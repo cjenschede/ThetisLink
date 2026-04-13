@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mermaid Editor (local)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #16213e; padding: 8px 16px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 16px; color: #64b5f6; }
+  header button { background: #2a4a6a; color: #e0e0e0; border: 1px solid #4a6a8a; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  header button:hover { background: #3a5a7a; }
+  header select { background: #2a4a6a; color: #e0e0e0; border: 1px solid #4a6a8a; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+  .container { display: flex; flex: 1; overflow: hidden; }
+  .editor { flex: 1; display: flex; flex-direction: column; border-right: 2px solid #333; }
+  .preview { flex: 1; overflow: auto; padding: 20px; background: #0d1117; }
+  textarea { flex: 1; background: #0d1117; color: #c9d1d9; border: none; padding: 12px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 14px; resize: none; outline: none; tab-size: 2; }
+  .preview .mermaid { display: flex; justify-content: center; }
+  .error { color: #f44336; padding: 12px; font-size: 13px; }
+  .status { background: #16213e; padding: 4px 16px; font-size: 12px; color: #888; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>Mermaid Editor</h1>
+  <button onclick="renderDiagram()">Render (Ctrl+Enter)</button>
+  <button onclick="loadFile()">Open .md file</button>
+  <button onclick="saveFile()">Save .md</button>
+  <button onclick="exportSVG()">Export SVG</button>
+  <select id="examples" onchange="loadExample(this.value)">
+    <option value="">-- Examples --</option>
+    <option value="flowchart">Flowchart</option>
+    <option value="sequence">Sequence Diagram</option>
+    <option value="state">State Diagram</option>
+  </select>
+</header>
+
+<div class="container">
+  <div class="editor">
+    <textarea id="code" spellcheck="false">graph TB
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Do something]
+    B -->|No| D[Do something else]
+    C --> E[End]
+    D --> E</textarea>
+  </div>
+  <div class="preview" id="preview">
+    <div class="mermaid" id="diagram"></div>
+  </div>
+</div>
+
+<div class="status" id="status">Ready — Edit on the left, click Render or press Ctrl+Enter</div>
+
+<input type="file" id="fileInput" accept=".md,.mmd,.mermaid,.txt" style="display:none" onchange="handleFile(this)">
+
+<script>
+  mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+
+  const codeEl = document.getElementById('code');
+  const previewEl = document.getElementById('preview');
+  const statusEl = document.getElementById('status');
+  let renderCount = 0;
+
+  async function renderDiagram() {
+    const code = codeEl.value.trim();
+    if (!code) return;
+    // Split on --- separator (multiple diagrams from .md file)
+    const blocks = code.split(/\n---\n/).map(b => b.trim()).filter(b => b.length > 0);
+    let html = '';
+    let errors = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      try {
+        const id = 'mermaid-' + (++renderCount);
+        const { svg } = await mermaid.render(id, blocks[i]);
+        html += '<div style="margin-bottom:24px;border-bottom:1px solid #333;padding-bottom:16px;">' + svg + '</div>';
+      } catch (e) {
+        html += '<div class="error">Diagram ' + (i+1) + ' error: ' + e.message + '</div>';
+        errors++;
+      }
+    }
+    previewEl.innerHTML = html;
+    statusEl.textContent = blocks.length + ' diagram(s) rendered' + (errors ? ', ' + errors + ' error(s)' : '') + ' (' + new Date().toLocaleTimeString() + ')';
+  }
+
+  // Ctrl+Enter to render
+  codeEl.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); renderDiagram(); }
+    // Tab inserts spaces
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = this.selectionStart;
+      this.value = this.value.substring(0, start) + '  ' + this.value.substring(this.selectionEnd);
+      this.selectionStart = this.selectionEnd = start + 2;
+    }
+  });
+
+  function loadFile() { document.getElementById('fileInput').click(); }
+
+  function handleFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      let text = e.target.result;
+      // Extract mermaid blocks from markdown
+      const blocks = [];
+      const regex = /```mermaid\s*\n([\s\S]*?)```/g;
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        blocks.push(match[1].trim());
+      }
+      if (blocks.length > 0) {
+        codeEl.value = blocks.join('\n\n---\n\n');
+        statusEl.textContent = 'Loaded ' + blocks.length + ' diagram(s) from ' + file.name;
+      } else {
+        codeEl.value = text;
+        statusEl.textContent = 'Loaded ' + file.name + ' (no mermaid blocks found, showing raw text)';
+      }
+      renderDiagram();
+    };
+    reader.readAsText(file);
+    input.value = '';
+  }
+
+  function saveFile() {
+    const blob = new Blob(['```mermaid\n' + codeEl.value + '\n```\n'], { type: 'text/markdown' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'diagram.md';
+    a.click();
+  }
+
+  function exportSVG() {
+    const svg = previewEl.querySelector('svg');
+    if (!svg) { alert('Render a diagram first'); return; }
+    const blob = new Blob([svg.outerHTML], { type: 'image/svg+xml' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'diagram.svg';
+    a.click();
+  }
+
+  const examples = {
+    flowchart: `graph TB
+    A[Client] -->|UDP| B[Server]
+    B -->|TCI WebSocket| C[Thetis]
+    B -->|Serial| D[Yaesu FT-991A]
+    B -->|HTTP/Serial| E[RF2K-S]
+    A -->|MIDI| F[DJ Controller]`,
+
+    sequence: `sequenceDiagram
+    participant C as Client
+    participant S as Server
+    participant T as Thetis
+
+    C->>S: FrequencyPacket
+    S->>T: VFO:0,0,14200000;
+    T-->>S: vfo:0,0,14200000;
+    S-->>C: FrequencyPacket`,
+
+    state: `stateDiagram-v2
+    [*] --> Disconnected
+    Disconnected --> Connecting: Connect
+    Connecting --> Connected: Auth OK
+    Connecting --> Disconnected: Auth Fail
+    Connected --> Transmitting: PTT ON
+    Transmitting --> Connected: PTT OFF
+    Connected --> Disconnected: Timeout`
+  };
+
+  function loadExample(name) {
+    if (examples[name]) {
+      codeEl.value = examples[name];
+      renderDiagram();
+    }
+    document.getElementById('examples').value = '';
+  }
+
+  // Initial render
+  renderDiagram();
+</script>
+
+</body>
+</html>

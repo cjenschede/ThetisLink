@@ -1,0 +1,26 @@
+ThetisLink License
+
+Copyright (c) 2025-2026 PA3GHM (Chiron van der Burgt)
+
+This software is free for personal and amateur radio use.
+Commercial use, resale, or redistribution for profit is prohibited
+without written permission from the author.
+
+Contributions, bug reports, and feature requests are welcome.
+Donations are appreciated — see the project README for details.
+
+DISCLAIMER
+
+This software controls radio transmitters. Use at your own risk.
+The author is not responsible for any damage to equipment,
+interference, or regulatory violations resulting from the use
+of this software. Verify all safety features (PTT timeout, power
+limits) before transmitting.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

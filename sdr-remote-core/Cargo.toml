@@ -1,0 +1,18 @@
+[package]
+name = "sdr-remote-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+audiopus = { workspace = true }
+bytemuck = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+num_enum = "0.7"
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+totp-lite = "2.0"
+base32 = "0.5"
+
+[dev-dependencies]

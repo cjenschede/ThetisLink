@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ThetisLink Architecture</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; margin: 0; padding: 20px 40px; }
+  h1 { color: #64b5f6; border-bottom: 2px solid #333; padding-bottom: 8px; }
+  h2 { color: #81c784; margin-top: 40px; }
+  h3 { color: #ffb74d; }
+  .mermaid { background: #0d1117; border-radius: 8px; padding: 20px; margin: 16px 0; overflow-x: auto; }
+  table { border-collapse: collapse; margin: 12px 0; }
+  th, td { border: 1px solid #444; padding: 6px 12px; text-align: left; }
+  th { background: #2a2a4a; color: #90caf9; }
+  tr:nth-child(even) { background: #1e1e3a; }
+  code { background: #2a2a4a; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  // If offline, mermaid won't load from CDN. We handle that gracefully.
+  document.addEventListener('DOMContentLoaded', function() {
+    if (typeof mermaid !== 'undefined') {
+      mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+        primaryColor: '#1e3a5f', primaryTextColor: '#e0e0e0', primaryBorderColor: '#4a90d9',
+        lineColor: '#888', secondaryColor: '#2a4a2a', tertiaryColor: '#3a2a1a',
+        noteTextColor: '#e0e0e0', noteBkgColor: '#2a2a4a'
+      }});
+    }
+  });
+</script>
+</head>
+<body>
+
+<h1>ThetisLink Architecture</h1>
+
+<h2>System Overview</h2>
+<div class="mermaid">
+graph TB
+    subgraph Thetis_PC["Thetis PC (Windows)"]
+        THETIS["Thetis SDR v2.10.3"]
+        TCI_WS["TCI WebSocket :40001"]
+        CAT_TCP["TCP CAT :13013"]
+        THETIS --> TCI_WS
+        THETIS --> CAT_TCP
+    end
+
+    subgraph Server["ThetisLink Server"]
+        TCI["TCI Connection"]
+        AUX_CAT["Aux CAT"]
+        SPEC["Spectrum Processor\nFFT + smoothing"]
+        RX2_SPEC["RX2 Spectrum"]
+        NET["Network Service\nUDP :4580"]
+        PTT["PTT Controller"]
+        YAESU["Yaesu FT-991A\nSerial + USB Audio"]
+        EQUIP["Equipment\nRF2K-S / SPE / JC-4s\nUltraBeam / Rotor"]
+        DXC["DX Cluster"]
+
+        TCI_WS -.-> TCI
+        CAT_TCP -.-> AUX_CAT
+        TCI --> PTT
+        AUX_CAT --> PTT
+        TCI -->|"IQ data"| SPEC
+        TCI -->|"IQ data"| RX2_SPEC
+        TCI -->|"RX audio"| NET
+        PTT --> NET
+        SPEC --> NET
+        RX2_SPEC --> NET
+        YAESU --> NET
+        EQUIP --> NET
+        DXC --> NET
+    end
+
+    subgraph Desktop["Desktop Client"]
+        ENGINE["Engine\nnetwork + audio"]
+        AUDIO["Audio I/O\ncpal stereo"]
+        UI["egui UI\nspectrum + controls"]
+        MIDI_C["MIDI"]
+        EQ["5-Band EQ"]
+
+        NET <-->|"UDP"| ENGINE
+        ENGINE <--> AUDIO
+        ENGINE <--> UI
+        MIDI_C --> UI
+        EQ --> ENGINE
+    end
+
+    subgraph Android["Android Client"]
+        ENGINE_A["Engine\nUniFFI"]
+        AUDIO_A["Oboe Audio"]
+        UI_A["Compose UI"]
+        BT["BT Remote"]
+
+        NET <-->|"UDP"| ENGINE_A
+        ENGINE_A <--> AUDIO_A
+        ENGINE_A <--> UI_A
+        BT --> UI_A
+    end
+</div>
+
+<h2>Audio Data Flow</h2>
+
+<h3>RX Audio (Thetis to Client)</h3>
+<div class="mermaid">
+graph LR
+    A["WDSP DSP\n48kHz float32"] --> B["TCI Binary\nWebSocket"]
+    B --> C["Server Decode"]
+    C --> D["Resample\n48k to 8k"]
+    D --> E["Opus Encode\n12.8 kbps"]
+    E --> F["UDP\nAudioPacket"]
+    F --> G["Jitter Buffer"]
+    G --> H["Opus Decode"]
+    H --> I["Resample\n8k to 48k"]
+    I --> J["Volume + Mix"]
+    J --> K["Ring Buffer"]
+    K --> L["Speaker"]
+</div>
+
+<h3>Binaural Stereo (BIN mode)</h3>
+<div class="mermaid">
+graph LR
+    A["Thetis WDSP\n2-channel output"] --> B["Server\nSplit L/R"]
+    B --> C["Opus L\nAudioPacket"]
+    B --> D["Opus R\nAudioBinR"]
+    C --> E["Client\nDecode L"]
+    D --> F["Client\nDecode R\nlockstep"]
+    E --> G["Stereo Output\nL=Left ear\nR=Right ear"]
+    F --> G
+</div>
+
+<h3>TX Audio (Client to Thetis)</h3>
+<div class="mermaid">
+graph LR
+    A["Microphone\n48kHz"] --> B["TX AGC"]
+    B --> C["Resample\n48k to 8k"]
+    C --> D["Opus Encode"]
+    D --> E["UDP to Server"]
+    E --> F["Opus Decode"]
+    F --> G["TCI TX_CHRONO\nResponse"]
+    G --> H["Thetis TX"]
+</div>
+
+<h3>Yaesu TX Audio</h3>
+<div class="mermaid">
+graph LR
+    A["Microphone\n48kHz"] --> B["5-Band EQ"]
+    B --> C["x Mic Gain"]
+    C --> D["Resample\n48k to 16k"]
+    D --> E["Wideband Opus\n24 kbps"]
+    E --> F["UDP AudioYaesu"]
+    F --> G["Server Decode\nx20 gain"]
+    G --> H["Yaesu USB\nAudio Output"]
+</div>
+
+<h2>Spectrum Pipeline</h2>
+<div class="mermaid">
+graph TB
+    A["TCI IQ Stream\n384kHz complex"] --> B["FFT Pipeline\n65K-262K point"]
+    B --> C["EMA Smoothing\n+ Peak Hold"]
+    C --> D["Calibration Offset\nmeter_cal + ATT auto-cal"]
+    D --> E["Extract View\nzoom/pan aware"]
+    D --> F["Full DDC Row\ncomplete bandwidth"]
+    E -->|"SpectrumPacket"| G["Client"]
+    F -->|"FullSpectrumPacket"| G
+    G --> H["Spectrum Line\n+ grid + VFO + filter"]
+    G --> I["Waterfall\nhybrid: view + full DDC\nper-pixel source select"]
+</div>
+
+<h2>State Synchronization</h2>
+<div class="mermaid">
+graph LR
+    A["TCI Notification"] --> B["TciConnection\n80 fields"]
+    C["CAT Poll"] --> D["CatConnection\n30 fields"]
+    B --> E["PttController\ngetter methods"]
+    D --> E
+    E -->|"UDP broadcast\nchange-detect cache"| F["RadioState\n260 fields"]
+    F -->|"watch channel"| G["SdrRemoteApp\n200 fields\n+ debounce"]
+</div>
+
+<h2>Control Command Sequence</h2>
+<div class="mermaid">
+sequenceDiagram
+    participant User
+    participant UI as Client UI
+    participant Engine as Client Engine
+    participant Server as Server
+    participant Thetis as Thetis
+
+    User->>UI: Click USB button
+    UI->>Engine: SetMode(1)
+    Engine->>Server: ModePacket {mode: 1}
+    Server->>Thetis: MODULATION:0,USB;
+    Thetis-->>Server: modulation:0,USB;
+    Server-->>Engine: ModePacket {mode: 1}
+    Engine-->>UI: state.mode = 1
+    UI-->>User: USB highlighted
+</div>
+
+<h2>PTT Multi-Client Sync</h2>
+<div class="mermaid">
+sequenceDiagram
+    participant A as Client A (Desktop)
+    participant S as Server
+    participant B as Client B (Android)
+
+    A->>S: PTT ON
+    S->>S: Activate TX
+    S-->>A: SmeterPacket (PTT flag)
+    S-->>B: SmeterPacket (PTT flag)
+    Note over A: Shows RED "TX"
+    Note over B: Shows ORANGE "TX in use"<br/>Button locked
+    A->>S: PTT OFF
+    S->>S: Deactivate TX
+    S-->>A: SmeterPacket (no PTT)
+    S-->>B: SmeterPacket (no PTT)
+    Note over B: Button unlocked
+</div>
+
+<h2>Crate Structure</h2>
+<pre>
+sdr-remote/
+  sdr-remote-core/        (2,634 lines)
+    protocol.rs            Packets, ControlId, PacketType
+    codec.rs               Opus encoder/decoder
+    jitter.rs              Jitter buffer
+    auth.rs                HMAC-SHA256 auth
+
+  sdr-remote-logic/        (3,198 lines)
+    engine.rs              Network loop + audio pipeline
+    commands.rs            Command enum (UI to Engine)
+    state.rs               RadioState (Engine to UI)
+    eq.rs                  5-band parametric EQ
+    audio.rs               AudioBackend trait
+
+  sdr-remote-server/       (17,641 lines)
+    network.rs             UDP service + broadcast + dispatch
+    tci.rs                 TCI WebSocket + state + parser
+    spectrum.rs            FFT + smoothing + calibration
+    ptt.rs                 PTT controller + radio backend
+    cat.rs                 TCP CAT polling
+    yaesu.rs               FT-991A serial + audio
+    rotor.rs               EA7HG Visual Rotor
+    main.rs                Server startup + config
+
+  sdr-remote-client/       (11,761 lines)
+    ui/mod.rs              App state (200 fields) + rendering
+    ui/screens.rs          TCI controls + MIDI
+    ui/spectrum.rs         Spectrum + waterfall
+    ui/devices.rs          Equipment panels + Yaesu popout
+    ui/meters.rs           S-meter + TX power bars
+    ui/helpers.rs          Level bars, formatting
+    audio.rs               cpal audio + stereo ring buffer
+    midi.rs                MIDI controller (48 actions)
+    main.rs                App entry point
+
+  sdr-remote-android/      (Kotlin + Rust bridge)
+    src/bridge.rs          UniFFI bridge
+    android/               Compose UI
+</pre>
+
+<h2>Refactoring Priorities</h2>
+<table>
+<tr><th>#</th><th>Task</th><th>Effort</th><th>Impact</th></tr>
+<tr><td>1</td><td>Extract audio loops, unify 3 identical TCI loops</td><td>Low</td><td>High</td></tr>
+<tr><td>2</td><td>Split broadcast task (700 lines) to broadcast.rs</td><td>Medium</td><td>High</td></tr>
+<tr><td>3</td><td>Collapse RX1/RX2 into ReceiverState[2]</td><td>High</td><td>High</td></tr>
+<tr><td>4</td><td>Replace manual from_u8 with num_enum derive</td><td>Low</td><td>Medium</td></tr>
+<tr><td>5</td><td>Break up SdrRemoteApp (200 fields) into sub-structs</td><td>High</td><td>High</td></tr>
+<tr><td>6</td><td>Extract control dispatch to control_dispatch.rs</td><td>Low</td><td>Medium</td></tr>
+<tr><td>7</td><td>Shared utils (freq mapping, dB conversion, resampler params)</td><td>Low</td><td>Medium</td></tr>
+</table>
+
+</body>
+</html>

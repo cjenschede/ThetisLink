@@ -1,0 +1,14 @@
+[package]
+name = "sdr-remote-logic"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sdr-remote-core = { path = "../sdr-remote-core" }
+tokio = { workspace = true }
+rubato = { workspace = true }
+ringbuf = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+socket2 = "0.5"
+chrono = "0.4"
