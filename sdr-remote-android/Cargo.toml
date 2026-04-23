@@ -1,0 +1,29 @@
+[package]
+name = "sdr-remote-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "sdr_remote_android"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+sdr-remote-core = { path = "../sdr-remote-core" }
+sdr-remote-logic = { path = "../sdr-remote-logic" }
+tokio = { workspace = true }
+ringbuf = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+uniffi = { version = "0.28", features = ["cli"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+oboe = { version = "0.6", features = ["java-interface"] }
+android_logger = "0.14"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }

@@ -1,0 +1,48 @@
+[package]
+name = "sdr-remote-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ThetisLink-Client"
+path = "src/main.rs"
+
+[dependencies]
+sdr-remote-core = { path = "../sdr-remote-core" }
+sdr-remote-logic = { path = "../sdr-remote-logic" }
+tokio = { workspace = true }
+cpal = { workspace = true }
+ringbuf = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+anyhow = { workspace = true }
+midir = { workspace = true }
+open = "5"
+chrono = "0.4"
+
+wry = "0.54"
+tao = "0.34"
+
+[features]
+default = []
+# Enable in-memory UiEvent recording + env-var gated test harness for unit/integration tests.
+ui-test = []
+# Emit ui-coverage.json at build/init time for the controls registration gate.
+ui-coverage = []
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

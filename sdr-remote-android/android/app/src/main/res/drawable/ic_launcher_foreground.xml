@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Background circle -->
+    <path
+        android:fillColor="#1A237E"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
+    <!-- Radio wave arcs (antenna signal) -->
+    <path
+        android:strokeColor="#42A5F5"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,60 Q54,40 40,30" />
+    <path
+        android:strokeColor="#42A5F5"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,60 Q54,35 35,22" />
+    <path
+        android:strokeColor="#42A5F5"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,60 Q54,40 68,30" />
+    <path
+        android:strokeColor="#42A5F5"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,60 Q54,35 73,22" />
+    <!-- Antenna base -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:fillColor="#00000000"
+        android:pathData="M54,60 L54,75" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:fillColor="#00000000"
+        android:pathData="M46,75 L62,75" />
+    <!-- "TL" text -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,82 L38,86 L42,86 L42,83 L40,83 L40,82 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,82 L44,86 L48,86 L48,85 L46,85 L46,82 Z" />
+</vector>

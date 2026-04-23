@@ -1,0 +1,23 @@
+# Rust build output
+/target
+
+# Editor/OS files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts (built, not committed)
+*.exe
+*.apk
+*.so
+*.pdb
+
+# Local logs and runtime state
+*.log
+*.conf
+
+# Android build output
+sdr-remote-android/android/app/build/
+sdr-remote-android/android/.gradle/
+sdr-remote-android/android/local.properties

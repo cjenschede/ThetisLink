@@ -1,0 +1,58 @@
+# No `targets` specified: cargo-about scans the dependency graph as
+# resolved for the current build host (typically Windows when ThetisLink
+# is being built). Platform-specific crates that don't apply on the host
+# target are omitted (e.g., Linux-only `alsa-sys`, Android-only
+# `android-*`). The full cross-platform inventory is captured in
+# `compliance/sbom.spdx.json` instead — THIRD-PARTY-LICENSES.html is the
+# per-host license-text bundle, the SBOM is the full crate inventory.
+#
+# Known cosmetic warning: cargo-about v0.8.4 emits a "GPL-2.0 deprecated
+# identifier" message during validation. This comes from cargo-about's
+# own internal license-expression checker, not from our config or the
+# dependency tree (grep on ~/.cargo/registry for `license = "GPL-2.0"`
+# plain yields zero hits). Output is correctly generated. Documented
+# here so future maintainers don't chase a non-existent bug.
+#
+# The Ubuntu Font License 1.0 (UFL-1.0) attached to epaint_default_fonts
+# has no standard SPDX identifier; we clarify the crate's expression
+# below to its SPDX-standard components. The UFL-1.0 text is shipped
+# separately as `compliance/licenses/UFL-1.0.txt` (see ATTRIBUTION.md).
+
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "GPL-2.0-or-later",
+    "OFL-1.1",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-or-later",
+]
+
+# epaint_default_fonts declares
+# "(MIT OR Apache-2.0) AND OFL-1.1 AND LicenseRef-UFL-1.0".
+# UFL-1.0 (Ubuntu Font License) has no standard SPDX identifier and
+# cargo-about cannot resolve it. We clarify the license expression here
+# down to its SPDX-standard components. The UFL.txt file that ships
+# inside the crate's `fonts/` directory remains physically present in
+# the dependency's distribution (it is bundled with the font binary
+# asset), so the UFL license text reaches end-users through the normal
+# crate packaging channel even though it does not appear in our
+# generated THIRD-PARTY-LICENSES.html.
+[epaint_default_fonts.clarify]
+license = "(MIT OR Apache-2.0) AND OFL-1.1"
+override-git-commit = "0.29.1"
+
+[[epaint_default_fonts.clarify.files]]
+path = "fonts/OFL.txt"
+license = "OFL-1.1"
+checksum = "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"

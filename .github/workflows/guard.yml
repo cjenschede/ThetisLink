@@ -1,0 +1,115 @@
+name: guard
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  forbidden-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: scan forbidden paths
+        run: |
+          set -e
+          forbidden=(
+            CLAUDE.md
+            Faseplan.md
+            RELEASE.md
+            docs/patch-briefs
+            docs/audit
+            .claude
+          )
+          fail=0
+          for p in "${forbidden[@]}"; do
+            if [ -e "$p" ]; then
+              echo "::error file=$p::forbidden path present"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  forbidden-patterns:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: scan forbidden patterns in files
+        run: |
+          set -e
+          patterns=(
+            '\bclaude\b'
+            '\banthropic\b'
+            'Co-Authored-By: Claude'
+            '\bAI-[123]\b'
+            'ChatGPT'
+            'OpenAI'
+            'Copilot'
+            'Gemini'
+            '\bGPT\b'
+            '\bLLM\b'
+            'AI-assisted'
+            'AI-powered'
+            'artificial intelligence'
+          )
+          fail=0
+          for pat in "${patterns[@]}"; do
+            matches=$(grep -rniE "$pat" . \
+              --include='*.rs' --include='*.kt' --include='*.md' \
+              --include='*.toml' --include='*.sh' --include='*.yml' --include='*.yaml' \
+              --include='*.json' --include='*.txt' --include='*.hbs' \
+              --include='.gitignore' \
+              --exclude-dir='.git' \
+              --exclude='guard.yml' 2>/dev/null || true)
+            if [ -n "$matches" ]; then
+              echo "::error::forbidden pattern '$pat' found:"
+              echo "$matches"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  forbidden-commit-messages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: scan commit messages
+        run: |
+          set -e
+          patterns='claude|anthropic|Co-Authored-By|\bAI-[123]\b|ChatGPT|OpenAI|Copilot|Gemini|\bGPT\b|\bLLM\b|AI-assisted|AI-powered|artificial intelligence'
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            range="origin/${GITHUB_BASE_REF}..HEAD"
+            messages=$(git log --format=%B $range)
+          else
+            messages=$(git log --format=%B --all)
+          fi
+          matches=$(echo "$messages" | grep -iE "$patterns" || true)
+          if [ -n "$matches" ]; then
+            echo "::error::forbidden pattern in commit messages:"
+            echo "$matches"
+            exit 1
+          fi
+
+  forbidden-tag-annotations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: scan tag annotations
+        run: |
+          set -e
+          patterns='claude|anthropic|Co-Authored-By|\bAI-[123]\b|ChatGPT|OpenAI|Copilot|Gemini|\bGPT\b|\bLLM\b|AI-assisted|AI-powered|artificial intelligence'
+          git fetch --tags --force
+          annotations=$(git for-each-ref refs/tags --format='=== %(refname:short) ===%0a%(contents)')
+          if [ -z "$annotations" ]; then
+            echo "no tags — skipping"
+            exit 0
+          fi
+          matches=$(echo "$annotations" | grep -iE "$patterns" || true)
+          if [ -n "$matches" ]; then
+            echo "::error::forbidden pattern in tag annotations:"
+            echo "$matches"
+            exit 1
+          fi

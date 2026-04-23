@@ -1,0 +1,36 @@
+[workspace]
+members = [
+    "sdr-remote-core",
+    "sdr-remote-logic",
+    "sdr-remote-server",
+    "sdr-remote-client",
+    "sdr-remote-android",
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+audiopus = "0.3.0-rc.0"
+cpal = "0.15"
+rubato = "0.14"
+ringbuf = "0.4"
+eframe = "0.29"
+egui = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender = "0.2"
+anyhow = "1"
+serialport = "4.7"
+midir = "0.10"
+
+# Optimize dependencies even in dev mode (Opus/rubato are too slow unoptimized)
+[profile.dev.package."*"]
+opt-level = 2
