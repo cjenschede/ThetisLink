@@ -11,7 +11,7 @@
 //!
 //! - `render_frequency_display` (sub-stap 2d): inline freq-label/edit state
 //!   machine + scroll-wheel tuning. Migreert RX1 popout + Tab::Radio (RX2
-//!   popout scope-trim — origineel had geen inline-edit). Adresseert
+//!   popout scope-trim - origineel had geen inline-edit). Adresseert
 //!   scroll-tuning + inline-edit connected-guard gaps.
 
 use egui::{Color32, RichText};
@@ -51,7 +51,7 @@ impl FreqStepAction {
 
 /// Rendert de frequency step-controls row: `−` + step-size selector + `+`.
 ///
-/// `ctx.density` bepaalt label-groottes (Basic: 16.0, Extended: 14.0 —
+/// `ctx.density` bepaalt label-groottes (Basic: 16.0, Extended: 14.0 -
 /// matcht originele Tab::Radio vs popout styling).
 ///
 /// `−` en `+` knoppen zijn guarded op `ctx.connected` via `add_enabled`.
@@ -60,7 +60,7 @@ impl FreqStepAction {
 ///
 /// Retourneert `Some(Decrement | Increment)` wanneer de gebruiker een
 /// frequentie-wijziging heeft gevraagd. De caller moet `dispatch()` aanroepen
-/// en **alleen bij `dispatched==true`** de `pending_freq` state updaten —
+/// en **alleen bij `dispatched==true`** de `pending_freq` state updaten -
 /// anders drift UI-state vs. server-state.
 pub(crate) fn render_freq_step_controls(
     ui: &mut egui::Ui,
@@ -164,20 +164,20 @@ fn vfo_prefix(channel: RxChannel) -> &'static str {
 /// Rendert de VFO frequency display + inline edit.
 ///
 /// **Display mode** (default): toont label "VFO X:  14.200.000 Hz" als
-/// klikbare widget. Klik → ctx.rx_state.freq_editing = true (state-transition).
-/// Scroll-wheel → `UiEvent::ScrollTuneApplied` + return `ScrollTune(delta)`.
+/// klikbare widget. Klik -> ctx.rx_state.freq_editing = true (state-transition).
+/// Scroll-wheel -> `UiEvent::ScrollTuneApplied` + return `ScrollTune(delta)`.
 ///
 /// **Edit mode** (wanneer `ctx.rx_state.freq_editing == true`): toont
 /// TextEdit met `ctx.rx_state.freq_edit_text`. Lost-focus + Enter + valid hz
-/// → `UiEvent::InlineFreqSubmitted` + return `Submit(hz)`. Lost-focus zonder
-/// geldige Enter → transitie terug naar display zonder actie.
+/// -> `UiEvent::InlineFreqSubmitted` + return `Submit(hz)`. Lost-focus zonder
+/// geldige Enter -> transitie terug naar display zonder actie.
 ///
 /// **Scroll-gating (Basic density, Tab::Radio):** wanneer `spectrum_enabled`
 /// consumeert het spectrum-widget scroll-events; de helper slaat scroll-detectie
-/// over in dat geval. In Extended density (popouts) is scroll altijd actief —
+/// over in dat geval. In Extended density (popouts) is scroll altijd actief -
 /// `render_freq_scroll` checkt zelf de `freq_scroll_consumed` memory-flag.
 ///
-/// Coverage: registreert `frequency_display` (guarded=true — klik naar edit is
+/// Coverage: registreert `frequency_display` (guarded=true - klik naar edit is
 /// door-`add_enabled` gesloten, scroll komt alleen binnen als connected-check in
 /// dispatch slaagt).
 pub(crate) fn render_frequency_display(
@@ -274,7 +274,7 @@ pub(crate) fn render_frequency_display(
             ui.horizontal(|ui| {
                 // Prefix label is klikbaar voor edit-mode transitie.
                 // Guarded op `ctx.connected`: zonder verbinding geen zin om edit
-                // te starten (dispatch zou toch falen) — consistent met
+                // te starten (dispatch zou toch falen) - consistent met
                 // `band/mode/freq_step_arrows` UX.
                 let prefix_widget = egui::Label::new(
                     RichText::new(format!("{}  ", prefix)).size(18.0).strong(),

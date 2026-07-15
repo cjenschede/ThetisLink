@@ -52,9 +52,9 @@ pub(super) fn render_spe_panel(
 
     ui.add_space(4.0);
 
-    // Toggle buttons row — each button shows current state in its text
+    // Toggle buttons row - each button shows current state in its text
     ui.horizontal(|ui| {
-        // Power — shows current state
+        // Power - shows current state
         if !status.connected || status.state == 0 {
             let btn = egui::Button::new(RichText::new("Power Off").strong().color(Color32::WHITE))
                 .fill(Color32::from_rgb(120, 120, 120));
@@ -69,7 +69,7 @@ pub(super) fn render_spe_panel(
             }
         }
 
-        // Operate/Standby toggle — shows current state
+        // Operate/Standby toggle - shows current state
         let (op_text, op_color) = match status.state {
             2 => ("Operate", Color32::from_rgb(50, 180, 50)),
             1 => ("Standby", amber),
@@ -92,7 +92,7 @@ pub(super) fn render_spe_panel(
 
     // Second row: Antenna, Input, Power level, Band
     ui.horizontal(|ui| {
-        // Antenna toggle — shows "Ant1" or "Ant2" with blue "b" for bypass
+        // Antenna toggle - shows "Ant1" or "Ant2" with blue "b" for bypass
         let mut ant_text = format!("Ant{}", status.antenna);
         let bypass_suffix = if status.atu_bypassed { "b" } else { "" };
         ant_text.push_str(bypass_suffix);
@@ -105,13 +105,13 @@ pub(super) fn render_spe_panel(
             spe.send_command(spe_expert::SpeCmd::CycleAntenna);
         }
 
-        // Input toggle — shows "In 1" or "In 2"
+        // Input toggle - shows "In 1" or "In 2"
         let input_text = format!("In {}", status.input);
         if ui.add_enabled(status.connected, egui::Button::new(&input_text)).clicked() {
             spe.send_command(spe_expert::SpeCmd::CycleInput);
         }
 
-        // Power level toggle — shows "Low", "Mid", "High"
+        // Power level toggle - shows "Low", "Mid", "High"
         let pwr_text = match status.power_level {
             0 => "Low",
             1 => "Mid",

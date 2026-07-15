@@ -3,7 +3,7 @@
 use super::*;
 
 /// `value`/`peak_value` carry dBm in RX mode and watts in TX mode (the same
-/// disambiguation used on the wire — see `SmeterPacket` and the `transmitting`
+/// disambiguation used on the wire - see `SmeterPacket` and the `transmitting`
 /// / `other_tx` booleans here). The widget owns all dBm-to-display math via
 /// `sdr_remote_core::dbm_to_display`.
 pub(crate) fn smeter_bar(ui: &mut egui::Ui, value: f32, peak_value: f32, transmitting: bool, other_tx: bool, swr_x100: u16) -> egui::Rect {
@@ -70,7 +70,7 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
         painter.text(bar_rect.center(), egui::Align2::CENTER_CENTER,
             swr_text, egui::FontId::proportional(if is_popout { 16.0 } else { 11.0 }), swr_color);
     } else {
-        // RX S-meter bar — `value` and `peak_value` are dBm.
+        // RX S-meter bar - `value` and `peak_value` are dBm.
         let dbm = value;
         let raw_for_arc = sdr_remote_core::dbm_to_display(dbm) as f32;
         let frac = (raw_for_arc / 228.0).clamp(0.0, 1.0);
@@ -90,7 +90,7 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
                 0.0, Color32::from_rgb(220, 30, 30));
         }
 
-        // Peak hold needle — peak is also dBm.
+        // Peak hold needle - peak is also dBm.
         if peak_value > dbm {
             let peak_raw = sdr_remote_core::dbm_to_display(peak_value) as f32;
             let peak_frac = (peak_raw / 228.0).clamp(0.0, 1.0);
@@ -130,7 +130,7 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
                 format!("+{}", db_over), tick_font.clone(), Color32::from_rgb(200, 100, 100));
         }
 
-        // S-value text on the bar — derived directly from dBm.
+        // S-value text on the bar - derived directly from dBm.
         let s_text = if dbm <= -73.0 {
             let s_unit = ((dbm + 127.0) / 6.0).floor().clamp(0.0, 9.0) as u8;
             format!("S{}", s_unit)
@@ -141,6 +141,125 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
         painter.text(bar_rect.center(), egui::Align2::CENTER_CENTER,
             s_text, egui::FontId::proportional(if is_popout { 16.0 } else { 11.0 }), Color32::WHITE);
     }
+    rect
+}
+
+
+/// Yaesu CAT S-meter bar. The radio reports a raw 0..255-ish SM value;
+/// render it on the same S1..S9 / S9+dB visual scale as the main RX meter.
+pub(crate) fn yaesu_smeter_bar(ui: &mut egui::Ui, raw: u16, peak_raw: u16) -> egui::Rect {
+    let label_h = 12.0;
+    let bar_h = 14.0;
+    let total_h = label_h + bar_h + label_h;
+    let bar_w = ui.available_width().min(350.0).max(120.0);
+    let desired_size = Vec2::new(bar_w, total_h);
+    let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+
+    if !ui.is_rect_visible(rect) {
+        return rect;
+    }
+
+    let painter = ui.painter();
+    let top_label = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), label_h));
+    let bar_rect = egui::Rect::from_min_size(rect.min + Vec2::new(0.0, label_h), Vec2::new(rect.width(), bar_h));
+    let bottom_label = egui::Rect::from_min_size(rect.min + Vec2::new(0.0, label_h + bar_h), Vec2::new(rect.width(), label_h));
+
+    painter.rect_filled(bar_rect, 2.0, Color32::from_rgb(20, 20, 20));
+
+    let raw_value = raw as f32;
+    let raw_for_bar = raw_value.clamp(0.0, 228.0);
+    let frac = raw_for_bar / 228.0;
+    let fill_width = bar_rect.width() * frac;
+    let s9_frac = 108.0 / 228.0;
+
+    if raw_for_bar <= 108.0 {
+        painter.rect_filled(
+            egui::Rect::from_min_size(bar_rect.min, Vec2::new(fill_width, bar_h)),
+            2.0,
+            Color32::from_rgb(0, 180, 0),
+        );
+    } else {
+        let green_w = bar_rect.width() * s9_frac;
+        painter.rect_filled(
+            egui::Rect::from_min_size(bar_rect.min, Vec2::new(green_w, bar_h)),
+            2.0,
+            Color32::from_rgb(0, 180, 0),
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                bar_rect.min + Vec2::new(green_w, 0.0),
+                Vec2::new((fill_width - green_w).max(0.0), bar_h),
+            ),
+            0.0,
+            Color32::from_rgb(220, 30, 30),
+        );
+    }
+
+    let peak_for_bar = (peak_raw as f32).clamp(0.0, 228.0);
+    if peak_for_bar > raw_for_bar {
+        let peak_x = bar_rect.min.x + bar_rect.width() * (peak_for_bar / 228.0);
+        painter.line_segment(
+            [egui::pos2(peak_x, bar_rect.min.y), egui::pos2(peak_x, bar_rect.max.y)],
+            egui::Stroke::new(2.0, Color32::YELLOW),
+        );
+    }
+
+    let tick_font = egui::FontId::proportional(9.0);
+    for s in 1..=9 {
+        let x = bar_rect.min.x + bar_rect.width() * (s as f32 * 12.0 / 228.0);
+        painter.line_segment(
+            [egui::pos2(x, top_label.max.y - 3.0), egui::pos2(x, top_label.max.y)],
+            egui::Stroke::new(1.0, Color32::GRAY),
+        );
+        painter.line_segment(
+            [egui::pos2(x, bottom_label.min.y), egui::pos2(x, bottom_label.min.y + 3.0)],
+            egui::Stroke::new(1.0, Color32::GRAY),
+        );
+        painter.text(
+            egui::pos2(x, top_label.min.y),
+            egui::Align2::CENTER_TOP,
+            format!("{}", s),
+            tick_font.clone(),
+            Color32::GRAY,
+        );
+    }
+
+    for db_over in (10..=60).step_by(10) {
+        let tick_raw = 108.0 + db_over as f32 * 2.0;
+        let x = bar_rect.min.x + bar_rect.width() * (tick_raw / 228.0);
+        let tick_color = Color32::from_rgb(200, 100, 100);
+        painter.line_segment(
+            [egui::pos2(x, top_label.max.y - 3.0), egui::pos2(x, top_label.max.y)],
+            egui::Stroke::new(1.0, tick_color),
+        );
+        painter.line_segment(
+            [egui::pos2(x, bottom_label.min.y), egui::pos2(x, bottom_label.min.y + 3.0)],
+            egui::Stroke::new(1.0, tick_color),
+        );
+        painter.text(
+            egui::pos2(x, bottom_label.max.y),
+            egui::Align2::CENTER_BOTTOM,
+            format!("+{}", db_over),
+            tick_font.clone(),
+            tick_color,
+        );
+    }
+
+    let text = if raw_value <= 108.0 {
+        let s_unit = (raw_value / 12.0).floor().clamp(0.0, 9.0) as u8;
+        format!("S{}", s_unit)
+    } else {
+        let db_over = ((raw_value - 108.0) * 0.5).max(0.0);
+        format!("S9+{:.0} dB", db_over)
+    };
+    painter.text(
+        bar_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(11.0),
+        Color32::WHITE,
+    );
+
     rect
 }
 
@@ -165,7 +284,7 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
     painter.rect_filled(rect, 6.0, Color32::from_rgb(25, 25, 30));
     painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, Color32::from_rgb(60, 60, 70)));
 
-    // Arc geometry — pivot at bottom, radius fits labels inside rect
+    // Arc geometry - pivot at bottom, radius fits labels inside rect
     let center_x = rect.center().x;
     let center_y = rect.max.y - 4.0;
     let center = egui::pos2(center_x, center_y);
@@ -249,7 +368,7 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
         }
     }
 
-    // Peak hold needle (thin, yellow) — extends through the scale arc
+    // Peak hold needle (thin, yellow) - extends through the scale arc
     if !is_tx && peak_value > value {
         let peak_raw = sdr_remote_core::dbm_to_display(peak_value) as f32;
         let peak_frac = (peak_raw / 228.0).clamp(0.0, 1.0);
@@ -259,7 +378,7 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
         painter.line_segment([base, tip], egui::Stroke::new(1.5, Color32::from_rgb(255, 255, 0).gamma_multiply(0.6)));
     }
 
-    // Main needle — extends through the scale arc
+    // Main needle - extends through the scale arc
     let angle = min_angle + frac * (max_angle - min_angle);
     let tip = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0);
     let needle_color = if is_tx {

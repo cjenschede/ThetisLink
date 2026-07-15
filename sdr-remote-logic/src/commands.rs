@@ -9,6 +9,8 @@ pub enum Command {
     SendTotpCode(String),            // 6-digit TOTP code
     Disconnect,
     SetPtt(bool),
+    SetMicGateDelayMs(u32),
+    SetPlaybackMute(bool),
     SetRxVolume(f32),
     SetLocalVolume(f32),
     SetVfoAVolume(f32),      // local RX1 playback volume (client-only, independent of Thetis ZZLA)
@@ -115,19 +117,30 @@ pub enum Command {
     SetVrx2Frequency(u64),
     SetVrx2Volume(f32),
     // VRX wide / synchronous-AM UX (PATCH-vrx-wide-sam-ux)
-    /// VRX audio-rate mode: 0=NB, 1=WB, 2=Auto. One setting for both VRX.
+    /// VRX1 audio-rate mode: 0=NB, 1=WB, 2=Auto (PATCH-vrx-per-client).
     SetVrxRateMode(u8),
+    /// VRX2 audio-rate mode: 0=NB, 1=WB, 2=Auto — per-client per-VRX (VrxAudioRate2).
+    SetVrxRateMode2(u8),
     /// (vrx_id 0|1, on) — SAM auto-tune-to-carrier per VRX.
     SetVrxAutoTune(u8, bool),
     /// TX modulation filter band (low_hz, high_hz) — PATCH-tx-modulation-bandwidth.
     /// Main-radio TX, not VRX. Server applies via tx_filter_band_ex.
     SetTxFilter(i32, i32),
+    /// Typed Yaesu DSP/function control (PATCH-yaesu-extra-controls):
+    /// (slot 0=radio1/1=radio2, control=YaesuCtrl as u8, value=toggle 0/1 or level).
+    SetYaesuControl(u8, u8, u16),
     WriteYaesuMemories(String), // tab-separated text to write to radio
     WriteYaesu2Memories(String), // idem radio 2 (Fase B)
     SetYaesuTxGain(f32),
     // Yaesu EQ: (band 0-4, gain_db -12..+12)
     SetYaesuEqBand(u8, f32),
     SetYaesuEqEnabled(bool),
+    // Client-side Yaesu TX-keten per radio (net als de EQ): compressor-amount 0-100
+    // en eigen AGC-toggle (los van de Thetis-AGC). Radio-processing werkt niet op USB.
+    SetYaesuCompressor(u8),
+    SetYaesuTxAgc(bool),
+    SetYaesu2Compressor(u8),
+    SetYaesu2TxAgc(bool),
     // Thetis TUNE (ZZTU) with PA bypass
     ThetisTune(bool),
     // TX Monitor
@@ -163,7 +176,7 @@ pub enum Command {
     CwKey { pressed: bool, duration_ms: u16 },
     CwMacroStop,
     // Audio recording
-    StartRecording { rx1: bool, rx2: bool, yaesu: bool, path: String },
+    StartRecording { rx1: bool, rx2: bool, yaesu: bool, yaesu2: bool, vrx1: bool, vrx2: bool, path: String },
     StopRecording,
     PlayRecording { path: String },  // play last recorded WAV
     StopPlayback,

@@ -14,9 +14,9 @@
 //! - AM:                            factor 0.5
 //! - FM / digital (DIGU/DIGL/SPEC/SAM/DRM/FM): factor 0.4
 //!
-//! Voorbeeld: positie A-2 met max 250 W → SSB-cap 250 W, AM-cap 125 W,
+//! Voorbeeld: positie A-2 met max 250 W -> SSB-cap 250 W, AM-cap 125 W,
 //! FM/DIG-cap 100 W (de oude JC-3s waardes komen netjes uit deze
-//! formule). Positie A-3 met max 1000 W → 1000 / 500 / 400 W. Een
+//! formule). Positie A-3 met max 1000 W -> 1000 / 500 / 400 W. Een
 //! positie zonder ingestelde max (`None`) krijgt **geen** cap (PA loopt
 //! vrij).
 //!
@@ -24,9 +24,9 @@
 //! en Thetis. Een ZZPC-verlaging vanuit de server wordt door de PA
 //! direct teruggepushed. De PA-eigen DriveDown zit buiten die loop.
 //!
-//! Activatievoorwaarden — alle vier moeten waar zijn:
+//! Activatievoorwaarden - alle vier moeten waar zijn:
 //! 1. Actieve Amplitec-A positie heeft `Some(max_w)` in de config.
-//! 2. `config.active_pa` is 1 (SPE) of 2 (RF2K-S) — owner heeft één
+//! 2. `config.active_pa` is 1 (SPE) of 2 (RF2K-S) - operator heeft één
 //!    PA expliciet als de actieve gemarkeerd in de client.
 //! 3. Die PA staat fysiek in Operate.
 //! 4. De huidige Thetis-mode heeft een geldige factor (alle
@@ -85,7 +85,7 @@ pub struct PowerCapState {
     /// detecteren zonder een tweede shared state.
     pub prev_amplitec_pos: Option<u8>,
     /// Laatst gelogde state-snapshot (pos, mode, pa_in_operate, cap).
-    /// Alleen loggen bij verandering — voorkomt periodieke "alles oké"
+    /// Alleen loggen bij verandering - voorkomt periodieke "alles oké"
     /// spam in het server-log; transities blijven zichtbaar.
     pub last_logged_snapshot: Option<(Option<u8>, u8, bool, Option<u16>)>,
 }
@@ -115,7 +115,7 @@ impl Default for PowerCapState {
 /// hebben allemaal een factor.
 pub fn mode_factor(mode: u8) -> Option<f32> {
     match mode {
-        // LSB (0), USB (1), DSB (2), CWL (3), CWU (4) — SSB + CW: 1.0
+        // LSB (0), USB (1), DSB (2), CWL (3), CWU (4) - SSB + CW: 1.0
         0 | 1 | 2 | 3 | 4 => Some(1.0),
         // AM (6): 0.5 (carrier ~ half van PEP)
         6 => Some(0.5),
@@ -145,13 +145,13 @@ pub fn cap_for(amplitec_pos: u8, max_w_table: &[Option<u16>; 6], mode: u8) -> Op
 /// commando); `None` betekent "geen actie".
 ///
 /// Argumenten:
-/// - `state` — gedeelde controller-state.
-/// - `active_pos` — actuele Amplitec-A positie (1..6) of None.
-/// - `max_w_table` — `config.amplitec_max_w` (6 Option<u16> waardes).
-/// - `active_pa` — `config.active_pa` (0=none, 1=SPE, 2=RF2K).
-/// - `pa_in_operate` — actieve PA staat in Operate.
-/// - `pa_fwd_watts` — PA-meter waarde (None = sensor onbekend).
-/// - `mode` — actuele Thetis `vfo_a_mode`.
+/// - `state` - gedeelde controller-state.
+/// - `active_pos` - actuele Amplitec-A positie (1..6) of None.
+/// - `max_w_table` - `config.amplitec_max_w` (6 Option<u16> waardes).
+/// - `active_pa` - `config.active_pa` (0=none, 1=SPE, 2=RF2K).
+/// - `pa_in_operate` - actieve PA staat in Operate.
+/// - `pa_fwd_watts` - PA-meter waarde (None = sensor onbekend).
+/// - `mode` - actuele Thetis `vfo_a_mode`.
 pub fn tick(
     state: &mut PowerCapState,
     active_pos: Option<u8>,
@@ -164,8 +164,8 @@ pub fn tick(
     let cap = active_pos.and_then(|p| cap_for(p, max_w_table, mode));
 
     // State-change-log: alleen wanneer (pos, mode, pa_in_operate, cap)
-    // is veranderd t.o.v. vorige tick. Owner wil status/geschiedenis
-    // zien — transities, niet periodieke "alles nog steeds zo" rust-
+    // is veranderd t.o.v. vorige tick. Operator wil status/geschiedenis
+    // zien - transities, niet periodieke "alles nog steeds zo" rust-
     // spam. Bij rust = geen log; bij elke wijziging = één regel met
     // de relevante velden zodat de timeline reconstrueerbaar blijft.
     let snapshot = (active_pos, mode, pa_in_operate, cap);
@@ -211,7 +211,7 @@ pub fn tick(
             PowerCapAction::Rf2kDriveDown
         }
         _ => {
-            // active_pa=0 (none) — cap kan niets doen
+            // active_pa=0 (none) - cap kan niets doen
             return None;
         }
     };
@@ -293,7 +293,7 @@ mod tests {
         for m in [5u8, 7, 8, 9, 10, 11] {
             assert_eq!(mode_factor(m), Some(0.4), "mode {} expected 0.4", m);
         }
-        // Onbekend → None
+        // Onbekend -> None
         assert_eq!(mode_factor(12), None);
         assert_eq!(mode_factor(255), None);
     }
@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(cap_for(1, &table, 6), Some(500));
         // Pos met max, FM (factor 0.4)
         assert_eq!(cap_for(1, &table, 5), Some(400));
-        // Mode zonder factor → None
+        // Mode zonder factor -> None
         assert_eq!(cap_for(1, &table, 12), None);
     }
 

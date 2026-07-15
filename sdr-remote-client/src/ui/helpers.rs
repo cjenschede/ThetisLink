@@ -4,7 +4,7 @@ use super::*;
 
 /// Collapsible-section header met handmatig getekende gevulde
 /// driehoek-chevron. Gespiegeld van `sdr-remote-server/src/ui/utils.rs`
-/// zodat client en server dezelfde visuele stijl gebruiken — geen
+/// zodat client en server dezelfde visuele stijl gebruiken - geen
 /// font-glyph dependency (egui's default font heeft geen ▼/▶).
 ///
 /// - `open == false`: rechts-wijzende gevulde driehoek (▶), collapsed
@@ -135,7 +135,7 @@ pub(crate) fn vrx_mode_label(mode: u8) -> &'static str {
 }
 
 /// Default (filter_low_hz, filter_high_hz) for a VRX mode. Preserves
-/// the current SSB bandwidth on USB↔LSB swap; uses mode-specific
+/// the current SSB bandwidth on USB<->LSB swap; uses mode-specific
 /// defaults for AM/SAM/FM (their natural bandwidths differ from SSB).
 pub(crate) fn vrx_mode_default_filter(new_mode: u8, current_bw: i32) -> (i32, i32) {
     let bw = if current_bw > 0 { current_bw } else { 3000 };
@@ -197,25 +197,25 @@ pub(crate) fn closest_preset_index(presets: &[i32], bw: i32) -> usize {
 /// AM/SAM/DSB/DRM/FM: symmetric around 0.
 pub(crate) fn calc_filter_edges(mode: u8, filter_low: i32, filter_high: i32, new_bw: i32) -> (i32, i32) {
     match mode {
-        1 | 7 => {  // USB, DIGU — low edge anchored
+        1 | 7 => {  // USB, DIGU - low edge anchored
             let low = filter_low.max(25);
             (low, low + new_bw)
         }
-        0 | 9 => {  // LSB, DIGL — high edge anchored
+        0 | 9 => {  // LSB, DIGL - high edge anchored
             let high = filter_high.min(-25);
             (high - new_bw, high)
         }
-        3 | 4 => {  // CWL, CWU — keep center
+        3 | 4 => {  // CWL, CWU - keep center
             let center = (filter_low + filter_high) / 2;
             (center - new_bw / 2, center + new_bw / 2)
         }
-        _ => {      // AM, SAM, DSB, DRM, FM — symmetric
+        _ => {      // AM, SAM, DSB, DRM, FM - symmetric
             (-new_bw / 2, new_bw / 2)
         }
     }
 }
 
-/// True for modes whose filter is symmetric around the carrier — AM, SAM, DSB,
+/// True for modes whose filter is symmetric around the carrier - AM, SAM, DSB,
 /// FM, DRM. Main-RX DSPMode numbering: LSB=0, USB=1, DSB=2, CWL=3, CWU=4,
 /// FM=5, AM=6, DIGU=7, SPEC=8, DIGL=9, SAM=10, DRM=11. One-sided modes (SSB,
 /// CW, DIG) and SPEC are NOT symmetric. Used to mirror a single dragged filter
@@ -251,8 +251,9 @@ pub(crate) fn format_frequency(hz: u64) -> String {
     result.chars().rev().collect()
 }
 
-/// Render VFO frequency with per-digit scroll wheel tuning.
-/// Returns Some(step) if scroll was detected, where step is positive for up, negative for down.
+/// Render VFO frequency with per-digit tuning: scroll wheel (desktop) én tik
+/// (touch/muis) - tik op de bovenkant van een cijfer = omhoog, onderkant = omlaag.
+/// Returns Some(step) als er getuned is (positief = omhoog, negatief = omlaag).
 pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
     let formatted = format_frequency(hz);
     let num_digits = formatted.chars().filter(|c| c.is_ascii_digit()).count();
@@ -276,16 +277,38 @@ pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
         let is_digit = ch.is_ascii_digit();
         let label = ui.add(
             egui::Label::new(RichText::new(ch.to_string()).size(18.0).strong().family(egui::FontFamily::Monospace))
-                .sense(egui::Sense::hover()),
+                .sense(if is_digit { egui::Sense::click() } else { egui::Sense::hover() }),
         );
         if is_digit {
+            // digit_idx 0 = highest digit, num_digits-1 = ones
+            let power = (num_digits - 1 - digit_idx) as u32;
+            let step = 10i64.pow(power);
+            // Hover-cue (desktop): licht alléén de helft op waar de muis staat
+            // (boven = omhoog, onder = omlaag). Dit geeft directionele terugkoppeling -
+            // het duwt de gebruiker naar wat een klik dáár gaat doen.
+            if label.hovered() {
+                if let Some(p) = pointer_pos {
+                    let rect = label.rect;
+                    let mid = rect.center().y;
+                    let half = if p.y < mid {
+                        egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, mid))
+                    } else {
+                        egui::Rect::from_min_max(egui::pos2(rect.min.x, mid), rect.max)
+                    };
+                    ui.painter().rect_filled(half, 2.0,
+                        Color32::from_rgba_unmultiplied(80, 160, 255, 60));
+                }
+            }
+            // Tik-tunen (touch + muis): bovenste helft = omhoog, onderste = omlaag.
+            if label.clicked() {
+                let up = label.interact_pointer_pos()
+                    .map_or(true, |p| p.y < label.rect.center().y);
+                scroll_step = Some(if up { step } else { -step });
+            }
             if let Some(pos) = pointer_pos {
                 if label.rect.contains(pos) {
                     pointer_over_digit = true;
                     if scroll_y != 0.0 {
-                        // digit_idx 0 = highest digit, num_digits-1 = ones
-                        let power = (num_digits - 1 - digit_idx) as u32;
-                        let step = 10i64.pow(power);
                         scroll_step = Some(if scroll_y > 0.0 { step } else { -step });
                     }
                 }
@@ -312,6 +335,43 @@ pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
         });
     }
     scroll_step
+}
+
+/// Touch-vriendelijke frequentie-stapper: grote −/+ knoppen met een instelbare
+/// stapgrootte-kiezer (10 Hz ... 1 MHz). `step_hz` is de gekozen stap (de caller
+/// bewaart 'm). Returns Some(delta_hz) als er ◄◄/►► is ingedrukt.
+pub(crate) fn render_freq_stepper(ui: &mut egui::Ui, step_hz: &mut i64) -> Option<i64> {
+    const STEPS: [(&str, i64); 6] = [
+        ("10", 10), ("100", 100), ("1k", 1_000),
+        ("10k", 10_000), ("100k", 100_000), ("1M", 1_000_000),
+    ];
+    if *step_hz <= 0 { *step_hz = 1_000; }
+    let mut delta = None;
+    ui.horizontal(|ui| {
+        if ui.add(egui::Button::new(RichText::new("−").size(15.0))
+            .min_size(egui::vec2(42.0, 24.0)))
+            .on_hover_text("Frequentie omlaag met de gekozen stap").clicked()
+        {
+            delta = Some(-*step_hz);
+        }
+        for (lbl, s) in STEPS {
+            let sel = *step_hz == s;
+            let b = if sel {
+                egui::Button::new(RichText::new(lbl).size(11.0).color(Color32::WHITE))
+                    .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(34.0, 22.0))
+            } else {
+                egui::Button::new(RichText::new(lbl).size(11.0)).min_size(egui::vec2(34.0, 22.0))
+            };
+            if ui.add(b).clicked() { *step_hz = s; }
+        }
+        if ui.add(egui::Button::new(RichText::new("+").size(15.0))
+            .min_size(egui::vec2(42.0, 24.0)))
+            .on_hover_text("Frequentie omhoog met de gekozen stap").clicked()
+        {
+            delta = Some(*step_hz);
+        }
+    });
+    delta
 }
 
 /// Compute default spectrum zoom for a given DDC span.

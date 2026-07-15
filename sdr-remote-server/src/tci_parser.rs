@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! TCI protocol parser — pure functions for parsing TCI text commands,
+//! TCI protocol parser - pure functions for parsing TCI text commands,
 //! binary frame decoding, and mode conversion. No state dependencies.
 
 use std::sync::atomic::AtomicBool;
@@ -49,7 +49,7 @@ pub enum TciNotification {
     RxChannelSensors {
         receiver: u32,
         channel: u32,
-        /// Avg dBm (true-mean detector) — always present; legacy non-`_ex` pushes only this slot.
+        /// Avg dBm (true-mean detector) - always present; legacy non-`_ex` pushes only this slot.
         dbm: f32,
         /// Sig dBm (peak-hold detector). `Some` only for `_ex` format.
         dbm_sig: Option<f32>,
@@ -109,9 +109,9 @@ pub enum TciNotification {
     VfoSyncEx { enabled: bool },
     FmDeviationEx { receiver: u32, hz: u32 },
     // Stock Thetis v2.10.3.14 native sample rate / IF limits (global, not per-RX)
-    /// `iq_samplerate:<rate>;` — primary bron voor DDC sample rate (Hz)
+    /// `iq_samplerate:<rate>;` - primary bron voor DDC sample rate (Hz)
     IqSamplerate { rate: u32 },
-    /// `if_limits:<low>,<high>;` — IF range in Hz; sample rate = high - low
+    /// `if_limits:<low>,<high>;` - IF range in Hz; sample rate = high - low
     /// (fallback wanneer iq_samplerate niet binnenkomt)
     IfLimits { low: i32, high: i32 },
     // Stock Thetis v2.10.3.14 native attenuator/preamp commands
@@ -122,7 +122,7 @@ pub enum TciNotification {
     TxFilterBandEx { low: i32, high: i32 },
     TxFrequencyEx { freq: u64, band: String, rx2_enabled: bool, tx_vfob: bool },
     DiversityEnableEx { enabled: bool },
-    /// rx_only_ex echo — Thetis' current "Receive only" state. Used by the
+    /// rx_only_ex echo - Thetis' current "Receive only" state. Used by the
     /// TL-server to track the live RXOnly so it can snapshot/restore around
     /// an RX-only Amplitec position.
     RxOnlyEx { rx_only: bool },
@@ -277,7 +277,7 @@ pub fn parse_tci_text(cmd: &str) -> Option<TciNotification> {
             }
         }
         "s9_frequency_ex" => {
-            // Format: `s9_frequency_ex:<mhz>;` — Thetis pushes its
+            // Format: `s9_frequency_ex:<mhz>;` - Thetis pushes its
             // user-configurable S9-frequency threshold (default 30 MHz).
             if args.is_empty() { return None; }
             let mhz: f64 = args[0].trim().parse().ok()?;
@@ -775,7 +775,7 @@ pub fn parse_tci_text(cmd: &str) -> Option<TciNotification> {
         }
         "ddc_sample_rate_ex" => {
             // TL2-1 fork extension: per-RX rate (`rx,rate_hz`). Coexists with stock global
-            // `iq_samplerate:rate;` which is parsed by another arm — that one set both
+            // `iq_samplerate:rate;` which is parsed by another arm - that one set both
             // RX rates equal; this one updates only the named receiver.
             if args.len() >= 2 {
                 let receiver: u32 = args[0].trim().parse().ok()?;
@@ -1017,7 +1017,7 @@ pub fn build_tci_binary_frame(
     frame
 }
 
-// --- Mode string ↔ u8 mapping ---
+// --- Mode string <-> u8 mapping ---
 // Thetis CAT modes: 0=LSB, 1=USB, 2=DSB, 3=CWL, 4=CWU, 5=FM, 6=AM, 7=DIGU, 8=SPEC, 9=DIGL, 10=SAM, 11=DRM
 
 pub fn mode_str_to_u8(s: &str) -> u8 {

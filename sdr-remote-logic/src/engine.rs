@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use log::{info, warn};
-use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, watch};
+use tokio::net::{ToSocketAddrs, UdpSocket};
+use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
 use tokio::time::{interval, Duration};
 
 use sdr_remote_core::codec::{OpusDecoder, OpusDecoderWideband, OpusEncoderWideband};
@@ -18,9 +19,101 @@ use crate::audio::AudioBackend;
 use crate::commands::Command;
 use crate::state::RadioState;
 
-/// PTT burst count â€" send this many packets on PTT state change
-const PTT_BURST_COUNT: u32 = 5;
+/// Phase C: kanalen die de client-engine aan de relay-monitor koppelen wanneer de
+/// client via de relay verbindt i.p.v. direct-UDP. De client (`sdr-remote-client`)
+/// knoopt deze aan een `RelayMonitor` met tunnel; de engine kent alleen de mpsc-kanalen.
+pub struct ClientRelayTunnel {
+    /// Engine -> monitor: te verzenden TL-frames (het adres is het server-adres, genegeerd door de relay).
+    pub uplink_tx: mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
+    /// Monitor -> engine: ontvangen (gedecodeerde) TL-frames.
+    pub inbound_rx: mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>,
+    /// Het server-adres; `recv` tagt inkomende frames hiermee, net als direct-UDP.
+    pub server_addr: SocketAddr,
+}
 
+/// Client-transport: direct-UDP (default, byte-identiek) of via de relay-tunnel.
+/// Bootst het `UdpSocket`-API-oppervlak na dat de engine gebruikt (`send_to`,
+/// `recv_from`, `local_addr`), zodat alle bestaande call-sites ongewijzigd blijven.
+enum ClientTransport {
+    Direct(UdpSocket),
+    Relay {
+        uplink_tx: mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
+        inbound_rx: AsyncMutex<mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>>,
+        server_addr: SocketAddr,
+    },
+}
+
+impl ClientTransport {
+    async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> std::io::Result<usize> {
+        match self {
+            ClientTransport::Direct(s) => s.send_to(buf, addr).await,
+            ClientTransport::Relay {
+                uplink_tx,
+                server_addr,
+                ..
+            } => {
+                // De relay kent de bestemming; het addr-argument (server) wordt genegeerd.
+                let _ = uplink_tx.send((*server_addr, buf.to_vec()));
+                Ok(buf.len())
+            }
+        }
+    }
+
+    async fn recv_from(&self, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+        match self {
+            ClientTransport::Direct(s) => s.recv_from(buf).await,
+            ClientTransport::Relay {
+                inbound_rx,
+                server_addr,
+                ..
+            } => {
+                let mut rx = inbound_rx.lock().await;
+                match rx.recv().await {
+                    Some((_addr, data)) => {
+                        let n = data.len().min(buf.len());
+                        buf[..n].copy_from_slice(&data[..n]);
+                        Ok((n, *server_addr))
+                    }
+                    None => Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "relay inbound channel closed",
+                    )),
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        match self {
+            ClientTransport::Direct(s) => s.local_addr(),
+            ClientTransport::Relay { .. } => Ok(SocketAddr::from(([0, 0, 0, 0], 0))),
+        }
+    }
+
+    /// True in relay-modus. De Connect-handler slaat dan de directe-IP-DNS/parse-check
+    /// over: in relay-modus is er geen direct server-IP (de route is url/station/token),
+    /// en het Connect-adres is puur een display-label dat de Relay-transport negeert.
+    fn is_relay(&self) -> bool {
+        matches!(self, ClientTransport::Relay { .. })
+    }
+}
+
+/// Pure toepassing van een `YaesuPresence`-pakket op de client-state. Presence is
+/// de connected-autoriteit (gedeeld naar desktop + Android). Retourneert
+/// `(slot0_changed, slot1_changed)` zodat de caller value-change-only kan loggen.
+/// Zet connected dynamisch true/false.
+pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePacket) -> (bool, bool) {
+    let c0 = state.yaesu_connected != p.slot0_present;
+    let c1 = state.yaesu2_connected != p.slot1_present;
+    state.yaesu_connected = p.slot0_present;
+    state.yaesu2_connected = p.slot1_present;
+    state.yaesu_model = p.slot0_model;
+    state.yaesu2_model = p.slot1_model;
+    (c0, c1)
+}
+
+/// PTT burst count - send this many packets on PTT state change
+const PTT_BURST_COUNT: u32 = 5;
 /// Heartbeat interval
 const HEARTBEAT_INTERVAL_MS: u64 = 500;
 
@@ -30,6 +123,7 @@ const CONNECTION_TIMEOUT_MIN_MS: u64 = 6000;
 /// Max samples to drain when not connected (500ms worth at 48kHz)
 const RING_DRAIN_SIZE: usize = 48_000 / 2;
 
+
 // --- TX AGC (Automatic Gain Control) ---
 
 const AGC_TARGET: f32 = 0.25;    // Target peak amplitude (~-12dB)
@@ -37,7 +131,7 @@ const AGC_MAX_GAIN: f32 = 10.0;  // +20dB max boost
 const AGC_MIN_GAIN: f32 = 0.1;   // -20dB max attenuation
 const AGC_ATTACK: f32 = 0.3;     // Fast attack (per 20ms frame)
 const AGC_RELEASE: f32 = 0.01;   // Slow release (per 20ms frame)
-const AGC_GATE: f32 = 0.001;     // Noise gate â€" don't boost below this
+const AGC_GATE: f32 = 0.001;     // Noise gate - don't boost below this
 
 struct TxAgc {
     gain: f32,
@@ -66,6 +160,39 @@ impl TxAgc {
     }
 }
 
+// --- TX Compressor (spraakcompressor voor de Yaesu USB-TX-keten) ---
+// De radio-eigen processor werkt niet op USB-audio; deze client-side compressor
+// vult dat gat. `amount` 0.0..1.0 (0=uit): comprimeert pieken boven een drempel
+// (ratio) en past makeup-gain toe → meer dichtheid/punch.
+struct TxCompressor {
+    amount: f32,
+    env: f32,
+}
+
+impl TxCompressor {
+    fn new() -> Self { Self { amount: 0.0, env: 0.0 } }
+
+    fn set_amount(&mut self, a: f32) { self.amount = a.clamp(0.0, 1.0); }
+
+    fn process(&mut self, samples: &mut [f32]) {
+        if self.amount <= 0.001 { return; }
+        // Drempel zakt, ratio + makeup stijgen met amount.
+        let threshold = 0.30 - 0.22 * self.amount; // 0.30 → 0.08
+        let ratio = 1.0 + 5.0 * self.amount;        // 1 → 6
+        let makeup = 1.0 + 1.5 * self.amount;       // 1.0 → 2.5
+        let exp = 1.0 / ratio - 1.0;                // negatieve exponent → gain-reductie
+        for s in samples.iter_mut() {
+            let a = s.abs();
+            let coeff = if a > self.env { 0.30 } else { 0.02 }; // attack / release
+            self.env += (a - self.env) * coeff;
+            let gain = if self.env > threshold {
+                (self.env / threshold).powf(exp)
+            } else { 1.0 };
+            *s = (*s * gain * makeup).clamp(-1.0, 1.0);
+        }
+    }
+}
+
 /// Client engine: owns all network + audio logic.
 /// Communicates with UI via watch (state) and mpsc (commands).
 pub struct ClientEngine {
@@ -87,25 +214,41 @@ impl ClientEngine {
         mut self,
         audio_factory: impl Fn(Option<&str>, Option<&str>) -> Result<Box<dyn AudioBackend>>,
         mut shutdown: watch::Receiver<bool>,
+        relay_tunnel: Option<ClientRelayTunnel>,
     ) -> Result<()> {
-        // Create socket with large recv buffer to prevent packet loss from
-        // spectrum packets (4-8KB each) filling the default 8KB Windows buffer.
-        let socket = UdpSocket::bind("0.0.0.0:0").await.context("bind client socket")?;
-        {
-            use socket2::SockRef;
-            let sock_ref = SockRef::from(&socket);
-            let _ = sock_ref.set_recv_buffer_size(2 * 1024 * 1024);
-            let _ = sock_ref.set_send_buffer_size(512 * 1024);
-            let recv = sock_ref.recv_buffer_size().unwrap_or(0);
-            let send = sock_ref.send_buffer_size().unwrap_or(0);
-            info!("Client UDP bound to {} (recv_buf={}KB, send_buf={}KB)",
-                socket.local_addr()?, recv / 1024, send / 1024);
-        }
+        // Client transport: direct-UDP (default, byte-identical) or via the relay
+        // tunnel when the client cannot port-forward. Direct binds a UDP socket with
+        // a large recv buffer to prevent packet loss from spectrum packets (4-8KB
+        // each) filling the default 8KB Windows buffer.
+        let transport = match relay_tunnel {
+            None => {
+                let udp = UdpSocket::bind("0.0.0.0:0").await.context("bind client socket")?;
+                {
+                    use socket2::SockRef;
+                    let sock_ref = SockRef::from(&udp);
+                    let _ = sock_ref.set_recv_buffer_size(2 * 1024 * 1024);
+                    let _ = sock_ref.set_send_buffer_size(512 * 1024);
+                    let recv = sock_ref.recv_buffer_size().unwrap_or(0);
+                    let send = sock_ref.send_buffer_size().unwrap_or(0);
+                    info!("Client UDP bound to {} (recv_buf={}KB, send_buf={}KB)",
+                        udp.local_addr()?, recv / 1024, send / 1024);
+                }
+                ClientTransport::Direct(udp)
+            }
+            Some(t) => {
+                info!("Client transport: relay tunnel (server {})", t.server_addr);
+                ClientTransport::Relay {
+                    uplink_tx: t.uplink_tx,
+                    inbound_rx: AsyncMutex::new(t.inbound_rx),
+                    server_addr: t.server_addr,
+                }
+            }
+        };
 
-        let socket = Arc::new(socket);
+        let socket = Arc::new(transport);
         let start = Instant::now();
 
-        // Audio setup â€" use defaults initially, can be reconfigured via commands
+        // Audio setup - use defaults initially, can be reconfigured via commands
         let mut audio: Box<dyn AudioBackend> = audio_factory(None, None)?;
         let mut capture_rate = audio.capture_sample_rate();
         let mut playback_rate = audio.playback_sample_rate();
@@ -117,7 +260,7 @@ impl ClientEngine {
             capture_rate, capture_frame_samples, playback_rate
         );
 
-        // Codec â€" wideband Opus (16kHz) for TX, stereo (8kHz) for RX decode
+        // Codec - wideband Opus (16kHz) for TX, stereo (8kHz) for RX decode
         let mut encoder = OpusEncoderWideband::new()?;
         // Per-channel mono decoders for multi-channel audio
         let mut dec_rx1 = OpusDecoder::new()?;
@@ -131,7 +274,7 @@ impl ClientEngine {
         let mut dec_bin_r_wb = OpusDecoderWideband::new()?;
         let mut dec_rx2_wb = OpusDecoderWideband::new()?;
 
-        // Yaesu (FT-991A) codec + jitter buffer â€" independent third audio channel.
+        // Yaesu (FT-991A) codec + jitter buffer - independent third audio channel.
         // RX-bandbreedte volgt de Thetis-wideband-toggle (build 122): per packet
         // bepaalt de AUDIO_WIDEBAND-flag of we NB (8 kHz) of WB (16 kHz) decoderen.
         // Beide decoders/resamplers blijven aan; `*_last_wb` onthoudt het laatste
@@ -153,12 +296,13 @@ impl ClientEngine {
         let mut yaesu_tx_sequence: u32 = 0;
         let mut yaesu_tx_accum: Vec<f32> = Vec::new();
         let mut yaesu_tx_encoder = OpusEncoderWideband::new()?;
+        let mut yaesu_tx_bitrate_bps: i32 = 24_000;
         // Anti-alias filter: sinc_len 128 + f_cutoff 0.95 (identiek aan
         // server-side Yaesu TX resampler). De korte filter (sinc_len 32)
         // liet NT-USB content >8 kHz onvoldoende afsnijden, waardoor die
         // frequenties bij de 48→16 kHz decimatie terug-aliassen in
         // 0-8 kHz en op de RF-uitgang als "raar klinkende" hoge tonen
-        // hoorbaar waren (owner-bevinding 2026-06-02). ~4 ms extra
+        // hoorbaar waren (operator-bevinding 2026-06-02). ~4 ms extra
         // filter delay — verwaarloosbaar voor mic→Yaesu pad.
         let mut yaesu_tx_resampler = rubato::SincFixedIn::<f32>::new(
             NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0,
@@ -200,6 +344,14 @@ impl ClientEngine {
         let mut res_rx2_out_wb = rubato::SincFixedIn::<f32>::new(
             playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
         ).context("RX2 16k->device WB resampler")?;
+        // Dedicated WAV playback resamplers. Do not share RX1 live resampler state;
+        // recordings played through the Server tab must sound like the file on disk.
+        let mut wav_res_out = rubato::SincFixedIn::<f32>::new(
+            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mk_sinc(), FRAME_SAMPLES, 1,
+        ).context("WAV 8k->device resampler")?;
+        let mut wav_res_out_wb = rubato::SincFixedIn::<f32>::new(
+            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
+        ).context("WAV 16k->device resampler")?;
 
         // Yaesu RX-resamplers per formaat (NB 8k→device, WB 16k→device); per packet
         // gekozen op de wideband-flag (build 122). SincInterpolationParameters is niet
@@ -326,7 +478,8 @@ impl ClientEngine {
         let mut yaesu2_ptt = false;
         let mut last_ptt = false;
         let mut ptt_burst_remaining: u32 = 0;
-        let mut capture_gate_delay: u32 = 0;
+        let mut mic_gate_delay_ms: u32 = 0;
+        let mut last_capture_ptt = false;
         let mut last_hb_sent = Instant::now();
         let mut last_hb_ack_time: Option<Instant> = None;
         let mut last_hb_ack_rtt: u16 = 0;
@@ -340,6 +493,14 @@ impl ClientEngine {
         let mut last_sent_volume: u16 = 0;
         let mut rx_volume_synced: bool = false; // Don't send ZZLA until server value received
         let mut agc = TxAgc::new();
+        let mut yaesu_agc = TxAgc::new(); // aparte AGC-envelope voor de Yaesu-TX-tak (deel B)
+        let mut yaesu_tx_agc_enabled = false; // eigen Yaesu-AGC-toggle (los van Thetis agc_enabled)
+        let mut yaesu_compressor = TxCompressor::new(); // client-side spraakcompressor (USB-TX)
+        // Radio 2 (FTX-1): eigen compressor/AGC zodat de TX-keten per radio instelbaar is
+        // (net als de per-radio EQ). PTT is mutueel exclusief → per-PTT de juiste keten.
+        let mut yaesu2_agc = TxAgc::new();
+        let mut yaesu2_tx_agc_enabled = false;
+        let mut yaesu2_compressor = TxCompressor::new();
         let mut agc_enabled = false;
         let mut rx2_volume: f32 = 0.2;     // Thetis ZZLB sync + RX2 audio gain
         let mut vfo_b_volume: f32 = 1.0;   // Additional client-only RX2 gain (VFO B Vol slider)
@@ -355,9 +516,13 @@ impl ClientEngine {
         let mut rec_rx1: Option<crate::wav::WavWriter> = None;
         let mut rec_rx2: Option<crate::wav::WavWriter> = None;
         let mut rec_yaesu: Option<crate::wav::WavWriter> = None;
+        let mut rec_yaesu2: Option<crate::wav::WavWriter> = None;
+        let mut rec_vrx1: Option<crate::wav::WavWriter> = None;
+        let mut rec_vrx2: Option<crate::wav::WavWriter> = None;
 
         // WAV playback state
         let mut playback_wav: Option<Vec<i16>> = None;
+        let mut playback_wav_rate: u32 = NETWORK_SAMPLE_RATE;
         let mut playback_pos: usize = 0;
         let mut playback_is_tx: bool = false;
 
@@ -366,11 +531,11 @@ impl ClientEngine {
         // (VRX-piek bij opstart, project_audio_stutter_diagnose): elk nieuw
         // audiokanaal start muted tot de UI/effectieve volume binnen is.
         let mut yaesu2_volume: f32 = 0.0;
-        let mut yaesu_local_mic_gain: f32 = 1.0; // Local Yaesu mic gain (before Opus encoding)
+        let mut yaesu_local_mic_gain: f32 = 0.2; // Local Yaesu mic gain (before Opus encoding)
         let mut yaesu_eq = crate::eq::Equalizer::new(48000.0); // EQ at capture rate
         // Slot-1 (FTX-1) eigen TX-mic-EQ + gain — toegepast wanneer op radio 2
         // wordt gezonden (PTT mutueel exclusief, dus per-PTT gekozen in de encode-keten).
-        let mut yaesu2_local_mic_gain: f32 = 1.0;
+        let mut yaesu2_local_mic_gain: f32 = 0.2;
         let mut yaesu2_eq = crate::eq::Equalizer::new(48000.0);
         let mut last_sent_rx2_volume: u16 = 0;
         let mut rx2_volume_synced: bool = false; // Don't send ZZLB until server value received
@@ -411,7 +576,7 @@ impl ClientEngine {
         let mut bw_tx_bytes: u64 = 0;
         // Per-PacketType byte-counter voor de RX-stream — geïndexeerd op
         // de `packet_type` byte (data[2]). Elke 5 s wordt een top-5
-        // overzicht naar info! gelogd zodat de owner kan zien welke
+        // overzicht naar info! gelogd zodat de operator kan zien welke
         // stream het meeste verbruikt (zonder UI-uitbreiding).
         let mut bw_by_type: [u64; 256] = [0; 256];
         let mut bw_breakdown_start = Instant::now();
@@ -505,7 +670,10 @@ impl ClientEngine {
                         // needed. If it has a hostname, try lookup_host once. Either failure
                         // mode produces a specific ConnectError so the UI can show a precise
                         // message instead of a generic "Disconnected".
-                        let resolved_ok = if addr.parse::<std::net::SocketAddr>().is_ok() {
+                        // In relay-modus is er geen direct server-IP: het adres is een
+                        // display-label (genegeerd door de Relay-transport). Sla de
+                        // directe-IP-DNS/parse-check dan over (security addendum fix).
+                        let resolved_ok = if socket.is_relay() || addr.parse::<std::net::SocketAddr>().is_ok() {
                             true
                         } else {
                             // Async DNS lookup with a tight timeout — don't block the
@@ -555,7 +723,7 @@ impl ClientEngine {
                             // surfaced from the network paths below.
                             state.connect_status =
                                 crate::state::ConnectStatus::Connecting;
-                            // Owner-smoke-test fix (2026-05-13): broadcast immediately so the
+                            // Operator-smoke-test fix (2026-05-13): broadcast immediately so the
                             // UI clears the previous Failed(WrongPassword/...) banner the
                             // moment Connect is pressed — without this the user keeps seeing
                             // "Wrong password" for several seconds until the next packet
@@ -596,6 +764,17 @@ impl ClientEngine {
                         }
                         server_addr = None;
                         jitter_buf.reset();
+                        // Re-baseline the other audio streams too, so Yaesu/VRX don't
+                        // stall on a stale next_seq after reconnect — explicit here
+                        // instead of relying only on the backjump re-baseline.
+                        yaesu_jitter_buf.reset();
+                        yaesu2_jitter_buf.reset();
+                        vrx1_jitter_buf.reset();
+                        vrx2_jitter_buf.reset();
+                        yaesu_logged_first = false;
+                        yaesu2_logged_first = false;
+                        vrx1_logged_first = false;
+                        vrx2_logged_first = false;
                         was_connected = false;
                         last_hb_ack_time = None;
                         last_hb_ack_rtt = 0;
@@ -625,6 +804,13 @@ impl ClientEngine {
                         state.rx2_spectrum_sequence = 0;
                         state.rx2_full_spectrum_sequence = 0;
                         let _ = self.state_tx.send(state.clone());
+                    }
+                    Command::SetMicGateDelayMs(v) => {
+                        mic_gate_delay_ms = v.min(800);
+                        audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
+                    }
+                    Command::SetPlaybackMute(v) => {
+                        audio.set_playback_mute(v);
                     }
                     Command::SetPtt(v) => {
                         thetis_ptt = v;
@@ -713,6 +899,7 @@ impl ClientEngine {
                             match audio_factory(in_name, out_name) {
                                 Ok(new_audio) => {
                                     audio = new_audio;
+                                    audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
                                     // Rebuild resamplers with new sample rates
                                     let new_cap = audio.capture_sample_rate();
                                     let new_play = audio.playback_sample_rate();
@@ -747,6 +934,8 @@ impl ClientEngine {
                                         if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx1_out_wb = r; }
                                         if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_bin_r_out_wb = r; }
                                         if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx2_out_wb = r; }
+                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { wav_res_out = r; }
+                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { wav_res_out_wb = r; }
                                         info!("Resamplers rebuilt: capture {}Hz, playback {}Hz", capture_rate, playback_rate);
                                     }
                                     // Reset all jitter buffers to prevent stale frame buildup
@@ -770,6 +959,7 @@ impl ClientEngine {
                             match audio_factory(in_name, out_name) {
                                 Ok(new_audio) => {
                                     audio = new_audio;
+                                    audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
                                     let new_cap = audio.capture_sample_rate();
                                     let new_play = audio.playback_sample_rate();
                                     if new_cap != capture_rate || new_play != playback_rate {
@@ -800,6 +990,8 @@ impl ClientEngine {
                                         if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx1_out_wb = r; }
                                         if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_bin_r_out_wb = r; }
                                         if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx2_out_wb = r; }
+                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { wav_res_out = r; }
+                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { wav_res_out_wb = r; }
                                         info!("Resamplers rebuilt: capture {}Hz, playback {}Hz", capture_rate, playback_rate);
                                     }
                                     jitter_buf.reset();
@@ -1271,13 +1463,12 @@ impl ClientEngine {
                             let _ = send_tx!(&buf, addr.as_str());
                         }
                     }
-                    Command::StartRecording { rx1, rx2, yaesu, path } => {
+                    Command::StartRecording { rx1, rx2, yaesu, yaesu2, vrx1, vrx2, path } => {
                         use std::path::Path;
                         let base = Path::new(&path);
                         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                        // De WAV-rate wordt dynamisch bepaald door de eerste geschreven
-                        // samples (write_samples geeft de decoder-rate mee) — schaalt
-                        // automatisch mee met NB (8k) / WB (16k) / toekomstige rates.
+                        // WAV rate is set by the first write_samples() call; each
+                        // source can therefore follow NB/WB decoder rate independently.
                         if rx1 {
                             let p = base.join(format!("RX1_{}.wav", ts));
                             match crate::wav::WavWriter::new(&p) {
@@ -1292,18 +1483,59 @@ impl ClientEngine {
                         if rx2 {
                             let p = base.join(format!("RX2_{}.wav", ts));
                             match crate::wav::WavWriter::new(&p) {
-                                Ok(w) => { info!("Recording RX2 to {}", p.display()); rec_rx2 = Some(w); }
+                                Ok(w) => {
+                                    info!("Recording RX2 to {}", p.display());
+                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    rec_rx2 = Some(w);
+                                }
                                 Err(e) => warn!("Failed to start RX2 recording: {}", e),
                             }
                         }
                         if yaesu {
-                            let p = base.join(format!("Yaesu_{}.wav", ts));
+                            let p = base.join(format!("Yaesu1_{}.wav", ts));
                             match crate::wav::WavWriter::new(&p) {
-                                Ok(w) => { info!("Recording Yaesu to {}", p.display()); rec_yaesu = Some(w); }
-                                Err(e) => warn!("Failed to start Yaesu recording: {}", e),
+                                Ok(w) => {
+                                    info!("Recording Yaesu radio 1 to {}", p.display());
+                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    rec_yaesu = Some(w);
+                                }
+                                Err(e) => warn!("Failed to start Yaesu radio 1 recording: {}", e),
                             }
                         }
-                        state.recording = rx1 || rx2 || yaesu;
+                        if yaesu2 {
+                            let p = base.join(format!("Yaesu2_{}.wav", ts));
+                            match crate::wav::WavWriter::new(&p) {
+                                Ok(w) => {
+                                    info!("Recording Yaesu radio 2 to {}", p.display());
+                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    rec_yaesu2 = Some(w);
+                                }
+                                Err(e) => warn!("Failed to start Yaesu radio 2 recording: {}", e),
+                            }
+                        }
+                        if vrx1 {
+                            let p = base.join(format!("VRX1_{}.wav", ts));
+                            match crate::wav::WavWriter::new(&p) {
+                                Ok(w) => {
+                                    info!("Recording VRX1 to {}", p.display());
+                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    rec_vrx1 = Some(w);
+                                }
+                                Err(e) => warn!("Failed to start VRX1 recording: {}", e),
+                            }
+                        }
+                        if vrx2 {
+                            let p = base.join(format!("VRX2_{}.wav", ts));
+                            match crate::wav::WavWriter::new(&p) {
+                                Ok(w) => {
+                                    info!("Recording VRX2 to {}", p.display());
+                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    rec_vrx2 = Some(w);
+                                }
+                                Err(e) => warn!("Failed to start VRX2 recording: {}", e),
+                            }
+                        }
+                        state.recording = rx1 || rx2 || yaesu || yaesu2 || vrx1 || vrx2;
                     }
                     Command::StopRecording => {
                         if let Some(w) = rec_rx1.take() {
@@ -1318,19 +1550,42 @@ impl ClientEngine {
                         }
                         if let Some(w) = rec_yaesu.take() {
                             let dur = w.duration_secs();
-                            if let Err(e) = w.finalize() { warn!("Yaesu WAV finalize error: {}", e); }
-                            else { info!("Yaesu recording stopped ({:.1}s)", dur); }
+                            if let Err(e) = w.finalize() { warn!("Yaesu radio 1 WAV finalize error: {}", e); }
+                            else { info!("Yaesu radio 1 recording stopped ({:.1}s)", dur); }
+                        }
+                        if let Some(w) = rec_yaesu2.take() {
+                            let dur = w.duration_secs();
+                            if let Err(e) = w.finalize() { warn!("Yaesu radio 2 WAV finalize error: {}", e); }
+                            else { info!("Yaesu radio 2 recording stopped ({:.1}s)", dur); }
+                        }
+                        if let Some(w) = rec_vrx1.take() {
+                            let dur = w.duration_secs();
+                            if let Err(e) = w.finalize() { warn!("VRX1 WAV finalize error: {}", e); }
+                            else { info!("VRX1 recording stopped ({:.1}s)", dur); }
+                        }
+                        if let Some(w) = rec_vrx2.take() {
+                            let dur = w.duration_secs();
+                            if let Err(e) = w.finalize() { warn!("VRX2 WAV finalize error: {}", e); }
+                            else { info!("VRX2 recording stopped ({:.1}s)", dur); }
                         }
                         state.recording = false;
                     }
                     Command::PlayRecording { path } => {
                         match crate::wav::read_wav(std::path::Path::new(&path)) {
-                            Ok((_rate, samples)) => {
-                                info!("Playback: loaded {} ({:.1}s, {} samples)",
-                                    path, samples.len() as f32 / 8000.0, samples.len());
+                            Ok((rate, samples)) => {
+                                let supported_rate = match rate {
+                                    NETWORK_SAMPLE_RATE | NETWORK_SAMPLE_RATE_WIDEBAND => rate,
+                                    other => {
+                                        warn!("Playback: unsupported WAV sample rate {} Hz, treating as 8 kHz", other);
+                                        NETWORK_SAMPLE_RATE
+                                    }
+                                };
+                                info!("Playback: loaded {} ({:.1}s, {} Hz, {} samples)",
+                                    path, samples.len() as f32 / rate.max(1) as f32, rate, samples.len());
                                 playback_wav = Some(samples);
+                                playback_wav_rate = supported_rate;
                                 playback_pos = 0;
-                                playback_is_tx = ptt || yaesu_ptt;
+                                playback_is_tx = ptt || yaesu_ptt || yaesu2_ptt;
                                 state.playing = true;
                             }
                             Err(e) => warn!("Failed to load WAV: {}", e),
@@ -1386,6 +1641,24 @@ impl ClientEngine {
                     Command::SetYaesuEqEnabled(on) => {
                         yaesu_eq.set_enabled(on);
                         info!("Yaesu EQ: {}", if on { "ON" } else { "OFF" });
+                    }
+                    Command::SetYaesuCompressor(level) => {
+                        // Client-side spraakcompressor radio 1 (0-100 → 0.0-1.0).
+                        yaesu_compressor.set_amount(level as f32 / 100.0);
+                        info!("Yaesu compressor: {}", level);
+                    }
+                    Command::SetYaesuTxAgc(on) => {
+                        yaesu_tx_agc_enabled = on;
+                        info!("Yaesu TX AGC: {}", if on { "ON" } else { "OFF" });
+                    }
+                    Command::SetYaesu2Compressor(level) => {
+                        // Client-side spraakcompressor radio 2 (FTX-1).
+                        yaesu2_compressor.set_amount(level as f32 / 100.0);
+                        info!("Yaesu2 compressor: {}", level);
+                    }
+                    Command::SetYaesu2TxAgc(on) => {
+                        yaesu2_tx_agc_enabled = on;
+                        info!("Yaesu2 TX AGC: {}", if on { "ON" } else { "OFF" });
                     }
                     Command::SetYaesuFreq(hz) => {
                         if let Some(ref addr) = server_addr {
@@ -1463,6 +1736,15 @@ impl ClientEngine {
                             let _ = send_tx!(&buf, addr.as_str());
                         }
                     }
+                    Command::SetYaesuControl(slot, control, value) => {
+                        // Typed Yaesu DSP/function control (PATCH-yaesu-extra-controls).
+                        if let Some(ref addr) = server_addr {
+                            let pkt = YaesuControlPacket { slot, control, value };
+                            let mut buf = [0u8; YaesuControlPacket::SIZE];
+                            pkt.serialize(&mut buf);
+                            let _ = send_tx!(&buf, addr.as_str());
+                        }
+                    }
                     Command::SetYaesu2Menu(addr_str, value) => {
                         // FTX-1 EX-set: reist als YaesuMemoryData2 met "SETMENU:"-prefix
                         // (spiegelt het 991A SetYaesuMenu-pad, maar 6-cijferig adres).
@@ -1483,13 +1765,8 @@ impl ClientEngine {
                     }
                     Command::SetYaesuPtt(on) => {
                         yaesu_ptt = on;
-                        // Open mic capture gate (shared hardware resource)
-                        if on {
-                            audio.set_capture_gate(true);
-                        } else if !ptt {
-                            audio.set_capture_gate(false);
-                        }
-                        // Send Yaesu PTT control to server
+                        // Send Yaesu PTT immediately; mic capture opens through
+                        // the shared delayed gate below.
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::YaesuPtt, value: on as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
@@ -1498,8 +1775,9 @@ impl ClientEngine {
                         }
                     }
                     Command::SetYaesuTxGain(v) => {
-                        // Local Yaesu mic gain (applied before Opus encoding)
-                        yaesu_local_mic_gain = v;
+                        // Local Yaesu mic gain (applied before Opus encoding).
+                        // UI display 0.5 maps to the empirically matched internal 0.2.
+                        yaesu_local_mic_gain = v.clamp(0.02, 0.4);
                     }
                     // --- Dual-radio slot 1 commands (PATCH-dual-radio-991a-ftx1) ---
                     Command::SetYaesu2Enable(on) => {
@@ -1516,11 +1794,6 @@ impl ClientEngine {
                     }
                     Command::SetYaesu2Ptt(on) => {
                         yaesu2_ptt = on;
-                        if on {
-                            audio.set_capture_gate(true);
-                        } else if !ptt && !yaesu_ptt {
-                            audio.set_capture_gate(false);
-                        }
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::Yaesu2Ptt, value: on as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
@@ -1545,8 +1818,8 @@ impl ClientEngine {
                         }
                     }
                     Command::SetYaesu2TxGain(v) => {
-                        // Eigen mic-gain voor radio 2 (toegepast bij zenden op slot 1).
-                        yaesu2_local_mic_gain = v;
+                        // Own mic gain for radio 2 (applied when transmitting on slot 1).
+                        yaesu2_local_mic_gain = v.clamp(0.02, 0.4);
                     }
                     Command::SetYaesu2EqBand(band, gain_db) => {
                         yaesu2_eq.set_band_gain(band as usize, gain_db);
@@ -1611,6 +1884,14 @@ impl ClientEngine {
                     Command::SetVrxRateMode(mode) => {
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::VrxAudioRate, value: mode as u16 };
+                            let mut buf = [0u8; ControlPacket::SIZE];
+                            ctrl.serialize(&mut buf);
+                            let _ = send_tx!(&buf, addr.as_str());
+                        }
+                    }
+                    Command::SetVrxRateMode2(mode) => {
+                        if let Some(ref addr) = server_addr {
+                            let ctrl = ControlPacket { control_id: ControlId::VrxAudioRate2, value: mode as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
                             ctrl.serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
@@ -1808,11 +2089,25 @@ impl ClientEngine {
             let current_addr = server_addr.clone();
             if current_addr.is_none() && last_server_addr.is_some() {
                 jitter_buf.reset();
+                // Reset the other per-stream audio jitter buffers too. Previously
+                // only the RX buffer was reset here, so after a server restart the
+                // Yaesu buffers kept a stale (high) next_seq and dropped the fresh
+                // low-sequence stream as "too late" — audio stayed silent for
+                // minutes (until the server sequence climbed back) or until a manual
+                // client reconnect. Re-baseline all streams on disconnect.
+                yaesu_jitter_buf.reset();
+                yaesu2_jitter_buf.reset();
+                vrx1_jitter_buf.reset();
+                vrx2_jitter_buf.reset();
                 was_connected = false;
                 last_hb_ack_time = None;
                 last_hb_ack_rtt = 0;
                 logged_first_rx = false;
                 logged_first_tx = false;
+                yaesu_logged_first = false;
+                yaesu2_logged_first = false;
+                vrx1_logged_first = false;
+                vrx2_logged_first = false;
                 rx_volume_synced = false;
                 rx2_volume_synced = false;
                 state.rx_af_gain = 0;
@@ -1821,6 +2116,18 @@ impl ClientEngine {
                 state.jitter_ms = 0.0;
                 state.buffer_depth = 0;
                 state.rx_packets = 0;
+                state.yaesu_audio_packets = 0;
+                state.yaesu_jitter_ms = 0.0;
+                state.yaesu_buffer_depth = 0;
+                state.yaesu2_audio_packets = 0;
+                state.yaesu2_jitter_ms = 0.0;
+                state.yaesu2_buffer_depth = 0;
+                state.vrx1_audio_packets = 0;
+                state.vrx1_jitter_ms = 0.0;
+                state.vrx1_buffer_depth = 0;
+                state.vrx2_audio_packets = 0;
+                state.vrx2_jitter_ms = 0.0;
+                state.vrx2_buffer_depth = 0;
                 state.down_kbps = 0;
                 state.up_kbps = 0;
                 state.bw_breakdown.clear();
@@ -1905,20 +2212,33 @@ impl ClientEngine {
                                 sdr_remote_core::protocol::Capabilities::REPORTS_STATE_FLAGS,
                             );
                             if server_reports_state_flags {
+                                let thetis_configured = ack.state_flags.has(
+                                    sdr_remote_core::protocol::ServerStateFlags::THETIS_CONFIGURED,
+                                );
                                 let tci_up = ack.state_flags.has(
                                     sdr_remote_core::protocol::ServerStateFlags::TCI_CONNECTED,
                                 );
                                 let thetis_proc_running = ack.state_flags.has(
                                     sdr_remote_core::protocol::ServerStateFlags::THETIS_RUNNING,
                                 );
-                                // PATCH-1 owner-feedback (2026-05-13): suppress TciUnreachable
+                                // PATCH-1 operator-feedback (2026-05-13): suppress TciUnreachable
                                 // while the server is in the launch phase (orange Start button).
                                 // Showing "TCI not reachable" during the normal 60s startup
                                 // grace period is wrong — the launch is still in progress.
                                 let thetis_starting_now = ack.state_flags.has(
                                     sdr_remote_core::protocol::ServerStateFlags::THETIS_STARTING,
                                 );
-                                if matches!(
+                                state.thetis_configured = thetis_configured;
+                                if !thetis_configured {
+                                    if matches!(
+                                        state.connect_status,
+                                        crate::state::ConnectStatus::Failed(
+                                            crate::state::ConnectError::TciUnreachable { .. }
+                                        )
+                                    ) {
+                                        state.connect_status = crate::state::ConnectStatus::Connected;
+                                    }
+                                } else if matches!(
                                     state.connect_status,
                                     crate::state::ConnectStatus::Connected
                                 ) {
@@ -1960,6 +2280,10 @@ impl ClientEngine {
                                         }
                                     }
                                 }
+                            } else {
+                                // Old servers do not report whether Thetis/TCI is configured;
+                                // keep the legacy Radio/Thetis UI visible for compatibility.
+                                state.thetis_configured = true;
                             }
                             if let Some(ref addr) = server_addr {
                                 if !was_connected {
@@ -2406,6 +2730,7 @@ impl ClientEngine {
                                 | ControlId::Yaesu2ReadMenus | ControlId::Yaesu2SetMenu => {}
                                 // VRX wide / synchronous-AM UX: client→server only.
                                 ControlId::VrxAudioRate
+                                | ControlId::VrxAudioRate2
                                 | ControlId::VrxSamAutoTune
                                 | ControlId::VrxSamAutoTune2 => {}
                                 // TX modulation filter: client→server only (the
@@ -2416,6 +2741,7 @@ impl ClientEngine {
                         Ok(Packet::EquipmentStatus(eq)) => {
                             match eq.device_type {
                                 DeviceType::Amplitec6x2 => {
+                                    state.amplitec_available = true;
                                     state.amplitec_connected = eq.connected;
                                     state.amplitec_switch_a = eq.switch_a;
                                     state.amplitec_switch_b = eq.switch_b;
@@ -2424,6 +2750,7 @@ impl ClientEngine {
                                     }
                                 }
                                 DeviceType::Tuner => {
+                                    state.tuner_available = true;
                                     state.tuner_state = eq.switch_a;
                                     state.tuner_can_tune = eq.switch_b != 0;
                                     state.tuner_connected = eq.connected;
@@ -2502,7 +2829,7 @@ impl ClientEngine {
                                         if parts.len() >= 28 {
                                             state.rf2k_active = parts[27] == "1";
                                         }
-                                        // Debug fields (Fase D) â€" parts[28..47]
+                                        // Debug fields (Fase D) - parts[28..47]
                                         if parts.len() >= 44 {
                                             state.rf2k_debug_available = parts[28] == "1";
                                             state.rf2k_bias_pct_x10 = parts[29].parse().unwrap_or(0);
@@ -2531,7 +2858,7 @@ impl ClientEngine {
                                             state.rf2k_band_gap_allowed = parts[42] == "1";
                                             state.rf2k_controller_version = parts[43].parse().unwrap_or(0);
                                         }
-                                        // Drive config (Fase D) â€" parts[44..46]
+                                        // Drive config (Fase D) - parts[44..46]
                                         if parts.len() >= 47 {
                                             fn parse_drive(s: &str) -> [u8; 11] {
                                                 let mut arr = [0u8; 11];
@@ -2629,7 +2956,9 @@ impl ClientEngine {
                             }
                         }
                         Ok(Packet::YaesuState(ys)) => {
-                            state.yaesu_connected = true;
+                            // connected komt NIET meer hieruit — presence-authority is
+                            // nu YaesuPresence (PATCH-android-yaesu-presence-datasaver),
+                            // zodat wegvallen/bijkomen dynamisch is i.p.v. sticky.
                             state.yaesu_freq_a = ys.freq_a;
                             state.yaesu_freq_b = ys.freq_b;
                             state.yaesu_mode = ys.mode;
@@ -2643,10 +2972,11 @@ impl ClientEngine {
                             state.yaesu_mic_gain = ys.mic_gain;
                             state.yaesu_split = ys.split;
                             state.yaesu_scan = ys.scan;
+                            state.yaesu_tuner_state = ys.tuner_state;
                             state.yaesu_vfo_select = ys.vfo_select;
                             state.yaesu_memory_channel = ys.memory_channel;
                         }
-                        Ok(Packet::FrequencyYaesu(_)) => {} // clientâ†’server only
+                        Ok(Packet::FrequencyYaesu(_)) => {} // client->server only
                         Ok(Packet::FrequencyVrx(_)) => {} // client→server only
                         Ok(Packet::FrequencyVrxActual(pkt)) => {
                             // SAM auto-tune: server is following the carrier.
@@ -2655,6 +2985,19 @@ impl ClientEngine {
                                 state.vrx1_autotune_freq_hz = pkt.frequency_hz;
                             } else {
                                 state.vrx2_autotune_freq_hz = pkt.frequency_hz;
+                            }
+                        }
+                        Ok(Packet::YaesuControl(_)) => {} // client→server only
+                        Ok(Packet::YaesuFeature(pkt)) => {
+                            // Yaesu DSP/function feature-state feedback (PATCH-yaesu-extra-controls).
+                            if pkt.slot == 0 {
+                                state.yaesu_feature_toggles = pkt.toggles;
+                                state.yaesu_feature_levels = pkt.levels;
+                                state.yaesu_feature_freqs = pkt.freqs;
+                            } else {
+                                state.yaesu2_feature_toggles = pkt.toggles;
+                                state.yaesu2_feature_levels = pkt.levels;
+                                state.yaesu2_feature_freqs = pkt.freqs;
                             }
                         }
                         Ok(Packet::TxFilterBand(pkt)) => {
@@ -2698,6 +3041,9 @@ impl ClientEngine {
                                         vrx1_logged_first = true;
                                     }
                                     vrx1_jitter_buf.push(frame, arrival_ms);
+                                    state.vrx1_audio_packets += 1;
+                                    state.vrx1_jitter_ms = vrx1_jitter_buf.jitter_ms();
+                                    state.vrx1_buffer_depth = vrx1_jitter_buf.depth() as u32;
                                 }
                                 1 => {
                                     if vrx2_logged_first && pkt.sequence == 0 {
@@ -2712,6 +3058,9 @@ impl ClientEngine {
                                         vrx2_logged_first = true;
                                     }
                                     vrx2_jitter_buf.push(frame, arrival_ms);
+                                    state.vrx2_audio_packets += 1;
+                                    state.vrx2_jitter_ms = vrx2_jitter_buf.jitter_ms();
+                                    state.vrx2_buffer_depth = vrx2_jitter_buf.depth() as u32;
                                 }
                                 _ => {}
                             }
@@ -2750,13 +3099,16 @@ impl ClientEngine {
                                 },
                                 arrival_ms,
                             );
+                            state.yaesu_audio_packets += 1;
+                            state.yaesu_jitter_ms = yaesu_jitter_buf.jitter_ms();
+                            state.yaesu_buffer_depth = yaesu_jitter_buf.depth() as u32;
                         }
                         Ok(Packet::PttDenied) => {
                             state.ptt_denied = true;
                         }
                         // Dual-radio slot 1 (Optie B-prime) — exacte spiegel van slot 0.
                         Ok(Packet::YaesuState2(ys)) => {
-                            state.yaesu2_connected = true;
+                            // connected komt NIET meer hieruit — zie YaesuPresence (3c).
                             state.yaesu2_freq_a = ys.freq_a;
                             state.yaesu2_freq_b = ys.freq_b;
                             state.yaesu2_mode = ys.mode;
@@ -2770,6 +3122,7 @@ impl ClientEngine {
                             state.yaesu2_mic_gain = ys.mic_gain;
                             state.yaesu2_split = ys.split;
                             state.yaesu2_scan = ys.scan;
+                            state.yaesu2_tuner_state = ys.tuner_state;
                             state.yaesu2_vfo_select = ys.vfo_select;
                             state.yaesu2_memory_channel = ys.memory_channel;
                         }
@@ -2799,11 +3152,24 @@ impl ClientEngine {
                                 },
                                 arrival_ms,
                             );
+                            state.yaesu2_audio_packets += 1;
+                            state.yaesu2_jitter_ms = yaesu2_jitter_buf.jitter_ms();
+                            state.yaesu2_buffer_depth = yaesu2_jitter_buf.depth() as u32;
                         }
                         Ok(Packet::RadioInfo { slot, model }) => {
                             // Per-radio model voor paneel-naamgeving ("991A 1"/"FTX1").
                             if slot == 0 { state.yaesu_model = model; }
                             else if slot == 1 { state.yaesu2_model = model; }
+                        }
+                        Ok(Packet::YaesuPresence(p)) => {
+                            // Presence-authority (PATCH-android-yaesu-presence-datasaver):
+                            // connected + model komen hiervandaan (broadcast naar álle
+                            // clients), NIET uit de subscription-gated YaesuState. Pure
+                            // toepassing in apply_yaesu_presence (unit-tested).
+                            let (c0, c1) = apply_yaesu_presence(&mut state, &p);
+                            // Value-change-only logging (L4) — gedeeld, dus ook desktop.
+                            if c0 { info!("[radio0] presence: {}", if p.slot0_present { "connected" } else { "disconnected" }); }
+                            if c1 { info!("[radio1] presence: {}", if p.slot1_present { "connected" } else { "disconnected" }); }
                         }
                         Ok(Packet::FrequencyYaesu2(_)) => {} // client→server only
                         Ok(Packet::YaesuMemoryData2(text)) => {
@@ -2875,6 +3241,18 @@ impl ClientEngine {
                         Ok(Packet::Disconnect) => {
                             info!("Server sent disconnect");
                             jitter_buf.reset();
+                            // Re-baseline all audio streams on a server-initiated
+                            // disconnect (server restart!) — this is the path the
+                            // Yaesu-audio-stall hit; don't lean only on the backjump
+                            // heuristic (also fixes the short-session stall).
+                            yaesu_jitter_buf.reset();
+                            yaesu2_jitter_buf.reset();
+                            vrx1_jitter_buf.reset();
+                            vrx2_jitter_buf.reset();
+                            yaesu_logged_first = false;
+                            yaesu2_logged_first = false;
+                            vrx1_logged_first = false;
+                            vrx2_logged_first = false;
                             was_connected = false;
                             last_hb_ack_time = None;
                             last_hb_ack_rtt = 0;
@@ -2954,7 +3332,7 @@ impl ClientEngine {
                         let mut frames_this_tick = 0u32;
                         // Accumulate output samples for mixing with RX2
                         let mut playback_buf: Vec<f32> = Vec::new();
-                        // Right channel buffer â€" filled from stereo decode
+                        // Right channel buffer - filled from stereo decode
                         let mut bin_r_buf: Vec<f32> = Vec::new();
                         let mut rx1_level_accum: f32 = 0.0;
                         let mut rx1_level_count: usize = 0;
@@ -3304,6 +3682,10 @@ impl ClientEngine {
                                     };
                                     match decoded {
                                         Some((pcm, wb)) => {
+                                            if let Some(ref mut w) = rec_yaesu2 {
+                                                let rate = if wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
+                                                let _ = w.write_samples(&pcm, rate);
+                                            }
                                             let mut resampled = if wb {
                                                 resample_to_device(&mut yaesu2_res_wb, &pcm)
                                             } else {
@@ -3375,6 +3757,10 @@ impl ClientEngine {
                                     };
                                     match decoded {
                                         Some((pcm, is_wb)) => {
+                                            if let Some(ref mut w) = rec_vrx1 {
+                                                let rate = if is_wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
+                                                let _ = w.write_samples(&pcm, rate);
+                                            }
                                             let mut resampled = if is_wb {
                                                 resample_to_device(&mut vrx1_resampler_out_wb, &pcm)
                                             } else {
@@ -3442,6 +3828,10 @@ impl ClientEngine {
                                     };
                                     match decoded {
                                         Some((pcm, is_wb)) => {
+                                            if let Some(ref mut w) = rec_vrx2 {
+                                                let rate = if is_wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
+                                                let _ = w.write_samples(&pcm, rate);
+                                            }
                                             let mut resampled = if is_wb {
                                                 resample_to_device(&mut vrx2_resampler_out_wb, &pcm)
                                             } else {
@@ -3477,20 +3867,32 @@ impl ClientEngine {
                             // WAV speaker playback (when not TX)
                             if !playback_is_tx && playback_wav.is_some() {
                                 let wav = playback_wav.as_ref().unwrap();
-                                let samples_per_tick = sdr_remote_core::FRAME_SAMPLES;
+                                let samples_per_tick = if playback_wav_rate == NETWORK_SAMPLE_RATE_WIDEBAND {
+                                    FRAME_SAMPLES_WIDEBAND
+                                } else {
+                                    FRAME_SAMPLES
+                                };
                                 let remaining = wav.len() - playback_pos;
                                 let to_read = samples_per_tick.min(remaining);
                                 if to_read > 0 {
-                                    let pcm: Vec<i16> = wav[playback_pos..playback_pos + to_read].to_vec();
-                                    let resampled = resample_to_device(&mut res_rx1_out, &pcm);
-                                    let target = playback_buf.len().max(resampled.len());
+                                    let mut pcm: Vec<i16> = wav[playback_pos..playback_pos + to_read].to_vec();
+                                    if pcm.len() < samples_per_tick {
+                                        pcm.resize(samples_per_tick, 0);
+                                    }
+                                    let resampled = if playback_wav_rate == NETWORK_SAMPLE_RATE_WIDEBAND {
+                                        resample_to_device(&mut wav_res_out_wb, &pcm)
+                                    } else {
+                                        resample_to_device(&mut wav_res_out, &pcm)
+                                    };
+                                    let target = resampled.len();
+                                    playback_buf.clear();
+                                    bin_r_buf.clear();
                                     playback_buf.resize(target, 0.0);
                                     bin_r_buf.resize(target, 0.0);
                                     for (i, &s) in resampled.iter().enumerate() {
-                                        if i < playback_buf.len() {
-                                            playback_buf[i] = (playback_buf[i] + s * local_volume).clamp(-1.0, 1.0);
-                                            bin_r_buf[i] = (bin_r_buf[i] + s * local_volume).clamp(-1.0, 1.0);
-                                        }
+                                        let sample = (s * local_volume).clamp(-1.0, 1.0);
+                                        playback_buf[i] = sample;
+                                        bin_r_buf[i] = sample;
                                     }
                                     playback_pos += to_read;
                                 }
@@ -3502,9 +3904,9 @@ impl ClientEngine {
                                 }
                             }
 
-                            // Write audio to playback â€" stereo if binaural R available
+                            // Write audio to playback - stereo if binaural R available
                             if !playback_buf.is_empty() {
-                                // Always write stereo â€" if R is empty, duplicate L
+                                // Always write stereo - if R is empty, duplicate L
                                 if bin_r_buf.is_empty() {
                                     bin_r_buf = playback_buf.clone();
                                 }
@@ -3539,7 +3941,7 @@ impl ClientEngine {
 
                     // Connection timeout detection: only disconnect when BOTH
                     // heartbeat ACK and audio packets have been absent for the timeout.
-                    // Dynamic timeout: max(6s, rtt*8) â€" accommodates mobile networks.
+                    // Dynamic timeout: max(6s, rtt*8) - accommodates mobile networks.
                     if was_connected {
                         let timeout_ms = (last_hb_ack_rtt as u64 * 8).max(CONNECTION_TIMEOUT_MIN_MS);
                         let hb_timed_out = last_hb_ack_time
@@ -3550,7 +3952,7 @@ impl ClientEngine {
                         if hb_timed_out && audio_timed_out {
                             info!("Connection lost (no traffic for {}ms, ring={}, jbuf={}, jitter={:.1}ms)",
                                 timeout_ms, audio.playback_buffer_level(), jitter_buf.depth(), jitter_buf.jitter_ms());
-                            // Don't reset jitter buffer â€" let it drain via PLC
+                            // Don't reset jitter buffer - let it drain via PLC
                             // so audio resumes smoothly if packets return
                             was_connected = false;
                             last_hb_ack_rtt = 0;
@@ -3584,6 +3986,7 @@ impl ClientEngine {
                             match audio_factory(in_name, out_name) {
                                 Ok(new_audio) => {
                                     audio = new_audio;
+                                    audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
                                     info!("Audio reconnected successfully");
                                     state.audio_error = false;
                                     audio_error_since = None;
@@ -3657,7 +4060,7 @@ impl ClientEngine {
                             current_loss_percent = smoothed_loss.round() as u8;
                             loss_prev_max_seq = Some(max);
                         } else if loss_prev_max_seq.is_some() {
-                            // Had packets before, now nothing â€" 100% loss
+                            // Had packets before, now nothing - 100% loss
                             smoothed_loss = smoothed_loss * 0.7 + 100.0 * 0.3;
                             current_loss_percent = smoothed_loss.round() as u8;
                         }
@@ -3740,31 +4143,25 @@ impl ClientEngine {
                     if ptt != last_ptt {
                         ptt_burst_remaining = PTT_BURST_COUNT;
                         info!("PTT: {}", if ptt { "TX" } else { "RX" });
-                        if ptt {
-                            // TX start: RX1/RX2 audio is muted in the mix loop (not
-                            // via playback_mute) so Yaesu audio keeps playing.
-                            // Capture gate opens after delay to let speaker drain.
-                            accum_buf.clear();
-                            audio.read_capture(&mut read_buf);
-                            capture_gate_delay = 2; // 2 ticks Ã— 20ms = 40ms after speaker mute
-                        } else {
-                            // TX end: close mic gate (unless Yaesu PTT still active).
-                            // No jitter buffer reset needed â€" playout kept running
-                            // during TX so decoder and buffer are warm with fresh data.
-                            if !yaesu_ptt {
-                                audio.set_capture_gate(false);
-                            }
-                        }
                         last_ptt = ptt;
                     }
-                    // Delayed capture gate opening: wait for speaker to drain
-                    if capture_gate_delay > 0 {
-                        capture_gate_delay -= 1;
-                        if capture_gate_delay == 0 {
-                            audio.set_capture_gate(true);
+
+                    let capture_ptt = ptt || yaesu_ptt || yaesu2_ptt;
+                    if capture_ptt != last_capture_ptt {
+                        if capture_ptt {
+                            audio.set_capture_gate(false);
                             accum_buf.clear();
-                            info!("Capture gate opened (speaker drained)");
+                            yaesu_tx_accum.clear();
+                            let _ = audio.read_capture(&mut read_buf);
+                            audio.set_capture_gate(true);
+                            if mic_gate_delay_ms > 0 {
+                            }
+                        } else {
+                            audio.set_capture_gate(false);
+                            accum_buf.clear();
+                            yaesu_tx_accum.clear();
                         }
+                        last_capture_ptt = capture_ptt;
                     }
 
                     // Update capture level
@@ -3917,11 +4314,6 @@ impl ClientEngine {
                     // Geldt voor beide radio's (PTT mutueel exclusief); per-PTT
                     // worden hieronder de juiste EQ + mic-gain gekozen.
                     if yaesu_ptt || yaesu2_ptt {
-                        static YAESU_TX_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                        let n = YAESU_TX_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if n < 5 || n % 500 == 0 {
-                            info!("Yaesu TX #{}: accum={} capture_frame={}", n, yaesu_tx_accum.len(), capture_frame_samples);
-                        }
                         // Resample to 16kHz, encode wideband Opus
                         while yaesu_tx_accum.len() >= capture_frame_samples {
                             let mut chunk: Vec<f32> = yaesu_tx_accum.drain(..capture_frame_samples).collect();
@@ -3934,15 +4326,45 @@ impl ClientEngine {
                                 yaesu_eq.process(&mut chunk);
                             }
 
-                            // Measure Yaesu mic level (after EQ)
-                            let sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
-                            state.yaesu_mic_level = (sum_sq / chunk.len() as f32).sqrt();
+                            // Measure Yaesu mic level (after EQ) for the UI meter.
+                            let level_sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
+                            state.yaesu_mic_level = if chunk.is_empty() {
+                                0.0
+                            } else {
+                                (level_sum_sq / chunk.len() as f32).sqrt()
+                            };
 
-                            // Resample to 16kHz and apply TX gain + per-radio mic gain.
+                            // Resample to 16kHz and apply Yaesu-specific mic gain before Opus.
                             let mic_gain = if yaesu2_ptt { yaesu2_local_mic_gain } else { yaesu_local_mic_gain };
-                            let resampled = resample_to_network(&mut yaesu_tx_resampler, &chunk);
+                            let mut resampled = resample_to_network(&mut yaesu_tx_resampler, &chunk);
+                            // Client-side TX-keten (radio-processing werkt niet op USB):
+                            // compressor → AGC, vóór de handmatige tx_gain/mic_gain-trim.
+                            // Per radio (net als de EQ): slot-1 PTT → radio-2 keten.
+                            // Compressor werkt zelf-gated op amount; AGC op de eigen toggle.
+                            if yaesu2_ptt {
+                                yaesu2_compressor.process(&mut resampled);
+                                if yaesu2_tx_agc_enabled {
+                                    yaesu2_agc.process(&mut resampled);
+                                }
+                            } else {
+                                yaesu_compressor.process(&mut resampled);
+                                if yaesu_tx_agc_enabled {
+                                    yaesu_agc.process(&mut resampled);
+                                }
+                            }
+                            let final_scale = mic_gain * 4.0;
+                            let desired_bitrate = yaesu_tx_bitrate_for_mode(if yaesu2_ptt { state.yaesu2_mode } else { state.yaesu_mode });
+                            if desired_bitrate != yaesu_tx_bitrate_bps {
+                                match yaesu_tx_encoder.set_bitrate_bps(desired_bitrate) {
+                                    Ok(()) => {
+                                        yaesu_tx_bitrate_bps = desired_bitrate;
+                                        info!("Yaesu TX Opus bitrate set to {} bps", desired_bitrate);
+                                    }
+                                    Err(e) => warn!("Yaesu TX Opus bitrate change failed: {}", e),
+                                }
+                            }
                             let pcm_i16: Vec<i16> = resampled.iter()
-                                .map(|&s| (s * tx_gain * mic_gain * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                                .map(|&s| (s * final_scale * 32767.0).clamp(-32768.0, 32767.0) as i16)
                                 .collect();
 
                             if pcm_i16.len() >= FRAME_SAMPLES_WIDEBAND {
@@ -3992,13 +4414,20 @@ impl ClientEngine {
     }
 }
 
-/// Resample i16 8kHz -> f32 device rate
+fn yaesu_tx_bitrate_for_mode(mode: u8) -> i32 {
+    match mode {
+        5 | 6 => 48_000, // FM and AM benefit most from the wider Opus budget.
+        _ => 24_000,
+    }
+}
+
+/// Resample i16 network-rate PCM -> f32 device rate
 fn resample_to_device(resampler: &mut impl rubato::Resampler<f32>, pcm_i16: &[i16]) -> Vec<f32> {
     let input_f32: Vec<f32> = pcm_i16.iter().map(|&s| s as f32 / 32768.0).collect();
     match resampler.process(&[input_f32], None) {
         Ok(result) => result.into_iter().next().unwrap_or_default(),
         Err(e) => {
-            warn!("resample 8k->device error: {}", e);
+            warn!("resample network->device error: {}", e);
             Vec::new()
         }
     }
@@ -4021,5 +4450,43 @@ fn apply_volume(samples: &mut [f32], volume: f32) {
         for s in samples.iter_mut() {
             *s *= volume;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: de presence-flip is de kern-eis — presence bepaalt connected,
+    // dynamisch true/false. Test de pure apply_yaesu_presence-seam.
+    #[test]
+    fn presence_drives_connected_flip() {
+        let mut state = RadioState::default();
+        assert!(!state.yaesu_connected);
+        assert!(!state.yaesu2_connected);
+
+        // Beide aanwezig → beide connected, models overgenomen, beide changed.
+        let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1,
+        });
+        assert!(c0 && c1);
+        assert!(state.yaesu_connected && state.yaesu2_connected);
+        assert_eq!(state.yaesu_model, 0);
+        assert_eq!(state.yaesu2_model, 1);
+
+        // Slot 0 valt weg → connected flipt naar false (kern van de dynamiek),
+        // slot 1 ongewijzigd (geen change-flag).
+        let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1,
+        });
+        assert!(c0 && !c1);
+        assert!(!state.yaesu_connected);
+        assert!(state.yaesu2_connected);
+
+        // Idempotent: zelfde presence nogmaals → geen change-flags.
+        let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1,
+        });
+        assert!(!c0 && !c1);
     }
 }

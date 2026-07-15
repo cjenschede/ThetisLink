@@ -223,7 +223,7 @@ fun ConnectWizard(
                 ) { Text("Next") }
             }
             WizardStep.EnterPassword -> {
-                Text("Enter the server password. Ask the owner of the server PC for it.")
+                Text("Enter the server password. Ask the operator of the server PC for it.")
                 OutlinedTextField(
                     value = passwordInput,
                     onValueChange = { passwordInput = it },

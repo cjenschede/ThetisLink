@@ -1,0 +1,36 @@
+# ThetisLink relay — TLS front (Caddy). Terminates wss:// on 443 and reverse-proxies
+# to the internal plain-ws relay. Caddy fetches + auto-renews a free Let's Encrypt
+# certificate for $RELAY_DOMAIN.
+#
+# Port 80 is used by another service on this shared VPS (HTTP-01 returns 502), so the
+# HTTP challenge is disabled and the certificate is obtained via TLS-ALPN-01 on 443.
+# auto_https disable_redirects also stops Caddy serving the HTTP->HTTPS redirect (80).
+
+{
+  auto_https disable_redirects
+}
+
+{$RELAY_DOMAIN} {
+  tls {
+    issuer acme {
+      disable_http_challenge
+    }
+  }
+
+  # Admin dashboard + API -> internal admin port (18081), reachable only over the
+  # compose network (never published to the host). The app enforces its own auth
+  # (Argon2 login + CSRF + login rate-limit); Caddy just terminates TLS and forwards.
+  # Caddy adds X-Forwarded-For so the relay records the real client IP.
+  #
+  # Optional hardening — lock the dashboard to known admin IPs by uncommenting:
+  #   @notadmin not remote_ip 203.0.113.5 198.51.100.0/24
+  #   abort @notadmin
+  handle /admin* {
+    reverse_proxy thetislink-relay:18081
+  }
+
+  # Everything else = the wss:// tunnel for ThetisLink stations/clients.
+  handle {
+    reverse_proxy thetislink-relay:18080
+  }
+}

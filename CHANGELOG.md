@@ -16,6 +16,114 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.4.0] — 2026-07-15 (Relay v2 UDP audio + auto TCP fallback · Yaesu SSB-over-USB & TX processing · full Android Yaesu parity · expanded monitoring · desktop themes)
+
+> **A broad release.** Beyond the relay, this version brings remote **SSB transmit over
+> the Yaesu USB audio**, client-side **TX compressor/AGC** and **clarifier** for the Yaesu,
+> a large **Android Yaesu parity** push (dual-radio, full DSP panel, touch tuning, internal
+> ATU), **mobile data-saving**, and a much **expanded connection monitor**.
+>
+> **Compatibility.** The TL wire-protocol `VERSION` stays 3 (additive), so a direct
+> (LAN / port-forward) connection is fully backwards-compatible. The **relay** path is a
+> coordinated upgrade: the relay, server and client (and Android) should all run 2.4.0
+> together; a mixed setup keeps working but stays on the reliable wss/TCP audio path.
+> Stock Thetis v2.10.3.15 is sufficient; no Thetis-fork change.
+
+### Relay v2 — low-latency audio through the VPS relay
+- **Audio + PTT over UDP.** Relayed audio now travels over bare UDP (no retransmit /
+  head-of-line blocking) instead of wss/TCP, matching the direct-connection latency feel.
+  Control and spectrum stay on the encrypted wss channel.
+- **Automatic UDP↔wss fallback (make-before-break).** When a network blocks or degrades
+  UDP, the audio auto-falls-back to the reliable wss/TCP path within ~2 s and returns to
+  UDP once it recovers (with hysteresis so it never flaps). During transmit the audio is
+  sent over both paths, so PTT is never lost. A small **transport indicator** ("UDP" /
+  "TCP fallback") shows which path is active — on desktop and Android. There can be a
+  brief (~0.5–1.5 s) gap only on a sudden total UDP loss; gradual degradation is seamless.
+- **UDP capability-token rotation.** The per-session UDP token has a bounded TTL and is
+  rotated over wss before it expires, so an active session never drops and no token
+  outlives its lifetime. A choice of UDP (low latency) vs wss (encrypted) audio is exposed
+  as a setting on desktop, server and Android.
+- **Admin dashboard (web).** Manage stations and devices (block / rename), see per-device
+  and per-station monthly usage, set data/device/client quotas, and download a one-click
+  consistent **database backup**. Argon2id login, CSRF protection, per-IP login rate-limit;
+  the API is internal-only behind the TLS reverse proxy.
+
+### Yaesu — SSB transmit over the USB audio
+- **SSB over the USB CODEC.** The Yaesu radios now transmit **SSB** using the streamed USB
+  microphone audio, not just FM/DATA. On the **FT-991A** this switches SSB MIC SELECT=REAR
+  + PORT SELECT=USB per PTT (restored on release); the **FTX-1** uses its own internal
+  automatic modulation source, which ThetisLink leaves untouched. Previously SSB TX
+  required the local hand mic.
+- **FM auto-DATA unchanged; SSB does not use DATA.** The automatic FM → DATA-FM switch (for
+  USB-mic FM TX) is unchanged. SSB stays in the normal SSB mode with the REAR/USB routing
+  above — the earlier SSB → DATA-LSB/USB approach was reverted (carrier offset + narrow
+  data filters are unsuitable for speech).
+- **Hybrid per-PTT routing + Exit.** SSB USB-routing is applied per-PTT by default and
+  restored between overs (presence-based restore in opt-out mode); an explicit **Exit**
+  button returns the radio to its fixed MIC/DATA baseline. The TX-audio output is retried
+  until the USB CODEC device is free.
+
+### Yaesu — TX audio processing & clarifier
+- **Client-side compressor + AGC, per radio.** A transmit compressor and an AGC toggle run
+  in the client audio engine for the Yaesu TX branch (desktop and Android), independently
+  per radio, alongside the existing per-radio TX EQ. Includes FTX-1 TX-mute and
+  volume-restore fixes and a clean **AGC cycle** (FAST → MID → SLOW → AUTO).
+- **Clarifier (RIT/XIT).** Clarifier control for both radios — RIT/XIT enable, offset
+  steps and clear.
+
+### Android — Yaesu parity
+- **Dual-radio on Android.** A radio 1 / radio 2 selector brings the second Yaesu to the
+  Android client, with per-radio PTT/volume routing.
+- **Full DSP panel.** Collapsible DSP controls (ATT/AGC/NB/NR/IPO/Contour/APF/Notch/Proc/
+  AMC) with adjustable sliders.
+- **Touch frequency tuning.** A large tappable digit tuner plus a stepper for direct
+  on-screen tuning of the Yaesu.
+- **Internal ATU** (Tune + ATU on/off) and the **clarifier** (RIT/XIT + offset) on Android.
+
+### Mobile data-saving
+- **Yaesu-only clients skip the Thetis RX stream.** A client that only listens to a Yaesu
+  radio no longer receives the Thetis RX audio, cutting mobile data.
+- **On-demand Yaesu streaming.** Yaesu data is streamed only while its window is open/
+  active (short spectrum grace on resume); a dynamic presence-push keeps a single Yaesu
+  stream alive when shared.
+
+### WebSDR
+- **Reload button** for a quick recovery of the embedded WebSDR/KiwiSDR view after a
+  network interruption.
+
+### Desktop theming
+- **Selectable UI themes** — Classic (light), Dark, Slate — plus a **Custom** theme with
+  live colour pickers for background, widgets, text and the slider knob. Applied
+  immediately and persisted.
+
+### Connection monitoring
+- **Greatly expanded per-stream statistics.** The Statistics panel now reports every audio
+  stream separately — Thetis RX, Yaesu 1/2 and VRX1/VRX2 — each with its own jitter,
+  jitter-buffer depth and packet count (and loss where the transport exposes it), alongside
+  RTT and up/down bandwidth. The Down (RX) figure expands into a per-packet-type breakdown
+  of the recent window, and the relay transport ("UDP" / "TCP fallback") is shown inline.
+  On both desktop and Android.
+- **Server-side bandwidth breakdown.** The server Status panel shows per-client down/up
+  bandwidth, split into audio / spectrum / other, so it is clear where the traffic goes.
+
+### Robustness fixes
+- **Main window self-heal.** A window position saved on a since-disconnected or rearranged
+  second monitor no longer opens off-screen — it falls back to the primary monitor.
+- **Spectrum toggle no longer cuts RX1 audio** for clients that also have a Yaesu radio
+  configured.
+- **Jitter-buffer recovery.** The per-stream jitter buffers re-baseline on a large backward
+  sequence jump (stream restart) and reset cleanly on disconnect, avoiding stuck audio.
+- **Spectrum safety net.** A conservative default `max_bins` (2048) guards against an
+  oversized spectrum request; the Android spectrum grace/`max_bins` handshake is honoured
+  on connect and resume.
+
+### Compliance / hygiene
+- Refreshed dependency **SBOM** + **THIRD-PARTY-LICENSES** bundle; all licenses verified
+  GPL-2.0-or-later compatible. Source line-endings normalized to LF; internal development
+  markers removed from product source.
+
+---
+
 ## [2.3.0] — 2026-06-27 (Synchronous AM (SAM-PLL) + AM auto-tune + TX modulation bandwidth)
 
 > **Backwards-compatible with 2.1.x / 2.2.0.** Wire-protocol `VERSION` stays 3 —

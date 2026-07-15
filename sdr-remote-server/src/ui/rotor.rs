@@ -23,7 +23,7 @@ pub(super) fn render_rotor_panel(
     let angle_deg = status.angle_x10 as f32 / 10.0;
     let target_deg = if status.rotating { Some(status.target_x10 as f32 / 10.0) } else { None };
 
-    // Compass circle — click to GoTo
+    // Compass circle - click to GoTo
     if let Some(goto) = render_compass(ui, angle_deg, target_deg, status.connected) {
         rotor.send_command(crate::rotor::RotorCmd::GoTo(goto));
     }
@@ -100,7 +100,7 @@ fn render_compass(ui: &mut egui::Ui, angle_deg: f32, target_deg: Option<f32>, co
         painter.line_segment([inner, outer], egui::Stroke::new(0.5, ring_color));
     }
 
-    // Target line (dashed feel — draw shorter line)
+    // Target line (dashed feel - draw shorter line)
     if let Some(tgt) = target_deg {
         let rad = (tgt - 90.0).to_radians();
         let tip = center + egui::vec2(rad.cos(), rad.sin()) * (radius - 10.0);
@@ -123,7 +123,7 @@ fn render_compass(ui: &mut egui::Ui, angle_deg: f32, target_deg: Option<f32>, co
         ui.visuals().text_color(),
     );
 
-    // Handle click — calculate angle from click position
+    // Handle click - calculate angle from click position
     if connected && response.clicked() {
         if let Some(pos) = response.interact_pointer_pos() {
             let dx = pos.x - center.x;

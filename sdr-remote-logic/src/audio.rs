@@ -24,6 +24,9 @@ pub trait AudioBackend: Send + 'static {
     /// Gate mic capture: when false, the capture callback discards audio
     /// instead of writing to the ring buffer.
     fn set_capture_gate(&mut self, _open: bool) {}
+    /// Configure backend-local samples to discard each time mic capture opens.
+    /// Android uses this for sample-precise PTT burst suppression; desktop ignores it.
+    fn set_capture_gate_delay_ms(&mut self, _delay_ms: u32) {}
     /// Mute speaker output: when true, playback callback outputs zeros
     /// regardless of ring buffer contents (instant silence).
     fn set_playback_mute(&mut self, _mute: bool) {}

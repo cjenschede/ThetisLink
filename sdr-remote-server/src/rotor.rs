@@ -50,7 +50,7 @@ pub struct Rotor {
     /// graden. Standaard 3600 (360°) voor EA7HG/PstRotator/etc.; de
     /// Adafruit MCP2221A-backend zet hem op `max_deg × 10` uit de
     /// kalibratie (typisch 4500 voor Yaesu G-1000DXC). Externe input-
-    /// bronnen die compass-headings 0–360° leveren (PstRotator-listener)
+    /// bronnen die compass-headings 0-360° leveren (PstRotator-listener)
     /// gebruiken deze waarde om bij overlap-rotors de mech-target +360°
     /// als alternatief te overwegen.
     max_deg_x10: u16,
@@ -180,7 +180,7 @@ fn rotor_thread(
                 handle_command(&socket, &remote, &cmd, &status);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Normal — continue polling
+                // Normal - continue polling
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("Rotor: command channel closed, shutting down");

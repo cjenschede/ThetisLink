@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! PstRotator UDP listener — parallel input source naast de actieve
+//! PstRotator UDP listener - parallel input source naast de actieve
 //! `rotor_backend`. Vertaalt inkomende PstRotator azimuth-broadcasts
 //! naar `RotorCmd::GoTo` op de gedeelde `Rotor`-facade zodat een
 //! logger zoals Log4OM via PstRotator de echte rotor-hardware kan
-//! aansturen — ongeacht welke backend (EA7HG / PstRotator-outgoing /
+//! aansturen - ongeacht welke backend (EA7HG / PstRotator-outgoing /
 //! Adafruit MCP2221A) die hardware bedient.
 //!
 //! **Topologie:**
@@ -21,23 +21,23 @@
 //! actieve backend (EA7HG / PstRotator / MCP2221A)
 //! ```
 //!
-//! **Geaccepteerde packet-formaten** — kies in PstRotator één van:
+//! **Geaccepteerde packet-formaten** - kies in PstRotator één van:
 //!
-//! - **Yaesu GS-232A / GS-232B** (PstRotator → "Controller: Yaesu
+//! - **Yaesu GS-232A / GS-232B** (PstRotator -> "Controller: Yaesu
 //!   GS-232A/B"; **aanbevolen**): tekstuele ASCII-commando's, simpel
 //!   en goed gedocumenteerd.
-//!   - `M<nnn>\r` — move to azimuth (3-cijferig 000-450). Voorbeeld:
+//!   - `M<nnn>\r` - move to azimuth (3-cijferig 000-450). Voorbeeld:
 //!     `M090\r`.
-//!   - `S\r` — stop
-//!   - `C\r` — current position query. Reply: `+<nnn>\r` (3-cijferig).
-//!   - `C2\r` — azimuth + elevation query. Reply: `+0aaa+0eee\r`
-//!     (we sturen elevation altijd 000 — geen el-as).
-//!   - `R\r` / `L\r` — manual rotate (worden genegeerd).
+//!   - `S\r` - stop
+//!   - `C\r` - current position query. Reply: `+<nnn>\r` (3-cijferig).
+//!   - `C2\r` - azimuth + elevation query. Reply: `+0aaa+0eee\r`
+//!     (we sturen elevation altijd 000 - geen el-as).
+//!   - `R\r` / `L\r` - manual rotate (worden genegeerd).
 //!   Bidirectionele protocol: listener antwoordt op `C` / `C2` met de
 //!   actuele rotor-positie zodat PstRotator zijn display kan
 //!   synchroniseren.
 //!
-//! - **Prosistel binair (EA7HG-variant)** (PstRotator → "Controller:
+//! - **Prosistel binair (EA7HG-variant)** (PstRotator -> "Controller:
 //!   EA7HG Visual Rotor"): `\x02AG<nnn>\r` of `AAG<nnn>\r`. Stop is
 //!   `\x02AG999\r` of `AAR\r`. Status-query `\x02A?\r` of `AA?\r`,
 //!   reply `\x02A,?,<nnn>,<R|B>\r`. Werkt maar minder gestandaardiseerd
@@ -50,19 +50,19 @@
 //! - **XML-mode** (PstRotator "Output" forwarding):
 //!   `<PST><AZIMUTH>nnn.n</AZIMUTH></PST>`.
 //!
-//! `EL:...` / `<ELEVATION>` is in fase 1 niet geïmplementeerd —
+//! `EL:...` / `<ELEVATION>` is in fase 1 niet geïmplementeerd -
 //! ThetisLink's Rotor-facade kent geen elevation-axis. Worden stil
 //! genegeerd via `debug!`.
 //!
 //! **Loop-bescherming:** wanneer `rotor_backend = pstrotator` (de
 //! outgoing backend) ook draait en zijn AZ?-replies pikken we niet
 //! per ongeluk op. PstRotator beantwoordt replies aan `port + 1`
-//! (default 12001) — als de gebruiker daar ook luistert ontstaat
+//! (default 12001) - als de gebruiker daar ook luistert ontstaat
 //! een feedback-loop. UI noteert dit; runtime negeren we packets
 //! waarvan de azimuth gelijk is aan de laatst-uitgaande GoTo
 //! binnen `LOOPBACK_DEDUP_WINDOW`.
 //!
-//! **Rate-limit:** PstRotator broadcast typisch elke 0,5–1 s zelfs
+//! **Rate-limit:** PstRotator broadcast typisch elke 0,5-1 s zelfs
 //! als de azimuth onveranderd is. Identieke azimuth binnen
 //! `DEDUPE_INTERVAL` wordt gefilterd zodat de poll-thread van de
 //! Adafruit niet onnodig per-tick een GoTo opnieuw beoordeelt.
@@ -79,13 +79,13 @@ use crate::rotor::{Rotor, RotorCmd};
 
 /// Hoe lang we dezelfde azimuth slikken voordat we weer een GoTo
 /// publiceren naar de Rotor-facade. 3 s is ruim onder een typische
-/// antenne-beweging (~2°/sec → 6° gemist worst-case) maar absorbeert
+/// antenne-beweging (~2°/sec -> 6° gemist worst-case) maar absorbeert
 /// PstRotator's heartbeat-broadcasts (~1 Hz bij stilstand) én een
 /// eventuele bidirectionele "AAG-herhaling" die PstRotator stuurt
 /// als hij geen status-reply terug krijgt.
 const DEDUPE_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Read-timeout op de UDP-socket — bepaalt hoe snel we de shutdown-flag
+/// Read-timeout op de UDP-socket - bepaalt hoe snel we de shutdown-flag
 /// zien als er geen verkeer is.
 const READ_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -114,7 +114,7 @@ const AZ_FEEDBACK_AFTER_AG: Duration = Duration::from_secs(30);
 /// Configuratie voor `spawn`. Bevat alleen wat de listener-thread
 /// hoeft te weten; de Rotor-facade komt apart binnen via `rotor`.
 pub struct ListenConfig {
-    /// UDP-poort waar we op luisteren. Owner-keuze; default 12001 is
+    /// UDP-poort waar we op luisteren. Operator-keuze; default 12001 is
     /// PstRotator's standaard feedback-poort.
     pub port: u16,
 }
@@ -130,7 +130,7 @@ pub fn spawn(config: ListenConfig, rotor: Rotor) -> Result<Arc<AtomicBool>, std:
         .map_err(|e: std::net::AddrParseError| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
         })?;
-    // UDP en TCP delen dezelfde poort — OS ziet ze als verschillende
+    // UDP en TCP delen dezelfde poort - OS ziet ze als verschillende
     // protocols. PstRotator-clients kunnen kiezen welk transport ze
     // gebruiken; beide threads draaien parallel.
     let udp_sock = UdpSocket::bind(bind_addr)?;
@@ -172,7 +172,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
     let mut last_dispatch_at: Option<Instant> = None;
     let mut packet_count: u64 = 0;
     let mut parse_fail_count: u64 = 0;
-    // Owner-bevinding 2026-06-05: PstRotator broadcastet zijn eigen
+    // Operator-bevinding 2026-06-05: PstRotator broadcastet zijn eigen
     // simulator-positie als `AZ:nnn` parallel aan de echte `AG<nnn>`
     // goto-stream. Zonder onderscheid overschreef elke AZ de goto en
     // de naald schommelde stapsgewijs. Track wanneer de laatste echte
@@ -242,7 +242,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                 v
             }
             Packet::GoToAz(v) => {
-                // Owner-bevinding 2026-06-05: PstRotator's simulator
+                // Operator-bevinding 2026-06-05: PstRotator's simulator
                 // broadcastet `AZ:nnn` parallel aan de goto-stream.
                 // Binnen het feedback-window na een echte AG: dump
                 // als simulator-noise. Daarbuiten: behandel als goto
@@ -252,7 +252,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                     .unwrap_or(false);
                 if within_window {
                     debug!(
-                        "PstRotator listen: AZ:{:.1}° from {} dropped — simulator broadcast within {}s of AG-goto",
+                        "PstRotator listen: AZ:{:.1}° from {} dropped - simulator broadcast within {}s of AG-goto",
                         v, peer, AZ_FEEDBACK_AFTER_AG.as_secs()
                     );
                     continue;
@@ -278,7 +278,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                         format!("\u{0002}A,?,{:03},{}\r", angle_int, rb)
                     }
                     QueryProtocol::PstXml => {
-                        // PstRotator native reply: `AZ:nnn.n<CR>` — wat
+                        // PstRotator native reply: `AZ:nnn.n<CR>` - wat
                         // Log4OM verwacht in PstRotator-emulation pad.
                         let angle_deg = status.angle_x10 as f32 / 10.0;
                         format!("AZ:{:.1}\r", angle_deg)
@@ -291,7 +291,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                     );
                 } else {
                     debug!(
-                        "PstRotator listen: {:?} reply → {} angle={}",
+                        "PstRotator listen: {:?} reply -> {} angle={}",
                         proto, peer, angle_int
                     );
                 }
@@ -302,12 +302,12 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                 // Een externe Stop (Yaesu `S\r`, Prosistel `\x02AR\r` /
                 // `AG999`, PST-XML `<STOP>`) wordt doorgezet naar de
                 // rotor-facade.
-                info!("PstRotator listen: Stop from {} → RotorCmd::Stop", peer);
+                info!("PstRotator listen: Stop from {} -> RotorCmd::Stop", peer);
                 rotor.send_command(RotorCmd::Stop);
                 continue;
             }
             Packet::ManualRotate => {
-                info!("PstRotator listen: manual rotate R/L from {} (ignored — no continuous-rotate API)", peer);
+                info!("PstRotator listen: manual rotate R/L from {} (ignored - no continuous-rotate API)", peer);
                 continue;
             }
             Packet::Elevation => {
@@ -335,10 +335,10 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                 continue;
             }
         };
-        // Compass-azimuth (0..360°) → mechanische rotor-target. Bij
+        // Compass-azimuth (0..360°) -> mechanische rotor-target. Bij
         // overlap-rotors (`max_deg > 360`) bestaan voor compass 0..(max-360)°
         // twee mechanische posities (X en X+360); kies degene het dichtst
-        // bij de huidige rotor-positie. Owner-scenario: max_deg=450, dus
+        // bij de huidige rotor-positie. Operator-scenario: max_deg=450, dus
         // compass 0..90° kan op mech 0..90° óf mech 360..450°.
         let base_az_x10 = (az_deg.clamp(0.0, 360.0) * 10.0).round() as u16;
         let max_deg_x10 = rotor.max_deg_x10();
@@ -376,14 +376,14 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
         }
         // Dispatch GoTo via de Rotor-facade. `send_command` slikt het
         // channel-closed-resultaat zelf, dus we kunnen niet detecteren
-        // dat de cmd niet aankomt — bij channel-disconnect zou de
+        // dat de cmd niet aankomt - bij channel-disconnect zou de
         // rotor-backend toch al uit zijn. De info-log hieronder
         // documenteert de poging.
         rotor.send_command(RotorCmd::GoTo(az_x10));
         last_az_x10 = Some(az_x10);
         last_dispatch_at = Some(now);
         info!(
-            "PstRotator listen: compass {:.1}° → mech {:.1}° from {} (cur={:.1}°, max={:.1}°, packets={}, parse-fail={})",
+            "PstRotator listen: compass {:.1}° -> mech {:.1}° from {} (cur={:.1}°, max={:.1}°, packets={}, parse-fail={})",
             az_deg,
             az_x10 as f32 / 10.0,
             peer,
@@ -459,7 +459,7 @@ fn handle_tcp_client(
     let mut last_received_target_x10: Option<u16> = None;
     let mut last_pushed_target_x10: Option<u16> = None;
     // Detecteer welk protocol PstRotator gebruikt zodat de push het
-    // matchende formaat heeft. Default Prosistel (owner's EA7HG-mode
+    // matchende formaat heeft. Default Prosistel (operator's EA7HG-mode
     // is het meest voorkomende) tot we anders horen via inkomende
     // commando's of queries.
     let mut peer_protocol: ProtocolKind = ProtocolKind::Prosistel;
@@ -538,7 +538,7 @@ fn handle_tcp_client(
                                 continue;
                             }
                             info!(
-                                "PstRotator TCP: GoTo compass {:.1}° → mech {:.1}° from {} (cur={:.1}°)",
+                                "PstRotator TCP: GoTo compass {:.1}° -> mech {:.1}° from {} (cur={:.1}°)",
                                 v,
                                 chosen as f32 / 10.0,
                                 peer,
@@ -582,8 +582,8 @@ fn handle_tcp_client(
                         }
                         Packet::Stop => {
                             // CHANGELOG / Manual claimen Stop-support
-                            // — zelfde semantiek als de UDP-pad.
-                            info!("PstRotator TCP: Stop from {} → RotorCmd::Stop", peer);
+                            // - zelfde semantiek als de UDP-pad.
+                            info!("PstRotator TCP: Stop from {} -> RotorCmd::Stop", peer);
                             rotor.send_command(RotorCmd::Stop);
                         }
                         Packet::ManualRotate => {
@@ -621,7 +621,7 @@ fn handle_tcp_client(
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
                 || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                // Idle moment — gebruik dit om TL2-originated targets
+                // Idle moment - gebruik dit om TL2-originated targets
                 // door te pushen naar PstRotator zodat zijn compass
                 // ook de target-aanwijzer ziet (anders zou hij alleen
                 // de huidige positie volgen via zijn polling).
@@ -653,7 +653,7 @@ fn handle_tcp_client(
                         break;
                     }
                     info!(
-                        "PstRotator TCP: pushed TL2-origin target {}° → {} via {:?} (mech {}°)",
+                        "PstRotator TCP: pushed TL2-origin target {}° -> {} via {:?} (mech {}°)",
                         compass,
                         peer,
                         peer_protocol,
@@ -677,7 +677,7 @@ fn handle_tcp_client(
 
 /// Welk protocol-format gebruikt PstRotator op deze connectie? Wordt
 /// gedetecteerd uit inkomende commando's/queries en bepaalt het format
-/// van uitgaande target-pushes (TL2 → PstRotator UI-sync).
+/// van uitgaande target-pushes (TL2 -> PstRotator UI-sync).
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum ProtocolKind {
     /// Prosistel binair (EA7HG controller): goto = `\x02AG<nnn>\r`,
@@ -691,13 +691,13 @@ enum ProtocolKind {
 /// reply-formaat zodat de zender de string kan parsen.
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum QueryProtocol {
-    /// Yaesu GS-232A `C\r` → reply `+<nnn>\r`.
+    /// Yaesu GS-232A `C\r` -> reply `+<nnn>\r`.
     Gs232C,
-    /// Yaesu GS-232A `C2\r` → reply `+0aaa+0eee\r`.
+    /// Yaesu GS-232A `C2\r` -> reply `+0aaa+0eee\r`.
     Gs232C2,
-    /// Prosistel `\x02A?\r` of `AA?\r` → reply `\x02A,?,<nnn>,<R|B>\r`.
+    /// Prosistel `\x02A?\r` of `AA?\r` -> reply `\x02A,?,<nnn>,<R|B>\r`.
     Prosistel,
-    /// PstRotator XML `<PST>AZ?</PST>` (Log4OM emulation pad) → reply
+    /// PstRotator XML `<PST>AZ?</PST>` (Log4OM emulation pad) -> reply
     /// `AZ:<nnn.n>\r`. Log4OM stuurt dit naar PstRotator's host/poort;
     /// TL2 vangt het op als drop-in vervanger voor PstRotator.
     PstXml,
@@ -724,9 +724,9 @@ enum Packet {
     /// stilzetten (CHANGELOG belooft dit per protocol).
     Stop,
     /// Manual rotate-knop (`R\r` / `L\r` in GS-232A). Geen target,
-    /// kunnen we niet zinvol doorzetten — gewoon loggen.
+    /// kunnen we niet zinvol doorzetten - gewoon loggen.
     ManualRotate,
-    /// Elevation-reply / XML — overgeslagen, geen elevation-axis.
+    /// Elevation-reply / XML - overgeslagen, geen elevation-axis.
     Elevation,
     /// Metadata-tags die Log4OM meestuurt naast de azimuth: callsign,
     /// naam, QTH, frequentie, mode, etc. PstRotator gebruikt die voor
@@ -747,13 +747,13 @@ enum Packet {
 /// 4. XML-mode: `<PST><AZIMUTH>nnn.n</AZIMUTH>...</PST>`.
 ///
 /// `EL:` / `<ELEVATION>` skip met `Elevation`. `AAG999` (park-positie)
-/// skip met `Park` — geen mapping.
+/// skip met `Park` - geen mapping.
 fn parse_packet(text: &str) -> Packet {
     let stripped: &str = text.trim_start_matches('\u{0002}');
     let trimmed = stripped
         .trim()
         .trim_end_matches(|c: char| c == '\r' || c == '\n');
-    // Yaesu GS-232A — text protocol, single-char commands.
+    // Yaesu GS-232A - text protocol, single-char commands.
     if trimmed == "C" {
         return Packet::StatusQuery(QueryProtocol::Gs232C);
     }
@@ -780,7 +780,7 @@ fn parse_packet(text: &str) -> Packet {
         }
     }
     // Prosistel binair: strip 1-2 leading `A`'s; wat overblijft begint
-    // met de actie-letter (G/R/?). Owner's PstRotator stuurt `\x02A?\r`
+    // met de actie-letter (G/R/?). Operator's PstRotator stuurt `\x02A?\r`
     // (single-A), de bestaande rotor.rs-backend stuurt `AA?` (double-A).
     let prosistel_rest = trimmed
         .strip_prefix("AA")
@@ -791,7 +791,7 @@ fn parse_packet(text: &str) -> Packet {
             if !digits.is_empty() {
                 if let Ok(n) = digits.parse::<u16>() {
                     if n == 999 {
-                        // Owner-bevinding (2026-06-05): in EA7HG-UDP-mode
+                        // Operator-bevinding (2026-06-05): in EA7HG-UDP-mode
                         // stuurt PstRotator `AG999` als STOP-signaal, niet
                         // als "park to 999°". Classificeer als Stop.
                         return Packet::Stop;
@@ -807,14 +807,9 @@ fn parse_packet(text: &str) -> Packet {
             return Packet::StatusQuery(QueryProtocol::Prosistel);
         }
     }
-    // Text format: AZ:nnn.n (case-insensitive). 2026-06-05 revert van
-    // build 8's "feedback only"-classificatie naar "GoTo" — owner-
-    // diagnose: packets stopten binnen te komen tijdens build 8/9.
-    // Roll-back om te isoleren of de PositionFeedback-pad zelf het
-    // probleem was. Als AZ-streams nu weer GoTo's worden zijn we
-    // weer terug bij de oude simulator-override bug, dat moeten we
-    // dan op een andere manier oplossen (bv. AZ negeren als binnen
-    // 1 s na een AG-goto).
+    // Text format: AZ:nnn.n (case-insensitive). Treat this as a GoTo command;
+    // feedback-only handling is intentionally limited to the explicit feedback
+    // packet forms above so simulator streams keep their legacy behaviour.
     if let Some(rest) = strip_prefix_ci(trimmed, "AZ:") {
         if let Ok(v) = rest.trim().parse::<f32>() {
             return Packet::GoToAz(v);
@@ -825,9 +820,9 @@ fn parse_packet(text: &str) -> Packet {
     }
     // XML format (PstRotator native, ook gebruikt door Log4OM in
     // PstRotator-emulation pad):
-    //   `<PST><AZIMUTH>nnn.n</AZIMUTH>...</PST>`   — goto
-    //   `<PST>AZ?</PST>`                           — query
-    //   `<PST><STOP>1</STOP></PST>`                — stop
+    //   `<PST><AZIMUTH>nnn.n</AZIMUTH>...</PST>`   - goto
+    //   `<PST>AZ?</PST>`                           - query
+    //   `<PST><STOP>1</STOP></PST>`                - stop
     let lower = trimmed.to_ascii_lowercase();
     if lower.contains("<pst>") && lower.contains("az?") {
         return Packet::StatusQuery(QueryProtocol::PstXml);
@@ -880,7 +875,7 @@ fn parse_azimuth(text: &str) -> Option<f32> {
 /// Kies de mechanische target dichtst bij `current` voor een gegeven
 /// compass-azimuth. Bij `max_deg_x10 > 3600` (overlap-rotor zoals Yaesu
 /// G-1000DXC met max=450°) is de compass-azimuth `base` ook bereikbaar
-/// als `base + 3600` zolang die binnen max blijft — kies de variant met
+/// als `base + 3600` zolang die binnen max blijft - kies de variant met
 /// de kortste mechanische reis vanuit `current`.
 fn pick_mechanical_target(base_x10: u16, max_deg_x10: u16, current_x10: u16) -> u16 {
     let primary = base_x10.min(max_deg_x10);
@@ -896,7 +891,7 @@ fn pick_mechanical_target(base_x10: u16, max_deg_x10: u16, current_x10: u16) -> 
     primary
 }
 
-/// Mappers van QueryProtocol → ProtocolKind voor protocol-detectie
+/// Mappers van QueryProtocol -> ProtocolKind voor protocol-detectie
 /// uit inkomende status-queries.
 fn protocol_kind_of_query(p: QueryProtocol) -> ProtocolKind {
     match p {
@@ -912,7 +907,7 @@ fn protocol_kind_of_query(p: QueryProtocol) -> ProtocolKind {
 
 /// Detecteer protocol uit een geparste goto-packet text. Prosistel
 /// commando's bevatten `AA` / `\x02A` prefix, GS-232 begint met `M`.
-/// Bij twijfel (AZ-text) returnt None — laat de caller default-waarde
+/// Bij twijfel (AZ-text) returnt None - laat de caller default-waarde
 /// behouden.
 fn protocol_kind_of_goto_text(text: &str) -> Option<ProtocolKind> {
     let s = text.trim_start_matches('\u{0002}').trim();
@@ -942,8 +937,8 @@ mod tests {
 
     #[test]
     fn parses_text_format() {
-        // AZ:nn → GoTo (revert van build 8's feedback-only naar
-        // owner-known-working state; zie parse_packet kommentaar).
+        // AZ:nn -> GoTo (revert van build 8's feedback-only naar
+        // operator-known-working state; zie parse_packet kommentaar).
         assert_eq!(parse_azimuth("AZ:123.4"), Some(123.4));
         assert_eq!(parse_azimuth("az:0.0\r"), Some(0.0));
         assert_eq!(parse_azimuth("  AZ:359.9  \r\n"), Some(359.9));
@@ -988,7 +983,7 @@ mod tests {
     #[test]
     fn ignores_prosistel_non_goto() {
         // AG999/AAG999 wordt als STOP (Packet::Stop) geclassificeerd
-        // — owner-bevinding 2026-06-05. parse_azimuth returnt None
+        // - operator-bevinding 2026-06-05. parse_azimuth returnt None
         // omdat het géén GoTo is, ongeacht of het Stop of Park is.
         assert_eq!(parse_azimuth("AAG999"), None);
         // Stop en query worden geskipt.
@@ -999,19 +994,19 @@ mod tests {
     #[test]
     fn picks_overlap_when_closer() {
         // Yaesu G-1000DXC met max=450°.
-        // Compass 30° (base=300) — primaire mech-target = 300, alt = 3900.
+        // Compass 30° (base=300) - primaire mech-target = 300, alt = 3900.
         // Bij huidige positie mech 350° (3500): alt 3900 is 400 weg, primary
-        // is 3200 weg → kies alt (overlap-route).
+        // is 3200 weg -> kies alt (overlap-route).
         assert_eq!(pick_mechanical_target(300, 4500, 3500), 3900);
-        // Vanuit mech 0° (0): primary 300 (afstand 300), alt 3900 (afstand 3900) → primary.
+        // Vanuit mech 0° (0): primary 300 (afstand 300), alt 3900 (afstand 3900) -> primary.
         assert_eq!(pick_mechanical_target(300, 4500, 0), 300);
-        // Compass 91° (base=910): geen alt mogelijk (910+3600=4510 > 4500) → primary.
+        // Compass 91° (base=910): geen alt mogelijk (910+3600=4510 > 4500) -> primary.
         assert_eq!(pick_mechanical_target(910, 4500, 4400), 910);
     }
 
     #[test]
     fn no_overlap_for_360_rotors() {
-        // max_deg=360 → geen alternatief mogelijk, altijd primary.
+        // max_deg=360 -> geen alternatief mogelijk, altijd primary.
         assert_eq!(pick_mechanical_target(300, 3600, 100), 300);
         assert_eq!(pick_mechanical_target(0, 3600, 3500), 0);
     }
@@ -1056,7 +1051,7 @@ mod tests {
 
     #[test]
     fn classifies_other_packet_kinds() {
-        // Owner-bevinding 2026-06-05: AG999 = STOP-signaal in PstRotator
+        // Operator-bevinding 2026-06-05: AG999 = STOP-signaal in PstRotator
         // EA7HG-UDP, niet "park to 999°".
         assert_eq!(parse_packet("AAG999"), Packet::Stop);
         assert_eq!(parse_packet("\u{0002}AG999\r"), Packet::Stop);

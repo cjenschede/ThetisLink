@@ -68,7 +68,7 @@ impl UiDensity {
 }
 
 /// Layout-oppervlak waarop een control gerenderd wordt. Orthogonaal op
-/// `UiDensity` — dezelfde densiteit kan op verschillende surfaces voorkomen
+/// `UiDensity` - dezelfde densiteit kan op verschillende surfaces voorkomen
 /// (bv. een popout-overlay boven het basisscherm).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum UiSurface {

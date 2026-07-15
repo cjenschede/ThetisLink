@@ -168,7 +168,7 @@ fn read_packet(port: &mut Box<dyn serialport::SerialPort>) -> Result<(u8, u8, Ve
     let mut in_packet = false;
     let mut dle_pending = false;
 
-    // Read with timeout — we have ~2s port timeout set
+    // Read with timeout - we have ~2s port timeout set
     loop {
         match port.read(&mut buf) {
             Ok(0) => return Err("EOF".to_string()),
@@ -184,13 +184,13 @@ fn read_packet(port: &mut Box<dyn serialport::SerialPort>) -> Result<(u8, u8, Ve
                 }
                 // Inside packet
                 if dle_pending {
-                    // DLE-quoted byte — take as literal data
+                    // DLE-quoted byte - take as literal data
                     payload.push(b);
                     dle_pending = false;
                 } else if b == DLE {
                     dle_pending = true;
                 } else if b == ETX {
-                    // End of packet — verify checksum
+                    // End of packet - verify checksum
                     // Payload contains: SEQ, COM, DAT..., CHK
                     if payload.len() < 3 {
                         return Err("Packet too short".to_string());
@@ -199,7 +199,7 @@ fn read_packet(port: &mut Box<dyn serialport::SerialPort>) -> Result<(u8, u8, Ve
                     // Note: ~elke 84-148s stuurt de RCU-06 een unsolicited broadcast frame
                     // (3 bursts) met een afwijkende checksum-init waardoor verify=0x81. Deze
                     // worden door read_packet als "Checksum mismatch (got 129)" gerapporteerd
-                    // en in de poll-loop herstelt zich na ~30s. Geen functionele impact —
+                    // en in de poll-loop herstelt zich na ~30s. Geen functionele impact -
                     // motor-positie wordt door de RCU-06 zelf bijgehouden.
                     let verify = compute_checksum(&payload);
                     if verify != 1 {
@@ -257,8 +257,8 @@ fn parse_status(data: &[u8]) -> Result<UltraBeamStatus, String> {
     let flags = data[7];
     s.off_state = (flags & 0x01) != 0;
     // byte 8 is een controller-state byte (geen motion-info); momenteel niet
-    // gebruikt door de UI. byte 9 is de echte per-motor moving bitfield —
-    // bit 0 = motor 1, bit 1 = motor 2 (gevalideerd via diagnostic build 2).
+    // gebruikt door de UI. byte 9 is de per-motor moving bitfield:
+    // bit 0 = motor 1, bit 1 = motor 2.
     s.motors_moving = data[9];
     s.freq_max_mhz = data[10];
     // data[11..] = trailing bytes, niet geïnterpreteerd
@@ -389,7 +389,7 @@ fn ultrabeam_thread(
                                     skipped += 1;
                                 }
                                 _other => {
-                                    // Non-freq command lost — acceptable trade-off vs queue explosion.
+                                    // Non-freq command lost - acceptable trade-off vs queue explosion.
                                     // Retract/ReadElements/ModifyElement are rare during rapid stepping.
                                 }
                             }
@@ -436,7 +436,7 @@ fn ultrabeam_thread(
                         let len_lo = (length_mm & 0xFF) as u8;
                         let len_hi = ((length_mm >> 8) & 0xFF) as u8;
                         let data = [index, 0, len_lo, len_hi];
-                        info!("UltraBeam: ModifyElement {} → {} mm", index, length_mm);
+                        info!("UltraBeam: ModifyElement {} -> {} mm", index, length_mm);
                         match send_and_receive(&mut port, seq, CMD_MODIFY_ELEMENT, &data) {
                             Ok((_s, _c, resp)) => {
                                 if resp.first() == Some(&UB_OK) {
@@ -455,7 +455,7 @@ fn ultrabeam_thread(
                 let _ = port.clear(serialport::ClearBuffer::Input);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Regular poll cycle — query status
+                // Regular poll cycle - query status
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("UltraBeam command channel closed, exiting");
@@ -469,7 +469,7 @@ fn ultrabeam_thread(
                 match parse_status(&data) {
                     Ok(parsed) => {
                         let mut s = status.lock().unwrap();
-                        // Behoud elements_mm en motor_progress over status-polls heen —
+                        // Behoud elements_mm en motor_progress over status-polls heen -
                         // die worden door aparte CMD_READ_ELEMENTS / CMD_MOTOR_PROGRESS
                         // commando's gevuld en moeten niet door elke status-poll naar 0
                         // gezet worden.

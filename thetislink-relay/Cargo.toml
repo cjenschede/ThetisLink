@@ -1,0 +1,30 @@
+[package]
+name = "thetislink-relay"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[[bin]]
+name = "thetislink-relay"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+env_logger = "0.11"
+futures-util = "0.3"
+log = "0.4"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["connect"] }
+# Fase 1 user-auth: per-station key registry. rusqlite (MIT) bundles SQLite
+# (public domain); sha2 + rand (MIT/Apache-2.0) — all GPL-2.0-or-later compatible.
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+rand = "0.8"
+# Fase 2 dashboard: admin login password hashing (human password -> slow KDF).
+# argon2 (MIT/Apache-2.0). Relay-only (server side), no Android cross-compile.
+argon2 = "0.5"
+# Fase 2 dashboard: admin HTTP API (axum) + JSON (serde). All MIT/Apache-2.0,
+# GPL-2.0-or-later compatible. Relay-only (server side).
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

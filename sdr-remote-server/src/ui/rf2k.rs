@@ -142,7 +142,7 @@ fn render_rf2k_power_display(
         *peak_time = now;
     }
 
-    // Forward power bar — auto-scale
+    // Forward power bar - auto-scale
     let (max_fwd, fwd_divs): (f32, &[(f32, &str)]) = if *peak_power > 1000 {
         (1500.0, &[(0.0,"0"),(300.0,"300"),(600.0,"600"),(900.0,"900"),(1200.0,"1200"),(1500.0,"1500")])
     } else if *peak_power > 500 {
@@ -162,7 +162,7 @@ fn render_rf2k_power_display(
         Some(peak_frac), fwd_divs, max_fwd);
 
     // SWR + Reflected: collapsible. Open/closed state in egui's
-    // transient per-id store — niet persistent in config maar
+    // transient per-id store - niet persistent in config maar
     // overleeft frames binnen één sessie.
     let swr = status.swr_x100 as f32 / 100.0;
     let swr_summary = format!("SWR {:.2}  |  Reflected {} W", swr, status.reflected_w);
@@ -174,7 +174,7 @@ fn render_rf2k_power_display(
     }
     if swr_open {
         ui.indent("rf2k_swr_body", |ui| {
-            // Reflected power bar — auto-scale
+            // Reflected power bar - auto-scale
             let (max_ref, ref_divs): (f32, &[(f32, &str)]) = if status.reflected_w > 100 {
                 (250.0, &[(0.0,"0"),(50.0,"50"),(100.0,"100"),(150.0,"150"),(200.0,"200"),(250.0,"250")])
             } else if status.reflected_w > 50 {
@@ -190,7 +190,7 @@ fn render_rf2k_power_display(
             render_rf2k_meter(ui, "Reflected", &ref_value, ref_frac, ref_color,
                 None, ref_divs, max_ref);
 
-            // SWR bar — fixed scale with non-linear divisions
+            // SWR bar - fixed scale with non-linear divisions
             let max_swr = status.max_swr_x100 as f32 / 100.0;
             let swr_frac = ((swr - 1.0) / 4.0).clamp(0.0, 1.0);
             let swr_color = if swr > 2.5 { Color32::from_rgb(255, 80, 80) }
@@ -557,7 +557,7 @@ fn render_rf2k_tuner(
             ui.label(format!("Setup: {}", status.tuner_setup));
         }
 
-        // MAN/AUTO toggle — shows current state
+        // MAN/AUTO toggle - shows current state
         if status.tuner_mode == 2 || status.tuner_mode == 4 {
             let toggle_text = if is_manual { "Manual" } else { "Auto" };
             let toggle_btn = egui::Button::new(RichText::new(toggle_text).strong())

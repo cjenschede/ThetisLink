@@ -141,7 +141,7 @@ fn parse_actions(s: &str) -> Vec<MacroAction> {
             actions.push(MacroAction::Cat(cmd.to_string()));
             remaining = &remaining[semi_pos + 1..];
         } else {
-            // Unknown token — skip to next whitespace
+            // Unknown token - skip to next whitespace
             let end = remaining
                 .find(|c: char| c.is_whitespace())
                 .unwrap_or(remaining.len());

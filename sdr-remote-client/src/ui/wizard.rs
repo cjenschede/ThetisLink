@@ -2,12 +2,12 @@
 
 //! PATCH-4: first-run connection wizard.
 //!
-//! Drives the user through Discover → Password → (2FA) → Verifying →
+//! Drives the user through Discover -> Password -> (2FA) -> Verifying ->
 //! Success in 4 visible steps. Reactive: subscribes to the same
 //! `RadioState.connect_status` that PATCH-1 produces and renders the
-//! corresponding step. The wizard never invents new connect-state — it
+//! corresponding step. The wizard never invents new connect-state - it
 //! only navigates around it, so a fault that PATCH-1 already classifies
-//! (`WrongPassword`, `AwaitingTotp`, `TciUnreachable`, …) lands the
+//! (`WrongPassword`, `AwaitingTotp`, `TciUnreachable`, ...) lands the
 //! user on the correct previous step with the matching i18n text.
 
 use egui::{Color32, RichText};
@@ -29,14 +29,14 @@ pub(crate) enum WizardStep {
     Success,
 }
 
-/// Result of a single `render()` call — tells the host UI what to do.
+/// Result of a single `render()` call - tells the host UI what to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WizardOutcome {
     /// Stay in wizard mode; render again next frame.
     Continue,
-    /// User pressed "Skip wizard" — switch to manual form without
+    /// User pressed "Skip wizard" - switch to manual form without
     /// touching the config (per brief §4 Stap 4: no `successful_connects`
-    /// bump on skip — otherwise the wizard never re-appears).
+    /// bump on skip - otherwise the wizard never re-appears).
     SkipToManual,
     /// Server returned `ConnectStatus::Connected` and the user pressed
     /// Done. Config has been marked as a successful connect; subsequent
@@ -102,9 +102,9 @@ pub(crate) fn render_wizard(
             ConnectStatus::Failed(err) => {
                 state.last_error = Some(err.clone());
                 // Land the user on the step that can actually fix the
-                // problem: wrong-totp → AwaitingTotp; everything else
-                // → Password (covers wrong-password) or DiscoverServer
-                // (covers DNS/unreachable). Owner can also press Back.
+                // problem: wrong-totp -> AwaitingTotp; everything else
+                // -> Password (covers wrong-password) or DiscoverServer
+                // (covers DNS/unreachable). Operator can also press Back.
                 state.step = match err {
                     ConnectError::WrongTotp => WizardStep::AwaitingTotp,
                     ConnectError::WrongPassword => WizardStep::EnterPassword,
@@ -219,8 +219,8 @@ fn render_discover(
         if servers.is_empty() {
             ui.label(
                 RichText::new(match lang {
-                    Lang::Nl => "Bezig met scannen van het lokale netwerk…",
-                    Lang::En => "Scanning local network…",
+                    Lang::Nl => "Bezig met scannen van het lokale netwerk...",
+                    Lang::En => "Scanning local network...",
                 })
                 .size(11.0)
                 .color(Color32::from_rgb(150, 150, 150)),
@@ -270,8 +270,8 @@ fn render_password(
     lang: Lang,
 ) -> WizardOutcome {
     ui.label(match lang {
-        Lang::Nl => "Vul het wachtwoord van de server in. Vraag dit aan de eigenaar van de server-PC.",
-        Lang::En => "Enter the server password. Ask the owner of the server PC for it.",
+        Lang::Nl => "Vul het wachtwoord van de server in. Vraag dit aan de operator van de server-PC.",
+        Lang::En => "Enter the server password. Ask the operator of the server PC for it.",
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -322,10 +322,10 @@ fn render_password(
 fn render_verifying(ui: &mut egui::Ui, lang: Lang, is_totp: bool) {
     ui.add(egui::Spinner::new());
     let label = match (lang, is_totp) {
-        (Lang::Nl, false) => "Bezig met verbinden…",
-        (Lang::Nl, true) => "Bezig met verifiëren van 2FA-code…",
-        (Lang::En, false) => "Connecting…",
-        (Lang::En, true) => "Verifying 2FA code…",
+        (Lang::Nl, false) => "Bezig met verbinden...",
+        (Lang::Nl, true) => "Bezig met verifiëren van 2FA-code...",
+        (Lang::En, false) => "Connecting...",
+        (Lang::En, true) => "Verifying 2FA code...",
     };
     ui.label(RichText::new(label).size(14.0));
 }

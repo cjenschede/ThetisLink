@@ -5,29 +5,29 @@
 //!
 //! Each physical tuner is a [`TunerInstance`]: it owns one MCP2221A bridge
 //! plus a background thread that runs the tune sequence. Up to two instances
-//! live inside a [`Tuners`] collection — JC-4s and JC-3s share an identical
+//! live inside a [`Tuners`] collection - JC-4s and JC-3s share an identical
 //! control protocol, so the only per-instance difference is the cosmetic
 //! `TunerModel` label, the target MCP2221A USB serial and the optional
 //! Amplitec-A position the tuner sits behind.
 //!
-//! Tune-sequence (per instance) — feedback-driven via the GP1 ADC tune-status
+//! Tune-sequence (per instance) - feedback-driven via the GP1 ADC tune-status
 //! line, preserving the PA-standby orchestration from the build-48 flow:
 //!   1. PA standby (SPE / RF2K) if either is in Operate.
-//!   2. GP2 HIGH  — assert start-button and HOLD until the JC-Control
+//!   2. GP2 HIGH  - assert start-button and HOLD until the JC-Control
 //!                  acknowledges the press (= yellow drops below
-//!                  `threshold - hyst/2`). No ACK within 3 s → `TUNER_TIMEOUT`.
-//!   3. GP2 LOW   — release the start-button now that the tuner has ACK'd.
-//!   4. ZZTU1     — Thetis carrier ON, tuner consumes RF to do its job.
+//!                  `threshold - hyst/2`). No ACK within 3 s -> `TUNER_TIMEOUT`.
+//!   3. GP2 LOW   - release the start-button now that the tuner has ACK'd.
+//!   4. ZZTU1     - Thetis carrier ON, tuner consumes RF to do its job.
 //!   5. Wait for the yellow line to go back above `threshold + hyst/2`
 //!      (LED off, tune cycle complete). 30 s hard cap.
-//!   6. ZZTU0     — Thetis carrier OFF.
+//!   6. ZZTU0     - Thetis carrier OFF.
 //!   7. PA operate restore.
 //!
 //! Threshold rationale (1 MΩ + 1 MΩ 1:1 divider on the yellow tune-status
-//! wire — see `docs/internal/referentie/MCP2221A-JC4s-wiring.md`):
+//! wire - see `docs/internal/referentie/MCP2221A-JC4s-wiring.md`):
 //!   - idle yellow ≈ 4.5 V
 //!   - tune-LED on yellow ≈ 0 V
-//! Owner sets the switch threshold (default 2.25 V) and hysteresis
+//! Operator sets the switch threshold (default 2.25 V) and hysteresis
 //! (default 0.50 V) per-tuner via the Status panel.
 
 use std::sync::mpsc;
@@ -67,12 +67,12 @@ pub const TUNER_ABORTED: u8 = 4;
 /// line low after asserting GP2, give up after this and report TIMEOUT.
 const ACTIVE_SEARCH_TIMEOUT_SECS: u64 = 3;
 /// Hard cap on total tune duration; once the LED has been seen ON, the
-/// JC-Control should complete within seconds — 30 s is the build-48 number.
+/// JC-Control should complete within seconds - 30 s is the build-48 number.
 const TUNE_COMPLETE_TIMEOUT_SECS: u64 = 30;
 /// ADC poll period during the tune sequence.
 const ADC_POLL_INTERVAL_MS: u64 = 25;
 /// Edge transitions (active/idle) require this many consecutive samples
-/// before being believed — single-sample noise rejection on top of the
+/// before being believed - single-sample noise rejection on top of the
 /// hysteresis window.
 const EDGE_CONSECUTIVE: usize = 2;
 
@@ -89,7 +89,7 @@ pub type Jc4sTuner = TunerInstance;
 /// A single physical StockCorner tuner driven through one MCP2221A board.
 /// Constructed via [`TunerInstance::new`]; held inside [`Tuners`].
 ///
-/// (Renamed from `Jc4sTuner` once JC-3s support landed — the protocol is
+/// (Renamed from `Jc4sTuner` once JC-3s support landed - the protocol is
 /// identical so one struct covers both models. `TunerModel` is just a label.)
 pub struct TunerInstance {
     cmd_tx: mpsc::Sender<TunerCmd>,
@@ -101,7 +101,7 @@ pub struct TunerInstance {
 }
 
 impl TunerInstance {
-    /// Open the MCP2221A board (by USB serial — empty string falls back to
+    /// Open the MCP2221A board (by USB serial - empty string falls back to
     /// "first available board"), spawn the worker thread.
     pub fn new(
         slot_index: usize,
@@ -110,8 +110,8 @@ impl TunerInstance {
         spe: Option<Arc<SpeExpert>>,
         rf2k: Option<Arc<Rf2k>>,
     ) -> Result<Self, String> {
-        // Owner-friendly label uses the USB serial (e.g. "JC-4s loop") rather
-        // than the cosmetic model enum, because the serial is what the owner
+        // Operator-friendly label uses the USB serial (e.g. "JC-4s loop") rather
+        // than the cosmetic model enum, because the serial is what the operator
         // actively chose when programming each Adafruit board and is unique
         // per physical tuner.
         let display_name = if config.mcp_serial.is_empty() {
@@ -127,7 +127,7 @@ impl TunerInstance {
         };
         let bridge = Mcp2221Debug::with_target_serial(target_serial);
         // Apply persisted tune-detector thresholds before the first sample
-        // is taken so the bridge uses the owner's saved switch level
+        // is taken so the bridge uses the operator's saved switch level
         // immediately.
         bridge.set_threshold_v(config.threshold_v);
         bridge.set_hysteresis_v(config.hysteresis_v);
@@ -193,7 +193,7 @@ impl TunerInstance {
         }
     }
 
-    /// Set stale flag (VFO moved >25 kHz from tuned freq — driven by network tick).
+    /// Set stale flag (VFO moved >25 kHz from tuned freq - driven by network tick).
     pub fn set_stale(&self, stale: bool) {
         self.status.lock().unwrap().stale = stale;
     }
@@ -210,7 +210,7 @@ impl TunerInstance {
         &self.label
     }
 
-    /// Underlying MCP2221A bridge — exposed so the UI can render per-tuner
+    /// Underlying MCP2221A bridge - exposed so the UI can render per-tuner
     /// debug info (GP2 toggle / GP1 ADC) without going through the worker
     /// thread.
     pub fn bridge(&self) -> &Arc<Mcp2221Debug> {
@@ -302,7 +302,7 @@ fn check_abort(cmd_rx: &mpsc::Receiver<TunerCmd>) -> bool {
     matches!(cmd_rx.try_recv(), Ok(TunerCmd::AbortTune))
 }
 
-/// Reset state to Idle after 3 s — same heuristic as build-48 so the UI
+/// Reset state to Idle after 3 s - same heuristic as build-48 so the UI
 /// banner clears itself after the user has had a chance to read it.
 fn schedule_idle_reset(status: &Arc<Mutex<TunerStatus>>) {
     let status = status.clone();
@@ -328,7 +328,7 @@ fn tuner_thread(
 
     // Auto-reconnect throttle: when the USB cable / Adafruit board drops out,
     // retry every `RECONNECT_INTERVAL_SECS` so a re-plug recovers without the
-    // owner having to restart the server. Reset to `None` on every successful
+    // operator having to restart the server. Reset to `None` on every successful
     // connection so the next disconnect retries immediately.
     const RECONNECT_INTERVAL_SECS: u64 = 5;
     let mut last_reconnect_at: Option<Instant> = None;
@@ -358,7 +358,7 @@ fn tuner_thread(
                 run_tune_sequence(&bridge, &cmd_rx, &status, &cat_tx, &spe, &rf2k, &label);
             }
             Ok(TunerCmd::AbortTune) => {
-                // Idle abort — nothing to cancel.
+                // Idle abort - nothing to cancel.
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // Idle tick: refresh connected flag from the bridge so the UI
@@ -382,7 +382,7 @@ fn tuner_thread(
                     };
                     if due {
                         info!(
-                            "{}: bridge disconnected — attempting reconnect",
+                            "{}: bridge disconnected - attempting reconnect",
                             label
                         );
                         bridge.reconnect();
@@ -417,7 +417,7 @@ fn run_tune_sequence(
     info!("{}: starting tune sequence", label);
     set_state(status, TUNER_TUNING);
 
-    // Step 0 — PA(s) to Standby.
+    // Step 0 - PA(s) to Standby.
     let restore_spe = safe_tune_standby(spe, label);
     let restore_rf2k = safe_tune_standby_rf2k(rf2k, label);
     if restore_spe || restore_rf2k {
@@ -425,14 +425,14 @@ fn run_tune_sequence(
         std::thread::sleep(Duration::from_millis(500));
     }
 
-    // Step 1 — GP2 HIGH, HOLD until JC-Control acknowledges the press.
-    // Feedback-driven: no fixed 150 ms wait — we keep the start-button
+    // Step 1 - GP2 HIGH, HOLD until JC-Control acknowledges the press.
+    // Feedback-driven: no fixed 150 ms wait - we keep the start-button
     // asserted for as long as it takes the tuner to register, then react.
     bridge.set_gp2(true);
     info!("{}: GP2 HIGH (start asserted, holding until ADC ACK)", label);
 
-    // Step 2 — Wait for tune-active edge while GP2 is still HIGH.
-    // No ACK within ACTIVE_SEARCH_TIMEOUT_SECS → TIMEOUT.
+    // Step 2 - Wait for tune-active edge while GP2 is still HIGH.
+    // No ACK within ACTIVE_SEARCH_TIMEOUT_SECS -> TIMEOUT.
     //
     // Note: snapshot() rate-limits the USB ADC poll to ADC_POLL_MIN_MS (100 ms)
     // while this loop polls every ADC_POLL_INTERVAL_MS (25 ms). To avoid
@@ -454,7 +454,7 @@ fn run_tune_sequence(
         }
         if start.elapsed() > Duration::from_secs(ACTIVE_SEARCH_TIMEOUT_SECS) {
             warn!(
-                "{}: ADC never went tune-active while GP2 HIGH for {} s — TIMEOUT",
+                "{}: ADC never went tune-active while GP2 HIGH for {} s - TIMEOUT",
                 label, ACTIVE_SEARCH_TIMEOUT_SECS
             );
             bridge.set_gp2(false);
@@ -487,11 +487,11 @@ fn run_tune_sequence(
         std::thread::sleep(Duration::from_millis(ADC_POLL_INTERVAL_MS));
     }
 
-    // Step 3 — Release the start-button now that the tuner has ACK'd.
+    // Step 3 - Release the start-button now that the tuner has ACK'd.
     bridge.set_gp2(false);
     info!("{}: GP2 LOW (start released after tuner ACK)", label);
 
-    // Step 4 — Carrier ON so the tuner has RF to chew on.
+    // Step 4 - Carrier ON so the tuner has RF to chew on.
     if cat_tx.blocking_send("ZZTU1;".to_string()).is_err() {
         warn!("{}: failed to send ZZTU1 after ACK, aborting", label);
         set_state(status, TUNER_ABORTED);
@@ -500,9 +500,9 @@ fn run_tune_sequence(
         if restore_rf2k { safe_tune_operate_rf2k(rf2k, label); }
         return;
     }
-    info!("{}: tune carrier ON (ZZTU1) — waiting for ADC to return to idle", label);
+    info!("{}: tune carrier ON (ZZTU1) - waiting for ADC to return to idle", label);
 
-    // Step 5 — wait for tune complete (ADC back above the idle threshold).
+    // Step 5 - wait for tune complete (ADC back above the idle threshold).
     // Same dedup as Step 2: only count a consecutive idle edge when
     // last_adc_at advances, so rate-limited cached samples don't double-count.
     let mut consecutive_idle = 0usize;
@@ -550,7 +550,7 @@ fn run_tune_sequence(
 }
 
 // ============================================================================
-// PA orchestration — semantics preserved from the build-48 serial-port flow.
+// PA orchestration - semantics preserved from the build-48 serial-port flow.
 // ============================================================================
 
 fn safe_tune_standby(spe: &Option<Arc<SpeExpert>>, label: &str) -> bool {

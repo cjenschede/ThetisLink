@@ -11,7 +11,7 @@
 //! **Kosten per call:** `register()` pakt een `Mutex`-lock en doet
 //! `BTreeSet::insert` (O(log n) met dedup). Bij typische render-cadens
 //! (60 fps × ~10 helpers) is dit in praktijk verwaarloosbaar, maar wel
-//! géén zero-cost — profileer als het hot-path zichtbaar gaat kosten.
+//! géén zero-cost - profileer als het hot-path zichtbaar gaat kosten.
 
 use std::collections::BTreeSet;
 use std::sync::Mutex;
@@ -36,7 +36,7 @@ static REGISTRY: Mutex<Option<BTreeSet<CoverageEntry>>> = Mutex::new(None);
 ///
 /// Idempotent: dezelfde combinatie wordt maar één keer vastgelegd. Een site
 /// die zowel `guarded=true` als `guarded=false` registreert produceert twee
-/// rijen — dat is opzettelijk (anders zou een inconsistente helper onzichtbaar
+/// rijen - dat is opzettelijk (anders zou een inconsistente helper onzichtbaar
 /// blijven).
 pub(crate) fn register(
     control: &'static str,

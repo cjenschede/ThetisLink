@@ -7,10 +7,10 @@
 //! - Zero-cost als observability uit staat (prod default): `tracing::enabled!`
 //!   short-circuit in `TracingSink`, geen allocaties per event.
 //! - Events gaan door de intent-laag; elke `cmd_tx.send` uit een control-helper
-//!   MOET voorafgegaan worden door `record_intent` + guard-check — afgedwongen
+//!   MOET voorafgegaan worden door `record_intent` + guard-check - afgedwongen
 //!   doordat `ControlContext::cmd_tx` privé is (alleen `dispatch()` kan senden).
 //! - `RecordingSink` is alleen beschikbaar onder `cfg(test)` of
-//!   `feature = "ui-test"` — niet in release-builds.
+//!   `feature = "ui-test"` - niet in release-builds.
 //! - Alle events krijgen bij emit een `frame_id` + `t_mono_ns`-stempel mee (zie
 //!   `StampedEvent`) voor timeline-correlatie in jq-scripts en
 //!   intent-chain-asserts.
@@ -65,7 +65,7 @@ pub(crate) enum UiIntent {
     VfoSync,
     /// Gebruiker heeft een absolute frequency getypt in de inline-edit en
     /// ingediend met Enter. Het enige kanaal voor absolute freq-set vanuit
-    /// een control-helper — memory-recall of andere absolute-freq features
+    /// een control-helper - memory-recall of andere absolute-freq features
     /// gaan later via een nieuwe intent-variant als ze control-helper
     /// oorsprong hebben.
     InlineFreqEdit { channel: RxChannel, hz: u64 },
@@ -103,7 +103,7 @@ impl CommandBlockReason {
 /// Structured events die de observability-laag uitstuurt.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiEvent {
-    /// N.B. Dit event wordt NIET uit render-helpers geëmit — helpers zijn
+    /// N.B. Dit event wordt NIET uit render-helpers geëmit - helpers zijn
     /// stateless en kunnen geen enabled-overgang detecteren zonder extra
     /// per-site tracker. Plan:
     /// verplaatsen naar een app-level `ConnectionStateChanged` emit wanneer
@@ -154,7 +154,7 @@ pub(crate) enum UiEvent {
         hz: u64,
         connected: bool,
     },
-    /// Alleen in test/ui-test builds emitted; in prod nooit (zie
+    /// Alleen non-production instrumentation; in prod nooit emitted (zie
     /// `TracingSink::emit`). Gebruikt een aparte tracing-target `ui::frame`
     /// zodat `RUST_LOG` ze onafhankelijk van andere ui-events kan filteren.
     RenderFrame {
@@ -164,7 +164,7 @@ pub(crate) enum UiEvent {
     },
 }
 
-/// Gestampeld event — wat `RecordingSink` vasthoudt en wat log-parsers
+/// Gestampeld event - wat `RecordingSink` vasthoudt en wat log-parsers
 /// kunnen correleren via `frame_id` en `t_mono_ns`.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StampedEvent {
@@ -192,7 +192,7 @@ impl TracingSink {
 
 impl UiEventSink for TracingSink {
     fn emit(&self, event: UiEvent) {
-        // Short-circuit wanneer niets luistert — geen veld-assembly, geen allocatie.
+        // Short-circuit wanneer niets luistert - geen veld-assembly, geen allocatie.
         if !tracing::enabled!(target: "ui", tracing::Level::INFO) {
             // RenderFrame gaat op een apart target; check apart.
             if !matches!(event, UiEvent::RenderFrame { .. }) {
@@ -335,7 +335,7 @@ impl UiEventSink for TracingSink {
                 control_count,
                 guarded_count,
             } => {
-                // RenderFrame gaat alleen in test/ui-test builds + aparte target.
+                // RenderFrame gebruikt non-production instrumentation + aparte target.
                 #[cfg(any(test, feature = "ui-test"))]
                 {
                     tracing::info!(
@@ -368,7 +368,7 @@ impl UiEventSink for TracingSink {
 }
 
 // ---------------------------------------------------------------------------
-// RecordingSink — alleen onder test of feature = "ui-test". Geen stub in prod
+// RecordingSink - alleen onder test of feature = "ui-test". Geen stub in prod
 // builds: het symbool bestaat niet, dus kan niet per ongeluk worden
 // geconstrueerd.
 // ---------------------------------------------------------------------------
@@ -391,7 +391,7 @@ impl RecordingSink {
         self.inner.lock().unwrap().clone()
     }
 
-    /// Events zonder stempel — handig voor PartialEq-gebaseerde asserts.
+    /// Events zonder stempel - handig voor PartialEq-gebaseerde asserts.
     pub(crate) fn events(&self) -> Vec<UiEvent> {
         self.inner
             .lock()

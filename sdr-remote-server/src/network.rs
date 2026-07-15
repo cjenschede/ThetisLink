@@ -2,22 +2,17 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-/// Per-VRX high-res spectrum span in kHz. 0 = disabled. Set via
-/// ControlId::VrxSpectrumEnable/SpanKhz; read by the spectrum tick.
-static VRX1_HR_SPAN_KHZ: AtomicU16 = AtomicU16::new(0);
-static VRX2_HR_SPAN_KHZ: AtomicU16 = AtomicU16::new(0);
-
-/// VRX audio-rate mode (PATCH-vrx-wide-sam-ux): 0=NB, 1=WB, 2=Auto. One
-/// setting for both VRX; the audio loop reads it (+ each VRX's filter) to
-/// pick the per-VRX output rate. Default Auto. Set via ControlId::VrxAudioRate.
-pub static VRX_AUDIO_RATE_MODE: AtomicU8 = AtomicU8::new(2);
+// NOTE: the former global VRX spectrum-span + audio-rate atomics are removed -
+// both are now per-client in `vrx_manager::PerClientVrxManager`
+// (PATCH-vrx-per-client).
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use tokio::net::UdpSocket;
+use crate::tracked_socket::TrackedSocket;
 use tokio::sync::{watch, Mutex};
 use tokio::time::{interval, Duration};
 
@@ -37,11 +32,12 @@ use crate::dxcluster::DxCluster;
 use crate::rotor::Rotor;
 use crate::ultrabeam::UltraBeam;
 
-/// Pack a dBm reading into the wire format: dBm × 10 as i16, saturating at the
+/// Pack a dBm reading into the wire format: dBm x 10 as i16, saturating at the
 /// ends so a stale `-200 dBm` sentinel still survives the cast intact.
 fn dbm_to_deci(dbm: f32) -> i16 {
     (dbm * 10.0).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
+
 
 /// Bind-fail / bind-timeout diagnostic write helper. Direct file-write to
 /// thetislink-server.log next to the executable, bypassing `log::` macros for
@@ -63,12 +59,16 @@ fn write_bind_diag(entry: &str) {
 
 /// Server network service
 pub struct NetworkService {
-    socket: Arc<UdpSocket>,
+    socket: Arc<TrackedSocket>,
     session: Arc<Mutex<SessionManager>>,
     ptt: Arc<Mutex<PttController>>,
     spectrum: Arc<Mutex<SpectrumProcessor>>,
     rx2_spectrum: Arc<Mutex<Rx2SpectrumProcessor>>,
     shutdown: watch::Receiver<bool>,
+    /// Per-client VRX state (PATCH-vrx-per-client). Shared with the audio-loop
+    /// task (control-state per client); the loop owns the runtimes. Sync mutex
+    /// (short locks, no `.await` held) - distinct from the tokio mutexes above.
+    vrx_mgr: Arc<std::sync::Mutex<crate::vrx_manager::PerClientVrxManager>>,
     amplitec: Option<Arc<AmplitecSwitch>>,
     /// Multi-tuner collection (0..=`MAX_TUNERS` instances). The single-
     /// tuner status broadcast and the Tune command handler route via
@@ -94,10 +94,10 @@ pub struct NetworkService {
     /// PATCH-2: lock-free audio-activity counters shared with the
     /// audio loops AND the UI Status panel.
     audio_stats: Arc<crate::audio_stats::AudioActivityStats>,
-    /// PATCH-2: lock-free TCI-connection probe — updated from the
+    /// PATCH-2: lock-free TCI-connection probe - updated from the
     /// heartbeat handler, read by the Status panel.
     tci_probe: Arc<crate::audio_stats::TciStatusProbe>,
-    /// PATCH-2: server start time — used as the mono-clock reference
+    /// PATCH-2: server start time - used as the mono-clock reference
     /// for `AudioActivityStats::tick()` and the Status panel snapshot.
     server_start: Instant,
 }
@@ -129,6 +129,12 @@ impl NetworkService {
         tci_probe: Arc<crate::audio_stats::TciStatusProbe>,
         server_start: Instant,
         bind_status_slot: Arc<std::sync::OnceLock<crate::audio_stats::BindStatus>>,
+        // Phase C: als de relay aan staat, de tunnel-kanalen naar/van de relay-monitor.
+        // uplink = TrackedSocket -> monitor (send naar sentinel); inbound = monitor -> TrackedSocket.
+        relay_socket: Option<(
+            tokio::sync::mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
+            tokio::sync::mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>,
+        )>,
     ) -> Result<Self> {
         // Wrap bind in 30s timeout to catch cold-boot kernel-hangs (memory
         // project_tl2_coldboot_bind_fail.md). Within that window we retry
@@ -211,7 +217,7 @@ impl NetworkService {
             }
         };
         // Enlarge UDP buffers: default Windows buffer (8KB) overflows with
-        // spectrum packets (4-8KB each × clients), dropping audio packets.
+        // spectrum packets (4-8KB each x clients), dropping audio packets.
         {
             use socket2::SockRef;
             let sock_ref = SockRef::from(&socket);
@@ -248,12 +254,18 @@ impl NetworkService {
         }
 
         Ok(Self {
-            socket: Arc::new(socket),
+            socket: Arc::new(match relay_socket {
+                Some((uplink_tx, inbound_rx)) => {
+                    TrackedSocket::with_relay(socket, uplink_tx, inbound_rx)
+                }
+                None => TrackedSocket::new(socket),
+            }),
             session,
             ptt,
             spectrum,
             rx2_spectrum,
             shutdown,
+            vrx_mgr: Arc::new(std::sync::Mutex::new(crate::vrx_manager::PerClientVrxManager::new())),
             amplitec,
             tuners,
             spe,
@@ -286,7 +298,7 @@ impl NetworkService {
 
         info!("TCI mode: audio at 48kHz via WebSocket");
 
-        // TCI IQ consumer task: drain IQ channels → spectrum processor
+        // TCI IQ consumer task: drain IQ channels -> spectrum processor
         let tci_iq_handle = {
             let spectrum = self.spectrum.clone();
             let rx2_spectrum = self.rx2_spectrum.clone();
@@ -294,8 +306,9 @@ impl NetworkService {
             let mut shutdown = self.shutdown.clone();
             let socket = self.socket.clone();
             let session = self.session.clone();
+            let vrx_mgr = self.vrx_mgr.clone();
             tokio::spawn(async move {
-                crate::audio_loops::tci_iq_consumer(ptt, spectrum, rx2_spectrum, &mut shutdown, socket, session).await;
+                crate::audio_loops::tci_iq_consumer(ptt, spectrum, rx2_spectrum, &mut shutdown, socket, session, vrx_mgr).await;
             })
         };
 
@@ -351,7 +364,7 @@ impl NetworkService {
             }
         };
 
-        // Slot-1 RX audio loop (Optie B-prime) — exacte spiegel van slot 0,
+        // Slot-1 RX audio loop (Optie B-prime) - exacte spiegel van slot 0,
         // maar broadcast naar yaesu2_addrs als AudioYaesu2 (slot=1).
         let _yaesu2_audio_handle = {
             let yaesu2_audio = yaesu2.as_ref().and_then(|y| {
@@ -374,10 +387,10 @@ impl NetworkService {
             }
         };
 
-        // PATCH-2 owner-feedback (2026-05-13): drive the TCI status probe
+        // PATCH-2 operator-feedback (2026-05-13): drive the TCI status probe
         // from an independent 1Hz ticker so the Status panel reflects reality
         // even when no clients are connected (heartbeat-driven updates only
-        // fire on client traffic — without this the panel would say
+        // fire on client traffic - without this the panel would say
         // "Disconnected since start" while Thetis is happily attached).
         let _tci_probe_ticker = {
             let ptt = self.ptt.clone();
@@ -410,10 +423,39 @@ impl NetworkService {
             if yaesu.is_some() {
                 Some(tokio::spawn(async move {
                     let mut tick = interval(Duration::from_millis(200));
+                    let mut last_features0: u32 = u32::MAX; // value-change-only feature-state
+                    let mut last_levels0 = [255u8; YaesuFeaturePacket::N_LEVELS];
+                    let mut last_freqs0 = [u16::MAX; YaesuFeaturePacket::N_FREQS];
+                    // Verse abonnees krijgen eenmalig de huidige feature-state (sent-set),
+                    // zodat een net-verbonden client meteen de juiste AGC/IPO/NB/DNR/Proc-
+                    // standen heeft (anders is de eerste cyclus-klik een no-op op stale 0).
+                    let mut sent_features0: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    // Presence-based SSB-routing (opt-out modus, per-PTT UIT): zet de USB-
+                    // routing aan zolang er een client op radio 1 zit, en herstel ~2s nadat
+                    // de laatste weg is. In per-PTT-modus doet de SetPtt-handler dit.
+                    let mut ssb_applied0 = false;
+                    let mut absent_ticks0: u32 = 0;
                     loop {
                         tokio::select! {
                             _ = tick.tick() => {
                                 let addrs = session.lock().await.yaesu_addrs();
+                                if let Some(ref y) = yaesu {
+                                    if !y.status().ssb_switch_on_ptt {
+                                        if !addrs.is_empty() {
+                                            absent_ticks0 = 0;
+                                            if !ssb_applied0 {
+                                                y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(true));
+                                                ssb_applied0 = true;
+                                            }
+                                        } else {
+                                            absent_ticks0 = absent_ticks0.saturating_add(1);
+                                            if ssb_applied0 && absent_ticks0 >= 10 { // 10x200ms = 2s
+                                                y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(false));
+                                                ssb_applied0 = false;
+                                            }
+                                        }
+                                    }
+                                }
                                 if addrs.is_empty() { continue; }
                                 if let Some(ref y) = yaesu {
                                     let ys = y.status();
@@ -433,11 +475,33 @@ impl NetworkService {
                                         mic_gain: ys.mic_gain,
                                         split: ys.split_active,
                                         scan: ys.scan_active,
+                                        tuner_state: ys.tuner_state,
                                     };
                                     let mut buf = [0u8; YaesuStatePacket::SIZE];
                                     pkt.serialize(&mut buf);
                                     for addr in &addrs {
                                         let _ = socket.try_send_to(&buf, *addr);
+                                    }
+                                    // Feature-state (toggles + levels): value-change-only push
+                                    // + initiele push naar verse abonnees (sent-set). Markeer een
+                                    // addr alleen bij geslaagde send -> retry volgende tick bij fout.
+                                    let feat_changed0 = ys.feature_toggles != last_features0 || ys.feature_levels != last_levels0 || ys.feature_freqs != last_freqs0;
+                                    if feat_changed0 {
+                                        last_features0 = ys.feature_toggles;
+                                        last_levels0 = ys.feature_levels;
+                                        last_freqs0 = ys.feature_freqs;
+                                        sent_features0.clear(); // iedereen krijgt de nieuwe state
+                                    }
+                                    sent_features0.retain(|a| addrs.contains(a)); // prune losgekoppelde
+                                    if feat_changed0 || addrs.iter().any(|a| !sent_features0.contains(a)) {
+                                        let fp = YaesuFeaturePacket { slot: 0, toggles: ys.feature_toggles, levels: ys.feature_levels, freqs: ys.feature_freqs };
+                                        let mut fbuf = [0u8; YaesuFeaturePacket::SIZE];
+                                        fp.serialize(&mut fbuf);
+                                        for addr in &addrs {
+                                            if feat_changed0 || !sent_features0.contains(addr) {
+                                                if socket.try_send_to(&fbuf, *addr).is_ok() { sent_features0.insert(*addr); }
+                                            }
+                                        }
                                     }
 
                                     // Check for memory data ready to send
@@ -471,7 +535,7 @@ impl NetworkService {
             }
         };
 
-        // Slot-1 state broadcast (Optie B-prime) — spiegel van slot 0, maar als
+        // Slot-1 state broadcast (Optie B-prime) - spiegel van slot 0, maar als
         // YaesuState2 / YaesuMemoryData2 naar yaesu2_addrs (subscription-gated).
         let _yaesu2_state_handle = {
             let yaesu2 = yaesu2.clone();
@@ -481,10 +545,35 @@ impl NetworkService {
             if yaesu2.is_some() {
                 Some(tokio::spawn(async move {
                     let mut tick = interval(Duration::from_millis(200));
+                    let mut last_features1: u32 = u32::MAX; // value-change-only feature-state
+                    let mut last_levels1 = [255u8; YaesuFeaturePacket::N_LEVELS];
+                    let mut last_freqs1 = [u16::MAX; YaesuFeaturePacket::N_FREQS];
+                    // Verse abonnees krijgen eenmalig de huidige feature-state (zie slot 0).
+                    let mut sent_features1: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    // Presence-based SSB-routing (opt-out modus) voor radio 2 (FTX-1).
+                    let mut ssb_applied1 = false;
+                    let mut absent_ticks1: u32 = 0;
                     loop {
                         tokio::select! {
                             _ = tick.tick() => {
                                 let addrs = session.lock().await.yaesu2_addrs();
+                                if let Some(ref y) = yaesu2 {
+                                    if !y.status().ssb_switch_on_ptt {
+                                        if !addrs.is_empty() {
+                                            absent_ticks1 = 0;
+                                            if !ssb_applied1 {
+                                                y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(true));
+                                                ssb_applied1 = true;
+                                            }
+                                        } else {
+                                            absent_ticks1 = absent_ticks1.saturating_add(1);
+                                            if ssb_applied1 && absent_ticks1 >= 10 { // 2s
+                                                y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(false));
+                                                ssb_applied1 = false;
+                                            }
+                                        }
+                                    }
+                                }
                                 if addrs.is_empty() { continue; }
                                 if let Some(ref y) = yaesu2 {
                                     let ys = y.status();
@@ -504,11 +593,32 @@ impl NetworkService {
                                         mic_gain: ys.mic_gain,
                                         split: ys.split_active,
                                         scan: ys.scan_active,
+                                        tuner_state: ys.tuner_state,
                                     };
                                     let mut buf = [0u8; YaesuStatePacket::SIZE];
                                     pkt.serialize_as_type(&mut buf, PacketType::YaesuState2);
                                     for addr in &addrs {
                                         let _ = socket.try_send_to(&buf, *addr);
+                                    }
+                                    // Feature-state (toggles + levels): value-change-only + initiele
+                                    // push naar verse abonnees (sent-set), slot 1. Zie slot 0.
+                                    let feat_changed1 = ys.feature_toggles != last_features1 || ys.feature_levels != last_levels1 || ys.feature_freqs != last_freqs1;
+                                    if feat_changed1 {
+                                        last_features1 = ys.feature_toggles;
+                                        last_levels1 = ys.feature_levels;
+                                        last_freqs1 = ys.feature_freqs;
+                                        sent_features1.clear();
+                                    }
+                                    sent_features1.retain(|a| addrs.contains(a));
+                                    if feat_changed1 || addrs.iter().any(|a| !sent_features1.contains(a)) {
+                                        let fp = YaesuFeaturePacket { slot: 1, toggles: ys.feature_toggles, levels: ys.feature_levels, freqs: ys.feature_freqs };
+                                        let mut fbuf = [0u8; YaesuFeaturePacket::SIZE];
+                                        fp.serialize(&mut fbuf);
+                                        for addr in &addrs {
+                                            if feat_changed1 || !sent_features1.contains(addr) {
+                                                if socket.try_send_to(&fbuf, *addr).is_ok() { sent_features1.insert(*addr); }
+                                            }
+                                        }
                                     }
 
                                     let mem_data = y.memory_data.lock().unwrap().take();
@@ -541,9 +651,9 @@ impl NetworkService {
         };
 
         // RadioInfo broadcast (Optie B-prime): laat dual-radio-bewuste clients
-        // (die Yaesu2Enable hebben gestuurd → yaesu2_addrs) het gedetecteerde
+        // (die Yaesu2Enable hebben gestuurd -> yaesu2_addrs) het gedetecteerde
         // model per slot weten, voor de paneel-naamgeving ("991A 1"/"FTX1" etc.).
-        // Oude clients zitten nooit op yaesu2_addrs → krijgen dit nieuwe packet-
+        // Oude clients zitten nooit op yaesu2_addrs -> krijgen dit nieuwe packet-
         // type nooit (back-compat by construction). 1 Hz volstaat ruim.
         let _radio_info_handle = {
             let yaesu = yaesu.clone();
@@ -583,6 +693,85 @@ impl NetworkService {
             }
         };
 
+        // YaesuPresence broadcast (PATCH-android-yaesu-presence-datasaver): presence
+        // + model per slot naar ALLE actieve clients - ontkoppelt de selector/
+        // connected-status van de audio+state-subscription zodat wegvallen/bijkomen
+        // dynamisch is (niet sticky). Push-on-change (prev-tuple diff) + determin-
+        // istische levering aan verse clients (elke addr krijgt de huidige tuple een
+        // keer via de sent-set, <= tick-latency; een verse client mist de diff dus niet,
+        // zonder ambigue auth-timing). Value-change-only logging.
+        let _yaesu_presence_handle = {
+            let yaesu = yaesu.clone();
+            let yaesu2 = yaesu2.clone();
+            let socket = self.socket.clone();
+            let session = self.session.clone();
+            let mut shutdown = self.shutdown.clone();
+            if yaesu.is_some() || yaesu2.is_some() {
+                // Diagnostische sim van radio-afwezigheid zonder loskoppelen.
+                // THETISLINK_SIM_YAESU_ABSENT=0 | 1 | 0,1 forceert die slot(s) "afwezig"
+                // (alleen leespad, low-risk). Eenmalig gelezen bij server-start.
+                let sim = std::env::var("THETISLINK_SIM_YAESU_ABSENT").unwrap_or_default();
+                let sim_absent0 = sim.split(',').any(|s| s.trim() == "0");
+                let sim_absent1 = sim.split(',').any(|s| s.trim() == "1");
+                if sim_absent0 || sim_absent1 {
+                    info!("Yaesu presence SIM active: forcing absent slot0={} slot1={}", sim_absent0, sim_absent1);
+                }
+                Some(tokio::spawn(async move {
+                    let mut tick = interval(Duration::from_millis(500));
+                    let mut prev: Option<(bool, u8, bool, u8)> = None;
+                    let mut sent_addrs: std::collections::HashSet<std::net::SocketAddr> =
+                        std::collections::HashSet::new();
+                    loop {
+                        tokio::select! {
+                            _ = tick.tick() => {
+                                let present0 = yaesu.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent0;
+                                let present1 = yaesu2.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent1;
+                                let model0 = yaesu.as_ref().map(|y| y.model.as_code()).unwrap_or(0);
+                                let model1 = yaesu2.as_ref().map(|y| y.model.as_code()).unwrap_or(0);
+                                let tuple = (present0, model0, present1, model1);
+
+                                let addrs = session.lock().await.active_addrs();
+                                sent_addrs.retain(|a| addrs.contains(a)); // prune losgekoppelde
+
+                                let changed = prev != Some(tuple);
+                                if changed {
+                                    // L1: value-change-only, incl. aantal ontvangers.
+                                    info!("Yaesu presence push: slot0={}/{} slot1={}/{} -> {} clients",
+                                        present0, model0, present1, model1, addrs.len());
+                                    prev = Some(tuple);
+                                    sent_addrs.clear(); // iedereen krijgt de nieuwe tuple
+                                }
+
+                                let pkt = YaesuPresencePacket {
+                                    slot0_present: present0, slot0_model: model0,
+                                    slot1_present: present1, slot1_model: model1,
+                                };
+                                let mut buf = [0u8; YaesuPresencePacket::SIZE];
+                                pkt.serialize(&mut buf);
+                                // Bij wijziging naar alle actieve clients; anders alleen
+                                // verse clients die de huidige tuple nog niet kregen.
+                                // Markeer een addr ALLEEN als 'sent' bij een geslaagde send:
+                                // bij een send-fout blijft 'ie ongemarkeerd -> volgende tick
+                                // (500 ms) opnieuw, zodat een verse client de initial push
+                                // niet permanent misloopt tot de volgende presence-wijziging.
+                                for addr in &addrs {
+                                    if changed || !sent_addrs.contains(addr) {
+                                        if socket.try_send_to(&buf, *addr).is_ok() {
+                                            if !changed { info!("Yaesu presence initial push -> {}", addr); }
+                                            sent_addrs.insert(*addr);
+                                        }
+                                    }
+                                }
+                            }
+                            _ = shutdown.changed() => break,
+                        }
+                    }
+                }))
+            } else {
+                None
+            }
+        };
+
         // Spawn the safety check task
         let safety_handle = {
             let ptt = self.ptt.clone();
@@ -590,6 +779,7 @@ impl NetworkService {
             let socket = self.socket.clone();
             let spectrum = self.spectrum.clone();
             let rx2_spectrum = self.rx2_spectrum.clone();
+            let vrx_mgr = self.vrx_mgr.clone();
             let amplitec = self.amplitec.clone();
             let tuners = self.tuners.clone();
             let spe = self.spe.clone();
@@ -617,7 +807,7 @@ impl NetworkService {
                 let mut spectrum_tick = interval(Duration::from_millis(50)); // 20 Hz check rate
                 let mut equipment_tick = interval(Duration::from_millis(200));
                 let mut spectrum_frame_count: u32 = 0;
-                // Per-tuner VFO-at-tune-complete tracking — each tuner has its
+                // Per-tuner VFO-at-tune-complete tracking - each tuner has its
                 // own physical memory, so the "stale" check (VFO moved >25 kHz
                 // from the last tune) must be evaluated independently per slot.
                 // Index by `TunerInstance::slot_index()`.
@@ -637,9 +827,9 @@ impl NetworkService {
                 let mut prev_tx_filter: Option<(i32, i32)> = None;
                 let mut prev_equipment: std::collections::HashMap<u8, Vec<u8>> = std::collections::HashMap::new();
                 let mut prev_eq_client_count: usize = 0;
-                // DX-spot dedup + refresh-tracking. Vóór deze fix stuurde de
-                // server élke equipment_tick (200 ms = 5 Hz) alle cached spots
-                // opnieuw naar alle clients — ~90 Kbit/s in steady-state bij
+                // DX-spot dedup + refresh-tracking. Voor deze fix stuurde de
+                // server elke equipment_tick (200 ms = 5 Hz) alle cached spots
+                // opnieuw naar alle clients - ~90 Kbit/s in steady-state bij
                 // een gevulde cache. Nieuwe spots gaan nu meteen door; de
                 // age-refresh-pass loopt elke 10 s (zichtbaar genoeg voor de
                 // "5m ago"-UI). Bij een nieuwe client wordt prev_spot_keys
@@ -648,10 +838,10 @@ impl NetworkService {
                     std::collections::HashSet::new();
                 let mut last_spot_full_refresh = std::time::Instant::now();
                 let mut prev_spot_client_count: usize = 0;
-                // Reactive RF-power-cap per Amplitec-A positie. Eén instantie
+                // Reactive RF-power-cap per Amplitec-A positie. Een instantie
                 // voor de hele broadcast-task; cap-state + snapshot/restore
                 // worden tussen tick-iteraties bewaard. Zie `power_cap.rs`
-                // voor de positie→watts tabel + activatievoorwaarden.
+                // voor de positie->watts tabel + activatievoorwaarden.
                 let mut power_cap_state = crate::power_cap::PowerCapState::new();
                 // Preventive TX-gate: handle naar de tx_blocked-flag in
                 // PttController. We pushen elke broadcast-iteratie de
@@ -665,19 +855,19 @@ impl NetworkService {
                 // Vorige beschikbaarheid van de rx_only_ex-cap. Wanneer de
                 // operator de ThetisLink-extensions checkbox in Thetis
                 // aanvinkt terwijl de Amplitec al op een RX-only stand staat,
-                // verandert pos_is_blocked niet — dus moeten we op de
-                // cap-transitie (afwezig→aanwezig) de RXOnly opnieuw pushen.
+                // verandert pos_is_blocked niet - dus moeten we op de
+                // cap-transitie (afwezig->aanwezig) de RXOnly opnieuw pushen.
                 let mut prev_had_rx_only_cap = false;
-                // Snapshot van Thetis' RXOnly-staat van vlak vóór TL2 'm
+                // Snapshot van Thetis' RXOnly-staat van vlak voor TL2 'm
                 // overnam voor een RX-only positie. `Some(prev)` betekent
                 // "TL2 heeft overgenomen, herstel `prev` bij teruggave".
                 // `None` = TL2 heeft RXOnly niet overgenomen. Alleen TL2 kent
                 // deze pre-state, dus de hele snapshot/restore-beslissing zit
                 // hier (de Thetis-fork blijft "dom").
                 let mut rx_only_saved: Option<bool> = None;
-                // Log de tx_blocked + max_w config-staat één keer bij start
+                // Log de tx_blocked + max_w config-staat een keer bij start
                 // van de broadcast-task, zodat we in de log direct zien of de
-                // actieve config de power-cap/RX-only waarden überhaupt heeft.
+                // actieve config de power-cap/RX-only waarden uberhaupt heeft.
                 {
                     let cfg = crate::config::load();
                     info!(
@@ -692,7 +882,7 @@ impl NetworkService {
                         }
                         _ = spectrum_tick.tick() => {
                             // Collect client info + loss BEFORE locking spectrum
-                            // (avoids deadlock: main loop does session→spectrum)
+                            // (avoids deadlock: main loop does session->spectrum)
                             let client_info: Vec<(SocketAddr, f32, f32, u16, u8)> = {
                                 let sess = session.lock().await;
                                 sess.spectrum_clients().into_iter().map(|(addr, zoom, pan, max_bins)| {
@@ -761,47 +951,57 @@ impl NetworkService {
 
                             // VRX1/VRX2 high-res spectrum: extract a window
                             // centered on the VRX listen freq with the client-
-                            // requested span. Per-client gated (release-gate
+                            // requested span. Per-client gated (release hardening
                             // fix): alleen clients die VrxSpectrum* aan hebben
-                            // gezet krijgen het SpectrumVrx packet-type — oude
+                            // gezet krijgen het SpectrumVrx packet-type - oude
                             // v2.1.x clients nooit.
-                            let vrx1_span_khz = VRX1_HR_SPAN_KHZ.load(Ordering::Relaxed);
-                            let vrx2_span_khz = VRX2_HR_SPAN_KHZ.load(Ordering::Relaxed);
-                            if vrx1_span_khz > 0 || vrx2_span_khz > 0 {
-                                let (vrx1_spec_addrs, vrx2_spec_addrs) = {
-                                    let s = session.lock().await;
-                                    (s.vrx_spectrum_addrs(0), s.vrx_spectrum_addrs(1))
-                                };
-                                if !vrx1_spec_addrs.is_empty() || !vrx2_spec_addrs.is_empty() {
-                                    if vrx1_span_khz > 0 && !vrx1_spec_addrs.is_empty() {
-                                        let span_hz = (vrx1_span_khz as u32) * 1000;
-                                        let vrx1_freq = crate::vrx_bridge::vrx_control_thetislink(0)
-                                            .lock().unwrap().target_freq_hz;
-                                        if vrx1_freq > 0 {
-                                            let sp = spectrum.lock().await;
-                                            let pkt = sp.extract_view_at(vrx1_freq, span_hz, 4096);
-                                            drop(sp);
-                                            if pkt.num_bins > 0 {
-                                                let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
-                                                pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx1);
-                                                for addr in &vrx1_spec_addrs { packets_to_send.push((*addr, buf.clone())); }
-                                            }
-                                        }
+                            // Per-client (PATCH-vrx-per-client): each spectrum subscriber
+                            // gets a window at ITS OWN listen freq + span. Snapshot the
+                            // (addr, freq, span) jobs under the manager lock, then extract
+                            // without holding it (lock the spectrum processor once).
+                            let (vrx1_spec_addrs, vrx2_spec_addrs) = {
+                                let s = session.lock().await;
+                                (s.vrx_spectrum_addrs(0), s.vrx_spectrum_addrs(1))
+                            };
+                            let jobs1: Vec<(std::net::SocketAddr, u64, u32)> = if vrx1_spec_addrs.is_empty() {
+                                Vec::new()
+                            } else {
+                                let m = vrx_mgr.lock().unwrap();
+                                vrx1_spec_addrs.iter().filter_map(|a| {
+                                    let span = m.spectrum_span(a, 0);
+                                    let freq = m.target_freq(a, 0);
+                                    (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000))
+                                }).collect()
+                            };
+                            if !jobs1.is_empty() {
+                                let sp = spectrum.lock().await;
+                                for (a, freq, span_hz) in jobs1 {
+                                    let pkt = sp.extract_view_at(freq, span_hz, 4096);
+                                    if pkt.num_bins > 0 {
+                                        let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
+                                        pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx1);
+                                        packets_to_send.push((a, buf));
                                     }
-                                    if vrx2_span_khz > 0 && !vrx2_spec_addrs.is_empty() {
-                                        let span_hz = (vrx2_span_khz as u32) * 1000;
-                                        let vrx2_freq = crate::vrx_bridge::vrx_control_thetislink(1)
-                                            .lock().unwrap().target_freq_hz;
-                                        if vrx2_freq > 0 {
-                                            let rx2_sp = rx2_spectrum.lock().await;
-                                            let pkt = rx2_sp.extract_view_at(vrx2_freq, span_hz, 4096);
-                                            drop(rx2_sp);
-                                            if pkt.num_bins > 0 {
-                                                let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
-                                                pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx2);
-                                                for addr in &vrx2_spec_addrs { packets_to_send.push((*addr, buf.clone())); }
-                                            }
-                                        }
+                                }
+                            }
+                            let jobs2: Vec<(std::net::SocketAddr, u64, u32)> = if vrx2_spec_addrs.is_empty() {
+                                Vec::new()
+                            } else {
+                                let m = vrx_mgr.lock().unwrap();
+                                vrx2_spec_addrs.iter().filter_map(|a| {
+                                    let span = m.spectrum_span(a, 1);
+                                    let freq = m.target_freq(a, 1);
+                                    (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000))
+                                }).collect()
+                            };
+                            if !jobs2.is_empty() {
+                                let rx2_sp = rx2_spectrum.lock().await;
+                                for (a, freq, span_hz) in jobs2 {
+                                    let pkt = rx2_sp.extract_view_at(freq, span_hz, 4096);
+                                    if pkt.num_bins > 0 {
+                                        let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
+                                        pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx2);
+                                        packets_to_send.push((a, buf));
                                     }
                                 }
                             }
@@ -855,7 +1055,7 @@ impl NetworkService {
                                 };
                                 send_if_changed!(DeviceType::Amplitec6x2, pkt, &eq_addrs);
                             }
-                            // Amplitec power-cap tabel — bij wijziging (of nieuwe
+                            // Amplitec power-cap tabel - bij wijziging (of nieuwe
                             // client, via prev_equipment-clear) opnieuw broadcast.
                             // Hergebruikt `send_if_changed!` met een unieke key
                             // buiten de DeviceType range (0xFE).
@@ -966,7 +1166,7 @@ impl NetworkService {
                                 send_if_changed!(DeviceType::Tuner, pkt, &eq_addrs);
                             }
 
-                            // Generieke RF-power cap per Amplitec-A positie —
+                            // Generieke RF-power cap per Amplitec-A positie -
                             // reactieve drive-reductie wanneer de actieve
                             // antenne-positie een max_w heeft in
                             // `config.amplitec_max_w` en de PA-meter daar
@@ -975,7 +1175,7 @@ impl NetworkService {
                             // gemarkeerd zijn (RX-only antennes).
                             //
                             // Cap-werking: we sturen de PA-EIGEN drive-knop
-                            // (zelfde commando als de "−" knop in het SPE/RF2K
+                            // (zelfde commando als de "-" knop in het SPE/RF2K
                             // tabblad van de client). Niet Thetis ZZPC: de PA
                             // bepaalt de drive via een TCI-loop terug naar
                             // Thetis, dus een ZZPC-verlaging vanuit de server
@@ -985,7 +1185,7 @@ impl NetworkService {
                             //
                             // TX-block: als Thetis in TX gaat op een
                             // RX-only positie sturen we direct `ZZTX0;`
-                            // (vertaalt naar `trx:0,false;`). Reactief —
+                            // (vertaalt naar `trx:0,false;`). Reactief -
                             // preventieve client-side gating komt later.
                             {
                                 let live_config = crate::config::load();
@@ -1034,7 +1234,7 @@ impl NetworkService {
                                 // TX-inhibit via het fork-command `rx_only_ex`.
                                 // Met fork-extensions blokkeert Thetis dan ALLE
                                 // TX-bronnen (MOX/spatiebalk/hardware-PTT/VOX)
-                                // aan de bron — geen TX-window meer. Tegen
+                                // aan de bron - geen TX-window meer. Tegen
                                 // stock Thetis (geen cap) returnt set_rx_only
                                 // false en blijft de reactieve ZZTX0 hieronder
                                 // de enige (best-effort) bescherming.
@@ -1047,10 +1247,10 @@ impl NetworkService {
                                 //   huidige Thetis-RXOnly als snapshot (alleen
                                 //   bij de eerste overname), zet RXOnly=true.
                                 // - Teruggave (positie niet meer RX-only):
-                                //   herstel de snapshot (NIET blind false) —
+                                //   herstel de snapshot (NIET blind false) -
                                 //   zo blijft een handmatig gezette RXOnly
                                 //   gerespecteerd.
-                                // - Cap verschijnt (extensions uit→aan terwijl
+                                // - Cap verschijnt (extensions uit->aan terwijl
                                 //   al op RX-only positie): behandel als
                                 //   overname.
                                 // - Cap verdwijnt (extensions uit) terwijl TL2
@@ -1079,7 +1279,7 @@ impl NetworkService {
                                             // zijn van een vorige TL-sessie die zelf RXOnly
                                             // had aangezet en niet opruimde (process-crash,
                                             // PC-reboot, etc.). Default bij bootstrap is dus
-                                            // `false` — bij teruggave gaat RXOnly netjes uit
+                                            // `false` - bij teruggave gaat RXOnly netjes uit
                                             // en blijft Thetis niet vastzitten. Buiten
                                             // bootstrap (mid-sessie cap-toggle) snapshotten
                                             // we wel de actuele staat zodat een handmatige
@@ -1098,12 +1298,12 @@ impl NetworkService {
                                     } else if let Some(prev) = rx_only_saved.take() {
                                         p.set_rx_only(prev).await;
                                         info!(
-                                            "TX-gate: RX-only release pos={:?} → restored RXOnly={}",
+                                            "TX-gate: RX-only release pos={:?} -> restored RXOnly={}",
                                             active_amplitec_pos, prev,
                                         );
                                     } else if cap_just_appeared {
                                         // Bootstrap-edge: cap kwam beschikbaar en TL2 heeft
-                                        // niet overgenomen (rx_only_saved is None) — pos is
+                                        // niet overgenomen (rx_only_saved is None) - pos is
                                         // niet RX-only. Stuur altijd `rx_only_ex:false`,
                                         // ongeacht `p.thetis_rx_only()`: bij bootstrap komt
                                         // de echo pas seconden NA de cap-detect, dus
@@ -1114,7 +1314,7 @@ impl NetworkService {
                                         // al uit was, en ruimt het residu op zonder op de
                                         // echo-timing te wachten. Eventuele bewust-handmatig-
                                         // gezette RXOnly wordt overruled; acceptabel volgens
-                                        // de eerdere trade-off — operator kan opnieuw
+                                        // de eerdere trade-off - operator kan opnieuw
                                         // aanvinken.
                                         p.set_rx_only(false).await;
                                         info!(
@@ -1128,19 +1328,19 @@ impl NetworkService {
                                     // preventieve TX-inhibit verlaten als de operator in
                                     // Thetis handmatig 'Receive only' uitvinkt
                                     // (setup.cs:6493) of een tweede TCI-client een
-                                    // `rx_only_ex:false;` stuurt — de bescherming zou dan
+                                    // `rx_only_ex:false;` stuurt - de bescherming zou dan
                                     // pas bij de volgende positie-wissel terugkomen,
                                     // tot die tijd terugvallend op de reactieve ZZTX0
                                     // catch-all (~100 ms TX-window). Re-assert alleen
                                     // wanneer de TCI-echo aangeeft dat RXOnly daadwerkelijk
-                                    // extern is gewist — voorkomt 5 Hz onnodige
+                                    // extern is gewist - voorkomt 5 Hz onnodige
                                     // TCI-traffic en herhaalde UI-invokes in de Thetis-
                                     // fork bij stabiele takeover.
                                     let mut p = ptt.lock().await;
                                     if !p.thetis_rx_only() {
                                         p.set_rx_only(true).await;
                                         log::warn!(
-                                            "TX-gate: RXOnly externally cleared on blocked pos {:?} — re-asserting preventieve TX-inhibit",
+                                            "TX-gate: RXOnly externally cleared on blocked pos {:?} - re-asserting preventieve TX-inhibit",
                                             active_amplitec_pos,
                                         );
                                     }
@@ -1148,7 +1348,7 @@ impl NetworkService {
 
                                 // Extensions uitgezet terwijl TL2 RXOnly had
                                 // overgenomen: bescherming blijft (veilig),
-                                // maar TL2 kan niet meer herstellen → waarschuw.
+                                // maar TL2 kan niet meer herstellen -> waarschuw.
                                 if cap_just_disappeared {
                                     if let Some(prev) = rx_only_saved.take() {
                                         log::warn!(
@@ -1171,7 +1371,7 @@ impl NetworkService {
                                     );
                                     ptt.lock().await.send_cat("ZZTX0").await;
                                 }
-                                // Switch detector — bij wegschakelen van een
+                                // Switch detector - bij wegschakelen van een
                                 // positie met actieve cap-cyclus sturen we
                                 // evenveel DriveUp commando's als we
                                 // DriveDowns gestuurd hadden, zodat de
@@ -1252,13 +1452,13 @@ impl NetworkService {
                                 };
                                 send_if_changed!(DeviceType::Rotor, pkt, &eq_addrs);
                             }
-                            // DX Cluster spot broadcast — dedup + 10 s refresh.
+                            // DX Cluster spot broadcast - dedup + 10 s refresh.
                             // Per tick: stuur alleen spots waarvan de
                             // (callsign, freq, mode)-key niet eerder gezien is.
                             // Elke 10 s en bij client-aantal-wijziging:
                             // volledige resync zodat age-velden bijgewerkt
                             // worden en nieuwe clients de cache krijgen.
-                            // Spot-addrs gefilterd op `dx_spots_enabled` —
+                            // Spot-addrs gefilterd op `dx_spots_enabled` -
                             // clients kunnen de stream opt-out via de
                             // DxSpotsEnabled control voor metered links.
                             if let Some(ref cluster) = dxcluster {
@@ -1280,7 +1480,7 @@ impl NetworkService {
                                             .map(|s| (s.callsign.clone(), s.frequency_hz, s.mode.clone()))
                                             .collect();
                                     // Garbage-collect: verwijder keys die uit
-                                    // de cache zijn verdwenen (geëxpireerd)
+                                    // de cache zijn verdwenen (geexpireerd)
                                     // zodat prev_spot_keys niet onbegrensd groeit.
                                     prev_spot_keys.retain(|k| current_keys.contains(k));
                                     for spot in &spots {
@@ -1312,7 +1512,7 @@ impl NetworkService {
                                     prev_spot_client_count = 0;
                                 }
                                 // Forward NEW spots to Thetis via TCI SPOT command (only once per spot).
-                                // Onafhankelijk van TL2-client subscriptions —
+                                // Onafhankelijk van TL2-client subscriptions -
                                 // de fork's eigen DX-spot weergave moet altijd
                                 // gevoed worden zolang de DX-cluster aanstaat.
                                 if !spots.is_empty() {
@@ -1359,7 +1559,7 @@ impl NetworkService {
                                 // Unknown tune command, pass through
                                 &cmd
                             };
-                            debug!("Tuner TCI: {} → {}", cmd.trim_end_matches(';'), tci_cmd.trim_end_matches(';'));
+                            debug!("Tuner TCI: {} -> {}", cmd.trim_end_matches(';'), tci_cmd.trim_end_matches(';'));
                             ptt.lock().await.send_cat(tci_cmd).await;
                         }
                         _ = cat_tick.tick() => {
@@ -1397,8 +1597,8 @@ impl NetworkService {
                             let mode = ptt_guard.vfo_a_mode();
                             let is_tx = ptt_guard.is_transmitting();
                             // S-meter packet `level` is signed deci-units on the wire:
-                            //  - RX (PTT flag clear): dBm × 10  (e.g. -730 = -73 dBm = S9)
-                            //  - TX (PTT flag set):   watts × 10 (e.g. 1000 = 100.0 W FWD)
+                            //  - RX (PTT flag clear): dBm x 10  (e.g. -730 = -73 dBm = S9)
+                            //  - TX (PTT flag set):   watts x 10 (e.g. 1000 = 100.0 W FWD)
                             let smeter: i16 = if is_tx {
                                 ptt_guard.fwd_power_raw() as i16
                             } else {
@@ -1516,8 +1716,8 @@ impl NetworkService {
                                 }
                             }
 
-                            // VFO Sync: Thetis handles A↔B sync natively via ZZSY.
-                            // No server-side sync needed — just relay Thetis frequency updates.
+                            // VFO Sync: Thetis handles A<->B sync natively via ZZSY.
+                            // No server-side sync needed - just relay Thetis frequency updates.
 
                             // Spectrum calibration
                             {
@@ -1625,7 +1825,7 @@ impl NetworkService {
                             if !smeter_addrs.is_empty() {
                                 let flags = if is_tx || yaesu_ptt_flag.load(Ordering::Relaxed) { Flags::PTT } else { Flags::NONE };
                                 // Pre-serialise the three RX1 packet bodies once per
-                                // tick — they're identical across clients.
+                                // tick - they're identical across clients.
                                 let mut buf_avg = [0u8; SmeterPacket::SIZE];
                                 SmeterPacket { level: smeter, flags }.serialize(&mut buf_avg);
                                 let mut buf_sig = [0u8; SmeterPacket::SIZE];
@@ -1639,7 +1839,7 @@ impl NetworkService {
                                         // During TX the `smeter` field carries FWD-power
                                         // (from `fwd_power_raw()` above), not an S-meter
                                         // value. The Sig/MaxBin packets are zero-valued
-                                        // by design — emitting them would overwrite the
+                                        // by design - emitting them would overwrite the
                                         // client's TX-meter to 0. Force every TX-active
                                         // client onto the legacy `Smeter` (Avg-slot)
                                         // packet, regardless of subscription mask, so
@@ -1724,7 +1924,7 @@ impl NetworkService {
                                 }
                             }
 
-                            // TX modulation filter band — push only when Thetis
+                            // TX modulation filter band - push only when Thetis
                             // reports it (stock 2.10.3.14+/fork), on change. The
                             // client uses this both to display the value and to
                             // know that setting it is supported.
@@ -1738,7 +1938,7 @@ impl NetworkService {
                                 }
                             }
 
-                            // TX profile names — only on change
+                            // TX profile names - only on change
                             if !tx_profile_names.is_empty() && tx_profile_names != prev_tx_profile_names {
                                 prev_tx_profile_names = tx_profile_names.clone();
                                 let active = tx_profile_names.iter()
@@ -1754,7 +1954,7 @@ impl NetworkService {
 
                             // Yaesu state broadcast moved to separate task
 
-                            // RX2 broadcasts — only to clients that have RX2 enabled
+                            // RX2 broadcasts - only to clients that have RX2 enabled
                             if !rx2_addrs.is_empty() {
                                 // Update RX2 spectrum processor with VFO-B freq + DDS in one lock
                                 {
@@ -1785,7 +1985,7 @@ impl NetworkService {
 
                                 // RX2 S-meter: per-client subscription mirror of RX1.
                                 // Bits 4/5/6 in SmeterSources control which RX2 packet
-                                // types are emitted. Default mask 0x22 → bit 5 (Avg) only.
+                                // types are emitted. Default mask 0x22 -> bit 5 (Avg) only.
                                 {
                                     let mut buf_avg = [0u8; SmeterPacket::SIZE];
                                     SmeterPacket { level: smeter_rx2, flags: Flags::NONE }.serialize_as_type(&mut buf_avg, PacketType::SmeterRx2);
@@ -1835,7 +2035,7 @@ impl NetworkService {
             })
         };
 
-        // TX resampler: 16kHz wideband → TCI rate (for mic audio from client)
+        // TX resampler: 16kHz wideband -> TCI rate (for mic audio from client)
         let tx_sinc = rubato::SincInterpolationParameters {
             sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
             interpolation: rubato::SincInterpolationType::Cubic,
@@ -1848,7 +2048,7 @@ impl NetworkService {
             FRAME_SAMPLES_WIDEBAND,
             1,
         )
-        .context("create 16k→device TX resampler")?;
+        .context("create 16k->device TX resampler")?;
 
         // Main RX loop
         let mut recv_buf = vec![0u8; MAX_PACKET_SIZE];
@@ -1867,14 +2067,14 @@ impl NetworkService {
         let mut yaesu_write_pending: Option<String> = None;
         // If the YaesuWriteMemories control arrives BEFORE the
         // YaesuMemoryData packet (the data is ~2.7kB, IP-fragmented;
-        // control is ~8B, single packet — control can overtake on
+        // control is ~8B, single packet - control can overtake on
         // reorder), latch the intent and fire the write when the data
         // finally lands. Otherwise the trigger was silently dropped.
         let mut yaesu_write_armed = false;
-        let yaesu_mic_gain = Arc::new(AtomicU32::new(20.0_f32.to_bits())); // default 20.0x
+        let yaesu_mic_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits())); // Yaesu gain now lives before Opus in the client
         // Slot-1 TX audio (Optie B-prime) + geheugen-write-latch (Fase B).
         let mut yaesu2_ptt_active = false;
-        let yaesu2_mic_gain = Arc::new(AtomicU32::new(20.0_f32.to_bits()));
+        let yaesu2_mic_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
         let mut yaesu2_write_pending: Option<String> = None;
         let mut yaesu2_write_armed = false;
         let yaesu_tx_packet_tx = {
@@ -1901,7 +2101,7 @@ impl NetworkService {
                         Ok(r) => r,
                         Err(e) => { log::error!("Yaesu TX resampler init: {}", e); return; }
                     };
-                    info!("Yaesu TX task started (wideband Opus 16kHz → {}Hz)", tx_rate);
+                    info!("Yaesu TX task started (wideband Opus 16kHz -> {}Hz)", tx_rate);
                     while let Some(opus_data) = pkt_rx.recv().await {
                         let gain = f32::from_bits(gain_shared.load(Ordering::Relaxed));
                         // Decode wideband Opus (16kHz)
@@ -1909,11 +2109,11 @@ impl NetworkService {
                             Ok(p) => p,
                             Err(e) => { log::warn!("Yaesu TX decode: {}", e); continue; }
                         };
-                        // Convert to f32, apply gain
+                        // Convert to f32; Yaesu mic gain is applied before Opus in the client.
                         let pcm_f32: Vec<f32> = pcm_i16.iter()
                             .map(|&s| (s as f32 / 32768.0 * gain).clamp(-1.0, 1.0))
                             .collect();
-                        // Resample 16kHz → tx_rate (48kHz)
+                        // Resample 16kHz -> tx_rate (48kHz)
                         use rubato::Resampler;
                         let resampled = match resampler.process(&[pcm_f32], None) {
                             Ok(r) => r.into_iter().next().unwrap_or_default(),
@@ -1930,8 +2130,8 @@ impl NetworkService {
             }
         };
 
-        // Slot-1 TX decode task (Optie B-prime) — exacte spiegel van slot 0,
-        // gevoed door AudioYaesu2 → yaesu2's tx_audio_tx.
+        // Slot-1 TX decode task (Optie B-prime) - exacte spiegel van slot 0,
+        // gevoed door AudioYaesu2 -> yaesu2's tx_audio_tx.
         let yaesu2_tx_packet_tx = {
             let tx_audio_tx = yaesu2.as_ref().and_then(|y| y.tx_audio_tx.clone());
             let tx_rate = yaesu2.as_ref().map(|y| y.tx_sample_rate).unwrap_or(0);
@@ -1956,7 +2156,7 @@ impl NetworkService {
                         Ok(r) => r,
                         Err(e) => { log::error!("[radio1] TX resampler init: {}", e); return; }
                     };
-                    info!("[radio1] TX task started (wideband Opus 16kHz → {}Hz)", tx_rate);
+                    info!("[radio1] TX task started (wideband Opus 16kHz -> {}Hz)", tx_rate);
                     while let Some(opus_data) = pkt_rx.recv().await {
                         let gain = f32::from_bits(gain_shared.load(Ordering::Relaxed));
                         let pcm_i16 = match decoder.decode(&opus_data) {
@@ -1991,7 +2191,7 @@ impl NetworkService {
                     // Protocol-version mismatch: detect BEFORE Packet::deserialize so we
                     // can record it in the Status-panel ringbuffer. Otherwise the bail!
                     // from Header::deserialize lands in the generic "Invalid packet" log
-                    // branch and the owner has no UI indication that an old client
+                    // branch and the operator has no UI indication that an old client
                     // (e.g. v2.0.2 APK against a build-58+ server) is retrying.
                     if data.len() >= 2 && data[0] == MAGIC && data[1] != VERSION {
                         let client_version = data[1];
@@ -2039,7 +2239,7 @@ impl NetworkService {
                             // `[MAGIC, VERSION, packet_type, flags]`; the
                             // client's `Header::deserialize` checks the version
                             // byte before the packet_type, so any value works
-                            // for bytes 2-3 — we use 0xFF as an "obviously
+                            // for bytes 2-3 - we use 0xFF as an "obviously
                             // meaningless" type sentinel. The client falls into
                             // the `Err(e)` recovery in
                             // `sdr-remote-logic/src/engine.rs` (around L2274)
@@ -2059,7 +2259,7 @@ impl NetworkService {
                     let packet = match Packet::deserialize(data) {
                         Ok(p) => p,
                         Err(e) => {
-                            // Unknown packet types from old clients — silently ignore
+                            // Unknown packet types from old clients - silently ignore
                             if !e.to_string().contains("unknown packet type") {
                                 info!("Invalid packet from {} ({}B): {}", addr, len, e);
                             }
@@ -2139,7 +2339,7 @@ impl NetworkService {
 
                         if session.auth_required() {
                             if !session.is_authenticated(addr) {
-                                // New unknown client or pending challenge — send challenge
+                                // New unknown client or pending challenge - send challenge
                                 // Don't overwrite PendingTotp state with a new challenge
                                 if session.get_auth_state(addr).is_none()
                                     || matches!(session.get_auth_state(addr), Some(crate::session::AuthState::NoAuth)) {
@@ -2168,7 +2368,7 @@ impl NetworkService {
 
                     match packet {
                         Packet::Audio(audio_pkt) => {
-                            // Thetis-only audio path — Yaesu TX handled via AudioYaesu packets
+                            // Thetis-only audio path - Yaesu TX handled via AudioYaesu packets
                             let ptt_requested = audio_pkt.flags.ptt();
                             let mut session = self.session.lock().await;
 
@@ -2204,7 +2404,7 @@ impl NetworkService {
                                     arrival_ms,
                                 );
                             } else if session.tx_holder() == Some(addr) {
-                                // This client held TX — push non-PTT frame so tail
+                                // This client held TX - push non-PTT frame so tail
                                 // audio plays out, then release will trigger from playout
                                 drop(session);
 
@@ -2223,18 +2423,26 @@ impl NetworkService {
                                     arrival_ms,
                                 );
                             }
-                            // else: non-PTT audio from non-TX-holder — ignore
+                            // else: non-PTT audio from non-TX-holder - ignore
                         }
                         Packet::Heartbeat(hb) => {
+                            let thetis_configured = self.config.tci_addr
+                                .as_deref()
+                                .map(|s| !s.trim().is_empty())
+                                .unwrap_or(false);
                             // Acquire PTT lock once: signal heartbeat received + read TCI/process/launch status
                             // in the same scope so we don't lock multiple times per heartbeat.
                             let (tci_connected, thetis_running, thetis_starting) = {
                                 let mut ptt = self.ptt.lock().await;
                                 ptt.heartbeat_received();
-                                (ptt.tci_connected(), ptt.thetis_process_running(), ptt.thetis_starting())
+                                if thetis_configured {
+                                    (ptt.tci_connected(), ptt.thetis_process_running(), ptt.thetis_starting())
+                                } else {
+                                    (false, false, false)
+                                }
                             };
                             // PATCH-2: feed the Status-panel TCI probe.
-                            // Idempotent — only stamps last_state_change on real flips.
+                            // Idempotent - only stamps last_state_change on real flips.
                             self.tci_probe.update(tci_connected, self.server_start);
                             self.session.lock().await.update_heartbeat(
                                 addr,
@@ -2246,9 +2454,13 @@ impl NetworkService {
 
                             // PATCH-1: report TCI + Thetis process status in HeartbeatAck.
                             // The two bits together let the client give a targeted hint:
-                            //   TCI_CONNECTED clear + THETIS_RUNNING set   → "Thetis runs, check TCI settings"
-                            //   TCI_CONNECTED clear + THETIS_RUNNING clear → "Thetis is not running, press Start"
+                            //   TCI_CONNECTED clear + THETIS_RUNNING set   -> "Thetis runs, check TCI settings"
+                            //   TCI_CONNECTED clear + THETIS_RUNNING clear -> "Thetis is not running, press Start"
                             let mut state_flags = sdr_remote_core::protocol::ServerStateFlags::NONE;
+                            if thetis_configured {
+                                state_flags = state_flags
+                                    .with(sdr_remote_core::protocol::ServerStateFlags::THETIS_CONFIGURED);
+                            }
                             if tci_connected {
                                 state_flags = state_flags
                                     .with(sdr_remote_core::protocol::ServerStateFlags::TCI_CONNECTED);
@@ -2264,7 +2476,7 @@ impl NetworkService {
 
                             // PATCH-1 review finding (B3): advertise REPORTS_STATE_FLAGS
                             // so the client knows the state_flags field is authoritative.
-                            // Old servers (pre-PATCH-1) leave both at NONE — client must
+                            // Old servers (pre-PATCH-1) leave both at NONE - client must
                             // NOT then assume "TCI down" from an absent flag.
                             let ack = HeartbeatAck {
                                 flags: Flags::NONE,
@@ -2284,7 +2496,7 @@ impl NetworkService {
                         Packet::Mode(mode_pkt) => {
                             // Thetis-bug workaround: a VFO-A mode change during TX
                             // is shown by the indication but NOT applied by Thetis
-                            // → desync. Drop it while transmitting so Thetis never
+                            // -> desync. Drop it while transmitting so Thetis never
                             // gets a mid-TX mode change (covers stock + fork, any client).
                             let mut ptt = self.ptt.lock().await;
                             if ptt.is_transmitting() {
@@ -2305,7 +2517,7 @@ impl NetworkService {
                                         EquipmentCommandPacket::CMD_SET_SWITCH_A => {
                                             if let Some(ref amp) = self.amplitec {
                                                 if let Some(&pos) = eq_cmd.data.first() {
-                                                    info!("Amplitec: requesting Switch A → {}", pos);
+                                                    info!("Amplitec: requesting Switch A -> {}", pos);
                                                     amp.send_command(crate::amplitec::AmplitecCmd::SetSwitchA(pos));
                                                 }
                                             }
@@ -2313,13 +2525,13 @@ impl NetworkService {
                                         EquipmentCommandPacket::CMD_SET_SWITCH_B => {
                                             if let Some(ref amp) = self.amplitec {
                                                 if let Some(&pos) = eq_cmd.data.first() {
-                                                    info!("Amplitec: requesting Switch B → {}", pos);
+                                                    info!("Amplitec: requesting Switch B -> {}", pos);
                                                     amp.send_command(crate::amplitec::AmplitecCmd::SetSwitchB(pos));
                                                 }
                                             }
                                         }
                                         sdr_remote_core::protocol::CMD_AMPLITEC_SET_POWER_TABLE => {
-                                            // 6 × { u16 max_w BE, u8 tx_blocked } = 18 bytes.
+                                            // 6 x { u16 max_w BE, u8 tx_blocked } = 18 bytes.
                                             // Hoeft geen amplitec device aanwezig; de tabel
                                             // is server-config en geldt zodra de Amplitec
                                             // weer online komt.
@@ -2584,7 +2796,7 @@ impl NetworkService {
                             }
                         }
                         Packet::HeartbeatAck(_) | Packet::PttDenied => {}
-                        // RX2 packets: client → server (frequency, mode set)
+                        // RX2 packets: client -> server (frequency, mode set)
                         Packet::FrequencyRx2(freq_pkt) => {
                             let mut ptt = self.ptt.lock().await;
                             ptt.set_vfo_b_freq(freq_pkt.frequency_hz).await;
@@ -2593,7 +2805,7 @@ impl NetworkService {
                             let mut ptt = self.ptt.lock().await;
                             ptt.set_vfo_b_mode(mode_pkt.mode).await;
                         }
-                        // RX2 packets that are server→client only (ignore if received)
+                        // RX2 packets that are server->client only (ignore if received)
                         Packet::AudioRx2(_) | Packet::AudioBinR(_) | Packet::SmeterRx2(_)
                         | Packet::SpectrumRx2(_) | Packet::FullSpectrumRx2(_)
                         | Packet::SmeterSig(_) | Packet::SmeterMaxBin(_)
@@ -2601,7 +2813,7 @@ impl NetworkService {
                         | Packet::AudioVrx(_)
                         | Packet::SpectrumVrx1(_) | Packet::SpectrumVrx2(_)
                         | Packet::FrequencyVrxActual(_) | Packet::TxFilterBand(_) => {}
-                        // Server→client only, ignore if received
+                        // Server->client only, ignore if received
                         Packet::Spot(_) | Packet::TxProfiles(_) | Packet::YaesuState(_)
                         | Packet::AmplitecPowerTable(_)
                         | Packet::AuthChallenge(_) | Packet::AuthResponse(_) | Packet::AuthResult(_)
@@ -2623,7 +2835,7 @@ impl NetworkService {
                                 if yaesu_write_armed {
                                     yaesu_write_armed = false;
                                     if let Some(ref yaesu) = yaesu {
-                                        info!("Client {} writing Yaesu memories (deferred — data arrived after control)", addr);
+                                        info!("Client {} writing Yaesu memories (deferred - data arrived after control)", addr);
                                         yaesu.send_command(crate::yaesu::YaesuCmd::WriteAllMemories(text));
                                     }
                                 } else {
@@ -2635,7 +2847,7 @@ impl NetworkService {
                         Packet::AudioYaesu(pkt) => {
                             if yaesu_ptt_active && !pkt.opus_data.is_empty() {
                                 if let Some(ref tx) = yaesu_tx_packet_tx {
-                                    // Only tick on successful enqueue — dropped
+                                    // Only tick on successful enqueue - dropped
                                     // frames (channel full) didn't reach Yaesu.
                                     if tx.try_send(pkt.opus_data).is_ok() {
                                         self.audio_stats.yaesu_tx.tick(self.server_start);
@@ -2645,7 +2857,7 @@ impl NetworkService {
                         }
                         Packet::FrequencyYaesu(freq_pkt) => {
                             if let Some(ref yaesu) = yaesu {
-                                // Don't send FA in memory mode — it forces the radio to VFO mode
+                                // Don't send FA in memory mode - it forces the radio to VFO mode
                                 let status = yaesu.status();
                                 if status.vfo_select != 1 { // 1=Memory
                                     yaesu.send_command(crate::yaesu::YaesuCmd::SetFreqA(freq_pkt.frequency_hz));
@@ -2658,13 +2870,12 @@ impl NetworkService {
                                 0 | 1 => pkt.vrx_id,
                                 _ => { continue; }
                             };
-                            let ctl = crate::vrx_bridge::vrx_control_thetislink(id);
-                            let mut s = ctl.lock().unwrap();
-                            s.target_freq_hz = pkt.frequency_hz;
+                            let ctl = self.vrx_mgr.lock().unwrap().control(addr, id);
+                            ctl.lock().unwrap().target_freq_hz = pkt.frequency_hz;
                             info!("Client {} VRX{} freq: {} Hz", addr, id + 1, pkt.frequency_hz);
                         }
-                        Packet::AudioMultiCh(_) => {} // server→client only, ignore
-                        // Dual-radio slot 1 (Optie B-prime) — spiegel van AudioYaesu/FrequencyYaesu.
+                        Packet::AudioMultiCh(_) => {} // server->client only, ignore
+                        // Dual-radio slot 1 (Optie B-prime) - spiegel van AudioYaesu/FrequencyYaesu.
                         Packet::AudioYaesu2(pkt) => {
                             if yaesu2_ptt_active && !pkt.opus_data.is_empty() {
                                 if let Some(ref tx) = yaesu2_tx_packet_tx {
@@ -2682,14 +2893,26 @@ impl NetworkService {
                                 }
                             }
                         }
-                        // Server→client only, ignore if received.
-                        Packet::YaesuState2(_) | Packet::RadioInfo { .. } => {}
+                        // Typed Yaesu DSP/function control (PATCH-yaesu-extra-controls).
+                        // Route to the addressed slot. Feedback (YaesuFeaturePacket) is
+                        // value-change-only and unknown-type-safe (old server/client
+                        // ignore it nonfatal), so no separate opt-in set is needed.
+                        Packet::YaesuControl(pkt) => {
+                            let target = if pkt.slot == 1 { &yaesu2 } else { &yaesu };
+                            if let Some(ref y) = target {
+                                info!("Client {} [radio{}] Yaesu control {} = {}", addr, pkt.slot, pkt.control, pkt.value);
+                                y.send_command(crate::yaesu::YaesuCmd::SetFeature(pkt.control, pkt.value));
+                            }
+                        }
+                        // Server->client only, ignore if received.
+                        Packet::YaesuState2(_) | Packet::RadioInfo { .. }
+                        | Packet::YaesuFeature(_) | Packet::YaesuPresence(_) => {}
                         // Slot-1 geheugen-write (Fase B): client stuurt de tab-text.
                         // Fire direct als de write-control al kwam (armed), anders
                         // latchen tot Yaesu2WriteMemories (UDP-reorder-safe, zoals slot 0).
                         Packet::YaesuMemoryData2(text) => {
                             if let Some(rest) = text.strip_prefix("SETMENU:") {
-                                // FTX-1 EX-write: "SETMENU:p1p2p3:value" → EX{p1p2p3}{value};
+                                // FTX-1 EX-write: "SETMENU:p1p2p3:value" -> EX{p1p2p3}{value};
                                 if let Some(ref yaesu) = yaesu2 {
                                     let parts: Vec<&str> = rest.splitn(2, ':').collect();
                                     if parts.len() == 2 && parts[0].len() == 6
@@ -2714,14 +2937,14 @@ impl NetworkService {
                             info!("Client {} disconnected", addr);
                             self.session.lock().await.remove(addr);
                             // TL2-1 ctun-auto-recenter: herbereken effective_zoom +
-                            // strictest-vink na disconnect — laatste vink-uit client kan
-                            // zojuist weg zijn waardoor zoom-min van 2.0 → 1.0 mag.
+                            // strictest-vink na disconnect - laatste vink-uit client kan
+                            // zojuist weg zijn waardoor zoom-min van 2.0 -> 1.0 mag.
                             let new_eff_rx1 = self.session.lock().await.effective_zoom_rx1();
                             let new_eff_rx2 = self.session.lock().await.effective_zoom_rx2();
                             let mut p = self.ptt.lock().await;
                             p.tci.effective_zoom_rx1_cache = new_eff_rx1;
                             p.tci.effective_zoom_rx2_cache = new_eff_rx2;
-                            // Geen trigger_eval bij disconnect — eerstvolgende vfo-event of
+                            // Geen trigger_eval bij disconnect - eerstvolgende vfo-event of
                             // remaining-client-zoom-change zal eval triggeren.
                         }
                         Packet::Control(ctrl) => {
@@ -2730,11 +2953,11 @@ impl NetworkService {
                                 ControlId::Rx1AfGain => {
                                     let val = ctrl.value.min(100);
                                     // rx_volume via TCI (stock v2.10.3.13+).
-                                    // Schaal: 0..100 % → −60..0 dB (matches parser in tci.rs RxVolume handler).
+                                    // Schaal: 0..100 % -> -60..0 dB (matches parser in tci.rs RxVolume handler).
                                     let db = ((val as i32 - 100) * 60) / 100;
                                     let cmd = format!("rx_volume:0,0,{};", db);
                                     ptt.send_cat(&cmd).await;
-                                    // No optimistic state update — Thetis echoes rx_volume back
+                                    // No optimistic state update - Thetis echoes rx_volume back
                                     // and the parser updates rx_af_gain via the notification path.
                                 }
                                 ControlId::PowerOnOff => {
@@ -2782,7 +3005,7 @@ impl NetworkService {
                                           addr, zoom, new_eff, prev_eff);
                                     // TL2-1 ctun-auto-recenter: update cached effective_zoom + trigger eval.
                                     // Gebruik bestaande outer `ptt`-guard (regel ~1572
-                                    // `let mut ptt = self.ptt.lock().await;`) — Tokio mutex is niet
+                                    // `let mut ptt = self.ptt.lock().await;`) - Tokio mutex is niet
                                     // reentrant, nested self.ptt.lock() = deadlock.
                                     ptt.tci.effective_zoom_rx1_cache = new_eff;
                                     ptt.tci.trigger_eval_and_act_rx1(new_eff).await;
@@ -2810,17 +3033,17 @@ impl NetworkService {
                                     let high = ctrl.value as i16 as i32;
                                     let low = pending_tx_filter_low.take()
                                         .unwrap_or(ptt.tx_filter_low_hz());
-                                    // Defensive clamp/sort at the server boundary — the TX
+                                    // Defensive clamp/sort at the server boundary - the TX
                                     // path is sensitive; an old/corrupt client could send
                                     // out-of-range or reversed edges. Bound 0..=8000
-                                    // (TX audio is 16 kS/s → Nyquist 8 kHz), low<=high.
+                                    // (TX audio is 16 kS/s -> Nyquist 8 kHz), low<=high.
                                     let lo = low.clamp(0, 8000);
                                     let hi = high.clamp(0, 8000);
                                     let (lo, hi) = (lo.min(hi), lo.max(hi));
                                     info!("Client {} TX filter: {} .. {} Hz", addr, lo, hi);
                                     ptt.set_tx_filter_band(lo, hi).await;
                                 }
-                                ControlId::ThetisStarting => {} // server→client only
+                                ControlId::ThetisStarting => {} // server->client only
                                 ControlId::Rx2Enable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_rx2_enabled(addr, enabled);
@@ -2873,10 +3096,10 @@ impl NetworkService {
                                     let prev_min = self.session.lock().await.server_enforced_zoom_min();
                                     self.session.lock().await.set_allow_zoom_below_2x(addr, allow);
                                     let new_min = self.session.lock().await.server_enforced_zoom_min();
-                                    info!("TCI: client {} allow_zoom_below_2x={}; server-strictest zoom-min: {:.1}x → {:.1}x",
+                                    info!("TCI: client {} allow_zoom_below_2x={}; server-strictest zoom-min: {:.1}x -> {:.1}x",
                                           addr, allow, prev_min, new_min);
-                                    // Vink-toggle wijzigt server_enforced_zoom_min → effective_zoom
-                                    // kan veranderen → herbereken cache + trigger eval voor beide RX.
+                                    // Vink-toggle wijzigt server_enforced_zoom_min -> effective_zoom
+                                    // kan veranderen -> herbereken cache + trigger eval voor beide RX.
                                     // Geen nested lock (outer ptt-guard reeds beschikbaar).
                                     let new_eff_rx1 = self.session.lock().await.effective_zoom_rx1();
                                     let new_eff_rx2 = self.session.lock().await.effective_zoom_rx2();
@@ -2947,22 +3170,22 @@ impl NetworkService {
                                         info!("Starting Thetis ULTRA null (continuous AVG sweep)");
                                         ptt.diversity_ultranull(&params).await;
                                     } else if has_smartnull {
-                                        info!("Starting Thetis smart null (coarse={}°@{}ms fine=±{}°@{}ms gain=±{}dB@{}ms)",
+                                        info!("Starting Thetis smart null (coarse={} deg@{}ms fine=+/-{} deg@{}ms gain=+/-{}dB@{}ms)",
                                             params[0], params[1], params[2], params[4], params[5], params[7]);
                                         ptt.diversity_smartnull(&params).await;
                                     } else {
-                                    // Fastsweep (F line) — requires Thetis cap
+                                    // Fastsweep (F line) - requires Thetis cap
                                     let fastsweep = if has_fastsweep { crate::load_smart_fastsweep() } else { None };
                                     if let Some((start, end, step, settle, meter)) = fastsweep {
                                         let meter_name = if meter == 1 { "AVG" } else { "instant" };
-                                        info!("Starting Thetis fastsweep: {:.0}° to {:.0}° step {:.2}° settle {}ms meter={}", start, end, step, settle, meter_name);
+                                        info!("Starting Thetis fastsweep: {:.0} deg to {:.0} deg step {:.2} deg settle {}ms meter={}", start, end, step, settle, meter_name);
                                         ptt.diversity_fastsweep(start, end, step, settle, meter).await;
                                     } else {
                                         // Fallback: step-based autonull (P/G lines or default sweep)
                                         let mut steps = crate::load_smart_steps_server();
                                         let settle = crate::load_smart_settle_ms();
                                         if steps.is_empty() {
-                                            // Generate default P/G steps: coarse 360° in 5°, fine ±15° in 1°, gain ±6dB in 0.5dB
+                                            // Generate default P/G steps: coarse 360 deg in 5 deg, fine +/-15 deg in 1 deg, gain +/-6dB in 0.5dB
                                             info!("No P/G steps in config, generating default sweep plan");
                                             let mut phase_offsets: Vec<f32> = (-180..=180).step_by(5).map(|d| d as f32).collect();
                                             phase_offsets.extend((-15..=15).map(|d| d as f32));
@@ -3191,8 +3414,8 @@ impl NetworkService {
                                 ControlId::YaesuPtt => {
                                     if let Some(ref yaesu) = yaesu {
                                         let on = ctrl.value != 0;
-                                        // Auto-DFM (FM ↔ DATA-FM) wordt nu volledig
-                                        // afgehandeld in YaesuCmd::SetPtt zelf (build 12) —
+                                        // Auto-DFM (FM <-> DATA-FM) wordt nu volledig
+                                        // afgehandeld in YaesuCmd::SetPtt zelf (build 12) -
                                         // single source of truth voor mode-toggle, geen race
                                         // tussen network.rs en yaesu_poll_loop. Memory-mode-skip
                                         // zit ook in SetPtt.
@@ -3204,11 +3427,11 @@ impl NetworkService {
                                 }
                                 ControlId::YaesuFreq => {} // handled via FrequencyYaesu packet
                                 ControlId::YaesuMicGain => {
-                                    // Client sends slider value * 100 (range 5-200).
-                                    // Multiply with base gain 20x for USB mic level compensation.
-                                    let gain = ctrl.value as f32 / 100.0 * 20.0;
+                                    // Legacy server-side gain control; current clients apply Yaesu mic gain before Opus.
+                                    // Kept only for older clients that still send this control.
+                                    let gain = ctrl.value as f32 / 100.0;
                                     yaesu_mic_gain.store(gain.to_bits(), Ordering::Relaxed);
-                                    info!("Client {} Yaesu mic gain: {:.1}x (slider {:.2})", addr, gain, ctrl.value as f32 / 100.0);
+                                    info!("Client {} Yaesu legacy server gain: {:.2}x", addr, gain);
                                 }
                                 ControlId::YaesuMode => {
                                     if let Some(ref yaesu) = yaesu {
@@ -3263,8 +3486,9 @@ impl NetworkService {
                                             0 => "AB;",      // A=B
                                             1 => "SC1;",     // Scan start
                                             2 => "SC0;",     // Scan stop
-                                            3 => "AC002;",   // Tuner on
-                                            4 => "AC000;",   // Tuner off
+                                            3 => "AC002;",   // Tune now (991A: start tuning)
+                                            4 => "AC000;",   // Tuner off (bypass)
+                                            15 => "AC001;",  // Tuner on (in-line) - PATCH-yaesu-internal-atu
                                             5 => "BU0;",     // Band up (VFO-A)
                                             6 => "BD0;",     // Band down (VFO-A)
                                             7 => "ST1;",     // Split on
@@ -3275,7 +3499,7 @@ impl NetworkService {
                                             info!("Client {} Yaesu button {}: {}", addr, ctrl.value, cat);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(cat.to_string()));
                                         }
-                                        // Memory channel up/down: use MC with current channel ±1
+                                        // Memory channel up/down: use MC with current channel +/-1
                                         if ctrl.value == 9 || ctrl.value == 10 {
                                             let status = yaesu.status();
                                             let cur = status.memory_channel;
@@ -3354,79 +3578,64 @@ impl NetworkService {
                                         guard.set_ddc_sample_rate(rx, rate_hz).await;
                                     });
                                 }
-                                // --- VRX (Virtual RX) controls ---
+                                // --- VRX (Virtual RX) controls - per-client (PATCH-vrx-per-client) ---
+                                // Each control writes THIS client's VrxControlState via the
+                                // manager; the manager lock is released before the inner
+                                // control lock (control() returns an owned Arc).
                                 ControlId::VrxEnable => {
                                     let on = ctrl.value != 0;
-                                    {
-                                        let ctl = crate::vrx_bridge::vrx_control_thetislink(0);
-                                        ctl.lock().unwrap().enabled = on;
-                                    }
-                                    // Per-client gating (release-gate fix): alleen subscribers
-                                    // krijgen AudioVrx — oude clients nooit dit packet-type.
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
+                                    ctl.lock().unwrap().enabled = on;
                                     self.session.lock().await.set_vrx_audio(addr, 0, on);
                                     info!("Client {} VRX1 enable: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxMode => {
                                     let mode = match ctrl.value {
-                                        0 => vrx_rs::VrxMode::Usb,
-                                        1 => vrx_rs::VrxMode::Lsb,
-                                        2 => vrx_rs::VrxMode::Am,
-                                        3 => vrx_rs::VrxMode::Sam,
-                                        4 => vrx_rs::VrxMode::Fm,
-                                        _ => vrx_rs::VrxMode::Usb,
+                                        0 => vrx_rs::VrxMode::Usb, 1 => vrx_rs::VrxMode::Lsb,
+                                        2 => vrx_rs::VrxMode::Am, 3 => vrx_rs::VrxMode::Sam,
+                                        4 => vrx_rs::VrxMode::Fm, _ => vrx_rs::VrxMode::Usb,
                                     };
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(0);
-                                    let mut s = ctl.lock().unwrap();
-                                    s.mode = mode;
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
+                                    ctl.lock().unwrap().mode = mode;
                                     info!("Client {} VRX1 mode: {:?}", addr, mode);
                                 }
                                 ControlId::VrxVolume => {
-                                    // Encoded as volume × 100 (0..=200 = 0..200%).
                                     let v = (ctrl.value as f32 / 100.0).clamp(0.0, 4.0);
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(0);
-                                    let mut s = ctl.lock().unwrap();
-                                    s.volume = v;
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
+                                    ctl.lock().unwrap().volume = v;
                                     info!("Client {} VRX1 volume: {:.2}", addr, v);
                                 }
                                 ControlId::VrxEnable2 => {
                                     let on = ctrl.value != 0;
-                                    {
-                                        let ctl = crate::vrx_bridge::vrx_control_thetislink(1);
-                                        ctl.lock().unwrap().enabled = on;
-                                    }
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
+                                    ctl.lock().unwrap().enabled = on;
                                     self.session.lock().await.set_vrx_audio(addr, 1, on);
                                     info!("Client {} VRX2 enable: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxMode2 => {
                                     let mode = match ctrl.value {
-                                        0 => vrx_rs::VrxMode::Usb,
-                                        1 => vrx_rs::VrxMode::Lsb,
-                                        2 => vrx_rs::VrxMode::Am,
-                                        3 => vrx_rs::VrxMode::Sam,
-                                        4 => vrx_rs::VrxMode::Fm,
-                                        _ => vrx_rs::VrxMode::Usb,
+                                        0 => vrx_rs::VrxMode::Usb, 1 => vrx_rs::VrxMode::Lsb,
+                                        2 => vrx_rs::VrxMode::Am, 3 => vrx_rs::VrxMode::Sam,
+                                        4 => vrx_rs::VrxMode::Fm, _ => vrx_rs::VrxMode::Usb,
                                     };
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(1);
-                                    let mut s = ctl.lock().unwrap();
-                                    s.mode = mode;
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
+                                    ctl.lock().unwrap().mode = mode;
                                     info!("Client {} VRX2 mode: {:?}", addr, mode);
                                 }
                                 ControlId::VrxVolume2 => {
                                     let v = (ctrl.value as f32 / 100.0).clamp(0.0, 4.0);
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(1);
-                                    let mut s = ctl.lock().unwrap();
-                                    s.volume = v;
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
+                                    ctl.lock().unwrap().volume = v;
                                     info!("Client {} VRX2 volume: {:.2}", addr, v);
                                 }
                                 ControlId::VrxFilterLow => {
                                     let hz = ctrl.value as i16 as i32;
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(0);
-                                    let mut s = ctl.lock().unwrap();
-                                    s.filter_low_hz = hz;
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
+                                    ctl.lock().unwrap().filter_low_hz = hz;
                                 }
                                 ControlId::VrxFilterHigh => {
                                     let hz = ctrl.value as i16 as i32;
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(0);
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
                                     let (lo, hi) = {
                                         let mut s = ctl.lock().unwrap();
                                         s.filter_high_hz = hz;
@@ -3436,13 +3645,12 @@ impl NetworkService {
                                 }
                                 ControlId::VrxFilterLow2 => {
                                     let hz = ctrl.value as i16 as i32;
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(1);
-                                    let mut s = ctl.lock().unwrap();
-                                    s.filter_low_hz = hz;
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
+                                    ctl.lock().unwrap().filter_low_hz = hz;
                                 }
                                 ControlId::VrxFilterHigh2 => {
                                     let hz = ctrl.value as i16 as i32;
-                                    let ctl = crate::vrx_bridge::vrx_control_thetislink(1);
+                                    let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
                                     let (lo, hi) = {
                                         let mut s = ctl.lock().unwrap();
                                         s.filter_high_hz = hz;
@@ -3451,50 +3659,52 @@ impl NetworkService {
                                     info!("Client {} VRX2 filter: {} .. {} Hz", addr, lo, hi);
                                 }
                                 ControlId::VrxSpectrumEnable => {
-                                    if ctrl.value != 0 {
-                                        // Default 24 kHz span on first enable; keep existing span otherwise.
-                                        if VRX1_HR_SPAN_KHZ.load(Ordering::Relaxed) == 0 {
-                                            VRX1_HR_SPAN_KHZ.store(24, Ordering::Relaxed);
-                                        }
-                                    } else {
-                                        VRX1_HR_SPAN_KHZ.store(0, Ordering::Relaxed);
+                                    let on = ctrl.value != 0;
+                                    {
+                                        let mut m = self.vrx_mgr.lock().unwrap();
+                                        let cur = m.spectrum_span(&addr, 0);
+                                        m.set_spectrum_span(addr, 0, if on { if cur == 0 { 24 } else { cur } } else { 0 });
                                     }
-                                    // Per-client gating: alleen subscribers krijgen SpectrumVrx1.
-                                    self.session.lock().await.set_vrx_spectrum(addr, 0, ctrl.value != 0);
-                                    info!("Client {} VRX1 high-res spectrum span_khz: {}", addr, VRX1_HR_SPAN_KHZ.load(Ordering::Relaxed));
+                                    self.session.lock().await.set_vrx_spectrum(addr, 0, on);
+                                    info!("Client {} VRX1 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxSpectrumEnable2 => {
-                                    if ctrl.value != 0 {
-                                        if VRX2_HR_SPAN_KHZ.load(Ordering::Relaxed) == 0 {
-                                            VRX2_HR_SPAN_KHZ.store(24, Ordering::Relaxed);
-                                        }
-                                    } else {
-                                        VRX2_HR_SPAN_KHZ.store(0, Ordering::Relaxed);
+                                    let on = ctrl.value != 0;
+                                    {
+                                        let mut m = self.vrx_mgr.lock().unwrap();
+                                        let cur = m.spectrum_span(&addr, 1);
+                                        m.set_spectrum_span(addr, 1, if on { if cur == 0 { 24 } else { cur } } else { 0 });
                                     }
-                                    // Per-client gating: alleen subscribers krijgen SpectrumVrx2.
-                                    self.session.lock().await.set_vrx_spectrum(addr, 1, ctrl.value != 0);
-                                    info!("Client {} VRX2 high-res spectrum span_khz: {}", addr, VRX2_HR_SPAN_KHZ.load(Ordering::Relaxed));
+                                    self.session.lock().await.set_vrx_spectrum(addr, 1, on);
+                                    info!("Client {} VRX2 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxSpectrumSpanKhz => {
-                                    if VRX1_HR_SPAN_KHZ.load(Ordering::Relaxed) != 0 {
-                                        VRX1_HR_SPAN_KHZ.store(ctrl.value.max(1), Ordering::Relaxed);
+                                    let mut m = self.vrx_mgr.lock().unwrap();
+                                    if m.spectrum_span(&addr, 0) != 0 {
+                                        m.set_spectrum_span(addr, 0, ctrl.value.max(1));
                                     }
                                 }
                                 ControlId::VrxSpectrumSpanKhz2 => {
-                                    if VRX2_HR_SPAN_KHZ.load(Ordering::Relaxed) != 0 {
-                                        VRX2_HR_SPAN_KHZ.store(ctrl.value.max(1), Ordering::Relaxed);
+                                    let mut m = self.vrx_mgr.lock().unwrap();
+                                    if m.spectrum_span(&addr, 1) != 0 {
+                                        m.set_spectrum_span(addr, 1, ctrl.value.max(1));
                                     }
                                 }
-                                // --- VRX wide / synchronous-AM UX (PATCH-vrx-wide-sam-ux) ---
+                                // --- VRX audio rate (per-client per-VRX, Optie B) ---
                                 ControlId::VrxAudioRate => {
-                                    // 0=NB, 1=WB, 2=Auto. One setting for both VRX;
-                                    // the audio loop resolves the per-VRX rate.
-                                    VRX_AUDIO_RATE_MODE.store((ctrl.value & 0xFF) as u8, Ordering::Relaxed);
-                                    info!("Client {} VRX audio-rate mode: {}", addr,
+                                    // VRX1 rate (0=NB,1=WB,2=Auto). Old clients send only this.
+                                    self.vrx_mgr.lock().unwrap().set_rate_mode(addr, 0, (ctrl.value & 0xFF) as u8);
+                                    info!("Client {} VRX1 audio-rate: {}", addr,
+                                        match ctrl.value { 0 => "NB", 1 => "WB", _ => "Auto" });
+                                }
+                                ControlId::VrxAudioRate2 => {
+                                    // VRX2 rate; new clients send this for independent per-VRX rate.
+                                    self.vrx_mgr.lock().unwrap().set_rate_mode(addr, 1, (ctrl.value & 0xFF) as u8);
+                                    info!("Client {} VRX2 audio-rate: {}", addr,
                                         match ctrl.value { 0 => "NB", 1 => "WB", _ => "Auto" });
                                 }
                                 ControlId::VrxSamAutoTune => {
-                                    // Per-client subscription only — the audio loop
+                                    // Per-client subscription only - the audio loop
                                     // derives the per-VRX AFC enable as the aggregate
                                     // (any active subscriber) before each feed, so one
                                     // client never flips another client's AFC.
@@ -3525,9 +3735,9 @@ impl NetworkService {
                                 }
                                 ControlId::Yaesu2Freq => {} // handled via FrequencyYaesu2 packet
                                 ControlId::Yaesu2MicGain => {
-                                    let gain = ctrl.value as f32 / 100.0 * 20.0;
+                                    let gain = ctrl.value as f32 / 100.0;
                                     yaesu2_mic_gain.store(gain.to_bits(), Ordering::Relaxed);
-                                    info!("Client {} [radio1] mic gain: {:.1}x", addr, gain);
+                                    info!("Client {} [radio1] legacy server gain: {:.2}x", addr, gain);
                                 }
                                 ControlId::Yaesu2Mode => {
                                     if let Some(ref yaesu) = yaesu2 {
@@ -3574,9 +3784,16 @@ impl NetworkService {
                                             // SC01=MAIN scan-up aan, SC00=MAIN scan uit. Zonder P1
                                             // ("SC1;") wordt het commando genegeerd. USB-audio = MAIN,
                                             // dus scannen op MAIN-side.
-                                            0 => "AB;", 1 => "SC01;", 2 => "SC00;", 3 => "AC002;",
-                                            4 => "AC000;", 5 => "BU0;", 6 => "BD0;", 7 => "ST1;", 8 => "ST0;",
-                                            // Dual-RX MAIN/SUB actieve-TX/RX-keuze (FTX-1) — geverifieerd
+                                            0 => "AB;", 1 => "SC01;", 2 => "SC00;",
+                                            // FTX-1 interne ATU: de radio rapporteert zijn tuner met
+                                            // P1=1 (AC; antwoord 'AC100' bij off) - P1=0 (manual) wordt
+                                            // genegeerd. We spiegelen de radio: P1=1, P2=0, P3=stand.
+                                            // P3: 0=off, 1=on, 3=tuning start. Zie PATCH-yaesu-internal-atu sec.2.
+                                            3 => "AC103;",   // Tune now (tuning start)
+                                            4 => "AC100;",   // Tuner off (bypass)
+                                            15 => "AC101;",  // Tuner on (in-line)
+                                            5 => "BU0;", 6 => "BD0;", 7 => "ST1;", 8 => "ST0;",
+                                            // Dual-RX MAIN/SUB actieve-TX/RX-keuze (FTX-1) - geverifieerd
                                             // commando-formaat uit cat-ftx1: FT0=MAIN, FT1=SUB.
                                             11 => "FT0;", 12 => "FT1;",
                                             // Quick Memory Bank (FTX-1): QI=store huidige VFO,
@@ -3585,6 +3802,7 @@ impl NetworkService {
                                             _ => "",
                                         };
                                         if !cat.is_empty() {
+                                            info!("Client {} [radio1] Yaesu button {}: {}", addr, ctrl.value, cat);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(cat.to_string()));
                                         }
                                         if ctrl.value == 9 || ctrl.value == 10 {
@@ -3596,7 +3814,7 @@ impl NetworkService {
                                         }
                                     }
                                 }
-                                // Slot-1 geheugens (Fase B) — read/write naar radio 2.
+                                // Slot-1 geheugens (Fase B) - read/write naar radio 2.
                                 ControlId::Yaesu2ReadMemories => {
                                     if let Some(ref yaesu) = yaesu2 {
                                         info!("Client {} [radio1] requested memory read", addr);
@@ -3614,7 +3832,7 @@ impl NetworkService {
                                         }
                                     }
                                 }
-                                // Slot-1 EX-menu (Fase C1): read = hiërarchische scan
+                                // Slot-1 EX-menu (Fase C1): read = hierarchische scan
                                 // op de FTX-1. De write komt binnen via YaesuMemoryData2
                                 // met "SETMENU:"-prefix (zie handler hieronder).
                                 ControlId::Yaesu2ReadMenus => {
@@ -3636,7 +3854,7 @@ impl NetworkService {
                 // Playout: pull exactly 1 frame per 20ms tick (smooth, regular cadence)
                 // PTT state changes are driven by jitter buffer output, not packet arrival.
                 _ = playout_tick.tick() => {
-                    // Check if prefill delay elapsed → send ZZTX1; now
+                    // Check if prefill delay elapsed -> send ZZTX1; now
                     self.ptt.lock().await.check_prefill().await;
 
                     match jitter_buf.pull() {

@@ -8,6 +8,12 @@ use std::time::Instant;
 
 use log::{info, warn};
 
+/// Conservatieve server-side default voor spectrum max_bins, vóór een client z'n
+/// eigen (scherm-passende) waarde stuurt. Vangnet zodat een ongeconfigureerd
+/// spectrum nooit op de volle DEFAULT_SPECTRUM_BINS (8192) resolutie streamt en
+/// zo de datarate opblaast. Clients die meer willen sturen gewoon hun eigen max_bins.
+const SERVER_DEFAULT_MAX_BINS: u16 = 2048;
+
 /// Timeout before considering a client disconnected (15s for mobile resilience)
 const SESSION_TIMEOUT_SECS: u64 = 15;
 
@@ -18,16 +24,16 @@ const AUTH_BLOCK_SECS: u64 = 60;
 
 /// PATCH-2: ringbuffer-capacity for recent connect attempts shown in the
 /// server Status panel. 10 entries balances "recent context for support"
-/// against memory under brute-force traffic — see decision-log §6.
+/// against memory under brute-force traffic - see decision-log §6.
 pub const CONNECT_HISTORY_CAPACITY: usize = 10;
 
-/// Outcome of a single connect attempt — shown in the Status panel so the
-/// owner can answer "what does the server see?" in one screenshot.
+/// Outcome of a single connect attempt - shown in the Status panel so the
+/// operator can answer "what does the server see?" in one screenshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectOutcome {
-    /// HMAC accepted, no 2FA required → session active.
+    /// HMAC accepted, no 2FA required -> session active.
     Accepted,
-    /// HMAC accepted, 2FA challenge sent — awaiting TOTP code.
+    /// HMAC accepted, 2FA challenge sent - awaiting TOTP code.
     TotpRequired,
     /// HMAC mismatched (wrong password or replay-old nonce).
     WrongPassword,
@@ -37,16 +43,16 @@ pub enum ConnectOutcome {
     /// Useful diagnostic ("is anything reaching the server?")
     /// even when no AuthResponse follows.
     ChallengeSent,
-    /// Magic byte matched but the wire-protocol version did not — typically
+    /// Magic byte matched but the wire-protocol version did not - typically
     /// an outdated client (e.g. v2.0.2 APK against a build-58+ server).
-    /// Without this entry the rejection is logged only and the owner cannot
+    /// Without this entry the rejection is logged only and the operator cannot
     /// see in the Status panel that an old client is trying to reconnect.
     ProtocolVersionMismatch { client_version: u8 },
 }
 
 impl ConnectOutcome {
     /// Short display label for the Status panel (English; UI is dev-tooling
-    /// for the owner, no i18n needed here).
+    /// for the operator, no i18n needed here).
     pub fn label(self) -> String {
         match self {
             ConnectOutcome::Accepted => "Accepted".into(),
@@ -72,7 +78,7 @@ impl ConnectOutcome {
 
 /// A single connect attempt record kept in the SessionManager ringbuffer.
 /// Carries both `Instant` (cheap relative-time calc) and a wall-clock
-/// timestamp (for "17:42:11" UI display) — owner-feedback / review request.
+/// timestamp (for "17:42:11" UI display) - operator-feedback / review request.
 #[derive(Debug, Clone)]
 pub struct ConnectAttempt {
     pub instant: Instant,
@@ -97,7 +103,7 @@ pub struct ClientSnapshot {
 /// Authentication state for a client
 #[derive(Debug)]
 pub enum AuthState {
-    /// No password configured — all clients rejected
+    /// No password configured - all clients rejected
     NoAuth,
     /// Challenge sent, awaiting HMAC response
     PendingChallenge { nonce: [u8; 16], sent_at: Instant },
@@ -163,11 +169,11 @@ pub struct ClientSession {
     pub vfo_sync: bool,
     pub yaesu_enabled: bool,
     /// Dual-radio slot 1 subscription-gate (PATCH-dual-radio-991a-ftx1, Optie
-    /// B-prime). Default false → oude clients (die `Yaesu2Enable` nooit sturen)
+    /// B-prime). Default false -> oude clients (die `Yaesu2Enable` nooit sturen)
     /// krijgen nooit slot-1 state/audio/memory. Dit is de echte back-compat-guard.
     pub yaesu2_enabled: bool,
-    /// VRX per-client subscription-gates (release-gate fix v2.2.0). Default
-    /// false → clients die `VrxEnable*`/`VrxSpectrumEnable*` nooit sturen
+    /// VRX per-client subscription-gates (hardening fix v2.2.0). Default
+    /// false -> clients die `VrxEnable*`/`VrxSpectrumEnable*` nooit sturen
     /// (o.a. oude v2.1.x clients) krijgen nooit `AudioVrx`/`SpectrumVrx`
     /// packet-types. Zelfde back-compat-patroon als `yaesu2_enabled`.
     pub vrx1_audio_enabled: bool,
@@ -177,7 +183,7 @@ pub struct ClientSession {
     pub vrx1_autotune_enabled: bool,
     pub vrx2_autotune_enabled: bool,
     pub audio_mode: u8, // 255=default(CH0 only), 0=Mono, 1=BIN, 2=Split
-    /// DX-cluster spot stream opt-out — default true (= stream actief).
+    /// DX-cluster spot stream opt-out - default true (= stream actief).
     /// Wanneer false stuurt de server geen Spot-frames meer naar deze
     /// client. Bandbreedte-besparing op metered links.
     pub dx_spots_enabled: bool,
@@ -186,12 +192,12 @@ pub struct ClientSession {
     /// Server enforces strictest: zolang één client false heeft, server-zoom-min = 2x.
     pub allow_zoom_below_2x: bool,
     /// S-meter source-subscription bitmap (see `ControlId::SmeterSources` doc).
-    /// Default 0x22 = RX1 Avg + RX2 Avg — matches pre-multi-source behaviour.
+    /// Default 0x22 = RX1 Avg + RX2 Avg - matches pre-multi-source behaviour.
     pub smeter_sources: u16,
     /// Wideband-Thetis-audio opt-in: when true the server encodes
     /// RX1/RX2/BinR via wideband Opus (16 kHz, ~30 kbps/ch) i.p.v.
     /// narrowband (8 kHz, ~14 kbps/ch) en accepteert TX-audio met
-    /// `Flags::AUDIO_WIDEBAND` gezet. Default false — opt-in via
+    /// `Flags::AUDIO_WIDEBAND` gezet. Default false - opt-in via
     /// `ControlId::ThetisWidebandAudio` from the client.
     pub thetis_wideband_audio: bool,
 }
@@ -227,7 +233,7 @@ impl SessionManager {
         if password.is_some() {
             info!("Authentication enabled (password configured)");
         } else {
-            warn!("No password configured — all client connections will be rejected");
+            warn!("No password configured - all client connections will be rejected");
         }
         if totp_secret.is_some() {
             info!("2FA enabled (TOTP configured)");
@@ -258,7 +264,7 @@ impl SessionManager {
     }
 
     /// PATCH-2: snapshot-clone of the connect-attempt ringbuffer for the
-    /// Status panel. UI doesn't hold the lock during render — it takes
+    /// Status panel. UI doesn't hold the lock during render - it takes
     /// the clone and releases the lock immediately.
     pub fn recent_connect_attempts(&self) -> Vec<ConnectAttempt> {
         self.connect_history.iter().cloned().collect()
@@ -266,7 +272,7 @@ impl SessionManager {
 
     /// PATCH-2: snapshot-clone of active client list for the Status panel.
     /// Each entry is a `(addr, connected_since, last_seen, rtt_ms, loss_pct, jitter_ms)`
-    /// tuple — UI-friendly, no SessionManager-internal refs leaked.
+    /// tuple - UI-friendly, no SessionManager-internal refs leaked.
     pub fn active_clients_snapshot(&self) -> Vec<ClientSnapshot> {
         self.clients
             .values()
@@ -303,7 +309,7 @@ impl SessionManager {
     }
 
     /// Check if a client is authenticated.
-    /// Password is always required — unauthenticated clients are rejected.
+    /// Password is always required - unauthenticated clients are rejected.
     pub fn is_authenticated(&self, addr: SocketAddr) -> bool {
         if self.password.is_none() { return false; }
         matches!(self.get_auth_state(addr), Some(AuthState::Authenticated))
@@ -322,11 +328,11 @@ impl SessionManager {
             spectrum_enabled: false,
             spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
             spectrum_zoom: 1.0, spectrum_pan: 0.0,
-            spectrum_max_bins: sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16,
+            spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
             rx2_enabled: false, rx2_spectrum_enabled: false,
             rx2_spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
             rx2_spectrum_zoom: 1.0, rx2_spectrum_pan: 0.0,
-            rx2_spectrum_max_bins: sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16,
+            rx2_spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
             vfo_sync: false, yaesu_enabled: false, yaesu2_enabled: false, audio_mode: 255,
             dx_spots_enabled: true,
             allow_zoom_below_2x: false,
@@ -400,7 +406,7 @@ impl SessionManager {
             TouchResult::Existing
         } else {
             let auth_state = if self.password.is_some() {
-                // Don't create full session yet — wait for challenge-response
+                // Don't create full session yet - wait for challenge-response
                 return TouchResult::NewClient;
             } else {
                 AuthState::NoAuth
@@ -420,13 +426,13 @@ impl SessionManager {
                 spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
                 spectrum_zoom: 1.0,
                 spectrum_pan: 0.0,
-                spectrum_max_bins: sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16,
+                spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
                 rx2_enabled: false,
                 rx2_spectrum_enabled: false,
                 rx2_spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
                 rx2_spectrum_zoom: 1.0,
                 rx2_spectrum_pan: 0.0,
-                rx2_spectrum_max_bins: sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16,
+                rx2_spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
                 vfo_sync: false,
                 yaesu_enabled: false, yaesu2_enabled: false,
                 audio_mode: 255, // default: CH0 only until client sends AudioMode
@@ -476,11 +482,28 @@ impl SessionManager {
     }
 
     /// Clients that should receive Thetis S-meter.
-    /// Excludes Yaesu-only clients (yaesu on + spectrum off = Android Yaesu mode).
+    /// Excludes Yaesu-only clients (either Yaesu slot on + spectrum off = Android Yaesu mode).
     /// Desktop clients with yaesu+spectrum both on still receive S-meter.
     pub fn smeter_addrs(&self) -> Vec<SocketAddr> {
         self.clients.values()
-            .filter(|s| (!s.yaesu_enabled || s.spectrum_enabled) && Self::is_active_authed(s))
+            .filter(|s| (!(s.yaesu_enabled || s.yaesu2_enabled) || s.spectrum_enabled) && Self::is_active_authed(s))
+            .map(|s| s.addr)
+            .collect()
+    }
+
+    /// Clients that should receive the main Thetis RX-audio stream.
+    /// Zelfde gate als smeter_addrs: een Android-client in Yaesu-mode (Yaesu slot on +
+    /// spectrum off) luistert naar de Yaesu, niet naar Thetis -> geen Thetis-audio
+    /// sturen (databesparing mobiel). Desktop met yaesu+spectrum beide aan blijft
+    /// Thetis-audio krijgen. Herstelt vanzelf zodra Yaesu-mode uit gaat (spectrum aan).
+    pub fn thetis_audio_addrs(&self) -> Vec<SocketAddr> {
+        // Every active, authenticated client receives Thetis RX audio. The old
+        // spectrum/Yaesu gate was a data-saving proxy that wrongly cut RX1 audio when a
+        // Yaesu-configured desktop client turned spectrum off (spectrum != "wants Thetis
+        // audio"). Not needed: a Yaesu-only setup has no Thetis configured -> no Thetis
+        // audio stream exists anyway, so there is nothing to save.
+        self.clients.values()
+            .filter(|s| Self::is_active_authed(s))
             .map(|s| s.addr)
             .collect()
     }
@@ -563,7 +586,7 @@ impl SessionManager {
     pub fn set_spectrum_max_bins(&mut self, addr: SocketAddr, max_bins: u16) {
         if let Some(session) = self.clients.get_mut(&addr) {
             session.spectrum_max_bins = if max_bins == 0 {
-                sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16
+                SERVER_DEFAULT_MAX_BINS
             } else {
                 max_bins.clamp(64, sdr_remote_core::MAX_SPECTRUM_SEND_BINS as u16)
             };
@@ -591,7 +614,7 @@ impl SessionManager {
         }
     }
 
-    /// VRX per-client audio-subscription (release-gate fix). ch 0 = VRX1, anders VRX2.
+    /// VRX per-client audio-subscription (hardening fix). ch 0 = VRX1, anders VRX2.
     pub fn set_vrx_audio(&mut self, addr: SocketAddr, ch: u8, on: bool) {
         if let Some(s) = self.clients.get_mut(&addr) {
             if ch == 0 { s.vrx1_audio_enabled = on; } else { s.vrx2_audio_enabled = on; }
@@ -606,7 +629,7 @@ impl SessionManager {
     }
 
     /// Subscribers voor `AudioVrx` op kanaal `ch` (0=VRX1, 1=VRX2). Spiegel van
-    /// `yaesu2_addrs`: alleen clients die `VrxEnable*` aan hebben gezet — oude
+    /// `yaesu2_addrs`: alleen clients die `VrxEnable*` aan hebben gezet - oude
     /// clients krijgen nooit een `AudioVrx` packet-type.
     pub fn vrx_audio_addrs(&self, ch: u8) -> Vec<SocketAddr> {
         self.clients.values()
@@ -634,7 +657,7 @@ impl SessionManager {
     }
 
     /// Subscribers voor `FrequencyVrxActual` (SAM auto-tune follow). ch 0=VRX1,
-    /// 1=VRX2. Alleen clients die `VrxSamAutoTune*` aan hebben gezet — oude
+    /// 1=VRX2. Alleen clients die `VrxSamAutoTune*` aan hebben gezet - oude
     /// clients krijgen nooit dit packet-type.
     pub fn vrx_autotune_addrs(&self, ch: u8) -> Vec<SocketAddr> {
         self.clients.values()
@@ -676,7 +699,7 @@ impl SessionManager {
         self.clients.get(&addr).map(|s| s.audio_mode).unwrap_or(255)
     }
 
-    /// Per-client RX2 enable flag — defaults to `false` for unknown
+    /// Per-client RX2 enable flag - defaults to `false` for unknown
     /// addrs so a half-set-up client never gets RX2 audio it didn't
     /// ask for.
     pub fn client_rx2_enabled(&self, addr: SocketAddr) -> bool {
@@ -732,7 +755,7 @@ impl SessionManager {
     }
 
     /// Slot-1 subscribers (Optie B-prime). Spiegel van `yaesu_addrs`; alleen
-    /// clients die `Yaesu2Enable` aan hebben gezet → oude clients nooit.
+    /// clients die `Yaesu2Enable` aan hebben gezet -> oude clients nooit.
     pub fn yaesu2_addrs(&self) -> Vec<SocketAddr> {
         self.clients.iter()
             .filter(|(_, s)| s.yaesu2_enabled && Self::is_active_authed(s))
@@ -758,7 +781,7 @@ impl SessionManager {
     pub fn set_rx2_spectrum_max_bins(&mut self, addr: SocketAddr, max_bins: u16) {
         if let Some(session) = self.clients.get_mut(&addr) {
             session.rx2_spectrum_max_bins = if max_bins == 0 {
-                sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16
+                SERVER_DEFAULT_MAX_BINS
             } else {
                 max_bins.clamp(64, sdr_remote_core::MAX_SPECTRUM_SEND_BINS as u16)
             };
@@ -889,7 +912,7 @@ impl SessionManager {
     /// Re-applies on connect/disconnect/vink-toggle.
     pub fn server_enforced_zoom_min(&self) -> f32 {
         if self.clients.is_empty() {
-            return 2.0; // no clients connected → safe default
+            return 2.0; // no clients connected -> safe default
         }
         if self.clients.values().all(|s| s.allow_zoom_below_2x) {
             1.0
@@ -933,14 +956,14 @@ mod tests {
     }
 
     /// Unit-test: effective_zoom MIN-aggregation over multiple clients.
-    /// Alle 3 clients vink-aan → strictest=1.0 → MIN doorgelaten.
+    /// Alle 3 clients vink-aan -> strictest=1.0 -> MIN doorgelaten.
     #[test]
     fn effective_zoom_min_aggregation() {
         let mut mgr = SessionManager::new(None, None);
         mgr.clients.insert("127.0.0.1:5001".parse().unwrap(), mk_session("127.0.0.1:5001", true, 8.0, 4.0, true, true));
         mgr.clients.insert("127.0.0.1:5002".parse().unwrap(), mk_session("127.0.0.1:5002", true, 4.0, 8.0, true, true));
         mgr.clients.insert("127.0.0.1:5003".parse().unwrap(), mk_session("127.0.0.1:5003", true, 2.0, 16.0, true, true));
-        // Alle vink-aan → strictest=1.0 → effective = raw MIN
+        // Alle vink-aan -> strictest=1.0 -> effective = raw MIN
         // RX1: min(8, 4, 2) = 2; RX2: min(4, 8, 16) = 4
         assert_eq!(mgr.server_enforced_zoom_min(), 1.0);
         assert_eq!(mgr.effective_zoom_rx1(), Some(2.0));
@@ -959,16 +982,16 @@ mod tests {
     #[test]
     fn vink_strictest_wins() {
         let mut mgr = SessionManager::new(None, None);
-        // 2 clients, 1 vink-aan + 1 vink-uit → strictest = 2.0
+        // 2 clients, 1 vink-aan + 1 vink-uit -> strictest = 2.0
         mgr.clients.insert("127.0.0.1:5001".parse().unwrap(), mk_session("127.0.0.1:5001", true, 8.0, 4.0, true, true));
         mgr.clients.insert("127.0.0.1:5002".parse().unwrap(), mk_session("127.0.0.1:5002", false, 4.0, 8.0, true, true));
         assert_eq!(mgr.server_enforced_zoom_min(), 2.0);
 
-        // Beide vink-aan → toegestaan zoom 1.0
+        // Beide vink-aan -> toegestaan zoom 1.0
         mgr.clients.get_mut(&"127.0.0.1:5002".parse::<SocketAddr>().unwrap()).unwrap().allow_zoom_below_2x = true;
         assert_eq!(mgr.server_enforced_zoom_min(), 1.0);
 
-        // Reset 1 naar vink-uit → terug naar strictest 2.0
+        // Reset 1 naar vink-uit -> terug naar strictest 2.0
         mgr.clients.get_mut(&"127.0.0.1:5001".parse::<SocketAddr>().unwrap()).unwrap().allow_zoom_below_2x = false;
         assert_eq!(mgr.server_enforced_zoom_min(), 2.0);
     }
@@ -976,7 +999,7 @@ mod tests {
     #[test]
     fn vink_strictest_no_clients_returns_safe_default() {
         let mgr = SessionManager::new(None, None);
-        // Geen clients → safe default 2.0
+        // Geen clients -> safe default 2.0
         assert_eq!(mgr.server_enforced_zoom_min(), 2.0);
     }
 
@@ -988,21 +1011,21 @@ mod tests {
         // Mix: client A vink-uit zoom 8, client B vink-aan zoom 1.0
         mgr.clients.insert("127.0.0.1:5001".parse().unwrap(), mk_session("127.0.0.1:5001", false, 8.0, 8.0, true, true));
         mgr.clients.insert("127.0.0.1:5002".parse().unwrap(), mk_session("127.0.0.1:5002", true, 1.0, 1.0, true, true));
-        // Strictest = 2.0 (één client vink-uit). Raw MIN = 1.0. Clamp → 2.0.
+        // Strictest = 2.0 (één client vink-uit). Raw MIN = 1.0. Clamp -> 2.0.
         assert_eq!(mgr.server_enforced_zoom_min(), 2.0);
         assert_eq!(mgr.effective_zoom_rx1(), Some(2.0));
         assert_eq!(mgr.effective_zoom_rx2(), Some(2.0));
 
-        // Beide vink-aan → strictest 1.0, raw MIN = 1.0, doorgelaten
+        // Beide vink-aan -> strictest 1.0, raw MIN = 1.0, doorgelaten
         mgr.clients.get_mut(&"127.0.0.1:5001".parse::<SocketAddr>().unwrap()).unwrap().allow_zoom_below_2x = true;
         assert_eq!(mgr.effective_zoom_rx1(), Some(1.0));
         assert_eq!(mgr.effective_zoom_rx2(), Some(1.0));
 
-        // Eén client zoom 4 + ander zoom 1.0 (beide vink-aan) → MIN 1.0
+        // Eén client zoom 4 + ander zoom 1.0 (beide vink-aan) -> MIN 1.0
         mgr.clients.get_mut(&"127.0.0.1:5001".parse::<SocketAddr>().unwrap()).unwrap().spectrum_zoom = 4.0;
         assert_eq!(mgr.effective_zoom_rx1(), Some(1.0));
 
-        // Zelfde maar één van twee toggle vink-uit → clamp naar 2.0
+        // Zelfde maar één van twee toggle vink-uit -> clamp naar 2.0
         mgr.clients.get_mut(&"127.0.0.1:5002".parse::<SocketAddr>().unwrap()).unwrap().allow_zoom_below_2x = false;
         assert_eq!(mgr.effective_zoom_rx1(), Some(2.0));
     }

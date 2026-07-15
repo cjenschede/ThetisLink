@@ -95,7 +95,7 @@ impl SpectrumProcessor {
     /// Initialize the FFT pipeline for real wideband data processing
     pub fn init_fft(&mut self) {
         self.fft_pipeline = Some(FftPipeline::new());
-        log::info!("FFT pipeline initialized ({}pt → {} bins)", WIDEBAND_SAMPLES, SPECTRUM_BINS);
+        log::info!("FFT pipeline initialized ({}pt -> {} bins)", WIDEBAND_SAMPLES, SPECTRUM_BINS);
     }
 
     /// Initialize the DDC FFT pipeline for complex I/Q data
@@ -123,7 +123,7 @@ impl SpectrumProcessor {
         self.sample_rate_hz = sample_rate_hz;
         self.smoothed = vec![0.0; fft_size];
         self.has_real_data = false;
-        log::info!("DDC sample rate changed: {}kHz → {}kHz (FFT: {} → {})",
+        log::info!("DDC sample rate changed: {}kHz -> {}kHz (FFT: {} -> {})",
             old_rate / 1000, sample_rate_hz / 1000,
             ddc_fft_size(old_rate), fft_size);
     }
@@ -151,7 +151,7 @@ impl SpectrumProcessor {
         self.has_real_data = false;
         let hop = sdr_remote_core::ddc_hop_size(fft_size);
         let fft_per_sec = self.sample_rate_hz as f32 / hop as f32;
-        log::info!("FFT size changed: {}K → {}K ({:.1} Hz/bin, {:.1} FFT/sec)",
+        log::info!("FFT size changed: {}K -> {}K ({:.1} Hz/bin, {:.1} FFT/sec)",
             old_size / 1024, fft_size / 1024,
             self.sample_rate_hz as f64 / fft_size as f64,
             fft_per_sec);
@@ -530,7 +530,7 @@ impl SpectrumProcessor {
 
         // Sum linear power across passband bins (integrate, not average).
         // Each bin covers [i, i+1) in bin-units. Edge bins get fractional weight.
-        // smoothed[i] is 0-255 → dB = val * 120/255 - 150
+        // smoothed[i] is 0-255 -> dB = val * 120/255 - 150
         let mut sum_power = 0.0f64;
 
         for i in first..=last {
@@ -579,7 +579,7 @@ impl SpectrumProcessor {
             self.skip_fft_frames = 2;
         }
 
-        // Shift bins: freq went up → data shifts left (positive shift_bins)
+        // Shift bins: freq went up -> data shifts left (positive shift_bins)
         if shift_bins > 0 {
             let s = shift_bins as usize;
             self.smoothed.copy_within(s.., 0);
@@ -665,12 +665,12 @@ fn ham_signal(freq_hz: f64, variation: f32) -> f32 {
         (1_850_000.0, 20_000.0, 60.0),
         // 80m band
         (3_700_000.0, 30_000.0, 80.0),
-        // 40m band — strong
+        // 40m band - strong
         (7_100_000.0, 40_000.0, 120.0),
         (7_050_000.0, 5_000.0, 150.0),
         // 30m band
         (10_120_000.0, 5_000.0, 70.0),
-        // 20m band — strong
+        // 20m band - strong
         (14_200_000.0, 50_000.0, 130.0),
         (14_070_000.0, 10_000.0, 100.0),
         // 17m band
@@ -817,7 +817,7 @@ impl Rx2SpectrumProcessor {
         self.has_real_data = false;
         let hop = sdr_remote_core::ddc_hop_size(fft_size);
         let fft_per_sec = self.sample_rate_hz as f32 / hop as f32;
-        log::info!("RX2 FFT size changed: {}K → {}K ({:.1} Hz/bin, {:.1} FFT/sec)",
+        log::info!("RX2 FFT size changed: {}K -> {}K ({:.1} Hz/bin, {:.1} FFT/sec)",
             old_size / 1024, fft_size / 1024,
             self.sample_rate_hz as f64 / fft_size as f64,
             fft_per_sec);
@@ -899,14 +899,14 @@ impl Rx2SpectrumProcessor {
                 self.ddc_center_hz = freq_hz;
 
                 if !self.tci_mode && old_center != 0 && old_center != freq_hz {
-                    log::debug!("RX2 set_vfo_freq: vfo {} → {}, ddc_center {} → {} (no HP, CTUN off)",
+                    log::debug!("RX2 set_vfo_freq: vfo {} -> {}, ddc_center {} -> {} (no HP, CTUN off)",
                         old_vfo, freq_hz, old_center, freq_hz);
                     self.shift_smoothed(old_center, freq_hz);
                 }
             }
             // CTUN on: freeze ddc_center_hz (don't follow VFO)
         } else if old_vfo != freq_hz {
-            log::debug!("RX2 set_vfo_freq: vfo {} → {} (HP active, ddc_center stays {})",
+            log::debug!("RX2 set_vfo_freq: vfo {} -> {} (HP active, ddc_center stays {})",
                 old_vfo, freq_hz, self.ddc_center_hz);
         }
     }
@@ -918,7 +918,7 @@ impl Rx2SpectrumProcessor {
         self.has_hp_center = true;
 
         if old != 0 && old != freq_hz {
-            log::debug!("RX2 set_ddc_center (HP): {} → {} (vfo={})", old, freq_hz, self.vfo_freq_hz);
+            log::debug!("RX2 set_ddc_center (HP): {} -> {} (vfo={})", old, freq_hz, self.vfo_freq_hz);
             self.shift_smoothed(old, freq_hz);
         }
     }
@@ -1034,7 +1034,7 @@ impl Rx2SpectrumProcessor {
         }
     }
 
-    /// Extract view — same logic as SpectrumProcessor::extract_view
+    /// Extract view - same logic as SpectrumProcessor::extract_view
     pub fn extract_view(&self, zoom: f32, pan: f32, max_bins: usize) -> SpectrumPacket {
         let total = self.smoothed.len();
         if total == 0 {
@@ -1147,7 +1147,7 @@ impl Rx2SpectrumProcessor {
     }
 }
 
-/// FFT pipeline: windowed FFT → power spectral density → decimated bins
+/// FFT pipeline: windowed FFT -> power spectral density -> decimated bins
 pub struct FftPipeline {
     fft: Arc<dyn rustfft::Fft<f32>>,
     window: Vec<f32>,
@@ -1174,7 +1174,7 @@ impl FftPipeline {
         Self { fft, window, fft_buf }
     }
 
-    /// Process 16384 raw ADC samples → 1024 log-power bins (0-255 range)
+    /// Process 16384 raw ADC samples -> 1024 log-power bins (0-255 range)
     pub fn process(&mut self, samples: &[i16]) -> Vec<f32> {
         let n = samples.len().min(WIDEBAND_SAMPLES);
 
@@ -1220,7 +1220,7 @@ impl FftPipeline {
                 -200.0
             };
 
-            // Map dB range to 0-255: -120 dB → 0, -20 dB → 255
+            // Map dB range to 0-255: -120 dB -> 0, -20 dB -> 255
             let normalized = ((db + 120.0) / 100.0 * 65535.0).clamp(0.0, 65535.0);
             output[i] = normalized;
         }
@@ -1229,7 +1229,7 @@ impl FftPipeline {
     }
 }
 
-/// DDC FFT pipeline: complex I/Q FFT → FFT-shift → power → N bins (parametric size)
+/// DDC FFT pipeline: complex I/Q FFT -> FFT-shift -> power -> N bins (parametric size)
 pub struct DdcFftPipeline {
     fft: Arc<dyn rustfft::Fft<f32>>,
     window: Vec<f32>,
@@ -1242,7 +1242,7 @@ impl DdcFftPipeline {
         let fft = planner.plan_fft_forward(fft_size);
 
         // Hann window for the FFT. Narrower main lobe than Blackman-Harris at
-        // the cost of higher side lobes — the trade-off we prefer for sharper
+        // the cost of higher side lobes - the trade-off we prefer for sharper
         // peak visibility in panadapter display.
         let window: Vec<f32> = (0..fft_size)
             .map(|i| {
@@ -1260,7 +1260,7 @@ impl DdcFftPipeline {
         Self { fft, window, fft_buf }
     }
 
-    /// Process DDC I/Q samples → N log-power bins (0-255 range as f32).
+    /// Process DDC I/Q samples -> N log-power bins (0-255 range as f32).
     /// Complex FFT with FFT-shift so DC (VFO) is in the center.
     pub fn process(&mut self, samples: &[(f32, f32)]) -> Vec<f32> {
         let fft_size = self.window.len();
@@ -1305,7 +1305,7 @@ impl DdcFftPipeline {
                 -200.0
             };
 
-            // Map dB range to 0-65535: -150 dB → 0, -30 dB → 65535
+            // Map dB range to 0-65535: -150 dB -> 0, -30 dB -> 65535
             output[i] = ((db + 150.0) / 120.0 * 65535.0).clamp(0.0, 65535.0);
         }
 

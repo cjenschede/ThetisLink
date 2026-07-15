@@ -25,6 +25,7 @@ const DEFAULT_TCI_ADDR: &str = "127.0.0.1:40001";
 /// audio streams, and IQ data. Sends commands and TX audio.
 pub struct TciConnection {
     addr: String,
+    enabled: bool,
     /// Channel to send text commands to the WebSocket writer task
     cmd_tx: Option<mpsc::Sender<String>>,
     /// Channel to send binary frames (TX audio) to the WebSocket writer task
@@ -41,7 +42,7 @@ pub struct TciConnection {
     pub vfo_a_mode: u8,
     pub smeter_window: VecDeque<f32>,
     /// Direct dBm value from TCI _ex format (bypasses window averaging).
-    /// This is the "Avg" source — the default S-meter value (true-mean detector).
+    /// This is the "Avg" source - the default S-meter value (true-mean detector).
     pub smeter_direct_dbm: Option<f32>,
     /// Sig source dBm (peak-hold detector, ~100 ms decay). `_ex` format only.
     pub smeter_sig_dbm: Option<f32>,
@@ -62,7 +63,7 @@ pub struct TciConnection {
     /// Per-RX CTUN state cache, gevuld via TCI `rx_ctun_ex` push notifications.
     /// `ctun` (boven) is voor RX1 (legacy field-naam); `ctun_rx2` voor RX2.
     /// TL2-1 ctun-auto-recenter gebruikt deze om bij VFO-event te checken of CTUN AAN
-    /// is — zo niet, eerst ZZCN1/ZZCO1 forceren (per owner-keuze 2026-05-08).
+    /// is - zo niet, eerst ZZCN1/ZZCO1 forceren (per operator-keuze 2026-05-08).
     pub ctun_rx2: bool,
     /// DDS center frequency per receiver (from TCI DDS notification)
     pub dds_freq: [u64; 2],
@@ -187,7 +188,7 @@ pub struct TciConnection {
     /// Stock v2.10.3.14: tx_filter_band_ex (Hz)
     pub tx_filter_low_hz: i32,
     pub tx_filter_high_hz: i32,
-    /// True zodra Thetis ten minste één tx_filter_band_ex heeft gemeld →
+    /// True zodra Thetis ten minste één tx_filter_band_ex heeft gemeld ->
     /// TX-filter is instelbaar (stock 2.10.3.14+ / fork). De client gebruikt
     /// dit (via de TxFilterBand-push) om de TX-bandbreedte-UI te activeren.
     pub tx_filter_known: bool,
@@ -213,12 +214,12 @@ pub struct TciConnection {
     pub server_caps: HashSet<String>,
 
     /// Last poll for filter preset index (ZZFI/ZZFJ via run_cat_ex)
-    /// — stock v2.10.3.14 has no native push for filter preset index.
+    /// - stock v2.10.3.14 has no native push for filter preset index.
     last_filter_preset_poll: Instant,
 
     /// TL2-1 ctun-auto-recenter: per-RX trigger state-machines + flag-clear timers.
     /// Cap-gated via `auto_recenter_ex` (advertised by Thetis fork only when the
-    /// extensions vink is on). Serialized via &mut self / single async task —
+    /// extensions vink is on). Serialized via &mut self / single async task -
     /// no separate mutex needed.
     pub ctun_recenter: crate::ctun_recenter::CtunRecenterState,
 
@@ -227,7 +228,7 @@ pub struct TciConnection {
     prev_tx_active_for_ctun: bool,
 
     /// TL2-1 ctun-auto-recenter: previous VFO per RX for band-switch heuristiek
-    /// (VFO-jump > DDC-bandwidth → band-switch detected).
+    /// (VFO-jump > DDC-bandwidth -> band-switch detected).
     prev_vfo_a_for_ctun: u64,
     prev_vfo_b_for_ctun: u64,
 
@@ -241,7 +242,7 @@ pub struct TciConnection {
     /// TL2-1 ctun-auto-recenter: Thetis-originated TX state uit
     /// `TciNotification::Trx`. `self.tx_active` wordt door PttController gezet
     /// (TL-server PTT-pad). Bij Thetis-zelf, footswitch, etc. update Thetis ons via
-    /// TRX-notif maar PttController ziet dat niet → ctun trigger zou recenter-burst
+    /// TRX-notif maar PttController ziet dat niet -> ctun trigger zou recenter-burst
     /// kunnen starten tijdens TX. Deze flag mirrort het TRX-event zodat de
     /// trigger-eval kan kiezen `tx_active OR thetis_tx_active`.
     pub thetis_tx_active: bool,
@@ -249,7 +250,7 @@ pub struct TciConnection {
     /// flag in `PttController::tx_blocked`). Wordt door de broadcast-loop in
     /// `network.rs` geüpdate; gebruikt in de TRX-notification handler om
     /// Thetis-direct PTT (spatiebalk, hardware-PTT) onmiddellijk te stoppen
-    /// — daar pakken de server-initiated PTT-paden niet bij (die hebben hun
+    /// - daar pakken de server-initiated PTT-paden niet bij (die hebben hun
     /// eigen preventieve gate). Default: dummy Arc die altijd `false` is.
     tx_blocked: Arc<AtomicBool>,
 }
@@ -275,6 +276,7 @@ impl TciConnection {
         // before any real timing-comparison happens at runtime.
         Self {
             addr: addr.unwrap_or(DEFAULT_TCI_ADDR).to_string(),
+            enabled: addr.is_some(),
             cmd_tx: None,
             bin_tx: None,
             notify_rx: None,
@@ -408,6 +410,9 @@ impl TciConnection {
     /// Check if connection attempt is needed. Returns the WS URL if so.
     /// Updates the rate-limit timer.
     pub fn needs_connect_info(&mut self) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
         if self.connected {
             return None;
         }
@@ -508,7 +513,7 @@ impl TciConnection {
         }
 
         // Filter preset index (ZZFI/ZZFJ) is not pushed by stock v2.10.3.14.
-        // Poll every 2 s via run_cat_ex over TCI — replaces the legacy aux CAT poll.
+        // Poll every 2 s via run_cat_ex over TCI - replaces the legacy aux CAT poll.
         // Skip when fork advertises rx_filter_preset_ex: native push covers the same data.
         if self.power_on
             && !self.has_cap("rx_filter_preset_ex")
@@ -525,7 +530,7 @@ impl TciConnection {
         // TL2-1 ctun-auto-recenter: PTT-off transition forceert eval.
         // Anders moet user knoppen voor recenter na lange TX-periode met VFO buiten zone.
         if self.detect_ptt_off_transition() {
-            log::debug!("TCI: ctun PTT-off transition — forcing trigger-eval");
+            log::debug!("TCI: ctun PTT-off transition - forcing trigger-eval");
             let zr1 = self.effective_zoom_rx1_cache;
             let zr2 = self.effective_zoom_rx2_cache;
             self.trigger_eval_and_act_rx1(zr1).await;
@@ -542,29 +547,29 @@ impl TciConnection {
             return;
         }
         if !self.ctun_recenter.fork_active_logged {
-            info!("TCI: ThetisLink ctun-extension active — Thetis recenter logic disabled (cap auto_recenter_ex)");
+            info!("TCI: ThetisLink ctun-extension active - Thetis recenter logic disabled (cap auto_recenter_ex)");
             self.ctun_recenter.fork_active_logged = true;
         }
         self.run_cat("ZZCN1").await;  // CTUN AAN voor RX1
-        self.run_cat("ZZCO1").await;  // CTUN AAN voor RX2 (ZZCO, NIET ZZCP — ZZCP is compander!)
+        self.run_cat("ZZCO1").await;  // CTUN AAN voor RX2 (ZZCO, NIET ZZCP - ZZCP is compander!)
     }
 
     /// Lazy-ensure: bij VFO-event op een specifieke RX, check of CTUN AAN staat.
-    /// Zo niet (owner heeft handmatig CTUN-uit gezet of Thetis-init had het uit):
-    /// stuur ZZCN1 (RX1) of ZZCO1 (RX2) en update cache. Per owner-keuze 2026-05-08.
-    /// Idempotent: bij CTUN al AAN → no-op. Cap-gated.
+    /// Zo niet (operator heeft handmatig CTUN-uit gezet of Thetis-init had het uit):
+    /// stuur ZZCN1 (RX1) of ZZCO1 (RX2) en update cache. Per operator-keuze 2026-05-08.
+    /// Idempotent: bij CTUN al AAN -> no-op. Cap-gated.
     async fn ensure_ctun_aan_for_rx(&mut self, rx_index: u8) {
         if !self.has_cap("auto_recenter_ex") {
             return;
         }
         match rx_index {
             0 if !self.ctun => {
-                debug!("TCI: ctun rx=0 was off — forcing ON before VFO-event eval");
+                debug!("TCI: ctun rx=0 was off - forcing ON before VFO-event eval");
                 self.run_cat("ZZCN1").await;
                 self.ctun = true; // optimistic; rx_ctun_ex push bevestigt later
             }
             1 if !self.ctun_rx2 => {
-                debug!("TCI: ctun rx=1 was off — forcing ON before VFO-event eval");
+                debug!("TCI: ctun rx=1 was off - forcing ON before VFO-event eval");
                 self.run_cat("ZZCO1").await;
                 self.ctun_rx2 = true;
             }
@@ -613,7 +618,7 @@ impl TciConnection {
         }
     }
 
-    /// Recenter-burst RX1: ZZCN0 → 50ms → ZZCN1. Sets per-RX flag voor 200ms.
+    /// Recenter-burst RX1: ZZCN0 -> 50ms -> ZZCN1. Sets per-RX flag voor 200ms.
     /// Note: PTT-on tijdens deze burst voltooit binnen flag-window (geen
     /// abort-pad). Inconsistente CTUN-state tussen ZZCN0 en ZZCN1 is risicovoller
     /// dan een korte ZZCN1-tijdens-TX-glitch. `&mut self`-borrow + tokio::sleep
@@ -648,7 +653,7 @@ impl TciConnection {
             self.run_cat("ZZCO1").await;
         }
         // Optimistic DDS-cache update: after ZZCx1 Thetis has forced
-        // DDC center = current VFO. Don't wait for the upstream `dds:` push —
+        // DDC center = current VFO. Don't wait for the upstream `dds:` push -
         // that adds 100-1000 ms of stale spectrum on the client. If Thetis
         // later pushes a different value (rare, rounding), the equality check
         // in the Dds notification handler covers it.
@@ -659,11 +664,11 @@ impl TciConnection {
         debug!("TCI: ctun recenter rx=0 END coupled={}", coupled);
     }
 
-    /// Recenter-burst RX2: ZZCO0 → 50ms → ZZCO1.
+    /// Recenter-burst RX2: ZZCO0 -> 50ms -> ZZCO1.
     /// **Belangrijk:** RX2-CTUN gebruikt **ZZCO**, niet ZZCP. ZZCP = compander
     /// (audio); ZZCO = CTUN RX2.
     ///
-    /// **VFO sync coalesce:** symmetrisch aan `execute_recenter_rx1` — wanneer
+    /// **VFO sync coalesce:** symmetrisch aan `execute_recenter_rx1` - wanneer
     /// VFO sync ON staat doet deze burst óók de RX1-CTUN-toggle interleaved.
     /// Zie commentaar daar voor de motivatie.
     async fn execute_recenter_rx2(&mut self) {
@@ -691,7 +696,7 @@ impl TciConnection {
         debug!("TCI: ctun recenter rx=1 END coupled={}", coupled);
     }
 
-    /// Band-switch heuristiek: VFO-jump > DDC-bandwidth → owner heeft band-switch
+    /// Band-switch heuristiek: VFO-jump > DDC-bandwidth -> operator heeft band-switch
     /// gedaan. Forceer CTUN-AAN opnieuw (Thetis kan CTUN-state per band onthouden).
     /// Aangeroepen vanuit network.rs na vfo-event-update.
     pub async fn detect_band_switch_and_reforce(&mut self) {
@@ -708,7 +713,7 @@ impl TciConnection {
             || (bw_rx2 > 0 && jump_b > bw_rx2 && self.prev_vfo_b_for_ctun > 0);
         if band_switch {
             debug!(
-                "TCI: ctun band-switch detected (vfo_a jump={} > bw_rx1={} OR vfo_b jump={} > bw_rx2={}) — reforcing CTUN-AAN",
+                "TCI: ctun band-switch detected (vfo_a jump={} > bw_rx1={} OR vfo_b jump={} > bw_rx2={}) - reforcing CTUN-AAN",
                 jump_a, bw_rx1, jump_b, bw_rx2
             );
             self.force_ctun_aan_if_capable().await;
@@ -740,7 +745,7 @@ impl TciConnection {
                 // session): reset state-machines that piggy-back on the cap
                 // surface so the next toggle ON starts clean.
                 if had_caps && !has_caps {
-                    info!("TCI: ThetisLink extensions disabled — releasing _ex feature surface");
+                    info!("TCI: ThetisLink extensions disabled - releasing _ex feature surface");
                     self.ctun_recenter.fork_active_logged = false;
                     // Without the fork pushing s9_frequency_ex we have no
                     // way to know the user's setting, so fall back to the
@@ -748,7 +753,7 @@ impl TciConnection {
                     self.s9_frequency_hz = 50_000_000;
                 }
                 // Claim auto-recenter ownership when caps transition from
-                // empty → non-empty (initial connect, or toggle ON after a
+                // empty -> non-empty (initial connect, or toggle ON after a
                 // previous OFF). Skipping when caps were already populated
                 // avoids re-spamming a claim on every refresh frame.
                 if !had_caps && has_caps && self.has_cap("auto_recenter_owner_ex") {
@@ -761,7 +766,7 @@ impl TciConnection {
                 self.power_on = true;
                 self.send_init_commands().await;
                 // TL2-1 ctun-auto-recenter: forceer CTUN-AAN bij init wanneer cap aanwezig.
-                // Idempotent — niet schadelijk om ook te runnen wanneer cap absent.
+                // Idempotent - niet schadelijk om ook te runnen wanneer cap absent.
                 self.force_ctun_aan_if_capable().await;
             }
             TciNotification::Vfo { receiver, channel, freq } => {
@@ -774,19 +779,19 @@ impl TciConnection {
                             // the matching `vfo:0,1` push for the sync'd RX may arrive
                             // 100-1000 ms later than `vfo:0,0`. Mirror immediately so
                             // the periodic broadcast (10 Hz) sends both VFOs to the
-                            // client at the same tick — avoids "synced VFO marker lags
+                            // client at the same tick - avoids "synced VFO marker lags
                             // behind active VFO marker on the client". When Thetis's
                             // delayed push eventually arrives with the same value the
                             // equality check below silently absorbs it.
                             if self.vfo_sync_on && freq != self.vfo_b_freq {
-                                log::debug!("TCI VFO A→B mirror (sync ON): {} Hz", freq);
+                                log::debug!("TCI VFO A->B mirror (sync ON): {} Hz", freq);
                                 self.vfo_b_freq = freq;
                             }
                             // TL2-1 ctun-auto-recenter: bij VFO-event eerst CTUN-aan
-                            // garanderen (per owner-keuze 2026-05-08); daarna band-switch
+                            // garanderen (per operator-keuze 2026-05-08); daarna band-switch
                             // detect en trigger-eval. Dit lost het edge-geval op waar
-                            // owner CTUN-uit klikt en daarna gaat tunen — feature blijft
-                            // werken zonder dat owner naar de vink-uit-checkbox hoeft.
+                            // operator CTUN-uit klikt en daarna gaat tunen - feature blijft
+                            // werken zonder dat operator naar de vink-uit-checkbox hoeft.
                             self.ensure_ctun_aan_for_rx(0).await;
                             self.detect_band_switch_and_reforce().await;
                             let z = self.effective_zoom_rx1_cache;
@@ -799,7 +804,7 @@ impl TciConnection {
                             self.vfo_b_freq = freq;
                             // VFO-sync optimistic mirror, symmetric to the VFO-A path.
                             if self.vfo_sync_on && freq != self.vfo_a_freq {
-                                log::debug!("TCI VFO B→A mirror (sync ON): {} Hz", freq);
+                                log::debug!("TCI VFO B->A mirror (sync ON): {} Hz", freq);
                                 self.vfo_a_freq = freq;
                             }
                             // Idem RX2: ensure CTUN aan, daarna band-switch + trigger-eval.
@@ -843,14 +848,14 @@ impl TciConnection {
                 // PTT (spatiebalk, footswitch, hardware-PTT op de radio)
                 // bereikt Thetis zonder dat de server het ziet aankomen. Hier
                 // pakken we de incoming TRX-notif en sturen direct
-                // `TRX:0,false;` terug — sub-100 ms reactietijd vergeleken
+                // `TRX:0,false;` terug - sub-100 ms reactietijd vergeleken
                 // met de ~200 ms broadcast-tick check.
                 let blocked = self.tx_blocked.load(Ordering::Relaxed);
                 debug!("TCI TRX recv: active={} tx_blocked={}", active, blocked);
                 if active && blocked {
                     warn!("Thetis-direct TX detected on RX-only Amplitec position; forcing TRX off");
                     self.send("TRX:0,false;").await;
-                    // Niet self.thetis_tx_active updaten — Thetis stuurt
+                    // Niet self.thetis_tx_active updaten - Thetis stuurt
                     // direct hierna een TRX:0,false; notif waar deze handler
                     // alsnog op reageert.
                     return;
@@ -937,7 +942,7 @@ impl TciConnection {
                 self.power_on = false;
             }
             TciNotification::Volume { .. } => {
-                // Master volume — not used for RX AF gain sync
+                // Master volume - not used for RX AF gain sync
             }
             TciNotification::RxVolume { receiver, db, .. } => {
                 // Map dB to 0..100% (Thetis sends -60.0..0.0 dB range)
@@ -1027,7 +1032,7 @@ impl TciConnection {
             TciNotification::NbEnable { receiver: 0, enabled, level } => {
                 // Symmetrisch met NR-handler (regel 553): forceer level=0 bij enabled=false.
                 // Thetis stuurt soms het laatste level terug met enabled=false; zonder deze
-                // guard blijft client-side `nb_level` op bv. 2 hangen → NB-knop cycle't niet
+                // guard blijft client-side `nb_level` op bv. 2 hangen -> NB-knop cycle't niet
                 // terug naar "uit". Fix voor PATCH-nb-toggle-fix.
                 self.nb_enable = enabled;
                 self.nb_level = if enabled { level } else { 0 };
@@ -1138,7 +1143,7 @@ impl TciConnection {
             }
             // ── ThetisLink extended controls (state tracking) ─────────────
             TciNotification::CtunEx { receiver, enabled } => {
-                // Per-RX cache update — gebruikt door ctun-auto-recenter om bij VFO-event
+                // Per-RX cache update - gebruikt door ctun-auto-recenter om bij VFO-event
                 // te checken of CTUN AAN is, zo niet eerst forceren.
                 match receiver {
                     0 => self.ctun = enabled,
@@ -1158,7 +1163,7 @@ impl TciConnection {
             // Stock v2.10.3.14+: iq_samplerate is the global IQ stream / DDC sample rate (Hz).
             // Primary source for DDC rate state. Both RX1 and RX2 receive the same value
             // because stock TCI exposes one global rate (DDC protocol 2 hardware does support
-            // per-RX rates — that comes back via TL2-x fork extensions in Phase 3).
+            // per-RX rates - that comes back via TL2-x fork extensions in Phase 3).
             TciNotification::IqSamplerate { rate } => {
                 // Defensief: stock .14/.15 stuurt nooit rate=0, maar future-Thetis
                 // builds of corrupte push zouden state op 0 zetten en client-UI
@@ -1174,11 +1179,11 @@ impl TciConnection {
                 self.ddc_sample_rate_rx2 = rate;
             }
             // Stock v2.10.3.14+: if_limits gives the IF range; sample rate ≈ high - low.
-            // Used as FALLBACK only — applied when iq_samplerate has not yet populated state.
+            // Used as FALLBACK only - applied when iq_samplerate has not yet populated state.
             TciNotification::IfLimits { low, high } => {
                 let derived = high.saturating_sub(low).max(0) as u32;
                 if self.ddc_sample_rate_rx1 == 0 && derived > 0 {
-                    info!("TCI: if_limits fallback → ddc_sample_rate = {} Hz (low={}, high={})",
+                    info!("TCI: if_limits fallback -> ddc_sample_rate = {} Hz (low={}, high={})",
                         derived, low, high);
                     self.ddc_sample_rate_rx1 = derived;
                     self.ddc_sample_rate_rx2 = derived;
@@ -1321,7 +1326,7 @@ impl TciConnection {
     /// Send initialization commands after READY.
     /// Commands are grouped in batches with short delays to avoid overwhelming Thetis
     /// with a burst of 40+ commands (see Ramdor feedback, TCI prio #16).
-    /// VOLUME is NOT set — user retains their own Thetis volume setting.
+    /// VOLUME is NOT set - user retains their own Thetis volume setting.
     async fn send_init_commands(&mut self) {
         let delay = tokio::time::Duration::from_millis(10);
 
@@ -1403,7 +1408,7 @@ impl TciConnection {
         // Read the current TX modulation filter band at connect so the desktop
         // "Follow RX bandwidth" feature is available immediately. Without this
         // the server only learns the band when the operator first changes it in
-        // Thetis (tx_filter_known stays false → no push → follow disabled until
+        // Thetis (tx_filter_known stays false -> no push -> follow disabled until
         // a server restart happened to catch a push). Stock v2.10.3.14+; echoes
         // back via the tx_filter_band_ex notification.
         self.send("tx_filter_band_ex;").await;
@@ -1492,7 +1497,7 @@ impl TciConnection {
 
     /// Thetis "above-S9-frequency" convention:
     ///  - VFO < `s9_frequency_hz`: S9 = -73 dBm (HF scale, no shift)
-    ///  - VFO ≥ `s9_frequency_hz`: S9 = -93 dBm (VHF/UHF — add 20 dB to dBm)
+    ///  - VFO ≥ `s9_frequency_hz`: S9 = -93 dBm (VHF/UHF - add 20 dB to dBm)
     /// The threshold is fork-pushed via `s9_frequency_ex` (user-configurable
     /// in Thetis Setup, Thetis default 30 MHz). When the fork isn't present
     /// the field defaults to 50 MHz (IARU Region 1) so stock Thetis behaves
@@ -1521,7 +1526,7 @@ impl TciConnection {
         }
     }
 
-    /// RX1 Sig source — peak-hold detector (~100 ms decay).
+    /// RX1 Sig source - peak-hold detector (~100 ms decay).
     /// Returns Avg as fallback when Thetis hasn't pushed the _ex format yet.
     pub fn smeter_sig(&self) -> f32 {
         if let Some(dbm) = self.smeter_sig_dbm {
@@ -1531,7 +1536,7 @@ impl TciConnection {
         }
     }
 
-    /// RX1 MaxBin source — highest single FFT bin in passband.
+    /// RX1 MaxBin source - highest single FFT bin in passband.
     pub fn smeter_peakbin(&self) -> f32 {
         if let Some(dbm) = self.smeter_peakbin_dbm {
             self.apply_s9_band_shift(dbm, self.vfo_a_freq)

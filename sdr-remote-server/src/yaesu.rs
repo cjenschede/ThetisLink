@@ -11,8 +11,7 @@ use log::{info, warn};
 /// Radio model for the dual-radio abstraction (PATCH-dual-radio-991a-ftx1).
 /// The Yaesu CAT dialect is shared across models; `RadioModel` only carries
 /// the few per-model differences (autodetect `ID;` code, audio device name,
-/// any mode-code extras). The FTX-1 is assumed CAT-compatible with the 991A;
-/// the bring-up probe verifies that live on hardware.
+/// any mode-code extras). The FTX-1 is assumed CAT-compatible with the 991A.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RadioModel {
     Ft991a,
@@ -34,7 +33,7 @@ impl RadioModel {
         format!("[radio{}/{}]", slot, self.label())
     }
 
-    /// Wire-code voor het `RadioInfo`-packet (server → client, paneel-naamgeving):
+    /// Wire-code voor het `RadioInfo`-packet (server -> client, paneel-naamgeving):
     /// 0 = FT-991A, 1 = FTX-1. Spiegel-decode gebeurt client-side op de u8.
     pub fn as_code(self) -> u8 {
         match self {
@@ -49,7 +48,7 @@ impl RadioModel {
     pub fn from_id_code(code: &str) -> Option<RadioModel> {
         match code.trim() {
             "0670" => Some(RadioModel::Ft991a),
-            // FTX-1 — live vastgelegd tijdens de owner-test 2026-06-14 (bring-up).
+            // FTX-1 - live vastgelegd tijdens de operator-test 2026-06-14 (bring-up).
             "0840" => Some(RadioModel::Ftx1),
             _ => None,
         }
@@ -57,7 +56,7 @@ impl RadioModel {
 }
 
 /// Log alle beschikbare audio-input-devices (één keer bij startup). Helpt de
-/// owner het juiste device per radio te kiezen (`yaesu_audio` / `yaesu2_audio`)
+/// operator het juiste device per radio te kiezen (`yaesu_audio` / `yaesu2_audio`)
 /// en maakt edge-case 6 zichtbaar (twee identiek genoemde "USB Audio CODEC").
 pub fn log_input_devices() {
     use cpal::traits::{DeviceTrait, HostTrait};
@@ -76,12 +75,12 @@ pub fn log_input_devices() {
 /// eerst, daarna de gangbare Yaesu-CAT-snelheden, tot een geldig `ID...;`-antwoord
 /// komt. Geeft het gedetecteerde model + de baud die werkte terug.
 ///
-/// **Model-toewijzing is per-poort, niet per-slot** — zo werkt élke combinatie:
-/// 2× 991A, 2× FTX-1, of een mix. `ID=0670` → FT-991A; elke andere geldige
-/// Yaesu-`ID` → FTX-1 via eliminatie (de exacte FTX-1-code is tot de eerste
-/// bring-up onbekend en hoeft dat ook niet te zijn — de gedeelde parser werkt).
-/// Geen antwoord op geen enkele baud → `None`; de caller degradeert naar een
-/// aanname-label en de reconnect-thread + bring-up loggen straks het echte ID.
+/// **Model-toewijzing is per-poort, niet per-slot** - zo werkt élke combinatie:
+/// 2× 991A, 2× FTX-1, of een mix. `ID=0670` -> FT-991A; elke andere geldige
+/// Yaesu-`ID` -> FTX-1 via eliminatie (de exacte FTX-1-code is tot de eerste
+/// bring-up onbekend en hoeft dat ook niet te zijn - de gedeelde parser werkt).
+/// Geen antwoord op geen enkele baud -> `None`; de caller degradeert naar een
+/// assumption label; the reconnect thread reads the real ID at startup.
 pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel, u32)> {
     let mut bauds = vec![preferred_baud];
     for b in [38400u32, 4800, 9600, 19200, 57600, 115200] {
@@ -99,7 +98,7 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
         {
             Ok(p) => p,
             // Poort niet te openen (bv. al in gebruik / bestaat niet) is niet
-            // baud-afhankelijk → verder proberen heeft geen zin.
+            // baud-afhankelijk -> verder proberen heeft geen zin.
             Err(_) => return None,
         };
         let resp = cat_query(&mut port, "ID;");
@@ -108,7 +107,7 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
             let model = RadioModel::from_id_code(&code).unwrap_or(RadioModel::Ftx1);
             return Some((model, baud));
         }
-        // Geen geldig antwoord op deze baud → port wordt hier gedropt, volgende baud.
+        // Geen geldig antwoord op deze baud -> port wordt hier gedropt, volgende baud.
     }
     None
 }
@@ -121,12 +120,12 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
 pub struct YaesuRadio {
     cmd_tx: mpsc::Sender<YaesuCmd>,
     status: Arc<Mutex<YaesuState>>,
-    /// Persistent audio RX channel — sender cloned into each new cpal capture stream.
+    /// Persistent audio RX channel - sender cloned into each new cpal capture stream.
     /// The receiver is taken once by the network audio loop and stays valid forever.
     _rx_audio_tx_keepalive: tokio::sync::mpsc::Sender<Vec<f32>>,
     pub audio_rx: Mutex<Option<tokio::sync::mpsc::Receiver<Vec<f32>>>>,
     pub audio_sample_rate: u32,
-    /// Persistent TX audio sender — used by the network TX decode task.
+    /// Persistent TX audio sender - used by the network TX decode task.
     /// The receiver is consumed by the output bridge thread.
     pub tx_audio_tx: Option<tokio::sync::mpsc::Sender<Vec<f32>>>,
     pub tx_sample_rate: u32,
@@ -139,7 +138,7 @@ pub struct YaesuRadio {
     _tx_producer: Arc<Mutex<Option<ringbuf::HeapProd<f32>>>>,
     /// Memory channel data read from radio (tab-separated text, ready to send to client)
     pub memory_data: Arc<Mutex<Option<String>>>,
-    /// Radio model + slot — drives the per-radio log prefix and per-model CAT quirks.
+    /// Radio model + slot - drives the per-radio log prefix and per-model CAT quirks.
     pub model: RadioModel,
     pub slot: u8,
 }
@@ -157,18 +156,71 @@ impl StreamHolder {
     fn set(&self, stream: Option<cpal::Stream>) {
         *self.0.lock().unwrap() = stream;
     }
+    fn is_set(&self) -> bool {
+        self.0.lock().unwrap().is_some()
+    }
 }
 
 // SAFETY: cpal::Stream on Windows (WASAPI) uses COM handles safe to move between threads.
 unsafe impl Send for YaesuRadio {}
 unsafe impl Sync for YaesuRadio {}
 
+#[derive(Clone, Debug, Default)]
+struct Ft991aUsbRoutingSnapshot {
+    ssb_mic_select: Option<String>,
+    ssb_port_select: Option<String>,
+    am_mic_select: Option<String>,
+    am_port_select: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Ft991aUsbRoutingScope {
+    Ssb,
+    Am,
+    All,
+}
+
+impl Ft991aUsbRoutingSnapshot {
+    fn read(port: &mut Box<dyn serialport::SerialPort>, prefix: &str) -> Self {
+        let snap = Self {
+            ssb_mic_select: read_ex_menu_value(port, prefix, 106, "SSB MIC SELECT"),
+            ssb_port_select: read_ex_menu_value(port, prefix, 109, "SSB PORT SELECT"),
+            am_mic_select: read_ex_menu_value(port, prefix, 45, "AM MIC SELECT"),
+            am_port_select: read_ex_menu_value(port, prefix, 48, "AM PORT SELECT"),
+        };
+        let known = [
+            snap.ssb_mic_select.as_ref(),
+            snap.ssb_port_select.as_ref(),
+            snap.am_mic_select.as_ref(),
+            snap.am_port_select.as_ref(),
+        ]
+        .iter()
+        .filter(|v| v.is_some())
+        .count();
+        if known == 4 {
+            info!(
+                "{} 991A USB routing snapshot: SSB mic={} port={}, AM mic={} port={}",
+                prefix,
+                snap.ssb_mic_select.as_deref().unwrap_or("?"),
+                snap.ssb_port_select.as_deref().unwrap_or("?"),
+                snap.am_mic_select.as_deref().unwrap_or("?"),
+                snap.am_port_select.as_deref().unwrap_or("?"),
+            );
+        } else {
+            warn!(
+                "{} 991A USB routing snapshot partial ({}/4); missing fields will not be restored blindly",
+                prefix, known
+            );
+        }
+        snap
+    }
+}
 #[derive(Clone, Debug)]
 pub struct YaesuState {
     pub connected: bool,
     pub vfo_a_freq: u64,
     pub vfo_b_freq: u64,
-    pub mode: u8,           // Internal mode (0=LSB, 1=USB, etc. — Thetis numbering)
+    pub mode: u8,           // Internal mode (0=LSB, 1=USB, etc. - Thetis numbering)
     pub tx_active: bool,
     pub smeter: u16,        // Raw S-meter value (0-255)
     pub af_gain: u8,        // 0-255
@@ -186,19 +238,37 @@ pub struct YaesuState {
     pub memory_channel: u16, // Current memory channel number (from IF)
     pub split_active: bool,  // true = split mode active
     pub scan_active: bool,   // true = scanning
+    /// Internal ATU state from the `AC;` readback (PATCH-yaesu-internal-atu), normalised:
+    /// 0=off/bypass, 1=on, 2=tuning-in-progress. Never the raw CAT P3.
+    pub tuner_state: u8,
+    /// DSP/function toggle bitfield (PATCH-yaesu-extra-controls): bit N = YaesuCtrl N
+    /// on/off, from the per-control read-parse. A1: RfAtt(0), BreakIn(1); A2: Narrow(2), AutoNotch(3).
+    pub feature_toggles: u32,
+    /// Multi-state/level values indexed by YaesuCtrl (Fase B: Agc(6), PreAmp(7); Fase C: Nb(8),Dnr(9),Processor(10),Amc(11)).
+    pub feature_levels: [u8; 16],
+    /// Fase D frequency values (u16): [0]=Contour, [1]=APF, [2]=Notch.
+    pub feature_freqs: [u16; 4],
     /// Squelch open (BUSY) volgens de radio (FTX-1 `RI`-respons P8). True =
-    /// signaal aanwezig / squelch open → audio door. Default true (open) zodat
+    /// signaal aanwezig / squelch open -> audio door. Default true (open) zodat
     /// radio's zonder RI (991A) of vóór de eerste poll nooit gegate worden.
     /// Drijft de server-side software-squelch op de FTX-1 USB-audio.
     pub squelch_open: bool,
-    /// Auto-DFM PTT-toggle state: true wanneer huidige TX-cyclus tijdelijk DATA-FM
-    /// gebruikt (was FM='4' bij PTT-on, dan switch naar 'A' voor USB-mic-audio).
-    /// Bij PTT-off wordt mode hersteld naar '4'. Per owner-keuze 2026-05-08.
+    /// Auto-DATA PTT-toggle state: true wanneer de huidige TX-cyclus tijdelijk een
+    /// DATA-mode gebruikt omdat USB-mic-TX in de gewone mode niet (goed) moduleert.
+    /// Only FM uses this path: FM('4')->DATA-FM('A').
+    /// PTT-off restores the original mode (see auto_dfm_saved_mode).
     pub auto_dfm_active: bool,
-    /// Saved memory channel bij PTT-on als auto-DFM in Memory-mode actief is.
-    /// 0 = niet-in-memory of ongeldig; restore via MC<nnn>; na MD04; op PTT-off.
-    /// Per owner-keuze 2026-05-08 (build 14 memory-restore extension).
+    /// Oorspronkelijke Yaesu-mode-char van vóór de auto-DATA-switch; hersteld op
+    /// PTT-off (MD0{char};). '4'=FM.
+    pub auto_dfm_saved_mode: char,
+    /// Saved memory channel bij PTT-on als auto-DATA in Memory-mode actief is.
+    /// 0 = niet-in-memory of ongeldig; restore via MC<nnn>; na mode-herstel op PTT-off.
     pub auto_dfm_saved_memory_channel: u16,
+    /// 991A SSB/AM USB routing: true = per-PTT switching (radio normal outside TX),
+    /// false = presence-based (routing active while a client is connected). Restore
+    /// returns to the session snapshot read at CAT connect; no factory-default assumption.
+    /// FTX-1 keeps its internal auto source selection; set in new_with_model.
+    pub ssb_switch_on_ptt: bool,
 }
 
 impl Default for YaesuState {
@@ -222,9 +292,15 @@ impl Default for YaesuState {
             memory_channel: 0,
             split_active: false,
             scan_active: false,
+            tuner_state: 0, // off/bypass until AC; readback says otherwise
+            feature_toggles: 0,
+            feature_levels: [0u8; 16],
+            feature_freqs: [0u16; 4],
             squelch_open: true, // open by default (geen gating tot RI zegt anders)
             auto_dfm_active: false,
+            auto_dfm_saved_mode: '4',
             auto_dfm_saved_memory_channel: 0,
+            ssb_switch_on_ptt: true,
         }
     }
 }
@@ -236,6 +312,9 @@ pub enum YaesuCmd {
     RecallMemory(u16),  // MC command: select memory channel
     SelectVfo(u8),      // VS command: 0=VFO A, 1=VFO B, 2=swap
     RawCat(String),     // Send any CAT command string directly
+    /// Typed DSP/function control (PATCH-yaesu-extra-controls): (control=YaesuCtrl u8,
+    /// value). Encoded per-model in the command dispatch. Fase A1: RfAtt, BreakIn.
+    SetFeature(u8, u16),
     WriteMemory {       // MW command: write a single memory channel
         channel: u16,
         freq_hz: u64,
@@ -248,6 +327,10 @@ pub enum YaesuCmd {
     SetMenu(u16, String),     // Set EXnnn with P2 value
     SetMode(u8),       // Internal mode code
     SetPtt(bool),
+    /// 991A SSB/AM USB TX routing on/off (opt-out/presence-based): true = switch to the
+    /// 991A USB modulation source (SSB EX106/109, AM EX045/048), false = restore to
+    /// the session snapshot read at CAT connect. FTX-1 is a no-op here.
+    SetSsbRouting(bool),
     SetAfGain(u8),     // 0-255
     SetTxPower(u8),    // 0-100
     SetPower(bool),
@@ -260,35 +343,35 @@ fn yaesu_mode_to_internal(yaesu: char) -> u8 {
     match yaesu {
         '1' => 0,  // LSB
         '2' => 1,  // USB
-        '3' => 3,  // CW → CW-L
+        '3' => 3,  // CW -> CW-L
         '4' => 5,  // FM
         '5' => 6,  // AM
-        '6' => 9,  // RTTY-LSB → DIGL
-        '7' => 4,  // CW-R → CW-U
-        '8' => 9,  // DATA-LSB → DIGL
-        '9' => 7,  // RTTY-USB → DIGU
-        'A' | 'a' => 5,  // DATA-FM → FM
-        'B' | 'b' => 5,  // FM-N → FM
-        'C' | 'c' => 7,  // DATA-USB → DIGU
+        '6' => 9,  // RTTY-LSB -> DIGL
+        '7' => 4,  // CW-R -> CW-U
+        '8' => 9,  // DATA-LSB -> DIGL
+        '9' => 7,  // RTTY-USB -> DIGU
+        'A' | 'a' => 5,  // DATA-FM -> FM
+        'B' | 'b' => 5,  // FM-N -> FM
+        'C' | 'c' => 7,  // DATA-USB -> DIGU
         _ => 1,    // default USB
     }
 }
 
 /// Map internal mode to Yaesu MD0x mode character.
 /// FM is sent as native FM ('4') for normal RX with built-in audio. USB-mic
-/// TX-pad switcht runtime tijdelijk naar DATA-FM ('A') — zie SetPtt-handler in
-/// yaesu_poll_loop. Eerdere implementatie forceerde DATA-FM altijd; owner-test
+/// TX-pad switcht runtime tijdelijk naar DATA-FM ('A') - zie SetPtt-handler in
+/// yaesu_poll_loop. Eerdere implementatie forceerde DATA-FM altijd; operator-test
 /// 2026-05-08 toonde dat USB-mic-audio in stand FM nu werkt na auto-toggle.
 fn internal_mode_to_yaesu(internal: u8) -> char {
     match internal {
         0 => '1',  // LSB
         1 => '2',  // USB
-        3 => '3',  // CW-L → CW
-        4 => '7',  // CW-U → CW-R
-        5 => '4',  // FM → FM (RX); auto-switch naar 'A' (DATA-FM) bij PTT-on, terug bij PTT-off
+        3 => '3',  // CW-L -> CW
+        4 => '7',  // CW-U -> CW-R
+        5 => '4',  // FM -> FM (RX); auto-switch naar 'A' (DATA-FM) bij PTT-on, terug bij PTT-off
         6 => '5',  // AM
-        7 => 'C',  // DIGU → DATA-USB
-        9 => '8',  // DIGL → DATA-LSB
+        7 => 'C',  // DIGU -> DATA-USB
+        9 => '8',  // DIGL -> DATA-LSB
         _ => '2',  // default USB
     }
 }
@@ -298,21 +381,29 @@ impl YaesuRadio {
     /// single-radio call-pad (ui/mod.rs) zonder dat alle callers hoeven te
     /// wijzigen. Slot 1 (FTX-1) gebruikt `new_with_model`.
     pub fn new(port_name: &str, baud: u32, audio_device: Option<&str>) -> Result<Self, String> {
-        Self::new_with_model(port_name, baud, audio_device, RadioModel::Ft991a, 0, 0)
+        Self::new_with_model(port_name, baud, audio_device, None, RadioModel::Ft991a, 0, 0, true)
     }
 
     pub fn new_with_model(
         port_name: &str,
         baud: u32,
         audio_device: Option<&str>,
+        // Separate TX/output device (PATCH-yaesu-output-device). None -> use the input
+        // `audio_device` pattern for output too (legacy behaviour). Set it when the
+        // capture and render endpoints have different names, so TX audio can't fall
+        // back onto the wrong USB codec.
+        output_device: Option<&str>,
         model: RadioModel,
         slot: u8,
         capture_channel: u8,
+        // 991A SSB/AM USB routing: true = per-PTT (radio normal outside TX), false =
+        // presence-based routing. FTX-1 keeps its internal auto source selection.
+        ssb_switch_on_ptt: bool,
     ) -> Result<Self, String> {
         let prefix = model.tag(slot);
         // Probe serial port (best-effort). If the Yaesu is off at server-start
         // the reconnect thread will retry silently in the background until the
-        // radio appears — earlier behaviour was hard-fail here, which meant
+        // radio appears - earlier behaviour was hard-fail here, which meant
         // powering up the Yaesu after the server was running required a full
         // server restart. Probe-open is just a courtesy log: drop immediately
         // and let the reconnect thread re-open in its own loop.
@@ -332,12 +423,13 @@ impl YaesuRadio {
         };
 
         let status = Arc::new(Mutex::new(YaesuState::default()));
+        status.lock().unwrap().ssb_switch_on_ptt = ssb_switch_on_ptt;
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
-        // Create persistent audio RX channel (capture → network loop)
+        // Create persistent audio RX channel (capture -> network loop)
         let (rx_audio_tx, rx_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(64);
 
-        // Create persistent TX audio channel (network → output)
+        // Create persistent TX audio channel (network -> output)
         let (tx_audio_tx, tx_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(64);
 
         // Swappable cpal streams and ring buffer producer
@@ -355,7 +447,7 @@ impl YaesuRadio {
         // hieronder en blijven we op default 48000. Dat is nodig zodat
         // de eenmalig-gestarte `yaesu_audio_loop` (RX-richting) en de
         // TX-resampler in network.rs met een geldige sample-rate
-        // initialiseren — niet met 0 wat tot `frame_samples = 0` en een
+        // initialiseren - niet met 0 wat tot `frame_samples = 0` en een
         // gedeeld-door-nul resampler-ratio leidt. Latere reconnect-
         // builds van de cpal streams gebruiken altijd 48000 zodat het
         // matched.
@@ -374,8 +466,10 @@ impl YaesuRadio {
                 }
                 Err(e) => warn!("{} audio capture init failed: {}", prefix, e),
             }
-            // Output (TX to Yaesu) — per-radio device (zie build_output_stream).
-            match build_output_stream(dev, tx_producer.clone(), &prefix) {
+            // Output (TX to Yaesu) - separate output device if configured, else the
+            // input pattern (PATCH-yaesu-output-device).
+            let out_dev = output_device.unwrap_or(dev);
+            match build_output_stream(out_dev, tx_producer.clone(), &prefix) {
                 Ok((stream, rate)) => {
                     output_stream.set(Some(stream));
                     tx_rate = rate;
@@ -384,7 +478,7 @@ impl YaesuRadio {
             }
         }
 
-        // Start TX audio bridge thread: drains tx_audio_rx → ring buffer producer
+        // Start TX audio bridge thread: drains tx_audio_rx -> ring buffer producer
         {
             let producer = tx_producer.clone();
             let mut rx = tx_audio_rx;
@@ -393,7 +487,7 @@ impl YaesuRadio {
                 let rt = match tokio::runtime::Runtime::new() {
                     Ok(rt) => rt,
                     Err(e) => {
-                        log::error!("{} TX audio bridge: tokio runtime init failed: {} — TX-audio disabled, RX/CAT blijven werken", prefix_tx, e);
+                        log::error!("{} TX audio bridge: tokio runtime init failed: {} - TX-audio disabled, RX/CAT blijven werken", prefix_tx, e);
                         return;
                     }
                 };
@@ -418,7 +512,7 @@ impl YaesuRadio {
             info!("{} serial probed OK on {} @ {} baud", prefix, port_name, baud);
         } else {
             info!(
-                "{} serial not detected on {} @ {} baud — background retry until radio comes online",
+                "{} serial not detected on {} @ {} baud - background retry until radio comes online",
                 prefix, port_name, baud
             );
         }
@@ -432,6 +526,7 @@ impl YaesuRadio {
             let memory_data = memory_data.clone();
             let port_name = port_name.to_string();
             let audio_device = audio_device.map(|s| s.to_string());
+            let output_device = output_device.map(|s| s.to_string());
             let rx_audio_tx = rx_audio_tx.clone();
             let capture_stream = capture_stream.clone();
             let output_stream = output_stream.clone();
@@ -441,7 +536,7 @@ impl YaesuRadio {
             std::thread::spawn(move || {
                 yaesu_reconnect_thread(
                     cmd_rx, status, memory_data,
-                    port_name, baud, audio_device,
+                    port_name, baud, audio_device, output_device,
                     rx_audio_tx, capture_stream, output_stream, tx_producer,
                     last_audio_time_clone, model, prefix, capture_channel,
                 );
@@ -489,6 +584,7 @@ fn yaesu_reconnect_thread(
     port_name: String,
     baud: u32,
     audio_device: Option<String>,
+    output_device: Option<String>,
     rx_audio_tx: tokio::sync::mpsc::Sender<Vec<f32>>,
     capture_stream: Arc<StreamHolder>,
     output_stream: Arc<StreamHolder>,
@@ -514,7 +610,7 @@ fn yaesu_reconnect_thread(
 
     loop {
         if !first {
-            // Drop oude audio streams (alleen na succesvolle connect zinvol —
+            // Drop oude audio streams (alleen na succesvolle connect zinvol -
             // tijdens cold-start retries is er niets om te droppen).
             if ever_connected {
                 capture_stream.set(None);
@@ -564,9 +660,9 @@ fn yaesu_reconnect_thread(
             }
         };
 
-        // Open succeeded — log de transitie en reset het dedup-flag voor de
+        // Open succeeded - log de transitie en reset het dedup-flag voor de
         // volgende eventuele outage-cycle. Connect-regel bevat COM+baud zodat
-        // owner-checklist item (a) direct grep-baar is.
+        // operator-checklist item (a) direct grep-baar is.
         if ever_connected {
             info!("{} serial reconnected on {} @ {} baud", prefix, port_name, baud);
         } else {
@@ -579,6 +675,16 @@ fn yaesu_reconnect_thread(
         // ruwe ID;/IF;/MD0;/FA; dumpen + één parse-samenvatting. Maakt live
         // zichtbaar of de radio als 991A-structuur parseert of waar hij afwijkt.
         bringup_probe(&mut port, &prefix, model);
+
+        // 991A SSB/AM USB TX routing is session-owned: snapshot only the menus
+        // TL may temporarily change, then restore those exact values later. Do
+        // not force a factory/default hand-mic state at connect; users may have
+        // a custom normal setup (for example a USB microphone on the radio).
+        let ft991a_usb_routing_snapshot = if !matches!(model, RadioModel::Ftx1) {
+            Some(Ft991aUsbRoutingSnapshot::read(&mut port, &prefix))
+        } else {
+            None
+        };
 
         // Rebuild audio streams onvoorwaardelijk na elke succesvolle open.
         // Bij cold-start (Yaesu was uit toen new() draaide) is het USB
@@ -605,13 +711,14 @@ fn yaesu_reconnect_thread(
                 Err(e) => warn!("{} audio capture reconnect failed: {}", prefix, e),
             }
             // Output-stream retry-loop: tot 5 pogingen, 500 ms tussen elk.
-            // Logt alleen de uiteindelijke status (ok of de laatste fout) —
+            // Logt alleen de uiteindelijke status (ok of de laatste fout) -
             // tussenliggende attempts blijven op debug om server-log rust
             // te houden.
             let mut output_ok = false;
             let mut last_err: Option<String> = None;
+            let out_dev = output_device.as_deref().unwrap_or(dev.as_str());
             for attempt in 1..=5 {
-                match build_output_stream(dev, tx_producer.clone(), &prefix) {
+                match build_output_stream(out_dev, tx_producer.clone(), &prefix) {
                     Ok((stream, _rate)) => {
                         output_stream.set(Some(stream));
                         if attempt == 1 {
@@ -634,7 +741,7 @@ fn yaesu_reconnect_thread(
             }
             if !output_ok {
                 warn!(
-                    "{} audio output reconnect failed after 5 attempts: {}",
+                    "{} audio output open failed after 5 attempts: {} - blijft op de achtergrond elke 5s herproberen tot het apparaat vrij is",
                     prefix, last_err.unwrap_or_else(|| "unknown".to_string())
                 );
             }
@@ -648,8 +755,8 @@ fn yaesu_reconnect_thread(
         // Run poll loop until disconnect (with audio watchdog)
         yaesu_poll_loop(
             port, &cmd_rx, &status, &memory_data,
-            &audio_device, &rx_audio_tx, &capture_stream, &output_stream, &tx_producer, &last_audio_time,
-            model, &prefix, capture_channel,
+            &audio_device, &output_device, &rx_audio_tx, &capture_stream, &output_stream, &tx_producer, &last_audio_time,
+            model, &prefix, capture_channel, ft991a_usb_routing_snapshot,
         );
 
         {
@@ -667,6 +774,7 @@ fn yaesu_poll_loop(
     status: &Arc<Mutex<YaesuState>>,
     memory_data: &Arc<Mutex<Option<String>>>,
     audio_device: &Option<String>,
+    output_device: &Option<String>,
     rx_audio_tx: &tokio::sync::mpsc::Sender<Vec<f32>>,
     capture_stream: &Arc<StreamHolder>,
     output_stream: &Arc<StreamHolder>,
@@ -675,6 +783,7 @@ fn yaesu_poll_loop(
     model: RadioModel,
     prefix: &str,
     capture_channel: u8,
+    ft991a_usb_routing_snapshot: Option<Ft991aUsbRoutingSnapshot>,
 ) {
     let mut read_buf = String::new();
     let mut raw_buf = [0u8; 256];
@@ -683,6 +792,7 @@ fn yaesu_poll_loop(
         .unwrap_or_else(Instant::now);
     let mut last_smeter_poll = Instant::now();
     let mut last_response = Instant::now();
+    let mut last_output_retry = Instant::now();
     // Warn-once guards: voorkomen 500 ms-poll log-spam terwijl ze
     // de huidige stille defaults wegnemen. `warned_modes` = onbekende MD-codes
     // (één warn per uniek teken); `warned_short_if` = afwijkende IF-lengte (één warn).
@@ -707,10 +817,10 @@ fn yaesu_poll_loop(
         }
 
         // Detect unresponsive radio (e.g. power supply removed while USB still connected).
-        // Baud-hint in de regel: owner ziet meteen of een stille radio
+        // Baud-hint in de regel: operator ziet meteen of een stille radio
         // een baud-mismatch radio-menu vs config kan zijn.
         if last_response.elapsed().as_secs() >= 5 {
-            warn!("{} no CAT response for 5s — disconnecting (controleer baud radio-menu vs config)", prefix);
+            warn!("{} no CAT response for 5s - disconnecting (controleer baud radio-menu vs config)", prefix);
             return;
         }
 
@@ -756,7 +866,7 @@ fn yaesu_poll_loop(
             Ok(YaesuCmd::ReadAllMenus) => {
                 info!("{} reading all menu settings...", prefix);
                 let menu_result = match model {
-                    // FTX-1 EX is hiërarchisch (P1.P2.P3) → scan-read i.p.v. platte index.
+                    // FTX-1 EX is hiërarchisch (P1.P2.P3) -> scan-read i.p.v. platte index.
                     RadioModel::Ftx1 => read_all_menus_ftx1(&mut port),
                     _ => read_all_menus(&mut port),
                 };
@@ -777,26 +887,29 @@ fn yaesu_poll_loop(
                     YaesuCmd::SetFreqB(hz) => format!("FB{:09};", hz),
                     YaesuCmd::SetMode(mode) => format!("MD0{};", internal_mode_to_yaesu(mode)),
                     YaesuCmd::SetPtt(on) => {
-                        // Auto-DFM PTT-toggle (per owner-keuze 2026-05-08): in stand
-                        // FM ('4') werkt USB-mic-TX niet; tijdelijk naar DATA-FM ('A')
-                        // voor de duur van TX-cyclus, daarna terug. Geeft schone
-                        // FM-RX-audio én bruikbare USB-mic-TX.
-                        //
-                        // Build 11 splitste TX-toggle en mode-change met sleep zodat
+                        // Auto-DATA PTT-toggle: in de gewone modes routeert de Yaesu
+                        // USB-mic-audio niet (goed) als TX-modulatiebron - alleen in de
+                        // DATA-varianten wél. Daarom tijdelijk naar de DATA-mode voor de
+                        // TX-cyclus, daarna terug:
+                        //   FM('4')->DATA-FM('A').
+                        // PTT-off restores the original mode.
+                        // SSB auto-DATA was removed on 2026-07-04 after operator testing showed
+                        // that DATA-LSB/USB is unsuitable for voice TX.
+                        // Split TX-toggle and mode-change with a short sleep so
                         // Yaesu TX-transition kan voltooien voor mode-change komt.
                         //
-                        // Build 12:
+                        // Current flow:
                         //   - Single source of truth: dit is het ENIGE auto-DFM
-                        //     emission-punt (oude network.rs wrapper verwijderd →
+                        //     emission-punt (oude network.rs wrapper verwijderd ->
                         //     geen race meer).
-                        //   - !in_memory guard — mode-change in Memory-mode forceert
+                        //   - !in_memory guard - mode-change in Memory-mode forceert
                         //     Yaesu naar VFO; skip auto-DFM in Memory-mode.
                         //
-                        // Build 14 (memory-restore extension, owner-keuze 2026-05-08):
+                        // Memory-restore extension:
                         //   - !in_memory guard verwijderd; auto-DFM werkt ook in Memory.
                         //   - Bij PTT-on: bewaar memory_channel als in_memory.
                         //   - Bij PTT-off: na MD04, restore Memory-mode via MC<nnn>;.
-                        //   - Resultaat: USB-mic-TX werkt in Memory-FM én owner blijft
+                        //   - Resultaat: USB-mic-TX werkt in Memory-FM én operator blijft
                         //     na PTT-off in Memory-mode op origineel kanaal.
                         let s_lock = status.lock().unwrap();
                         let mode_char = s_lock.mode_char;
@@ -805,64 +918,141 @@ fn yaesu_poll_loop(
                         let mem_ch = s_lock.memory_channel;
                         drop(s_lock);
 
+                        // Optimistisch TX-state zetten zodat de RX-audio-loop meteen dempt
+                        // (de TX-poll bevestigt daarna). Vooral voor de FTX-1, die zijn
+                        // USB-RX niet in hardware dempt tijdens TX.
+                        status.lock().unwrap().tx_active = on;
+
+                        // 991A SSB USB TX routing per PTT (hybrid option): switch the 991A
+                        // to USB source only during TX, then restore it on PTT-off. FTX-1
+                        // keeps its internal auto source selection and is intentionally skipped.
+                        let ssb_on_ptt = status.lock().unwrap().ssb_switch_on_ptt;
+                        if ssb_on_ptt && !matches!(model, RadioModel::Ftx1) && matches!(mode_char, '1' | '2') {
+                            if on {
+                                let _ = port.write_all(b"EX1061;"); // SSB MIC SELECT = REAR
+                                let _ = port.write_all(b"EX1091;"); // SSB PORT SELECT = USB
+                                std::thread::sleep(Duration::from_millis(30)); // short settle before TX
+                            } else {
+                                restore_991a_usb_routing_snapshot(
+                                    &mut port,
+                                    prefix,
+                                    ft991a_usb_routing_snapshot.as_ref(),
+                                    Ft991aUsbRoutingScope::Ssb,
+                                    "PTT-off SSB",
+                                );
+                            }
+                        }
+
+                        // FT-991A AM USB TX routing per PTT: AM has no DATA-AM mode.
+                        // AM PORT SELECT stays USB; AM MIC SELECT switches hand mic (MIC)
+                        // versus remote audio (REAR). In presence-based mode AM follows
+                        // SetSsbRouting as well. FTX-1 does not use these 991A menus.
+                        if ssb_on_ptt && !matches!(model, RadioModel::Ftx1) && matches!(mode_char, '5' | 'D' | 'd') {
+                            if on {
+                                let _ = port.write_all(b"EX0481;"); // AM PORT SELECT = USB
+                                let _ = port.write_all(b"EX0451;"); // AM MIC SELECT = REAR
+                                std::thread::sleep(Duration::from_millis(30));
+                            } else {
+                                restore_991a_usb_routing_snapshot(
+                                    &mut port,
+                                    prefix,
+                                    ft991a_usb_routing_snapshot.as_ref(),
+                                    Ft991aUsbRoutingScope::Am,
+                                    "PTT-off AM",
+                                );
+                            }
+                        }
+                        // Map the current mode to the DATA variant used for USB mic TX.
+                        // FM only: FM('4')->DATA-FM('A'). SSB->DATA-LSB/USB was reverted:
+                        // those DATA modes introduce carrier offset and narrow data filters,
+                        // which makes them unsuitable for speech.
+                        let data_target = match mode_char {
+                            '4' => Some(('A', "DATA-FM")),   // FM -> DATA-FM
+                            _ => None,
+                        };
                         if on {
-                            if mode_char == '4' && !was_dfm {
-                                // Defensieve diagnose-aid (build 15):
-                                // Memory-mode met memory_channel=0 betekent stille memory-loss
-                                // bij PTT-off (saved=0 → geen MC-restore). Komt voor bij
-                                // IF-poll-init-transient (~100ms na cold-boot) of parser-bug.
+                            if let (Some((dch, dname)), false) = (data_target, was_dfm) {
+                                // Defensieve diagnose-aid: Memory-mode met memory_channel=0
+                                // betekent stille memory-loss bij PTT-off (geen MC-restore).
                                 if in_memory && mem_ch == 0 {
-                                    warn!("{} auto-DFM: in Memory-mode maar memory_channel=0 — geen MC-restore (state mogelijk niet geïnitialiseerd)", prefix);
+                                    warn!("{} auto-DATA: in Memory-mode maar memory_channel=0 - geen MC-restore (state mogelijk niet geïnitialiseerd)", prefix);
                                 }
-                                // FM (VFO of Memory) → DATA-FM eerst, settle 50ms, dan PTT-on.
-                                // Bij Memory-mode: Yaesu wordt geforceerd naar VFO door MD0A;
-                                // we bewaren het kanaal en restoren na PTT-off via MC<nnn>;.
-                                let pre = b"MD0A;";
-                                if let Err(e) = port.write_all(pre) {
-                                    warn!("{} auto-DFM pre-PTT MD0A failed: {}", prefix, e);
+                                // Naar DATA-mode eerst, settle 50ms, dan PTT-on. Bij Memory-mode
+                                // forceert de MD-switch naar VFO; kanaal bewaard + na PTT-off restoren.
+                                let pre = format!("MD0{};", dch);
+                                if let Err(e) = port.write_all(pre.as_bytes()) {
+                                    warn!("{} auto-DATA pre-PTT {} failed: {}", prefix, pre, e);
                                     return;
                                 }
                                 std::thread::sleep(Duration::from_millis(50));
                                 let mut s = status.lock().unwrap();
                                 s.auto_dfm_active = true;
+                                s.auto_dfm_saved_mode = mode_char;
                                 s.auto_dfm_saved_memory_channel =
                                     if in_memory && mem_ch > 0 { mem_ch } else { 0 };
-                                info!("{} auto-DFM: FM -> DATA-FM voor PTT-on (memory={}, ch={})",
-                                    prefix, in_memory, s.auto_dfm_saved_memory_channel);
+                                info!("{} auto-DATA: {} -> {} voor PTT-on (memory={}, ch={})",
+                                    prefix, mode_char, dname, in_memory, s.auto_dfm_saved_memory_channel);
                                 "TX1;".to_string()
                             } else {
                                 "TX1;".to_string()
                             }
                         } else if was_dfm {
-                            let saved_mem = status.lock().unwrap().auto_dfm_saved_memory_channel;
-                            // PTT-off eerst (Yaesu schakelt TX uit), settle 100ms voor
-                            // TX-transition, dan mode terug naar FM, evt. memory-restore.
+                            let (saved_mode, saved_mem) = {
+                                let s = status.lock().unwrap();
+                                (s.auto_dfm_saved_mode, s.auto_dfm_saved_memory_channel)
+                            };
+                            // PTT-off eerst (Yaesu schakelt TX uit), settle 100ms voor de
+                            // TX-transition, dan de oorspronkelijke mode terug, evt. memory-restore.
                             if let Err(e) = port.write_all(b"TX0;") {
-                                warn!("{} auto-DFM pre-MD TX0 failed: {}", prefix, e);
+                                warn!("{} auto-DATA pre-MD TX0 failed: {}", prefix, e);
                                 return;
                             }
                             std::thread::sleep(Duration::from_millis(100));
-                            if let Err(e) = port.write_all(b"MD04;") {
-                                warn!("{} auto-DFM MD04 failed: {}", prefix, e);
+                            let restore = format!("MD0{};", saved_mode);
+                            if let Err(e) = port.write_all(restore.as_bytes()) {
+                                warn!("{} auto-DATA restore {} failed: {}", prefix, restore, e);
                                 return;
                             }
                             if saved_mem > 0 {
                                 std::thread::sleep(Duration::from_millis(50));
                                 let mc_cmd = format!("MC{:03};", saved_mem);
                                 if let Err(e) = port.write_all(mc_cmd.as_bytes()) {
-                                    warn!("{} auto-DFM memory-restore {} failed: {}",
+                                    warn!("{} auto-DATA memory-restore {} failed: {}",
                                         prefix, mc_cmd, e);
                                 }
                             }
                             let mut s = status.lock().unwrap();
                             s.auto_dfm_active = false;
                             s.auto_dfm_saved_memory_channel = 0;
-                            info!("{} auto-DFM: DATA-FM -> FM na PTT-off (mem-restore={})",
-                                prefix, saved_mem);
+                            info!("{} auto-DATA: DATA -> {} na PTT-off (mem-restore={})",
+                                prefix, saved_mode, saved_mem);
                             String::new()  // alle commando's al verstuurd
                         } else {
                             "TX0;".to_string()
                         }
+                    }
+                    YaesuCmd::SetSsbRouting(on) => {
+                        // Presence-based (opt-out): enable 991A SSB/AM USB routing while a
+                        // client is present, then restore the session snapshot after ~2 s without a client.
+                        // FTX-1 keeps its internal auto source selection, so this command is a no-op for it.
+                        if !matches!(model, RadioModel::Ftx1) {
+                            if on {
+                                let _ = port.write_all(b"EX1061;"); // SSB MIC SELECT = REAR
+                                let _ = port.write_all(b"EX1091;"); // SSB PORT SELECT = USB
+                                let _ = port.write_all(b"EX0481;"); // AM PORT SELECT = USB
+                                let _ = port.write_all(b"EX0451;"); // AM MIC SELECT = REAR
+                                info!("{} 991A SSB/AM USB routing ON (client present)", prefix);
+                            } else {
+                                restore_991a_usb_routing_snapshot(
+                                    &mut port,
+                                    prefix,
+                                    ft991a_usb_routing_snapshot.as_ref(),
+                                    Ft991aUsbRoutingScope::All,
+                                    "no client",
+                                );
+                            }
+                        }
+                        String::new()
                     }
                     YaesuCmd::SetAfGain(v) => format!("AG0{:03};", v.min(255)),
                     YaesuCmd::SetTxPower(v) => {
@@ -892,6 +1082,91 @@ fn yaesu_poll_loop(
                         }
                     }
                     YaesuCmd::RawCat(ref s) => s.clone(),
+                    // Typed DSP/function control (PATCH-yaesu-extra-controls, Fase A1).
+                    // Generieke P1=0/MAIN-encode: werkt voor de 991A (accepteert de leidende 0)
+                    // én voor de FTX-1 MAIN-receiver (side=0). Model-specifieke controls zijn
+                    // geguard (AMC=alleen FTX-1, NB/NR on/off=alleen 991A) zodat een verdwaald
+                    // pakket naar het verkeerde model no-op is i.p.v. de radio te verrassen; de
+                    // client gate't dit al in de UI. Onbekend/ongeldig-voor-model -> leeg (no-op).
+                    // NB: hardware-verificatie per commando via de reply-parse hieronder.
+                    YaesuCmd::SetFeature(ctrl, val) => {
+                        let is_ftx1 = matches!(model, RadioModel::Ftx1);
+                        match ctrl {
+                            0 => format!("RA0{};", val.min(1)), // RfAtt: RA P1=0 (fixed), P2 0/1
+                            1 => format!("BI{};", val.min(1)),  // BreakIn: BI 0/1
+                            2 => format!("NA0{};", val.min(1)), // Narrow: NA P1=0 (MAIN), P2 0/1
+                            3 => format!("BC0{};", val.min(1)), // Auto-Notch (DNF): BC P1=0 (MAIN), P2 0/1
+                            6 => format!("GT0{};", val.clamp(1, 4)), // AGC: GT P1=0, P2 1=fast/2=mid/3=slow/4=auto (hardware-geverifieerd §13; AUTO leest terug als 4/5/6 -> server normaliseert naar 4)
+                            7 => format!("PA0{};", val.min(2)), // Pre-amp/IPO (HF): PA P1=0, P2 0-2 (IPO/AMP1/AMP2)
+                            8 => format!("NL0{:03};", val.min(10)),  // Noise Blanker level: NL P1=0, P2 000-010 (0=off)
+                            9 => format!("RL0{:02};", val.min(10)),  // Noise Reduction (DNR) level: RL P1=0, P2 00-10 (0=off)
+                            10 => format!("PL{:03};", val.min(100)), // Speech Processor level: PL 000-100 (0=off)
+                            11 if is_ftx1 => format!("AO{:03};", val.clamp(1, 100)), // AMC output level: AO 001-100 (FTX-1-only; 991A kent geen AO)
+                            13 if !is_ftx1 => format!("NB0{};", val.min(1)), // 991A: Noise Blanker on/off (NB), los van NL-niveau (FTX-1 codeert off-in-level)
+                            14 if !is_ftx1 => format!("NR0{};", val.min(1)), // 991A: Noise Reduction on/off (NR), los van RL-niveau (FTX-1 codeert off-in-level)
+                            // Fase D - CO P1=0, P2 (0=contour on/off,1=contour freq,2=APF on/off,3=APF freq), P3 4-digit.
+                            15 => format!("CO00{:04};", val.min(1)),        // Contour on/off
+                            16 => format!("CO02{:04};", val.min(1)),        // APF on/off
+                            18 => format!("CO01{:04};", val.clamp(10, 3200)), // Contour freq (10-3200 Hz)
+                            19 => format!("CO03{:04};", val.min(50)),       // APF freq (0000-0050)
+                            // BP P1=0, P2 (0=notch on/off,1=notch freq), P3 3-digit.
+                            17 => format!("BP00{:03};", val.min(1)),        // Manual notch on/off
+                            20 => format!("BP01{:03};", val.clamp(1, 320)), // Manual notch freq (x10 Hz)
+                            // Clarifier (§15, hardware-spec geverifieerd). 991A: RT/XT/RC/RU/RD
+                            // (relatief). FTX-1: CF - RX/TX-clar samen in één P3=0-bericht (dus
+                            // de andere stand uit de bijgehouden state lezen) + absolute freq (P3=1).
+                            21 => match model { // RIT (RX-clarifier) on/off
+                                RadioModel::Ftx1 => {
+                                    let xit = (status.lock().unwrap().feature_toggles >> 22) & 1;
+                                    format!("CF000{}{}000;", val.min(1), xit)
+                                }
+                                _ => format!("RT{};", val.min(1)),
+                            },
+                            22 => match model { // XIT (TX-clarifier) on/off
+                                RadioModel::Ftx1 => {
+                                    let rit = (status.lock().unwrap().feature_toggles >> 21) & 1;
+                                    format!("CF000{}{}000;", rit, val.min(1))
+                                }
+                                _ => format!("XT{};", val.min(1)),
+                            },
+                            23 => { // Clarifier clear (offset -> 0)
+                                status.lock().unwrap().feature_freqs[3] = 0;
+                                match model {
+                                    RadioModel::Ftx1 => "CF001+0000;".to_string(),
+                                    _ => "RC;".to_string(),
+                                }
+                            }
+                            24 => { // Clarifier step (value = i16-as-u16 signed Hz)
+                                let step = val as i16;
+                                match model {
+                                    RadioModel::Ftx1 => {
+                                        // Absoluut: nieuwe offset uit de bijgehouden state, clamp ±9999.
+                                        let newv = {
+                                            let mut s = status.lock().unwrap();
+                                            let nv = (s.feature_freqs[3] as i16)
+                                                .saturating_add(step).clamp(-9999, 9999);
+                                            s.feature_freqs[3] = nv as u16;
+                                            nv
+                                        };
+                                        let sign = if newv >= 0 { '+' } else { '-' };
+                                        format!("CF001{}{:04};", sign, newv.unsigned_abs())
+                                    }
+                                    _ => {
+                                        // 991A relatief: accumuleer state (geen readback via los cmd).
+                                        {
+                                            let mut s = status.lock().unwrap();
+                                            let nv = (s.feature_freqs[3] as i16)
+                                                .saturating_add(step).clamp(-9999, 9999);
+                                            s.feature_freqs[3] = nv as u16;
+                                        }
+                                        if step >= 0 { format!("RU{:04};", step as u16) }
+                                        else { format!("RD{:04};", step.unsigned_abs()) }
+                                    }
+                                }
+                            }
+                            _ => String::new(),
+                        }
+                    }
                     YaesuCmd::WriteMemory { channel, freq_hz, mode, ctcss, shift } => {
                         let mode_char = internal_mode_to_yaesu(mode);
                         // MW format mirrors MR response:
@@ -914,7 +1189,20 @@ fn yaesu_poll_loop(
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
-                info!("{} command channel closed, stopping", prefix);
+                // Graceful shutdown while the port is still alive -> restore the 991A
+                // USB-routing session snapshot. FTX-1 auto source selection is left untouched.
+                if !matches!(model, RadioModel::Ftx1) {
+                    restore_991a_usb_routing_snapshot(
+                        &mut port,
+                        prefix,
+                        ft991a_usb_routing_snapshot.as_ref(),
+                        Ft991aUsbRoutingScope::All,
+                        "command channel closed",
+                    );
+                    info!("{} command channel closed, stopping", prefix);
+                } else {
+                    info!("{} command channel closed, stopping", prefix);
+                }
                 return;
             }
         }
@@ -922,7 +1210,7 @@ fn yaesu_poll_loop(
         let now = Instant::now();
 
         // Fast poll: S-meter every 200ms. FTX-1: óók RI0; (P8 = squelch open/dicht)
-        // voor de server-side software-squelch — de FTX-1 gate't zijn USB-audio
+        // voor de server-side software-squelch - de FTX-1 gate't zijn USB-audio
         // niet zelf (anders dan de 991A). 991A krijgt geen RI (heeft het niet).
         if now.duration_since(last_smeter_poll).as_millis() >= 200 {
             last_smeter_poll = now;
@@ -936,8 +1224,15 @@ fn yaesu_poll_loop(
         // Full poll: freq, mode, TX state every 500ms
         if now.duration_since(last_full_poll).as_millis() >= 500 {
             last_full_poll = now;
-            if let Err(e) = port.write_all(b"FA;FB;MD0;TX;AG0;PC;PS;IF;SQ0;RG0;MG;FT;SC;") {
+            if let Err(e) = port.write_all(b"FA;FB;MD0;TX;AG0;PC;PS;IF;SQ0;RG0;MG;FT;SC;AC;RA0;BI;NA0;BC0;GT0;PA0;NL0;RL0;PL;AO;NB0;NR0;CO00;CO01;CO02;CO03;BP00;BP01;") {
                 warn!("{} full poll failed: {}", prefix, e);
+                return;
+            }
+            // Clarifier readback (§15): 991A leest RIT/XIT los (RT/XT), offset houden we
+            // zelf bij (geen los read-cmd). FTX-1: CF000=RX/TX-clar on/off, CF001=offset.
+            let clar_poll: &[u8] = if matches!(model, RadioModel::Ftx1) { b"CF000;CF001;" } else { b"RT;XT;" };
+            if let Err(e) = port.write_all(clar_poll) {
+                warn!("{} clarifier poll failed: {}", prefix, e);
                 return;
             }
 
@@ -952,7 +1247,7 @@ fn yaesu_poll_loop(
                 if stale_ms > 5000 {
                     if let Some(ref dev) = audio_device {
                         warn!("{} audio watchdog: no samples for {:.1}s, rebuilding streams", prefix, stale_ms as f64 / 1000.0);
-                        // Reset timestamp to prevent repeated rebuilds — give new stream 10s to start
+                        // Reset timestamp to prevent repeated rebuilds - give new stream 10s to start
                         let future_ms = now_ms + 10_000;
                         last_audio_time.store(future_ms, std::sync::atomic::Ordering::Relaxed);
                         match build_capture_stream(dev, rx_audio_tx.clone(), last_audio_time.clone(), prefix, capture_channel) {
@@ -962,7 +1257,8 @@ fn yaesu_poll_loop(
                             }
                             Err(e) => warn!("{} audio watchdog capture failed: {}", prefix, e),
                         }
-                        match build_output_stream(dev, tx_producer.clone(), prefix) {
+                        let out_dev = output_device.as_deref().unwrap_or(dev.as_str());
+                        match build_output_stream(out_dev, tx_producer.clone(), prefix) {
                             Ok((stream, _rate)) => {
                                 output_stream.set(Some(stream));
                                 info!("{} audio output rebuilt by watchdog", prefix);
@@ -970,6 +1266,25 @@ fn yaesu_poll_loop(
                             Err(e) => warn!("{} audio watchdog output failed: {}", prefix, e),
                         }
                     }
+                }
+            }
+        }
+
+        // Output-stream herstel: als de TX-uitgang niet open is (bv. de CODEC was
+        // bij het openen bezet / in exclusieve modus / nog niet vrij), blijf 'm
+        // periodiek herproberen. Zo komt TX vanzelf terug zodra het apparaat vrij
+        // is -- zonder handmatige server-herstart. De capture-watchdog hierboven
+        // dekt dit niet (die triggert alleen op RX-stilte, en RX kan prima lopen
+        // terwijl TX faalt).
+        if !output_stream.is_set() && last_output_retry.elapsed().as_secs() >= 5 {
+            last_output_retry = Instant::now();
+            if let Some(out_dev) = output_device.as_deref().or(audio_device.as_deref()) {
+                match build_output_stream(out_dev, tx_producer.clone(), prefix) {
+                    Ok((stream, _rate)) => {
+                        output_stream.set(Some(stream));
+                        info!("{} audio output hersteld (apparaat vrij)", prefix);
+                    }
+                    Err(e) => log::debug!("{} audio output retry mislukt: {}", prefix, e),
                 }
             }
         }
@@ -1023,12 +1338,12 @@ fn parse_responses(
                 if payload.len() >= 2 {
                     let mode_char = payload.chars().nth(1).unwrap_or('2');
                     // Faal-veilig: onbekende mode-code zou stil naar USB
-                    // defaulten — warn één keer per uniek teken zodat een FTX-1-
+                    // defaulten - warn één keer per uniek teken zodat een FTX-1-
                     // specifieke mode tijdens de test zichtbaar wordt i.p.v. verzwegen.
                     let known = matches!(mode_char,
                         '1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'|'9'|'A'|'a'|'B'|'b'|'C'|'c');
                     if !known && warned_modes.insert(mode_char) {
-                        warn!("{} onbekende MD mode-code '{}' — val terug op USB; mogelijk model-specifiek", prefix, mode_char);
+                        warn!("{} onbekende MD mode-code '{}' - val terug op USB; mogelijk model-specifiek", prefix, mode_char);
                     }
                     let mode = yaesu_mode_to_internal(mode_char);
                     let mut s = status.lock().unwrap();
@@ -1063,8 +1378,8 @@ fn parse_responses(
                 }
             }
             "PC" => {
-                // FTX-1: "PC{P1}{nnn}" — P1=head (1=field 5-10W, 2=Optima 5-100W),
-                // nnn=watts → payload 4 tekens. 991A: "PC{nnn}" → payload 3 tekens.
+                // FTX-1: "PC{P1}{nnn}" - P1=head (1=field 5-10W, 2=Optima 5-100W),
+                // nnn=watts -> payload 4 tekens. 991A: "PC{nnn}" -> payload 3 tekens.
                 // Detecteer op lengte zodat beide modellen kloppen.
                 let p = payload.trim();
                 if p.len() >= 4 {
@@ -1112,7 +1427,7 @@ fn parse_responses(
                 status.lock().unwrap().split_active = split;
             }
             "SC" => {
-                // 991A: SC{P2} → scan-state op [0]. FTX-1: SC{P1}{P2} → MAIN/SUB-side
+                // 991A: SC{P2} -> scan-state op [0]. FTX-1: SC{P1}{P2} -> MAIN/SUB-side
                 // op [0], scan-state op [1] (P2: 0=off, 1=up, 2=down). Zonder model-
                 // awareness las de FTX-1 de side i.p.v. de scan-state.
                 let scan_char = match model {
@@ -1120,6 +1435,175 @@ fn parse_responses(
                     _ => payload.chars().nth(0).unwrap_or('0'),
                 };
                 status.lock().unwrap().scan_active = scan_char != '0';
+            }
+            "AC" => {
+                // Internal ATU readback. payload = P1 P2 P3 (3 chars).
+                //   991A: AC00P3; (P1P2 fixed "00"), P3: 0=off, 1=on, 2=tuning.
+                //   FTX-1: AC P1 P2 P3; radio meldt zijn tuner met P1=1, P2=0 (empirisch:
+                //     'AC100' bij off). P2=2 = ATAS (buiten scope). P3: 0=off,1=on,3=tuning.
+                // P3 lezen zolang P2=0 (tuner-mode), ongeacht P1. Normaliseer P3->0/1/2,
+                // nooit raw doorgeven.
+                let pc: Vec<char> = payload.chars().collect();
+                let p2 = pc.get(1).copied().unwrap_or('0');
+                let p3 = pc.get(2).copied().unwrap_or('0');
+                let state = if p2 != '0' {
+                    0 // ATAS of niet-tuner-mode -> geen interne-ATU-stand
+                } else {
+                    match p3 {
+                        '0' => 0,
+                        '1' => 1,
+                        '2' | '3' => 2,
+                        _ => 0,
+                    }
+                };
+                let mut s = status.lock().unwrap();
+                if state != s.tuner_state {
+                    info!("{} tuner: {}", prefix, match state { 0 => "OFF", 1 => "ON", _ => "TUNING" });
+                    s.tuner_state = state;
+                }
+            }
+            "RA" => {
+                // RA0 P2 -> RF-ATT on/off (PATCH-yaesu-extra-controls, YaesuCtrl::RfAtt bit 0).
+                let on = payload.chars().nth(1) == Some('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 0;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "BI" => {
+                // BI P1 -> break-in on/off (YaesuCtrl::BreakIn bit 1).
+                let on = payload.starts_with('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 1;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "NA" => {
+                // NA0 P2 -> narrow on/off (YaesuCtrl::Narrow bit 2). FTX-1: P1=side.
+                let on = payload.chars().nth(1) == Some('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 2;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "BC" => {
+                // BC0 P2 -> auto-notch (DNF) on/off (YaesuCtrl::AutoNotch bit 3). FTX-1: P1=side.
+                let on = payload.chars().nth(1) == Some('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 3;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "GT" => {
+                // GT0 P2 -> AGC mode (YaesuCtrl::Agc, level index 6).
+                // Hardware-geverifieerd (§13, build 32) op 991A én FTX-1: 1=FAST, 2=MID,
+                // 3=SLOW, en AUTO wordt teruggemeld als de *opgeloste* auto-snelheid
+                // 4=auto-fast/5=auto-mid/6=auto-slow. We zetten AUTO altijd met 4 en
+                // normaliseren élke readback 4/5/6 -> 4 (AUTO) zodat readback == set-waarde.
+                let raw = payload.chars().nth(1).and_then(|c| c.to_digit(10)).unwrap_or(0) as u8;
+                let v = if (4..=6).contains(&raw) { 4 } else { raw };
+                let mut s = status.lock().unwrap();
+                s.feature_levels[6] = v;
+            }
+            "PA" => {
+                // PA0 P2 -> pre-amp/IPO on HF (YaesuCtrl::PreAmp, level index 7). FTX-1: P1=band.
+                let v = payload.chars().nth(1).and_then(|c| c.to_digit(10)).unwrap_or(0) as u8;
+                let mut s = status.lock().unwrap();
+                s.feature_levels[7] = v;
+            }
+            "NL" => {
+                // NL0 P2P2P2 -> Noise Blanker level (index 8). P1=side.
+                let lvl: u16 = payload.get(1..).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+                let mut s = status.lock().unwrap();
+                s.feature_levels[8] = lvl.min(255) as u8;
+            }
+            "RL" => {
+                // RL0 P2P2 -> Noise Reduction (DNR) level (index 9). P1=side.
+                let lvl: u16 = payload.get(1..).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+                let mut s = status.lock().unwrap();
+                s.feature_levels[9] = lvl.min(255) as u8;
+            }
+            "PL" => {
+                // PL P1P1P1 -> Speech Processor level (index 10). No side.
+                let lvl: u16 = payload.trim().parse().unwrap_or(0);
+                let mut s = status.lock().unwrap();
+                s.feature_levels[10] = lvl.min(255) as u8;
+            }
+            "AO" => {
+                // AO P1P1P1 -> AMC output level (index 11). No side.
+                let lvl: u16 = payload.trim().parse().unwrap_or(0);
+                let mut s = status.lock().unwrap();
+                s.feature_levels[11] = lvl.min(255) as u8;
+            }
+            "NB" => {
+                // NB0 P2 -> Noise Blanker on/off (991A), YaesuCtrl::NbOn bit 13. FTX-1 stuurt geen NB.
+                let on = payload.chars().nth(1) == Some('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 13;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "NR" => {
+                // NR0 P2 -> Noise Reduction on/off (991A), YaesuCtrl::NrOn bit 14.
+                let on = payload.chars().nth(1) == Some('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 14;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "CO" => {
+                // CO P1 P2 P3P3P3P3 - P2: 0=Contour on/off, 1=Contour freq, 2=APF on/off, 3=APF freq.
+                let p2 = payload.chars().nth(1).unwrap_or('0');
+                let p3: u16 = payload.get(2..).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+                let mut s = status.lock().unwrap();
+                match p2 {
+                    '0' => { let b = 1u32 << 15; s.feature_toggles = if p3 != 0 { s.feature_toggles | b } else { s.feature_toggles & !b }; }
+                    '1' => s.feature_freqs[0] = p3,
+                    '2' => { let b = 1u32 << 16; s.feature_toggles = if p3 != 0 { s.feature_toggles | b } else { s.feature_toggles & !b }; }
+                    '3' => s.feature_freqs[1] = p3,
+                    _ => {}
+                }
+            }
+            "BP" => {
+                // BP P1 P2 P3P3P3 - P2: 0=Manual notch on/off, 1=notch freq (x10 Hz).
+                let p2 = payload.chars().nth(1).unwrap_or('0');
+                let p3: u16 = payload.get(2..).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+                let mut s = status.lock().unwrap();
+                match p2 {
+                    '0' => { let b = 1u32 << 17; s.feature_toggles = if p3 != 0 { s.feature_toggles | b } else { s.feature_toggles & !b }; }
+                    '1' => s.feature_freqs[2] = p3,
+                    _ => {}
+                }
+            }
+            "RT" => {
+                // 991A RIT (RX-clarifier) on/off -> toggle-bit 21.
+                let on = payload.starts_with('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 21;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "XT" => {
+                // 991A XIT (TX-clarifier) on/off -> toggle-bit 22.
+                let on = payload.starts_with('1');
+                let mut s = status.lock().unwrap();
+                let bit = 1u32 << 22;
+                s.feature_toggles = if on { s.feature_toggles | bit } else { s.feature_toggles & !bit };
+            }
+            "CF" => {
+                // FTX-1 Clarifier. P3 (payload[2]): 0=setting (P4=RX/RIT, P5=TX/XIT),
+                // 1=freq (P4=teken, P5-P8=0000-9999 Hz). 991A gebruikt RT/XT + accumulatie.
+                let p3 = payload.chars().nth(2).unwrap_or('0');
+                let mut s = status.lock().unwrap();
+                match p3 {
+                    '0' => {
+                        let rit = payload.chars().nth(3) == Some('1');
+                        let xit = payload.chars().nth(4) == Some('1');
+                        let (rb, xb) = (1u32 << 21, 1u32 << 22);
+                        s.feature_toggles = if rit { s.feature_toggles | rb } else { s.feature_toggles & !rb };
+                        s.feature_toggles = if xit { s.feature_toggles | xb } else { s.feature_toggles & !xb };
+                    }
+                    '1' => {
+                        let sign = payload.chars().nth(3).unwrap_or('+');
+                        let mag: i16 = payload.get(4..8).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+                        let off = if sign == '-' { -mag } else { mag };
+                        s.feature_freqs[3] = off as u16;
+                    }
+                    _ => {}
+                }
             }
             "RI" => {
                 // FTX-1 Radio Information. P8 (laatste teken) = squelch/BUSY:
@@ -1163,11 +1647,11 @@ fn parse_responses(
                         s.memory_channel = mc;
                     }
                 } else {
-                    // Faal-veilig: afwijkende IF-lengte → niet indexen
+                    // Faal-veilig: afwijkende IF-lengte -> niet indexen
                     // (geen out-of-range/paniek), parse overslaan + één warn. Maakt een
                     // verschoven FTX-1-veldindeling zichtbaar i.p.v. stil te falen.
                     if !*warned_short_if {
-                        warn!("{} IF-respons {}B ('{}'), 991A verwacht >=22 — velden mogelijk verschoven, parse overgeslagen",
+                        warn!("{} IF-respons {}B ('{}'), 991A verwacht >=22 - velden mogelijk verschoven, parse overgeslagen",
                             prefix, payload.len(), payload);
                         *warned_short_if = true;
                     }
@@ -1185,13 +1669,117 @@ fn parse_responses(
     }
 }
 
+fn parse_ex_menu_value(menu: u16, response: &str) -> Option<String> {
+    let prefix = format!("EX{:03}", menu);
+    let start = response.find(&prefix)?;
+    let rest = &response[start + prefix.len()..];
+    let end = rest.find(';')?;
+    let value = rest[..end].trim();
+    if value.is_empty() { None } else { Some(value.to_string()) }
+}
+
+fn read_ex_menu_value(
+    port: &mut Box<dyn serialport::SerialPort>,
+    prefix: &str,
+    menu: u16,
+    label: &str,
+) -> Option<String> {
+    let response = cat_query(port, &format!("EX{:03};", menu));
+    if response.trim().is_empty() || response.contains("?;") {
+        warn!(
+            "{} 991A USB routing snapshot: EX{:03} {} read failed ({:?})",
+            prefix, menu, label, response
+        );
+        return None;
+    }
+    let value = parse_ex_menu_value(menu, &response);
+    if value.is_none() {
+        warn!(
+            "{} 991A USB routing snapshot: EX{:03} {} parse failed ({:?})",
+            prefix, menu, label, response
+        );
+    }
+    value
+}
+
+fn write_ex_menu_value(
+    port: &mut Box<dyn serialport::SerialPort>,
+    prefix: &str,
+    menu: u16,
+    value: &str,
+    label: &str,
+) -> bool {
+    let cmd = format!("EX{:03}{};", menu, value);
+    match port.write_all(cmd.as_bytes()) {
+        Ok(()) => {
+            log::debug!("{} restored {} via {}", prefix, label, cmd);
+            std::thread::sleep(Duration::from_millis(30));
+            true
+        }
+        Err(e) => {
+            warn!("{} restore {} failed via {}: {}", prefix, label, cmd, e);
+            false
+        }
+    }
+}
+
+fn restore_991a_usb_routing_snapshot(
+    port: &mut Box<dyn serialport::SerialPort>,
+    prefix: &str,
+    snapshot: Option<&Ft991aUsbRoutingSnapshot>,
+    scope: Ft991aUsbRoutingScope,
+    reason: &str,
+) {
+    let Some(snapshot) = snapshot else {
+        warn!("{} cannot restore 991A USB routing for {}: no session snapshot", prefix, reason);
+        return;
+    };
+
+    let mut restored = 0usize;
+    let mut skipped = 0usize;
+
+    if matches!(scope, Ft991aUsbRoutingScope::Ssb | Ft991aUsbRoutingScope::All) {
+        if let Some(value) = snapshot.ssb_mic_select.as_deref() {
+            if write_ex_menu_value(port, prefix, 106, value, "SSB MIC SELECT") { restored += 1; }
+        } else { skipped += 1; }
+        if let Some(value) = snapshot.ssb_port_select.as_deref() {
+            if write_ex_menu_value(port, prefix, 109, value, "SSB PORT SELECT") { restored += 1; }
+        } else { skipped += 1; }
+    }
+
+    if matches!(scope, Ft991aUsbRoutingScope::Am | Ft991aUsbRoutingScope::All) {
+        if let Some(value) = snapshot.am_mic_select.as_deref() {
+            if write_ex_menu_value(port, prefix, 45, value, "AM MIC SELECT") { restored += 1; }
+        } else { skipped += 1; }
+        if let Some(value) = snapshot.am_port_select.as_deref() {
+            if write_ex_menu_value(port, prefix, 48, value, "AM PORT SELECT") { restored += 1; }
+        } else { skipped += 1; }
+    }
+
+    if skipped > 0 {
+        warn!(
+            "{} 991A USB routing restore for {} partial: restored {}, skipped {} missing snapshot values",
+            prefix, reason, restored, skipped
+        );
+    } else {
+        info!("{} 991A USB routing restored from session snapshot ({})", prefix, reason);
+    }
+}
 /// List available serial ports (reuse for UI combo box).
 /// Send a CAT command and read response until `;` or timeout.
 fn cat_query(port: &mut Box<dyn serialport::SerialPort>, cmd: &str) -> String {
+    cat_query_with_timeout(port, cmd, Duration::from_millis(300))
+}
+
+fn cat_query_with_timeout(
+    port: &mut Box<dyn serialport::SerialPort>,
+    cmd: &str,
+    timeout: Duration,
+) -> String {
     let mut raw_buf = [0u8; 512];
     if port.write_all(cmd.as_bytes()).is_err() { return String::new(); }
     let mut response = String::new();
-    let deadline = Instant::now() + Duration::from_millis(300);
+    let deadline = Instant::now() + timeout;
     loop {
         if Instant::now() > deadline { break; }
         match port.read(&mut raw_buf) {
@@ -1209,48 +1797,24 @@ fn cat_query(port: &mut Box<dyn serialport::SerialPort>, cmd: &str) -> String {
     response
 }
 
-/// One-shot bring-up probe: dump de ruwe `ID;`/`IF;`/`MD0;`/`FA;`
-/// + één parse-samenvatting direct ná een geslaagde open. Maakt live zichtbaar
-/// of de radio als de gedeelde 991A-structuur parseert, of waar een FTX-1-
-/// veldindeling afwijkt. `{:?}` toont een lege/geen-antwoord-respons als `""`
-/// (onderscheidt "geen antwoord" van een echte string).
+/// Startup probe: read `ID;` once and warn if the connected model does not match
+/// the configured slot model. Normal releases avoid raw CAT dumps; detailed CAT
+/// traces should use debug logging around the specific command path being tested.
 fn bringup_probe(port: &mut Box<dyn serialport::SerialPort>, prefix: &str, model: RadioModel) {
     let id_resp = cat_query(port, "ID;");
-    let if_resp = cat_query(port, "IF;");
-    let md_resp = cat_query(port, "MD0;");
-    let fa_resp = cat_query(port, "FA;");
-
-    info!("{} bring-up raw ID;  -> {:?}", prefix, id_resp);
-    info!("{} bring-up raw IF;  -> {:?}", prefix, if_resp);
-    info!("{} bring-up raw MD0; -> {:?}", prefix, md_resp);
-    info!("{} bring-up raw FA;  -> {:?}", prefix, fa_resp);
-
-    // Parse-samenvatting (de "één-oogopslag"-regel): toont of de 991A-aannames kloppen.
     let id_code = resp_payload("ID", &id_resp);
     let detected = RadioModel::from_id_code(&id_code);
-    let if_payload_len = resp_payload("IF", &if_resp).len();
-    let md_payload = resp_payload("MD", &md_resp);
-    let md_char = md_payload.chars().nth(1).unwrap_or('?');
-    let internal_mode = yaesu_mode_to_internal(md_char);
-    let fa_ok = resp_payload("FA", &fa_resp).parse::<u64>().is_ok();
 
-    info!(
-        "{} bring-up parse: ID={} configured={:?} detected={:?} | IF.len={} (991A verwacht >=22) | MD='{}' -> internal={} | FA.parse_ok={}",
-        prefix, id_code, model, detected, if_payload_len, md_char, internal_mode, fa_ok
-    );
-
-    // Faal-veilig: een lege of onbekende ID-code is geen crash —
-    // degrade naar de gedeelde 991A-parser en wijs op de bring-up-velden hierboven.
     if id_code.is_empty() {
-        warn!("{} autodetect: ID; geen geldig antwoord ({:?}) — controleer kabel/baud radio-menu vs config; val terug op gedeelde 991A-parser", prefix, id_resp);
+        warn!("{} autodetect: ID; returned no valid response ({:?}); check cable/baud radio-menu vs config; falling back to shared Yaesu parser", prefix, id_resp);
     } else if detected.is_none() {
-        warn!("{} onbekende ID-code '{}' — aangenomen Yaesu-compatibel (991A-parser); verifieer bring-up IF/MD hierboven", prefix, id_code);
+        warn!("{} unknown ID code '{}'; assuming Yaesu-compatible CAT dialect", prefix, id_code);
     } else if detected != Some(model) {
-        // Gedetecteerd model wijkt af van het geconfigureerde slot-model →
-        // mogelijke COM-/USB-enumeratie-swap (de devices kunnen per slot
-        // verwisseld zijn). Niet-fataal, maar luidruchtig zodat de owner het ziet.
+        // Gedetecteerd model wijkt af van het geconfigureerde slot-model ->
+        // mogelijke COM-/USB-enumeratie-swap. Niet-fataal, maar luidruchtig
+        // zodat de operator de slot- en audio-device-toewijzing kan corrigeren.
         warn!(
-            "{} model-mismatch: geconfigureerd={:?} maar de radio meldt {:?} (ID {}) — mogelijke COM-/USB-enumeratie-swap; controleer de slot- en audio-device-toewijzing",
+            "{} model mismatch: configured={:?}, radio reports {:?} (ID {}); possible COM/USB enumeration swap",
             prefix, model, detected.unwrap(), id_code
         );
     }
@@ -1282,10 +1846,6 @@ fn read_all_memories(port: &mut Box<dyn serialport::SerialPort>) -> Result<Strin
             if let Some(end) = response[start..].find(';') {
                 let d = &response[start + 2..start + end]; // skip "MT"
 
-                // Log raw for first 3 channels
-                if ch <= 3 {
-                    info!("MT{:03} raw data: [{}] ({}B)", ch, d, d.len());
-                }
 
                 // MT response: P1(3)+P2(9)+P3(5)+P4(1)+P5(1)+P6(1)+P7(1)+P8(1)+P9(2)+P10(1)+P11(1)+P12(12) = 38
                 if d.len() < 26 { continue; }
@@ -1425,17 +1985,17 @@ fn write_all_memories(port: &mut Box<dyn serialport::SerialPort>, tab_text: &str
         if freq_hz == 0 { continue; }
 
         // Memory-storage modes: respect what the client provided. The
-        // FM → DATA-FM auto-toggle is a RUNTIME PTT-mechanic in
-        // `set_ptt()` (FM ↔ DATA-FM around the TX window for USB-mic
+        // FM -> DATA-FM auto-toggle is a RUNTIME PTT-mechanic in
+        // `set_ptt()` (FM <-> DATA-FM around the TX window for USB-mic
         // compatibility), NOT a storage transform. Earlier code force-
         // mapped all FM variants to 'A' here, which left every memory
         // channel permanently in DATA-FM after a Write-radio cycle and
-        // disabled local FM-mic on those channels. Owner-feedback
+        // disabled local FM-mic on those channels. Operator-feedback
         // 2026-06-07.
         // Mode-codes moeten round-trip kloppen met de read-parser
-        // hierboven (line ~1003-1007): '4'→FM, 'B'→FM-N, '5'→AM,
-        // 'D'→AM-N, 'A'→DATA-FM, 'E'→C4FM, etc. Eerdere code mapte
-        // AM-N→'5' (= AM) en C4FM→'A' (= DATA-FM), wat de read-na-write
+        // hierboven (line ~1003-1007): '4'->FM, 'B'->FM-N, '5'->AM,
+        // 'D'->AM-N, 'A'->DATA-FM, 'E'->C4FM, etc. Eerdere code mapte
+        // AM-N->'5' (= AM) en C4FM->'A' (= DATA-FM), wat de read-na-write
         // integriteit brak.
         let mode_char = match get(col_mode) {
             "LSB" => '1', "USB" => '2', "CW" => '3',
@@ -1493,7 +2053,7 @@ fn write_all_memories(port: &mut Box<dyn serialport::SerialPort>, tab_text: &str
         // a non-spec MT for any channel with Tone Mode != "None" and
         // appears to have been silently rejected by the radio. The
         // CTCSS tone index is configured separately via CN; MT carries
-        // only the tone-mode flag (P8). `tone_num` is kept for now —
+        // only the tone-mode flag (P8). `tone_num` is kept for now -
         // if a future patch wires up CN-write it can move there.
         let _ = tone_num; // intentionally unused until CN-write lands
         let mt_cmd = format!("MT{:03}{:09}+000000{}0{}00{}0{};",
@@ -1525,7 +2085,7 @@ fn parse_ftx1_tag(mt: &str) -> String {
     String::new()
 }
 
-/// FTX-1 mode-code (P6 in MR/MW) → label. Codes wijken af van de 991A
+/// FTX-1 mode-code (P6 in MR/MW) -> label. Codes wijken af van de 991A
 /// (3=CW-U, 7=CW-L, E=PSK, H/I=C4FM). Labels gekozen zodat ze round-trip
 /// kloppen met `ftx1_mode_to_code` en herkenbaar zijn in de client-editor.
 fn ftx1_mode_label(c: char) -> &'static str {
@@ -1539,7 +2099,7 @@ fn ftx1_mode_label(c: char) -> &'static str {
     }
 }
 
-/// Inverse van [`ftx1_mode_label`]: label → FTX-1 mode-code (P6).
+/// Inverse van [`ftx1_mode_label`]: label -> FTX-1 mode-code (P6).
 fn ftx1_mode_to_code(label: &str) -> char {
     match label {
         "LSB" => '1', "USB" => '2', "CW" => '3', "FM" => '4', "AM" => '5',
@@ -1554,10 +2114,10 @@ fn ftx1_mode_to_code(label: &str) -> char {
 ///
 /// De FTX-1 splitst wat de FT-991A in één `MT`-query stopt over twee commando's
 /// (FTX-1 CAT OM, MR + MT) en gebruikt **5-cijferige** kanaalnummers:
-///   `MR{ch:05};` → freq/mode/clarifier/shift/ctcss (GEEN naam), 27 data-chars:
+///   `MR{ch:05};` -> freq/mode/clarifier/shift/ctcss (GEEN naam), 27 data-chars:
 ///       P1(5:ch) P2(9:freq) P3(5:clar) P4(1:rxclar) P5(1:txclar)
 ///       P6(1:mode) P7(1:vfo/mem) P8(1:ctcss) P9(2:fixed00) P10(1:shift)
-///   `MT{ch:05};` → de 12-char tag (naam) van dat kanaal.
+///   `MT{ch:05};` -> de 12-char tag (naam) van dat kanaal.
 /// (De 991A gebruikt 3-cijferige kanalen + een gecombineerde MT-query, vandaar
 /// dat `MT001;` op de FTX-1 `?;` teruggaf.)
 fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, String> {
@@ -1565,7 +2125,7 @@ fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<
 
     for ch in 1..=99u16 {
         let mut mr = cat_query(port, &format!("MR{:05};", ch));
-        // Transient timeout (lege respons) tijdens drukke client-connect → tot 2
+        // Transient timeout (lege respons) tijdens drukke client-connect -> tot 2
         // retries. `?;` = leeg kanaal (terecht overslaan, GEEN retry). Dit voorkomt
         // dat de auto-read bij opstarten kanalen mist (manueel idle lukt wel).
         let mut tries = 0;
@@ -1575,7 +2135,7 @@ fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<
         }
 
         // Ruwe-respons probe (eerste 3 kanalen) zodat de hardware het
-        // manual-formaat bevestigt — net als bij PC/IF bring-up.
+        // manual-formaat bevestigt - net als bij PC/IF bring-up.
         if ch <= 3 {
             info!("MR{:05} RAW probe: [{}] ({}B)", ch, mr.escape_debug(), mr.len());
         }
@@ -1627,7 +2187,7 @@ fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<
             }
             _ => (freq_hz, ""),
         };
-        // P9 is fixed "00" in MR → de CTCSS-toonfrequentie zit hier niet in;
+        // P9 is fixed "00" in MR -> de CTCSS-toonfrequentie zit hier niet in;
         // default (zoals 991A vóór CN-write). Verfijning = aparte CT/CN-query.
         let ctcss_freq = "67.0 Hz";
 
@@ -1766,55 +2326,149 @@ fn read_all_menus(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, 
 
 /// Read all EX menu settings from the Yaesu FTX-1.
 ///
-/// De FTX-1 EX is hiërarchisch: `EX{P1:02}{P2:02}{P3:02};` → antwoord
+/// De FTX-1 EX is hiërarchisch: `EX{P1:02}{P2:02}{P3:02};` -> antwoord
 /// `EX{P1}{P2}{P3}{waarde};`. Er is geen platte index zoals de 991A. We
 /// *scannen* de geldige adressen live op de radio (ground truth): een ongeldig
 /// adres geeft `?;` en wordt overgeslagen. De client matcht de adressen tegen de
-/// menu-chart (Table 3) voor labels — een fout label kan dus nooit een verkeerd
+/// menu-chart (Table 3) voor labels - een fout label kan dus nooit een verkeerd
 /// adres schrijven. Output: \"p1p2p3:waarde\"-regels (6-cijferig adres).
 ///
 /// Begrenzing: P1 1..=11, P2 1..=9, P3 1..=40. Per (P1,P2) stoppen we vroeg als
 /// P3=01 én 02 ontbreken (subgroep bestaat niet), en na 6 opeenvolgende missers
 /// binnen een bestaande subgroep (einde items, tolereert gaten tot 5).
-fn read_all_menus_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, String> {
-    let mut lines: Vec<String> = Vec::new();
+enum Ftx1ExRead {
+    Value(String),
+    Missing,
+    NoResponse,
+}
 
-    for p1 in 1..=11u8 {
-        for p2 in 1..=9u8 {
-            let mut found_in_p2 = false;
-            let mut consecutive_miss = 0u8;
-            for p3 in 1..=40u8 {
-                let resp = cat_query(port, &format!("EX{:02}{:02}{:02};", p1, p2, p3));
-                let ok = !resp.trim().is_empty() && !resp.contains("?;") && resp.contains("EX");
-                let mut parsed = false;
-                if ok {
-                    if let (Some(s), Some(e)) = (resp.find("EX"), resp.find(';')) {
-                        if e > s + 2 {
-                            let body = &resp[s + 2..e]; // p1p2p3 + waarde
-                            if body.len() >= 6 {
-                                let value = &body[6..];
-                                lines.push(format!("{:02}{:02}{:02}:{}", p1, p2, p3, value));
-                                found_in_p2 = true;
-                                consecutive_miss = 0;
-                                parsed = true;
+fn read_ftx1_ex_value(port: &mut Box<dyn serialport::SerialPort>, p1: u8, p2: u8, p3: u8) -> Ftx1ExRead {
+    let cmd = format!("EX{:02}{:02}{:02};", p1, p2, p3);
+    let prefix = format!("EX{:02}{:02}{:02}", p1, p2, p3);
+
+    for attempt in 0..3 {
+        let resp = cat_query_with_timeout(port, &cmd, Duration::from_millis(700));
+        std::thread::sleep(Duration::from_millis(15));
+
+        if resp.contains("?;") {
+            return Ftx1ExRead::Missing;
+        }
+        if let Some(start) = resp.find(&prefix) {
+            if let Some(end_rel) = resp[start..].find(';') {
+                let value_start = start + prefix.len();
+                let value_end = start + end_rel;
+                if value_end >= value_start {
+                    return Ftx1ExRead::Value(resp[value_start..value_end].to_string());
+                }
+            }
+        }
+
+        // Empty or stale/mismatched replies can happen during the long EX scan;
+        // retry before treating the address as soft-missing.
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    }
+
+    Ftx1ExRead::NoResponse
+}
+
+fn read_all_menus_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, String> {
+    // The FTX-1 intermittently returns a transient "?;" or times out for an
+    // address that actually has a value, so a single pass misses a variable
+    // subset of the ~405 menus (this is why the old flow needed several manual
+    // "Read" clicks, each recovering different stragglers). We run up to
+    // MAX_PASSES full passes and merge results by address, re-querying only the
+    // addresses not yet captured, and stop as soon as a pass adds nothing new.
+    // One "Read" thus does internally what the operator used to do by clicking
+    // repeatedly, converging on the complete set.
+    //
+    // Pathological guard: if the radio stops replying entirely mid-scan
+    // (unplugged / hung), a non-existent subgroup would otherwise scan all 40
+    // addresses at ~2.2 s each, blocking the single-threaded poll loop (PTT/CAT)
+    // for minutes. Abort once we see this many *consecutive* no-response reads
+    // with no valid value or "?;" in between (any real reply resets the counter),
+    // spanning all passes.
+    use std::collections::BTreeMap;
+    const MAX_PASSES: u8 = 5;
+    const MAX_CONSECUTIVE_NO_RESPONSE: u8 = 15; // ~33 s of uninterrupted silence
+    let mut found: BTreeMap<String, String> = BTreeMap::new();
+    let mut no_response_count = 0usize;
+    let mut consecutive_no_response = 0u8;
+    let mut aborted = false;
+
+    'passes: for pass in 1..=MAX_PASSES {
+        let before = found.len();
+        'scan: for p1 in 1..=11u8 {
+            for p2 in 1..=9u8 {
+                let mut found_in_p2 = false;
+                let mut consecutive_definitive_miss = 0u8;
+                for p3 in 1..=40u8 {
+                    let key = format!("{:02}{:02}{:02}", p1, p2, p3);
+                    // Already captured in an earlier pass: treat as present, no I/O.
+                    if found.contains_key(&key) {
+                        found_in_p2 = true;
+                        consecutive_definitive_miss = 0;
+                        consecutive_no_response = 0;
+                        continue;
+                    }
+                    match read_ftx1_ex_value(port, p1, p2, p3) {
+                        Ftx1ExRead::Value(value) => {
+                            found.insert(key, value);
+                            found_in_p2 = true;
+                            consecutive_definitive_miss = 0;
+                            consecutive_no_response = 0;
+                        }
+                        Ftx1ExRead::Missing => {
+                            consecutive_definitive_miss += 1;
+                            consecutive_no_response = 0;
+                        }
+                        Ftx1ExRead::NoResponse => {
+                            no_response_count += 1;
+                            consecutive_no_response += 1;
+                            if consecutive_no_response >= MAX_CONSECUTIVE_NO_RESPONSE {
+                                aborted = true;
+                                break 'scan;
                             }
                         }
                     }
-                }
-                if !parsed {
-                    consecutive_miss += 1;
-                    if !found_in_p2 && p3 >= 2 {
-                        break; // subgroep bestaat niet (01 en 02 ontbreken)
+
+                    if !found_in_p2 && p3 >= 2 && consecutive_definitive_miss >= 2 {
+                        break; // subgroup does not exist: 01 and 02 were both rejected by the radio.
                     }
-                    if found_in_p2 && consecutive_miss >= 6 {
-                        break; // einde van de items in deze subgroep
+                    if found_in_p2 && consecutive_definitive_miss >= 6 {
+                        break; // end of items in this subgroup; tolerate gaps up to 5 addresses.
                     }
                 }
             }
         }
+        let added = found.len() - before;
+        info!(
+            "FTX-1: EX menu scan pass {}/{} -> {} values total (+{} new)",
+            pass,
+            MAX_PASSES,
+            found.len(),
+            added
+        );
+        if aborted || added == 0 {
+            break 'passes; // radio gone, or converged (a full pass found nothing new).
+        }
     }
 
-    info!("FTX-1: read {} EX menu values", lines.len());
+    if aborted {
+        warn!(
+            "FTX-1: EX menu scan aborted after {} consecutive no-response reads (radio not responding); returning {} partial values",
+            MAX_CONSECUTIVE_NO_RESPONSE,
+            found.len()
+        );
+    } else if no_response_count > 0 {
+        warn!("FTX-1: EX menu scan had {} timeout/stale replies across passes (recovered via re-scan where possible)", no_response_count);
+    }
+    info!("FTX-1: read {} EX menu values", found.len());
+    let lines: Vec<String> = found
+        .into_iter()
+        .map(|(k, v)| format!("{}:{}", k, v))
+        .collect();
     Ok(lines.join("\n"))
 }
 
@@ -1832,7 +2486,7 @@ pub fn available_ports() -> Vec<String> {
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 /// Splits a configured device-pattern into (naam-substring, positie). Een optioneel
-/// achtervoegsel "#N" kiest het **N-de** (1-based) apparaat dat op de naam matcht —
+/// achtervoegsel "#N" kiest het **N-de** (1-based) apparaat dat op de naam matcht -
 /// nodig wanneer twee radio's een identiek benoemd USB-audio-device hebben
 /// (bv. 2× "USB Audio CODEC"). Geen suffix = #1 (eerste match) = ongewijzigd gedrag.
 /// Voorbeeld config: `yaesu2_audio=USB Audio CODEC#2`.
@@ -1868,7 +2522,7 @@ fn build_capture_stream(
 
     let device_name = device.name().unwrap_or_default();
     // Device-naam met prefix: cruciaal voor edge-case 6 (twee identieke
-    // "USB Audio CODEC"-devices → zo zie je welk device aan welke radio hangt).
+    // "USB Audio CODEC"-devices -> zo zie je welk device aan welke radio hangt).
     info!("{} audio input: {}", prefix, device_name);
 
     let config = device.default_input_config()
@@ -1881,18 +2535,18 @@ fn build_capture_stream(
     let stream = device.build_input_stream(
         &config.into(),
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            // OWNER LATENCY-WAIVER (release v2.0.0, owner: PA3GHM/cjenschede):
+            // Operator LATENCY-WAIVER (release v2.0.0, operator: PA3GHM/cjenschede):
             // Per-callback Vec-allocatie is bewust geaccepteerd op deze server-side
-            // Yaesu RX-pad. Owner heeft de latency-prioriteit afgewogen tegen de
+            // Yaesu RX-pad. Operator heeft de latency-prioriteit afgewogen tegen de
             // implementatie-kosten en gekozen voor de huidige aanpak omdat:
             //   (a) server runt op Thetis-PC, geen lokale real-time audio-output;
             //       audio-latency wordt overschaduwd door encode + netwerk-pad
-            //   (b) alloc-cost ~50µs is <0.5% van ~10ms frame-budget — niet
+            //   (b) alloc-cost ~50µs is <0.5% van ~10ms frame-budget - niet
             //       hoorbaar onder normale belasting
             //   (c) Vec::with_capacity(frames) voorkomt grow-realloc bij stabiele
             //       input-config
             //   (d) tokio::mpsc::Sender consumeert de Vec (ownership-move); zero
-            //       alloc vereist Vec-pool met return-channel — niet-triviale
+            //       alloc vereist Vec-pool met return-channel - niet-triviale
             //       refactor, gepland voor post-release optimization in v2.1+.
             let frames = data.len() / channels.max(1);
             let mut mono: Vec<f32> = Vec::with_capacity(frames);
@@ -1937,13 +2591,13 @@ fn build_output_stream(
     let pat = pat_name.to_lowercase();
     // Per-radio output-device. Bij twee radio's die zich beide als
     // "USB Audio CODEC" melden (edge-case 6) MOET het TX-pad het output-device
-    // matchen dat bij DEZE radio hoort — anders gaat radio-1's TX-audio naar
-    // radio-0's codec (de bug t/m build 119: device-naam was hardgecodeerd).
+    // matchen dat bij DEZE radio hoort - anders gaat radio-1's TX-audio naar
+    // radio-0's codec; the device name must stay per slot.
     // We matchen op het per-radio device-patroon (zelfde USB-CODEC = zelfde
     // friendly-name voor capture én playback) + de #N-positie zodat twee
     // identiek benoemde devices uit elkaar te houden zijn. Fallback op
     // "USB Audio CODEC" (zelfde positie) als het specifieke patroon geen output
-    // oplevert → geen regressie t.o.v. het oude gedrag, single-radio blijft werken.
+    // oplevert -> geen regressie t.o.v. het oude gedrag, single-radio blijft werken.
     let pick = |p: &str, n: usize| -> Option<cpal::Device> {
         host.output_devices()
             .ok()?
@@ -1955,7 +2609,7 @@ fn build_output_stream(
         None => {
             if pat != "usb audio codec" {
                 warn!(
-                    "{} geen output-device #{} matcht '{}' — fallback naar 'USB Audio CODEC' #{}",
+                    "{} geen output-device #{} matcht '{}' - fallback naar 'USB Audio CODEC' #{}",
                     prefix, pos, pat_name, pos
                 );
             }
@@ -2020,6 +2674,17 @@ unsafe impl Send for YaesuAudioOutput {}
 pub fn available_audio_inputs() -> Vec<String> {
     let host = cpal::default_host();
     host.input_devices()
+        .map(|devices| {
+            devices.filter_map(|d| d.name().ok()).collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Enumerate output (render) devices - for the separate Yaesu TX/output device
+/// picker (PATCH-yaesu-output-device).
+pub fn available_audio_outputs() -> Vec<String> {
+    let host = cpal::default_host();
+    host.output_devices()
         .map(|devices| {
             devices.filter_map(|d| d.name().ok()).collect()
         })

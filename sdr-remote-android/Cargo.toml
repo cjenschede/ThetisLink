@@ -15,6 +15,7 @@ path = "src/bin/uniffi-bindgen.rs"
 [dependencies]
 sdr-remote-core = { path = "../sdr-remote-core" }
 sdr-remote-logic = { path = "../sdr-remote-logic" }
+sdr-remote-relay = { path = "../sdr-remote-relay" }
 tokio = { workspace = true }
 ringbuf = { workspace = true }
 log = { workspace = true }

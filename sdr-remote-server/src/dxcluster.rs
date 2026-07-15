@@ -19,7 +19,7 @@ pub struct DxSpot {
     pub time: Instant,
 }
 
-/// DX Cluster client — connects to a DX Spider telnet cluster,
+/// DX Cluster client - connects to a DX Spider telnet cluster,
 /// parses spots, and stores them with automatic expiry.
 pub struct DxCluster {
     spots: Arc<Mutex<Vec<DxSpot>>>,
@@ -101,7 +101,7 @@ async fn cluster_task(
 
     loop {
         // Log "connecting" alleen bij de eerste poging of na een eerdere
-        // succesvolle verbinding — niet bij elke retry tijdens een
+        // succesvolle verbinding - niet bij elke retry tijdens een
         // langdurige outage (anders krijg je 3 regels per backoff-cycle).
         if consecutive_failures == 0 {
             info!("DX Cluster: connecting to {}...", server);
@@ -130,13 +130,13 @@ async fn cluster_task(
             Ok(Err(e)) => {
                 consecutive_failures += 1;
                 if consecutive_failures == 1 {
-                    warn!("DX Cluster: connect failed: {} — retrying in background", e);
+                    warn!("DX Cluster: connect failed: {} - retrying in background", e);
                 }
             }
             Err(_) => {
                 consecutive_failures += 1;
                 if consecutive_failures == 1 {
-                    warn!("DX Cluster: connect timeout — retrying in background");
+                    warn!("DX Cluster: connect timeout - retrying in background");
                 }
             }
         }

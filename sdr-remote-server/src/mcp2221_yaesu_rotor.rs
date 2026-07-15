@@ -8,9 +8,9 @@
 //!
 //! | MCP2221A pin | Functie | DIN-7 pin Yaesu | Toelichting |
 //! |--------------|---------|-----------------|-------------|
-//! | GP0 (GPIO out) | gate BST82 (CW) | drain → pin 1 (R/CW) | low = idle, high = CW actief |
-//! | GP1 (GPIO out) | gate BST82 (CCW) | drain → pin 2 (L/CCW) | low = idle, high = CCW actief |
-//! | GP2 (DAC) | snelheid | pin 3 (Speed) | DAC-Vref = Vdd → 0-5 V, 5-bit (32 stappen) |
+//! | GP0 (GPIO out) | gate BST82 (CW) | drain -> pin 1 (R/CW) | low = idle, high = CW actief |
+//! | GP1 (GPIO out) | gate BST82 (CCW) | drain -> pin 2 (L/CCW) | low = idle, high = CCW actief |
+//! | GP2 (DAC) | snelheid | pin 3 (Speed) | DAC-Vref = Vdd -> 0-5 V, 5-bit (32 stappen) |
 //! | GP3 (ADC) | positie-feedback | pin 4 (Position) via 1,8k+2,2k deler | ADC-Vref = intern 4,096 V, 10-bit (max meet ≈ 7,45 V) |
 //! | GND | gemeenschappelijke massa | pin 5 (Signal GND) | |
 //!
@@ -39,7 +39,7 @@ use mcp2221_hal::MCP2221;
 
 /// DAC-uitgang op 5 bits (32 stappen). Met DAC-Vref = Vdd (5 V) levert
 /// dat ~156 mV per stap. Voor de Yaesu G-1000DXC speed-ingang is dat
-/// grof maar voldoende — de ingang is hoog-ohmig (~108 k) en bedoeld
+/// grof maar voldoende - de ingang is hoog-ohmig (~108 k) en bedoeld
 /// voor continu-variabele DC.
 pub const DAC_MAX: u8 = 31;
 
@@ -52,19 +52,19 @@ pub const ADC_FULL_SCALE: u16 = 1023;
 /// stabielere interne 4,096 V geeft reproduceerbare kalibratie.
 pub const ADC_VREF_V: f32 = 4.096;
 
-/// Positie-spanningsdeler op het printje. Owner heeft hem na een eerste
-/// build (1,8 k + 10 k → ratio 1,18, max meting 4,83 V) verkrapt naar
-/// 1,8 k + 2,2 k → ratio (1800+2200)/2200 = 1,818, max meting
+/// Positie-spanningsdeler op het printje. Operator heeft hem na een eerste
+/// build (1,8 k + 10 k -> ratio 1,18, max meting 4,83 V) verkrapt naar
+/// 1,8 k + 2,2 k -> ratio (1800+2200)/2200 = 1,818, max meting
 /// 4,096 × 1,818 ≈ 7,45 V. Reden: de Yaesu G-1000DXC kan boven 4,8 V
 /// uitkomen op pin 4 voor de hoogste graden, waardoor met de eerste
 /// ratio de ADC clipte boven ~365°. Met 2,2 k onder valt 0-5 V pin 4
-/// netjes binnen ADC-range met ruime marge. Owner moet na deze
+/// netjes binnen ADC-range met ruime marge. Operator moet na deze
 /// hardware-aanpassing opnieuw "Park CCW" + "Park CW" drukken want de
 /// opgeslagen v_at_0deg / v_at_max_deg waardes hangen aan de oude
 /// ratio en kloppen anders niet meer met de fysieke positie.
 pub const POSITION_DIVIDER_RATIO: f32 = (1_800.0 + 2_200.0) / 2_200.0;
 
-/// Driver-status — gespiegeld aan het `Mcp2221Debug` tuner-pad.
+/// Driver-status - gespiegeld aan het `Mcp2221Debug` tuner-pad.
 #[derive(Debug, Clone)]
 pub enum Status {
     /// Nog geen poging gedaan om te verbinden.
@@ -114,7 +114,7 @@ struct Inner {
     device: Option<MCP2221>,
     status: Status,
     /// USB serial van het te openen bord (`rot_<naam>`). `None` valt
-    /// terug op "eerste board op de bus" — alleen handig voor het
+    /// terug op "eerste board op de bus" - alleen handig voor het
     /// standalone test-spike binary.
     target_serial: Option<String>,
     gp0_cw_high: bool,
@@ -122,7 +122,7 @@ struct Inner {
     dac_value: u8,
     last_adc_raw: Option<u16>,
     /// Ringbuffer van laatste ADC-samples voor moving-average filtering.
-    /// Eerder kreeg de UI elke 200 ms een ruwe sample en owner zag tot
+    /// Eerder kreeg de UI elke 200 ms een ruwe sample en operator zag tot
     /// ~500 mV schommeling op een DC-feedback signaal; deze buffer
     /// middelt dat uit naar een stabielere display-waarde en geeft
     /// tegelijk min/max-spread voor ruis-diagnose.
@@ -203,7 +203,7 @@ pub struct YaesuRotorDriver {
 impl YaesuRotorDriver {
     /// Maak een nieuwe driver-instance gebonden aan een specifiek MCP2221A
     /// USB serial (typisch `rot_<naam>` per ThetisLink-conventie). `None`
-    /// valt terug op "eerste bord op de bus" — alleen sinnig voor losse
+    /// valt terug op "eerste bord op de bus" - alleen sinnig voor losse
     /// hardware-tests; productie moet altijd via serial.
     pub fn with_target_serial(target_serial: Option<String>) -> Self {
         Self {
@@ -222,7 +222,7 @@ impl YaesuRotorDriver {
     /// Snapshot van de huidige driver-state (zonder USB-call).
     /// Berekent zowel mean (voor log-diagnose) als median (voor UI display)
     /// over de moving-average buffer. Median is robuust tegen ruis-spikes
-    /// die de mean wegtrekken — owner-bevinding 2026-06-04: EMI-pickup
+    /// die de mean wegtrekken - operator-bevinding 2026-06-04: EMI-pickup
     /// veroorzaakt spreads van ~150 raw counts ongeacht rotor-positie,
     /// een mediaan over 10 samples filtert de uitschieters effectief uit
     /// terwijl rotor-bewegingen wel direct meeloeren.
@@ -328,7 +328,7 @@ impl YaesuRotorDriver {
     }
 
     /// Lees de ADC op GP3 (positie-feedback) en geef raw counts terug.
-    /// Geen rate-limit hier — de caller (poll-thread of spike-binary)
+    /// Geen rate-limit hier - de caller (poll-thread of spike-binary)
     /// bepaalt zelf de cadans.
     pub fn read_position_raw(&self) -> Result<u16> {
         let mut g = self.inner.lock().expect("YaesuRotorDriver mutex poisoned");
@@ -351,7 +351,7 @@ impl YaesuRotorDriver {
         g.last_adc_raw = Some(raw);
         // Push naar moving-average ringbuffer; drop oudste sample(s)
         // tot we onder de huidige `adc_buffer_cap` zitten. Cap kan
-        // dynamisch krimpen (motion→idle transitie zet cap kleiner)
+        // dynamisch krimpen (motion->idle transitie zet cap kleiner)
         // dus eventueel meerdere oude samples in één call droppen.
         let cap = g.adc_buffer_cap.max(1);
         while g.adc_samples.len() >= cap {
@@ -374,7 +374,7 @@ impl YaesuRotorDriver {
     }
 
     /// Wis alle samples uit de moving-average buffer. Gebruikt bij
-    /// idle→motion transitie zodat oude 1-Hz samples niet de display
+    /// idle->motion transitie zodat oude 1-Hz samples niet de display
     /// vervuilen tijdens een actieve rotatie.
     pub fn clear_samples(&self) {
         let mut g = self.inner.lock().expect("YaesuRotorDriver mutex poisoned");
@@ -407,7 +407,7 @@ const ADC_POLL_INTERVAL_IDLE_MS: u64 = 1000;
 /// × 33 ms ≈ 333 ms venster, mediaan-lag ~165 ms) zodat de control-
 /// loop de werkelijke rotor-positie snel genoeg ziet om op tijd de
 /// soft-stop in te zetten. Bij 30 samples liep de gemeten positie
-/// ~1,5° achter (bij 3°/s) en kwam de decel-trigger te laat —
+/// ~1,5° achter (bij 3°/s) en kwam de decel-trigger te laat -
 /// rotor stopte abrupt op target i.p.v. lineair.
 const ADC_AVG_WINDOW_MOTION: usize = 10;
 
@@ -428,7 +428,7 @@ const MAX_ROTOR_DEG_PER_SEC: f32 = 6.0;
 
 /// Veiligheidsfactor op de berekende decel-distance. Werkelijke
 /// rotorsnelheid varieert (mast-belasting, voeding-droop) en de
-/// mediaan-filter geeft sowieso een kleine meet-lag — beter ruim op
+/// mediaan-filter geeft sowieso een kleine meet-lag - beter ruim op
 /// tijd beginnen met ramp-down en de laatste graden op DAC=0 uit
 /// laten lopen dan een abrupte stop op target.
 const DECEL_SAFETY_FACTOR: f32 = 2.2;
@@ -457,7 +457,7 @@ pub struct RotorInstanceStatus {
     /// Mediaan ADC-counts (primair voor UI; robuust tegen ruis-spikes).
     pub median_adc_raw: Option<u16>,
     /// Yaesu-pin spanning afgeleid van `median_adc_raw`. UI toont dit
-    /// als primaire spanningswaarde — geen drift door uitschieters.
+    /// als primaire spanningswaarde - geen drift door uitschieters.
     pub median_yaesu_volts: Option<f32>,
     /// Peak-to-peak spread van de samples in het venster (max − min,
     /// in raw counts). 0 = perfect stabiel; hoog = ruis op de bron.
@@ -505,7 +505,7 @@ impl RotorCalibration {
     pub fn volts_to_degrees(&self, v: f32) -> Option<f32> {
         let span = self.v_at_max_deg - self.v_at_0deg;
         if span.abs() < 0.01 {
-            // Eindpunten gelijk → niet kalibreerd, geen mapping mogelijk.
+            // Eindpunten gelijk -> niet kalibreerd, geen mapping mogelijk.
             return None;
         }
         let frac = (v - self.v_at_0deg) / span;
@@ -525,18 +525,18 @@ pub struct RotorInstance {
     /// Slot-index in `config.rotors` zodat `set_calibration_*` weet
     /// welke entry te muteren. Voor MAX_ROTORS=1 nu altijd 0.
     slot_index: usize,
-    /// Kalibratie-state in geheugen — gespiegeld met `config.rotors[slot]`
+    /// Kalibratie-state in geheugen - gespiegeld met `config.rotors[slot]`
     /// kalibratie-velden. UI muteert hier (Park-knoppen), poll-thread
     /// leest hier (voor GoTo-control). `Arc<Mutex<>>` zodat beide
     /// dezelfde gedeelde state delen.
     calibration: Arc<Mutex<RotorCalibration>>,
-    /// Cmd-channel voor de `Rotor`-facade (client → server commands).
+    /// Cmd-channel voor de `Rotor`-facade (client -> server commands).
     /// Poll-thread handelt elke tick één commando af.
     cmd_tx: mpsc::Sender<RotorCmd>,
-    /// Live `RotorStatus` — gedeeld met de `Rotor`-facade. Poll-thread
+    /// Live `RotorStatus` - gedeeld met de `Rotor`-facade. Poll-thread
     /// schrijft hier elke ADC-poll de actuele angle/connected/rotating.
     rotor_status: Arc<Mutex<RotorStatus>>,
-    /// Shutdown-flag voor de poll-thread. Geen explicit JoinHandle —
+    /// Shutdown-flag voor de poll-thread. Geen explicit JoinHandle -
     /// rotor-instance leeft normaal de hele server-runtime.
     shutdown: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -756,9 +756,9 @@ impl RotorInstance {
         });
     }
 
-    /// CW/CCW commande — delegeert direct naar de driver (USB-call op
+    /// CW/CCW commande - delegeert direct naar de driver (USB-call op
     /// de aanroepende thread, zelfde patroon als Mcp2221Debug). Best
-    /// vanuit een actie-handler (button click) — niet vanuit een
+    /// vanuit een actie-handler (button click) - niet vanuit een
     /// hoge-frequentie render-loop.
     pub fn set_direction(&self, cw: bool, ccw: bool) {
         if let Err(e) = self.driver.set_direction(cw, ccw) {
@@ -798,20 +798,20 @@ fn rotor_poll_thread(
     let mut last_stat_log = Instant::now();
     let stat_log_interval = Duration::from_secs(5);
     // Actieve GoTo target, in graden. `None` betekent geen automatische
-    // beweging — manual cmd's (Cw/Ccw) of stilstand.
+    // beweging - manual cmd's (Cw/Ccw) of stilstand.
     let mut target_deg: Option<f32> = None;
     // Ramp-state: huidige DAC-output (float voor smoothness) + waar we
-    // naartoe ramp-en. Bij gate-on of GoTo → dac_target = DAC_MAX; bij
-    // landing of stop → dac_target = 0. Per tick interpoleert
+    // naartoe ramp-en. Bij gate-on of GoTo -> dac_target = DAC_MAX; bij
+    // landing of stop -> dac_target = 0. Per tick interpoleert
     // `current_dac` met `ramp_pct_per_sec`.
     let mut current_dac: f32 = 0.0;
     let mut dac_target: f32 = 0.0;
     // Vorige tick-tijdstip voor de exacte ramp-step berekening (echte
-    // verstreken tijd, niet de nominale tick — anders verliezen we
+    // verstreken tijd, niet de nominale tick - anders verliezen we
     // ramp-snelheid als het OS de slaap-tijd oprekt).
     let mut last_tick = Instant::now();
-    // Vorige motion-state voor edge-detection: bij idle→motion wissen
-    // we de buffer (vers beginnen op 30 Hz), bij motion→idle laten we
+    // Vorige motion-state voor edge-detection: bij idle->motion wissen
+    // we de buffer (vers beginnen op 30 Hz), bij motion->idle laten we
     // de samples staan en groeit de buffer langzaam naar 60.
     let mut was_in_motion = false;
     // Manual-mode: zodra een externe bron (server-UI test-knoppen of
@@ -872,7 +872,7 @@ fn rotor_poll_thread(
             // angle_x10 verwacht 0..3600 voor 0..360°. Yaesu G-1000DXC
             // gaat tot 450°; we clampen naar 0..max_deg en multiplyceren.
             // Mocht de client-UI strict 0..360 zijn, ziet die nu een
-            // bredere range — geen schade, en owners die de extra 90°
+            // bredere range - geen schade, en owners die de extra 90°
             // willen tonen hebben er voordeel van.
             if let Some(d) = current_deg {
                 let clamped = d.clamp(0.0, cal_snap.max_deg as f32);
@@ -886,7 +886,7 @@ fn rotor_poll_thread(
         }
 
         // Pull pending rotor commands (manual + GoTo). Niet-blocking.
-        // Manual cmd's zetten dac_target = max → soft-start ramp omhoog.
+        // Manual cmd's zetten dac_target = max -> soft-start ramp omhoog.
         // Stop zet dac_target = 0 + gate uit (geen ramp-down nodig bij
         // expliciete stop). GoTo zet target_deg en laat de control-loop
         // erna ramp + landing afhandelen.
@@ -928,7 +928,7 @@ fn rotor_poll_thread(
                 // Kortste-route optie: bij rotors met overlap-zone
                 // (max_deg > 360) kan een alternatief target = primary
                 // ± 360° fysiek dezelfde antenne-richting opleveren,
-                // maar via een kortere mechanische route. Owner-keuze
+                // maar via een kortere mechanische route. Operator-keuze
                 // 2026-06-04: per-rotor checkbox, default uit.
                 let chosen = if cal_snap.shortest_route_in_overlap
                     && cal_snap.max_deg > 360
@@ -977,8 +977,8 @@ fn rotor_poll_thread(
         // graden de rotor nog nodig heeft om bij target uit te komen
         // én hoeveel graden hij tijdens een ramp-down zou aflegen op
         // basis van de huidige DAC + ramp_pct_per_sec. Als afstand-tot-
-        // target ≤ decel-distance → start ramp-down (dac_target=0). Bij
-        // |Δ| ≤ deadband → gate uit, target wissen.
+        // target ≤ decel-distance -> start ramp-down (dac_target=0). Bij
+        // |Δ| ≤ deadband -> gate uit, target wissen.
         if let (Some(target), Some(current)) = (target_deg, current_deg) {
             let delta = target - current;
             if delta.abs() <= GOTO_DEADBAND_DEG {
@@ -998,7 +998,7 @@ fn rotor_poll_thread(
                 // tijdens beweging een nieuwe target krijgt aan de
                 // andere kant (delta-teken flipt) moest voorheen direct
                 // de CW/CCW gates wisselen terwijl current_dac nog op
-                // MAX stond — abrupte motor-reversal op vol vermogen.
+                // MAX stond - abrupte motor-reversal op vol vermogen.
                 // Detecteer hier of de gewenste richting verschilt van
                 // de huidige gate-stand; als ja én current_dac > 0,
                 // houd huidige richting vast en ramp eerst DAC naar 0.
@@ -1025,7 +1025,7 @@ fn rotor_poll_thread(
                     // Gemiddelde snelheid tijdens ramp = MAX × frac / 2.
                     // Distance = avg_speed × time = MAX × frac² × 50 / pct.
                     // Plus `DECEL_SAFETY_FACTOR` om meet-lag + speed-onzekerheid
-                    // te dekken — beter te vroeg afremmen dan te laat.
+                    // te dekken - beter te vroeg afremmen dan te laat.
                     let frac = current_dac / DAC_MAX as f32;
                     let decel_time_sec =
                         frac * 100.0 / cal_snap.ramp_pct_per_sec.max(1.0);
@@ -1054,13 +1054,13 @@ fn rotor_poll_thread(
         if let Some(last) = last_written_dac {
             if actual_dac != last && !manual_mode {
                 debug!(
-                    "rotor-poll {}: external DAC override ({} → {}), entering manual mode",
+                    "rotor-poll {}: external DAC override ({} -> {}), entering manual mode",
                     label, last, actual_dac
                 );
                 manual_mode = true;
                 current_dac = actual_dac as f32;
                 dac_target = actual_dac as f32;
-                // Lopende GoTo afbreken — gebruiker heeft de controle
+                // Lopende GoTo afbreken - gebruiker heeft de controle
                 // overgenomen. Doelhoek wissen zodat de ramp-loop hem
                 // niet later weer probeert te bereiken.
                 target_deg = None;
@@ -1086,7 +1086,7 @@ fn rotor_poll_thread(
             }
             current_dac = current_dac.clamp(0.0, DAC_MAX as f32);
             let new_dac = current_dac.round() as u8;
-            // Alleen schrijven als de waarde feitelijk veranderd is —
+            // Alleen schrijven als de waarde feitelijk veranderd is -
             // anders blijven we tijdens stilstand elke tick een no-op
             // USB-call doen én lopen we het risico een handmatige DAC
             // tussen ticks per ongeluk te overschrijven.
@@ -1118,13 +1118,13 @@ fn rotor_poll_thread(
                 driver.set_buffer_cap(ADC_AVG_WINDOW_MOTION);
                 driver.clear_samples();
                 info!(
-                    "rotor-poll {}: → MOTION (cap={}, tick={} ms, buffer cleared)",
+                    "rotor-poll {}: -> MOTION (cap={}, tick={} ms, buffer cleared)",
                     label, ADC_AVG_WINDOW_MOTION, ADC_POLL_INTERVAL_MOTION_MS
                 );
             } else {
                 driver.set_buffer_cap(ADC_AVG_WINDOW_IDLE);
                 info!(
-                    "rotor-poll {}: → IDLE (cap={}, tick={} ms)",
+                    "rotor-poll {}: -> IDLE (cap={}, tick={} ms)",
                     label, ADC_AVG_WINDOW_IDLE, ADC_POLL_INTERVAL_IDLE_MS
                 );
             }

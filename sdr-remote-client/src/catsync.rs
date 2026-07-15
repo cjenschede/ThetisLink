@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! CatSync — automatically mute browser audio during TX.
+//! CatSync - automatically mute browser audio during TX.
 //!
 //! Uses the Windows Audio Session API (WASAPI) to mute/unmute audio sessions of
 //! browsers (Chrome, Firefox, Edge) when PTT is active.
@@ -196,6 +196,25 @@ impl CatSync {
     pub fn close_websdr_window(&mut self) {
         if let Some(tx) = self.websdr_tx.take() {
             let _ = tx.send(crate::websdr::WebSdrCmd::Close);
+        }
+    }
+
+    /// Reload the embedded WebSDR page (re-navigates to the current tune URL).
+    /// De WebSDR.org/KiwiSDR-audiostream herstelt niet vanzelf na een netwerk-hik;
+    /// herladen bouwt de pagina + audiostream opnieuw op, mét de actuele freq/mode -
+    /// scheelt het venster sluiten en heropenen.
+    pub fn reload_websdr_window(&mut self, freq_hz: u64, mode: u8) {
+        if self.websdr_tx.is_none() {
+            return;
+        }
+        let url = self.websdr_tune_url(freq_hz, mode);
+        let tx = self.websdr_tx.as_ref().unwrap();
+        if tx.send(crate::websdr::WebSdrCmd::Navigate(url)).is_ok() {
+            self.last_synced_freq = freq_hz;
+            self.last_synced_mode = mode;
+            self.webview_muted = false; // verse pagina start unmuted
+        } else {
+            self.websdr_tx = None; // venster was al gesloten
         }
     }
 

@@ -47,7 +47,14 @@ pub struct ServerApp {
     thetis_path: String,
     yaesu_port: String,
     yaesu_audio_device: String,
+    yaesu_audio_output_device: String,
     yaesu_enabled: bool,
+    yaesu_ssb_switch_on_ptt: bool,
+    // Dual-radio slot 1 (radio 2) - nu ook in de settings-GUI i.p.v. conf-only.
+    yaesu2_port: String,
+    yaesu2_audio_device: String,
+    yaesu2_audio_output_device: String,
+    yaesu2_enabled: bool,
     amplitec_port: String,
     amplitec_enabled: bool,
     serial_ports: Vec<String>,
@@ -146,7 +153,7 @@ pub struct ServerApp {
     pstrotator_has_elevation: bool,
     pstrotator_listen_enabled: bool,
     pstrotator_listen_port: u16,
-    // Per-popout "init applied" flags — see mirror impl in
+    // Per-popout "init applied" flags - see mirror impl in
     // sdr-remote-client mod.rs apply_popout_geometry for the rationale.
     // Repeated `with_position()` calls every frame caused the windows to
     // jitter when manually moved; we now only apply position on the first
@@ -169,6 +176,12 @@ pub struct ServerApp {
     totp_secret: String,
     // PATCH-3 mDNS friendly name (optional human-readable label)
     friendly_name: String,
+    // Phase A relay monitor settings (status only; no TL frames routed yet).
+    relay_enabled: bool,
+    relay_url: String,
+    relay_station: String,
+    relay_token: String,
+    relay_udp_enabled: bool,
     // Autostart
     autostart: bool,
     pending_autostart: bool,
@@ -183,7 +196,7 @@ pub struct ServerApp {
     ultrabeam_window_size: Option<[f32; 2]>,
     rotor_window_size: Option<[f32; 2]>,
     show_about: bool,
-    /// PATCH-2: shared Status-panel probes — `Some` while a server is running,
+    /// PATCH-2: shared Status-panel probes - `Some` while a server is running,
     /// `None` before start_server / after Settings teardown.
     status_panel_state: Option<crate::audio_stats::StatusPanelShared>,
     /// PATCH-2: bind address shown in the Status panel (e.g. "0.0.0.0:4580").
@@ -192,7 +205,7 @@ pub struct ServerApp {
     status_view: StatusView,
 }
 
-/// PATCH-2: top-level view in Mode::Running — Logs (existing) or
+/// PATCH-2: top-level view in Mode::Running - Logs (existing) or
 /// Status (new compact server-state panel).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusView {
@@ -223,7 +236,13 @@ impl ServerApp {
             thetis_path: config.thetis_path.unwrap_or_default(),
             yaesu_port: config.yaesu_port.unwrap_or_default(),
             yaesu_audio_device: config.yaesu_audio_device.unwrap_or_default(),
+            yaesu_audio_output_device: config.yaesu_audio_output_device.unwrap_or_default(),
             yaesu_enabled: config.yaesu_enabled,
+            yaesu_ssb_switch_on_ptt: config.yaesu_ssb_switch_on_ptt,
+            yaesu2_port: config.yaesu2_port.clone().unwrap_or_default(),
+            yaesu2_audio_device: config.yaesu2_audio_device.clone().unwrap_or_default(),
+            yaesu2_audio_output_device: config.yaesu2_audio_output_device.clone().unwrap_or_default(),
+            yaesu2_enabled: config.yaesu2_enabled,
             amplitec_port: config.amplitec_port.unwrap_or_default(),
             amplitec_enabled: config.amplitec_enabled,
             serial_ports,
@@ -287,7 +306,7 @@ impl ServerApp {
             ultrabeam_enabled: config.ultrabeam_enabled,
             ultrabeam: None,
             show_ultrabeam_window: config.show_ultrabeam_window,
-            // ultrabeam_show_menu initialized below — load from config
+            // ultrabeam_show_menu initialized below - load from config
             ultrabeam_window_pos: config.ultrabeam_window_pos,
             ultrabeam_show_menu: config.ultrabeam_show_menu,
             ultrabeam_confirm_retract: false,
@@ -320,6 +339,11 @@ impl ServerApp {
             password: config.password.clone().unwrap_or_default(),
             totp_enabled: config.totp_enabled,
             friendly_name: config.friendly_name.clone().unwrap_or_default(),
+            relay_enabled: config.relay_enabled,
+            relay_url: config.relay_url.clone(),
+            relay_station: config.relay_station.clone(),
+            relay_token: config.relay_token.clone(),
+            relay_udp_enabled: config.relay_udp_enabled,
             totp_secret: config.totp_secret.clone().unwrap_or_else(|| sdr_remote_core::auth::generate_totp_secret()),
             main_window_pos: config.main_window_pos,
             autostart: config.autostart,
@@ -354,14 +378,17 @@ impl ServerApp {
             thetis_path: if thetis.is_empty() { None } else { Some(thetis) },
             yaesu_port: if yaesu_port_str.is_empty() { None } else { Some(yaesu_port_str.clone()) },
             yaesu_enabled: self.yaesu_enabled,
+            yaesu_ssb_switch_on_ptt: self.yaesu_ssb_switch_on_ptt,
             yaesu_baud: 38400,
             yaesu_audio_device: if self.yaesu_audio_device.is_empty() { None } else { Some(self.yaesu_audio_device.clone()) },
-            // Dual-radio slot 1: round-trip via disk tot de settings-UI yaesu2_*
-            // toont (taak #6) — zelfde patroon als de multi-tuner schema hieronder.
-            yaesu2_port: crate::config::load().yaesu2_port,
-            yaesu2_enabled: crate::config::load().yaesu2_enabled,
+            yaesu_audio_output_device: if self.yaesu_audio_output_device.is_empty() { None } else { Some(self.yaesu_audio_output_device.clone()) },
+            // Dual-radio slot 1 (radio 2) - nu uit de settings-UI. Baud + audio-channel
+            // blijven van disk (baud autodetect via detect_model; channel = FTX-1 L/R).
+            yaesu2_port: if self.yaesu2_port.is_empty() { None } else { Some(self.yaesu2_port.clone()) },
+            yaesu2_enabled: self.yaesu2_enabled,
             yaesu2_baud: crate::config::load().yaesu2_baud,
-            yaesu2_audio_device: crate::config::load().yaesu2_audio_device,
+            yaesu2_audio_device: if self.yaesu2_audio_device.is_empty() { None } else { Some(self.yaesu2_audio_device.clone()) },
+            yaesu2_audio_output_device: if self.yaesu2_audio_output_device.is_empty() { None } else { Some(self.yaesu2_audio_output_device.clone()) },
             yaesu2_audio_channel: crate::config::load().yaesu2_audio_channel,
             amplitec_port: if amp_port.is_empty() { None } else { Some(amp_port.clone()) },
             amplitec_enabled: self.amplitec_enabled,
@@ -413,7 +440,7 @@ impl ServerApp {
             spe_saved_drive: crate::config::load().spe_saved_drive,
             ultrabeam_show_menu: self.ultrabeam_show_menu,
             mcp2221_section_expanded: crate::config::load().mcp2221_section_expanded,
-            // Preserve the multi-tuner schema across UI saves — until the
+            // Preserve the multi-tuner schema across UI saves - until the
             // settings UI exposes tuner1/tuner2 the values just round-trip
             // through whatever was last loaded from disk.
             tuners: crate::config::load().tuners,
@@ -431,6 +458,11 @@ impl ServerApp {
             } else {
                 Some(self.friendly_name.trim().to_string())
             },
+            relay_enabled: self.relay_enabled,
+            relay_url: self.relay_url.trim().to_string(),
+            relay_station: self.relay_station.trim().to_string(),
+            relay_token: self.relay_token.clone(),
+            relay_udp_enabled: self.relay_udp_enabled,
         };
         crate::config::save(&config);
 
@@ -443,14 +475,17 @@ impl ServerApp {
             let port_log = port.clone();
             let audio_dev = self.yaesu_audio_device.clone();
             let audio_dev_opt = if audio_dev.is_empty() { None } else { Some(audio_dev) };
+            let audio_out = self.yaesu_audio_output_device.clone();
+            let audio_out_opt = if audio_out.is_empty() { None } else { Some(audio_out) };
             // Slot-0 model per-poort autodetect (dual-radio): zo werkt élke
             // combinatie incl. een FTX-1 als primaire radio. Detect + open
             // draaien in de timeout-thread (blokkeert de UI-thread niet).
-            // Faalt detect (radio uit) → 991A-aanname-label; bring-up logt echt ID.
+            // Faalt detect (radio uit) -> 991A-aanname-label; bring-up logt echt ID.
+            let ssb_on_ptt = config.yaesu_ssb_switch_on_ptt;
             match with_timeout(com_timeout, move || {
                 let (model, det_baud) = crate::yaesu::detect_model(&port, baud)
                     .unwrap_or((crate::yaesu::RadioModel::Ft991a, baud));
-                crate::yaesu::YaesuRadio::new_with_model(&port, det_baud, audio_dev_opt.as_deref(), model, 0, 0)
+                crate::yaesu::YaesuRadio::new_with_model(&port, det_baud, audio_dev_opt.as_deref(), audio_out_opt.as_deref(), model, 0, 0, ssb_on_ptt)
             }) {
                 Ok(radio) => {
                     // YaesuRadio is fail-soft: the underlying serial open
@@ -469,7 +504,7 @@ impl ServerApp {
 
         // Create AmplitecSwitch early so UI can access it too. De
         // worker-thread retry zelf bij offline device, dus we maken
-        // de instance ook als het bord nu niet bereikbaar is — anders
+        // de instance ook als het bord nu niet bereikbaar is - anders
         // verscheen het Amplitec-venster niet bij offline-start en
         // kwam het ook niet vanzelf terug na een power-cycle (de
         // oude thread brak op het eerste read-failure).
@@ -549,7 +584,7 @@ impl ServerApp {
             }
         }
 
-        // Create Rotor if configured — backend keuze: EA7HG, PstRotator
+        // Create Rotor if configured - backend keuze: EA7HG, PstRotator
         // of Adafruit MCP2221A (PATCH-yaesu-rotor-mcp2221).
         // RotorInstance voor mcp2221_yaesu wordt tijdelijk bewaard in
         // `pending_yaesu_rotor` zodat we 'm na het aanmaken van
@@ -622,7 +657,7 @@ impl ServerApp {
                             );
                         } else {
                             log::warn!(
-                                "mcp2221_yaesu backend geselecteerd maar config.rotors[0] is leeg of disabled — gebruik wizard om een rot_<naam> bord te claimen"
+                                "mcp2221_yaesu backend geselecteerd maar config.rotors[0] is leeg of disabled - gebruik wizard om een rot_<naam> bord te claimen"
                             );
                         }
                     } else {
@@ -643,7 +678,7 @@ impl ServerApp {
         }
 
         // PstRotator UDP-listener (v2.1.1+) wordt server-side gespawnd in
-        // main.rs::run_server_async met de pre-built rotor_inst — daar
+        // main.rs::run_server_async met de pre-built rotor_inst - daar
         // hoort dit hoor; hier in ui/mod.rs zou een tweede spawn een
         // "address already in use" bind-conflict op de poort geven.
 
@@ -724,7 +759,7 @@ impl eframe::App for ServerApp {
             self.start_server();
         }
 
-        // Refresh in-memory mirror van label-config — wordt door het
+        // Refresh in-memory mirror van label-config - wordt door het
         // Amplitec rename-dialog (context-menu) via `modify_config`
         // bijgewerkt, en dit pad zorgt dat de UI in dezelfde frame de
         // nieuwe naam toont zonder server-restart.
@@ -743,14 +778,14 @@ impl eframe::App for ServerApp {
         //   2. Een korte sleep het OS tijd geeft om die handles te
         //      releasen voor de nieuwe child probeert te enumeraten.
         // Voorheen riep restart_server direct process::exit(0) na spawn,
-        // wat Drop oversloeg — audio op de nieuwe instance werkte dan
-        // vaak niet tot owner handmatig de server afsloot en herstartte.
+        // wat Drop oversloeg - audio op de nieuwe instance werkte dan
+        // vaak niet tot operator handmatig de server afsloot en herstartte.
         if auto_restart_requested() {
             self.save_window_positions();
             if let Some(tx) = self.shutdown_tx.take() {
                 let _ = tx.send(true);
             }
-            // Drop alle hardware-Arcs → cpal streams, serial ports en
+            // Drop alle hardware-Arcs -> cpal streams, serial ports en
             // TCI-connection worden via hun eigen Drop-impls afgesloten.
             self.yaesu = None;
             self.amplitec = None;
@@ -778,7 +813,7 @@ impl eframe::App for ServerApp {
             match self.mode {
                 Mode::Settings => {
                     // ScrollArea zodat het Settings-paneel ook bruikbaar
-                    // blijft bij kleinere venstershoogtes — de Save & Start
+                    // blijft bij kleinere venstershoogtes - de Save & Start
                     // knop staat helemaal onderaan en moet altijd bereikbaar
                     // zijn zonder het hele venster groter te slepen.
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -796,7 +831,7 @@ impl eframe::App for ServerApp {
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.yaesu_enabled, "Yaesu FT-991A");
+                        ui.checkbox(&mut self.yaesu_enabled, "Yaesu radio 1");
                         ui.label("CAT:");
                         egui::ComboBox::from_id_salt("yaesu_port")
                             .selected_text(if self.yaesu_port.is_empty() { "(Geen)" } else { &self.yaesu_port })
@@ -811,7 +846,7 @@ impl eframe::App for ServerApp {
                                     }
                                 }
                             });
-                        ui.label("Audio:");
+                        ui.label("Audio in:");
                         egui::ComboBox::from_id_salt("yaesu_audio")
                             .selected_text(if self.yaesu_audio_device.is_empty() { "(Geen)" } else { &self.yaesu_audio_device })
                             .width(200.0)
@@ -826,6 +861,86 @@ impl eframe::App for ServerApp {
                                 }
                             });
                     });
+                    // TX/output device: apart kiesbaar zodat de zend-audio altijd naar
+                    // de juiste codec gaat (PATCH-yaesu-output-device). Leeg = zelfde als
+                    // de input; kies dit als capture/render-endpoint anders heten.
+                    ui.horizontal(|ui| {
+                        ui.label("Audio uit (TX):");
+                        egui::ComboBox::from_id_salt("yaesu_audio_out")
+                            .selected_text(if self.yaesu_audio_output_device.is_empty() { "(zelfde als input)" } else { &self.yaesu_audio_output_device })
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.yaesu_audio_output_device.is_empty(), "(zelfde als input)").clicked() {
+                                    self.yaesu_audio_output_device.clear();
+                                }
+                                for name in crate::yaesu::available_audio_outputs() {
+                                    if ui.selectable_label(name == self.yaesu_audio_output_device, &name).clicked() {
+                                        self.yaesu_audio_output_device = name;
+                                    }
+                                }
+                            });
+                    });
+
+                    ui.add_space(4.0);
+
+                    // 991A SSB/AM USB routing mode. Off (default): routing stays active while a client
+                    // is connected, then restores ~2 s after disconnect. On: switch only during PTT.
+                    // FTX-1 keeps its internal auto source selection either way.
+                    ui.checkbox(&mut self.yaesu_ssb_switch_on_ptt, "Switch 991A SSB/AM USB routing on PTT")
+                        .on_hover_text("Off (default): keep 991A USB routing active while a client is connected and restore about 2 s after disconnect (zero PTT delay).\nOn: switch 991A routing only during PTT; useful when you want the hand mic restored immediately outside TX. FTX-1 auto source selection is left unchanged.");
+                    ui.add_space(4.0);
+
+                    // Dual-radio slot 1 (radio 2) - zelfde opzet als radio 1.
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.yaesu2_enabled, "Yaesu radio 2");
+                        ui.label("CAT:");
+                        egui::ComboBox::from_id_salt("yaesu2_port")
+                            .selected_text(if self.yaesu2_port.is_empty() { "(Geen)" } else { &self.yaesu2_port })
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.yaesu2_port.is_empty(), "(Geen)").clicked() {
+                                    self.yaesu2_port.clear();
+                                }
+                                for port in &self.serial_ports {
+                                    if ui.selectable_label(*port == self.yaesu2_port, port).clicked() {
+                                        self.yaesu2_port = port.clone();
+                                    }
+                                }
+                            });
+                        ui.label("Audio in:");
+                        egui::ComboBox::from_id_salt("yaesu2_audio")
+                            .selected_text(if self.yaesu2_audio_device.is_empty() { "(Geen)" } else { &self.yaesu2_audio_device })
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.yaesu2_audio_device.is_empty(), "(Geen)").clicked() {
+                                    self.yaesu2_audio_device.clear();
+                                }
+                                for name in crate::yaesu::available_audio_inputs() {
+                                    if ui.selectable_label(name == self.yaesu2_audio_device, &name).clicked() {
+                                        self.yaesu2_audio_device = name;
+                                    }
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Audio uit (TX):");
+                        egui::ComboBox::from_id_salt("yaesu2_audio_out")
+                            .selected_text(if self.yaesu2_audio_output_device.is_empty() { "(zelfde als input)" } else { &self.yaesu2_audio_output_device })
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.yaesu2_audio_output_device.is_empty(), "(zelfde als input)").clicked() {
+                                    self.yaesu2_audio_output_device.clear();
+                                }
+                                for name in crate::yaesu::available_audio_outputs() {
+                                    if ui.selectable_label(name == self.yaesu2_audio_output_device, &name).clicked() {
+                                        self.yaesu2_audio_output_device = name;
+                                    }
+                                }
+                            });
+                    });
+                    ui.label(egui::RichText::new("Radio 2 wijzigingen: opslaan + server herstarten.").size(10.0).color(Color32::GRAY));
+
+                    ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.amplitec_enabled, "Amplitec 6/2");
@@ -850,7 +965,7 @@ impl eframe::App for ServerApp {
 
                     ui.add_space(8.0);
 
-                    // JC-4s / JC-3s tuners — geen COM-poort meer. Elke tuner
+                    // JC-4s / JC-3s tuners - geen COM-poort meer. Elke tuner
                     // wordt aangestuurd via een Adafruit MCP2221A USB-HID
                     // breakout en per slot toegewezen in het server status-
                     // paneel onder "MCP2221A tuner bridges". Hier alleen nog
@@ -905,6 +1020,21 @@ impl eframe::App for ServerApp {
 
                     ui.add_space(8.0);
 
+                    // DX Cluster (spot stream). Login = the operator's own callsign
+                    // (no password). No hardcoded default - enter your call here; the
+                    // cluster stays offline until it is set.
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.dxcluster_enabled, "DX Cluster");
+                        ui.label("call:");
+                        ui.text_edit_singleline(&mut self.dxcluster_callsign);
+                    });
+                    if self.dxcluster_enabled && self.dxcluster_callsign.trim().is_empty() {
+                        ui.label(RichText::new("Enter your callsign to enable the DX cluster")
+                            .color(Color32::from_rgb(220, 160, 0)).size(11.0));
+                    }
+
+                    ui.add_space(8.0);
+
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.ultrabeam_enabled, "UltraBeam RCU-06");
                         egui::ComboBox::from_id_salt("ultrabeam_port")
@@ -933,7 +1063,7 @@ impl eframe::App for ServerApp {
                         ui.label("backend:");
                         // Snapshot voor change-detect; bij wijziging direct
                         // naar disk persisteren (anders raakt de keuze
-                        // weg wanneer owner de server niet via Start
+                        // weg wanneer operator de server niet via Start
                         // herstart na de dropdown-wijziging).
                         let backend_before = self.rotor_backend.clone();
                         egui::ComboBox::from_id_salt("rotor_backend_combo")
@@ -961,7 +1091,7 @@ impl eframe::App for ServerApp {
                             });
                         if backend_before != self.rotor_backend {
                             let new_backend = self.rotor_backend.clone();
-                            log::info!("Rotor backend switched: {} → {}", backend_before, new_backend);
+                            log::info!("Rotor backend switched: {} -> {}", backend_before, new_backend);
                             crate::config::modify_config(|c| {
                                 c.rotor_backend = new_backend.clone();
                             });
@@ -1016,9 +1146,9 @@ impl eframe::App for ServerApp {
                         ui.checkbox(&mut self.show_rotor_window, "Rotor venster openen bij starten");
                     }
 
-                    // PstRotator listener — parallel input source bovenop
+                    // PstRotator listener - parallel input source bovenop
                     // de actieve rotor-backend. Onafhankelijk van de
-                    // backend-keuze; werkt bv. om Log4OM → PstRotator de
+                    // backend-keuze; werkt bv. om Log4OM -> PstRotator de
                     // Adafruit-rotor te laten besturen.
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -1052,6 +1182,47 @@ impl eframe::App for ServerApp {
                     }
 
                     ui.add_space(16.0);
+
+                    ui.add_space(8.0);
+                    ui.heading("Relay");
+                    ui.checkbox(&mut self.relay_enabled, "Enable outbound relay monitor");
+                    ui.checkbox(&mut self.relay_udp_enabled, "Audio over UDP (low latency)")
+                        .on_hover_text(
+                            "Route audio + PTT over plain UDP (port 443) instead of the wss tunnel: \
+                             no retransmit, lower latency. Both server and client must have it on. \
+                             Applies on restart.",
+                        );
+                    ui.horizontal(|ui| {
+                        ui.label("Relay URL:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.relay_url)
+                                .desired_width(260.0)
+                                .hint_text("ws://relay.example.com:18080"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Station name:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.relay_station)
+                                .desired_width(180.0)
+                                .hint_text("my-station"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Relay token:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.relay_token)
+                                .desired_width(180.0)
+                                .password(true),
+                        );
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "Relay routes the full connection: audio + PTT over UDP with automatic wss (TCP) fallback, control + spectrum over wss. Both server and client must use the same relay, station name and token.",
+                        )
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(160, 160, 160)),
+                    );
 
                     ui.add_space(8.0);
                     ui.heading("Security");
@@ -1157,7 +1328,7 @@ impl eframe::App for ServerApp {
                                     } else {
                                         ui.colored_label(
                                             Color32::from_rgb(160, 160, 160),
-                                            "Status panel not ready (server starting…)",
+                                            "Status panel not ready (server starting...)",
                                         );
                                     }
                                 });
@@ -1191,6 +1362,21 @@ impl eframe::App for ServerApp {
                         }
                     }
 
+                    ui.separator();
+                    if ui.button("Exit").clicked() {
+                        // Nette afsluiting (PE1FMC-wens): sein de server-shutdown zodat de
+                        // Yaesu SSB-routing wordt hersteld (connect-set-modus; in per-PTT-modus
+                        // staat de radio al normaal), drop de radio-Arc zodat de cmd-channel
+                        // dichtgaat -> restore in de serial-thread, geef die ~500 ms, sluit af.
+                        // Zo blijft de 991 niet in USB-stand achter na afsluiten.
+                        self.save_window_positions();
+                        if let Some(tx) = self.shutdown_tx.take() {
+                            let _ = tx.send(true);
+                        }
+                        self.yaesu = None;
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        std::process::exit(0);
+                    }
                     ui.separator();
                     if ui.button("Settings").clicked() {
                         // Stop server (thread finishes in background)
@@ -1668,7 +1854,7 @@ impl eframe::App for ServerApp {
         }
 
         // Rotor secondary window. Titel volgt de actieve backend zodat
-        // de owner direct ziet welke driver onder water werkt.
+        // de operator direct ziet welke driver onder water werkt.
         if matches!(self.mode, Mode::Running) && self.show_rotor_window {
             if let Some(ref rotor_ref) = self.rotor {
                 let status = rotor_ref.status();
@@ -1676,9 +1862,9 @@ impl eframe::App for ServerApp {
 
                 let rotor_sz = self.rotor_window_size.unwrap_or([340.0, 320.0]);
                 let backend_title = match self.rotor_backend.as_str() {
-                    "pstrotator" => "Rotor — PstRotator",
-                    "mcp2221_yaesu" => "Rotor — Adafruit MCP2221A → Yaesu G-1000DXC",
-                    _ => "Rotor — EA7HG Visual Rotor",
+                    "pstrotator" => "Rotor - PstRotator",
+                    "mcp2221_yaesu" => "Rotor - Adafruit MCP2221A -> Yaesu G-1000DXC",
+                    _ => "Rotor - EA7HG Visual Rotor",
                 };
                 let mut rotor_vb = ViewportBuilder::default()
                     .with_title(backend_title)
@@ -1734,33 +1920,36 @@ impl eframe::App for ServerApp {
                             ui.label(RichText::new("ThetisLink Server").size(20.0).strong());
                             ui.label(RichText::new(format!("v{}", sdr_remote_core::version_string())).size(14.0));
                             ui.add_space(4.0);
-                            ui.label("Remote control for Thetis SDR + Yaesu FT-991A");
+                            ui.label("Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
                         });
                         ui.add_space(8.0);
                         ui.separator();
                         ui.label(RichText::new("Author").size(13.0).strong());
-                        ui.label("Chiron van der Burgt — PA3GHM");
+                        ui.label("Chiron van der Burgt - PA3GHM");
                         ui.add_space(6.0);
                         ui.label(RichText::new("Special Thanks").size(13.0).strong());
-                        ui.label("Richie (ramdor) — Thetis SDR development, TCI protocol extensions");
+                        ui.label("Richie (ramdor) - Thetis SDR development, TCI protocol extensions");
                         ui.add_space(6.0);
                         ui.label(RichText::new("Protocols & External Services").size(13.0).strong());
-                        ui.label("TCI — Expert Electronics / Thetis");
-                        ui.label("DX Spider — DX cluster telnet protocol");
+                        ui.label("TCI - Expert Electronics / Thetis");
+                        ui.label("DX Spider - DX cluster telnet protocol");
                         ui.label("HPSDR / OpenHPSDR Protocol 2");
-                        ui.label("WebSDR (PA3FWM) / KiwiSDR — CatSync targets");
+                        ui.label("WebSDR (PA3FWM) / KiwiSDR - CatSync targets");
+                        ui.label("ThetisLink Relay - self-hosted WebSocket + UDP relay (internet remote)");
                         ui.add_space(6.0);
                         ui.label(RichText::new("Hardware Support").size(13.0).strong());
                         egui::Grid::new("hw_grid_srv").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
                             for (dev, iface) in [
                                 ("ANAN 7000DLE", "TCI (via Thetis)"),
                                 ("Yaesu FT-991A", "Serial CAT + USB Audio"),
+                                ("Yaesu FTX-1", "Serial CAT + USB Audio"),
                                 ("RF2K-S PA", "HTTP API"),
                                 ("SPE Expert 1.3K-FA", "Serial"),
                                 ("StockCorner JC-4s / JC-3s Tuner (×2)", "MCP2221A USB-HID"),
                                 ("UltraBeam RCU-06", "Serial"),
                                 ("Amplitec 6/2", "Serial"),
                                 ("EA7HG Visual Rotor", "UDP"),
+                                ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
                                 ("PstRotator (any supported rotor)", "XML over UDP"),
                             ] {
                                 ui.label(dev);
@@ -1776,7 +1965,8 @@ impl eframe::App for ServerApp {
                             ui.label("Source:");
                             ui.hyperlink("https://github.com/cjenschede/ThetisLink");
                         });
-                        ui.label("Based on the Thetis SDR lineage — see ATTRIBUTION.md");
+                        ui.label("Based on the Thetis SDR lineage - see ATTRIBUTION.md");
+                        ui.label("Third-party licenses & SBOM: see NOTICE.md, THIRD-PARTY-LICENSES.html");
                         ui.add_space(12.0);
                         ui.vertical_centered(|ui| {
                             if ui.button("Close").clicked() {
@@ -1817,7 +2007,7 @@ fn spawn_replacement_and_exit() -> ! {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // DETACHED_PROCESS (0x00000008) — de nieuwe process krijgt een
+        // DETACHED_PROCESS (0x00000008) - de nieuwe process krijgt een
         // eigen console-handle-group, los van ons. CREATE_NEW_PROCESS_GROUP
         // (0x00000200) isoleert Ctrl-C-bezorging. Samen zorgen ze dat de
         // child volledig zelfstandig is zodat dit proces meteen kan exit.

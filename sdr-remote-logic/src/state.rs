@@ -131,6 +131,18 @@ pub struct RadioState {
     pub jitter_ms: f32,
     pub buffer_depth: u32,
     pub rx_packets: u64,
+    pub yaesu_audio_packets: u64,
+    pub yaesu_jitter_ms: f32,
+    pub yaesu_buffer_depth: u32,
+    pub yaesu2_audio_packets: u64,
+    pub yaesu2_jitter_ms: f32,
+    pub yaesu2_buffer_depth: u32,
+    pub vrx1_audio_packets: u64,
+    pub vrx1_jitter_ms: f32,
+    pub vrx1_buffer_depth: u32,
+    pub vrx2_audio_packets: u64,
+    pub vrx2_jitter_ms: f32,
+    pub vrx2_buffer_depth: u32,
     pub loss_percent: u8,
     /// Inkomende UDP-bandbreedte over het laatste ~500 ms venster (Kbit/s).
     /// Telt alle ontvangen bytes op de socket; geen breakdown per stream-type.
@@ -184,6 +196,8 @@ pub struct RadioState {
     pub thetis_swr_x100: u16,
     pub filter_low_hz: i32,
     pub filter_high_hz: i32,
+    /// True unless a modern server explicitly reports that Thetis/TCI is disabled.
+    pub thetis_configured: bool,
     pub thetis_starting: bool,
     pub mon_on: bool,
     pub tx_profile_names: Vec<String>,
@@ -267,6 +281,7 @@ pub struct RadioState {
     pub tx_filter_supported: bool,
 
     // External equipment: Amplitec 6/2 antenna switch
+    pub amplitec_available: bool,  // true once any Amplitec device-status packet is received
     pub amplitec_connected: bool,
     pub amplitec_switch_a: u8,  // 0=unknown, 1-6
     pub amplitec_switch_b: u8,
@@ -282,6 +297,7 @@ pub struct RadioState {
     pub amplitec_power_loaded: bool,
 
     // JC-4s antenna tuner
+    pub tuner_available: bool,    // true once any tuner device-status packet is received
     pub tuner_connected: bool,  // Hardware connected
     pub tuner_state: u8,        // 0=Idle, 1=Tuning, 2=DoneOk, 3=Timeout, 4=Aborted, 5=DoneAssumed
     pub tuner_can_tune: bool,   // Amplitec switch A on JC-4s position
@@ -396,6 +412,15 @@ pub struct RadioState {
     pub yaesu_mic_gain: u8,
     pub yaesu_split: bool,
     pub yaesu_scan: bool,
+    /// Internal ATU state (PATCH-yaesu-internal-atu): 0=off, 1=on, 2=tuning-in-progress.
+    pub yaesu_tuner_state: u8,
+    /// Yaesu DSP/function toggles bitfield (PATCH-yaesu-extra-controls): bit N =
+    /// `YaesuCtrl` N on/off. Fed by YaesuFeaturePacket. Fase A1: RfAtt(0), BreakIn(1).
+    pub yaesu_feature_toggles: u32,
+    /// Yaesu multi-state/level values, indexed by `YaesuCtrl`. Fase B: Agc(6), PreAmp(7).
+    pub yaesu_feature_levels: [u8; 16],
+    /// Fase D frequency values: [0]=Contour, [1]=APF, [2]=Notch.
+    pub yaesu_feature_freqs: [u16; 4],
     pub yaesu_vfo_select: u8,  // 0=VFO, 1=Memory, 2=MemTune
     pub yaesu_memory_channel: u16,
     pub yaesu_memory_data: Option<String>,
@@ -419,6 +444,10 @@ pub struct RadioState {
     pub yaesu2_mic_gain: u8,
     pub yaesu2_split: bool,
     pub yaesu2_scan: bool,
+    pub yaesu2_tuner_state: u8,
+    pub yaesu2_feature_toggles: u32,
+    pub yaesu2_feature_levels: [u8; 16],
+    pub yaesu2_feature_freqs: [u16; 4],
     pub yaesu2_vfo_select: u8,
     pub yaesu2_memory_channel: u16,
     pub yaesu2_memory_data: Option<String>, // tab-separated geheugen-dump radio 2 (Fase B)
@@ -473,6 +502,18 @@ impl Default for RadioState {
             jitter_ms: 0.0,
             buffer_depth: 0,
             rx_packets: 0,
+            yaesu_audio_packets: 0,
+            yaesu_jitter_ms: 0.0,
+            yaesu_buffer_depth: 0,
+            yaesu2_audio_packets: 0,
+            yaesu2_jitter_ms: 0.0,
+            yaesu2_buffer_depth: 0,
+            vrx1_audio_packets: 0,
+            vrx1_jitter_ms: 0.0,
+            vrx1_buffer_depth: 0,
+            vrx2_audio_packets: 0,
+            vrx2_jitter_ms: 0.0,
+            vrx2_buffer_depth: 0,
             loss_percent: 0,
             down_kbps: 0,
             up_kbps: 0,
@@ -505,6 +546,7 @@ impl Default for RadioState {
             thetis_swr_x100: 100,
             filter_low_hz: 0,
             filter_high_hz: 0,
+            thetis_configured: true,
             thetis_starting: false,
             mon_on: false,
             tx_profile_names: Vec::new(),
@@ -562,6 +604,7 @@ impl Default for RadioState {
             tx_filter_low_hz: 0,
             tx_filter_high_hz: 0,
             tx_filter_supported: false,
+            amplitec_available: false,
             amplitec_connected: false,
             amplitec_switch_a: 0,
             amplitec_switch_b: 0,
@@ -569,6 +612,7 @@ impl Default for RadioState {
             amplitec_power_max_w: [0; 6],
             amplitec_power_tx_blocked: [false; 6],
             amplitec_power_loaded: false,
+            tuner_available: false,
             tuner_connected: false,
             tuner_state: 0,
             tuner_can_tune: false,
@@ -671,6 +715,10 @@ impl Default for RadioState {
             yaesu_mic_gain: 0,
             yaesu_split: false,
             yaesu_scan: false,
+            yaesu_tuner_state: 0,
+            yaesu_feature_toggles: 0,
+            yaesu_feature_levels: [0u8; 16],
+            yaesu_feature_freqs: [0u16; 4],
             yaesu_vfo_select: 0,
             yaesu_memory_channel: 0,
             yaesu_memory_data: None,
@@ -690,6 +738,10 @@ impl Default for RadioState {
             yaesu2_mic_gain: 0,
             yaesu2_split: false,
             yaesu2_scan: false,
+            yaesu2_tuner_state: 0,
+            yaesu2_feature_toggles: 0,
+            yaesu2_feature_levels: [0u8; 16],
+            yaesu2_feature_freqs: [0u16; 4],
             yaesu2_vfo_select: 0,
             yaesu2_memory_channel: 0,
             yaesu2_memory_data: None,

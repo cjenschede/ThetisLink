@@ -2,7 +2,7 @@
 
 //! Standalone hardware-test voor het MCP2221A-rotor-printje.
 //!
-//! Doel (PATCH-yaesu-rotor-mcp2221 fase 2): owner kan met multimeter de
+//! Doel (PATCH-yaesu-rotor-mcp2221 fase 2): operator kan met multimeter de
 //! BST82-gates / DAC / ADC verifiëren zonder een hele server-restart-
 //! cycle. De driver-module (`mcp2221_yaesu_rotor.rs`) wordt via
 //! `#[path]` gedeeld met de hoofd-server-binary; geen library-refactor.
@@ -15,11 +15,11 @@
 //!
 //! Sub-tests (`--test`):
 //!
-//! | Naam | Wat de owner ziet/meet |
+//! | Naam | Wat de operator ziet/meet |
 //! |------|------------------------|
 //! | `gpio` | GP0 (BST82-CW) hi/low + GP1 (BST82-CCW) hi/low met 1 s pauze; DMM op DIN pin 1 resp. pin 2 t.o.v. GND moet ~0 V tonen tijdens HIGH (BST82 trekt naar GND), open tijdens LOW |
-//! | `dac` | DAC sweep 0→31→0 in stapjes; DMM op DIN pin 3 t.o.v. GND moet ~0 V → ~5 V → ~0 V tonen |
-//! | `adc` | continu poll (1 Hz) van GP3 ADC; owner draait rotor handmatig (of legt vaste spanning op pin 4) en ziet raw + omgerekende Yaesu-pin spanning meelopen |
+//! | `dac` | DAC sweep 0->31->0 in stapjes; DMM op DIN pin 3 t.o.v. GND moet ~0 V -> ~5 V -> ~0 V tonen |
+//! | `adc` | continu poll (1 Hz) van GP3 ADC; operator draait rotor handmatig (of legt vaste spanning op pin 4) en ziet raw + omgerekende Yaesu-pin spanning meelopen |
 //! | `all` | alle drie achter elkaar |
 //!
 //! Bij elke transactie wordt een `log::info!` regel geschreven met de
@@ -97,7 +97,7 @@ use mcp2221_yaesu_rotor::{YaesuRotorDriver, ADC_FULL_SCALE, ADC_VREF_V, DAC_MAX}
 
 fn print_usage() {
     eprintln!(
-        "rotor-spike — hardware-test voor MCP2221A Yaesu rotor printje
+        "rotor-spike - hardware-test voor MCP2221A Yaesu rotor printje
 
 USAGE:
     rotor-spike --serial <ROT_SERIAL> [--test <gpio|dac|adc|all>] [--no-cleanup]
@@ -144,28 +144,28 @@ fn parse_args() -> Option<(Option<String>, String, bool)> {
 
 fn test_gpio(driver: &YaesuRotorDriver) {
     info!("[GPIO test] start");
-    info!("[GPIO test] GP0 (CW) HIGH — DMM op DIN-pin 1 t.o.v. GND moet ~0 V tonen (BST82 trekt naar GND)");
+    info!("[GPIO test] GP0 (CW) HIGH - DMM op DIN-pin 1 t.o.v. GND moet ~0 V tonen (BST82 trekt naar GND)");
     if let Err(e) = driver.set_direction(true, false) {
         error!("[GPIO test] GP0 high faalde: {:?}", e);
         return;
     }
     sleep(Duration::from_millis(1500));
 
-    info!("[GPIO test] GP0 LOW — DIN-pin 1 moet open zijn (>1 MΩ naar GND)");
+    info!("[GPIO test] GP0 LOW - DIN-pin 1 moet open zijn (>1 MΩ naar GND)");
     if let Err(e) = driver.set_direction(false, false) {
         error!("[GPIO test] GP0 low faalde: {:?}", e);
         return;
     }
     sleep(Duration::from_millis(1500));
 
-    info!("[GPIO test] GP1 (CCW) HIGH — DIN-pin 2 moet ~0 V tonen");
+    info!("[GPIO test] GP1 (CCW) HIGH - DIN-pin 2 moet ~0 V tonen");
     if let Err(e) = driver.set_direction(false, true) {
         error!("[GPIO test] GP1 high faalde: {:?}", e);
         return;
     }
     sleep(Duration::from_millis(1500));
 
-    info!("[GPIO test] GP1 LOW — DIN-pin 2 moet open zijn");
+    info!("[GPIO test] GP1 LOW - DIN-pin 2 moet open zijn");
     if let Err(e) = driver.set_direction(false, false) {
         error!("[GPIO test] GP1 low faalde: {:?}", e);
         return;
@@ -174,7 +174,7 @@ fn test_gpio(driver: &YaesuRotorDriver) {
 }
 
 fn test_dac(driver: &YaesuRotorDriver) {
-    info!("[DAC test] start — DMM op DIN-pin 3 t.o.v. GND, verwacht 0..5 V sweep");
+    info!("[DAC test] start - DMM op DIN-pin 3 t.o.v. GND, verwacht 0..5 V sweep");
     let steps: Vec<u8> = (0..=DAC_MAX).step_by(4).chain(std::iter::once(DAC_MAX)).collect();
     for v in &steps {
         let pred_v = (*v as f32 / DAC_MAX as f32) * 5.0;
@@ -198,14 +198,14 @@ fn test_dac(driver: &YaesuRotorDriver) {
 }
 
 fn test_adc(driver: &YaesuRotorDriver) {
-    info!("[ADC test] start — 20 polls @ 1 Hz; draai rotor handmatig of leg vaste spanning op DIN-pin 4");
+    info!("[ADC test] start - 20 polls @ 1 Hz; draai rotor handmatig of leg vaste spanning op DIN-pin 4");
     for i in 1..=20 {
         match driver.read_position_raw() {
             Ok(raw) => {
                 let adc_v = (raw as f32) * ADC_VREF_V / (ADC_FULL_SCALE as f32);
                 let yaesu_v = YaesuRotorDriver::raw_to_yaesu_volts(raw);
                 info!(
-                    "[ADC test] #{:>2}: raw={:>4} ({:.3} V op ADC-pin) → Yaesu pin 4 ≈ {:.3} V",
+                    "[ADC test] #{:>2}: raw={:>4} ({:.3} V op ADC-pin) -> Yaesu pin 4 ≈ {:.3} V",
                     i, raw, adc_v, yaesu_v
                 );
             }

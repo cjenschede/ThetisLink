@@ -1,10 +1,10 @@
-﻿# ThetisLink v2.3.0 - Installatiehandleiding
+﻿# ThetisLink v2.4.0 - Installatiehandleiding
 
 ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket.
 
 **Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt — zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A als tweede radio (via COM-poort).
 
-**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.3.0 werkt prima met stock Thetis v2.10.3.15 via TCI alleen — er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-extensiegedrag van stock v2.10.3.15 behouden (let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata). Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
+**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.4.0 werkt prima met stock Thetis v2.10.3.15 via TCI alleen — er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-extensiegedrag van stock v2.10.3.15 behouden (let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata). Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
 
 **Disclaimer:** Deze software bestuurt radiozenders. Gebruik op eigen risico. De auteur is niet verantwoordelijk voor schade aan apparatuur, storing of overtredingen van regelgeving als gevolg van het gebruik van deze software. Controleer alle veiligheidsfuncties (PTT timeout, vermogensgrenzen) voor het zenden.
 
@@ -16,7 +16,7 @@ ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, s
 |---------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - draait op de PC naast Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.3.0.apk | ThetisLink Android Client - telefoon/tablet |
+| ThetisLink-2.4.0.apk | ThetisLink Android Client - telefoon/tablet |
 | Installatie.pdf | Deze handleiding (Nederlands) |
 | User-Manual.pdf | Gebruikershandleiding (Nederlands) |
 | Technische-Referentie.pdf | Technische referentie (Nederlands) |
@@ -45,6 +45,12 @@ flowchart LR
 **ThetisLink Server -> ThetisLink Clients** (UDP poort 4580):
 - Alles: audio, spectrum, besturing, apparaatstatus - in één UDP-verbinding per ThetisLink Client
 
+**Verbinden van buiten je eigen netwerk** (twee methodes):
+- **Port forwarding** — router stuurt UDP 4580 door naar de ThetisLink Server PC. Vereist een eigen publiek IP-adres.
+- **Relay (v2.4.0)** — achter **CGNAT** of zonder router-toegang: server én client verbinden *uitgaand* met een relay op een VPS, geen port forward nodig. De relay kun je zelf hosten, of PA3GHM voegt je op verzoek tijdelijk toe (beperkt aantal plekken).
+
+Beide staan uitgewerkt in [Netwerk](#netwerk) verderop (secties *Gebruik via internet* en *... met de relay*).
+
 ---
 
 ## Vereisten
@@ -66,7 +72,7 @@ Geen administrator-rechten nodig voor de ThetisLink Server of ThetisLink Clients
 
 ### 1.0 PA3GHM Thetis fork installeren (aanbevolen)
 
-De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.3.0 werkt het best met Thetis-fork build PA3GHM TL2-4** — die versie levert de wideband-IQ extensie + de modulation-filter fan-out die deze release benut. Eerdere fork-builds werken ook, met steeds minder fork-only features beschikbaar (TL2-3 zonder wideband, TL2-2 zonder rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 blijft de fallback. Installatie:
+De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.4.0 werkt het best met Thetis-fork build PA3GHM TL2-4** — die versie levert de wideband-IQ extensie + de modulation-filter fan-out die deze release benut. Eerdere fork-builds werken ook, met steeds minder fork-only features beschikbaar (TL2-3 zonder wideband, TL2-2 zonder rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 blijft de fallback. Installatie:
 
 1. Installeer eerst de officiele **Thetis v2.10.3.15** via de standaard installer (als je dat nog niet hebt)
 2. Download `Thetis.exe` van de PA3GHM fork — **release tag `TL2-4`** op [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -99,7 +105,7 @@ Setup -> Serial/Network/Midi CAT -> Network -> groep **TCI Server**:
 Bij de PA3GHM Thetis fork, op dezelfde tab:
 1. Vink **ThetisLink extensions** aan
 
-> ThetisLink v2.3.0 gebruikt uitsluitend TCI voor radio-besturing. De TCP/IP CAT-server in Thetis hoeft niet aan te staan voor ThetisLink — die is alleen nodig als je een apart loggings-programma of derde-partij CAT-client direct aan Thetis wilt koppelen.
+> ThetisLink v2.4.0 gebruikt uitsluitend TCI voor radio-besturing. De TCP/IP CAT-server in Thetis hoeft niet aan te staan voor ThetisLink — die is alleen nodig als je een apart loggings-programma of derde-partij CAT-client direct aan Thetis wilt koppelen.
 
 ---
 
@@ -248,14 +254,14 @@ Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Statu
 ### 4.1 APK installeren
 
 **Via bestandsbeheer:**
-1. Kopieer `ThetisLink-2.3.0.apk` naar je telefoon (USB, e-mail, of cloud)
+1. Kopieer `ThetisLink-2.4.0.apk` naar je telefoon (USB, e-mail, of cloud)
 2. Open het APK-bestand op de telefoon
 3. Sta "Installeren van onbekende bronnen" toe als gevraagd
 4. Installeer
 
 **Via ADB** (met USB-debugging ingeschakeld):
 ```
-adb install ThetisLink-2.3.0.apk
+adb install ThetisLink-2.4.0.apk
 ```
 
 ### 4.2 Verbinden — begeleide setup-wizard
@@ -348,6 +354,49 @@ Om ThetisLink van buitenshuis te gebruiken moet je router het verkeer doorsturen
 In de ThetisLink Client gebruik je dan je **publieke IP-adres** als ThetisLink Server-adres. Je publieke IP vind je op bijv. whatismyip.com. Bij een wisselend IP-adres kun je een DynDNS dienst gebruiken (bijv. No-IP, DuckDNS) zodat je altijd via dezelfde naam verbindt.
 
 > **Beveiliging:** Het wachtwoord is altijd verplicht (zie stap 2.6). Bij gebruik via internet wordt 2FA (TOTP) sterk aanbevolen als extra beveiligingslaag. Overweeg als alternatief een VPN-oplossing (bijv. WireGuard) waarmee de ThetisLink Server PC niet direct aan internet wordt blootgesteld.
+
+### Gebruik via internet met de relay (v2.4.0, aanbevolen bij CGNAT / geen port-forward)
+
+Port forwarding werkt alleen als je een eigen publiek IP-adres hebt en je router kunt aanpassen. Heb je **CGNAT** (veel glasvezel- en 4G/5G-providers geven geen publiek IP) of geen toegang tot de router, gebruik dan de **relay**. Zowel de server (station) als de client verbinden dan **uitgaand** met een relay-server op een VPS — er hoeft niets ingekomen doorgestuurd te worden. Zie de gebruikershandleiding, sectie [Internet-remote via relay], voor de werking; hieronder de setup-stappen.
+
+> **De relay proberen zonder zelf te hosten?** Voor de eerste gebruikers die de relay willen uitproberen kan PA3GHM je — op verzoek en zolang er plek is — tijdelijk toevoegen aan een testrelay. Let op: dit is een **tijdelijke server met een beperkt aantal plekken**, dus zonder garantie op beschikbaarheid of continuïteit. Neem contact op met PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM). Wil je hem zelf hosten, volg dan de stappen hieronder.
+
+**A. Relay hosten (eenmalig, op een VPS)**
+
+De relay is geen kant-en-klare download maar broncode + Docker. Op een Linux-VPS met Docker:
+
+1. Zet de relay-bron op de VPS (clone de repo of pak de `thetislink-relay-source.tar.gz` uit).
+2. Kopieer `.env.example` naar `.env` en vul in: een **stationsleutel** (de token die het station en de client delen), een **beheerderswachtwoord** voor het dashboard, en je **domeinnaam** voor Caddy/TLS.
+3. Start: `docker compose up -d --build`. Caddy regelt automatisch een TLS-certificaat voor je domein.
+4. De relay luistert dan op **poort 443** (wss voor besturing/spectrum + UDP voor audio).
+
+> Het volledige VPS-recept (domein, Caddy, poorten, updaten) staat in `thetislink-relay/DEPLOY-wss.md`. Het `.env`-bestand bevat geheimen en mag **nooit** publiek of in een repository komen.
+
+**B. Station (ThetisLink Server) op de relay zetten**
+
+In de server-settings-GUI, blok **"Relay"**:
+
+1. Vink **"Enable outbound relay monitor"** aan.
+2. **Relay URL:** het adres van je relay (bijv. `wss://relay.jouwdomein.nl` via Caddy, of `ws://<vps-ip>:18080` rechtstreeks zonder TLS).
+3. **Station name:** een naam voor dit station (bijv. `thuis-anan`) — client en station moeten exact dezelfde naam gebruiken.
+4. **Relay token:** de stationsleutel uit de relay-`.env`.
+5. Laat **"Audio over UDP (low latency)"** aan (aanbevolen). Herstart de server; het **"Relay:"**-veld in het status-paneel toont de verbindingsstatus.
+
+**C. Client op de relay zetten**
+
+In de desktop-client, Server-tab, uitklapblok **"Relay connection"**:
+
+1. Vink **"Connect via relay"** aan.
+2. **Relay URL:** hetzelfde relay-adres als bij het station.
+3. **Station name:** exact dezelfde stationnaam als bij het station.
+4. **Token:** dezelfde stationsleutel.
+5. Laat **"Audio over UDP (low latency)"** aan; herstart de client. Op Android staan dezelfde velden in de instellingen.
+
+Zolang station en client met dezelfde naam en token bij de relay ingelogd zijn, bedien je alles als bij een directe verbinding. Blokkeert je netwerk UDP, dan schakelt de audio automatisch over op de TCP-tunnel (indicator "TCP fallback") en terug zodra UDP weer kan — zie de gebruikershandleiding.
+
+**D. Relay-dashboard (beheer)**
+
+Het beheerderswachtwoord uit de `.env` geeft toegang tot het web-dashboard van de relay (achter TLS): apparaat-/stationbeheer met verbruik/quota per device, en een **"Backup DB"**-knop om een consistente database-kopie te downloaden.
 
 ---
 

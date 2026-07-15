@@ -3,7 +3,7 @@
 //! MCP2221A bridge for the StockCorner JC-4s/JC-3s tuner.
 //!
 //! GP2 drives the transistor that pulls the grey "start" wire low; GP1 reads
-//! the yellow "tune-status" wire through a 1 M + 1 M 1:1 divider. The owner
+//! the yellow "tune-status" wire through a 1 M + 1 M 1:1 divider. The operator
 //! sets two voltage thresholds (switch level + hysteresis) on the yellow line;
 //! samples below `threshold - hyst/2` count as tune-active, samples above
 //! `threshold + hyst/2` count as tune-idle. See `tuner.rs` for the full tune
@@ -21,11 +21,11 @@ use mcp2221_hal::gpio::{GpioChanges, GpioDirection, LogicLevel};
 use mcp2221_hal::settings::{Gp1Mode, Gp2Mode};
 use mcp2221_hal::MCP2221;
 
-/// Minimum interval between ADC polls — keeps USB HID traffic bounded even
+/// Minimum interval between ADC polls - keeps USB HID traffic bounded even
 /// when the UI repaints at 30 FPS. 100 ms is plenty for the per-tuner row.
 const ADC_POLL_MIN_MS: u64 = 100;
 
-/// Voltage divider ratio undone in display (R1 = R2 = 1 MΩ → ×2).
+/// Voltage divider ratio undone in display (R1 = R2 = 1 MΩ -> ×2).
 const DIVIDER_RATIO: f32 = 2.0;
 /// MCP2221A ADC reference (Vdd-relative, default 3.3 V on Adafruit breakout).
 const ADC_VREF: f32 = 3.3;
@@ -76,14 +76,14 @@ pub struct DebugSnapshot {
     /// Computed active edge: yellow_v < this counts as tune-active.
     /// Clamped to physically-reachable range `[0, ADC_VREF * DIVIDER_RATIO]`
     /// so an out-of-range threshold/hysteresis combination is visible to the
-    /// owner instead of silently producing a never-triggerable edge.
+    /// operator instead of silently producing a never-triggerable edge.
     pub threshold_active_v: f32,
     /// Computed idle edge: yellow_v > this counts as tune-idle. Same
     /// clamping as `threshold_active_v`.
     pub threshold_idle_v: f32,
     /// `true` when the requested edges fell outside the reachable yellow
-    /// range so the UI can warn the owner that the slider combo will never
-    /// actually trigger (e.g. threshold 0.5 V + hysteresis 2.0 V → requested
+    /// range so the UI can warn the operator that the slider combo will never
+    /// actually trigger (e.g. threshold 0.5 V + hysteresis 2.0 V -> requested
     /// active edge at -0.5 V, unreachable).
     pub edges_clamped: bool,
 }
@@ -157,12 +157,12 @@ impl Inner {
     }
 }
 
-/// Helper: raw ADC value → yellow-wire voltage (post-divider).
+/// Helper: raw ADC value -> yellow-wire voltage (post-divider).
 fn raw_to_yellow_v(raw: u16) -> f32 {
     (raw as f32) * ADC_VREF / ADC_FULL_SCALE * DIVIDER_RATIO
 }
 
-/// Shared MCP2221A bridge state — cloned into [`TunerInstance`] and read by
+/// Shared MCP2221A bridge state - cloned into [`TunerInstance`] and read by
 /// the UI each frame.
 pub struct Mcp2221Debug {
     inner: Mutex<Inner>,
@@ -170,7 +170,7 @@ pub struct Mcp2221Debug {
 
 impl Mcp2221Debug {
     /// New bridge bound to a specific USB serial number. Pass `None` to fall
-    /// back to "first available board" — only sensible with a single tuner.
+    /// back to "first available board" - only sensible with a single tuner.
     pub fn with_target_serial(target_serial: Option<String>) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner::new(target_serial)),
@@ -283,7 +283,7 @@ impl Mcp2221Debug {
     }
 
     /// True when `raw` looks like the tune-LED is on (yellow voltage below
-    /// the clamped active edge — see `DebugSnapshot::threshold_active_v`).
+    /// the clamped active edge - see `DebugSnapshot::threshold_active_v`).
     pub fn is_tune_active(&self, raw: u16) -> bool {
         let g = self.inner.lock().expect("mcp bridge mutex poisoned");
         let max_yellow = ADC_VREF * DIVIDER_RATIO;
@@ -292,7 +292,7 @@ impl Mcp2221Debug {
     }
 
     /// True when `raw` looks like the tune-LED is off (yellow voltage above
-    /// the clamped idle edge — see `DebugSnapshot::threshold_idle_v`).
+    /// the clamped idle edge - see `DebugSnapshot::threshold_idle_v`).
     pub fn is_tune_idle(&self, raw: u16) -> bool {
         let g = self.inner.lock().expect("mcp bridge mutex poisoned");
         let max_yellow = ADC_VREF * DIVIDER_RATIO;

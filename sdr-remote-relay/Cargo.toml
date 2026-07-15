@@ -1,0 +1,18 @@
+[package]
+name = "sdr-remote-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+futures-util = "0.3"
+log = { workspace = true }
+tokio = { workspace = true }
+# rustls-tls-webpki-roots: bundles Mozilla CA roots (no OS TLS dep), so wss:// works
+# on Windows + Android alike. Lets clients reach a TLS relay (Let's Encrypt cert).
+tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpki-roots"] }
+# tokio-tungstenite does NOT enable a rustls crypto provider, so rustls 0.23 panics
+# ("no process-level CryptoProvider") on the first wss connect. Enable the `ring`
+# provider explicitly (default-features off avoids also pulling aws-lc-rs, which would
+# make it ambiguous). `ring` cross-compiles cleanly to Android.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }

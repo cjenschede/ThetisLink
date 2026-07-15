@@ -42,7 +42,7 @@ impl log::Log for GuiLogger {
             return;
         }
         let line = format!(
-            "[{}] {} — {}",
+            "[{}] {} - {}",
             record.level(),
             record.target(),
             record.args()
@@ -70,7 +70,7 @@ fn main() -> Result<()> {
 
     // Crash-safe coverage dump: bij panic is de UI-coverage matrix juist waardevol
     // (welke controls waren gerendered tot aan crash?). Wrap zonder default-hook
-    // weg te gooien — we bellen die daarna alsnog.
+    // weg te gooien - we bellen die daarna alsnog.
     {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
@@ -107,18 +107,18 @@ fn main() -> Result<()> {
     log::set_boxed_logger(Box::new(logger)).unwrap();
     log::set_max_level(log::LevelFilter::Info);
 
-    // Tracing subscriber voor UI-observability (controls/events.rs → TracingSink).
+    // Tracing subscriber voor UI-observability (controls/events.rs -> TracingSink).
     //
     // Schrijft naar `ui-events.jsonl` naast de exe (NIET naar stderr):
     // windows_subsystem = "windows" detacht stderr in GUI-builds; writes naar
     // een dead fd hingen de UI-thread op onder spectrum+click-belasting.
     //
     // Non-blocking writer (tracing-appender) zet de I/O op een background
-    // thread — UI-thread kan NIET blokkeren op een write-syscall. Guard moet
+    // thread - UI-thread kan NIET blokkeren op een write-syscall. Guard moet
     // in scope blijven tot einde main anders gaan events verloren.
     //
     // Gated door `RUST_LOG` via EnvFilter; default (leeg) filtert alles uit
-    // → zero-cost in prod.
+    // -> zero-cost in prod.
     let _tracing_guard = {
         let exe_dir = std::env::current_exe()
             .ok()
@@ -155,6 +155,54 @@ fn main() -> Result<()> {
     // Shutdown signal
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    // Phase C: relay als transport. Is de relay-config compleet, dan zetten we een
+    // client-relay-monitor met tunnel op (rol Client); de engine krijgt de tunnel als
+    // ClientTransport::Relay, de UI krijgt de status-handle. Anders: direct-UDP (default).
+    let relay_cfg_loaded = ui::config::load_config();
+    let mut _relay_monitor_keepalive: Option<sdr_remote_relay::RelayMonitor> = None;
+    let (relay_tunnel, relay_status_handle): (
+        Option<sdr_remote_logic::engine::ClientRelayTunnel>,
+        Option<sdr_remote_relay::RelayStatusHandle>,
+    ) = if relay_cfg_loaded.relay_enabled
+        && !relay_cfg_loaded.relay_url.trim().is_empty()
+        && !relay_cfg_loaded.relay_station.trim().is_empty()
+        && !relay_cfg_loaded.relay_token.trim().is_empty()
+    {
+        let (uplink_tx, uplink_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Placeholder server-adres: display-label, genegeerd door de Relay-transport.
+        let server_placeholder: std::net::SocketAddr = "203.0.113.1:4580".parse().unwrap();
+        let relay_cfg = sdr_remote_relay::RelayConfig {
+            enabled: true,
+            url: relay_cfg_loaded.relay_url.clone(),
+            station: relay_cfg_loaded.relay_station.clone(),
+            token: relay_cfg_loaded.relay_token.clone(),
+            role: sdr_remote_relay::RelayRole::Client,
+            instance: relay_cfg_loaded.relay_instance_id.clone(),
+            name: relay_cfg_loaded.relay_device_name.clone(),
+            udp_port: sdr_remote_relay::relay_udp_port_resolve(relay_cfg_loaded.relay_udp_enabled),
+        };
+        let tunnel = sdr_remote_relay::RelayTunnel {
+            sentinel: server_placeholder,
+            inbound_tx,
+            uplink_rx,
+        };
+        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_tunnel(relay_cfg, tunnel);
+        let status = monitor.status_handle();
+        _relay_monitor_keepalive = Some(monitor);
+        info!("Client transport: relay tunnel (via {})", relay_cfg_loaded.relay_url);
+        (
+            Some(sdr_remote_logic::engine::ClientRelayTunnel {
+                uplink_tx,
+                inbound_rx,
+                server_addr: server_placeholder,
+            }),
+            Some(status),
+        )
+    } else {
+        (None, None)
+    };
+
     // Start engine in background thread (tokio runtime)
     let network_thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
@@ -167,6 +215,7 @@ fn main() -> Result<()> {
                         Ok(Box::new(audio) as Box<dyn sdr_remote_logic::audio::AudioBackend>)
                     },
                     shutdown_rx,
+                    relay_tunnel,
                 ).await {
                     log::error!("Engine error: {}", e);
                 }
@@ -190,12 +239,24 @@ fn main() -> Result<()> {
         .with_title(format!("ThetisLink v{}", sdr_remote_core::version_string()))
         .with_icon(std::sync::Arc::new(icon));
     if let Some(pos) = window_pos {
-        viewport = viewport.with_position(egui::pos2(pos[0], pos[1]));
+        // Only restore the saved position when a usable part of the window would land on a
+        // currently-connected monitor. A position left on a since-disconnected/rearranged
+        // second monitor is otherwise applied verbatim and the main window opens off-screen
+        // (invisible, unrecoverable without editing the conf). If it is off all monitors we
+        // drop with_position() and let it open on the primary. Pop-outs already do this.
+        if ui::main_window_pos_visible(pos, window_size) {
+            viewport = viewport.with_position(egui::pos2(pos[0], pos[1]));
+        } else {
+            log::warn!(
+                "main window saved pos ({}, {}) is off all connected monitors - opening on primary",
+                pos[0], pos[1]
+            );
+        }
     }
     let native_options = eframe::NativeOptions {
         viewport,
         // eframe's eigen window-state-restore overschrijft anders onze
-        // with_inner_size/with_position uit de conf → window-geometrie werd niet
+        // with_inner_size/with_position uit de conf -> window-geometrie werd niet
         // onthouden. Wij beheren de geometrie zelf (load_window_size/pos +
         // save_full_config), dus eframe's persist uit.
         persist_window: false,
@@ -206,7 +267,7 @@ fn main() -> Result<()> {
         &format!("ThetisLink v{}", sdr_remote_core::version_string()),
         native_options,
         Box::new(move |_cc| {
-            Ok(Box::new(ui::SdrRemoteApp::new(state_rx, cmd_tx, log_buffer)))
+            Ok(Box::new(ui::SdrRemoteApp::new(state_rx, cmd_tx, log_buffer, relay_status_handle)))
         }),
     );
 

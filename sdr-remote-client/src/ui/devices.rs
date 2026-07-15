@@ -10,7 +10,7 @@ enum AntennaState {
     Inactive,
 }
 
-/// Twee-regelige antenne-knop — visueel identiek aan de server-versie
+/// Twee-regelige antenne-knop - visueel identiek aan de server-versie
 /// (`sdr-remote-server::ui::amplitec::antenna_button`) zodat client en
 /// server hetzelfde uiterlijk hebben. Geen rename-context-menu hier:
 /// labels worden alleen op de server beheerd, clients tonen de huidige
@@ -105,35 +105,43 @@ fn antenna_button(
 impl SdrRemoteApp {
     pub(super) fn render_devices_screen(&mut self, ui: &mut egui::Ui) {
         let amber = Color32::from_rgb(255, 170, 40);
+        let show_amplitec = self.amplitec_available;
+        let show_tuner = self.tuner_available;
+        let show_yaesu = self.yaesu_connected || self.yaesu2_connected || self.yaesu_enabled || self.yaesu2_enabled;
 
-        // Sub-tabs for each device (only show active PA)
+        let mut tabs: Vec<(u8, &str)> = Vec::new();
+        if show_amplitec { tabs.push((0, "Amplitec")); }
+        if show_tuner { tabs.push((1, "JC-4s")); }
+        if self.spe_active { tabs.push((2, "SPE Expert")); }
+        if self.rf2k_active { tabs.push((3, "RF2K-S")); }
+        if self.ub_available { tabs.push((4, "UltraBeam")); }
+        if self.rotor_available { tabs.push((5, "Rotor")); }
+        if show_yaesu { tabs.push((6, "Yaesu")); }
+
+        if tabs.is_empty() {
+            ui.colored_label(Color32::GRAY, "No external devices are configured or online.");
+            return;
+        }
+
+        if !tabs.iter().any(|(id, _)| *id == self.device_tab) {
+            self.device_tab = tabs[0].0;
+        }
+
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.device_tab, 0, "Amplitec");
-            ui.selectable_value(&mut self.device_tab, 1, "JC-4s");
-            if self.spe_active {
-                ui.selectable_value(&mut self.device_tab, 2, "SPE Expert");
+            for (id, label) in &tabs {
+                ui.selectable_value(&mut self.device_tab, *id, *label);
             }
-            if self.rf2k_active {
-                ui.selectable_value(&mut self.device_tab, 3, "RF2K-S");
-            }
-            if self.ub_available {
-                ui.selectable_value(&mut self.device_tab, 4, "UltraBeam");
-            }
-            if self.rotor_available {
-                ui.selectable_value(&mut self.device_tab, 5, "Rotor");
-            }
-            ui.selectable_value(&mut self.device_tab, 6, "Yaesu");
         });
         ui.separator();
 
         match self.device_tab {
-            0 => self.render_device_amplitec(ui),
-            1 => self.render_device_tuner(ui, amber),
+            0 if show_amplitec => self.render_device_amplitec(ui),
+            1 if show_tuner => self.render_device_tuner(ui, amber),
             2 if self.spe_active => self.render_device_spe(ui, amber),
             3 if self.rf2k_active => self.render_device_rf2k(ui, amber),
             4 if self.ub_available => self.render_device_ultrabeam(ui, amber),
             5 if self.rotor_available => self.render_device_rotor(ui),
-            6 => self.render_device_yaesu(ui, amber),
+            6 if show_yaesu => self.render_device_yaesu(ui, amber),
             _ => {}
         }
     }
@@ -152,7 +160,7 @@ impl SdrRemoteApp {
         });
         ui.separator();
 
-        // Poort A — TX+RX
+        // Poort A - TX+RX
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Poort A \u{2014} TX+RX").strong());
@@ -188,7 +196,7 @@ impl SdrRemoteApp {
 
         ui.add_space(8.0);
 
-        // Poort B — RX
+        // Poort B - RX
         ui.horizontal(|ui| {
             ui.label(RichText::new("Poort B \u{2014} RX").strong());
             if self.amplitec_switch_b > 0 {
@@ -416,7 +424,7 @@ impl SdrRemoteApp {
 
         // Row 1: Power On/Off | Operate/Standby (state+color) | Tune
         ui.horizontal(|ui| {
-            // Power — shows current state
+            // Power - shows current state
             if !self.spe_connected || self.spe_state == 0 {
                 let btn = egui::Button::new(RichText::new("Power Off").strong().color(Color32::WHITE))
                     .fill(Color32::from_rgb(120, 120, 120));
@@ -431,7 +439,7 @@ impl SdrRemoteApp {
                 }
             }
 
-            // Operate/Standby — shows current state
+            // Operate/Standby - shows current state
             let (op_text, op_color) = match self.spe_state {
                 2 => ("Operate", Color32::from_rgb(50, 180, 50)),
                 1 => ("Standby", amber),
@@ -454,7 +462,7 @@ impl SdrRemoteApp {
 
         // Row 2: Ant{N} | In {N} | Low/Mid/High | Band label | Drive (read-only)
         ui.horizontal(|ui| {
-            // Antenna toggle — shows bypass/tuner suffix
+            // Antenna toggle - shows bypass/tuner suffix
             let bypass_suffix = if self.spe_atu_bypassed { "b" } else { "" };
             let ant_text = format!("Ant{}{}", self.spe_antenna, bypass_suffix);
             let btn = if self.spe_atu_bypassed {
@@ -777,7 +785,7 @@ impl SdrRemoteApp {
             };
             ui.colored_label(mode_color, RichText::new(format!("Tuner: {}", mode_text)).strong());
 
-            // MAN/AUTO toggle — shows current state
+            // MAN/AUTO toggle - shows current state
             if self.rf2k_tuner_mode == 2 || self.rf2k_tuner_mode == 4 {
                 let (_toggle_text, toggle_btn) = if is_manual {
                     ("Manual", egui::Button::new(RichText::new("Manual").strong())
@@ -791,7 +799,7 @@ impl SdrRemoteApp {
                 }
             }
 
-            // Bypass — shows current state
+            // Bypass - shows current state
             let is_bypass = self.rf2k_tuner_mode == 1 || self.rf2k_tuner_setup == "BYPASS";
             let byp_btn = if is_bypass {
                 egui::Button::new(RichText::new("Bypass").strong())
@@ -1284,8 +1292,8 @@ impl SdrRemoteApp {
                 });
         }
 
-        // Collapsible Menu section — mirrors the server window so the
-        // owner only has to learn one UX. Editable element lengths +/-,
+        // Collapsible Menu section - mirrors the server window so the
+        // operator only has to learn one UX. Editable element lengths +/-,
         // Refresh, plus read-only Controller Info.
         if self.ub_show_menu {
             ui.add_space(8.0);
@@ -1357,7 +1365,7 @@ impl SdrRemoteApp {
         let angle_deg = self.rotor_angle_x10 as f32 / 10.0;
         let target_deg = if self.rotor_rotating { Some(self.rotor_target_x10 as f32 / 10.0) } else { None };
 
-        // Compass circle — click to GoTo
+        // Compass circle - click to GoTo
         if let Some(goto) = Self::render_compass(ui, angle_deg, target_deg, self.rotor_connected) {
             let _ = self.cmd_tx.send(Command::RotorGoTo(goto));
         }
@@ -1474,6 +1482,230 @@ impl SdrRemoteApp {
         None
     }
 
+    /// Shared DSP/function control block for a Yaesu radio slot (used by both slot 0
+    /// and slot 1 so styling stays identical - single shared renderer, no per-window drift).
+    /// PATCH-yaesu-extra-controls Fase A1: RF-ATT + Break-in toggles, driven by the
+    /// feature-state bitfield (bit N = YaesuCtrl N). Blauwe fill = aan.
+    /// Optimistische toggle-update: flip de lokale feature-bit meteen bij klik + zet de
+    /// debounce, zodat de knop direct reageert; de poll bevestigt/corrigeert (~0,5s, vangnet).
+    fn yaesu_toggle_flip(&mut self, slot: u8, bit: u32) {
+        if slot == 0 {
+            self.yaesu_feature_toggles ^= 1 << bit;
+            self.yaesu_control_changed_at = Some(Instant::now());
+        } else {
+            self.yaesu2_feature_toggles ^= 1 << bit;
+            self.yaesu2_control_changed_at = Some(Instant::now());
+        }
+    }
+
+    fn render_yaesu_dsp_block(&mut self, ui: &mut egui::Ui, slot: u8, toggles: u32, levels: [u8; 16]) {
+        let toggle_btn = |label: &str, on: bool| {
+            if on {
+                egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
+                    .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(46.0, 20.0))
+            } else {
+                egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(46.0, 20.0))
+            }
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label("DSP:");
+            let att_on = toggles & (1 << 0) != 0; // YaesuCtrl::RfAtt
+            if ui.add(toggle_btn("ATT", att_on)).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 0, if att_on { 0 } else { 1 }));
+                self.yaesu_toggle_flip(slot, 0);
+            }
+            let bi_on = toggles & (1 << 1) != 0; // YaesuCtrl::BreakIn
+            if ui.add(toggle_btn("BK-IN", bi_on)).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 1, if bi_on { 0 } else { 1 }));
+                self.yaesu_toggle_flip(slot, 1);
+            }
+            let nar_on = toggles & (1 << 2) != 0; // YaesuCtrl::Narrow
+            if ui.add(toggle_btn("NAR", nar_on)).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 2, if nar_on { 0 } else { 1 }));
+                self.yaesu_toggle_flip(slot, 2);
+            }
+            let dnf_on = toggles & (1 << 3) != 0; // YaesuCtrl::AutoNotch (DNF)
+            if ui.add(toggle_btn("DNF", dnf_on)).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 3, if dnf_on { 0 } else { 1 }));
+                self.yaesu_toggle_flip(slot, 3);
+            }
+            // AGC cyclus (multi-state) - YaesuCtrl::Agc index 6. Geen blauw: er is altijd
+            // één stand actief; het label toont de stand. Hardware-geverifieerd (§13):
+            // 1=FAST/2=MID/3=SLOW/4=AUTO op beide radio's (AUTO leest terug als 4/5/6, door
+            // de server naar 4 genormaliseerd). OFF (0) bewust weggelaten (remote riskant).
+            let agc = levels[6];
+            let agc_lbl = match agc { 1 => "FAST", 2 => "MID", 3 => "SLOW", 4 => "AUTO", _ => "AUTO" };
+            // Cyclus FAST->MID->SLOW->AUTO->FAST; onbekende/0-stand start op FAST.
+            let next_agc: u16 = if (1..4).contains(&agc) { (agc + 1) as u16 } else { 1 };
+            if ui.add(egui::Button::new(RichText::new(format!("AGC:{}", agc_lbl)).size(11.0))
+                .min_size(egui::vec2(74.0, 20.0))).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 6, next_agc));
+            }
+            // Pre-amp/IPO cyclus (HF) - YaesuCtrl::PreAmp index 7. Label toont de stand.
+            let ipo = levels[7];
+            let ipo_lbl = match ipo { 0 => "IPO", 1 => "AMP1", _ => "AMP2" };
+            if ui.add(egui::Button::new(RichText::new(ipo_lbl).size(11.0))
+                .min_size(egui::vec2(52.0, 20.0))).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 7, ((ipo + 1) % 3) as u16));
+            }
+        });
+    }
+
+    /// Collapsible level-slider block (Fase C): NB/DNR/Processor/AMC as sliders,
+    /// per radio slot. Debounced via yaesu(2)_control_changed_at zodat een sleep niet
+    /// elk frame door de radio-readback wordt teruggezet. Gedeeld voor slot 0/1.
+    fn render_yaesu_levels_block(&mut self, ui: &mut egui::Ui, slot: u8) {
+        let s = slot as usize;
+        // AMC (AO) bestaat alleen op de FTX-1; de 991A kent geen AO CAT-commando
+        // (geen readback -> slider zou terugspringen). Model-code 1 = FTX-1.
+        let is_ftx1 = (if slot == 0 { self.yaesu_model } else { self.yaesu2_model }) == 1;
+        // APF is CW-only (mode 3=CW, 4=CW-R); buiten CW uitgrijzen.
+        let is_cw = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 3 | 4);
+        let toggles = if slot == 0 { self.yaesu_feature_toggles } else { self.yaesu2_feature_toggles };
+        egui::CollapsingHeader::new("DSP/Levels")
+            .id_salt(("yaesu_levels", slot))
+            .show(ui, |ui| {
+                // (level-ctrl, label, min, max, ftx1_only, on/off-ctrl voor 991A)
+                // Proc (ctrl 10) verwijderd: de radio-speech-processor doet niets op
+                // USB-audio (radio-shaping gebypassed op REAR/USB); client-side EQ/AGC
+                // vervangen het.
+                let specs: [(u8, &str, i32, i32, bool, Option<u8>); 3] = [
+                    (8, "NB", 0, 10, false, Some(13)),   // 991A: NB aan/uit = ctrl 13
+                    (9, "DNR", 0, 10, false, Some(14)),  // 991A: NR aan/uit = ctrl 14
+                    (11, "AMC", 1, 100, true, None),
+                ];
+                for (j, &(ctrl, label, lo, hi, ftx1_only, toggle_ctrl)) in specs.iter().enumerate() {
+                    if ftx1_only && !is_ftx1 { continue; }
+                    ui.horizontal(|ui| {
+                        // 991A: aparte aan/uit-knop vóór de niveau-slider (FTX-1 codeert
+                        // "uit" in het niveau zelf, dus daar geen toggle).
+                        let has_toggle = toggle_ctrl.is_some() && !is_ftx1;
+                        if let Some(tc) = toggle_ctrl {
+                            if !is_ftx1 {
+                                let on = toggles & (1 << tc) != 0;
+                                let tbtn = if on {
+                                    egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
+                                        .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(46.0, 20.0))
+                                } else {
+                                    egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(46.0, 20.0))
+                                };
+                                if ui.add(tbtn).clicked() {
+                                    let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, tc, if on { 0 } else { 1 }));
+                                    self.yaesu_toggle_flip(slot, tc as u32);
+                                }
+                            }
+                        }
+                        let sl_label = if has_toggle { "" } else { label };
+                        let resp = ui.add(egui::Slider::new(&mut self.yaesu_level_sliders[s][j], lo..=hi).text(sl_label));
+                        // Send alleen op drag-release (of een niet-sleep-wijziging: klik/toets),
+                        // niet op elke tussenwaarde - anders burst een sleep CAT-commando's over
+                        // de seriële Yaesu-link (deelt met de poll -> CAT-lag). Eindwaarde altijd.
+                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                            let v = self.yaesu_level_sliders[s][j] as u16;
+                            let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, ctrl, v));
+                            if slot == 0 {
+                                self.yaesu_control_changed_at = Some(Instant::now());
+                            } else {
+                                self.yaesu2_control_changed_at = Some(Instant::now());
+                            }
+                        }
+                    });
+                }
+                // Fase D: Contour / APF / Manual-Notch - aan/uit-knop + frequentie-slider.
+                let dspecs: [(usize, &str, u8, u8, i32, i32); 3] = [
+                    (0, "Contour", 15, 18, 10, 3200),
+                    (1, "APF", 16, 19, 0, 50),
+                    (2, "Notch", 17, 20, 1, 320),
+                ];
+                for &(fidx, label, on_ctrl, freq_ctrl, flo, fhi) in dspecs.iter() {
+                    let enabled = label != "APF" || is_cw; // APF alleen in CW
+                    ui.add_enabled_ui(enabled, |ui| {
+                    ui.horizontal(|ui| {
+                        let on = toggles & (1 << on_ctrl) != 0;
+                        let tbtn = if on {
+                            egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
+                                .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(58.0, 20.0))
+                        } else {
+                            egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(58.0, 20.0))
+                        };
+                        if ui.add(tbtn).clicked() {
+                            let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, on_ctrl, if on { 0 } else { 1 }));
+                            self.yaesu_toggle_flip(slot, on_ctrl as u32);
+                        }
+                        let resp = ui.add(egui::Slider::new(&mut self.yaesu_freq_sliders[s][fidx], flo..=fhi).text("Hz"));
+                        // Send op drag-release i.p.v. elke tussenwaarde - brede freq-sliders
+                        // (Contour 10-3200, Notch 1-320) zouden anders tientallen CAT-commando's
+                        // per sleep queuen. Eindwaarde altijd verzonden.
+                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                            let v = self.yaesu_freq_sliders[s][fidx] as u16;
+                            let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, freq_ctrl, v));
+                            if slot == 0 {
+                                self.yaesu_control_changed_at = Some(Instant::now());
+                            } else {
+                                self.yaesu2_control_changed_at = Some(Instant::now());
+                            }
+                        }
+                    });
+                    });
+                }
+            });
+    }
+
+    /// Clarifier-blok (§15): RIT/XIT aan/uit (blauw=aan, optimistisch), offset-display
+    /// (freqs[3] als i16) + stapknoppen (±10/±100 Hz) en Clear. Gedeeld voor slot 0/1.
+    /// Per-model verschil zit server-side (991A relatief RU/RD, FTX-1 absolute CF).
+    fn render_yaesu_clarifier_block(&mut self, ui: &mut egui::Ui, slot: u8) {
+        let toggles = if slot == 0 { self.yaesu_feature_toggles } else { self.yaesu2_feature_toggles };
+        let offset = if slot == 0 { self.yaesu_clar_offset } else { self.yaesu2_clar_offset }; // signed Hz
+        let toggle_btn = |label: &str, on: bool| {
+            if on {
+                egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
+                    .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(40.0, 20.0))
+            } else {
+                egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(40.0, 20.0))
+            }
+        };
+        let step_btn = |label: &str| egui::Button::new(RichText::new(label).size(11.0))
+            .min_size(egui::vec2(40.0, 20.0));
+        ui.horizontal(|ui| {
+            ui.label("Clar:");
+            let rit_on = toggles & (1 << 21) != 0; // YaesuCtrl::RitOn
+            if ui.add(toggle_btn("RIT", rit_on)).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 21, if rit_on { 0 } else { 1 }));
+                self.yaesu_toggle_flip(slot, 21);
+            }
+            let xit_on = toggles & (1 << 22) != 0; // YaesuCtrl::XitOn
+            if ui.add(toggle_btn("XIT", xit_on)).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 22, if xit_on { 0 } else { 1 }));
+                self.yaesu_toggle_flip(slot, 22);
+            }
+            // Offset-display (signed): oranje als ≠0, grijs als 0.
+            let (txt, col) = if offset == 0 {
+                (" +0000 Hz".to_string(), Color32::from_rgb(120, 120, 120))
+            } else {
+                (format!("{:+05} Hz", offset), Color32::from_rgb(255, 170, 40))
+            };
+            ui.label(RichText::new(txt).size(11.0).family(egui::FontFamily::Monospace).color(col));
+        });
+        ui.horizontal(|ui| {
+            // Stapknoppen: value = i16-as-u16 signed stap (YaesuCtrl::ClarStep = 24).
+            for &step in &[-100i16, -10] {
+                if ui.add(step_btn(&format!("{}", step))).clicked() {
+                    let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 24, step as u16));
+                }
+            }
+            if ui.add(egui::Button::new(RichText::new("Clr").size(11.0))
+                .min_size(egui::vec2(40.0, 20.0))).clicked() {
+                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 23, 0)); // ClarClear
+            }
+            for &step in &[10i16, 100] {
+                if ui.add(step_btn(&format!("+{}", step))).clicked() {
+                    let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 24, step as u16));
+                }
+            }
+        });
+    }
+
     pub(super) fn render_yaesu_popout(&mut self, ui: &mut egui::Ui) {
         let mode_label = match self.yaesu_mode {
             0 => "LSB", 1 => "USB", 3 => "CW-L", 4 => "CW-U",
@@ -1516,15 +1748,20 @@ impl SdrRemoteApp {
             ui.label(RichText::new(label).size(14.0).strong().color(c));
         }
 
-        // Frequency display with scroll-to-tune
+        // Frequency display with scroll/tap-to-tune + touch-vriendelijke stapper (§16)
         ui.horizontal(|ui| {
             ui.label(RichText::new("A:  ").size(16.0).strong());
             if let Some(delta) = render_freq_scroll(ui, self.yaesu_freq_a) {
                 let new_freq = (self.yaesu_freq_a as i64 + delta).max(0) as u64;
                 let _ = self.cmd_tx.send(Command::SetYaesuFreq(new_freq));
-                self.yaesu_freq_a = new_freq;
+                self.set_pending_yaesu_freq(0, new_freq);
             }
         });
+        if let Some(delta) = render_freq_stepper(ui, &mut self.tune_step_hz) {
+            let new_freq = (self.yaesu_freq_a as i64 + delta).max(0) as u64;
+            let _ = self.cmd_tx.send(Command::SetYaesuFreq(new_freq));
+            self.set_pending_yaesu_freq(0, new_freq);
+        }
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("B:  ").size(12.0));
@@ -1546,7 +1783,11 @@ impl SdrRemoteApp {
             ui.horizontal(|ui| {
                 ui.label("Mode:");
                 for (i, &name) in mode_names.iter().enumerate().take(8) {
-                    if ui.add(btn(name)).clicked() {
+                    let mb = if mode_codes[i] == self.yaesu_mode {
+                        egui::Button::new(RichText::new(name).size(11.0).color(Color32::WHITE))
+                            .fill(Color32::from_rgb(0, 90, 200))
+                    } else { btn(name) };
+                    if ui.add(mb).clicked() {
                         let _ = self.cmd_tx.send(Command::SetYaesuMode(mode_codes[i]));
                     }
                 }
@@ -1589,16 +1830,33 @@ impl SdrRemoteApp {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton,
                         if self.yaesu_scan_active { 1 } else { 2 }));
                 }
-                let tune_btn = if self.yaesu_tuner_active {
+                // Interne ATU: momentane Tune (band-gated: HF+6m, <54 MHz) + aan/uit-toggle
+                // die de echte radio-stand toont (via AC;-poll). PATCH-yaesu-internal-atu.
+                let can_tune = self.yaesu_connected && self.yaesu_freq_a < 54_000_000;
+                let tune_btn = if self.yaesu_tuner_state == 2 {
+                    // Actief aan het tunen -> rode voortgangsindicatie.
                     egui::Button::new(RichText::new("Tune").size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(180, 0, 0)).min_size(egui::vec2(38.0, 20.0))
                 } else { btn("Tune") };
-                if ui.add(tune_btn).clicked() {
-                    self.yaesu_tuner_active = !self.yaesu_tuner_active;
+                if ui.add_enabled(can_tune, tune_btn).clicked() {
+                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 3)); // start tuning (momentaan)
+                }
+                let atu_on = self.yaesu_tuner_state == 1;
+                let atu_btn = if atu_on {
+                    egui::Button::new(RichText::new("ATU").size(11.0).color(Color32::WHITE))
+                        .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(38.0, 20.0))
+                } else { btn("ATU") };
+                if ui.add(atu_btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton,
-                        if self.yaesu_tuner_active { 3 } else { 4 }));
+                        if atu_on { 4 } else { 15 })); // toggle: uit (AC000) / aan (AC001)
                 }
             });
+            // DSP/functie-controls (PATCH-yaesu-extra-controls) - radio 1.
+            let dsp0 = self.yaesu_feature_toggles;
+            let lvl0 = self.yaesu_feature_levels;
+            self.render_yaesu_dsp_block(ui, 0, dsp0, lvl0);
+            self.render_yaesu_clarifier_block(ui, 0);
+            self.render_yaesu_levels_block(ui, 0);
 
             // Sliders: aligned grid layout
             let label_w = 55.0;
@@ -1637,28 +1895,7 @@ impl SdrRemoteApp {
         ui.separator();
 
         // S-meter bar
-        {
-            let frac = (self.yaesu_smeter as f32 / 255.0).clamp(0.0, 1.0);
-            let desired = egui::vec2(ui.available_width().min(350.0), 18.0);
-            let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
-            if ui.is_rect_visible(rect) {
-                let painter = ui.painter();
-                painter.rect_filled(rect, 3.0, Color32::from_rgb(30, 30, 30));
-                let fill_w = rect.width() * frac;
-                let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
-                let color = if frac < 0.7 { Color32::from_rgb(0, 180, 0) } else { Color32::from_rgb(220, 40, 40) };
-                painter.rect_filled(fill_rect, 3.0, color);
-                let s_val = (self.yaesu_smeter as f32 / 12.0).min(9.0);
-                let text = if s_val >= 9.0 {
-                    let db_over = ((self.yaesu_smeter as f32 - 108.0) * 0.5).max(0.0);
-                    format!("S9+{:.0} dB", db_over)
-                } else {
-                    format!("S{:.0}", s_val)
-                };
-                painter.text(rect.center(), egui::Align2::CENTER_CENTER,
-                    text, egui::FontId::proportional(12.0), Color32::WHITE);
-            }
-        }
+        yaesu_smeter_bar(ui, self.yaesu_smeter, self.yaesu_smeter_peak);
 
         ui.separator();
 
@@ -1675,26 +1912,36 @@ impl SdrRemoteApp {
         });
 
         ui.separator();
+        self.render_websdr_controls(ui, CatSyncTarget::Yaesu1, self.yaesu_freq_a, self.yaesu_mode);
 
-        // Volume slider
+        ui.separator();
+
+        // Mic gain slider for Yaesu USB TX audio. Display 0.5 maps
+        // to the empirically matched internal gain 0.2.
         ui.horizontal(|ui| {
-            ui.label("Volume:");
-            let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
+            ui.label("Mic gain:");
+            let mut mic_gain_display = super::yaesu_mic_gain_to_display(self.yaesu_mic_gain);
+            let slider = egui::Slider::new(&mut mic_gain_display, 0.05..=1.0)
                 .logarithmic(true)
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            if ui.add_sized([140.0, 16.0], slider).changed() {
-                let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
+                .custom_formatter(|v, _| format!("{:.2}x", v));
+            let resp = ui.add_sized([140.0, 16.0], slider);
+            if resp.changed() {
+                self.yaesu_mic_gain = super::yaesu_mic_gain_from_display(mic_gain_display);
+                let _ = self.cmd_tx.send(Command::SetYaesuTxGain(self.yaesu_mic_gain));
+            }
+            if resp.drag_stopped() {
+                self.save_ptt_config();
             }
         });
 
         ui.separator();
 
-        // 5-band Equalizer — gedeelde generieke component (slot 0).
+        // 5-band Equalizer - gedeelde generieke component (slot 0).
         self.render_yaesu_eq(ui, 0);
 
         ui.separator();
 
-        // Memory channels — visible body height is user-resizable so it
+        // Memory channels - visible body height is user-resizable so it
         // doesn't push the Radio Settings header off the bottom of the window.
         if super::helpers::chevron_label(
             ui,
@@ -1718,7 +1965,7 @@ impl SdrRemoteApp {
                     });
             });
         }
-        // Drag-handle below memories — only visible when memories expanded
+        // Drag-handle below memories - only visible when memories expanded
         // so it can resize the visible portion of the channel list.
         if self.collapse_yaesu_memories {
             let handle_h = 6.0;
@@ -1803,8 +2050,8 @@ impl SdrRemoteApp {
     /// uit state) en stuurt SetYaesu2*-commando's.
     /// Generieke 5-band EQ-sectie (chevron + profielen opslaan/verwijderen +
     /// waarde per slider), GEDEELD door beide Yaesu-windows (slot 0 = 991A-window,
-    /// slot 1 = FTX-1-window) — parity by construction, niet per-window naschilderen.
-    /// Snapshot→writeback houdt de borrow-checker tevreden bij per-slot state +
+    /// slot 1 = FTX-1-window) - parity by construction, niet per-window naschilderen.
+    /// Snapshot->writeback houdt de borrow-checker tevreden bij per-slot state +
     /// per-slot commando's (SetYaesu*/SetYaesu2*).
     pub(super) fn render_yaesu_eq(&mut self, ui: &mut egui::Ui, slot: u8) {
         let mut collapse = if slot == 0 { self.collapse_yaesu_eq } else { self.collapse_yaesu2_eq };
@@ -1829,6 +2076,12 @@ impl SdrRemoteApp {
         let mk_en = |on: bool| if slot == 0 { Command::SetYaesuEqEnabled(on) } else { Command::SetYaesu2EqEnabled(on) };
         let mk_band = |b: u8, g: f32| if slot == 0 { Command::SetYaesuEqBand(b, g) } else { Command::SetYaesu2EqBand(b, g) };
         let mk_gain = |g: f32| if slot == 0 { Command::SetYaesuTxGain(g) } else { Command::SetYaesu2TxGain(g) };
+        // Client-side TX-keten per radio: compressor (0-100) + AGC-toggle.
+        let mut comp = if slot == 0 { self.yaesu_compressor } else { self.yaesu2_compressor };
+        let mut agc = if slot == 0 { self.yaesu_tx_agc } else { self.yaesu2_tx_agc };
+        let mut chain_dirty = false;
+        let mk_comp = |v: u8| if slot == 0 { Command::SetYaesuCompressor(v) } else { Command::SetYaesu2Compressor(v) };
+        let mk_agc = |on: bool| if slot == 0 { Command::SetYaesuTxAgc(on) } else { Command::SetYaesu2TxAgc(on) };
 
         ui.indent(("yaesu_eq_body", slot), |ui| {
             ui.horizontal(|ui| {
@@ -1895,22 +2148,41 @@ impl SdrRemoteApp {
                     });
                 }
             });
+            // Client-side TX-keten (radio-processing werkt niet op USB): AGC + compressor.
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut agc, "AGC").changed() {
+                    let _ = tx.send(mk_agc(agc));
+                    chain_dirty = true;
+                }
+                ui.label("Comp");
+                let mut c = comp as f32;
+                let resp = ui.add(egui::Slider::new(&mut c, 0.0..=100.0)
+                    .custom_formatter(|v, _| format!("{:.0}", v)));
+                if resp.changed() {
+                    comp = c.round() as u8;
+                    let _ = tx.send(mk_comp(comp));
+                }
+                if resp.drag_stopped() { chain_dirty = true; }
+            });
         });
 
         // Writeback naar de slot-state.
         if slot == 0 {
             self.yaesu_eq_enabled = enabled; self.yaesu_eq_gains = gains; self.yaesu_mic_gain = mic_gain;
             self.yaesu_eq_profiles = profiles; self.yaesu_eq_active_profile = active; self.yaesu_eq_new_name = new_name;
+            self.yaesu_compressor = comp; self.yaesu_tx_agc = agc;
         } else {
             self.yaesu2_eq_enabled = enabled; self.yaesu2_eq_gains = gains; self.yaesu2_mic_gain = mic_gain;
             self.yaesu2_eq_profiles = profiles; self.yaesu2_eq_active_profile = active; self.yaesu2_eq_new_name = new_name;
+            self.yaesu2_compressor = comp; self.yaesu2_tx_agc = agc;
         }
         if dirty { self.save_full_config(); }
+        if chain_dirty { self.save_ptt_config(); } // comp/AGC volgen het mic-gain-append-patroon
     }
 
     /// Geheugen-tabel per radio-slot. Slot 0 = direct. Slot 1: wissel de slot-1
     /// state via mem::swap in de (gedeelde) slot-0 velden, render dezelfde tabel,
-    /// en wissel terug — zo blijft de werkende 991A-tabel ongewijzigd en is de UI
+    /// en wissel terug - zo blijft de werkende 991A-tabel ongewijzigd en is de UI
     /// gedeeld. De read/write-commando's volgen `yaesu_mem_active_slot`.
     pub(super) fn render_yaesu_memories_slot(&mut self, ui: &mut egui::Ui, slot: u8) {
         if slot == 0 {
@@ -1954,7 +2226,7 @@ impl SdrRemoteApp {
             ui.separator();
             ui.label(RichText::new(mode_label).size(14.0).color(Color32::from_rgb(255, 170, 40)));
         });
-        // VFO / Memory-indicator (blauw bij Memory) — zelfde plek + naam/freq als 991A.
+        // VFO / Memory-indicator (blauw bij Memory) - zelfde plek + naam/freq als 991A.
         if self.yaesu2_vfo_select == 1 {
             let c = Color32::from_rgb(100, 200, 255);
             let found = self.yaesu2_mem_channels.iter()
@@ -1976,15 +2248,20 @@ impl SdrRemoteApp {
             };
             ui.label(RichText::new(label).size(14.0).strong().color(c));
         }
-        // A: frequentie (scroll-to-tune), daaronder B:.
+        // A: frequentie (scroll/tik-to-tune) + touch-vriendelijke stapper (§16), daaronder B:.
         ui.horizontal(|ui| {
             ui.label(RichText::new("A:  ").size(16.0).strong());
             if let Some(delta) = render_freq_scroll(ui, self.yaesu2_freq_a) {
                 let new_freq = (self.yaesu2_freq_a as i64 + delta).max(0) as u64;
                 let _ = self.cmd_tx.send(Command::SetYaesu2Freq(new_freq));
-                self.yaesu2_freq_a = new_freq;
+                self.set_pending_yaesu_freq(1, new_freq);
             }
         });
+        if let Some(delta) = render_freq_stepper(ui, &mut self.tune_step_hz) {
+            let new_freq = (self.yaesu2_freq_a as i64 + delta).max(0) as u64;
+            let _ = self.cmd_tx.send(Command::SetYaesu2Freq(new_freq));
+            self.set_pending_yaesu_freq(1, new_freq);
+        }
         ui.horizontal(|ui| {
             ui.label(RichText::new("B:  ").size(12.0));
             ui.label(RichText::new(format!("{} Hz", format_frequency(self.yaesu2_freq_b)))
@@ -1999,13 +2276,17 @@ impl SdrRemoteApp {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Mode:");
                 for (i, &name) in mode_names.iter().enumerate() {
-                    if ui.add(btn(name)).clicked() {
+                    let mb = if mode_codes[i] == self.yaesu2_mode {
+                        egui::Button::new(RichText::new(name).size(11.0).color(Color32::WHITE))
+                            .fill(Color32::from_rgb(0, 90, 200))
+                    } else { btn(name) };
+                    if ui.add(mb).clicked() {
                         let _ = self.cmd_tx.send(Command::SetYaesu2Mode(mode_codes[i]));
                     }
                 }
             });
         }
-        // Band / A=B / Split / Scan / Tune — spiegel van het 991A-paneel, geroute
+        // Band / A=B / Split / Scan / Tune - spiegel van het 991A-paneel, geroute
         // naar slot 1 (Yaesu2Button). Mem± en V/M = fase 2 (geheugen).
         {
             use sdr_remote_core::protocol::ControlId;
@@ -2047,16 +2328,32 @@ impl SdrRemoteApp {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button,
                         if self.yaesu2_scan { 1 } else { 2 }));
                 }
-                let tune_btn = if self.yaesu2_tuner_active {
+                // Interne ATU (FTX-1): momentane Tune (band-gated <54 MHz) + aan/uit-toggle
+                // met echte stand via AC;-poll. Server stuurt AC003 voor tune-start (FTX-1).
+                let can_tune = self.yaesu2_connected && self.yaesu2_freq_a < 54_000_000;
+                let tune_btn = if self.yaesu2_tuner_state == 2 {
                     egui::Button::new(RichText::new("Tune").size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(180, 0, 0)).min_size(egui::vec2(38.0, 20.0))
                 } else { btn("Tune") };
-                if ui.add(tune_btn).clicked() {
-                    self.yaesu2_tuner_active = !self.yaesu2_tuner_active;
+                if ui.add_enabled(can_tune, tune_btn).clicked() {
+                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 3)); // start tuning (momentaan)
+                }
+                let atu_on = self.yaesu2_tuner_state == 1;
+                let atu_btn = if atu_on {
+                    egui::Button::new(RichText::new("ATU").size(11.0).color(Color32::WHITE))
+                        .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(38.0, 20.0))
+                } else { btn("ATU") };
+                if ui.add(atu_btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button,
-                        if self.yaesu2_tuner_active { 3 } else { 4 }));
+                        if atu_on { 4 } else { 15 })); // toggle: uit (AC000) / aan (AC001)
                 }
             });
+            // DSP/functie-controls (PATCH-yaesu-extra-controls) - radio 2.
+            let dsp1 = self.yaesu2_feature_toggles;
+            let lvl1 = self.yaesu2_feature_levels;
+            self.render_yaesu_dsp_block(ui, 1, dsp1, lvl1);
+            self.render_yaesu_clarifier_block(ui, 1);
+            self.render_yaesu_levels_block(ui, 1);
             // Quick Memory Bank (FTX-1-specifiek): momentane actie-knoppen.
             // Store = huidige VFO in QMB (QI;), Recall = QMB doorlopen (QR;).
             ui.horizontal(|ui| {
@@ -2073,7 +2370,7 @@ impl SdrRemoteApp {
                 }
             });
         }
-        // Squelch / RF-power / RF-gain sliders — spiegel van het 991A-paneel.
+        // Squelch / RF-power / RF-gain sliders - spiegel van het 991A-paneel.
         {
             use sdr_remote_core::protocol::ControlId;
             let slider_w = 120.0;
@@ -2106,30 +2403,8 @@ impl SdrRemoteApp {
             });
         }
         ui.separator();
-        // S-meter — identiek aan het 991A-paneel (geverfde bar i.p.v. ProgressBar).
-        {
-            let frac = (self.yaesu2_smeter as f32 / 255.0).clamp(0.0, 1.0);
-            let desired = egui::vec2(ui.available_width().min(350.0), 18.0);
-            let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
-            if ui.is_rect_visible(rect) {
-                let painter = ui.painter();
-                painter.rect_filled(rect, 3.0, Color32::from_rgb(30, 30, 30));
-                let fill_w = rect.width() * frac;
-                let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
-                let color = if frac < 0.7 { Color32::from_rgb(0, 180, 0) } else { Color32::from_rgb(220, 40, 40) };
-                painter.rect_filled(fill_rect, 3.0, color);
-                // S-eenheid-omrekening (zelfde als 991A; FTX-1 SM-cal evt. later fijnstellen).
-                let s_val = (self.yaesu2_smeter as f32 / 12.0).min(9.0);
-                let text = if s_val >= 9.0 {
-                    let db_over = ((self.yaesu2_smeter as f32 - 108.0) * 0.5).max(0.0);
-                    format!("S9+{:.0} dB", db_over)
-                } else {
-                    format!("S{:.0}", s_val)
-                };
-                painter.text(rect.center(), egui::Align2::CENTER_CENTER,
-                    text, egui::FontId::proportional(12.0), Color32::WHITE);
-            }
-        }
+        // S-meter bar
+        yaesu_smeter_bar(ui, self.yaesu2_smeter, self.yaesu2_smeter_peak);
         ui.separator();
         // Status: RX/TX + power on/off (spiegel van het 991A-paneel).
         ui.horizontal(|ui| {
@@ -2143,25 +2418,28 @@ impl SdrRemoteApp {
             ui.label(if self.yaesu2_power_on { "Power ON" } else { "Power OFF" });
         });
         ui.separator();
+        self.render_websdr_controls(ui, CatSyncTarget::Yaesu2, self.yaesu2_freq_a, self.yaesu2_mode);
+        ui.separator();
         ui.horizontal(|ui| {
-            ui.label("Volume:");
-            // Waarde-blok (%) + muis-aanpasbaar, identiek aan het 991A-volume.
-            let slider = egui::Slider::new(&mut self.yaesu2_volume, 0.001..=1.0)
+            ui.label("Mic gain:");
+            let mut mic_gain_display = super::yaesu_mic_gain_to_display(self.yaesu2_mic_gain);
+            let slider = egui::Slider::new(&mut mic_gain_display, 0.05..=1.0)
                 .logarithmic(true)
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                .custom_formatter(|v, _| format!("{:.2}x", v));
             let resp = ui.add_sized([140.0, 16.0], slider);
             if resp.changed() {
-                let _ = self.cmd_tx.send(Command::SetYaesu2Volume(self.yaesu2_volume));
+                self.yaesu2_mic_gain = super::yaesu_mic_gain_from_display(mic_gain_display);
+                let _ = self.cmd_tx.send(Command::SetYaesu2TxGain(self.yaesu2_mic_gain));
             }
             if resp.drag_stopped() {
-                self.save_full_config(); // persist volume bij loslaten
+                self.save_ptt_config();
             }
         });
         ui.separator();
-        // Equalizer — zelfde gedeelde generieke component als het 991A-window (slot 1).
+        // Equalizer - zelfde gedeelde generieke component als het 991A-window (slot 1).
         self.render_yaesu_eq(ui, 1);
         ui.separator();
-        // Memory Channels — zelfde gedeelde tabel als het 991A-window (via slot 1).
+        // Memory Channels - zelfde gedeelde tabel als het 991A-window (via slot 1).
         if super::helpers::chevron_label(ui, self.collapse_yaesu2_memories,
             RichText::new("Memory Channels").strong().size(14.0)).clicked()
         {
@@ -2182,8 +2460,8 @@ impl SdrRemoteApp {
                     });
             });
         }
-        // (geen separator hier — pariteit met het 991A-window; de lijn hoorde er niet)
-        // Radio Settings (EX Menu) — FTX-1 hiërarchisch. C1: ruwe adres/waarde-lijst
+        // (geen separator hier - pariteit met het 991A-window; de lijn hoorde er niet)
+        // Radio Settings (EX Menu) - FTX-1 hiërarchisch. C1: ruwe adres/waarde-lijst
         // ter verificatie van de server-scan; C3 maakt er een P1>P2>P3 browser van.
         if super::helpers::chevron_label(ui, self.collapse_yaesu2_menu,
             RichText::new("Radio Settings (EX Menu)").strong().size(14.0)).clicked()
@@ -2251,8 +2529,8 @@ impl SdrRemoteApp {
                             let mut last_sub = String::new();
                             for (addr, sub, desc, val) in items {
                                 if sub != &last_sub {
-                                    // Subgroep-header bold (was .weak() → vrijwel onleesbaar,
-                                    // owner-feedback build 120). Bold + volle contrast.
+                                    // Subgroep-header bold (was .weak() -> vrijwel onleesbaar,
+                                    // operator-feedback build 120). Bold + volle contrast.
                                     ui.label(RichText::new(sub).strong());
                                     last_sub = sub.clone();
                                 }
@@ -2331,7 +2609,7 @@ impl SdrRemoteApp {
                         // Name
                         ui.label(name);
 
-                        // Value — read-only, enum dropdown, or text
+                        // Value - read-only, enum dropdown, or text
                         let read_only = def.map_or(false, |d| d.p2_digits == 0);
                         if read_only {
                             ui.label(RichText::new(&item.raw_value).color(Color32::GRAY));
@@ -2350,7 +2628,7 @@ impl SdrRemoteApp {
                                     }
                                 });
                         } else {
-                            // Numeric value — show as text, editable
+                            // Numeric value - show as text, editable
                             let resp = ui.add(egui::TextEdit::singleline(&mut item.raw_value)
                                 .desired_width(60.0).font(egui::FontId::monospace(11.0)));
                             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -2441,10 +2719,10 @@ impl SdrRemoteApp {
             // Import: kopieer de volledige geheugenlijst van de ANDERE radio.
             // Door het mem::swap-patroon in render_yaesu_memories_slot staan de
             // kanalen van de andere radio altijd in `yaesu2_mem_channels`,
-            // ongeacht welk slot nu getoond wordt. 991A↔FTX-1 delen exact dezelfde
+            // ongeacht welk slot nu getoond wordt. 991A<->FTX-1 delen exact dezelfde
             // YaesuMemoryChannel + tab-kolommen, dus een directe clone volstaat;
             // de per-model write-functie op de server mapt de mode-codes.
-            // Niet-destructief: vult de lijst + markeert dirty — pas bij
+            // Niet-destructief: vult de lijst + markeert dirty - pas bij
             // "Write radio" gaat het écht naar de radio.
             if !self.yaesu2_mem_channels.is_empty() {
                 let from_radio = if self.yaesu_mem_active_slot == 0 { 2 } else { 1 };
@@ -2493,7 +2771,7 @@ impl SdrRemoteApp {
         // Use a horizontal layout so the table can exceed the viewport width
         egui::ScrollArea::both().show(ui, |ui| {
             let header_style = |t: &str| RichText::new(t).strong().size(11.0);
-            let on_off = |v: bool| if v { "On" } else { "—" };
+            let on_off = |v: bool| if v { "On" } else { "-" };
 
             egui::Grid::new("yaesu_mem_grid")
                 .striped(true)
@@ -2579,10 +2857,10 @@ impl SdrRemoteApp {
                             // Offset frequency
                             if ch.offset_direction != "Simplex" {
                                 egui::ComboBox::from_id_salt(format!("mof_{}", idx))
-                                    .width(70.0).selected_text(if ch.offset_freq.is_empty() { "—" } else { &ch.offset_freq })
+                                    .width(70.0).selected_text(if ch.offset_freq.is_empty() { "-" } else { &ch.offset_freq })
                                     .show_ui(ui, |ui| {
                                         for &f in yaesu_memory::OFFSET_FREQS {
-                                            let label = if f.is_empty() { "—" } else { f };
+                                            let label = if f.is_empty() { "-" } else { f };
                                             if ui.selectable_label(ch.offset_freq == f, label).clicked() {
                                                 ch.offset_freq = f.to_string();
                                                 self.yaesu_mem_dirty = true;
@@ -2590,15 +2868,15 @@ impl SdrRemoteApp {
                                         }
                                     });
                             } else {
-                                ui.label("—");
+                                ui.label("-");
                             }
 
                             // Tone mode
                             egui::ComboBox::from_id_salt(format!("mt_{}", idx))
-                                .width(55.0).selected_text(if ch.tone_mode == "None" { "—" } else { &ch.tone_mode })
+                                .width(55.0).selected_text(if ch.tone_mode == "None" { "-" } else { &ch.tone_mode })
                                 .show_ui(ui, |ui| {
                                     for &t in yaesu_memory::TONE_MODES {
-                                        let l = if t == "None" { "—" } else { t };
+                                        let l = if t == "None" { "-" } else { t };
                                         if ui.selectable_label(ch.tone_mode == t, l).clicked() {
                                             ch.tone_mode = t.to_string(); self.yaesu_mem_dirty = true;
                                         }
@@ -2616,7 +2894,7 @@ impl SdrRemoteApp {
                                             }
                                         }
                                     });
-                            } else { ui.label("—"); }
+                            } else { ui.label("-"); }
 
                             // AGC
                             egui::ComboBox::from_id_salt(format!("ma_{}", idx))
@@ -2709,14 +2987,14 @@ impl SdrRemoteApp {
                             ui.label(RichText::new(dir_text).color(c));
 
                             // Offset freq
-                            ui.label(RichText::new(if ch.offset_freq.is_empty() { "—" } else { &ch.offset_freq }).color(c));
+                            ui.label(RichText::new(if ch.offset_freq.is_empty() { "-" } else { &ch.offset_freq }).color(c));
 
-                            ui.label(RichText::new(if ch.tone_mode == "None" { "—" } else { &ch.tone_mode }).color(c));
+                            ui.label(RichText::new(if ch.tone_mode == "None" { "-" } else { &ch.tone_mode }).color(c));
 
                             let tone_val = match ch.tone_mode.as_str() {
                                 "Tone" | "Tone ENC" | "T SQL" => ch.ctcss.clone(),
                                 "DCS" | "DCS ENC" | "D Code" => ch.dcs.clone(),
-                                _ => "—".into(),
+                                _ => "-".into(),
                             };
                             ui.label(RichText::new(&tone_val).color(c));
 
@@ -2740,7 +3018,7 @@ impl SdrRemoteApp {
         });
 
         // Execute deferred actions: recall memory channel only.
-        // FM → DATA-FM switch happens transparently at PTT time (server-side).
+        // FM -> DATA-FM switch happens transparently at PTT time (server-side).
         if let Some((_freq, _mode, ch_num)) = tune_action {
             let _ = self.cmd_tx.send(Command::SetControl(
                 sdr_remote_core::protocol::ControlId::YaesuRecallMemory, ch_num));
@@ -2754,98 +3032,78 @@ impl SdrRemoteApp {
         }
     }
 
-    pub(super) fn render_device_yaesu(&mut self, ui: &mut egui::Ui, _amber: Color32) {
-        ui.horizontal(|ui| {
-            ui.heading(format!("Radio 1: {}", self.yaesu_panel_name(0)));
-            ui.separator();
-            if ui.checkbox(&mut self.yaesu_enabled, "Enable").changed() {
-                let _ = self.cmd_tx.send(Command::SetControl(
-                    sdr_remote_core::protocol::ControlId::YaesuEnable, self.yaesu_enabled as u16));
-            }
-            ui.separator();
-            if self.yaesu_enabled {
-                let popout_label = if self.yaesu_popout { "Close window" } else { "Open window" };
-                if ui.button(popout_label).clicked() {
-                    self.yaesu_popout = !self.yaesu_popout;
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("PTT:");
-            if ui.selectable_label(!self.yaesu_ptt_toggle_mode, "Push to talk").clicked() {
-                self.yaesu_ptt_toggle_mode = false;
-                self.save_ptt_config();
-            }
-            if ui.selectable_label(self.yaesu_ptt_toggle_mode, "Toggle").clicked() {
-                self.yaesu_ptt_toggle_mode = true;
-                self.save_ptt_config();
-            }
-        });
-        ui.separator();
-
-        // ── Radio 2 (2e Yaesu, bv. FTX-1) — eigen enable / PTT-mode / window ──
-        ui.horizontal(|ui| {
-            ui.heading(format!("Radio 2: {}", self.yaesu_panel_name(1)));
-            ui.separator();
-            if ui.checkbox(&mut self.yaesu2_enabled, "Enable").changed() {
-                let _ = self.cmd_tx.send(Command::SetYaesu2Enable(self.yaesu2_enabled));
-                if !self.yaesu2_enabled {
-                    self.yaesu2_popout = false;
-                }
-                self.save_ptt_config();
-            }
-            ui.separator();
-            if self.yaesu2_enabled {
-                let popout_label = if self.yaesu2_popout { "Close window" } else { "Open window" };
-                if ui.button(popout_label).clicked() {
-                    self.yaesu2_popout = !self.yaesu2_popout;
-                    self.save_ptt_config(); // persist window open/dicht-stand
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("PTT:");
-            if ui.selectable_label(!self.yaesu2_ptt_toggle_mode, "Push to talk").clicked() {
-                self.yaesu2_ptt_toggle_mode = false;
-                self.save_ptt_config();
-            }
-            if ui.selectable_label(self.yaesu2_ptt_toggle_mode, "Toggle").clicked() {
-                self.yaesu2_ptt_toggle_mode = true;
-                self.save_ptt_config();
-            }
-        });
-        ui.separator();
-
-        let mode_label = match self.yaesu_mode {
-            0 => "LSB", 1 => "USB", 3 => "CW-L", 4 => "CW-U",
-            5 => "FM", 6 => "AM", 7 => "DIGU", 9 => "DIGL",
+    fn yaesu_compact_mode_label(mode: u8) -> &'static str {
+        match mode {
+            0 => "LSB",
+            1 => "USB",
+            3 => "CW-L",
+            4 => "CW-U",
+            5 => "FM",
+            6 => "AM",
+            7 => "DIGU",
+            9 => "DIGL",
             _ => "?",
+        }
+    }
+
+    fn yaesu_compact_smeter_label(raw: u16) -> String {
+        let raw = raw as f32;
+        if raw <= 108.0 {
+            let s_unit = (raw / 12.0).round().clamp(0.0, 9.0) as u8;
+            format!("S{}", s_unit)
+        } else {
+            let db_over = ((raw - 108.0) * 0.5).round().max(0.0) as i32;
+            format!("S9+{} dB", db_over)
+        }
+    }
+
+    fn render_yaesu_compact_status(&mut self, ui: &mut egui::Ui, slot: u8) {
+        let (freq_a, freq_b, mode, power_on, tx_active, smeter, target) = if slot == 0 {
+            (
+                self.yaesu_freq_a,
+                self.yaesu_freq_b,
+                self.yaesu_mode,
+                self.yaesu_power_on,
+                self.yaesu_tx_active,
+                self.yaesu_smeter,
+                CatSyncTarget::Yaesu1,
+            )
+        } else {
+            (
+                self.yaesu2_freq_a,
+                self.yaesu2_freq_b,
+                self.yaesu2_mode,
+                self.yaesu2_power_on,
+                self.yaesu2_tx_active,
+                self.yaesu2_smeter,
+                CatSyncTarget::Yaesu2,
+            )
         };
 
-        egui::Grid::new("yaesu_grid")
+        egui::Grid::new(format!("yaesu_compact_grid_{}", slot))
             .num_columns(2)
             .spacing([20.0, 6.0])
             .show(ui, |ui| {
                 ui.label("VFO A:");
-                ui.label(RichText::new(format!("{} Hz", format_frequency(self.yaesu_freq_a)))
+                ui.label(RichText::new(format!("{} Hz", format_frequency(freq_a)))
                     .size(18.0).strong());
                 ui.end_row();
 
                 ui.label("VFO B:");
-                ui.label(RichText::new(format!("{} Hz", format_frequency(self.yaesu_freq_b)))
+                ui.label(RichText::new(format!("{} Hz", format_frequency(freq_b)))
                     .size(14.0));
                 ui.end_row();
 
                 ui.label("Mode:");
-                ui.label(RichText::new(mode_label).size(14.0).strong());
+                ui.label(RichText::new(Self::yaesu_compact_mode_label(mode)).size(14.0).strong());
                 ui.end_row();
 
                 ui.label("Power:");
-                ui.label(if self.yaesu_power_on { "ON" } else { "OFF" });
+                ui.label(if power_on { "ON" } else { "OFF" });
                 ui.end_row();
 
                 ui.label("TX:");
-                ui.label(if self.yaesu_tx_active {
+                ui.label(if tx_active {
                     RichText::new("TX").color(Color32::RED).strong()
                 } else {
                     RichText::new("RX").color(Color32::GREEN)
@@ -2853,21 +3111,105 @@ impl SdrRemoteApp {
                 ui.end_row();
 
                 ui.label("S-Meter:");
-                ui.label(format!("{}", self.yaesu_smeter));
+                ui.label(RichText::new(Self::yaesu_compact_smeter_label(smeter)).strong());
+                ui.end_row();
+
+                ui.label("Audio:");
+                if slot == 0 {
+                    let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
+                        .logarithmic(true)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                    if ui.add_sized([180.0, 16.0], slider).changed() {
+                        let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
+                    }
+                } else {
+                    let slider = egui::Slider::new(&mut self.yaesu2_volume, 0.001..=1.0)
+                        .logarithmic(true)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                    if ui.add_sized([180.0, 16.0], slider).changed() {
+                        let _ = self.cmd_tx.send(Command::SetYaesu2Volume(self.yaesu2_volume));
+                    }
+                }
                 ui.end_row();
             });
 
         ui.separator();
+        self.render_websdr_controls(ui, target, freq_a, mode);
+    }
 
-        // Yaesu audio volume
-        ui.horizontal(|ui| {
-            ui.label("Audio:");
-            let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
-                .logarithmic(true)
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            if ui.add(slider).changed() {
-                let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
+    pub(super) fn render_device_yaesu(&mut self, ui: &mut egui::Ui, _amber: Color32) {
+        let show_radio1 = self.yaesu_connected || self.yaesu_enabled;
+        let show_radio2 = self.yaesu2_connected || self.yaesu2_enabled;
+
+        if show_radio1 {
+            ui.horizontal(|ui| {
+                ui.heading(format!("Radio 1: {}", self.yaesu_panel_name(0)));
+                ui.separator();
+                if ui.checkbox(&mut self.yaesu_enabled, "Enable").changed() {
+                    let _ = self.cmd_tx.send(Command::SetControl(
+                        sdr_remote_core::protocol::ControlId::YaesuEnable, self.yaesu_enabled as u16));
+                }
+                ui.separator();
+                if self.yaesu_enabled {
+                    let popout_label = if self.yaesu_popout { "Close window" } else { "Open window" };
+                    if ui.button(popout_label).clicked() {
+                        self.yaesu_popout = !self.yaesu_popout;
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("PTT:");
+                if ui.selectable_label(!self.yaesu_ptt_toggle_mode, "Push to talk").clicked() {
+                    self.yaesu_ptt_toggle_mode = false;
+                    self.save_ptt_config();
+                }
+                if ui.selectable_label(self.yaesu_ptt_toggle_mode, "Toggle").clicked() {
+                    self.yaesu_ptt_toggle_mode = true;
+                    self.save_ptt_config();
+                }
+            });
+            ui.separator();
+            self.render_yaesu_compact_status(ui, 0);
+        }
+
+        if show_radio2 {
+            if show_radio1 {
+                ui.separator();
             }
-        });
+            ui.horizontal(|ui| {
+                ui.heading(format!("Radio 2: {}", self.yaesu_panel_name(1)));
+                ui.separator();
+                if ui.checkbox(&mut self.yaesu2_enabled, "Enable").changed() {
+                    let _ = self.cmd_tx.send(Command::SetYaesu2Enable(self.yaesu2_enabled));
+                    if !self.yaesu2_enabled {
+                        self.yaesu2_popout = false;
+                    }
+                    self.save_ptt_config();
+                }
+                ui.separator();
+                if self.yaesu2_enabled {
+                    let popout_label = if self.yaesu2_popout { "Close window" } else { "Open window" };
+                    if ui.button(popout_label).clicked() {
+                        self.yaesu2_popout = !self.yaesu2_popout;
+                        self.save_ptt_config();
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("PTT:");
+                if ui.selectable_label(!self.yaesu2_ptt_toggle_mode, "Push to talk").clicked() {
+                    self.yaesu2_ptt_toggle_mode = false;
+                    self.save_ptt_config();
+                }
+                if ui.selectable_label(self.yaesu2_ptt_toggle_mode, "Toggle").clicked() {
+                    self.yaesu2_ptt_toggle_mode = true;
+                    self.save_ptt_config();
+                }
+            });
+            ui.separator();
+            self.render_yaesu_compact_status(ui, 1);
+        } else {
+            self.yaesu2_popout = false;
+        }
     }
 }

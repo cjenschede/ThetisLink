@@ -42,6 +42,7 @@ accepted = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "MPL-2.0",
+    "CDLA-Permissive-2.0",
     "GPL-2.0-or-later",
     "OFL-1.1",
     "LGPL-2.1-or-later",
@@ -90,6 +91,14 @@ checksum = "6e0bad263cbd2aa6235d78e3c26bcfa2668cf32f6b274ae21ce0dd620114c7b3"
 # the deprecated bare identifier, causing a parse error in 0.8.4. We
 # pin the expression to MIT (matching the crate's own Cargo.toml choice)
 # and point at LICENSE.txt as the canonical text.
+#
+# Note on the rendered text: LICENSE.txt is hidapi's own canonical license
+# file and reproduces the full tri-license *notice* (MIT / BSD / GPL-3 all
+# offered by upstream), not a MIT-only excerpt. We reproduce that notice
+# verbatim rather than substitute a trimmed MIT-only file, so the attribution
+# stays faithful to exactly what upstream ships; our SPDX selection (MIT, the
+# permissive branch the crate itself declares) governs how we use it. Both the
+# selection and the verbatim upstream notice are therefore correct.
 [hidapi.clarify]
 license = "MIT"
 override-git-commit = "2.6.6"

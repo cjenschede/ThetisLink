@@ -11,18 +11,18 @@ use log::{debug, info, warn};
 /// Communicates via 115200 baud 8N1, binary command protocol.
 ///
 /// Protocol reference: SPE Application Programmer's Guide Rev. 1.1 (15.10.2015)
-/// — zie `docs/referentie/SPE_Application_Programmers_Guide.pdf`.
+/// - zie `docs/referentie/SPE_Application_Programmers_Guide.pdf`.
 ///
-///   Command (host → PA):  [0x55 0x55 0x55] [CNT] [DATA...] [CHK]
+///   Command (host -> PA):  [0x55 0x55 0x55] [CNT] [DATA...] [CHK]
 ///                           CHK = sum(DATA) mod 256
-///   Response (PA → host): [0xAA 0xAA 0xAA] [CNT] [DATA...] [CHK_LO] [CHK_HI] [,] [CR] [LF]
+///   Response (PA -> host): [0xAA 0xAA 0xAA] [CNT] [DATA...] [CHK_LO] [CHK_HI] [,] [CR] [LF]
 ///                           CHK_LO = sum(DATA) % 256
 ///                           CHK_HI = sum(DATA) / 256
 ///   STATUS response DATA is 67 bytes of comma-separated ASCII (19 fields).
 ///
 /// Hardware: SPE has USB + RS-232 as PC-interface ports. Both speak this binary
 /// protocol and cannot be used simultaneously. The amplifier's CAT connection
-/// to the transceiver is a separate physical cable using Kenwood CAT — not
+/// to the transceiver is a separate physical cable using Kenwood CAT - not
 /// this protocol.
 pub struct SpeExpert {
     cmd_tx: mpsc::Sender<SpeCmd>,
@@ -80,8 +80,8 @@ pub enum SpeCmd {
     BandDown,       // 0x02
     PowerOff,       // 0x0A  (serial command)
     PowerOn,        // RTS pulse (not a serial command)
-    DriveDown,      // 0x0F  LEFT_ARROW — decrease drive during TX
-    DriveUp,        // 0x10  RIGHT_ARROW — increase drive during TX
+    DriveDown,      // 0x0F  LEFT_ARROW - decrease drive during TX
+    DriveUp,        // 0x10  RIGHT_ARROW - increase drive during TX
 }
 
 // SPE response preamble byte
@@ -157,7 +157,7 @@ impl SpeExpert {
 //   - warm-up tolerance prevents false `mark_disconnected` on UART startup
 //   - adaptive polling runs fast (75ms) during TX and slow (1s / 2s) in RX
 //     and offline modes
-// See `docs/patch-briefs/PATCH-spe-expert-polling-state.md` §1.1–§1.7.
+// See the internal design notes for the SPE Expert polling-state rationale.
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,7 +252,7 @@ pub(crate) enum SpeEvent {
 pub(crate) enum TransitionLog {
     Info(String),
     Warn(String),
-    /// CAT mismatch detected — caller must render the full warning by calling
+    /// CAT mismatch detected - caller must render the full warning by calling
     /// `format_unexpected_data_error(&collected)` since the classifier drops
     /// the raw bytes after classification.
     WarnCatMisconfigured,
@@ -291,7 +291,7 @@ pub(crate) fn next_state(
             IoError => (
                 Offline,
                 Some(TransitionLog::Warn(
-                    "SPE Expert IO error — going offline".to_string(),
+                    "SPE Expert IO error - going offline".to_string(),
                 )),
             ),
             OverflowWithPreamble | OverflowUnknown | ParseError => {
@@ -299,7 +299,7 @@ pub(crate) fn next_state(
                     (
                         Offline,
                         Some(TransitionLog::Warn(
-                            "SPE Expert did not come online — check connection".to_string(),
+                            "SPE Expert did not come online - check connection".to_string(),
                         )),
                     )
                 } else {
@@ -316,7 +316,7 @@ pub(crate) fn next_state(
             IoError => (
                 Offline,
                 Some(TransitionLog::Info(
-                    "SPE Expert offline — polling continues silently".to_string(),
+                    "SPE Expert offline - polling continues silently".to_string(),
                 )),
             ),
             _ => {
@@ -324,7 +324,7 @@ pub(crate) fn next_state(
                     (
                         Offline,
                         Some(TransitionLog::Info(
-                            "SPE Expert offline — polling continues silently".to_string(),
+                            "SPE Expert offline - polling continues silently".to_string(),
                         )),
                     )
                 } else {
@@ -340,7 +340,7 @@ pub(crate) fn next_state(
             };
             (Online, Some(TransitionLog::Info(msg)))
         }
-        // CAT mismatch can promote from Offline → user may hot-swap cables and
+        // CAT mismatch can promote from Offline -> user may hot-swap cables and
         // wants a one-time warning explaining why the port isn't responding.
         (Offline, PollFail(CatPortMismatch)) => {
             (CatMisconfigured, Some(TransitionLog::WarnCatMisconfigured))
@@ -365,7 +365,7 @@ pub(crate) fn next_state(
         (CatMisconfigured, InitialOk { .. }) => (CatMisconfigured, None),
         (CatMisconfigured, InitialFail) => (CatMisconfigured, None),
 
-        // Reinit paths after thread restart — not expected in practice, keep silent.
+        // Reinit paths after thread restart - not expected in practice, keep silent.
         (WarmingUp, InitialOk { .. }) | (WarmingUp, InitialFail) => (WarmingUp, None),
         (Online, InitialOk { .. }) | (Online, InitialFail) => (Online, None),
 
@@ -378,13 +378,13 @@ pub(crate) fn next_state(
 /// Whether a given failure kind counts toward the threshold-counter in the
 /// given state. Matches the tel-beleid table in brief §1.4.
 ///
-/// - `IoError` and `CatPortMismatch` never count — they trigger immediate
+/// - `IoError` and `CatPortMismatch` never count - they trigger immediate
 ///   transitions in `next_state` and do not accumulate.
 /// - In `WarmingUp`, only true protocol errors count. UART-startup noise
 ///   (`TimeoutNoData`/`NullOnly`/`Partial`) is ignored so a successful
 ///   `state=N` initial query cannot be undone by driver/UART warm-up.
 /// - In `Online`, any non-directe kind counts normally.
-/// - `Offline`/`CatMisconfigured`/`Unknown` do not accumulate — polling
+/// - `Offline`/`CatMisconfigured`/`Unknown` do not accumulate - polling
 ///   stays silent until a success event.
 pub(crate) fn counts_toward_threshold(state: SpeConnState, kind: PollFailureKind) -> bool {
     match state {
@@ -479,7 +479,7 @@ fn read_status_response_ex(
                     });
                 }
 
-                // Preamble-aware overflow check — see `read_status_response` comment.
+                // Preamble-aware overflow check - see `read_status_response` comment.
                 let has_preamble = collected.len() >= 3
                     && collected[0] == RESP_PREAMBLE
                     && collected[1] == RESP_PREAMBLE
@@ -818,7 +818,7 @@ fn read_status_response(port: &mut Box<dyn serialport::SerialPort>) -> Result<Ve
                 // Strategie: check of de collected-buffer start met SPE preamble
                 // `0xAA 0xAA 0xAA`. Met preamble: ruime threshold (128 bytes) om
                 // chunked reads op te vangen. Zonder preamble: fast-fail op 64
-                // bytes — we hebben geen SPE-connectie en kunnen diagnostiek
+                // bytes - we hebben geen SPE-connectie en kunnen diagnostiek
                 // loggen (hint naar verkeerde COM-poort).
                 let has_preamble = collected.len() >= 3
                     && collected[0] == RESP_PREAMBLE
@@ -850,7 +850,7 @@ fn read_status_response(port: &mut Box<dyn serialport::SerialPort>) -> Result<Ve
 /// Bouw een error-message met ASCII-preview en pattern-sniff voor overflow in
 /// `read_status_response`. Gedraagt zich anders afhankelijk van of de data
 /// met SPE preamble `0xAA 0xAA 0xAA` start (valid frame dat geen CRLF vond
-/// binnen budget) of niet (vreemd verkeer op poort — typisch CAT-data).
+/// binnen budget) of niet (vreemd verkeer op poort - typisch CAT-data).
 fn format_unexpected_data_error(collected: &[u8]) -> String {
     let preview_len = collected.len().min(64);
     let preview = &collected[..preview_len];
@@ -877,7 +877,7 @@ fn format_unexpected_data_error(collected: &[u8]) -> String {
         );
     }
 
-    // Geen preamble → vermoedelijk verkeerde COM-poort.
+    // Geen preamble -> vermoedelijk verkeerde COM-poort.
     let printable_count = preview
         .iter()
         .filter(|&&b| (0x20..0x7F).contains(&b))
@@ -886,12 +886,12 @@ fn format_unexpected_data_error(collected: &[u8]) -> String {
     let has_cat_separator = preview.iter().any(|&b| b == b';' || b == b',');
 
     if looks_ascii && has_cat_separator {
-        return "SPE CAT port detected — configure ThetisLink on SPE's PC-control \
+        return "SPE CAT port detected - configure ThetisLink on SPE's PC-control \
                 port instead (the port used by the SPE Windows app)"
             .to_string();
     }
 
-    // Onbekend verkeer — diagnostiek behouden zodat we het later kunnen analyseren.
+    // Onbekend verkeer - diagnostiek behouden zodat we het later kunnen analyseren.
     format!(
         "response overflow ({} bytes, no SPE preamble 0xAA 0xAA 0xAA seen). \
          ASCII preview: {:?}. Raw first 64 bytes: {:02X?}",
@@ -1005,7 +1005,7 @@ fn parse_status_response(data: &[u8]) -> Result<SpeStatus, String> {
     // [10] Forward power (watts)
     s.forward_power = fields[10].trim().parse().unwrap_or(0);
 
-    // [11] SWR (ATU side) — multiply by 10 for integer storage
+    // [11] SWR (ATU side) - multiply by 10 for integer storage
     if let Ok(swr) = fields[11].trim().parse::<f32>() {
         s.swr_x10 = (swr * 10.0) as u16;
     }
@@ -1091,7 +1091,7 @@ pub fn power_level_name(level: u8) -> &'static str {
 }
 
 // ============================================================================
-// Tests — classifier, transition function, adaptive polling, replay sessions.
+// Tests - classifier, transition function, adaptive polling, replay sessions.
 // See PATCH-spe-expert-polling-state §1.8 and §1.11.
 // ============================================================================
 
@@ -1171,7 +1171,7 @@ mod tests {
 
     #[test]
     fn classifier_parse_error() {
-        // Any payload with Parse kind → ParseError regardless of content
+        // Any payload with Parse kind -> ParseError regardless of content
         assert_eq!(
             classify_poll_failure(&[0xAA, 0xAA, 0xAA, 0x01, 0x00], PollIoKind::Parse),
             PollFailureKind::ParseError
@@ -1371,8 +1371,8 @@ mod tests {
     #[test]
     fn replay_session_1_warmup_noise_then_online() {
         // sessie-1: state=1, 2× timeout 0 bytes, 1× null-only, then Ok.
-        // Expected: WarmingUp → Online, no false disconnect, 2 transitions total
-        // (Unknown→WarmingUp, WarmingUp→Online), both logged.
+        // Expected: WarmingUp -> Online, no false disconnect, 2 transitions total
+        // (Unknown->WarmingUp, WarmingUp->Online), both logged.
         let events = vec![
             SpeEvent::InitialOk { state: 1 },
             SpeEvent::PollFail(PollFailureKind::TimeoutNoData),
@@ -1388,7 +1388,7 @@ mod tests {
         assert_eq!(
             transitions.len(),
             2,
-            "expected exactly 2 transitions (Unknown→WarmingUp, WarmingUp→Online), got {:?}",
+            "expected exactly 2 transitions (Unknown->WarmingUp, WarmingUp->Online), got {:?}",
             transitions
         );
         assert!(
@@ -1413,7 +1413,7 @@ mod tests {
         ];
         let (end, transitions) = drive(&events);
         assert_eq!(end, SpeConnState::CatMisconfigured);
-        // Unknown → Offline (silent), Offline → CatMisconfigured (logged).
+        // Unknown -> Offline (silent), Offline -> CatMisconfigured (logged).
         // Only 1 CAT-warn transition expected.
         let cat_transitions: Vec<_> = transitions
             .iter()
@@ -1470,7 +1470,7 @@ mod tests {
     }
 
     /// Simulates the call-site counter logic end-to-end so we catch the exact
-    /// off-by-one: WarmingUp→Offline after the 3rd hard fail, not the 2nd.
+    /// off-by-one: WarmingUp->Offline after the 3rd hard fail, not the 2nd.
     fn drive_with_callsite_counter(
         start: SpeConnState,
         events: &[SpeEvent],
@@ -1508,7 +1508,7 @@ mod tests {
     fn warmup_hard_fails_transition_on_third_not_second() {
         use PollFailureKind::*;
 
-        // 2 hard fails → stays WarmingUp
+        // 2 hard fails -> stays WarmingUp
         let (s2, t2) = drive_with_callsite_counter(
             SpeConnState::WarmingUp,
             &[
@@ -1519,7 +1519,7 @@ mod tests {
         assert_eq!(s2, SpeConnState::WarmingUp);
         assert!(t2.is_empty(), "2 hard fails must not transition");
 
-        // 3 hard fails → Offline
+        // 3 hard fails -> Offline
         let (s3, t3) = drive_with_callsite_counter(
             SpeConnState::WarmingUp,
             &[
@@ -1536,7 +1536,7 @@ mod tests {
     fn online_fails_transition_on_fifth_not_fourth() {
         use PollFailureKind::*;
 
-        // 4 fails → stays Online
+        // 4 fails -> stays Online
         let (s4, t4) = drive_with_callsite_counter(
             SpeConnState::Online,
             &[SpeEvent::PollFail(TimeoutNoData); 4],
@@ -1544,7 +1544,7 @@ mod tests {
         assert_eq!(s4, SpeConnState::Online);
         assert!(t4.is_empty(), "4 fails must not transition");
 
-        // 5 fails → Offline
+        // 5 fails -> Offline
         let (s5, t5) = drive_with_callsite_counter(
             SpeConnState::Online,
             &[SpeEvent::PollFail(TimeoutNoData); 5],
@@ -1573,16 +1573,16 @@ mod tests {
 
     #[test]
     fn replay_spe_stays_off_silent_after_threshold() {
-        // SPE uit scenario: initial fail → Offline (silent), poll fails forever
-        // → stay Offline with no further logs.
+        // SPE uit scenario: initial fail -> Offline (silent), poll fails forever
+        // -> stay Offline with no further logs.
         let mut events = vec![SpeEvent::InitialFail];
         for _ in 0..30 {
             events.push(SpeEvent::PollFail(PollFailureKind::TimeoutNoData));
         }
         let (end, transitions) = drive(&events);
         assert_eq!(end, SpeConnState::Offline);
-        // Only one transition (Unknown→Offline), and it was silent.
+        // Only one transition (Unknown->Offline), and it was silent.
         assert_eq!(transitions.len(), 1);
-        assert!(!transitions[0].2, "Unknown→Offline must be silent");
+        assert!(!transitions[0].2, "Unknown->Offline must be silent");
     }
 }

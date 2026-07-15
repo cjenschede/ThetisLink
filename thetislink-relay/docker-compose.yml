@@ -1,0 +1,55 @@
+services:
+  thetislink-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: thetislink-relay:dev
+    container_name: thetislink-relay
+    restart: unless-stopped
+    environment:
+      THETISLINK_RELAY_TOKEN: ${THETISLINK_RELAY_TOKEN:?set THETISLINK_RELAY_TOKEN in .env}
+      # Persistent station registry (Fase 1 auth). Empty registry -> legacy token mode.
+      THETISLINK_RELAY_DB: /data/stations.db
+      RUST_LOG: ${RUST_LOG:-info}
+      # PATCH-relay-audio-udp fase 2: bind the kale-UDP audio data path. Audio + PTT
+      # travel over UDP (no retransmit); control/spectrum stay on wss via Caddy.
+      THETISLINK_RELAY_UDP_LISTEN: 0.0.0.0:443
+    volumes:
+      - relay-data:/data
+    # Internal only over the compose network: 18080 = wss tunnel; 18081 = admin API
+    # (Caddy routes /admin* here). Neither is published to the host.
+    expose:
+      - "18080"
+      - "18081"
+    # Published to the host: UDP 443 for the audio data path (fase 2). This is UDP;
+    # Caddy keeps TCP 443 for wss — same port number, different protocol, no conflict.
+    ports:
+      - "443:443/udp"
+    # Migration aid: uncomment to also serve plain ws:// on the host during the switch.
+    # ports:
+    #   - "18080:18080"
+
+  caddy:
+    # Caddyfile is baked into the image (see Dockerfile.caddy) rather than bind-mounted,
+    # which avoids the fragile single-file mount. RELAY_DOMAIN is substituted at runtime.
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: thetislink-caddy:dev
+    container_name: thetislink-caddy
+    restart: unless-stopped
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:?set RELAY_DOMAIN in .env (your DuckDNS subdomain)}
+    ports:
+      - "443:443"
+      # Port 80 intentionally NOT mapped: taken on this shared VPS. Caddy uses the
+      # TLS-ALPN-01 challenge on 443 for the Let's Encrypt certificate.
+    volumes:
+      # Persist the certificate + ACME account so it is not re-fetched on every restart.
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

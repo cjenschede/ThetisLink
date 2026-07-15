@@ -2,7 +2,7 @@
 
 //! Compact server-state panel for the GUI (PATCH-2).
 //!
-//! Renders six elements in one screenful so the owner can answer
+//! Renders six elements in one screenful so the operator can answer
 //! support questions ("is the server listening?", "what does it see?")
 //! with a single screenshot:
 //!
@@ -14,7 +14,7 @@
 //! 6. External devices (compact dot grid)
 //!
 //! All reads are non-blocking: SessionManager via `try_lock()` (returns
-//! stale snapshot on contention — 1Hz refresh), audio/TCI via lock-free
+//! stale snapshot on contention - 1Hz refresh), audio/TCI via lock-free
 //! atomics. UI never blocks the network or audio loops.
 
 use egui::{Color32, RichText};
@@ -23,12 +23,12 @@ use crate::audio_stats::StatusPanelShared;
 use crate::session::{ClientSnapshot, ConnectAttempt};
 
 /// Snapshot-cache: bij contentie op de SessionManager-lock (try_lock
-/// faalt) renderden we eerder een 1-regel "(snapshot busy…)" placeholder.
+/// faalt) renderden we eerder een 1-regel "(snapshot busy...)" placeholder.
 /// Dat liet de paneel-hoogte periodiek krimpen waardoor de omringende
 /// ScrollArea de scroll-positie clampte en de gebruiker visueel zag dat
 /// content omhoog sprong terwijl hij naar de uitgeklapte MCP2221A-sectie
 /// keek. Cache laat ons in plaats daarvan de laatst-succesvolle snapshot
-/// blijven tonen — stale text is acceptabel; layout-jitter niet.
+/// blijven tonen - stale text is acceptabel; layout-jitter niet.
 fn clients_cache() -> &'static std::sync::Mutex<Option<Vec<ClientSnapshot>>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<ClientSnapshot>>>> =
         std::sync::OnceLock::new();
@@ -39,6 +39,55 @@ fn attempts_cache() -> &'static std::sync::Mutex<Option<Vec<ConnectAttempt>>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<ConnectAttempt>>>> =
         std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Per-client bandbreedte in kbps, uitgesplitst: (audio, spectrum, overig, up).
+/// Afgeleid uit de cumulatieve byte-tellers van de tracked-socket: vorige sample +
+/// tijdstip bewaard, snelheid over het interval (≥250 ms, tegen ruis). Prunet
+/// tegelijk stale adres-tellers (elke herverbinding = nieuwe bron-poort).
+/// bits/ms == kbps.
+type ClientRate = (u32, u32, u32, u32); // (audio, spectrum, other, up)
+fn client_bandwidth_rates(
+    active: &[std::net::SocketAddr],
+) -> std::collections::HashMap<std::net::SocketAddr, ClientRate> {
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use std::time::Instant;
+    struct BwState {
+        prev: HashMap<SocketAddr, (u64, u64, u64, u64)>, // (aud, spec, oth, rx) totals
+        prev_at: Option<Instant>,
+        rates: HashMap<SocketAddr, ClientRate>,
+    }
+    static S: std::sync::OnceLock<std::sync::Mutex<BwState>> = std::sync::OnceLock::new();
+    let m = S.get_or_init(|| {
+        std::sync::Mutex::new(BwState { prev: HashMap::new(), prev_at: None, rates: HashMap::new() })
+    });
+    crate::tracked_socket::bw_retain(active);
+    let snap = crate::tracked_socket::bw_snapshot();
+    let now = Instant::now();
+    let mut st = m.lock().unwrap();
+    let due = st.prev_at.map(|t| now.duration_since(t).as_millis() >= 250).unwrap_or(true);
+    if due {
+        let dt_ms = st.prev_at.map(|t| now.duration_since(t).as_millis() as u64).unwrap_or(0);
+        if dt_ms > 0 {
+            let mut new_rates = HashMap::new();
+            let kbps = |cur: u64, prev: u64| -> u32 {
+                (cur.saturating_sub(prev).saturating_mul(8) / dt_ms) as u32
+            };
+            for s in &snap {
+                let (pa, ps, po, pr) =
+                    st.prev.get(&s.addr).copied().unwrap_or((s.tx_audio, s.tx_spectrum, s.tx_other, s.rx));
+                new_rates.insert(
+                    s.addr,
+                    (kbps(s.tx_audio, pa), kbps(s.tx_spectrum, ps), kbps(s.tx_other, po), kbps(s.rx, pr)),
+                );
+            }
+            st.rates = new_rates;
+        }
+        st.prev = snap.iter().map(|s| (s.addr, (s.tx_audio, s.tx_spectrum, s.tx_other, s.rx))).collect();
+        st.prev_at = Some(now);
+    }
+    st.rates.clone()
 }
 
 /// Render the Status panel into the provided `ui`. Designed to fit in
@@ -57,7 +106,7 @@ pub fn render_status_panel(
     let server_start = shared.server_start;
 
     // ── 1. Bind address ──────────────────────────────────────────────────
-    // Reflect the actual bind outcome — a hardcoded placeholder would lie
+    // Reflect the actual bind outcome - a hardcoded placeholder would lie
     // about the listen address when the bind itself failed.
     ui.horizontal(|ui| {
         ui.label(RichText::new("Server:").strong());
@@ -77,12 +126,30 @@ pub fn render_status_panel(
             None => {
                 ui.colored_label(
                     Color32::from_rgb(200, 160, 40),
-                    format!("Binding {} …", pending_bind_addr),
+                    format!("Binding {} ...", pending_bind_addr),
                 );
             }
         }
     });
 
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Relay:").strong());
+        if let Some(handle) = shared.relay_status.get() {
+            let status = handle.snapshot();
+            let color = match status.phase {
+                sdr_remote_relay::RelayPhase::Authenticated => Color32::from_rgb(50, 200, 50),
+                sdr_remote_relay::RelayPhase::Connecting
+                | sdr_remote_relay::RelayPhase::WaitingForPeer
+                | sdr_remote_relay::RelayPhase::WaitingForConfig => Color32::from_rgb(200, 160, 40),
+                sdr_remote_relay::RelayPhase::Error => Color32::from_rgb(220, 60, 60),
+                sdr_remote_relay::RelayPhase::Disabled
+                | sdr_remote_relay::RelayPhase::Disconnected => Color32::from_rgb(130, 130, 130),
+            };
+            ui.colored_label(color, status.label()).on_hover_text(status.message);
+        } else {
+            ui.colored_label(Color32::from_rgb(130, 130, 130), "Disabled");
+        }
+    });
     // ── 2. TCI connection ────────────────────────────────────────────────
     let (tci_connected, tci_age) = shared.tci.snapshot(server_start);
     ui.horizontal(|ui| {
@@ -90,7 +157,7 @@ pub fn render_status_panel(
         if tci_connected {
             let dur = tci_age
                 .map(format_duration_short)
-                .unwrap_or_else(|| "—".to_string());
+                .unwrap_or_else(|| "-".to_string());
             ui.colored_label(
                 Color32::from_rgb(50, 200, 50),
                 format!("Connected  ({})", dur),
@@ -135,35 +202,69 @@ pub fn render_status_panel(
                 ui.label(RichText::new("Active clients:").strong());
                 ui.label(format!("{}", clients.len()));
             });
-            for c in clients {
-                let last_seen_age = c.last_seen.elapsed().as_secs();
-                let connected_for =
-                    format_duration_short(c.connected_since.elapsed().as_secs_f32());
-                let line = format!(
-                    "  {:<22}  connected {:<8}  rtt={}ms  loss={}%  jitter={}ms   (seen {}s ago)",
-                    c.addr.to_string(),
-                    connected_for,
-                    c.rtt_ms,
-                    c.loss_percent,
-                    c.jitter_ms,
-                    last_seen_age
-                );
-                let color = if !c.authenticated {
-                    Color32::from_rgb(200, 160, 40) // authenticating
-                } else if last_seen_age > 5 {
-                    Color32::from_rgb(200, 160, 40) // stale
-                } else {
-                    ui.visuals().text_color()
-                };
-                ui.colored_label(color, RichText::new(line).monospace());
-            }
+            let active_addrs: Vec<std::net::SocketAddr> = clients.iter().map(|c| c.addr).collect();
+            let bw_rates = client_bandwidth_rates(&active_addrs);
+            let normal_color = ui.visuals().text_color();
+            let col_widths = [170.0, 72.0, 56.0, 48.0, 62.0, 76.0, 76.0, 86.0, 76.0, 70.0, 48.0];
+            egui::Grid::new("server_client_stats_grid")
+                .num_columns(11)
+                .spacing([4.0, 3.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    let headers = [
+                        "Client", "Connected", "RTT", "Loss", "Jitter",
+                        "Down", "Audio", "Spectrum", "Other", "Up", "Seen",
+                    ];
+                    for i in 0..headers.len() {
+                        ui.add_sized(
+                            [col_widths[i], 16.0],
+                            egui::Label::new(RichText::new(headers[i]).strong().size(11.0)),
+                        );
+                    }
+                    ui.end_row();
+
+                    for c in clients {
+                        let last_seen_age = c.last_seen.elapsed().as_secs();
+                        let connected_for =
+                            format_duration_short(c.connected_since.elapsed().as_secs_f32());
+                        let (aud, spec, oth, up_kbps) =
+                            bw_rates.get(&c.addr).copied().unwrap_or((0, 0, 0, 0));
+                        let down_kbps = aud + spec + oth;
+                        let color = if !c.authenticated {
+                            Color32::from_rgb(200, 160, 40) // authenticating
+                        } else if last_seen_age > 5 {
+                            Color32::from_rgb(200, 160, 40) // stale
+                        } else {
+                            normal_color
+                        };
+                        let cell = |ui: &mut egui::Ui, text: String, width: f32| {
+                            ui.add_sized(
+                                [width, 16.0],
+                                egui::Label::new(RichText::new(text).monospace().size(11.0).color(color)),
+                            );
+                        };
+
+                        cell(ui, c.addr.to_string(), col_widths[0]);
+                        cell(ui, connected_for, col_widths[1]);
+                        cell(ui, format!("{} ms", c.rtt_ms), col_widths[2]);
+                        cell(ui, format!("{}%", c.loss_percent), col_widths[3]);
+                        cell(ui, format!("{} ms", c.jitter_ms), col_widths[4]);
+                        cell(ui, format!("{} kbps", down_kbps), col_widths[5]);
+                        cell(ui, format!("{} kbps", aud), col_widths[6]);
+                        cell(ui, format!("{} kbps", spec), col_widths[7]);
+                        cell(ui, format!("{} kbps", oth), col_widths[8]);
+                        cell(ui, format!("{} kbps", up_kbps), col_widths[9]);
+                        cell(ui, format!("{}s", last_seen_age), col_widths[10]);
+                        ui.end_row();
+                    }
+                });
         }
         None => {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Active clients:").strong());
                 ui.colored_label(
                     Color32::from_rgb(160, 160, 160),
-                    "(snapshot busy — updating…)",
+                    "(snapshot busy - updating...)",
                 );
             });
         }
@@ -236,13 +337,13 @@ pub fn render_status_panel(
         None => {
             ui.colored_label(
                 Color32::from_rgb(160, 160, 160),
-                "  (snapshot busy — updating…)",
+                "  (snapshot busy - updating...)",
             );
         }
     }
 
     // ── 6. Configured external devices (compact dot grid) ────────────────
-    // Dots reflect Some/None at server-start, NOT live link health — true
+    // Dots reflect Some/None at server-start, NOT live link health - true
     // online/offline detection per device is out of scope for PATCH-2.
     // Labelled "Configured devices" so the screenshot reader is not
     // misled into thinking a green dot means the radio replied.
@@ -256,7 +357,7 @@ pub fn render_status_panel(
         render_device_dot(ui, "RF2K", rf2k_configured);
     });
 
-    // ── 7. MCP2221A tuner bridges — collapsible so the owner can hide the
+    // ── 7. MCP2221A tuner bridges - collapsible so the operator can hide the
     // per-tuner threshold sliders and board-scan tools during normal use.
     // Open/closed state is persisted in the config so it survives a restart.
     ui.separator();
@@ -272,7 +373,7 @@ pub fn render_status_panel(
     }
     if current_expanded {
         ui.indent("mcp2221_section", |ui| {
-            // 7a — per-tuner rows. Aantal slots is gelijk aan het aantal
+            // 7a - per-tuner rows. Aantal slots is gelijk aan het aantal
             // entries in `config.tuners` (1..=`MAX_TUNERS`). Lege Vec =
             // geen tuner-rijen; fase 3 voegt de "Add tuner"-wizard toe
             // die nieuwe entries op basis van een board-scan aanmaakt.
@@ -291,7 +392,7 @@ pub fn render_status_panel(
                     None => render_tuner_disabled_row(ui, slot),
                 }
             }
-            // 7b — Yaesu rotor (PATCH-yaesu-rotor-mcp2221 fase 3): live
+            // 7b - Yaesu rotor (PATCH-yaesu-rotor-mcp2221 fase 3): live
             // ADC-positie + handmatige CW/CCW/Stop + DAC speed-slider voor
             // hardware-verificatie. Alleen zichtbaar zodra een rot_*
             // instance is opgestart.
@@ -299,8 +400,8 @@ pub fn render_status_panel(
                 ui.separator();
                 render_rotor_row(ui, rotor);
             }
-            // 7c — board scan: list all MCP2221A devices on the USB bus so
-            // the owner can figure out which USB serial belongs to which
+            // 7c - board scan: list all MCP2221A devices on the USB bus so
+            // the operator can figure out which USB serial belongs to which
             // physical tuner. Result cached statically until the next Scan
             // click so we don't hammer the HID enumerator on every repaint.
             ui.separator();
@@ -343,8 +444,8 @@ fn render_tuner_detector_row(
                 }
             });
         });
-        // MCP serial selector — pick which physical Adafruit board (by USB
-        // serial name, as the owner programmed it) is assigned to this tuner
+        // MCP serial selector - pick which physical Adafruit board (by USB
+        // serial name, as the operator programmed it) is assigned to this tuner
         // slot. Options come from the latest scan cache; the current value
         // is always present even if the board is currently unplugged.
         // Changing the selection writes the new serial to config and
@@ -398,7 +499,7 @@ fn render_tuner_detector_row(
                 });
                 if applied {
                     log::info!(
-                        "Tuner {} MCP serial changed to \"{}\" — auto-restart",
+                        "Tuner {} MCP serial changed to \"{}\" - auto-restart",
                         slot + 1,
                         chosen_for_log,
                     );
@@ -406,9 +507,9 @@ fn render_tuner_detector_row(
                 }
             }
         });
-        // Amplitec-A position picker — drives the Tune-button routing in
+        // Amplitec-A position picker - drives the Tune-button routing in
         // network.rs. Options come from the live config so the labels stay
-        // in sync with whatever the owner has set per antenna position.
+        // in sync with whatever the operator has set per antenna position.
         ui.horizontal(|ui| {
             ui.label("Amplitec pos:");
             let slot = inst.slot_index();
@@ -455,7 +556,7 @@ fn render_tuner_detector_row(
                 });
                 if applied {
                     log::info!(
-                        "Tuner {} amplitec_pos changed to {:?} — auto-restart",
+                        "Tuner {} amplitec_pos changed to {:?} - auto-restart",
                         slot + 1,
                         chosen,
                     );
@@ -463,8 +564,8 @@ fn render_tuner_detector_row(
                 }
             }
         });
-        // Live yellow-wire voltage — single value, since raw and pre-divider
-        // pin voltage add nothing for the owner who reads the schema in
+        // Live yellow-wire voltage - single value, since raw and pre-divider
+        // pin voltage add nothing for the operator who reads the schema in
         // post-divider volts.
         ui.horizontal(|ui| {
             ui.label("Live:");
@@ -480,7 +581,7 @@ fn render_tuner_detector_row(
                 }
             }
         });
-        // Threshold slider — switch level on the yellow wire (V). Changes
+        // Threshold slider - switch level on the yellow wire (V). Changes
         // apply to the live bridge AND persist to config so they survive a
         // restart.
         ui.horizontal(|ui| {
@@ -495,7 +596,7 @@ fn render_tuner_detector_row(
                 persist_threshold_v(slot, v);
             }
         });
-        // Hysteresis slider — width of the dead-band around the threshold (V).
+        // Hysteresis slider - width of the dead-band around the threshold (V).
         ui.horizontal(|ui| {
             let slot = inst.slot_index();
             ui.label("Hysteresis:");
@@ -508,10 +609,10 @@ fn render_tuner_detector_row(
                 persist_hysteresis_v(slot, v);
             }
         });
-        // Computed edges, in V — what the bridge will compare each sample to.
+        // Computed edges, in V - what the bridge will compare each sample to.
         // When threshold ± hyst/2 falls outside the physically-reachable
         // yellow range (0..ADC_VREF*divider), the edges are clamped and an
-        // amber warning is shown so the owner sees the slider combo is
+        // amber warning is shown so the operator sees the slider combo is
         // degenerate (would never actually trigger a tune on hardware).
         ui.horizontal(|ui| {
             ui.label("Edges:");
@@ -522,7 +623,7 @@ fn render_tuner_detector_row(
             if snap.edges_clamped {
                 ui.colored_label(
                     Color32::from_rgb(220, 160, 40),
-                    RichText::new(format!("{}   ⚠ clamped", edges_text)).monospace(),
+                    RichText::new(format!("{}   ! clamped", edges_text)).monospace(),
                 )
                 .on_hover_text(
                     "Threshold + hysteresis falls outside the reachable yellow range. \
@@ -545,7 +646,7 @@ fn render_tuner_detector_row(
 /// Lichte config-row voor een tuner-slot dat nog niet enabled is. Toont
 /// alleen de MCP-serial en Amplitec-pos dropdowns; de voltage/threshold
 /// sliders zijn weggelaten omdat er geen actieve bridge is om uit te
-/// lezen of te configureren. Zodra de owner een MCP serial selecteert
+/// lezen of te configureren. Zodra de operator een MCP serial selecteert
 /// wordt de tuner enabled gezet en de server geherstart (zelfde
 /// auto-restart pad als de full row).
 fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
@@ -565,7 +666,7 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
                 }
             });
         });
-        // MCP serial dropdown — selecteren enabled het slot + auto-restart.
+        // MCP serial dropdown - selecteren enabled het slot + auto-restart.
         ui.horizontal(|ui| {
             ui.label("MCP serial:");
             let current_serial: String = crate::config::load()
@@ -626,9 +727,9 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
                 }
             }
         });
-        // Amplitec pos dropdown — kan al gezet worden vóór het slot enabled
+        // Amplitec pos dropdown - kan al gezet worden vóór het slot enabled
         // is, maar levert weinig op zonder een actieve tuner; we tonen 'm
-        // toch zodat de owner alles in één veld-sessie kan instellen.
+        // toch zodat de operator alles in één veld-sessie kan instellen.
         ui.horizontal(|ui| {
             ui.label("Amplitec pos:");
             let live_config = crate::config::load();
@@ -733,7 +834,7 @@ fn board_program_result_state(
 /// Persist a tuner slot's switch threshold (V). Saves silently (no
 /// auto-restart): `set_threshold_v` already updates the live bridge so the
 /// new value is effective immediately. Uses `modify_config` so the load /
-/// mutate / save sequence is atomic under `CONFIG_LOCK` — preventing the
+/// mutate / save sequence is atomic under `CONFIG_LOCK` - preventing the
 /// build-58 RMW race from being reintroduced via the UI slider.
 fn persist_threshold_v(slot: usize, v: f32) {
     crate::config::modify_config(|config| {
@@ -767,7 +868,7 @@ fn infer_model_from_serial(serial: &str) -> crate::config::TunerModel {
 
 /// Verwijder de TunerConfig op slot-index `slot` uit `config.tuners` en
 /// trigger auto-restart zodat de runtime de geneerde TunerInstance niet
-/// meer probeert te benaderen. Owner gebruikt dit om een tuner-slot
+/// meer probeert te benaderen. Operator gebruikt dit om een tuner-slot
 /// definitief uit de config te halen (bv. fysiek board afwezig of
 /// vervangen door een rename).
 fn remove_tuner_slot(slot: usize) {
@@ -783,7 +884,7 @@ fn remove_tuner_slot(slot: usize) {
         }
     });
     if let Some(label) = removed_label {
-        log::info!("Remove tuner slot: {} — auto-restart", label);
+        log::info!("Remove tuner slot: {} - auto-restart", label);
         restart_server();
     } else {
         log::warn!("Remove tuner slot: index {} out of range (no-op)", slot);
@@ -812,9 +913,9 @@ fn scan_cache(
 }
 
 /// Snapshot of every non-empty serial currently in the scan cache. Used by
-/// the per-tuner serial dropdown so the owner can pick from physically
-/// present boards. Returns an empty Vec when the owner hasn't clicked Scan
-/// yet — the dropdown then only shows the currently-configured serial.
+/// the per-tuner serial dropdown so the operator can pick from physically
+/// present boards. Returns an empty Vec when the operator hasn't clicked Scan
+/// yet - the dropdown then only shows the currently-configured serial.
 fn cached_scan_serials() -> Vec<String> {
     let cache = scan_cache().lock().unwrap();
     match cache.as_ref() {
@@ -827,10 +928,10 @@ fn cached_scan_serials() -> Vec<String> {
     }
 }
 
-/// PATCH-yaesu-rotor-mcp2221 fase 3 — Yaesu G-1000DXC rotor live-status.
+/// PATCH-yaesu-rotor-mcp2221 fase 3 - Yaesu G-1000DXC rotor live-status.
 /// Toont ADC-positie (raw counts + omgerekende Yaesu-pin spanning),
 /// CW/CCW/Stop knoppen, DAC speed-slider. Bedoeld voor hardware-
-/// verificatie en latere kalibratie (fase 4). Geen lokale state — alle
+/// verificatie en latere kalibratie (fase 4). Geen lokale state - alle
 /// commando's gaan direct naar de driver, snapshot leest live state.
 fn render_rotor_row(
     ui: &mut egui::Ui,
@@ -840,7 +941,7 @@ fn render_rotor_row(
     let snap = rotor.status();
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Yaesu rotor — {}", snap.label)).strong());
+            ui.label(RichText::new(format!("Yaesu rotor - {}", snap.label)).strong());
             match &snap.status {
                 RotorStatus::Connected => {
                     ui.colored_label(Color32::from_rgb(50, 200, 50), "Connected");
@@ -871,14 +972,14 @@ fn render_rotor_row(
                 }
                 (None, Some(v)) => {
                     ui.label(
-                        RichText::new("— niet gekalibreerd —")
+                        RichText::new("- niet gekalibreerd -")
                             .weak(),
                     );
                     ui.separator();
                     ui.label(format!("≈ {:.3} V (median)", v));
                 }
                 _ => {
-                    ui.label(RichText::new("— geen sample —").weak());
+                    ui.label(RichText::new("- geen sample -").weak());
                 }
             }
         });
@@ -889,9 +990,9 @@ fn render_rotor_row(
                 ui.label(RichText::new(format!("{}", raw)).weak());
                 if let Some(p2p) = snap.adc_p2p_raw {
                     ui.separator();
-                    ui.label(RichText::new(format!("spread Δ={} raw", p2p)).weak());
+                    ui.label(RichText::new(format!("spread d={} raw", p2p)).weak());
                     // Omgerekend naar Yaesu pin-spanning voor leesbare diagnose.
-                    // 1,8 k + 10 k spanningsdeler-correctie matcht owner's hardware.
+                    // 1,8 k + 10 k spanningsdeler-correctie matcht operator's hardware.
                     let p2p_v = (p2p as f32) * 4.096 / 1023.0 * (11_800.0 / 10_000.0);
                     ui.label(RichText::new(format!("≈ {:.3} V p2p", p2p_v)).weak());
                 }
@@ -949,7 +1050,7 @@ fn render_rotor_row(
             }
         });
 
-        // Kalibratie (PATCH-yaesu-rotor-mcp2221 fase 4): owner draait
+        // Kalibratie (PATCH-yaesu-rotor-mcp2221 fase 4): operator draait
         // de rotor naar CCW-eindpark, klikt "Park CCW (0°)" om de
         // huidige mediaan-spanning vast te leggen; vervolgens naar CW-
         // eindpark en "Park CW". De max_deg-spinner zet de fullscale
@@ -989,7 +1090,7 @@ fn render_rotor_row(
                 rotor.set_max_deg(max_deg);
             }
             ui.separator();
-            // Ramp-rate slider: hoe snel de DAC van 0 → max ramp-t (en
+            // Ramp-rate slider: hoe snel de DAC van 0 -> max ramp-t (en
             // omgekeerd) tijdens een GoTo of start/stop. Lage waarde =
             // langzame, antenne-vriendelijke acceleratie (zware
             // mast/grote antenne); hoge waarde = snel reactief.
@@ -1017,7 +1118,7 @@ fn render_rotor_row(
                     .checkbox(&mut shortest, "shortest route")
                     .on_hover_text(
                         "Kies bij GoTo de kortste mechanische route via de overlap-zone.\n\
-                         Bv. huidig 350°, target 30° → CW via 390° i.p.v. CCW via 0°.",
+                         Bv. huidig 350°, target 30° -> CW via 390° i.p.v. CCW via 0°.",
                     )
                     .changed()
                 {
@@ -1049,14 +1150,14 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
         Some(Ok(list)) if list.is_empty() => {
             ui.colored_label(
                 Color32::from_rgb(220, 160, 40),
-                "  (none detected — check USB cable)",
+                "  (none detected - check USB cable)",
             );
         }
         Some(Ok(list)) => {
-            // Tel ongeprogrammeerde boards — bij >1 disable de Add-knop
+            // Tel ongeprogrammeerde boards - bij >1 disable de Add-knop
             // zodat de operator zeker weet welk fysiek board hij in
             // gebruik gaat nemen (anders kan een toegevoegd `tun_<naam>`
-            // naar de verkeerde Adafruit gaan). Owner-conventie:
+            // naar de verkeerde Adafruit gaan). Operator-conventie:
             // configureer altijd met max 1 onbenoemd board aangesloten.
             use crate::mcp2221_scan::BoardKind;
             let unprogrammed_count = list
@@ -1067,7 +1168,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                 ui.colored_label(
                     Color32::from_rgb(220, 160, 40),
                     format!(
-                        "  ⚠ {} onbenoemde boards aangesloten — sluit max 1 ongeprogrammeerd board aan tijdens configuratie",
+                        "  ! {} onbenoemde boards aangesloten - sluit max 1 ongeprogrammeerd board aan tijdens configuratie",
                         unprogrammed_count
                     ),
                 );
@@ -1209,13 +1310,13 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                             .weak(),
                         );
                     } else {
-                        // Tuner of Rotor — rename-flow blijft beschikbaar,
+                        // Tuner of Rotor - rename-flow blijft beschikbaar,
                         // prefix wordt afgedwongen via een read-only label.
                         // Voor een Tuner-board zonder bijbehorende config-
                         // entry tonen we óók een "Koppel aan config"-knop;
-                        // dat dekt het scenario "owner heeft tuner1_*/2_*
+                        // dat dekt het scenario "operator heeft tuner1_*/2_*
                         // config-regels verwijderd maar het board heeft al
-                        // een geprogrammeerd tun_-serial" — de nieuwe entry
+                        // een geprogrammeerd tun_-serial" - de nieuwe entry
                         // wordt zonder herprogrammering toegevoegd.
                         let prefix = match kind {
                             BoardKind::Tuner => BoardKind::TUNER_PREFIX,
@@ -1289,7 +1390,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                             ui.horizontal(|ui| {
                                 ui.colored_label(
                                     Color32::from_rgb(220, 160, 40),
-                                    "  ⚠ Geprogrammeerd tuner-board zonder config-entry.",
+                                    "  ! Geprogrammeerd tuner-board zonder config-entry.",
                                 );
                                 let can_add = crate::config::load().tuners.len()
                                     < crate::config::MAX_TUNERS;
@@ -1299,7 +1400,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                 {
                                     let serial = b.serial_number.clone();
                                     log::info!(
-                                        "Claim tuner board: serial=\"{}\" → new config entry",
+                                        "Claim tuner board: serial=\"{}\" -> new config entry",
                                         serial
                                     );
                                     crate::config::modify_config(|c| {
@@ -1329,7 +1430,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                             Ok(()) => {
                                 ui.colored_label(
                                     Color32::from_rgb(50, 200, 50),
-                                    "OK — klik Scan om te verversen",
+                                    "OK - klik Scan om te verversen",
                                 );
                             }
                             Err(msg) => {
@@ -1360,7 +1461,7 @@ fn render_channel_chip(
 ) {
     let (count, age) = stats.snapshot(server_start);
     let (sym, color) = match age {
-        None => ("—", Color32::from_rgb(120, 120, 120)),
+        None => ("-", Color32::from_rgb(120, 120, 120)),
         Some(a) if a < 1.0 => ("●", Color32::from_rgb(50, 200, 50)),
         Some(a) if a < 5.0 => ("●", Color32::from_rgb(200, 160, 40)),
         Some(_) => ("○", Color32::from_rgb(160, 160, 160)),

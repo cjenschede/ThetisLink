@@ -160,7 +160,7 @@ pub struct PttController {
     pending_release: Option<Instant>,
     tail_delay_ms: u64,
     ptt_active: Arc<AtomicBool>,
-    /// TCI WebSocket connection — TL2 v2 is TCI-only, no CAT backend.
+    /// TCI WebSocket connection - TL2 v2 is TCI-only, no CAT backend.
     pub tci: TciConnection,
     thetis_path: Option<String>,
     pending_power_on: bool,
@@ -173,7 +173,7 @@ pub struct PttController {
     /// positie-wissel via `update_tx_blocked()`).
     tx_blocked: Arc<AtomicBool>,
     /// Throttle voor de WARN-log wanneer een PTT-request wordt
-    /// geweigerd — anders krijgt iedere audio-frame (50/sec) een log.
+    /// geweigerd - anders krijgt iedere audio-frame (50/sec) een log.
     last_blocked_log: Option<Instant>,
     // --- Latency metrics ---
     ptt_prefill_start: Option<Instant>,
@@ -208,7 +208,7 @@ impl PttController {
         // tci-notification handler óók Thetis-direct PTT kan blokkeren.
         // (Zonder dit: server-initiated paden zijn dicht, maar spatiebalk
         // op Thetis-PC wordt pas via de 200 ms broadcast catch-all
-        // afgevangen — te laat voor RX-amp bescherming.)
+        // afgevangen - te laat voor RX-amp bescherming.)
         let blocked_clone = ctl.tx_blocked.clone();
         ctl.tci.set_tx_blocked_handle(blocked_clone);
         ctl
@@ -395,13 +395,13 @@ impl PttController {
         self.ptt_active.store(is_tx, Ordering::Relaxed);
 
         // Latency metrics
-        // Measures server-side PTT budget: prefill→TRX-send (our latency contribution).
+        // Measures server-side PTT budget: prefill->TRX-send (our latency contribution).
         // Gap between TRX-send and first TX audio frame is Thetis-side (TX_CHRONO timing)
         // and not measurable without cross-task synchronization overhead in the audio hot path.
         if is_tx {
             if let Some(start) = self.ptt_prefill_start.take() {
                 let ms = start.elapsed().as_millis() as u64;
-                info!("PTT metrics: prefill→TRX = {}ms (server-side budget)", ms);
+                info!("PTT metrics: prefill->TRX = {}ms (server-side budget)", ms);
                 self.ptt_prefill_latencies.push(ms);
             }
         } else if let Some(start) = self.ptt_release_start.take() {
@@ -458,7 +458,7 @@ impl PttController {
     pub async fn send_cat(&mut self, cmd: &str) {
         // Hard gate voor TX-startende CAT-commando's wanneer de actuele
         // Amplitec-A positie als RX-only is gemarkeerd. ZZTX1 schakelt
-        // direct de zender, ZZTU1 start de tune-carrier — beide gaan
+        // direct de zender, ZZTU1 start de tune-carrier - beide gaan
         // niet naar Thetis. ZZTX0/ZZTU0 (uitschakelen) blijven uiteraard
         // wel werken zodat we een lopende TX kunnen afsluiten.
         let trimmed = cmd.trim_end_matches(';');
@@ -471,10 +471,10 @@ impl PttController {
         // ZZ* commando's hebben drie niveaus van bediening:
         //   1. Native TCI mapping via `cat_to_tci` (snelste pad voor de
         //      meest-gebruikte ZZ-commando's zoals ZZFA/ZZMD/ZZTX).
-        //   2. TCI `run_cat_ex:ZZxxx;` passthrough — Thetis voert het ZZ
+        //   2. TCI `run_cat_ex:ZZxxx;` passthrough - Thetis voert het ZZ
         //      commando uit op zijn eigen interne CAT-parser zonder dat
         //      we een aparte CAT-verbinding nodig hebben. Werkt voor elk
-        //      ZZ-commando dat Thetis kent (ZZPC, ZZCN, ZZCO, ZZFI, …).
+        //      ZZ-commando dat Thetis kent (ZZPC, ZZCN, ZZCO, ZZFI, ...).
         //   3. Vroeger ook: auxiliary CAT TCP-socket. Vanaf v2.0.0 is dat
         //      pad verwijderd (TCI-only architectuur), dus niveau 3 is
         //      een no-op.
@@ -488,17 +488,17 @@ impl PttController {
         // single-TCI link hun pad vinden.
         if cmd.starts_with("ZZ") {
             if let Some(tci_cmd) = Self::cat_to_tci(cmd) {
-                log::debug!("CAT→TCI: {} → {}", cmd.trim_end_matches(';'), tci_cmd.trim_end_matches(';'));
+                log::debug!("CAT->TCI: {} -> {}", cmd.trim_end_matches(';'), tci_cmd.trim_end_matches(';'));
                 self.radio_send(&tci_cmd).await;
             } else {
                 // Fallback: TCI run_cat_ex passthrough. Vraagt Thetis om
                 // het ZZ-commando op zijn eigen CAT-parser uit te voeren.
                 let zz = cmd.trim_end_matches(';');
-                log::debug!("CAT→TCI run_cat_ex: {}", zz);
+                log::debug!("CAT->TCI run_cat_ex: {}", zz);
                 self.tci.run_cat(zz).await;
             }
         } else {
-            // TCI command (bv. TUNE:0,true;) → direct via WebSocket
+            // TCI command (bv. TUNE:0,true;) -> direct via WebSocket
             self.radio_send(cmd).await;
         }
     }
@@ -506,36 +506,36 @@ impl PttController {
     /// Translate a ZZ CAT command to a TCI equivalent. Returns None if unknown.
     fn cat_to_tci(cmd: &str) -> Option<String> {
         let cmd = cmd.trim_end_matches(';');
-        // ZZFA00007073000 → vfo:0,0,7073000 (VFO A freq, 11 digits)
+        // ZZFA00007073000 -> vfo:0,0,7073000 (VFO A freq, 11 digits)
         if cmd.starts_with("ZZFA") && cmd.len() >= 15 {
             if let Ok(hz) = cmd[4..15].parse::<u64>() {
                 return Some(format!("vfo:0,0,{};", hz));
             }
         }
-        // ZZFB00007073000 → vfo:1,0,7073000 (VFO B freq)
+        // ZZFB00007073000 -> vfo:1,0,7073000 (VFO B freq)
         if cmd.starts_with("ZZFB") && cmd.len() >= 15 {
             if let Ok(hz) = cmd[4..15].parse::<u64>() {
                 return Some(format!("vfo:1,0,{};", hz));
             }
         }
-        // ZZMD00 → modulation:0,LSB (mode VFO A, 2 digit mode number)
+        // ZZMD00 -> modulation:0,LSB (mode VFO A, 2 digit mode number)
         if cmd.starts_with("ZZMD") && cmd.len() >= 6 {
             if let Ok(mode_num) = cmd[4..6].parse::<u8>() {
                 let mode_name = cat_mode_to_tci(mode_num);
                 return Some(format!("modulation:0,{};", mode_name));
             }
         }
-        // ZZME00 → modulation:1,LSB (mode VFO B)
+        // ZZME00 -> modulation:1,LSB (mode VFO B)
         if cmd.starts_with("ZZME") && cmd.len() >= 6 {
             if let Ok(mode_num) = cmd[4..6].parse::<u8>() {
                 let mode_name = cat_mode_to_tci(mode_num);
                 return Some(format!("modulation:1,{};", mode_name));
             }
         }
-        // ZZTU1/ZZTU0 → tune:0,true/false
+        // ZZTU1/ZZTU0 -> tune:0,true/false
         if cmd == "ZZTU1" { return Some("tune:0,true;".to_string()); }
         if cmd == "ZZTU0" { return Some("tune:0,false;".to_string()); }
-        // ZZTX1/ZZTX0 → trx:0,true/false
+        // ZZTX1/ZZTX0 -> trx:0,true/false
         if cmd == "ZZTX1" { return Some("trx:0,true,tci;".to_string()); }
         if cmd == "ZZTX0" { return Some("trx:0,false;".to_string()); }
         None
@@ -652,7 +652,7 @@ impl PttController {
     }
 
     pub async fn set_power(&mut self, on: bool) {
-        info!("set_power({}) called — connected={}, thetis_path={:?}", on, self.is_connected(), self.thetis_path.is_some());
+        info!("set_power({}) called - connected={}, thetis_path={:?}", on, self.is_connected(), self.thetis_path.is_some());
         if !on {
             self.pending_power_on = false;
             self.thetis_launch_time = None;
@@ -787,7 +787,7 @@ impl PttController {
         self.tci.mon_on
     }
 
-    // New TCI state getters (v2.10.3.13) — TCI-only, return defaults for CAT
+    // New TCI state getters (v2.10.3.13) - TCI-only, return defaults for CAT
     pub fn agc_mode(&self) -> u8 {
         self.tci.agc_mode
     }
@@ -948,7 +948,7 @@ impl PttController {
 
     pub async fn set_vfo_sync_thetis(&mut self, on: bool) {
         // Stock .14/.15 supports vfo_sync_ex without advertising the cap (cap-check is
-        // a TL-26 erfgoed). Use the optimistic _ex setter directly — owner-keuze 1a:
+        // a TL-26 erfgoed). Use the optimistic _ex setter directly - operator-keuze 1a:
         // "Plus vfo_sync_ex _ex pad uitlijnen". Compat-statement (alpha-4 ≥ Thetis
         // v2.10.3.14) maakt de oude run_cat(ZZSY) fallback overbodig.
         self.tci.set_vfo_sync(on).await;
@@ -969,7 +969,7 @@ impl PttController {
 
     /// Push Thetis' "Receive only" preventive transmit-inhibit via the fork's
     /// `rx_only_ex` command. Returns `true` if the fork accepted it (extensions
-    /// present) — meaning TX is now preventively blocked at the Thetis source.
+    /// present) - meaning TX is now preventively blocked at the Thetis source.
     /// Returns `false` when running against stock Thetis (no cap): the caller
     /// must keep using the reactive `ZZTX0` catch-all instead.
     pub async fn set_rx_only(&mut self, rx_only: bool) -> bool {
@@ -1032,14 +1032,14 @@ impl PttController {
         self.send_cat(&cmd).await;
     }
 
-    /// TL2-1 fork-only — no CAT fallback (stock Thetis has no ZZ-CAT for GainMulti).
+    /// TL2-1 fork-only - no CAT fallback (stock Thetis has no ZZ-CAT for GainMulti).
     pub async fn set_diversity_gain_multi(&mut self, multi: u16) {
         if self.tci.has_cap("diversity_gain_multi_ex") {
             self.tci.set_diversity_gain_multi(multi).await;
         }
     }
 
-    /// TL2-1 fork-only — DDC per-RX sample-rate change. No CAT fallback (stock
+    /// TL2-1 fork-only - DDC per-RX sample-rate change. No CAT fallback (stock
     /// Thetis has no ZZ-CAT for the per-RX sample rate; only Setup-form UI).
     pub async fn set_ddc_sample_rate(&mut self, rx: u32, rate_hz: u32) {
         if self.tci.has_cap("ddc_sample_rate_ex") {
@@ -1182,7 +1182,7 @@ impl PttController {
     }
 
     /// Check which connections need to be established (brief, no I/O).
-    /// Returns (tci_url,) — TL2 v2: TCI-only, no CAT.
+    /// Returns (tci_url,) - TL2 v2: TCI-only, no CAT.
     pub fn needed_connections(&mut self) -> Option<String> {
         self.tci.needs_connect_info()
     }
@@ -1239,7 +1239,7 @@ impl PttController {
     }
 
     /// Static calibration offset (dB) from TCI calibration_ex.
-    /// This is meter_cal + xvtr_gain + 6m_gain — everything except step ATT.
+    /// This is meter_cal + xvtr_gain + 6m_gain - everything except step ATT.
     pub fn static_cal_offset(&self, receiver: usize) -> f32 {
         let idx = receiver.min(1);
         self.tci.meter_cal_offset[idx] + self.tci.xvtr_gain_offset[idx] + self.tci.six_m_gain_offset[idx]

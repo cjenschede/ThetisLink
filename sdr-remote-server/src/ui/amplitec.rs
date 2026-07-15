@@ -7,11 +7,11 @@ use crate::amplitec::AmplitecSwitch;
 /// Visuele toestand voor `antenna_button`.
 #[derive(Clone, Copy)]
 enum AntennaState {
-    /// Deze positie is de actief geselecteerde — blauwe vulling
+    /// Deze positie is de actief geselecteerde - blauwe vulling
     /// (ThetisLink-conventie voor toggled-on, zie memory
     /// `feedback_ui_button_color_convention`).
     Active,
-    /// Deze positie is bezet door de andere poort — disabled-ish look.
+    /// Deze positie is bezet door de andere poort - disabled-ish look.
     Blocked,
     /// Normale klikbare staat.
     Inactive,
@@ -21,7 +21,7 @@ enum AntennaState {
 ///   - bovenste regel: `Ant<N>` (positie-id, klein/gedempt)
 ///   - onderste regel: optionele alias (groter, prominent)
 ///
-/// Owner-keuze: de alias-tekst krijgt het visuele primaat omdat dat
+/// Operator-keuze: de alias-tekst krijgt het visuele primaat omdat dat
 /// de functionele naam is; het positie-nummer dient slechts als
 /// identifier op een rij van 6 knoppen.
 ///
@@ -45,7 +45,7 @@ fn antenna_button(
 
     // Font-resolutie: bovenste regel (positie-id) is de kleine
     // identifier, onderste regel (alias) is de prominent leesbare
-    // functionele naam. Owner-keuze: alias-tekst krijgt zo het
+    // functionele naam. Operator-keuze: alias-tekst krijgt zo het
     // visuele primaat.
     let style = ui.style().clone();
     let pos_font: FontId = egui::TextStyle::Small.resolve(&style);
@@ -68,7 +68,7 @@ fn antenna_button(
     let gap = 1.0_f32;
     // Natuurlijke breedte op basis van de bredere tekst-regel. Wordt
     // afgekapt door `max_width` zodat 6 knoppen op een rij meeschalen
-    // met de window-breedte — nooit groter dan natuurlijk, wel kleiner.
+    // met de window-breedte - nooit groter dan natuurlijk, wel kleiner.
     let natural_w = pos_galley.size().x.max(alias_galley.size().x) + pad_x * 2.0;
     let width = natural_w.min(max_width).max(24.0);
     let height = pos_galley.size().y + alias_galley.size().y + pad_y * 2.0 + gap;
@@ -134,7 +134,7 @@ fn antenna_button(
 /// Pending rename-state voor het Amplitec-paneel: (positie 1..=6,
 /// edit-buffer). `None` betekent: geen dialog open. Het dialog wordt
 /// gerenderd door `render_amplitec_panel` aan het einde wanneer de
-/// state Some is — context-menu op een antenne-knop zet de state via
+/// state Some is - context-menu op een antenne-knop zet de state via
 /// `open_rename_dialog`.
 fn rename_state() -> &'static std::sync::Mutex<Option<(u8, String)>> {
     use std::sync::{Mutex, OnceLock};
@@ -146,9 +146,9 @@ fn open_rename_dialog(pos: u8, current: &str) {
     *rename_state().lock().unwrap() = Some((pos, current.to_string()));
 }
 
-/// Render de rename-modal als de state Some is. Owner kan een nieuw
+/// Render de rename-modal als de state Some is. Operator kan een nieuw
 /// label invoeren of cancelen. Bij OK wordt `config.amplitec_labels`
-/// via `modify_config` bijgewerkt — een auto-restart is niet nodig
+/// via `modify_config` bijgewerkt - een auto-restart is niet nodig
 /// omdat labels live geinjecteerd worden in elke render-call.
 fn render_rename_dialog(ctx: &egui::Context) {
     let state = rename_state();
@@ -254,7 +254,7 @@ pub(super) fn render_amplitec_panel(
                 amplitec.send_command(crate::amplitec::AmplitecCmd::SetSwitchA(pos));
             }
             let resp = if is_blocked {
-                resp.on_hover_text(format!("Ant{} ({}) — bezet door Poort B", pos, label))
+                resp.on_hover_text(format!("Ant{} ({}) - bezet door Poort B", pos, label))
             } else {
                 resp
             };
@@ -297,7 +297,7 @@ pub(super) fn render_amplitec_panel(
                 amplitec.send_command(crate::amplitec::AmplitecCmd::SetSwitchB(pos));
             }
             let resp = if is_blocked {
-                resp.on_hover_text(format!("Ant{} ({}) — bezet door Poort A", pos, label))
+                resp.on_hover_text(format!("Ant{} ({}) - bezet door Poort A", pos, label))
             } else {
                 resp
             };
@@ -310,7 +310,7 @@ pub(super) fn render_amplitec_panel(
         }
     });
 
-    // Rename-dialog (modal) — verschijnt boven het paneel zolang
+    // Rename-dialog (modal) - verschijnt boven het paneel zolang
     // `rename_state()` Some is. Open via rechtermuisknop op een
     // antenne-knop -> "Hernoem...".
     render_rename_dialog(ui.ctx());

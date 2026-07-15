@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use log::{info, warn};
-use tokio::net::UdpSocket;
+use crate::tracked_socket::TrackedSocket;
 use tokio::sync::{watch, Mutex};
 use tokio::time::{interval, Duration};
 
@@ -111,26 +111,26 @@ impl VrxDumpState {
 // `tci_iq_consumer` instantieert per VRX-channel een `VrxRuntime`
 // en geeft elke IQ-batch door via `feed()`.
 
-// â”€â”€ Resampling helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Resampling helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-/// Resample i16 8kHz â†’ f32 device rate
+/// Resample i16 8kHz â†' f32 device rate
 pub fn resample_to_device(resampler: &mut impl rubato::Resampler<f32>, pcm_i16: &[i16]) -> Vec<f32> {
     let input_f32: Vec<f32> = pcm_i16.iter().map(|&s| s as f32 / 32768.0).collect();
     match resampler.process(&[input_f32], None) {
         Ok(result) => result.into_iter().next().unwrap_or_default(),
         Err(e) => {
-            warn!("resample 8kâ†’device error: {}", e);
+            warn!("resample 8kâ†'device error: {}", e);
             Vec::new()
         }
     }
 }
 
-/// Resample f32 device rate â†’ f32 8kHz
+/// Resample f32 device rate â†' f32 8kHz
 pub fn resample_to_network(resampler: &mut impl rubato::Resampler<f32>, pcm_f32: &[f32]) -> Vec<f32> {
     match resampler.process(&[pcm_f32.to_vec()], None) {
         Ok(result) => result.into_iter().next().unwrap_or_default(),
         Err(e) => {
-            warn!("resample deviceâ†’8k error: {}", e);
+            warn!("resample deviceâ†'8k error: {}", e);
             Vec::new()
         }
     }
@@ -153,7 +153,7 @@ pub fn hq_sinc_params() -> rubato::SincInterpolationParameters {
 /// Always sends L=RX1 (or RX1-L when BIN), R=RX2 (or RX1-R when BIN).
 /// The client decides how to play L and R (mono/split/binaural).
 pub async fn tci_multichannel_audio_loop(
-    socket: Arc<UdpSocket>,
+    socket: Arc<TrackedSocket>,
     session: Arc<Mutex<SessionManager>>,
     ptt: Arc<Mutex<PttController>>,
     mut rx1_audio_rx: Option<tokio::sync::mpsc::Receiver<Vec<f32>>>,
@@ -167,7 +167,7 @@ pub async fn tci_multichannel_audio_loop(
     let tci_rate = 48000u32;
     let tci_frame_samples = (tci_rate * 20 / 1000) as usize; // 960
 
-    // Per-channel mono encoders + resamplers — narrowband (8 kHz).
+    // Per-channel mono encoders + resamplers - narrowband (8 kHz).
     let mut enc_rx1 = OpusEncoder::new()?;
     let mut enc_bin_r = OpusEncoder::new()?;
     let mut enc_rx2 = OpusEncoder::new()?;
@@ -179,10 +179,10 @@ pub async fn tci_multichannel_audio_loop(
     let mut res_bin_r = mk_resampler().context("BinR resampler")?;
     let mut res_rx2 = mk_resampler().context("RX2 resampler")?;
 
-    // Wideband (16 kHz) parallel-encoders — alleen actief gevoed wanneer
+    // Wideband (16 kHz) parallel-encoders - alleen actief gevoed wanneer
     // ten minste één client de Thetis-wideband-audio opt-in heeft staan.
     // De resamplers blijven idle (geen `process()` call) zolang geen
-    // client wideband wil — geen merkbare CPU-impact.
+    // client wideband wil - geen merkbare CPU-impact.
     let mut enc_rx1_wb = OpusEncoderWideband::new()?;
     let mut enc_bin_r_wb = OpusEncoderWideband::new()?;
     let mut enc_rx2_wb = OpusEncoderWideband::new()?;
@@ -222,7 +222,7 @@ pub async fn tci_multichannel_audio_loop(
         }
 
         tokio::select! {
-            // Wait for tick or shutdown â€” audio is drained non-blocking below
+            // Wait for tick or shutdown â€" audio is drained non-blocking below
             _ = tick.tick() => {
                 // Drain ALL channels non-blocking to prevent select! bias
                 fn drain_channel(rx_opt: &mut Option<tokio::sync::mpsc::Receiver<Vec<f32>>>, accum: &mut Vec<f32>) {
@@ -254,7 +254,9 @@ pub async fn tci_multichannel_audio_loop(
 
                 let addrs = {
                     let sess = session.lock().await;
-                    sess.active_addrs()
+                    // Yaesu-only clients (Android Yaesu-mode) krijgen geen Thetis-RX-audio
+                    // -> databesparing. Herstelt zodra Yaesu-mode uit gaat (spectrum aan).
+                    sess.thetis_audio_addrs()
                 };
                 let has_clients = !addrs.is_empty();
                 if !has_clients {
@@ -372,7 +374,7 @@ pub async fn tci_multichannel_audio_loop(
                     // Read per-client modes + rx2_enabled flag + WB-opt-in
                     // under short lock, then release. `rx2_enabled` gates
                     // CH2 even when `audio_mode` would otherwise allow it
-                    // — the desktop client UI's "RX2 enabled" toggle must
+                    // - the desktop client UI's "RX2 enabled" toggle must
                     // mute the upstream RX2 stream entirely, not just the
                     // local playback (bandwidth bug uncovered 2026-05-13).
                     let client_modes: Vec<(std::net::SocketAddr, u8, bool, bool)> = {
@@ -391,7 +393,7 @@ pub async fn tci_multichannel_audio_loop(
                     for (addr, mode, rx2_enabled, want_wb) in &client_modes {
                         // Filter channels based on client's audio mode.
                         // Then drop CH2 (RX2) for clients that have RX2
-                        // turned off — those bytes would otherwise reach
+                        // turned off - those bytes would otherwise reach
                         // the client and be silently mixed into mono
                         // output (or burn data on metered links).
                         // mode 255 (default/Android): CH0 only
@@ -442,11 +444,11 @@ pub async fn tci_multichannel_audio_loop(
     Ok(())
 }
 
-// â”€â”€ Yaesu audio loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Yaesu audio loop â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 /// Yaesu USB audio TX loop: receives from cpal, encodes Opus, sends to clients.
 pub async fn yaesu_audio_loop(
-    socket: Arc<UdpSocket>,
+    socket: Arc<TrackedSocket>,
     session: Arc<Mutex<SessionManager>>,
     mut audio_rx: tokio::sync::mpsc::Receiver<Vec<f32>>,
     sample_rate: u32,
@@ -454,11 +456,11 @@ pub async fn yaesu_audio_loop(
     start: Instant,
     audio_stats: Arc<crate::audio_stats::AudioActivityStats>,
     server_start: Instant,
-    // Dual-radio (Optie B-prime): slot 0 → yaesu_addrs + AudioYaesu (byte-identiek
-    // aan het bestaande pad); slot 1 → yaesu2_addrs + AudioYaesu2.
+    // Dual-radio (Optie B-prime): slot 0 -> yaesu_addrs + AudioYaesu (byte-identiek
+    // aan het bestaande pad); slot 1 -> yaesu2_addrs + AudioYaesu2.
     slot: u8,
     // Live radio-status (voor de software-squelch). FTX-1: squelch_open uit de
-    // RI-poll gate't de USB-audio. 991A: squelch_open blijft true → geen effect.
+    // RI-poll gate't de USB-audio. 991A: squelch_open blijft true -> geen effect.
     // std::sync::Mutex (matcht YaesuRadio.status; audio_loops' `Mutex` = tokio).
     status: Arc<std::sync::Mutex<crate::yaesu::YaesuState>>,
 ) -> Result<()> {
@@ -467,7 +469,7 @@ pub async fn yaesu_audio_loop(
 
     // Radio-RX bandbreedte volgt de Thetis-wideband-toggle (build 122):
     // de client kiest in de Server-tab NB (laag dataverbruik) of WB (helder,
-    // CELT i.p.v. SILK → getrouwe ruis). Eén globale knop voor Thetis + beide
+    // CELT i.p.v. SILK -> getrouwe ruis). Eén globale knop voor Thetis + beide
     // radio's. We houden daarom beide encoders/resamplers aan en sturen per
     // abonnee het formaat dat die client wil (`client_thetis_wideband`), met
     // de `AUDIO_WIDEBAND`-flag op WB-packets. Mirror van het Thetis-multi-ch-pad.
@@ -487,8 +489,8 @@ pub async fn yaesu_audio_loop(
     let mut tick = interval(Duration::from_millis(20));
     let mut had_clients = false;
 
-    // Software-squelch gate-envelope (FTX-1: dichte squelch → fade naar stilte;
-    // de squelch-knop op de radio is de drempel). 991A: squelch_open=true → no-op.
+    // Software-squelch gate-envelope (FTX-1: dichte squelch -> fade naar stilte;
+    // de squelch-knop op de radio is de drempel). 991A: squelch_open=true -> no-op.
     let mut gate_gain: f32 = 1.0;
     let mut sql_closed_frames: u32 = 0;
     const SQL_HANG_FRAMES: u32 = 8;   // ~160 ms hang vóór de gate sluit (anti-flutter)
@@ -538,8 +540,8 @@ pub async fn yaesu_audio_loop(
                             info!("Yaesu audio: client(s) enabled, encoders reset");
                         }
                         _ => {
-                            log::error!("Yaesu encoder reset failed — Yaesu audio RX skipped this tick (server blijft draaien)");
-                            // had_clients stays false → retry next tick if clients still present.
+                            log::error!("Yaesu encoder reset failed - Yaesu audio RX skipped this tick (server blijft draaien)");
+                            // had_clients stays false -> retry next tick if clients still present.
                         }
                     }
                     continue;
@@ -551,17 +553,25 @@ pub async fn yaesu_audio_loop(
                 let mut frame: Vec<f32> = accumulator.drain(..frame_samples).collect();
 
                 // Software-squelch: fade naar stilte bij dichte squelch (alleen FTX-1
-                // zet squelch_open=false; 991A blijft open → start_g/end_g==1.0 → no-op).
+                // zet squelch_open=false; 991A blijft open -> start_g/end_g==1.0 -> no-op).
                 // ALLEEN in FM-familie (internal mode 5: FM/FM-N/DATA-FM): op SSB/CW/AM/
                 // RTTY/data heeft de radio-BUSY (RI P8) geen zinvolle betekenis en meldt
-                // hij 'dicht' terwijl er wél audio is → daar audio altijd doorlaten
-                // (owner-test build 123: LSB werd onterecht volledig gedempt).
-                let (sql_open, mode) = {
+                // hij 'dicht' terwijl er wél audio is -> daar audio altijd doorlaten
+                // This prevents LSB from being muted by the USB-side squelch gate.
+                let (sql_open, mode, tx_active) = {
                     let s = status.lock().unwrap();
-                    (s.squelch_open, s.mode)
+                    (s.squelch_open, s.mode, s.tx_active)
                 };
-                let effective_open = mode != 5 || sql_open;
-                let target: f32 = if effective_open {
+                // TX-mute: tijdens zenden mag RX-audio nooit terugkomen. De 991A dempt
+                // zijn USB-RX in hardware tijdens TX; de FTX-1 niet -> daar liep RX-geluid
+                // door tijdens PTT (operator-test 2026-07-04). Model-onafhankelijk in software:
+                // bij TX direct naar stilte (geen squelch-hang), voor de 991A een no-op
+                // omdat er dan toch al (bijna) stilte binnenkomt.
+                let effective_open = !tx_active && (mode != 5 || sql_open);
+                let target: f32 = if tx_active {
+                    sql_closed_frames = 0;
+                    0.0
+                } else if effective_open {
                     sql_closed_frames = 0;
                     1.0
                 } else {
@@ -584,9 +594,9 @@ pub async fn yaesu_audio_loop(
                 gate_gain = end_g;
                 // Observability: log alleen de fade-randen (geen per-frame spam).
                 if start_g > 0.0 && end_g == 0.0 {
-                    log::info!("Yaesu squelch: gate dicht — audio gedempt");
+                    log::info!("Yaesu squelch: gate dicht - audio gedempt");
                 } else if start_g == 0.0 && end_g > 0.0 {
-                    log::info!("Yaesu squelch: gate open — audio hervat");
+                    log::info!("Yaesu squelch: gate open - audio hervat");
                 }
 
                 let need_wb = subs.iter().any(|(_, wb)| *wb);
@@ -647,18 +657,120 @@ pub async fn yaesu_audio_loop(
     Ok(())
 }
 
-// â”€â”€ TCI IQ consumer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ TCI IQ consumer â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 /// Drains IQ channels from TCI and feeds spectrum processors (RX1 + RX2).
 /// Also runs the VRX channelizer on the RX1 IQ stream and emits VrxAudioPacket
 /// UDP frames to subscribed clients (separate-channel VRX audio).
+/// One per-client VRX channelizer runtime + its shared control-state Arc and the
+/// current resolved wideband flag. Owned by the audio-loop task (not the manager).
+struct ClientRt {
+    runtime: vrx_rs::VrxRuntime,
+    control: Arc<std::sync::Mutex<vrx_rs::VrxControlState>>,
+    current_wb: bool,
+}
+
+/// Resolve the per-VRX wideband flag from the client's NB/WB/Auto mode + filter
+/// width. Auto switches up at ≥4 kHz audio BW and back below ~3.75 kHz (hysteresis
+/// against rebuild-thrash while dragging the filter edge). Rate-mode is now
+/// per-client (PATCH-vrx-per-client), passed in rather than read from a global.
+fn vrx_desired_wb(mode_u8: u8, low_hz: i32, high_hz: i32, current_wb: bool) -> bool {
+    let mode = vrx_rs::VrxRateMode::from_u8(mode_u8);
+    vrx_rs::rate_mode_wants_wideband(mode, low_hz, high_hz, current_wb)
+}
+
+/// Service one VRX channel for every currently audio-subscribed client: prune
+/// runtimes whose client dropped the subscription, lazily create a runtime per
+/// client (with that client's shared control), resolve per-client NB/WB, feed each
+/// runtime and route its audio to that client's address only. Runtimes live in
+/// `rts` (owned by the caller) - `feed()`/Opus/UDP never run under the manager lock;
+/// the manager lock is only taken for short control/rate reads.
+#[allow(clippy::too_many_arguments)]
+fn service_vrx_channel(
+    ch: u8,
+    frame_rate: u32,
+    iq_pairs: &[(f32, f32)],
+    vfo_hz: u64,
+    ddc_center_hz: u64,
+    audio_addrs: &[std::net::SocketAddr],
+    auto_addrs: &[std::net::SocketAddr],
+    tx_active: bool,
+    timestamp_ms: u32,
+    rts: &mut std::collections::HashMap<std::net::SocketAddr, ClientRt>,
+    mgr: &Arc<std::sync::Mutex<crate::vrx_manager::PerClientVrxManager>>,
+    sink: &mut crate::vrx_bridge::ThetisVrxSink,
+    timer: &mut crate::vrx_bridge::VrxFeedTimer,
+) {
+    // No set allocation on the hot path: the subscriber list is tiny (one entry
+    // per client), so a linear `contains` is cheaper than building a HashSet.
+    let before = rts.len();
+    rts.retain(|a, _| audio_addrs.contains(a));
+    if rts.len() != before {
+        log::info!(
+            "VRX destroy ch={} reason=disable removed={} - active_runtimes(ch)={}",
+            ch + 1, before - rts.len(), rts.len()
+        );
+    }
+    // Mute during TX: keep the runtimes (state intact), skip DSP/Opus/UDP.
+    if tx_active {
+        return;
+    }
+    let mut total_feed = std::time::Duration::ZERO;
+    for &addr in audio_addrs {
+        if !rts.contains_key(&addr) {
+            let control = mgr.lock().unwrap().control(addr, ch);
+            let runtime = vrx_rs::VrxRuntime::new(
+                vrx_rs::VrxRuntimeOptions { vrx_id: ch, wav_dir: None, wav_segment_sec: 10, wideband: false },
+                control.clone(),
+            );
+            rts.insert(addr, ClientRt { runtime, control, current_wb: false });
+            log::info!("VRX create client={} ch={} - active_runtimes(ch)={}", addr, ch + 1, rts.len());
+        }
+        let rate_mode = mgr.lock().unwrap().rate_mode(&addr, ch);
+        let rt = rts.get_mut(&addr).unwrap();
+        let (lo, hi) = {
+            let s = rt.control.lock().unwrap();
+            (s.filter_low_hz, s.filter_high_hz)
+        };
+        let want_wb = vrx_desired_wb(rate_mode, lo, hi, rt.current_wb);
+        if want_wb != rt.current_wb {
+            log::info!(
+                "VRX rate {} client={} ch={} (afc preserved)",
+                if want_wb { "NB->WB" } else { "WB->NB" }, addr, ch + 1
+            );
+            let (afc_o, afc_b) = rt.runtime.afc_state();
+            rt.runtime = vrx_rs::VrxRuntime::new(
+                vrx_rs::VrxRuntimeOptions { vrx_id: ch, wav_dir: None, wav_segment_sec: 10, wideband: want_wb },
+                rt.control.clone(),
+            );
+            rt.runtime.restore_afc_state(afc_o, afc_b);
+            rt.current_wb = want_wb;
+        }
+        let auto = auto_addrs.contains(&addr);
+        rt.control.lock().unwrap().sam_auto_tune = auto;
+        sink.addrs.clear();
+        sink.addrs.push(addr);
+        sink.autotune_addrs.clear();
+        if auto {
+            sink.autotune_addrs.push(addr);
+        }
+        sink.wideband = rt.current_wb;
+        sink.timestamp_ms = timestamp_ms;
+        let t0 = std::time::Instant::now();
+        rt.runtime.feed(frame_rate, iq_pairs, vfo_hz, ddc_center_hz, sink);
+        total_feed += t0.elapsed();
+    }
+    timer.record(total_feed, iq_pairs.len(), frame_rate, rts.len());
+}
+
 pub async fn tci_iq_consumer(
     ptt: Arc<Mutex<PttController>>,
     spectrum: Arc<Mutex<crate::spectrum::SpectrumProcessor>>,
     rx2_spectrum: Arc<Mutex<crate::spectrum::Rx2SpectrumProcessor>>,
     shutdown: &mut watch::Receiver<bool>,
-    socket: Arc<UdpSocket>,
+    socket: Arc<TrackedSocket>,
     session: Arc<Mutex<SessionManager>>,
+    vrx_mgr: Arc<std::sync::Mutex<crate::vrx_manager::PerClientVrxManager>>,
 ) {
     let mut iq_rx1: Option<tokio::sync::mpsc::Receiver<(u32, Vec<(f32, f32)>)>> = None;
     let mut iq_rx2: Option<tokio::sync::mpsc::Receiver<(u32, Vec<(f32, f32)>)>> = None;
@@ -668,7 +780,7 @@ pub async fn tci_iq_consumer(
     // monotonic counter on the wire.
     let server_start = Instant::now();
 
-    // VRX channelizer experiment — one-shot RX1 I/Q dump to file when
+    // VRX channelizer experiment - one-shot RX1 I/Q dump to file when
     // VRX_DUMP=<path> env is set. Captures ~5 s of complex I/Q (or
     // VRX_DUMP_SECONDS if set), then closes the file. File format:
     //   u32 LE  sample_rate_hz
@@ -681,7 +793,7 @@ pub async fn tci_iq_consumer(
     // VRX live channelizers. Two instances: VRX1 on the RX1 IQ stream
     // + VFO-A (vrx_id=0), VRX2 on the RX2 IQ stream + VFO-B (vrx_id=1).
     // Both gated at runtime by their own `VrxControlState` slot. The
-    // optional `VRX_LIVE_DIR=<dir>` env still produces WAV captures —
+    // optional `VRX_LIVE_DIR=<dir>` env still produces WAV captures -
     // VRX1 writes to the configured dir as before; VRX2 is wav-less to
     // avoid filename collisions (acceptable for dev tooling, can grow
     // a per-channel sub-dir later if needed).
@@ -690,39 +802,19 @@ pub async fn tci_iq_consumer(
     // toggle (PATCH-vrx-wide-sam-ux): each VRX follows the NB/WB/Auto
     // dropdown (VRX_AUDIO_RATE_MODE) resolved against its own filter width.
     // Start narrowband; the loop bumps to WB on the first batch if needed.
-    let mut vrx1_runtime = vrx_rs::VrxRuntime::new(
-        vrx_rs::VrxRuntimeOptions {
-            vrx_id: 0,
-            wav_dir: vrx_dir.clone(),
-            wav_segment_sec: 10,
-            wideband: false,
-        },
-        crate::vrx_bridge::vrx_control_thetislink(0),
-    );
-    let mut vrx2_runtime = vrx_rs::VrxRuntime::new(
-        vrx_rs::VrxRuntimeOptions {
-            vrx_id: 1,
-            wav_dir: None,
-            wav_segment_sec: 10,
-            wideband: false,
-        },
-        crate::vrx_bridge::vrx_control_thetislink(1),
-    );
+    // Per-client VRX runtimes (PATCH-vrx-per-client). The audio loop owns these
+    // maps; each client with a VRX audio subscription gets its own channelizer per
+    // channel, created lazily in service_vrx_channel(). Per-client WAV capture is
+    // disabled to avoid file collisions (§3f); the VRX_DUMP one-shot still works.
+    let _ = &vrx_dir;
+    let mut vrx1_rts: std::collections::HashMap<std::net::SocketAddr, ClientRt> =
+        std::collections::HashMap::new();
+    let mut vrx2_rts: std::collections::HashMap<std::net::SocketAddr, ClientRt> =
+        std::collections::HashMap::new();
     let mut vrx1_sink = crate::vrx_bridge::ThetisVrxSink::new(socket.clone());
     let mut vrx2_sink = crate::vrx_bridge::ThetisVrxSink::new(socket.clone());
-    let mut vrx1_current_wb = false;
-    let mut vrx2_current_wb = false;
-
-    // Resolve the per-VRX wideband flag from the NB/WB/Auto mode + filter
-    // width. Auto switches up at ≥4 kHz audio BW and back down below 3.75 kHz
-    // (hysteresis to avoid rebuild-thrash while dragging the filter edge).
-    fn vrx_desired_wb(low_hz: i32, high_hz: i32, current_wb: bool) -> bool {
-        let mode = vrx_rs::VrxRateMode::from_u8(
-            crate::network::VRX_AUDIO_RATE_MODE.load(std::sync::atomic::Ordering::Relaxed),
-        );
-        // Single source of truth in vrx-rs (incl. the Auto hysteresis).
-        vrx_rs::rate_mode_wants_wideband(mode, low_hz, high_hz, current_wb)
-    }
+    let mut vrx1_timer = crate::vrx_bridge::VrxFeedTimer::new("RX1");
+    let mut vrx2_timer = crate::vrx_bridge::VrxFeedTimer::new("RX2");
 
     let mut fft_size = spectrum.lock().await.ddc_fft_size();
     let mut rx2_fft_size = rx2_spectrum.lock().await.ddc_fft_size();
@@ -778,55 +870,38 @@ pub async fn tci_iq_consumer(
                     }
                 }
                 {
-                    // VRX1 op RX1 IQ + VFO-A. ThetisVrxSink stuurt
-                    // VrxAudioPacket frames naar elke client per Opus
-                    // frame. Snapshot active_addrs vóór feed() — sink
-                    // gebruikt try_send_to (sync) zonder eigen lock.
+                    // VRX1 per client (RX1 IQ + VFO-A). Snapshot spectrum + the
+                    // per-client subscription/autotune sets, then service each
+                    // client's own runtime (see service_vrx_channel). TX-mute +
+                    // per-client NB/WB rate handled inside the helper.
                     let (vfo_hz, ddc_center_hz) = {
                         let spec = spectrum.lock().await;
                         (spec.vfo_freq_hz(), spec.ddc_center_hz())
                     };
-                    {
+                    let (audio_addrs, auto_addrs, active) = {
                         let sess = session.lock().await;
-                        vrx1_sink.addrs = sess.vrx_audio_addrs(0);
-                        vrx1_sink.autotune_addrs = sess.vrx_autotune_addrs(0);
-                    }
-                    // AFC enable = aggregate (any active subscriber), not a single
-                    // client's toggle — keeps multi-client ownership clean.
-                    crate::vrx_bridge::vrx_control_thetislink(0).lock().unwrap().sam_auto_tune =
-                        !vrx1_sink.autotune_addrs.is_empty();
-                    vrx1_sink.timestamp_ms = server_start.elapsed().as_millis() as u32;
-                    // Per-VRX rate (NB/WB/Auto). Recreate the runtime only when
-                    // the resolved rate actually changes (output rate is fixed
-                    // at construction); the hysteresis avoids drag-thrash.
-                    let (f1_lo, f1_hi) = {
-                        let ctl = crate::vrx_bridge::vrx_control_thetislink(0);
-                        let s = ctl.lock().unwrap();
-                        (s.filter_low_hz, s.filter_high_hz)
+                        (sess.vrx_audio_addrs(0), sess.vrx_autotune_addrs(0), sess.active_addrs())
                     };
-                    let want_wb1 = vrx_desired_wb(f1_lo, f1_hi, vrx1_current_wb);
-                    if want_wb1 != vrx1_current_wb {
-                        info!("VRX1 audio rate: {} → {} — recreating runtime",
-                            if vrx1_current_wb { "WB" } else { "NB" }, if want_wb1 { "WB" } else { "NB" });
-                        vrx1_current_wb = want_wb1;
-                        // Carry the auto-tune follow across the rebuild so a
-                        // WB↔NB switch re-locks instantly instead of re-pulling
-                        // in from the original manual tuning (seconds of beat).
-                        let (afc_o, afc_b) = vrx1_runtime.afc_state();
-                        vrx1_runtime = vrx_rs::VrxRuntime::new(
-                            vrx_rs::VrxRuntimeOptions { vrx_id: 0, wav_dir: vrx_dir.clone(), wav_segment_sec: 10, wideband: want_wb1 },
-                            crate::vrx_bridge::vrx_control_thetislink(0),
-                        );
-                        vrx1_runtime.restore_afc_state(afc_o, afc_b);
+                    // Cleanup vangnet (§3a): drop per-client control-state for clients
+                    // no longer active-authed - covers both explicit disconnect and
+                    // session timeout/stale (is_active_authed). Runtimes auto-prune in
+                    // service_vrx_channel via the subscriber set.
+                    {
+                        let (dropped, count) = {
+                            let mut m = vrx_mgr.lock().unwrap();
+                            (m.retain_active(&active), m.client_count())
+                        };
+                        if dropped > 0 {
+                            info!("VRX retain_active: dropped {} stale client(s) - vrx_clients={}", dropped, count);
+                        }
                     }
-                    vrx1_sink.wideband = want_wb1;
-                    // Mute VRX during TX: skip the channelizer + Opus encode
-                    // + UDP send. Avoids the “insensitive RX” sound during
-                    // own transmissions; saves bandwidth + CPU too.
                     let tx_active = ptt.lock().await.is_tx_or_prefill();
-                    if !tx_active {
-                        vrx1_runtime.feed(frame_rate, &iq_pairs, vfo_hz, ddc_center_hz, &mut vrx1_sink);
-                    }
+                    let ts = server_start.elapsed().as_millis() as u32;
+                    service_vrx_channel(
+                        0, frame_rate, &iq_pairs, vfo_hz, ddc_center_hz,
+                        &audio_addrs, &auto_addrs, tx_active, ts,
+                        &mut vrx1_rts, &vrx_mgr, &mut vrx1_sink, &mut vrx1_timer,
+                    );
                 }
                 let cur_fft = spectrum.lock().await.ddc_fft_size();
                 if cur_fft != fft_size {
@@ -864,43 +939,22 @@ pub async fn tci_iq_consumer(
                 }
                 rx2_accum.extend_from_slice(&iq_pairs);
                 {
-                    // VRX2 op RX2 IQ + VFO-B. Zie VRX1 voor de
-                    // snapshot-volgorde (addrs vóór feed).
+                    // VRX2 per client (RX2 IQ + VFO-B). See VRX1 above.
                     let (vfo_hz, ddc_center_hz) = {
                         let spec = rx2_spectrum.lock().await;
                         (spec.vfo_freq_hz(), spec.ddc_center_hz())
                     };
-                    {
+                    let (audio_addrs, auto_addrs) = {
                         let sess = session.lock().await;
-                        vrx2_sink.addrs = sess.vrx_audio_addrs(1);
-                        vrx2_sink.autotune_addrs = sess.vrx_autotune_addrs(1);
-                    }
-                    crate::vrx_bridge::vrx_control_thetislink(1).lock().unwrap().sam_auto_tune =
-                        !vrx2_sink.autotune_addrs.is_empty();
-                    vrx2_sink.timestamp_ms = server_start.elapsed().as_millis() as u32;
-                    // Per-VRX rate (NB/WB/Auto) for VRX2, same as VRX1.
-                    let (f2_lo, f2_hi) = {
-                        let ctl = crate::vrx_bridge::vrx_control_thetislink(1);
-                        let s = ctl.lock().unwrap();
-                        (s.filter_low_hz, s.filter_high_hz)
+                        (sess.vrx_audio_addrs(1), sess.vrx_autotune_addrs(1))
                     };
-                    let want_wb2 = vrx_desired_wb(f2_lo, f2_hi, vrx2_current_wb);
-                    if want_wb2 != vrx2_current_wb {
-                        info!("VRX2 audio rate: {} → {} — recreating runtime",
-                            if vrx2_current_wb { "WB" } else { "NB" }, if want_wb2 { "WB" } else { "NB" });
-                        vrx2_current_wb = want_wb2;
-                        let (afc_o, afc_b) = vrx2_runtime.afc_state();
-                        vrx2_runtime = vrx_rs::VrxRuntime::new(
-                            vrx_rs::VrxRuntimeOptions { vrx_id: 1, wav_dir: None, wav_segment_sec: 10, wideband: want_wb2 },
-                            crate::vrx_bridge::vrx_control_thetislink(1),
-                        );
-                        vrx2_runtime.restore_afc_state(afc_o, afc_b);
-                    }
-                    vrx2_sink.wideband = want_wb2;
                     let tx_active = ptt.lock().await.is_tx_or_prefill();
-                    if !tx_active {
-                        vrx2_runtime.feed(frame_rate, &iq_pairs, vfo_hz, ddc_center_hz, &mut vrx2_sink);
-                    }
+                    let ts = server_start.elapsed().as_millis() as u32;
+                    service_vrx_channel(
+                        1, frame_rate, &iq_pairs, vfo_hz, ddc_center_hz,
+                        &audio_addrs, &auto_addrs, tx_active, ts,
+                        &mut vrx2_rts, &vrx_mgr, &mut vrx2_sink, &mut vrx2_timer,
+                    );
                 }
                 let cur_fft = rx2_spectrum.lock().await.ddc_fft_size();
                 if cur_fft != rx2_fft_size {

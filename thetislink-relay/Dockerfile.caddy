@@ -1,0 +1,5 @@
+# Bake the Caddyfile into a small Caddy image instead of bind-mounting a single file
+# (single-file bind mounts are fragile on some Docker hosts — ENOTDIR on start).
+# RELAY_DOMAIN is still substituted at runtime from the compose environment.
+FROM caddy:2
+COPY Caddyfile /etc/caddy/Caddyfile

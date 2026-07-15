@@ -14,14 +14,14 @@ use mcp2221_hal::MCP2221;
 /// One detected MCP2221A on the local USB bus.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoardInfo {
-    /// USB serial number — pass into `Mcp2221Debug::with_serial` /
+    /// USB serial number - pass into `Mcp2221Debug::with_serial` /
     /// `TunerBridge::with_serial` to target this exact board. Empty string
     /// if the board has no serial-number assigned yet (factory-default
     /// often collides, requires `usb_change_serial_number` to make unique).
     pub serial_number: String,
     /// USB product string, usually "MCP2221 USB-I2C/UART Combo".
     pub product_string: String,
-    /// OS-level HID path — unique per physical board even when the serial
+    /// OS-level HID path - unique per physical board even when the serial
     /// number is empty. Used to target a specific anonymous board for
     /// one-shot serial-number programming.
     pub path: String,
@@ -32,9 +32,9 @@ impl BoardInfo {
     /// Falls back to "(no serial)" when the board has no serial set yet.
     pub fn label(&self) -> String {
         if self.serial_number.is_empty() {
-            format!("(no serial) — {}", self.product_string)
+            format!("(no serial) - {}", self.product_string)
         } else {
-            format!("{}  —  {}", self.serial_number, self.product_string)
+            format!("{}  -  {}", self.serial_number, self.product_string)
         }
     }
 
@@ -52,7 +52,7 @@ pub enum BoardKind {
     /// Board geprogrammeerd voor tuner-bediening (`tun_*` prefix).
     Tuner,
     /// Board geprogrammeerd voor rotor-bediening (`rot_*` prefix).
-    /// Runtime-support volgt in fase 4 — wizard accepteert de keuze
+    /// Runtime-support volgt in fase 4 - wizard accepteert de keuze
     /// al maar Add is geblokkeerd in v2.0.5.
     Rotor,
     /// Geen `tun_`/`rot_` prefix gevonden. Een fresh-from-factory
@@ -89,7 +89,7 @@ impl BoardKind {
 /// Enumerate every MCP2221A currently visible on the USB bus.
 ///
 /// Returns an empty Vec if no boards are attached (not an error). Only
-/// surfaces an error when the HID layer itself fails to initialise — that
+/// surfaces an error when the HID layer itself fails to initialise - that
 /// usually means the OS HID subsystem is unhappy, not a missing board.
 pub fn list_boards() -> Result<Vec<BoardInfo>> {
     let listings = MCP2221::list_devices()?;
@@ -119,7 +119,7 @@ pub fn program_serial_at_path(path: &str, new_serial: &str) -> Result<()> {
         .map_err(|e| anyhow!("open by path failed: {:?}", e))?;
 
     // Critical: the MCP2221A ships with the "CDC serial-number enumeration"
-    // flag cleared by default — so even after we write the serial string to
+    // flag cleared by default - so even after we write the serial string to
     // flash, USB enumeration won't advertise it and hidapi keeps reporting
     // "(no serial)". Read the chip settings, flip the bit, write back, THEN
     // write the serial. Both go to flash and survive a reset.

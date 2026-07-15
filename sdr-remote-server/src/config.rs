@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// Cosmetic alias for a StockCorner tuner — JC-3s and JC-4s share the same
+/// Cosmetic alias for a StockCorner tuner - JC-3s and JC-4s share the same
 /// MCP2221A-driven control protocol; the model name is only used for display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TunerModel {
@@ -40,7 +40,7 @@ impl TunerModel {
 
 /// Bovengrens van het aantal tuner-slots dat tegelijk geconfigureerd
 /// mag zijn. Komt overeen met het aantal Amplitec-A posities (6) zodat
-/// elke positie maximaal één eigen tuner kan hebben.
+/// elke positie maximaal een eigen tuner kan hebben.
 pub const MAX_TUNERS: usize = 6;
 
 /// Maximum number of rotor-slots. For now single rotor (Yaesu G-1000DXC
@@ -90,7 +90,7 @@ impl Default for TunerConfig {
 }
 
 /// Per-slot rotor configuration (PATCH-yaesu-rotor-mcp2221 fase 1).
-/// Eén entry per fysiek MCP2221A-board dat een Yaesu G-1000DXC direct
+/// Een entry per fysiek MCP2221A-board dat een Yaesu G-1000DXC direct
 /// aanstuurt. Fase 1 vult alleen `enabled` + `mcp_serial` + `name`;
 /// kalibratie-velden (v_at_0deg / v_at_max_deg / max_deg) en
 /// default_speed komen in latere fasen erbij.
@@ -105,27 +105,27 @@ pub struct RotorConfig {
     /// (`rot_<naam>` prefix per ThetisLink-conventie). Leeg = niet
     /// gebonden.
     pub mcp_serial: String,
-    /// Kalibratie (fase 4): Yaesu pin-4 spanning bij 0° (CCW eindpark).
-    /// Default 0,0 = niet-gekalibreerd. Owner zet dit via "Park CCW".
+    /// Kalibratie (fase 4): Yaesu pin-4 spanning bij 0 deg (CCW eindpark).
+    /// Default 0,0 = niet-gekalibreerd. Operator zet dit via "Park CCW".
     pub v_at_0deg: f32,
     /// Kalibratie (fase 4): Yaesu pin-4 spanning bij `max_deg`
-    /// (CW eindpark). Default 4,5 V (typisch G-1000DXC). Owner zet
+    /// (CW eindpark). Default 4,5 V (typisch G-1000DXC). Operator zet
     /// dit via "Park CW".
     pub v_at_max_deg: f32,
     /// Maximale rotatie in graden (default 450 voor G-1000DXC).
     pub max_deg: u16,
     /// Soft-start/stop snelheidsverhoging in procent per seconde
-    /// (PATCH fase 6). Default 50%/sec = volledige ramp 0→max in 2 s.
+    /// (PATCH fase 6). Default 50%/sec = volledige ramp 0->max in 2 s.
     /// Lagere waarde voor zware antennes (5-10%/sec); hogere waarde
     /// (75-100%/sec) voor lichte antennes. Wordt zowel voor de
-    /// soft-start (gate-on → max DAC) als voor de soft-stop bij
+    /// soft-start (gate-on -> max DAC) als voor de soft-stop bij
     /// GoTo-landing gebruikt.
     pub ramp_pct_per_sec: f32,
     /// Bij rotors met overlap-range (max_deg > 360, bv. G-1000DXC met
-    /// 450°): kies bij GoTo automatisch de kortste route via de
-    /// overlap-zone. Voorbeeld bij max_deg=450: huidig 350°, target
-    /// 30° → CCW-route = 320°, CW via 390° = 40° → CW wint. Default
-    /// uit zodat "ga naar 30°" letterlijk op 30° fysiek eindigt.
+    /// 450 deg): kies bij GoTo automatisch de kortste route via de
+    /// overlap-zone. Voorbeeld bij max_deg=450: huidig 350 deg, target
+    /// 30 deg -> CCW-route = 320 deg, CW via 390 deg = 40 deg -> CW wint. Default
+    /// uit zodat "ga naar 30 deg" letterlijk op 30 deg fysiek eindigt.
     pub shortest_route_in_overlap: bool,
 }
 
@@ -147,7 +147,7 @@ impl Default for RotorConfig {
 /// Serializes all read-modify-write sequences on the server config file.
 /// Without it the UI thread (active_pa toggle, save_window_positions,
 /// start_server) and the RF2K poll thread (save_saved_drive) can race:
-/// each loads, modifies its field, writes — and the later writer silently
+/// each loads, modifies its field, writes - and the later writer silently
 /// drops the other's update if their load-windows overlap.
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
@@ -164,7 +164,17 @@ pub struct ServerConfig {
     pub yaesu_baud: u32,
     /// Yaesu USB audio input device name pattern (e.g. "USB Audio")
     pub yaesu_audio_device: Option<String>,
-    // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) ──
+    /// Yaesu USB audio OUTPUT (TX) device name pattern. `None`/empty -> use the input
+    /// pattern for output too (legacy). Set it when capture/render endpoints have
+    /// different names, so TX audio can't fall back onto the wrong codec
+    /// (PATCH-yaesu-output-device).
+    pub yaesu_audio_output_device: Option<String>,
+    /// SSB/AM USB TX routing per PTT (default false): off = enable 991A routing
+    /// while a client is present, then restore ~2 s after disconnect/shutdown.
+    /// On = switch the 991A USB modulation source only during TX, then restore
+    /// on PTT-off. FTX-1 keeps its internal auto source selection and is not driven here.
+    pub yaesu_ssb_switch_on_ptt: bool,
+    // -- Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) --
     // Tweede onafhankelijke radio (bv. FTX-1). De bestaande `yaesu_*`-keys
     // hierboven = slot 0 (back-compat); deze `yaesu2_*`-keys = slot 1. Beide
     // delen het gedeelde Yaesu-CAT-dialect; `RadioModel` draagt de verschillen.
@@ -175,6 +185,9 @@ pub struct ServerConfig {
     /// Slot-1 USB audio input device name pattern. Aparte keuze want twee
     /// radio's melden zich mogelijk identiek als "USB Audio CODEC" (edge-case 6).
     pub yaesu2_audio_device: Option<String>,
+    /// Slot-1 USB audio OUTPUT (TX) device pattern. `None`/empty -> input pattern
+    /// (PATCH-yaesu-output-device).
+    pub yaesu2_audio_output_device: Option<String>,
     /// Slot-1 capture-kanaal-keuze voor dual-RX radio's (FTX-1 = 2 fysieke
     /// ontvangers op L/R). 0 = L (hardware-RX 1), 1 = R (hardware-RX 2),
     /// 2 = mix (beide gesommeerd). Default 2. Mono radio's (991A) negeren dit.
@@ -209,7 +222,7 @@ pub struct ServerConfig {
     /// which tuner to drive when the user presses Tune. **Schema is wired into
     /// load/save now; the runtime + UI that consume it land in a follow-up
     /// patch, alongside the MCP2221A tuner-driver rewrite.**
-    /// Dynamische lijst (1..=`MAX_TUNERS`) van tuner-slots, één per
+    /// Dynamische lijst (1..=`MAX_TUNERS`) van tuner-slots, een per
     /// fysieke MCP2221A board. Vroeger een vaste `[TunerConfig; 2]`,
     /// nu een `Vec` zodat de server schalend kan zijn naar het aantal
     /// Amplitec-posities (max 6) zonder code-wijziging per slot.
@@ -219,7 +232,7 @@ pub struct ServerConfig {
     /// Show tuner control window on start (default true)
     pub show_tuner_window: bool,
     /// Per-slot Yaesu-rotor configuration (PATCH-yaesu-rotor-mcp2221).
-    /// Eén entry per MCP2221A-board met `rot_` USB-serial prefix; tot
+    /// Een entry per MCP2221A-board met `rot_` USB-serial prefix; tot
     /// `MAX_ROTORS`. Runtime-binding (rotor-backend `Mcp2221Yaesu`)
     /// landt in fase 3 van de brief; fase 1 vult het schema en de
     /// wizard-claim.
@@ -246,11 +259,11 @@ pub struct ServerConfig {
     pub show_rotor_window: bool,
     /// Welke rotor-backend is actief: `"ea7hg"` (Visual Rotor, default) of
     /// `"pstrotator"` (XML over UDP naar een externe PstRotator). Leeg of
-    /// onbekend wordt als `"ea7hg"` geïnterpreteerd voor backwards-compat.
+    /// onbekend wordt als `"ea7hg"` geinterpreteerd voor backwards-compat.
     pub rotor_backend: String,
-    /// PstRotator host — verwacht een numeriek IP-adres (de worker
+    /// PstRotator host - verwacht een numeriek IP-adres (de worker
     /// parset `host:port` als `SocketAddr` en doet geen DNS-resolutie).
-    /// PstRotator draait vaak op een andere PC in hetzelfde LAN —
+    /// PstRotator draait vaak op een andere PC in hetzelfde LAN -
     /// daarom geen hardcoded loopback default.
     pub pstrotator_host: String,
     /// PstRotator UDP listener port voor XML-commando's. Default 12000.
@@ -261,7 +274,7 @@ pub struct ServerConfig {
     /// Polle ook `EL?` voor elevation-rotors. Default `false` (alleen AZ).
     pub pstrotator_has_elevation: bool,
     /// PstRotator UDP-listener (v2.1.1+): luistert parallel aan de actieve
-    /// `rotor_backend` voor inkomende azimuth-broadcasts van bv. Log4OM →
+    /// `rotor_backend` voor inkomende azimuth-broadcasts van bv. Log4OM ->
     /// PstRotator en zet ze om in `RotorCmd::GoTo` op de Rotor-facade.
     /// Maakt het mogelijk om de Adafruit-rotor vanuit een logging-programma
     /// te besturen zonder de outgoing PstRotator-backend te activeren.
@@ -292,16 +305,16 @@ pub struct ServerConfig {
     /// Active PA: 0=none, 1=SPE, 2=RF2K
     pub active_pa: u8,
     /// Persisted pre-Operate Thetis ZZPC drive level per PA. `Some(n)` is the
-    /// last value captured when the PA went Standby→Operate; `None` means
+    /// last value captured when the PA went Standby->Operate; `None` means
     /// no snapshot has been taken yet. Used by the TL2-server drive observer
-    /// to restore the value when the PA goes Operate→Standby, even across a
+    /// to restore the value when the PA goes Operate->Standby, even across a
     /// host restart that would otherwise lose the in-memory observer state.
     pub rf2k_saved_drive: Option<u8>,
     pub spe_saved_drive: Option<u8>,
     /// UltraBeam control window: Menu section expanded (collapsible state)
     pub ultrabeam_show_menu: bool,
     /// Status panel: MCP2221A tuner-bridges section expanded. Persisted so
-    /// the owner's last open/closed choice survives a server restart.
+    /// the operator's last open/closed choice survives a server restart.
     pub mcp2221_section_expanded: bool,
     /// DX Cluster telnet server address (e.g. "dxc.pi4cc.nl:8000")
     pub dxcluster_server: String,
@@ -321,6 +334,14 @@ pub struct ServerConfig {
     /// distinguish multiple ThetisLink servers on the same LAN
     /// (e.g. "Shack PC"). `None` falls back to the OS hostname.
     pub friendly_name: Option<String>,
+    /// Optional outbound relay monitor (Phase A only; does not route TL frames yet).
+    pub relay_enabled: bool,
+    pub relay_url: String,
+    pub relay_station: String,
+    pub relay_token: String,
+    /// PATCH-relay-audio-udp: route audio+PTT over kale UDP (443) instead of the wss
+    /// tunnel. Default on. Env THETISLINK_RELAY_UDP_PORT overrides.
+    pub relay_udp_enabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -332,11 +353,14 @@ impl Default for ServerConfig {
             yaesu_port: None,
             yaesu_enabled: false,
             yaesu_baud: 38400,
+            yaesu_ssb_switch_on_ptt: false,
             yaesu_audio_device: None,
+            yaesu_audio_output_device: None,
             yaesu2_port: None,
             yaesu2_enabled: false,
             yaesu2_baud: 38400,
             yaesu2_audio_device: None,
+            yaesu2_audio_output_device: None,
             yaesu2_audio_channel: 2, // mix (beide ontvangers) als veilige default
             amplitec_port: None,
             amplitec_enabled: true,
@@ -387,13 +411,20 @@ impl Default for ServerConfig {
             ultrabeam_show_menu: false,
             mcp2221_section_expanded: true,
             dxcluster_server: "dxc.pi4cc.nl:8000".to_string(),
-            dxcluster_callsign: "PA3GHM".to_string(),
+            // No hardcoded callsign - the operator enters their own in server
+            // settings on first run; DX cluster stays offline until it's set.
+            dxcluster_callsign: String::new(),
             dxcluster_enabled: true,
             dxcluster_expiry_min: 10,
             password: None,
             totp_secret: None,
             totp_enabled: false,
             friendly_name: None,
+            relay_enabled: false,
+            relay_url: String::new(),
+            relay_station: String::new(),
+            relay_token: String::new(),
+            relay_udp_enabled: true,
         }
     }
 }
@@ -413,7 +444,7 @@ fn parse_tuner_slot_prefix(key: &str) -> Option<(usize, &str)> {
 }
 
 /// Vergroot de `tuners`-Vec zodat `slot0_idx` een geldige index is, met
-/// default `TunerConfig`-entries voor gaten. Owner-config kan een Vec van
+/// default `TunerConfig`-entries voor gaten. Operator-config kan een Vec van
 /// 0 hebben (eerste run zonder tuners) en alleen `tuner2_*` keys; in dat
 /// geval krijgen slot 0 (en eventuele andere gaten) een default-entry.
 fn ensure_tuner_slot(tuners: &mut Vec<TunerConfig>, slot0_idx: usize) {
@@ -540,7 +571,7 @@ fn config_path() -> PathBuf {
 }
 
 /// Public load: takes the global CONFIG_LOCK so external callers always see
-/// a consistent snapshot — never the half-written file from a concurrent
+/// a consistent snapshot - never the half-written file from a concurrent
 /// save. Internal `load_unlocked` is for `modify_config` which already
 /// holds the lock.
 pub fn load() -> ServerConfig {
@@ -578,6 +609,9 @@ fn load_unlocked() -> ServerConfig {
                     "yaesu_enabled" => {
                         config.yaesu_enabled = value.trim() != "false";
                     }
+                    "yaesu_ssb_switch_on_ptt" => {
+                        config.yaesu_ssb_switch_on_ptt = value.trim() != "false";
+                    }
                     "yaesu_baud" => {
                         if let Ok(v) = value.trim().parse::<u32>() {
                             config.yaesu_baud = v;
@@ -586,6 +620,10 @@ fn load_unlocked() -> ServerConfig {
                     "yaesu_audio" => {
                         let v = value.trim().to_string();
                         config.yaesu_audio_device = if v.is_empty() { None } else { Some(v) };
+                    }
+                    "yaesu_audio_out" => {
+                        let v = value.trim().to_string();
+                        config.yaesu_audio_output_device = if v.is_empty() { None } else { Some(v) };
                     }
                     "yaesu2_port" => {
                         let v = value.trim().to_string();
@@ -603,13 +641,17 @@ fn load_unlocked() -> ServerConfig {
                         let v = value.trim().to_string();
                         config.yaesu2_audio_device = if v.is_empty() { None } else { Some(v) };
                     }
+                    "yaesu2_audio_out" => {
+                        let v = value.trim().to_string();
+                        config.yaesu2_audio_output_device = if v.is_empty() { None } else { Some(v) };
+                    }
                     "yaesu2_audio_channel" => {
                         // Tolerant: accepteer cijfer (0/1/2) of L/R/MIX (case-insensitive).
                         let v = value.trim().to_lowercase();
                         config.yaesu2_audio_channel = match v.as_str() {
                             "0" | "l" | "left" => 0,
                             "1" | "r" | "right" => 1,
-                            _ => 2, // "2"/"mix"/onbekend → mix
+                            _ => 2, // "2"/"mix"/onbekend -> mix
                         };
                     }
                     "amplitec_port" => {
@@ -671,9 +713,9 @@ fn load_unlocked() -> ServerConfig {
                     }
                     // Legacy v2.0.2 keys silently ignored on load (multi-tuner
                     // runtime supersedes the single serial-port flow):
-                    //   `tuner_port`           — COM-port no longer used
-                    //   `tuner_enabled`        — replaced by per-slot enable
-                    //   `tuner_assume_tuned`   — assume-tuned pad retired
+                    //   `tuner_port`           - COM-port no longer used
+                    //   `tuner_enabled`        - replaced by per-slot enable
+                    //   `tuner_assume_tuned`   - assume-tuned pad retired
                     "tuner_port" => {}
                     "tuner_enabled" => {
                         // Honour the legacy global toggle one last time so
@@ -686,7 +728,7 @@ fn load_unlocked() -> ServerConfig {
                     "tuner_assume_tuned" => {}
                     // Per-slot keys: `tuner<N>_FIELD=value` met N=1..MAX_TUNERS.
                     // Auto-grow de Vec tot index N-1 zodat oude config-files
-                    // (twee slots) én nieuwe (1..6 slots) beide werken.
+                    // (twee slots) en nieuwe (1..6 slots) beide werken.
                     k if parse_tuner_slot_prefix(k).is_some() => {
                         if let Some((slot0_idx, sub)) = parse_tuner_slot_prefix(k) {
                             ensure_tuner_slot(&mut config.tuners, slot0_idx);
@@ -985,6 +1027,25 @@ fn load_unlocked() -> ServerConfig {
                             config.friendly_name = Some(v.to_string());
                         }
                     }
+                    "relay_enabled" => {
+                        config.relay_enabled = value.trim() == "true";
+                    }
+                    "relay_udp_enabled" => {
+                        config.relay_udp_enabled = value.trim() == "true";
+                    }
+                    "relay_url" => {
+                        config.relay_url = value.trim().to_string();
+                    }
+                    "relay_station" => {
+                        config.relay_station = value.trim().to_string();
+                    }
+                    "relay_token" => {
+                        let v = value.trim();
+                        if !v.is_empty() {
+                            config.relay_token = sdr_remote_core::auth::deobfuscate_password(v)
+                                .unwrap_or_else(|| v.to_string());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1045,13 +1106,15 @@ pub fn save(config: &ServerConfig) {
 fn save_unlocked(config: &ServerConfig) {
     let path = config_path();
     let mut contents = format!(
-        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_audio={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
+        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_ssb_switch_on_ptt={}\nyaesu_audio={}\nyaesu_audio_out={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
         config.tci_addr.as_deref().unwrap_or(""),
         config.thetis_path.as_deref().unwrap_or(""),
         config.yaesu_port.as_deref().unwrap_or(""),
         config.yaesu_enabled,
         config.yaesu_baud,
+        config.yaesu_ssb_switch_on_ptt,
         config.yaesu_audio_device.as_deref().unwrap_or(""),
+        config.yaesu_audio_output_device.as_deref().unwrap_or(""),
         config.amplitec_port.as_deref().unwrap_or(""),
         config.amplitec_enabled,
         config.show_amplitec_window,
@@ -1076,6 +1139,7 @@ fn save_unlocked(config: &ServerConfig) {
     contents.push_str(&format!("yaesu2_enabled={}\n", config.yaesu2_enabled));
     contents.push_str(&format!("yaesu2_baud={}\n", config.yaesu2_baud));
     contents.push_str(&format!("yaesu2_audio={}\n", config.yaesu2_audio_device.as_deref().unwrap_or("")));
+    contents.push_str(&format!("yaesu2_audio_out={}\n", config.yaesu2_audio_output_device.as_deref().unwrap_or("")));
     contents.push_str(&format!("yaesu2_audio_channel={}\n", config.yaesu2_audio_channel));
     // Rotor backend keuze + PstRotator-velden. Apart geblokt zodat de
     // bestaande EA7HG-config-format ongewijzigd blijft bij upgrade.
@@ -1098,7 +1162,7 @@ fn save_unlocked(config: &ServerConfig) {
         "pstrotator_listen_port={}\n",
         config.pstrotator_listen_port
     ));
-    // Per-tuner slots — tuner1_* / tuner2_* keys keep the file readable by hand.
+    // Per-tuner slots - tuner1_* / tuner2_* keys keep the file readable by hand.
     for (i, t) in config.tuners.iter().enumerate() {
         let prefix = format!("tuner{}", i + 1);
         contents.push_str(&format!("{}_enabled={}\n", prefix, t.enabled));
@@ -1112,7 +1176,7 @@ fn save_unlocked(config: &ServerConfig) {
         contents.push_str(&format!("{}_threshold_v={}\n", prefix, t.threshold_v));
         contents.push_str(&format!("{}_hysteresis_v={}\n", prefix, t.hysteresis_v));
     }
-    // Per-rotor slots (PATCH-yaesu-rotor-mcp2221 fase 1) — rotor1_* / rotor2_*
+    // Per-rotor slots (PATCH-yaesu-rotor-mcp2221 fase 1) - rotor1_* / rotor2_*
     // keys. Fase 1 schrijft alleen enabled / name / mcp_serial; latere fasen
     // breiden uit met kalibratie + speed-velden.
     for (i, r) in config.rotors.iter().enumerate() {
@@ -1213,6 +1277,17 @@ fn save_unlocked(config: &ServerConfig) {
     }
     if let Some(ref name) = config.friendly_name {
         contents.push_str(&format!("friendly_name={}\n", name));
+    }
+    contents.push_str(&format!("relay_enabled={}\n", config.relay_enabled));
+    contents.push_str(&format!("relay_udp_enabled={}\n", config.relay_udp_enabled));
+    if !config.relay_url.is_empty() {
+        contents.push_str(&format!("relay_url={}\n", config.relay_url));
+    }
+    if !config.relay_station.is_empty() {
+        contents.push_str(&format!("relay_station={}\n", config.relay_station));
+    }
+    if !config.relay_token.is_empty() {
+        contents.push_str(&format!("relay_token={}\n", sdr_remote_core::auth::obfuscate_password(&config.relay_token)));
     }
     let _ = fs::write(&path, contents);
 }

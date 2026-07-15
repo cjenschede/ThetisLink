@@ -233,7 +233,7 @@ pub(super) fn render_ultrabeam_panel(
             }
         }
 
-        // Menu toggle blijft rechts uitgelijnd in de header-rij —
+        // Menu toggle blijft rechts uitgelijnd in de header-rij -
         // `chevron_label` plaatst de gevulde driehoek links van het
         // label binnen zijn eigen left-to-right horizontal, dus de
         // cell zelf wordt door de parent right-to-left layout netjes

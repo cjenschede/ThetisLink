@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+use std::net::SocketAddr;
 use std::sync::Mutex;
 
 use log::info;
@@ -8,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 use sdr_remote_core::protocol::ControlId;
 use sdr_remote_logic::audio::AudioBackend;
 use sdr_remote_logic::commands::Command;
-use sdr_remote_logic::engine::ClientEngine;
+use sdr_remote_logic::engine::{ClientEngine, ClientRelayTunnel};
 use sdr_remote_logic::state::RadioState;
 
 /// Namespace function: returns shared version string (with build number in dev)
@@ -31,12 +32,27 @@ pub struct BridgeDxSpot {
 /// 1:1 mapping with RadioState fields.
 pub struct BridgeRadioState {
     pub connected: bool,
+    /// Fase 3c: relay audio on the wss TCP-fallback (true) vs low-latency UDP (false).
+    /// Always false in direct mode. Overridden in get_state() from the relay status.
+    pub relay_transport_fallback: bool,
     pub ptt_denied: bool,
     pub audio_error: bool,
     pub rtt_ms: u16,
     pub jitter_ms: f32,
     pub buffer_depth: u32,
     pub rx_packets: u64,
+    pub yaesu_audio_packets: u64,
+    pub yaesu_jitter_ms: f32,
+    pub yaesu_buffer_depth: u32,
+    pub yaesu2_audio_packets: u64,
+    pub yaesu2_jitter_ms: f32,
+    pub yaesu2_buffer_depth: u32,
+    pub vrx1_audio_packets: u64,
+    pub vrx1_jitter_ms: f32,
+    pub vrx1_buffer_depth: u32,
+    pub vrx2_audio_packets: u64,
+    pub vrx2_jitter_ms: f32,
+    pub vrx2_buffer_depth: u32,
     pub loss_percent: u8,
     pub down_kbps: u32,
     pub up_kbps: u32,
@@ -67,6 +83,7 @@ pub struct BridgeRadioState {
     pub other_tx: bool,
     pub filter_low_hz: i32,
     pub filter_high_hz: i32,
+    pub thetis_configured: bool,
     pub thetis_starting: bool,
     pub tx_profile_names: Vec<String>,
     // Spectrum (extracted view)
@@ -155,6 +172,37 @@ pub struct BridgeRadioState {
     pub yaesu_scan: bool,
     pub playback_level_yaesu: f32,
     pub yaesu_memory_data: String,
+    pub yaesu_model: u8,
+    pub yaesu_tuner_state: u8,
+    // Radio 2 (yaesu2_*) — Android toont één radio tegelijk; de selector kiest welke.
+    // De selector toont een radio alleen als 'ie connected is (= geconfigureerd + actief).
+    pub yaesu2_connected: bool,
+    pub yaesu2_model: u8,
+    pub yaesu2_tuner_state: u8,
+    pub yaesu2_freq_a: u64,
+    pub yaesu2_freq_b: u64,
+    pub yaesu2_mode: u8,
+    pub yaesu2_smeter: u16,
+    pub yaesu2_tx_active: bool,
+    pub yaesu2_power_on: bool,
+    pub yaesu2_af_gain: u8,
+    pub yaesu2_tx_power: u8,
+    pub yaesu2_squelch: u8,
+    pub yaesu2_rf_gain: u8,
+    pub yaesu2_mic_gain: u8,
+    pub yaesu2_vfo_select: u8,
+    pub yaesu2_memory_channel: u16,
+    pub yaesu2_split: bool,
+    pub yaesu2_scan: bool,
+    pub playback_level_yaesu2: f32,
+    pub yaesu2_memory_data: String,
+    // DSP/functie-feature-state (beide slots): toggles bitfield, levels, freqs.
+    pub yaesu_feature_toggles: u32,
+    pub yaesu_feature_levels: Vec<u8>,
+    pub yaesu_feature_freqs: Vec<u16>,
+    pub yaesu2_feature_toggles: u32,
+    pub yaesu2_feature_levels: Vec<u8>,
+    pub yaesu2_feature_freqs: Vec<u16>,
     // UltraBeam RCU-06
     pub ub_connected: bool,
     pub ub_frequency_khz: u16,
@@ -218,12 +266,26 @@ impl From<RadioState> for BridgeRadioState {
     fn from(s: RadioState) -> Self {
         Self {
             connected: s.connected,
+            relay_transport_fallback: false, // set in get_state() from the relay status
+
             ptt_denied: s.ptt_denied,
             audio_error: s.audio_error,
             rtt_ms: s.rtt_ms,
             jitter_ms: s.jitter_ms,
             buffer_depth: s.buffer_depth,
             rx_packets: s.rx_packets,
+            yaesu_audio_packets: s.yaesu_audio_packets,
+            yaesu_jitter_ms: s.yaesu_jitter_ms,
+            yaesu_buffer_depth: s.yaesu_buffer_depth,
+            yaesu2_audio_packets: s.yaesu2_audio_packets,
+            yaesu2_jitter_ms: s.yaesu2_jitter_ms,
+            yaesu2_buffer_depth: s.yaesu2_buffer_depth,
+            vrx1_audio_packets: s.vrx1_audio_packets,
+            vrx1_jitter_ms: s.vrx1_jitter_ms,
+            vrx1_buffer_depth: s.vrx1_buffer_depth,
+            vrx2_audio_packets: s.vrx2_audio_packets,
+            vrx2_jitter_ms: s.vrx2_jitter_ms,
+            vrx2_buffer_depth: s.vrx2_buffer_depth,
             loss_percent: s.loss_percent,
             down_kbps: s.down_kbps,
             up_kbps: s.up_kbps,
@@ -252,6 +314,7 @@ impl From<RadioState> for BridgeRadioState {
             other_tx: s.other_tx,
             filter_low_hz: s.filter_low_hz,
             filter_high_hz: s.filter_high_hz,
+            thetis_configured: s.thetis_configured,
             thetis_starting: s.thetis_starting,
             tx_profile_names: s.tx_profile_names,
             spectrum_bins: s.spectrum_bins.iter().map(|v| (v >> 8) as u8).collect(),
@@ -333,6 +396,34 @@ impl From<RadioState> for BridgeRadioState {
             yaesu_scan: s.yaesu_scan,
             playback_level_yaesu: s.playback_level_yaesu,
             yaesu_memory_data: s.yaesu_memory_data.clone().unwrap_or_default(),
+            yaesu_model: s.yaesu_model,
+            yaesu_tuner_state: s.yaesu_tuner_state,
+            yaesu2_connected: s.yaesu2_connected,
+            yaesu2_model: s.yaesu2_model,
+            yaesu2_tuner_state: s.yaesu2_tuner_state,
+            yaesu2_freq_a: s.yaesu2_freq_a,
+            yaesu2_freq_b: s.yaesu2_freq_b,
+            yaesu2_mode: s.yaesu2_mode,
+            yaesu2_smeter: s.yaesu2_smeter,
+            yaesu2_tx_active: s.yaesu2_tx_active,
+            yaesu2_power_on: s.yaesu2_power_on,
+            yaesu2_af_gain: s.yaesu2_af_gain,
+            yaesu2_tx_power: s.yaesu2_tx_power,
+            yaesu2_squelch: s.yaesu2_squelch,
+            yaesu2_rf_gain: s.yaesu2_rf_gain,
+            yaesu2_mic_gain: s.yaesu2_mic_gain,
+            yaesu2_vfo_select: s.yaesu2_vfo_select,
+            yaesu2_memory_channel: s.yaesu2_memory_channel,
+            yaesu2_split: s.yaesu2_split,
+            yaesu2_scan: s.yaesu2_scan,
+            playback_level_yaesu2: s.playback_level_yaesu2,
+            yaesu2_memory_data: s.yaesu2_memory_data.clone().unwrap_or_default(),
+            yaesu_feature_toggles: s.yaesu_feature_toggles,
+            yaesu_feature_levels: s.yaesu_feature_levels.to_vec(),
+            yaesu_feature_freqs: s.yaesu_feature_freqs.to_vec(),
+            yaesu2_feature_toggles: s.yaesu2_feature_toggles,
+            yaesu2_feature_levels: s.yaesu2_feature_levels.to_vec(),
+            yaesu2_feature_freqs: s.yaesu2_feature_freqs.to_vec(),
             ub_connected: s.ub_connected,
             ub_frequency_khz: s.ub_frequency_khz,
             ub_band: s.ub_band,
@@ -424,10 +515,24 @@ pub struct SdrBridge {
     /// PATCH-1: UI language for connect-status / connect-error rendering in
     /// `get_state()`. Set via `set_language("nl" | "en")`. Defaults to "en".
     ui_language: Mutex<String>,
+    /// Phase C: houdt de relay-monitor in leven zolang de bridge bestaat (draait op
+    /// een eigen thread). `None` in direct-modus.
+    _relay_monitor: Mutex<Option<sdr_remote_relay::RelayMonitor>>,
+    /// Fase 3c: relay status handle to surface the transport (UDP / wss-fallback) to the
+    /// Compose UI. `None` in direct mode.
+    relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
 }
 
 impl SdrBridge {
-    pub fn new() -> Self {
+    pub fn new(
+        relay_enabled: bool,
+        relay_url: String,
+        relay_station: String,
+        relay_token: String,
+        relay_instance: String,
+        relay_name: String,
+        relay_udp_enabled: bool,
+    ) -> Self {
         #[cfg(target_os = "android")]
         {
             android_logger::init_once(
@@ -440,21 +545,75 @@ impl SdrBridge {
         let (engine, state_rx, cmd_tx) = ClientEngine::new();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+        // Phase C: relay-transport voor Android-clients die niet kunnen port-forwarden
+        // (mobiel achter CGNAT). Is de relay-config compleet, dan tunnel + monitor
+        // (rol Client) opzetten; anders direct-UDP (default, byte-identiek).
+        let mut relay_monitor: Option<sdr_remote_relay::RelayMonitor> = None;
+        let relay_tunnel = if relay_enabled
+            && !relay_url.trim().is_empty()
+            && !relay_station.trim().is_empty()
+            && !relay_token.trim().is_empty()
+        {
+            let (uplink_tx, uplink_rx) = mpsc::unbounded_channel();
+            let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
+            // Placeholder server-adres (display-label; genegeerd door de Relay-transport).
+            let server_placeholder = SocketAddr::from(([203, 0, 113, 1], 4580));
+            let relay_cfg = sdr_remote_relay::RelayConfig {
+                enabled: true,
+                url: relay_url.clone(),
+                station: relay_station,
+                token: relay_token,
+                role: sdr_remote_relay::RelayRole::Client,
+                instance: relay_instance,
+                name: relay_name,
+                // Fase 5: audio + PTT over kale UDP when the user leaves it enabled
+                // (default). Off -> audio stays on the encrypted wss channel (the user's
+                // latency-vs-encryption choice, matching the desktop toggle). The relay
+                // lib handles UDP transparently and falls back to wss if it can't open.
+                udp_port: if relay_udp_enabled {
+                    Some(sdr_remote_relay::DEFAULT_UDP_PORT)
+                } else {
+                    None
+                },
+            };
+            let tunnel = sdr_remote_relay::RelayTunnel {
+                sentinel: server_placeholder,
+                inbound_tx,
+                uplink_rx,
+            };
+            relay_monitor = Some(sdr_remote_relay::RelayMonitor::start_threaded_tunnel(
+                relay_cfg, tunnel,
+            ));
+            info!("Android transport: relay tunnel (via {})", relay_url);
+            Some(ClientRelayTunnel {
+                uplink_tx,
+                inbound_rx,
+                server_addr: server_placeholder,
+            })
+        } else {
+            None
+        };
+
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
             rt.block_on(async {
-                if let Err(e) = engine.run(make_audio, shutdown_rx).await {
+                if let Err(e) = engine.run(make_audio, shutdown_rx, relay_tunnel).await {
                     log::error!("Engine error: {}", e);
                 }
             });
             info!("Engine thread exited");
         });
 
+        // Capture the status handle before the monitor is moved into the struct, so
+        // get_state() can report the live transport (UDP vs wss-fallback).
+        let relay_status = relay_monitor.as_ref().map(|m| m.status_handle());
         Self {
             cmd_tx,
             state_rx: Mutex::new(state_rx),
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             ui_language: Mutex::new("en".to_string()),
+            _relay_monitor: Mutex::new(relay_monitor),
+            relay_status,
         }
     }
 
@@ -488,6 +647,14 @@ impl SdrBridge {
 
     pub fn set_ptt(&self, active: bool) {
         let _ = self.cmd_tx.send(Command::SetPtt(active));
+    }
+
+    pub fn set_mic_gate_delay_ms(&self, delay_ms: u32) {
+        let _ = self.cmd_tx.send(Command::SetMicGateDelayMs(delay_ms));
+    }
+
+    pub fn set_playback_mute(&self, mute: bool) {
+        let _ = self.cmd_tx.send(Command::SetPlaybackMute(mute));
     }
 
     pub fn set_dx_spots_enabled(&self, enabled: bool) {
@@ -768,6 +935,86 @@ impl SdrBridge {
         let _ = self.cmd_tx.send(Command::SetYaesuEqEnabled(on));
     }
 
+    /// Client-side spraakcompressor-amount (0-100) voor de Yaesu-TX, radio 1.
+    pub fn yaesu_compressor(&self, level: u8) {
+        let _ = self.cmd_tx.send(Command::SetYaesuCompressor(level));
+    }
+
+    /// Client-side Yaesu-TX AGC aan/uit, radio 1 (eigen toggle, los van Thetis-AGC).
+    pub fn yaesu_tx_agc(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetYaesuTxAgc(on));
+    }
+
+    /// Client-side spraakcompressor-amount (0-100) voor de Yaesu-TX, radio 2 (FTX-1).
+    pub fn yaesu2_compressor(&self, level: u8) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2Compressor(level));
+    }
+
+    /// Client-side Yaesu-TX AGC aan/uit, radio 2 (FTX-1).
+    pub fn yaesu2_tx_agc(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2TxAgc(on));
+    }
+
+    /// Getypte DSP/functie-control voor een slot (0=radio1, 1=radio2). Dekt álle
+    /// DSP-knoppen + clarifier (YaesuCtrl-index in `control`, waarde in `value`).
+    pub fn yaesu_control(&self, slot: u8, control: u8, value: u16) {
+        let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, control, value));
+    }
+
+    // ── Radio 2 (yaesu2) — spiegel van de yaesu_* functies, geroute naar slot 1 ──
+    pub fn yaesu2_enable(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::Yaesu2Enable, on as u16));
+    }
+
+    pub fn yaesu2_read_memories(&self) {
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::Yaesu2ReadMemories, 0));
+    }
+
+    pub fn yaesu2_ptt(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(on));
+    }
+
+    pub fn yaesu2_volume(&self, vol: f32) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2Volume(vol));
+    }
+
+    pub fn yaesu2_select_vfo(&self, vfo: u8) {
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::Yaesu2SelectVfo, vfo as u16));
+    }
+
+    pub fn yaesu2_recall_memory(&self, channel: u16) {
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::Yaesu2RecallMemory, channel));
+    }
+
+    pub fn yaesu2_freq(&self, hz: u64) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2Freq(hz));
+    }
+
+    pub fn yaesu2_mode(&self, mode: u8) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2Mode(mode));
+    }
+
+    pub fn yaesu2_button(&self, button_id: u16) {
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::Yaesu2Button, button_id));
+    }
+
+    pub fn yaesu2_tx_gain(&self, gain: f32) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2TxGain(gain));
+    }
+
+    pub fn yaesu2_eq_band(&self, band: u8, gain_db: f32) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2EqBand(band, gain_db));
+    }
+
+    pub fn yaesu2_eq_enabled(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetYaesu2EqEnabled(on));
+    }
+
     pub fn server_reboot(&self) {
         let _ = self.cmd_tx.send(Command::ServerReboot);
     }
@@ -785,13 +1032,28 @@ impl SdrBridge {
         } else {
             sdr_remote_logic::i18n::Lang::En
         };
-        bridge_state_from_radio_state(state, lang)
+        let mut bs = bridge_state_from_radio_state(state, lang);
+        // Fase 3c: report the live relay transport (UDP vs wss-fallback) to the UI.
+        if let Some(h) = &self.relay_status {
+            bs.relay_transport_fallback = h.snapshot().transport_fallback;
+        }
+        bs
     }
 
     pub fn shutdown(&self) {
         let mut guard = self.shutdown_tx.lock().unwrap();
         if let Some(tx) = guard.take() {
             let _ = tx.send(true);
+        }
+        drop(guard);
+        // Also stop the relay monitor. Otherwise its background thread keeps the
+        // relay connection (and its client_id slot) alive after this app instance is
+        // gone — and when the next instance starts with the same install id, the two
+        // ping-pong the slot (each reclaim closes the other, which reconnects after
+        // RECONNECT_DELAY). Stopping the monitor here (ViewModel.onCleared) prevents
+        // the zombie connection.
+        if let Some(monitor) = self._relay_monitor.lock().unwrap().take() {
+            monitor.stop();
         }
     }
 }

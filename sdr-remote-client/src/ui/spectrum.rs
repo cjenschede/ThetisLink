@@ -104,7 +104,7 @@ pub(crate) fn spectrum_plot(
         return;
     }
 
-    // Frequency range — display window centered on VFO (like waterfall)
+    // Frequency range - display window centered on VFO (like waterfall)
     let visible_span = span_hz as f64;
     let disp_center = display_center_hz as f64;
     let start_hz = disp_center - visible_span / 2.0;
@@ -682,7 +682,7 @@ pub(crate) fn render_waterfall(
     let wf_height = wf.height;
     let ddc_span_f = full_span_hz as f64;
 
-    // View in absolute frequency space — use the most recent view span from the
+    // View in absolute frequency space - use the most recent view span from the
     // spectrum packet rather than recomputing from ddc_span/zoom, because the
     // server's integer FFT bin count can differ slightly from ddc_span/zoom,
     // causing a scaling mismatch between spectrum line and waterfall at the edges.
@@ -751,7 +751,7 @@ pub(crate) fn render_waterfall(
                 mv
             };
 
-            // Same normalization as spectrum plot: raw→dB→frac→color
+            // Same normalization as spectrum plot: raw->dB->frac->color
             let server_floor_db = -150.0f32;
             let server_range_db = 120.0f32;
             let db = server_floor_db + (max_val as f32 / 65535.0) * server_range_db;
@@ -1189,7 +1189,7 @@ pub(crate) fn render_vrx_strip(
     // ── Filter edge interaction (drag-resize + scroll-resize) ──
     // Mirror main spectrum pattern: detect near-edge, set cursor,
     // memory-based drag-state persistence. Writes go to ctx-memory
-    // under "{salt}_filter_low/high_hz" — caller reads and dispatches.
+    // under "{salt}_filter_low/high_hz" - caller reads and dispatches.
     let filt_lo_x_full = rect.min.x + (((vrx_freq_hz as f64 + filter_low_hz as f64) - view_min_hz) / view_span_hz) as f32 * rect.width();
     let filt_hi_x_full = rect.min.x + (((vrx_freq_hz as f64 + filter_high_hz as f64) - view_min_hz) / view_span_hz) as f32 * rect.width();
     let grab_dist = 8.0;
@@ -1281,7 +1281,7 @@ pub(crate) fn render_vrx_strip(
     }
     let was_filter_drag = dragging_filter.is_some() || near_lo || near_hi;
 
-    // Click → tune VRX (skip if interacting with filter edge)
+    // Click -> tune VRX (skip if interacting with filter edge)
     if resp.clicked() && !was_filter_drag {
         if let Some(pos) = resp.interact_pointer_pos() {
             let frac = ((pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
@@ -1290,7 +1290,7 @@ pub(crate) fn render_vrx_strip(
             new_freq = Some((clamped / 1000) * 1000); // round to 1 kHz, parity met RX
         }
     }
-    // Scroll → step VRX freq (skip when filter-edge scroll consumed it)
+    // Scroll -> step VRX freq (skip when filter-edge scroll consumed it)
     if resp.hovered() && !filter_scroll_consumed && !(near_lo || near_hi) {
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll.abs() > 0.1 {
@@ -1310,7 +1310,7 @@ pub(crate) fn render_vrx_strip(
     let wf_h_px = (wf_h.max(40.0) as usize).max(1);
     let wf_w_px = (ui.available_width().max(1.0) as usize).min(1024);
     // Textuur-hoogte = ringbuffer-capaciteit (niet de paneel-pixelhoogte); painter.image
-    // rekt 'm uit naar de rect — parity met RX-waterval. Voorkomt een permanente zwarte
+    // rekt 'm uit naar de rect - parity met RX-waterval. Voorkomt een permanente zwarte
     // rand onder als het paneel hoger is dan de ring.
     let wf_tex_rows = wf.height.max(1);
     let mut pixels = vec![Color32::from_rgb(8, 10, 20); wf_w_px * wf_tex_rows];
@@ -1342,7 +1342,7 @@ pub(crate) fn render_vrx_strip(
                 if b1 <= 0 || b0 >= row.len() as isize { continue; }
                 let b0c = b0.max(0) as usize;
                 let b1c = (b1 as usize).min(row.len());
-                // Max over alle bins die op deze pixel vallen — parity met RX-waterval.
+                // Max over alle bins die op deze pixel vallen - parity met RX-waterval.
                 // Single-bin sampling miste de piek waardoor VRX donkerder oogde.
                 let mut val = 0u16;
                 for j in b0c..b1c { val = val.max(row[j]); }
@@ -1411,34 +1411,34 @@ pub(crate) fn render_vrx_strip(
 }
 
 /// Map 8-bit power value to RGB color (waterfall colormap)
-/// Black → Blue → Cyan → Yellow → Red → White
+/// Black -> Blue -> Cyan -> Yellow -> Red -> White
 pub(crate) fn waterfall_colormap(value: u8) -> (u8, u8, u8) {
     let v = value as f32 / 255.0;
     let (r, g, b) = if v < 0.2 {
-        // Black → Blue
+        // Black -> Blue
         let t = v / 0.2;
         (0.0, 0.0, t)
     } else if v < 0.4 {
-        // Blue → Cyan
+        // Blue -> Cyan
         let t = (v - 0.2) / 0.2;
         (0.0, t, 1.0)
     } else if v < 0.6 {
-        // Cyan → Yellow
+        // Cyan -> Yellow
         let t = (v - 0.4) / 0.2;
         (t, 1.0, 1.0 - t)
     } else if v < 0.8 {
-        // Yellow → Red
+        // Yellow -> Red
         let t = (v - 0.6) / 0.2;
         (1.0, 1.0 - t, 0.0)
     } else {
-        // Red → White
+        // Red -> White
         let t = (v - 0.8) / 0.2;
         (1.0, t, t)
     };
     ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
-/// Map normalized level (0.0=bottom/weak → 1.0=top/strong) to RGB for spectrum line/fill.
+/// Map normalized level (0.0=bottom/weak -> 1.0=top/strong) to RGB for spectrum line/fill.
 /// Uses waterfall colormap with adjustable floor (skips dark end of the scale).
 /// floor: 0.0=full range (starts at black), 0.3=starts at cyan, 0.5=starts at yellow
 fn spectrum_level_color_with_floor(level: f32, floor: f32) -> (u8, u8, u8) {

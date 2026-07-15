@@ -34,7 +34,7 @@ impl SdrType {
 
 /// Commands sent from UI thread to the WebView thread.
 pub enum WebSdrCmd {
-    #[allow(dead_code)]
+    /// Re-navigate to a URL (also used to reload/recover the page + audio stream).
     Navigate(String),
     Mute(bool),
     SetFreq(u64, u8),
@@ -162,7 +162,7 @@ fn init_script(sdr_type: SdrType) -> &'static str {
 fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>) -> anyhow::Result<()> {
     use wry::raw_window_handle;
 
-    // Raw Win32 FFI — minimal set for window creation + message pump
+    // Raw Win32 FFI - minimal set for window creation + message pump
     #[repr(C)]
     struct WNDCLASSEXW {
         cb_size: u32, style: u32,
@@ -316,7 +316,7 @@ fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>)
 
 // ── macOS: Safari + AppleScript JS injection ────────────────────────────
 // Opens URL in Safari, then uses osascript to inject JavaScript for mute
-// and freq sync. Requires: Safari → Develop → Allow JavaScript from Apple Events.
+// and freq sync. Requires: Safari -> Develop -> Allow JavaScript from Apple Events.
 
 #[cfg(target_os = "macos")]
 fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>) -> anyhow::Result<()> {
@@ -349,7 +349,7 @@ fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>)
 }
 
 /// Execute JavaScript in Safari's front tab via AppleScript.
-/// Requires: Safari → Develop → Allow JavaScript from Apple Events.
+/// Requires: Safari -> Develop -> Allow JavaScript from Apple Events.
 #[cfg(target_os = "macos")]
 fn safari_eval_js(js: &str) {
     // Escape single quotes and backslashes for AppleScript string

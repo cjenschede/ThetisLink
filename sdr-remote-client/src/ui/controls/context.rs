@@ -4,7 +4,7 @@
 //! state, command-sender, event sink. Zo heeft elke helper één parameter en
 //! is enabled/observability/state-toegang uniform.
 //!
-//! Bewust géén `&mut ThetisLinkApp` — dat zou de hele app-state exposen en
+//! Bewust géén `&mut ThetisLinkApp` - dat zou de hele app-state exposen en
 //! tests onmogelijk maken zonder volledige app-constructie.
 //!
 //! `cmd_tx` is privé: helpers buiten deze module kunnen
@@ -74,7 +74,7 @@ impl<'a> ControlContext<'a> {
     ///
     /// `#[must_use]`: callers MOETEN de return-waarde checken voordat ze
     /// lokale UI-state muteren. Als ze dat niet doen, kan state-drift ontstaan
-    /// tussen client en server — exact de bug-klasse uit
+    /// tussen client en server - exact de bug-klasse uit
     /// PATCH-client-band-switch-guard finding #3 die deze refactor moest
     /// wegnemen. Compiler dwingt het contract af.
     #[must_use]

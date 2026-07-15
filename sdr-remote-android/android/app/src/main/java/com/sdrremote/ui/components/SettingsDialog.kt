@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -87,6 +90,80 @@ fun SettingsDialog(
                     Text("Password is required to connect", fontSize = 12.sp, color = Color(0xFFE53935))
                 }
 
+                // Relay connection (Phase C): for clients that cannot port-forward.
+                // Read once at app start; changing it takes effect after a restart.
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                var relayEnabled by remember { mutableStateOf(prefs.getBoolean("relay_enabled", false)) }
+                var relayUrl by remember { mutableStateOf(prefs.getString("relay_url", "") ?: "") }
+                var relayStation by remember { mutableStateOf(prefs.getString("relay_station", "") ?: "") }
+                var relayToken by remember { mutableStateOf(prefs.getString("relay_token", "") ?: "") }
+                var relayDeviceName by remember { mutableStateOf(prefs.getString("relay_device_name", "") ?: "") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Connect via relay:", fontSize = 14.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = relayEnabled,
+                        onCheckedChange = { relayEnabled = it; prefs.edit().putBoolean("relay_enabled", it).apply() },
+                    )
+                }
+                Text(
+                    "For clients that cannot port-forward (e.g. mobile). Restart the app to apply.",
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = relayUrl,
+                    onValueChange = { relayUrl = it; prefs.edit().putString("relay_url", it).apply() },
+                    label = { Text("Relay URL") },
+                    placeholder = { Text("ws://relay.example.com:18080") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = relayStation,
+                    onValueChange = { relayStation = it; prefs.edit().putString("relay_station", it).apply() },
+                    label = { Text("Station name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = relayToken,
+                    onValueChange = { relayToken = it; prefs.edit().putString("relay_token", it).apply() },
+                    label = { Text("Token") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = relayDeviceName,
+                    onValueChange = { relayDeviceName = it; prefs.edit().putString("relay_device_name", it).apply() },
+                    label = { Text("Device name") },
+                    singleLine = true,
+                    supportingText = { Text("Shown in relay logs. Restart the app to apply.") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                var relayUdpEnabled by remember { mutableStateOf(prefs.getBoolean("relay_udp_enabled", true)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Audio over UDP (low latency):", fontSize = 14.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = relayUdpEnabled,
+                        onCheckedChange = { relayUdpEnabled = it; prefs.edit().putBoolean("relay_udp_enabled", it).apply() },
+                    )
+                }
+                Text(
+                    "On: lowest-latency audio over UDP. Off: audio stays on the encrypted relay channel. Restart the app to apply.",
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+
                 // PTT mode
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
@@ -132,7 +209,7 @@ fun SettingsDialog(
                         onCheckedChange = { onDxSpotsEnabledChange(it) },
                     )
                 }
-                Text("Ontvang DX-cluster spots (uit = data besparen)", fontSize = 11.sp, color = Color.Gray)
+                Text("Receive DX-cluster spots (off = save data)", fontSize = 11.sp, color = Color.Gray)
 
                 // Audio routing
                 Spacer(Modifier.height(12.dp))
@@ -228,6 +305,41 @@ fun SettingsDialog(
                     }
                     Text("Auto-switches TX profile when mic changes", fontSize = 11.sp, color = Color.Gray)
                 }
+
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                Text("Mic gate delay (experimental):", fontSize = 14.sp)
+                Spacer(Modifier.height(4.dp))
+                val gateLabels = listOf("Thetis phone mic", "Yaesu phone mic", "BT headset")
+                val gateKeys = listOf("thetis_android_mic", "yaesu_android_mic", "android_bt")
+                val gateDefaults = listOf(0, 100, 0)
+                gateLabels.forEachIndexed { i, label ->
+                    var delayText by remember {
+                        mutableStateOf(prefs.getInt("mic_gate_delay_ms_${gateKeys[i]}", gateDefaults[i]).toString())
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, fontSize = 12.sp, modifier = Modifier.weight(0.55f))
+                        OutlinedTextField(
+                            value = delayText,
+                            onValueChange = { raw ->
+                                val filtered = raw.filter { it.isDigit() }.take(3)
+                                val value = filtered.toIntOrNull()?.coerceIn(0, 800) ?: 0
+                                delayText = if (filtered.isEmpty()) "" else value.toString()
+                                prefs.edit().putInt("mic_gate_delay_ms_${gateKeys[i]}", value).apply()
+                            },
+                            label = { Text("ms") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(0.45f),
+                        )
+                    }
+                }
+                Text(
+                    "PTT is immediate; mic audio opens after this delay. Test range: 0-800 ms.",
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
 
                 if (connected) {
                     Spacer(Modifier.height(12.dp))

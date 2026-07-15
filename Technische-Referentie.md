@@ -1,10 +1,10 @@
-# ThetisLink v2.3.0 — Technische Documentatie
+# ThetisLink v2.4.0 — Technische Documentatie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een ANAN 7000DLE + Thetis SDR-ontvanger en een Yaesu FT-991A transceiver via een netwerkverbinding. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
 
-**Versie:** v2.3.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.4.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -21,7 +21,7 @@ Daarnaast is er een **PA3GHM ThetisLink fork** ([cjenschede/Thetis](https://gith
 - **Diversity auto-null**: Smart en Ultra algoritmen die server-side in Thetis draaien (DSP-snelheid)
 - **BroadcastDiversityPhase/Gain**: real-time cirkelplot updates tijdens auto-null sweep
 
-Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. Met deze vink uit blijft het stock TCI-extensiegedrag van v2.10.3.15 behouden (de fork bevat wel een eigen build-tag, release-notes en About-metadata). De huidige ThetisLink fork build tag is **TL2-1**.
+Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. Met deze vink uit blijft het stock TCI-extensiegedrag van v2.10.3.15 behouden (de fork bevat wel een eigen build-tag, release-notes en About-metadata). De huidige ThetisLink fork build tag is **TL2-4**.
 
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
@@ -29,6 +29,10 @@ De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruik
 - ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.3.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.4.0 highlights
+
+**Relay v2 (lage-latency UDP-audio + automatische TCP-terugval), een beheer-dashboard, uitgebreide verbindingsmonitoring en desktop-thema's — plus een grote Yaesu- en Android-inhaalslag.** Backwards-compatible met v2.3.x — wire `VERSION` blijft 3; alle relay-toevoegingen zitten in de relay-laag en de tunnel, niet in het radio-protocol. Relay-audio + PTT lopen nu over kale UDP (voorheen wss/TCP) met automatische make-before-break UDP↔wss-terugval als een netwerk UDP blokkeert of degradeert, plus een transport-indicator op desktop en Android; UDP-sessietokens roteren over wss vóór ze verlopen. Een web-dashboard beheert stations/apparaten met verbruik/quota per device en een database-backup-knop (`VACUUM INTO`, Argon2id-login, CSRF, per-IP rate-limit, intern achter de TLS-proxy). Het **Statistics-paneel is fors uitgebreid**: per-stream jitter, jitterbuffer-diepte, packet-telling en loss voor Thetis RX / Yaesu 1-2 / VRX1-2, plus RTT, up/down-bandbreedte met een uitsplitsing per packet-type, en de live transport-indicator (desktop + Android); server-side toont het Status-paneel per client de down/up-bandbreedte uitgesplitst naar audio/spectrum/overig. Grote **Yaesu**-uitbreiding: **SSB-zenden via de USB-audio** (991A: per PTT SSB MIC SELECT=REAR + PORT SELECT=USB, hersteld bij loslaten; FTX-1: interne auto-modulatiebron ongemoeid; auto-DATA alleen FM, niet SSB; hybride per-PTT-routing + Exit), client-side **TX-compressor + AGC** per radio en een **clarifier (RIT/XIT)** — plus een grote **Android Yaesu-pariteit** (dual-radio-selector, volledig DSP-paneel, touch freq-tuning, interne ATU). **Databesparing mobiel** stopt de Thetis-RX-stream naar Yaesu-only clients en streamt Yaesu-data alleen als het venster actief is. De desktop-client krijgt kiesbare UI-thema's (Classic/Dark/Slate/Custom) en zelfherstel van off-screen-vensters. Geen Thetis-fork-update nodig (stock v2.10.3.15 volstaat).
 
 ### v2.3.0 highlights
 
@@ -125,7 +129,7 @@ De v2.0.0 release is een grote stap ten opzichte van de v0.x-lijn. Belangrijkste
 
 ## 2. Architectuur
 
-ThetisLink v2.3.0 gebruikt één enkele TCI WebSocket verbinding naar Thetis voor audio, IQ en alle radio-commando's. Met de PA3GHM fork breiden de aanvullende `_ex` commando's het oppervlak uit (CTUN auto-recenter, diversity, per-RX DDC sample rate, `rx_only_ex` preventieve TX-inhibit). Tegen zowel stock v2.10.3.15 als de fork is geen parallelle CAT-verbinding meer nodig.
+ThetisLink v2.4.0 gebruikt één enkele TCI WebSocket verbinding naar Thetis voor audio, IQ en alle radio-commando's. Met de PA3GHM fork breiden de aanvullende `_ex` commando's het oppervlak uit (CTUN auto-recenter, diversity, per-RX DDC sample rate, `rx_only_ex` preventieve TX-inhibit). Tegen zowel stock v2.10.3.15 als de fork is geen parallelle CAT-verbinding meer nodig.
 
 ```mermaid
 flowchart LR
@@ -825,7 +829,7 @@ TCI (Transceiver Control Interface) is een WebSocket-gebaseerd protocol ingebouw
 
 ### Stock vs fork TCI sub-protocol
 
-ThetisLink v2.3.0 praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork (TL2-4)**. Het basisprotocol is identiek — maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-4).
+ThetisLink v2.4.0 praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork (TL2-4)**. Het basisprotocol is identiek — maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-4).
 
 **Capability-negotiation:** bij verbinden vraagt de client `tci_caps_ex;` op. Met de fork (en de "ThetisLink extensions" Setup-checkbox aan) antwoordt Thetis met een lijst van ondersteunde `_ex` capabilities (`auto_recenter_ex`, `rx_filter_preset_ex`, `ddc_sample_rate_ex`, `diversity_ex`, ...). Stock Thetis implementeert `tci_caps_ex` niet en het verzoek timet uit → ThetisLink valt terug op stock-mode gedrag.
 
@@ -1509,7 +1513,7 @@ Spectrum data komt via de TCI WebSocket IQ stream.
 
 De IQ sample rate is per ontvanger configureerbaar via de **DDC sample rate dropdown** in de client (Spectrum-panel).
 
-| Sample rate | Stock v2.10.3.15 | PA3GHM fork (TL2-1) | Opmerkingen |
+| Sample rate | Stock v2.10.3.15 | PA3GHM fork (TL2-4) | Opmerkingen |
 |-------------|------------------|---------------------|-------------|
 | 48 kHz | ja | ja | minimaal IQ-venster, laagste CPU/netwerk |
 | 96 kHz | ja | ja | |
@@ -1762,10 +1766,10 @@ WAV recorder voor RX audio op de server, met playback naar speaker of TX.
 
 ### Recording
 
-- Per audiobron: **RX1**, **RX2**, **Yaesu** — elk een eigen checkbox in de Server tab
-- Formaat: WAV, 8 kHz, 16-bit mono (PCM)
+- Per audiobron: **RX1**, **RX2**, **Yaesu 1**, **Yaesu 2**, **VRX1**, **VRX2** (v2.4.0) — elk een eigen checkbox in de Server tab, alleen zichtbaar als die bron beschikbaar/ingeschakeld is
+- Formaat: WAV, 16-bit mono (PCM). De sample-rate volgt de gedecodeerde stream-rate — meestal **8 kHz** (smalband) of **16 kHz** (breedband), dus meelopend met de RX-bandbreedte-instelling; hij wordt vastgelegd bij de eerste write van elk bestand
 - Bestandsnaam: automatisch met timestamp, bijv. `rx1_2026-04-05_14-30-00.wav`
-- Opname start/stop via checkboxes in de server GUI
+- Opname start/stop via checkboxes in de client GUI
 - Ruwe PCM na Opus decode, voor resampling naar device rate
 
 ### Playback
@@ -2125,14 +2129,10 @@ De FTX-1 **WIRES-X** EX-menu-velden zijn toegevoegd aan de EX-editor (§26).
 
 ## 30. Bekende Beperkingen
 
-1. **AM/FM audio:** Momenteel geen geluid in AM/FM modus op Thetis (SSB/CW werkt correct).
+1. **HPSDR protocol-dekking:** ThetisLink praat met Thetis (via TCI), niet rechtstreeks met de SDR-hardware. Zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als Protocol 2 (ANAN 7000DLE, 8000DLE, G2, Hermes-Lite 2, etc.) worden daarom ondersteund zolang Thetis zelf het apparaat ondersteunt.
 
-2. **HPSDR protocol-dekking:** ThetisLink praat met Thetis (via TCI), niet rechtstreeks met de SDR-hardware. Zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als Protocol 2 (ANAN 7000DLE, 8000DLE, G2, Hermes-Lite 2, etc.) worden daarom ondersteund zolang Thetis zelf het apparaat ondersteunt.
+2. **Single TX:** Slechts een client tegelijk kan zenden. Andere clients ontvangen PttDenied.
 
-3. **Single TX:** Slechts een client tegelijk kan zenden. Andere clients ontvangen PttDenied.
+3. **Yaesu EX menu items 031-033:** CAT RATE/TOT/RTS wijzigen via ThetisLink kan de seriele verbinding met de radio verbreken.
 
-6. **Yaesu EX menu items 031-033:** CAT RATE/TOT/RTS wijzigen via ThetisLink kan de seriele verbinding met de radio verbreken.
-
-7. **macOS:** Experimentele ondersteuning. cpal werkt met CoreAudio maar sommige USB audio devices worden niet correct gedetecteerd.
-
-8. **Android spectrum:** Geen pinch-to-zoom of drag pan op de Android spectrum/waterfall weergave.
+4. **macOS:** Experimentele ondersteuning. cpal werkt met CoreAudio maar sommige USB audio devices worden niet correct gedetecteerd.

@@ -18,7 +18,7 @@ use super::coverage;
 use super::{ControlContext, UiEvent};
 use crate::ui::helpers::band_label;
 
-/// Bands die op ieder RX-kanaal beschikbaar zijn. Één bron van waarheid —
+/// Bands die op ieder RX-kanaal beschikbaar zijn. Één bron van waarheid -
 /// voorheen twee kopieën (`render_rx1_controls_inner` + `render_rx2_controls_inner`).
 pub(crate) const BANDS: &[(&str, u64)] = &[
     ("160m", 1_900_000),
@@ -45,9 +45,9 @@ pub(crate) struct BandClick {
 /// `guarded=true`.
 ///
 /// Retourneert `Some(BandClick { ... })` wanneer een band-knop geklikt is
-/// (en het kanaal connected was — `add_enabled` garandeert dat). Caller is
+/// (en het kanaal connected was - `add_enabled` garandeert dat). Caller is
 /// verantwoordelijk voor de multi-command band-switch actie en de
-/// intent→command chain in observability.
+/// intent->command chain in observability.
 pub(crate) fn render_band_selector(
     ui: &mut egui::Ui,
     ctx: &ControlContext,

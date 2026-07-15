@@ -62,6 +62,10 @@ pub(crate) struct ClientConfig {
     pub(crate) output_device: String,
     pub(crate) mic_profile_map: std::collections::HashMap<String, String>,
     pub(crate) agc_enabled: bool,
+    /// UI theme variant ("classic" | "dark" | "slate" | "custom").
+    pub(crate) theme: String,
+    /// Custom palette as `rrggbb,rrggbb,rrggbb` (background,widget,text). Empty = unset.
+    pub(crate) theme_custom: String,
     pub(crate) spectrum_enabled: bool,
     pub(crate) spectrum_ref_db: f32,
     pub(crate) spectrum_range_db: f32,
@@ -76,7 +80,7 @@ pub(crate) struct ClientConfig {
     /// scrollable. Popouts keep using their full available height regardless
     /// of this setting.
     pub(crate) spectrum_total_h: f32,
-    /// Persisted geometry per popout viewport — `Some((x, y))` / `Some((w, h))`
+    /// Persisted geometry per popout viewport - `Some((x, y))` / `Some((w, h))`
     /// is the last position / size the OS reported; `None` means use the
     /// hard-coded default and let the OS pick the position.
     pub(crate) spectrum_popout_pos: Option<(f32, f32)>,
@@ -92,7 +96,7 @@ pub(crate) struct ClientConfig {
     pub(crate) vrx_popout_pos: Option<(f32, f32)>,
     pub(crate) vrx_popout_size: Option<(f32, f32)>,
     // VRX1 per-channel state (was `vrx_volume`/`vrx_enabled`/etc. in
-    // build 48 — renamed in build 50 when VRX2 was added; the loader
+    // build 48 - renamed in build 50 when VRX2 was added; the loader
     // still accepts the old keys for one-version backwards compat).
     pub(crate) vrx1_volume: Option<f32>,
     pub(crate) vrx1_enabled: Option<bool>,
@@ -128,7 +132,7 @@ pub(crate) struct ClientConfig {
     pub(crate) rx2_enabled: bool,
     /// Opt-in voor wideband Thetis-audio (RX1/RX2/BinR 16 kHz i.p.v.
     /// 8 kHz default). Verdubbelt RX-bandbreedte per kanaal ongeveer,
-    /// dus default false; aan-zetten via Settings → Audio.
+    /// dus default false; aan-zetten via Settings -> Audio.
     pub(crate) thetis_wideband_audio: bool,
     pub(crate) popout_joined: bool,
     pub(crate) popout_meter_analog: bool,
@@ -168,19 +172,49 @@ pub(crate) struct ClientConfig {
     /// zodat de schuif-waarde altijd onthouden wordt). Range 0.05..=3.0.
     pub(crate) yaesu_mic_gain: f32,
     pub(crate) yaesu2_mic_gain: f32,
+    /// Client-side TX-compressor (0-100) en AGC-toggle per radio, persistent.
+    pub(crate) yaesu_compressor: u8,
+    pub(crate) yaesu2_compressor: u8,
+    pub(crate) yaesu_tx_agc: bool,
+    pub(crate) yaesu2_tx_agc: bool,
     /// FTX-1 (radio 2) popout-window open/dicht-stand, persistent.
     pub(crate) yaesu2_popout: bool,
     /// S-meter source choice: 0=Sig, 1=Avg (default), 2=MaxBin.
-    /// Shared by RX1 and RX2 — same presentation method for both receivers.
+    /// Shared by RX1 and RX2 - same presentation method for both receivers.
     pub(crate) smeter_source: u8,
     pub(crate) catsync_enabled: bool,
     pub(crate) catsync_url: String,
     pub(crate) catsync_favorites: Vec<(String, String)>,
     /// TL2-1 ctun-auto-recenter: setup-vink "Allow zoom below 2x (waterfall smear during tune)".
-    /// Default false → zoom-min 2x, anti-smear feature volledig actief.
-    /// True → zoom-min 1x toegestaan, smear bij tunen <1.2× zoom.
-    /// Server enforced strictest over alle clients (zolang één client false → server klemt op 2x).
+    /// Default false -> zoom-min 2x, anti-smear feature volledig actief.
+    /// True -> zoom-min 1x toegestaan, smear bij tunen <1.2× zoom.
+    /// Server enforced strictest over alle clients (zolang één client false -> server klemt op 2x).
     pub(crate) allow_zoom_below_2x: bool,
+
+    /// PTT switch-on spike protection for a built-in speaker+mic in one chassis
+    /// (tablets/laptops). When off, all gate-delays are 0 - no added latency. The
+    /// per-path mic gate-delay (ms) discards the first mic audio after keyup so the
+    /// speaker/chassis spike decays before it reaches TX. Thetis default 0 (the
+    /// instant playback-mute is enough), Yaesu default 100 (later TX-path opening).
+    pub(crate) spike_protection: bool,
+    pub(crate) mic_gate_delay_thetis_ms: u32,
+    pub(crate) mic_gate_delay_yaesu_ms: u32,
+
+    /// Phase A relay monitor settings (status only; direct transport remains default).
+    pub(crate) relay_enabled: bool,
+    pub(crate) relay_url: String,
+    pub(crate) relay_station: String,
+    pub(crate) relay_token: String,
+    /// Stable per-install id sent to the relay so a reconnecting client reclaims its
+    /// own slot instead of piling up ghosts. Generated once on first run, persisted.
+    pub(crate) relay_instance_id: String,
+    /// Human device label sent to the relay (shown in relay logs/dashboard).
+    /// Auto-defaulted to the hostname on first run; user-editable; may contain spaces.
+    pub(crate) relay_device_name: String,
+    /// PATCH-relay-audio-udp: route audio+PTT over kale UDP (port 443) instead of the
+    /// wss tunnel - no retransmit, low latency. Default on. The env var
+    /// THETISLINK_RELAY_UDP_PORT overrides this (testing / non-standard port).
+    pub(crate) relay_udp_enabled: bool,
 
     /// PATCH-1: UI-language for connect-status / connect-error strings.
     /// Accepts "en" (default) or "nl". Any other value falls back to "en".
@@ -213,6 +247,8 @@ impl Default for ClientConfig {
             output_device: String::new(),
             mic_profile_map: std::collections::HashMap::new(),
             agc_enabled: false,
+            theme: "classic".to_string(),
+            theme_custom: String::new(),
             spectrum_enabled: false,
             spectrum_ref_db: -20.0,
             spectrum_range_db: 100.0,
@@ -298,8 +334,12 @@ impl Default for ClientConfig {
             yaesu2_enabled: false,
             yaesu2_ptt_toggle: false,
             yaesu2_volume: 0.05,
-            yaesu_mic_gain: 0.5,
-            yaesu2_mic_gain: 1.0,
+            yaesu_mic_gain: 0.2,
+            yaesu2_mic_gain: 0.2,
+            yaesu_compressor: 0,
+            yaesu2_compressor: 0,
+            yaesu_tx_agc: false,
+            yaesu2_tx_agc: false,
             yaesu2_popout: false,
             midi_ptt_toggle: true, // MIDI defaults to toggle (existing behavior)
             smeter_source: 1,      // Avg matches pre-multi-source server default
@@ -307,6 +347,16 @@ impl Default for ClientConfig {
             catsync_url: String::new(),
             catsync_favorites: Vec::new(),
             allow_zoom_below_2x: false,
+            spike_protection: false,
+            mic_gate_delay_thetis_ms: 0,
+            mic_gate_delay_yaesu_ms: 100,
+            relay_enabled: false,
+            relay_url: String::new(),
+            relay_station: String::new(),
+            relay_token: String::new(),
+            relay_instance_id: String::new(),
+            relay_device_name: String::new(),
+            relay_udp_enabled: true,
             language: "en".to_string(),
             successful_connects: 0,
         }
@@ -314,7 +364,7 @@ impl Default for ClientConfig {
 }
 
 /// Parse a `f32,f32` pair (used for popout pos / size). Returns `None` on any
-/// parse error or malformed input — callers fall back to OS default placement.
+/// parse error or malformed input - callers fall back to OS default placement.
 fn parse_f32_pair(val: &str) -> Option<(f32, f32)> {
     let mut it = val.trim().split(',');
     let a: f32 = it.next()?.trim().parse().ok()?;
@@ -362,6 +412,31 @@ pub(crate) fn load_config() -> ClientConfig {
                     .unwrap_or_else(|| v.to_string());
             }
             has_keys = true;
+        } else if let Some(val) = line.strip_prefix("relay_enabled=") {
+            config.relay_enabled = val.trim() == "true";
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("relay_udp_enabled=") {
+            config.relay_udp_enabled = val.trim() == "true";
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("relay_url=") {
+            config.relay_url = val.trim().to_string();
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("relay_station=") {
+            config.relay_station = val.trim().to_string();
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("relay_token=") {
+            let v = val.trim();
+            if !v.is_empty() {
+                config.relay_token = sdr_remote_core::auth::deobfuscate_password(v)
+                    .unwrap_or_else(|| v.to_string());
+            }
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("relay_instance_id=") {
+            config.relay_instance_id = val.trim().to_string();
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("relay_device_name=") {
+            config.relay_device_name = val.trim().to_string();
+            has_keys = true;
         } else if let Some(val) = line.strip_prefix("volume=") {
             if let Ok(v) = val.trim().parse::<f32>() {
                 config.rx_volume = v.clamp(0.0, 1.0);
@@ -403,6 +478,12 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("agc_enabled=") {
             config.agc_enabled = val.trim() == "true";
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("theme=") {
+            config.theme = val.trim().to_string();
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("theme_custom=") {
+            config.theme_custom = val.trim().to_string();
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("spectrum_enabled=") {
             config.spectrum_enabled = val.trim() == "true";
@@ -473,7 +554,7 @@ pub(crate) fn load_config() -> ClientConfig {
         } else if let Some(val) = line.strip_prefix("vrx_popout_size=") {
             config.vrx_popout_size = parse_f32_pair(val);
             has_keys = true;
-        // VRX1 keys — accept both legacy `vrx_*` (build 48 and earlier)
+        // VRX1 keys - accept both legacy `vrx_*` (build 48 and earlier)
         // and new `vrx1_*` (build 50+). New writes use only `vrx1_*`.
         } else if let Some(val) = line.strip_prefix("vrx1_volume=").or_else(|| line.strip_prefix("vrx_volume=")) {
             config.vrx1_volume = val.trim().parse().ok();
@@ -618,8 +699,8 @@ pub(crate) fn load_config() -> ClientConfig {
             config.yaesu_eq_active = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("yaesu_eq_profile=") {
             // Format: name|enabled|g0,g1,g2,g3,g4[|mic_gain]
-            // mic_gain (4e veld) is optioneel — oude profielen zonder
-            // mic_gain vallen terug op default 0.5 zodat upgrades niet
+            // mic_gain (4e veld) is optioneel - oude profielen zonder
+            // mic_gain fall back to internal default 0.2 zodat upgrades niet
             // breken.
             let parts: Vec<&str> = val.trim().splitn(4, '|').collect();
             if parts.len() >= 3 {
@@ -630,7 +711,8 @@ pub(crate) fn load_config() -> ClientConfig {
                 if gains.len() == 5 {
                     let mic_gain = parts.get(3)
                         .and_then(|s| s.trim().parse::<f32>().ok())
-                        .unwrap_or(0.5);
+                        .unwrap_or(0.2)
+                        .clamp(0.02, 0.4);
                     config.yaesu_eq_profiles.push((name, enabled,
                         [gains[0], gains[1], gains[2], gains[3], gains[4]],
                         mic_gain));
@@ -648,7 +730,8 @@ pub(crate) fn load_config() -> ClientConfig {
                 if gains.len() == 5 {
                     let mic_gain = parts.get(3)
                         .and_then(|s| s.trim().parse::<f32>().ok())
-                        .unwrap_or(1.0);
+                        .unwrap_or(0.2)
+                        .clamp(0.02, 0.4);
                     config.yaesu2_eq_profiles.push((name, enabled,
                         [gains[0], gains[1], gains[2], gains[3], gains[4]],
                         mic_gain));
@@ -775,9 +858,17 @@ pub(crate) fn load_config() -> ClientConfig {
         } else if let Some(val) = line.strip_prefix("yaesu2_ptt_toggle=") {
             config.yaesu2_ptt_toggle = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu_mic_gain=") {
-            if let Ok(v) = val.trim().parse::<f32>() { config.yaesu_mic_gain = v.clamp(0.05, 3.0); }
+            if let Ok(v) = val.trim().parse::<f32>() { config.yaesu_mic_gain = v.clamp(0.02, 0.4); }
         } else if let Some(val) = line.strip_prefix("yaesu2_mic_gain=") {
-            if let Ok(v) = val.trim().parse::<f32>() { config.yaesu2_mic_gain = v.clamp(0.05, 3.0); }
+            if let Ok(v) = val.trim().parse::<f32>() { config.yaesu2_mic_gain = v.clamp(0.02, 0.4); }
+        } else if let Some(val) = line.strip_prefix("yaesu_compressor=") {
+            if let Ok(v) = val.trim().parse::<u8>() { config.yaesu_compressor = v.min(100); }
+        } else if let Some(val) = line.strip_prefix("yaesu2_compressor=") {
+            if let Ok(v) = val.trim().parse::<u8>() { config.yaesu2_compressor = v.min(100); }
+        } else if let Some(val) = line.strip_prefix("yaesu_tx_agc=") {
+            config.yaesu_tx_agc = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("yaesu2_tx_agc=") {
+            config.yaesu2_tx_agc = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu2_popout=") {
             config.yaesu2_popout = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("midi_ptt_toggle=") {
@@ -789,6 +880,12 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("allow_zoom_below_2x=") {
             config.allow_zoom_below_2x = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("spike_protection=") {
+            config.spike_protection = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("mic_gate_delay_thetis_ms=") {
+            if let Ok(v) = val.trim().parse::<u32>() { config.mic_gate_delay_thetis_ms = v.min(800); }
+        } else if let Some(val) = line.strip_prefix("mic_gate_delay_yaesu_ms=") {
+            if let Ok(v) = val.trim().parse::<u32>() { config.mic_gate_delay_yaesu_ms = v.min(800); }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("language=") {
             let v = val.trim().to_lowercase();
@@ -833,7 +930,94 @@ pub(crate) fn load_config() -> ClientConfig {
     if let Some(profiles) = tx_profiles {
         config.tx_profiles = profiles;
     }
+    // Ensure a stable per-install relay id exists (generate + persist on first run)
+    // so a reconnecting client reclaims its own relay slot instead of piling up.
+    if config.relay_instance_id.trim().is_empty() {
+        config.relay_instance_id = generate_instance_id();
+        save_relay_instance_id(&config.relay_instance_id);
+    }
+    // Auto-default the device name to the hostname on first run (user-editable later).
+    if config.relay_device_name.trim().is_empty() {
+        config.relay_device_name = generate_device_name();
+        save_relay_device_name(&config.relay_device_name);
+    }
     config
+}
+
+/// Auto-default device label = the computer's hostname (Windows COMPUTERNAME, else
+/// HOSTNAME), or a generic fallback. A device label, not the login username.
+fn generate_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Desktop".to_string())
+}
+
+/// Persist the device name (read-modify-write on its single key). May contain spaces.
+pub(crate) fn save_relay_device_name(name: &str) {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let path = exe.with_file_name(CONFIG_FILE);
+    let new_line = format!("relay_device_name={}", name.trim());
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut found = false;
+    let mut updated: Vec<String> = existing
+        .lines()
+        .map(|l| {
+            if l.starts_with("relay_device_name=") {
+                found = true;
+                new_line.clone()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    if !found {
+        updated.push(new_line);
+    }
+    let _ = std::fs::write(path, updated.join("\n") + "\n");
+}
+
+/// Generate a stable-enough per-install id (first-run timestamp + pid, hex). Kept
+/// once in the config file; only needs to be unique per install, not secret.
+fn generate_instance_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("d{nanos:x}{:x}", std::process::id())
+}
+
+/// Persist the per-install relay id (read-modify-write on its single key).
+fn save_relay_instance_id(id: &str) {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let path = exe.with_file_name(CONFIG_FILE);
+    let new_line = format!("relay_instance_id={id}");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut found = false;
+    let mut updated: Vec<String> = existing
+        .lines()
+        .map(|l| {
+            if l.starts_with("relay_instance_id=") {
+                found = true;
+                new_line.clone()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    if !found {
+        updated.push(new_line);
+    }
+    let _ = std::fs::write(path, updated.join("\n") + "\n");
 }
 
 /// Save config to file next to the executable.
@@ -935,6 +1119,8 @@ pub(crate) fn save_config(
     catsync_url: &str,
     catsync_favorites: &[(String, String)],
     mic_profile_map: &std::collections::HashMap<String, String>,
+    theme: &str,
+    theme_custom: &str,
 ) {
     if let Ok(exe) = std::env::current_exe() {
         let path = exe.with_file_name(CONFIG_FILE);
@@ -948,6 +1134,10 @@ pub(crate) fn save_config(
             content.push_str(&format!("output_device={}\n", output_device));
         }
         content.push_str(&format!("agc_enabled={}\n", agc_enabled));
+        content.push_str(&format!("theme={}\n", theme));
+        if !theme_custom.is_empty() {
+            content.push_str(&format!("theme_custom={}\n", theme_custom));
+        }
         content.push_str(&format!("spectrum_enabled={}\n", spectrum_enabled));
         content.push_str(&format!("spectrum_ref_db={:.0}\n", spectrum_ref_db));
         content.push_str(&format!("spectrum_range_db={:.0}\n", spectrum_range_db));
@@ -1161,19 +1351,33 @@ pub(crate) fn save_config(
         }
         // Preserve toggles die via save_ptt_config (read-modify-append) worden
         // beheerd, zodat deze volledige herschrijf ze niet dropt. yaesu2_enabled/
-        // _ptt_toggle/_popout + de mic-gains horen hier expliciet bij — anders
+        // _ptt_toggle/_popout + de mic-gains horen hier expliciet bij - anders
         // verdwijnt de radio2-enable/window/mic-stand bij elke andere wijziging.
         if let Ok(existing) = std::fs::read_to_string(&path) {
             for line in existing.lines() {
                 if line.starts_with("ptt_toggle=") || line.starts_with("yaesu_ptt_toggle=") || line.starts_with("midi_ptt_toggle=")
                     || line.starts_with("allow_zoom_below_2x=")
+                    || line.starts_with("spike_protection=")
+                    || line.starts_with("mic_gate_delay_thetis_ms=")
+                    || line.starts_with("mic_gate_delay_yaesu_ms=")
                     || line.starts_with("smeter_source=")
                     || line.starts_with("successful_connects=")
+                    || line.starts_with("relay_enabled=")
+                    || line.starts_with("relay_udp_enabled=")
+                    || line.starts_with("relay_url=")
+                    || line.starts_with("relay_station=")
+                    || line.starts_with("relay_token=")
+                    || line.starts_with("relay_instance_id=")
+                    || line.starts_with("relay_device_name=")
                     || line.starts_with("yaesu2_enabled=")
                     || line.starts_with("yaesu2_ptt_toggle=")
                     || line.starts_with("yaesu2_popout=")
                     || line.starts_with("yaesu_mic_gain=")
-                    || line.starts_with("yaesu2_mic_gain=") {
+                    || line.starts_with("yaesu2_mic_gain=")
+                    || line.starts_with("yaesu_compressor=")
+                    || line.starts_with("yaesu2_compressor=")
+                    || line.starts_with("yaesu_tx_agc=")
+                    || line.starts_with("yaesu2_tx_agc=") {
                     content.push_str(line);
                     content.push('\n');
                 }
@@ -1181,6 +1385,70 @@ pub(crate) fn save_config(
         }
         let _ = std::fs::write(path, content);
     }
+}
+
+/// Phase A relay monitor: persist relay settings without touching the large
+/// direct-connection config rewrite path.
+pub(crate) fn save_relay_config(
+    enabled: bool,
+    url: &str,
+    station: &str,
+    token: &str,
+    udp_enabled: bool,
+) {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let path = exe.with_file_name(CONFIG_FILE);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let token_enc = if token.is_empty() {
+        String::new()
+    } else {
+        sdr_remote_core::auth::obfuscate_password(token)
+    };
+    let desired = [
+        ("relay_enabled", enabled.to_string()),
+        ("relay_url", url.trim().to_string()),
+        ("relay_station", station.trim().to_string()),
+        ("relay_token", token_enc),
+        ("relay_udp_enabled", udp_enabled.to_string()),
+    ];
+    let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
+    for (key, value) in desired {
+        let prefix = format!("{}=", key);
+        if let Some(line) = lines.iter_mut().find(|line| line.starts_with(&prefix)) {
+            *line = format!("{}{}", prefix, value);
+        } else {
+            lines.push(format!("{}{}", prefix, value));
+        }
+    }
+    let _ = std::fs::write(path, lines.join("\n") + "\n");
+}
+/// Persist PTT spike-protection settings (built-in speaker+mic in one chassis).
+/// Read-modify-write on the three keys so other config keys are untouched.
+pub(crate) fn save_spike_protection(enabled: bool, thetis_ms: u32, yaesu_ms: u32) {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let path = exe.with_file_name(CONFIG_FILE);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let desired = [
+        ("spike_protection", enabled.to_string()),
+        ("mic_gate_delay_thetis_ms", thetis_ms.to_string()),
+        ("mic_gate_delay_yaesu_ms", yaesu_ms.to_string()),
+    ];
+    let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
+    for (key, value) in desired {
+        let prefix = format!("{}=", key);
+        if let Some(line) = lines.iter_mut().find(|line| line.starts_with(&prefix)) {
+            *line = format!("{}{}", prefix, value);
+        } else {
+            lines.push(format!("{}{}", prefix, value));
+        }
+    }
+    let _ = std::fs::write(path, lines.join("\n") + "\n");
 }
 
 /// TL2-1 ctun-auto-recenter: persist setup-vink "Allow zoom below 2x" to config file.
@@ -1253,7 +1521,7 @@ pub(crate) fn is_first_run() -> bool {
 
 /// PATCH-4: bump `successful_connects` to (at least) 1 on the first
 /// `ConnectStatus::Connected` transition. Read-modify-write so other
-/// fields are not touched. No-op if the value is already > 0 — keeps
+/// fields are not touched. No-op if the value is already > 0 - keeps
 /// the wizard from re-arming if the user clears their server field
 /// mid-session.
 pub(crate) fn mark_successful_connect() {

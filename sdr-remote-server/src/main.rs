@@ -20,6 +20,7 @@ mod spe_expert;
 mod spectrum;
 mod tci;
 mod tci_commands;
+mod tracked_socket;
 mod tci_parser;
 mod tuner;
 mod yaesu;
@@ -29,6 +30,7 @@ mod pstrotator;
 mod pstrotator_listen;
 mod ui;
 mod vrx_bridge;
+mod vrx_manager;
 
 use std::collections::VecDeque;
 
@@ -228,7 +230,7 @@ fn print_usage() {
 /// the executable, then delegates to the default handler so CLI-mode stderr is
 /// unchanged.
 ///
-/// In GUI-mode autostart, stderr goes nowhere — without this hook a panic in a
+/// In GUI-mode autostart, stderr goes nowhere - without this hook a panic in a
 /// spawned tokio task (e.g. peripheral init racing an unstable USB device on
 /// cold-boot) is invisible. Direct file-write avoids depending on `log::` macros,
 /// which may be unsafe during panic-unwinding.
@@ -323,7 +325,7 @@ fn main() -> Result<()> {
         || spe_port.is_some() || rf2k_addr.is_some();
 
     if has_cli_args {
-        // CLI mode — normal env_logger, no GUI
+        // CLI mode - normal env_logger, no GUI
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
         let defaults = ServerConfig::default();
@@ -339,11 +341,14 @@ fn main() -> Result<()> {
             yaesu_port: defaults.yaesu_port,
             yaesu_enabled: defaults.yaesu_enabled,
             yaesu_baud: defaults.yaesu_baud,
+            yaesu_ssb_switch_on_ptt: defaults.yaesu_ssb_switch_on_ptt,
             yaesu_audio_device: defaults.yaesu_audio_device,
+            yaesu_audio_output_device: defaults.yaesu_audio_output_device,
             yaesu2_port: defaults.yaesu2_port,
             yaesu2_enabled: defaults.yaesu2_enabled,
             yaesu2_baud: defaults.yaesu2_baud,
             yaesu2_audio_device: defaults.yaesu2_audio_device,
+            yaesu2_audio_output_device: defaults.yaesu2_audio_output_device,
             yaesu2_audio_channel: defaults.yaesu2_audio_channel,
             amplitec_port: amplitec_port.or(defaults.amplitec_port),
             amplitec_labels: defaults.amplitec_labels,
@@ -399,6 +404,11 @@ fn main() -> Result<()> {
             totp_secret: defaults.totp_secret,
             totp_enabled: defaults.totp_enabled,
             friendly_name: defaults.friendly_name,
+            relay_enabled: defaults.relay_enabled,
+            relay_url: defaults.relay_url,
+            relay_station: defaults.relay_station,
+            relay_token: defaults.relay_token,
+            relay_udp_enabled: defaults.relay_udp_enabled,
             tuners: defaults.tuners,
             rotors: defaults.rotors,
         };
@@ -439,7 +449,7 @@ fn main() -> Result<()> {
             }
         });
     } else {
-        // GUI mode — dual logger (stderr + buffer) and hide console
+        // GUI mode - dual logger (stderr + buffer) and hide console
         let log_buffer: LogBuffer = Arc::new(StdMutex::new(VecDeque::new()));
 
         let env_log = env_logger::Builder::from_env(
@@ -529,8 +539,8 @@ pub async fn run_server_async(
 ) -> Result<()> {
     let bind_addr: SocketAddr = format!("0.0.0.0:{}", DEFAULT_PORT).parse()?;
     info!("ThetisLink Server v{} starting up...", sdr_remote_core::version_string());
-    info!("PA3GHM — Remote control for Thetis SDR + Yaesu FT-991A");
-    info!("Licensed under GPL-2.0-or-later — source: https://github.com/cjenschede/ThetisLink");
+    info!("PA3GHM - Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
+    info!("Licensed under GPL-2.0-or-later - source: https://github.com/cjenschede/ThetisLink");
 
     // PATCH-2: derive Status-panel state from the optional incoming bundle
     // (GUI mode) or construct a one-shot bundle for CLI mode so the rest of
@@ -544,13 +554,24 @@ pub async fn run_server_async(
     // Session manager
     let session = Arc::new(Mutex::new(SessionManager::new(config.password.clone(), config.totp_secret.clone())));
     // PATCH-2: publish to the Status-panel slot so the UI can read it.
-    // CLI mode also publishes — harmless even though no UI reads from it.
+    // CLI mode also publishes - harmless even though no UI reads from it.
     let _ = status_panel_state.session_slot.set(session.clone());
 
-    // PTT controller (TL2 v2: TCI-only). Default to localhost if no addr configured.
-    let tci_addr_str = config.tci_addr.clone().unwrap_or_else(|| "127.0.0.1:40001".to_string());
-    info!("TCI mode: connecting to ws://{}", tci_addr_str);
-    let ptt = Arc::new(Mutex::new(PttController::new_tci(Some(&tci_addr_str), config.thetis_path.clone())));
+    // PTT controller. `tci_addr=None` is a valid Yaesu-only setup; do not
+    // silently probe localhost because that makes Thetis look required.
+    let tci_addr_configured = config.tci_addr.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+    if let Some(ref tci_addr_str) = config.tci_addr {
+        if tci_addr_configured {
+            info!("TCI mode: connecting to ws://{}", tci_addr_str);
+        }
+    }
+    if !tci_addr_configured {
+        info!("TCI mode: disabled (no Thetis TCI address configured)");
+    }
+    let ptt = Arc::new(Mutex::new(PttController::new_tci(
+        config.tci_addr.as_deref().filter(|s| !s.trim().is_empty()),
+        config.thetis_path.clone(),
+    )));
 
     // Spectrum processor
     let spectrum = Arc::new(Mutex::new(SpectrumProcessor::new()));
@@ -558,8 +579,8 @@ pub async fn run_server_async(
     // RX2 spectrum processor
     let rx2_spectrum = Arc::new(Mutex::new(Rx2SpectrumProcessor::new()));
 
-    // TCI IQ stream → spectrum processor
-    if config.spectrum_enabled {
+    // TCI IQ stream -> spectrum processor
+    if config.spectrum_enabled && tci_addr_configured {
         let tci_iq_rate = 384_000u32; // Initial default, updated dynamically from TCI IQ frame header
         {
             let mut s = spectrum.lock().await;
@@ -574,9 +595,9 @@ pub async fn run_server_async(
         info!("TCI mode: spectrum from TCI IQ stream ({}kHz)", tci_iq_rate / 1000);
     }
 
-    // Amplitec antenna switch — use prebuilt (from GUI) or create here (CLI mode)
+    // Amplitec antenna switch - use prebuilt (from GUI) or create here (CLI mode)
     // De serial-thread retry zelf naar binnen toe, dus we maken de
-    // instance altijd zodra de poort geconfigureerd is — ook als het
+    // instance altijd zodra de poort geconfigureerd is - ook als het
     // apparaat nu offline staat. De UI ziet `connected=false` tot het
     // bord weer aangesloten is.
     let amplitec = if amplitec_prebuilt.is_some() {
@@ -589,7 +610,7 @@ pub async fn run_server_async(
         None
     };
 
-    // SPE Expert amplifier — use prebuilt (from GUI) or create here (CLI mode)
+    // SPE Expert amplifier - use prebuilt (from GUI) or create here (CLI mode)
     // Must be created BEFORE tuner so tuner can reference it for safe tune
     let spe = if spe_prebuilt.is_some() {
         spe_prebuilt
@@ -623,7 +644,7 @@ pub async fn run_server_async(
     // Merge: use existing cat_cmd_rx (from GUI) or new CLI channel
     let shared_cat_rx = cat_cmd_rx.or(cli_cat_rx);
 
-    // RF2K-S power amplifier (HTTP) — use prebuilt (from GUI) or create here (CLI mode)
+    // RF2K-S power amplifier (HTTP) - use prebuilt (from GUI) or create here (CLI mode)
     // Must be created BEFORE tuner so tuner can reference it for safe tune
     let rf2k = if rf2k_prebuilt.is_some() {
         rf2k_prebuilt
@@ -635,7 +656,7 @@ pub async fn run_server_async(
         None
     };
 
-    // StockCorner tuners — use prebuilt (from GUI) or create here (CLI mode).
+    // StockCorner tuners - use prebuilt (from GUI) or create here (CLI mode).
     // Multi-instance: 0, 1 or 2 tuners, each on its own MCP2221A board.
     let spe_arc = spe.as_ref().map(|s| s.clone());
     let rf2k_arc = rf2k.as_ref().map(|r| r.clone());
@@ -668,7 +689,7 @@ pub async fn run_server_async(
         (Arc::new(collection), shared_cat_rx)
     };
     // Backwards-compat: legacy paths (macros, settings UI, single-tuner status
-    // panel) consume `Option<Arc<TunerInstance>>` — give them the primary
+    // panel) consume `Option<Arc<TunerInstance>>` - give them the primary
     // (first enabled) tuner, matching the pre-multi-tuner behaviour.
     let tuner = tuners.primary();
     // Publish the collection to the Status-panel slot so the UI can render
@@ -681,10 +702,10 @@ pub async fn run_server_async(
     // backend == "mcp2221_yaesu"), zodat de Rotor-facade en de
     // status_panel-RotorInstance één gedeelde MCP2221A driver delen.
     // De drie rotor-backends (EA7HG TCP / PstRotator UDP / Adafruit
-    // MCP2221A) zijn mutex-exclusief — slechts één tegelijk actief om
+    // MCP2221A) zijn mutex-exclusief - slechts één tegelijk actief om
     // hardware-conflicten te voorkomen.
 
-    // UltraBeam RCU-06 — use prebuilt (from GUI) or create here (CLI mode)
+    // UltraBeam RCU-06 - use prebuilt (from GUI) or create here (CLI mode)
     let ultrabeam = if ultrabeam_prebuilt.is_some() {
         ultrabeam_prebuilt
     } else if config.ultrabeam_enabled && config.ultrabeam_port.is_some() {
@@ -703,7 +724,7 @@ pub async fn run_server_async(
         None
     };
 
-    // Rotor — use prebuilt (from GUI) or create here (CLI mode).
+    // Rotor - use prebuilt (from GUI) or create here (CLI mode).
     // Backend keuze: EA7HG Visual Rotor (default) of PstRotator XML/UDP.
     let rotor_inst = if rotor_prebuilt.is_some() {
         rotor_prebuilt
@@ -717,7 +738,7 @@ pub async fn run_server_async(
                     None
                 } else {
                     info!(
-                        "Rotor (PstRotator) → {}:{} (feedback :{}, ele={})",
+                        "Rotor (PstRotator) -> {}:{} (feedback :{}, ele={})",
                         config.pstrotator_host,
                         config.pstrotator_port,
                         config.pstrotator_feedback_port,
@@ -763,7 +784,7 @@ pub async fn run_server_async(
                         let facade = inst.make_rotor_facade();
                         let _ = status_panel_state.rotor_slot.set(inst);
                         info!(
-                            "Rotor (Adafruit MCP2221A) instance gebonden — serial \"{}\" (label \"{}\", cal {:.3}V→{:.3}V @ {}°)",
+                            "Rotor (Adafruit MCP2221A) instance gebonden - serial \"{}\" (label \"{}\", cal {:.3}V->{:.3}V @ {}°)",
                             rot_cfg.mcp_serial, label,
                             rot_cfg.v_at_0deg, rot_cfg.v_at_max_deg, rot_cfg.max_deg
                         );
@@ -776,7 +797,7 @@ pub async fn run_server_async(
                     }
                 } else {
                     log::warn!(
-                        "mcp2221_yaesu backend selected but no rotor in config.rotors — gebruik wizard om een rot_<naam> bord te claimen"
+                        "mcp2221_yaesu backend selected but no rotor in config.rotors - gebruik wizard om een rot_<naam> bord te claimen"
                     );
                     None
                 }
@@ -797,12 +818,12 @@ pub async fn run_server_async(
     // PstRotator UDP-listener (v2.1.1+): luistert parallel aan de
     // actieve `rotor_backend` voor inkomende azimuth-broadcasts. Spawn
     // alleen als er een actieve Rotor-facade is om het commando naartoe
-    // te sturen — zonder rotor geen punt.
+    // te sturen - zonder rotor geen punt.
     let pstrotator_listen_shutdown = if config.pstrotator_listen_enabled {
         if let Some(rotor_arc) = rotor_inst.as_ref() {
             if config.rotor_backend == "pstrotator" {
                 warn!(
-                    "PstRotator listener: rotor_backend is ook 'pstrotator' — \
+                    "PstRotator listener: rotor_backend is ook 'pstrotator' - \
                      mogelijk feedback-loop met outgoing replies. Listener \
                      blijft actief maar wees alert op duplicaten."
                 );
@@ -822,7 +843,7 @@ pub async fn run_server_async(
             }
         } else {
             warn!(
-                "PstRotator listener ingeschakeld maar geen actieve rotor-backend — \
+                "PstRotator listener ingeschakeld maar geen actieve rotor-backend - \
                  ingeschakelde listener zonder doel doet niets, listener overgeslagen"
             );
             None
@@ -831,24 +852,61 @@ pub async fn run_server_async(
         None
     };
 
-    // DX Cluster
-    let dxcluster = if config.dxcluster_enabled {
+    // DX Cluster - needs a login callsign (no hardcoded default; set it in
+    // server settings). Skip the connection while it's blank so we never log in
+    // with an empty/placeholder call.
+    let dxcluster = if config.dxcluster_enabled && !config.dxcluster_callsign.trim().is_empty() {
         info!("DX Cluster: starting (server={}, callsign={}, expiry={}min)", config.dxcluster_server, config.dxcluster_callsign, config.dxcluster_expiry_min);
         Some(Arc::new(dxcluster::DxCluster::new(&config.dxcluster_server, &config.dxcluster_callsign, config.dxcluster_expiry_min)))
     } else {
+        if config.dxcluster_enabled {
+            info!("DX Cluster: enabled but no callsign configured - not connecting (set your callsign in server settings)");
+        }
         None
     };
 
+    // Relay Phase C: outbound relay path that also tunnels TL frames, so a client
+    // that cannot port-forward can reach the server through the VPS relay instead
+    // of direct UDP. The tunnel channels connect the relay monitor to the
+    // TrackedSocket seam; direct UDP stays the default and is byte-identical.
+    let (relay_monitor, relay_socket_ends) = if config.relay_enabled {
+        let relay_cfg = sdr_remote_relay::RelayConfig {
+            enabled: config.relay_enabled,
+            url: config.relay_url.clone(),
+            station: config.relay_station.clone(),
+            token: config.relay_token.clone(),
+            role: sdr_remote_relay::RelayRole::Station,
+            // Station uses replace-on-reconnect already (single station slot); no
+            // per-install id needed. Station identity is the station name; no device label.
+            instance: String::new(),
+            name: String::new(),
+            udp_port: sdr_remote_relay::relay_udp_port_resolve(config.relay_udp_enabled),
+        };
+        // Tunnel channels between TrackedSocket and the relay monitor:
+        //  - uplink:  TrackedSocket (send to sentinel) -> monitor (TLT1 over WS)
+        //  - inbound: monitor (decoded TLT1)           -> TrackedSocket (recv_from)
+        let (uplink_tx, uplink_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let sentinel = crate::tracked_socket::relay_sentinel_for(0);
+        let tunnel = sdr_remote_relay::RelayTunnel { sentinel, inbound_tx, uplink_rx };
+        // Own thread (see build 123): keeps the relay ping/echo off the busy DSP
+        // runtime, so its scheduling doesn't inflate the measured RTT/jitter.
+        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_tunnel(relay_cfg, tunnel);
+        let _ = status_panel_state.relay_status.set(monitor.status_handle());
+        (Some(monitor), Some((uplink_tx, inbound_rx)))
+    } else {
+        (None, None)
+    };
     // Network service
-    // Discard the `tuner` binding (kept for compat with macros / settings) —
+    // Discard the `tuner` binding (kept for compat with macros / settings) -
     // NetworkService now takes the full Tuners collection so it can route
     // Tune commands per Amplitec-A position.
     let _ = tuner;
 
     // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Optie B-prime). De 2e radio
     // wordt hier uit config aangemaakt (werkt in GUI- én headless-mode). Model is
-    // per-poort autodetect via `ID;` (detect_model) → élke combinatie 2×991A /
-    // 2×FTX1 / mix werkt; faalt detect (radio uit) → FTX1-aanname-label, bring-up
+    // per-poort autodetect via `ID;` (detect_model) -> élke combinatie 2×991A /
+    // 2×FTX1 / mix werkt; faalt detect (radio uit) -> FTX1-aanname-label, bring-up
     // logt straks het echte ID. Slot 0 blijft volledig ongemoeid.
     yaesu::log_input_devices();
     let yaesu2_prebuilt: Option<Arc<yaesu::YaesuRadio>> = if config.yaesu2_enabled {
@@ -858,12 +916,13 @@ pub async fn run_server_async(
                 .unwrap_or((yaesu::RadioModel::Ftx1, baud));
             info!("[radio1] slot 1 enabled: {} @ {} baud, model={:?}", port, det_baud, model);
             let audio = config.yaesu2_audio_device.clone();
-            match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), model, 1, config.yaesu2_audio_channel) {
+            let audio_out = config.yaesu2_audio_output_device.clone();
+            match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu_ssb_switch_on_ptt) {
                 Ok(r) => Some(Arc::new(r)),
-                Err(e) => { warn!("[radio1] init failed: {} — slot 1 uit, server draait door", e); None }
+                Err(e) => { warn!("[radio1] init failed: {} - slot 1 uit, server draait door", e); None }
             }
         } else {
-            warn!("[radio1] enabled maar geen yaesu2_port geconfigureerd — slot 1 uit");
+            warn!("[radio1] enabled maar geen yaesu2_port geconfigureerd - slot 1 uit");
             None
         }
     } else {
@@ -896,13 +955,14 @@ pub async fn run_server_async(
         tci_probe.clone(),
         server_start,
         status_panel_state.bind_status.clone(),
+        relay_socket_ends,
     )
     .await?;
 
     info!("Server ready, waiting for connections...");
 
     // PATCH-3: advertise on the local network so clients can find us
-    // without typing an IP. mDNS failure is non-fatal — manual entry
+    // without typing an IP. mDNS failure is non-fatal - manual entry
     // remains the always-on fallback in the clients.
     let mdns_advertiser = match mdns::MdnsAdvertiser::start(
         sdr_remote_core::DEFAULT_PORT,
@@ -939,6 +999,9 @@ pub async fn run_server_async(
         s.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    if let Some(monitor) = relay_monitor.as_ref() {
+        monitor.stop();
+    }
     // PATCH-3: deregister the mDNS service so clients see the server
     // disappear instead of relying on TTL expiry.
     if let Some(adv) = mdns_advertiser {

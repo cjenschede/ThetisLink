@@ -146,6 +146,18 @@ pub enum PacketType {
     /// clients verwerken dit type niet — een onbekend packet-type is nonfatal
     /// (ze loggen het hooguit als "unknown packet type" en lopen door).
     TxFilterBand = 0x2B,
+    /// Typed Yaesu DSP/function control (client→server): {slot, control, value}.
+    /// Replaces YaesuButton magic-values (PATCH-yaesu-extra-controls). Additive.
+    YaesuControl = 0x2C,
+    /// Yaesu feature-state feedback (server→client): per-slot toggles bitfield +
+    /// levels. Value-change-only, opt-in send. Additive.
+    YaesuFeature = 0x2D,
+    /// Yaesu radio-presence (server→client, broadcast naar álle clients): welke
+    /// slots een verbonden radio hebben + hun model. Ontkoppelt de selector/
+    /// connected-status van de audio+state-subscription — dynamisch (wegvallen/
+    /// bijkomen) i.p.v. sticky. Push-on-change + eenmalig bij (her)connect.
+    /// Oude clients negeren dit onbekende type (back-compat by construction).
+    YaesuPresence = 0x2E,
 }
 
 impl PacketType {
@@ -446,6 +458,13 @@ pub enum ControlId {
     TxFilterLow = 0x78,
     /// TX-filter hoogrand (client → server, signed Hz als u16).
     TxFilterHigh = 0x79,
+
+    /// VRX2 audio-rate NB/WB/Auto (client → server). Additief bij
+    /// `VrxAudioRate` (=VRX1) zodat per-client onafhankelijke VRX elk zijn eigen
+    /// rate kan zetten (PATCH-vrx-per-client, Optie B). Back-compat: oude clients
+    /// sturen 'm niet (VRX1+2 delen dan `VrxAudioRate`); oude servers droppen dit
+    /// onbekende control-packet nonfatal. Client stuurt alleen on-change (geen hot-loop-spam).
+    VrxAudioRate2 = 0x7A,
 
     // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Optie B-prime) ──
     // 1:1 spiegel van de slot-0 Yaesu-controls (0x20-0x2F) op de vrije range
@@ -968,6 +987,10 @@ impl ServerStateFlags {
     /// launch timeout firing). Client should NOT show "TCI unreachable"
     /// while this is set — it's a normal transient launch phase.
     pub const THETIS_STARTING: u32 = 1 << 2;
+    /// The server has a Thetis/TCI radio configured. When this is clear,
+    /// clients must not turn a missing TCI connection into a user-facing
+    /// "Radio not reachable" warning; Yaesu-only installs are valid.
+    pub const THETIS_CONFIGURED: u32 = 1 << 3;
 
     pub fn has(self, flag: u32) -> bool {
         self.0 & flag != 0
@@ -1708,10 +1731,13 @@ pub struct YaesuStatePacket {
     pub mic_gain: u8,      // 0-100
     pub split: bool,
     pub scan: bool,
+    /// Internal ATU state (PATCH-yaesu-internal-atu): 0=off/bypass, 1=on, 2=tuning-in-progress.
+    /// Additive trailing field — normalised server-side from the `AC;` readback (never raw P3).
+    pub tuner_state: u8,
 }
 
 impl YaesuStatePacket {
-    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1; // 35 bytes
+    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1; // 36 bytes
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         self.serialize_as_type(buf, PacketType::YaesuState);
@@ -1737,7 +1763,8 @@ impl YaesuStatePacket {
         buf[pos] = self.rf_gain; pos += 1;
         buf[pos] = self.mic_gain; pos += 1;
         buf[pos] = self.split as u8; pos += 1;
-        buf[pos] = self.scan as u8;
+        buf[pos] = self.scan as u8; pos += 1;
+        buf[pos] = self.tuner_state;
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -1760,8 +1787,9 @@ impl YaesuStatePacket {
         let rf_gain = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
         let mic_gain = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
         let split = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
-        let scan = if buf.len() > pos { buf[pos] != 0 } else { false };
-        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan })
+        let scan = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
+        let tuner_state = if buf.len() > pos { buf[pos] } else { 0 };
+        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan, tuner_state })
     }
 }
 
@@ -1826,6 +1854,172 @@ impl TxProfilesPacket {
     }
 }
 
+/// Yaesu DSP/function control id (the `control` field of `YaesuControlPacket` and
+/// the bit index in `YaesuFeaturePacket.toggles`). PATCH-yaesu-extra-controls.
+/// Fase A1 wires RfAtt + BreakIn; the rest are reserved for later phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u8)]
+pub enum YaesuCtrl {
+    RfAtt = 0,
+    BreakIn = 1,
+    Narrow = 2,
+    AutoNotch = 3,
+    Vox = 4,
+    Mox = 5,
+    Agc = 6,
+    PreAmp = 7,
+    Nb = 8,
+    Dnr = 9,
+    Processor = 10,
+    Amc = 11,
+    Monitor = 12,
+    /// 991A-only: Noise Blanker on/off (`NB`), apart van het NB-niveau (`NL`=Nb).
+    NbOn = 13,
+    /// 991A-only: Noise Reduction on/off (`NR`), apart van het DNR-niveau (`RL`=Dnr).
+    NrOn = 14,
+    // Fase D — samengestelde controls: aan/uit (toggle-bit) + frequentie (freqs-array).
+    ContourOn = 15,
+    ApfOn = 16,
+    NotchOn = 17,
+    ContourFreq = 18, // → freqs[0]
+    ApfFreq = 19,     // → freqs[1]
+    NotchFreq = 20,   // → freqs[2]
+    // Clarifier (RIT/XIT). Toggles delen op Yaesu één offset. Per-model: 991A `RT`/`XT`/
+    // `RC`/`RU`/`RD` (relatief), FTX-1 `CF` (P3=0 RX/TX on/off, P3=1 absolute freq).
+    RitOn = 21,     // toggle-bit 21 (RX-clarifier)
+    XitOn = 22,     // toggle-bit 22 (TX-clarifier)
+    ClarClear = 23, // momentaan: offset → 0
+    ClarStep = 24,  // value = i16-as-u16 signed stap in Hz; huidige offset → freqs[3]
+}
+
+/// Typed Yaesu control (client→server): set `control` (a `YaesuCtrl`) on `slot`
+/// (0=radio1/991A, 1=radio2/FTX-1) to `value` (toggle 0/1, or level/multi-state).
+pub struct YaesuControlPacket {
+    pub slot: u8,
+    pub control: u8,
+    pub value: u16,
+}
+
+impl YaesuControlPacket {
+    pub const SIZE: usize = Header::SIZE + 1 + 1 + 2; // 8
+
+    pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
+        Header::new(PacketType::YaesuControl, Flags::NONE).serialize(buf);
+        buf[4] = self.slot;
+        buf[5] = self.control;
+        buf[6..8].copy_from_slice(&self.value.to_be_bytes());
+    }
+
+    pub fn deserialize(buf: &[u8]) -> Result<Self> {
+        let header = Header::deserialize(buf)?;
+        if header.packet_type != PacketType::YaesuControl {
+            bail!("expected YaesuControl packet, got {:?}", header.packet_type);
+        }
+        if buf.len() < Self::SIZE {
+            bail!("YaesuControl packet too short: {} < {}", buf.len(), Self::SIZE);
+        }
+        Ok(Self {
+            slot: buf[4],
+            control: buf[5],
+            value: u16::from_be_bytes(buf[6..8].try_into().unwrap()),
+        })
+    }
+}
+
+/// Yaesu feature-state feedback (server→client): per-slot toggle bitfield (bit N =
+/// `YaesuCtrl` N on/off) + level values (indexed by `YaesuCtrl`). Value-change-only.
+pub struct YaesuFeaturePacket {
+    pub slot: u8,
+    pub toggles: u32,
+    pub levels: [u8; Self::N_LEVELS],
+    /// Frequency-type feature values (u16, tot 3200 Hz): [0]=Contour, [1]=APF, [2]=Notch.
+    pub freqs: [u16; Self::N_FREQS],
+}
+
+impl YaesuFeaturePacket {
+    pub const N_LEVELS: usize = 16;
+    pub const N_FREQS: usize = 4;
+    pub const SIZE: usize = Header::SIZE + 1 + 4 + Self::N_LEVELS + Self::N_FREQS * 2; // 33
+
+    pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
+        Header::new(PacketType::YaesuFeature, Flags::NONE).serialize(buf);
+        buf[4] = self.slot;
+        buf[5..9].copy_from_slice(&self.toggles.to_be_bytes());
+        buf[9..9 + Self::N_LEVELS].copy_from_slice(&self.levels);
+        let mut pos = 9 + Self::N_LEVELS;
+        for f in &self.freqs {
+            buf[pos..pos + 2].copy_from_slice(&f.to_be_bytes());
+            pos += 2;
+        }
+    }
+
+    pub fn deserialize(buf: &[u8]) -> Result<Self> {
+        let header = Header::deserialize(buf)?;
+        if header.packet_type != PacketType::YaesuFeature {
+            bail!("expected YaesuFeature packet, got {:?}", header.packet_type);
+        }
+        if buf.len() < 9 {
+            bail!("YaesuFeature packet too short: {}", buf.len());
+        }
+        let slot = buf[4];
+        let toggles = u32::from_be_bytes(buf[5..9].try_into().unwrap());
+        // Additive-tolerant: accept fewer trailing bytes (default 0).
+        let mut levels = [0u8; Self::N_LEVELS];
+        for (i, lvl) in levels.iter_mut().enumerate() {
+            if buf.len() > 9 + i {
+                *lvl = buf[9 + i];
+            }
+        }
+        let mut freqs = [0u16; Self::N_FREQS];
+        let fbase = 9 + Self::N_LEVELS;
+        for (i, fr) in freqs.iter_mut().enumerate() {
+            if buf.len() >= fbase + i * 2 + 2 {
+                *fr = u16::from_be_bytes(buf[fbase + i * 2..fbase + i * 2 + 2].try_into().unwrap());
+            }
+        }
+        Ok(Self { slot, toggles, levels, freqs })
+    }
+}
+
+/// Yaesu radio-presence (server→client, broadcast naar álle clients): per slot of
+/// er een verbonden radio is + het model. Ontkoppelt de connected-status/selector
+/// van de audio+state-subscription zodat wegvallen/bijkomen dynamisch is (niet
+/// sticky). PATCH-android-yaesu-presence-datasaver.
+pub struct YaesuPresencePacket {
+    pub slot0_present: bool,
+    pub slot0_model: u8,
+    pub slot1_present: bool,
+    pub slot1_model: u8,
+}
+
+impl YaesuPresencePacket {
+    pub const SIZE: usize = Header::SIZE + 4; // 8
+
+    pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
+        Header::new(PacketType::YaesuPresence, Flags::NONE).serialize(buf);
+        buf[4] = self.slot0_present as u8;
+        buf[5] = self.slot0_model;
+        buf[6] = self.slot1_present as u8;
+        buf[7] = self.slot1_model;
+    }
+
+    pub fn deserialize(buf: &[u8]) -> Result<Self> {
+        let header = Header::deserialize(buf)?;
+        if header.packet_type != PacketType::YaesuPresence {
+            bail!("expected YaesuPresence packet, got {:?}", header.packet_type);
+        }
+        if buf.len() < Self::SIZE {
+            bail!("YaesuPresence packet too short: {} < {}", buf.len(), Self::SIZE);
+        }
+        Ok(Self {
+            slot0_present: buf[4] != 0,
+            slot0_model: buf[5],
+            slot1_present: buf[6] != 0,
+            slot1_model: buf[7],
+        })
+    }
+}
+
 /// Parse any incoming packet by peeking at the header
 pub enum Packet {
     Audio(AudioPacket),
@@ -1879,6 +2073,9 @@ pub enum Packet {
     FrequencyVrx(VrxFrequencyPacket),
     FrequencyVrxActual(VrxFrequencyPacket),
     TxFilterBand(TxFilterBandPacket),
+    YaesuControl(YaesuControlPacket),
+    YaesuFeature(YaesuFeaturePacket),
+    YaesuPresence(YaesuPresencePacket),
 }
 
 /// AuthResult codes
@@ -1924,6 +2121,9 @@ impl Packet {
             PacketType::FrequencyVrx => Ok(Packet::FrequencyVrx(VrxFrequencyPacket::deserialize(buf)?)),
             PacketType::FrequencyVrxActual => Ok(Packet::FrequencyVrxActual(VrxFrequencyPacket::deserialize(buf)?)),
             PacketType::TxFilterBand => Ok(Packet::TxFilterBand(TxFilterBandPacket::deserialize(buf)?)),
+            PacketType::YaesuControl => Ok(Packet::YaesuControl(YaesuControlPacket::deserialize(buf)?)),
+            PacketType::YaesuFeature => Ok(Packet::YaesuFeature(YaesuFeaturePacket::deserialize(buf)?)),
+            PacketType::YaesuPresence => Ok(Packet::YaesuPresence(YaesuPresencePacket::deserialize(buf)?)),
             PacketType::AudioMultiCh => Ok(Packet::AudioMultiCh(MultiChannelAudioPacket::deserialize(buf)?)),
             PacketType::YaesuState => Ok(Packet::YaesuState(YaesuStatePacket::deserialize(buf)?)),
             PacketType::FrequencyYaesu => Ok(Packet::FrequencyYaesu(FrequencyPacket::deserialize(buf)?)),
@@ -2002,6 +2202,28 @@ mod tests {
     fn header_invalid_magic() {
         let buf = [0x00, VERSION, 0x01, 0x00];
         assert!(Header::deserialize(&buf).is_err());
+    }
+
+    #[test]
+    fn yaesu_presence_roundtrip() {
+        let pkt = YaesuPresencePacket {
+            slot0_present: true,
+            slot0_model: 0,   // FT-991A
+            slot1_present: false,
+            slot1_model: 1,   // FTX-1
+        };
+        let mut buf = [0u8; YaesuPresencePacket::SIZE];
+        pkt.serialize(&mut buf);
+        // Parse via de generieke weg zoals de client 'm binnenkrijgt.
+        match Packet::deserialize(&buf).unwrap() {
+            Packet::YaesuPresence(p) => {
+                assert!(p.slot0_present);
+                assert_eq!(p.slot0_model, 0);
+                assert!(!p.slot1_present);
+                assert_eq!(p.slot1_model, 1);
+            }
+            _ => panic!("expected YaesuPresence packet"),
+        }
     }
 
     #[test]

@@ -6,11 +6,13 @@ members = [
     "sdr-remote-client",
     "sdr-remote-android",
     "vrx-rs",
+    "thetislink-relay",
+    "sdr-remote-relay",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "2.3.0"
+version = "2.4.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
 

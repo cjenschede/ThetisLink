@@ -3,9 +3,9 @@
 //! Mode-selector render-helper (sub-stap 2b).
 //!
 //! Vervangt drie render-paden met één helper:
-//! - `render_rx1_controls_inner` (RX1 popouts, ~mod.rs:2275) — 8 modes, Extended
-//! - `render_rx2_controls_inner` (RX2 popouts, ~mod.rs:2636) — 8 modes, Extended
-//! - Tab::Radio hoofdvenster (~mod.rs:3594) — 4 modes, Basic — was **ongegeguard**
+//! - `render_rx1_controls_inner` (RX1 popouts, ~mod.rs:2275) - 8 modes, Extended
+//! - `render_rx2_controls_inner` (RX2 popouts, ~mod.rs:2636) - 8 modes, Extended
+//! - Tab::Radio hoofdvenster (~mod.rs:3594) - 4 modes, Basic - was **ongegeguard**
 //!   (connected-guard ontbrak).
 //!
 //! `UiDensity` bepaalt welke mode-set zichtbaar is: Basic toont alleen de
@@ -16,7 +16,7 @@ use egui::{Color32, RichText};
 use super::coverage;
 use super::{ControlContext, UiDensity, UiEvent};
 
-/// Volledige mode-set (popouts). (mode_val, label) — mode_val komt uit het
+/// Volledige mode-set (popouts). (mode_val, label) - mode_val komt uit het
 /// TCI-protocol: 0=LSB, 1=USB, 3=CW-L, 4=CW-U, 5=FM, 6=AM, 7=DIGU, 9=DIGL,
 /// 10=SAM (synchronous AM, AM-variant).
 pub(crate) const MODES_EXTENDED: &[(u8, &str)] = &[

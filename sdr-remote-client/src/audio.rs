@@ -54,10 +54,14 @@ pub struct ClientAudio {
     playback_level: Arc<AtomicU32>,
     /// Set by error callbacks when a device error occurs
     audio_error: Arc<AtomicBool>,
-    /// Gate: when false, capture callback discards audio (prevents speaker→mic bleed)
+    /// Gate: when false, capture callback discards audio (prevents speaker->mic bleed)
     capture_gate: Arc<AtomicBool>,
     /// Mute: when true, playback callback outputs zeros (instant speaker silence for TX)
     playback_mute: Arc<AtomicBool>,
+    /// Samples of mic to discard right after the gate opens (keyup), so the
+    /// speaker/chassis switch-on spike decays before mic audio is transmitted.
+    /// 0 = disabled (no added latency - the default for isolated/headset audio).
+    capture_gate_delay_samples: Arc<AtomicU32>,
     /// Actual sample rate of the capture device
     pub capture_sample_rate: u32,
     /// Actual sample rate of the playback device
@@ -72,7 +76,7 @@ impl ClientAudio {
     /// Create audio pipeline. Pass device names for specific devices, or None/empty for defaults.
     pub fn new(input_name: Option<&str>, output_name: Option<&str>) -> Result<Self> {
         let (capture_producer, capture_consumer) = HeapRb::<f32>::new(RING_CAPACITY).split();
-        // Single interleaved stereo ring buffer (L,R,L,R,...) — 2x capacity for stereo
+        // Single interleaved stereo ring buffer (L,R,L,R,...) - 2x capacity for stereo
         let (playback_producer, playback_consumer) = HeapRb::<f32>::new(RING_CAPACITY * 2).split();
 
         let running = Arc::new(AtomicBool::new(false));
@@ -81,6 +85,7 @@ impl ClientAudio {
         let audio_error = Arc::new(AtomicBool::new(false));
         let capture_gate = Arc::new(AtomicBool::new(false));
         let playback_mute = Arc::new(AtomicBool::new(false));
+        let capture_gate_delay_samples = Arc::new(AtomicU32::new(0));
 
         let mut audio = Self {
             capture_consumer,
@@ -93,6 +98,7 @@ impl ClientAudio {
             audio_error,
             capture_gate,
             playback_mute,
+            capture_gate_delay_samples,
             capture_sample_rate: DEVICE_SAMPLE_RATE,
             playback_sample_rate: DEVICE_SAMPLE_RATE,
         };
@@ -188,11 +194,17 @@ impl ClientAudio {
         let in_stream_config = input_config.config();
         let out_stream_config = output_config.config();
 
-        // Capture (microphone) — downmix to mono
+        // Capture (microphone) - downmix to mono
         let level = self.capture_level.clone();
         let err_flag = self.audio_error.clone();
         let gate = self.capture_gate.clone();
-        // Pre-allocated scratch — bewaart capacity over callback-aanroepen heen om
+        let gate_delay_samples = self.capture_gate_delay_samples.clone();
+        // Per-callback state for the post-keyup gate-delay (mirrors the Android path):
+        // when the gate opens we discard `gate_delay_remaining` mono samples so the
+        // speaker/chassis switch-on spike decays before mic audio reaches TX.
+        let mut was_open = false;
+        let mut gate_delay_remaining: u32 = 0;
+        // Pre-allocated scratch - bewaart capacity over callback-aanroepen heen om
         // real-time alloc op de audio-thread te voorkomen (latency-prioriteit).
         let mut mono_scratch: Vec<f32> = Vec::with_capacity(8192);
         let capture_stream = input_device
@@ -200,21 +212,37 @@ impl ClientAudio {
                 &in_stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     // Only write to ring buffer when gate is open (PTT active).
-                    // Prevents speaker→mic feedback from contaminating TX audio.
+                    // Prevents speaker->mic feedback from contaminating TX audio.
                     if !gate.load(Ordering::Relaxed) {
+                        was_open = false;
+                        gate_delay_remaining = 0;
                         level.store(0u32, Ordering::Relaxed);
                         return;
+                    }
+                    // On the open transition, latch the configured discard window.
+                    if !was_open {
+                        was_open = true;
+                        gate_delay_remaining = gate_delay_samples.load(Ordering::Relaxed);
                     }
                     mono_scratch.clear();
                     for frame in data.chunks(in_channels) {
                         mono_scratch.push(frame[0]);
                     }
 
-                    let rms = (mono_scratch.iter().map(|&s| s * s).sum::<f32>()
-                        / mono_scratch.len().max(1) as f32).sqrt();
+                    // Discard the first N mono samples after keyup (gate-delay).
+                    let skip = (gate_delay_remaining as usize).min(mono_scratch.len());
+                    gate_delay_remaining -= skip as u32;
+                    let out = &mono_scratch[skip..];
+                    if out.is_empty() {
+                        level.store(0u32, Ordering::Relaxed);
+                        return;
+                    }
+
+                    let rms = (out.iter().map(|&s| s * s).sum::<f32>()
+                        / out.len().max(1) as f32).sqrt();
                     level.store(rms.to_bits(), Ordering::Relaxed);
 
-                    capture_producer.push_slice(&mono_scratch);
+                    capture_producer.push_slice(out);
                 },
                 move |err| {
                     log::error!("client capture error: {}", err);
@@ -224,7 +252,7 @@ impl ClientAudio {
             )
             .context("build client capture stream")?;
 
-        // Playback (speakers) — mono or stereo (binaural R channel)
+        // Playback (speakers) - mono or stereo (binaural R channel)
         let level = self.playback_level.clone();
         let err_flag = self.audio_error.clone();
         let mute = self.playback_mute.clone();
@@ -330,7 +358,7 @@ impl ClientAudio {
         let n = left.len().min(right.len());
         let mut written = 0;
         for i in 0..n {
-            // Pre-check: ring must have room for both L and R together — anders
+            // Pre-check: ring must have room for both L and R together - anders
             // frame-skip om geen half-frame in ring achter te laten.
             if self.playback_producer.vacant_len() < 2 {
                 break;
@@ -397,6 +425,16 @@ impl sdr_remote_logic::audio::AudioBackend for ClientAudio {
 
     fn set_capture_gate(&mut self, open: bool) {
         self.capture_gate.store(open, Ordering::Relaxed);
+    }
+
+    fn set_capture_gate_delay_ms(&mut self, delay_ms: u32) {
+        // ms -> samples at the capture rate (round up), mirroring the Android path.
+        let samples = (self.capture_sample_rate as u64)
+            .saturating_mul(delay_ms as u64)
+            .saturating_add(999)
+            / 1000;
+        self.capture_gate_delay_samples
+            .store(samples.min(u32::MAX as u64) as u32, Ordering::Relaxed);
     }
 
     fn set_playback_mute(&mut self, mute: bool) {

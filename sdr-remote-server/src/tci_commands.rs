@@ -92,12 +92,12 @@ impl TciConnection {
 
     pub async fn set_rx2_af_gain(&mut self, level: u8) {
         // rx_volume supported since Thetis v2.10.3.13.
-        // Schaal: 0..100 % → −60..0 dB (matches RxVolume parser/handler in tci.rs).
+        // Schaal: 0..100 % -> −60..0 dB (matches RxVolume parser/handler in tci.rs).
         let level = level.min(100);
         let db = ((level as i32 - 100) * 60) / 100;
         let cmd = format!("rx_volume:1,0,{};", db);
         self.send(&cmd).await;
-        // No optimistic state update — Thetis echoes rx_volume back and the
+        // No optimistic state update - Thetis echoes rx_volume back and the
         // RxVolume notification handler updates `rx2_af_gain`.
     }
 
@@ -192,7 +192,7 @@ impl TciConnection {
         // Stock .14/.15 supports rx_nb_enable_ex without advertising the cap.
         // Het `level`-argument bepaalt de uiteindelijke NB-stand bij de server;
         // bij disable sturen we `level=0` (niet `.max(1)`), anders blijft NB1
-        // actief en werkt de cycle→off transitie niet.
+        // actief en werkt de cycle->off transitie niet.
         let enabled = level > 0;
         let cmd = format!("rx_nb_enable_ex:0,{},{};", if enabled { "true" } else { "false" }, level);
         self.send(&cmd).await;
@@ -239,7 +239,7 @@ impl TciConnection {
         // Switch TCI audio channels: stereo for binaural, mono otherwise
         let ch_cmd = format!("AUDIO_STREAM_CHANNELS:{};", if on { 2 } else { 1 });
         self.send(&ch_cmd).await;
-        debug!("TCI: binaural {} → audio channels {}", if on { "ON" } else { "OFF" }, if on { 2 } else { 1 });
+        debug!("TCI: binaural {} -> audio channels {}", if on { "ON" } else { "OFF" }, if on { 2 } else { 1 });
         self.binaural = on;
     }
 
@@ -285,7 +285,7 @@ impl TciConnection {
 
     pub async fn set_rx2_nb(&mut self, level: u8) {
         // Stock .14/.15 supports rx_nb_enable_ex without advertising the cap.
-        // Zie set_nb() — zelfde Thetis-gotcha, stuur echte level i.p.v. .max(1).
+        // Zie set_nb() - zelfde Thetis-gotcha, stuur echte level i.p.v. .max(1).
         let enabled = level > 0;
         let cmd = format!("rx_nb_enable_ex:1,{},{};", if enabled { "true" } else { "false" }, level);
         self.send(&cmd).await;
@@ -386,7 +386,7 @@ impl TciConnection {
 
 
     /// Start auto-null on Thetis with step plan. Results arrive via DiversityAutonull notifications.
-    /// Steps format: Vec of (is_phase, offsets) — same as client's diversity-smart.txt
+    /// Steps format: Vec of (is_phase, offsets) - same as client's diversity-smart.txt
     pub async fn diversity_autonull(&mut self, settle_ms: u32, steps: &[(Vec<f32>, bool)]) {
         if !self.has_cap("diversity_sweep_ex") { return; }
         self.diversity_auto_progress = None;
@@ -441,7 +441,7 @@ impl TciConnection {
         }
     }
 
-    /// Set Thetis' "Receive only" flag via the fork's `rx_only_ex` command —
+    /// Set Thetis' "Receive only" flag via the fork's `rx_only_ex` command -
     /// a preventive transmit-inhibit (MOX/spacebar/hardware-PTT/VOX all refused
     /// at the source, not reactively flipped back). Only sent when the fork
     /// advertises the capability; returns `true` if it was sent (extensions
@@ -498,7 +498,7 @@ impl TciConnection {
         }
     }
 
-    /// Send DDC sample-rate change via TL2-1 fork extension (no CAT fallback —
+    /// Send DDC sample-rate change via TL2-1 fork extension (no CAT fallback -
     /// stock Thetis has no equivalent in TCI, only via Setup-form UI).
     /// `rate_hz` must be one of 48000/96000/192000/384000/768000/1536000.
     pub async fn set_ddc_sample_rate(&mut self, rx: u32, rate_hz: u32) {
@@ -515,7 +515,7 @@ impl TciConnection {
 
     // ── Note: stock v2.10.3.14 setters do NOT optimistically mutate local state.
     // Thetis echoes the change back as a notification (rx_step_att_ex, etc.),
-    // which is parsed and dispatched in `handle_notification` — that is the single
+    // which is parsed and dispatched in `handle_notification` - that is the single
     // source of truth. Skipping the optimistic update prevents drift if `send()`
     // silently dropped the frame (no return value to check). See
     // `feedback_dispatch_return_checked.md`.

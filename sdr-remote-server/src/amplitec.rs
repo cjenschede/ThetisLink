@@ -135,7 +135,7 @@ fn amplitec_thread(
                     debug!("Amplitec {} still offline: {}", port_name, e);
                 }
                 mark_disconnected(&status);
-                // Pending commands droppen — verzending na power-cycle
+                // Pending commands droppen - verzending na power-cycle
                 // van een stale switch-cmd zou ongewenst zijn.
                 while cmd_rx.try_recv().is_ok() {}
                 // Wachten op retry óf op shutdown.
@@ -145,7 +145,7 @@ fn amplitec_thread(
                         return;
                     }
                     // Bij Timeout én bij een eventueel binnengekomen cmd
-                    // (drainen na retry) → opnieuw proberen te openen.
+                    // (drainen na retry) -> opnieuw proberen te openen.
                     _ => continue,
                 }
             }
@@ -178,7 +178,7 @@ fn amplitec_thread(
 }
 
 enum SessionOutcome {
-    /// Serial-fout opgetreden — port sluiten en opnieuw openen.
+    /// Serial-fout opgetreden - port sluiten en opnieuw openen.
     Reconnect,
     /// Command-channel gesloten (server-stop). Thread mag eindigen.
     Shutdown,
@@ -198,7 +198,7 @@ fn run_amplitec_session(
                         warn!("Amplitec set A{} failed: {}", pos, e);
                         return SessionOutcome::Reconnect;
                     }
-                    info!("Amplitec: Switch A → {}", pos);
+                    info!("Amplitec: Switch A -> {}", pos);
                 }
             }
             Ok(AmplitecCmd::SetSwitchB(pos)) => {
@@ -208,7 +208,7 @@ fn run_amplitec_session(
                         warn!("Amplitec set B{} failed: {}", pos, e);
                         return SessionOutcome::Reconnect;
                     }
-                    info!("Amplitec: Switch B → {}", pos);
+                    info!("Amplitec: Switch B -> {}", pos);
                 }
             }
             Ok(AmplitecCmd::Query) | Err(mpsc::RecvTimeoutError::Timeout) => {

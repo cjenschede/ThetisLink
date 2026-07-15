@@ -154,7 +154,7 @@ pub enum Rf2kCmd {
     TunerLDown,
     TunerCUp,
     TunerCDown,
-    TunerK,                     // Cycle K coefficient (CL→LC→BYPASS)
+    TunerK,                     // Cycle K coefficient (CL->LC->BYPASS)
     // Drive controls (Fase C)
     DriveUp,
     DriveDown,
@@ -354,7 +354,7 @@ fn rf2k_thread(
     loop {
         match cmd_rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Rf2kCmd::Tune) => {
-                // Automated tune sequence: ZZTU1 → wait → tune → wait → poll → ZZTU0
+                // Automated tune sequence: ZZTU1 -> wait -> tune -> wait -> poll -> ZZTU0
                 if let Some(ref tx) = cat_tx {
                     let _ = tx.blocking_send("ZZTU1;".to_string());
                     info!("RF2K-S tune: carrier ON (ZZTU1)");
@@ -474,7 +474,7 @@ fn rf2k_thread(
                 poll_cycle += 1;
 
                 // Secondary poll: debug info every ~5s (25 cycles × 200ms)
-                // NOTE: lock must NOT be held here — fetch_debug does HTTP I/O
+                // NOTE: lock must NOT be held here - fetch_debug does HTTP I/O
                 if poll_cycle % 25 == 1 {
                     if let Ok(dbg) = fetch_debug(&client, base_url) {
                         let mut s = status.lock().unwrap();
@@ -536,10 +536,10 @@ fn get_json<T: serde::de::DeserializeOwned>(client: &reqwest::blocking::Client, 
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().unwrap_or_default();
-        return Err(format!("{} returned {} — {}", url, status, body));
+        return Err(format!("{} returned {} - {}", url, status, body));
     }
     let body = resp.text().map_err(|e| format!("{} read: {}", url, e))?;
-    serde_json::from_str(&body).map_err(|e| format!("{} parse: {} — body: {}", url, e, &body[..body.len().min(200)]))
+    serde_json::from_str(&body).map_err(|e| format!("{} parse: {} - body: {}", url, e, &body[..body.len().min(200)]))
 }
 
 fn poll_status(client: &reqwest::blocking::Client, base_url: &str) -> Result<Rf2kStatus, String> {
@@ -586,7 +586,7 @@ fn poll_status(client: &reqwest::blocking::Client, base_url: &str) -> Result<Rf2
 
     s.operate = operate.operate_mode == "OPERATE";
 
-    // GET /drive (optional — don't fail poll if drive endpoint unavailable)
+    // GET /drive (optional - don't fail poll if drive endpoint unavailable)
     if let Ok(drive) = get_json::<DriveResponse>(client, &format!("{}/drive", base_url)) {
         if drive.has_drive {
             s.drive_w = drive.drive_power;
@@ -953,11 +953,11 @@ fn parse_error_state(status_str: &str, s: &mut Rf2kStatus) {
         "Wrong Frequency" => (5, "WRONG FREQUENCY"),
         "No internal high voltage" => (6, "NO INTERNAL HV"),
         "Overheating" => (7, "OVERHEATING"),
-        // NOT_TUNED (8) has no __str__ override, returns "" — indistinguishable from NONE
+        // NOT_TUNED (8) has no __str__ override, returns "" - indistinguishable from NONE
         "High Output Power" => (9, "HIGH OUTPUT POWER"),
         "High SWR" => (10, "HIGH SWR"),
         other => {
-            // Unknown error string — treat as error so Reset button enables
+            // Unknown error string - treat as error so Reset button enables
             if !other.is_empty() {
                 warn!("RF2K-S unknown error state string: {:?}", other);
                 (99, other)
@@ -1122,14 +1122,14 @@ pub fn tuner_mode_name(mode: u8) -> &'static str {
 }
 
 // ============================================================================
-// Drive-restore observability (Phase B — passive observer)
+// Drive-restore observability (Phase B - passive observer)
 // ----------------------------------------------------------------------------
 // Watches RF2K-S operate-mode transitions against the Thetis-side ZZPC drive
-// percentage (shared via `Arc<AtomicU8>`). Purely observational — emits
+// percentage (shared via `Arc<AtomicU8>`). Purely observational - emits
 // transition-only log lines. A `RESTORE FAILED` WARN line is the key signal:
-// it means the external restore flow (RF2K-S firmware ↔ Thetis CAT) did NOT
+// it means the external restore flow (RF2K-S firmware <-> Thetis CAT) did NOT
 // bring the drive back to its pre-operate value within the timeout window.
-// See `docs/patch-briefs/PATCH-rf2k-drive-restore-reliability.md` §1.3.
+// See the internal design notes for the drive-restore reliability rationale.
 // ============================================================================
 
 /// Observer timeout: how long after an operate-mode transition we wait for
@@ -1179,7 +1179,7 @@ pub(crate) enum DriveObserverLog {
     Info(String),
     Warn(String),
     /// Signal to the caller that Thetis failed to restore the pre-Operate
-    /// drive on its own (timeout fired after Operate→Standby). Carries the
+    /// drive on its own (timeout fired after Operate->Standby). Carries the
     /// value to push back via CAT (`ZZPC{value:03};`). The caller is
     /// expected to send it and log an Info line describing the action.
     RestoreActionRequired(u8),
@@ -1189,12 +1189,12 @@ pub(crate) enum DriveObserverLog {
 ///
 /// Returns the new state plus an optional log directive to emit when an
 /// actual transition (or a relevant timeout) occurs. Callers must update
-/// `ctx` based on the return value — specifically:
+/// `ctx` based on the return value - specifically:
 ///
-/// - On `Standby → StandbyToOperate`: set `transition_start=Some(now)` and
+/// - On `Standby -> StandbyToOperate`: set `transition_start=Some(now)` and
 ///   `saved_drive=Some(observed_zzpc)` from the triggering event.
-/// - On `Operate → OperateToStandby`: set `transition_start=Some(now)`.
-///   `saved_drive` is preserved from the earlier Standby→StandbyToOperate.
+/// - On `Operate -> OperateToStandby`: set `transition_start=Some(now)`.
+///   `saved_drive` is preserved from the earlier Standby->StandbyToOperate.
 /// - On any transition back to `Standby` or `Operate`: clear
 ///   `transition_start=None`.
 /// - Every `ZzpcObserved { value }` event: update `last_known_zzpc=value`.
@@ -1311,14 +1311,14 @@ pub(crate) fn next_drive_state(
                     // If no snapshot is available (rare: first-ever
                     // Operate-cycle after a fresh install, or a manual
                     // config-reset) the safe action is NOT to push the
-                    // observer's default `0` — that would actively zero
+                    // observer's default `0` - that would actively zero
                     // Thetis' drive level. Just warn and stay in Standby.
                     return match ctx.saved_drive {
                         Some(v) => (Standby, Some(DriveObserverLog::RestoreActionRequired(v))),
                         None => (
                             Standby,
                             Some(DriveObserverLog::Warn(
-                                "RF2K drive: no saved pre-Operate snapshot, cannot restore — skipping".to_string()
+                                "RF2K drive: no saved pre-Operate snapshot, cannot restore - skipping".to_string()
                             )),
                         ),
                     };
@@ -1340,7 +1340,7 @@ struct DriveObserverState {
     /// operate-transition events before the initial state is known.
     initialized: bool,
     /// `Some(v)` when the observer has decided Thetis failed to restore the
-    /// pre-Operate drive on its own (timeout after Operate→Standby) and is
+    /// pre-Operate drive on its own (timeout after Operate->Standby) and is
     /// asking the caller to push ZZPC{v} via CAT. Cleared by the caller
     /// after one successful send. Without this fallback the pre-Operate
     /// drive is permanently lost after a host-restart that orphaned the
@@ -1394,7 +1394,7 @@ impl DriveObserverState {
                 }
                 (Rf2kDriveState::Operate, Rf2kDriveState::OperateToStandby) => {
                     self.ctx.transition_start = Some(Instant::now());
-                    // saved_drive preserved from earlier Standby→StandbyToOperate
+                    // saved_drive preserved from earlier Standby->StandbyToOperate
                 }
                 (_, Rf2kDriveState::Standby) | (_, Rf2kDriveState::Operate) => {
                     self.ctx.transition_start = None;
@@ -1439,11 +1439,11 @@ impl DriveObserverState {
             // Boot diagnostics: PA already in Operate at first poll AND no
             // persisted pre-Operate snapshot to restore from. Next Standby
             // transition will warn-and-skip (RestoreActionRequired::None
-            // branch) so owner knows why the drive stays at the current
+            // branch) so operator knows why the drive stays at the current
             // PA-drive level.
             if current_operate && self.ctx.saved_drive.is_none() {
                 warn!(
-                    "RF2K drive: PA in Operate at startup but no pre-Operate snapshot available — \
+                    "RF2K drive: PA in Operate at startup but no pre-Operate snapshot available - \
                      next Standby will skip restore (drive stays at {}%)",
                     current_zzpc
                 );
@@ -1471,7 +1471,7 @@ impl DriveObserverState {
 }
 
 // ============================================================================
-// Tests (Phase B acceptance §1.4 — pure state machine only)
+// Tests (Phase B acceptance §1.4 - pure state machine only)
 // ============================================================================
 
 #[cfg(test)]
@@ -1604,7 +1604,7 @@ mod tests {
         }
     }
 
-    // §1.4 test #7 — the critical edge-case capture
+    // §1.4 test #7 - the critical edge-case capture
     #[test]
     fn restore_failure_on_timeout() {
         let start = Instant::now() - Duration::from_millis(2_500);
@@ -1636,7 +1636,7 @@ mod tests {
         assert!(log.is_none());
     }
 
-    // §1.4 test #9 — end-to-end rapid cycle via DriveObserverState
+    // §1.4 test #9 - end-to-end rapid cycle via DriveObserverState
     #[test]
     fn rapid_operate_standby_cycle_preserves_saved_drive() {
         let mut obs = DriveObserverState::new();
@@ -1647,7 +1647,7 @@ mod tests {
         assert_eq!(obs.state, Rf2kDriveState::StandbyToOperate);
         assert_eq!(obs.ctx.saved_drive, Some(100));
 
-        obs.tick(true, 10);   // ZZPC drop to 10 — confirms operate
+        obs.tick(true, 10);   // ZZPC drop to 10 - confirms operate
         assert_eq!(obs.state, Rf2kDriveState::Operate);
 
         obs.tick(false, 10);  // operate off, ZZPC still 10
@@ -1655,7 +1655,7 @@ mod tests {
         // saved_drive must still be 100 (from earlier transition)
         assert_eq!(obs.ctx.saved_drive, Some(100));
 
-        obs.tick(false, 100); // ZZPC restored to 100 — restore OK
+        obs.tick(false, 100); // ZZPC restored to 100 - restore OK
         assert_eq!(obs.state, Rf2kDriveState::Standby);
     }
 
@@ -1674,7 +1674,7 @@ mod tests {
         }
     }
 
-    // §1.4 test #11 — caller-side ctx update for last_known_zzpc in Standby
+    // §1.4 test #11 - caller-side ctx update for last_known_zzpc in Standby
     #[test]
     fn saved_drive_updates_on_standby_zzpc_via_caller() {
         let mut obs = DriveObserverState::new();
@@ -1695,12 +1695,12 @@ mod tests {
         // No drive-drop seen, operate flaps back to standby
         obs.tick(false, 100);
         assert_eq!(obs.state, Rf2kDriveState::OperateToStandby);
-        // Now ZZPC stays at 100 (saved was 100) — restore "succeeds" immediately
+        // Now ZZPC stays at 100 (saved was 100) - restore "succeeds" immediately
         // when caller sees ZZPC observation equal to saved.
         obs.tick(false, 100); // no ZZPC change, but saved == 100 so ZzpcObserved not emitted
         // State remains OperateToStandby until either match or timeout. No
         // ZZPC event was emitted because current==prev (both 100). That is the
-        // desired passive behavior — timeout will eventually fire.
+        // desired passive behavior - timeout will eventually fire.
         assert_eq!(obs.state, Rf2kDriveState::OperateToStandby);
     }
 

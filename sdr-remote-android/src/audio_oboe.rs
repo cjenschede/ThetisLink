@@ -25,6 +25,7 @@ struct CaptureCallback {
     level: Arc<AtomicU32>,
     error: Arc<AtomicBool>,
     gate: Arc<AtomicBool>,
+    gate_delay_samples: Arc<AtomicU32>,
     /// Samples to skip after gate opens (anti-feedback: let speaker decay first)
     gate_delay_remaining: u32,
     was_open: bool,
@@ -42,6 +43,20 @@ impl AudioInputCallback for CaptureCallback {
         let gate_open = self.gate.load(Ordering::Relaxed);
         if !gate_open {
             self.was_open = false;
+            self.gate_delay_remaining = 0;
+            self.level.store(0u32, Ordering::Relaxed);
+            return DataCallbackResult::Continue;
+        }
+
+        if !self.was_open {
+            self.was_open = true;
+            self.gate_delay_remaining = self.gate_delay_samples.load(Ordering::Relaxed);
+        }
+
+        let skip = self.gate_delay_remaining.min(data.len() as u32) as usize;
+        self.gate_delay_remaining = self.gate_delay_remaining.saturating_sub(skip as u32);
+        let data = &data[skip..];
+        if data.is_empty() {
             self.level.store(0u32, Ordering::Relaxed);
             return DataCallbackResult::Continue;
         }
@@ -148,6 +163,7 @@ pub struct OboeAudioBackend {
     playback_level: Arc<AtomicU32>,
     audio_error: Arc<AtomicBool>,
     capture_gate: Arc<AtomicBool>,
+    capture_gate_delay_samples: Arc<AtomicU32>,
     playback_mute: Arc<AtomicBool>,
     capture_sample_rate: u32,
     playback_sample_rate: u32,
@@ -165,6 +181,7 @@ impl OboeAudioBackend {
         let playback_level = Arc::new(AtomicU32::new(0));
         let audio_error = Arc::new(AtomicBool::new(false));
         let capture_gate = Arc::new(AtomicBool::new(false));
+        let capture_gate_delay_samples = Arc::new(AtomicU32::new(0));
         let playback_mute = Arc::new(AtomicBool::new(false));
 
         // Capture stream (microphone)
@@ -173,6 +190,7 @@ impl OboeAudioBackend {
             level: capture_level.clone(),
             error: audio_error.clone(),
             gate: capture_gate.clone(),
+            gate_delay_samples: capture_gate_delay_samples.clone(),
             gate_delay_remaining: 0,
             was_open: false,
         };
@@ -231,6 +249,7 @@ impl OboeAudioBackend {
             playback_level,
             audio_error,
             capture_gate,
+            capture_gate_delay_samples,
             playback_mute,
             capture_sample_rate,
             playback_sample_rate,
@@ -275,6 +294,15 @@ impl AudioBackend for OboeAudioBackend {
 
     fn set_capture_gate(&mut self, open: bool) {
         self.capture_gate.store(open, Ordering::Relaxed);
+    }
+
+    fn set_capture_gate_delay_ms(&mut self, delay_ms: u32) {
+        let samples = (self.capture_sample_rate as u64)
+            .saturating_mul(delay_ms as u64)
+            .saturating_add(999)
+            / 1000;
+        self.capture_gate_delay_samples
+            .store(samples.min(u32::MAX as u64) as u32, Ordering::Relaxed);
     }
 
     fn set_playback_mute(&mut self, mute: bool) {

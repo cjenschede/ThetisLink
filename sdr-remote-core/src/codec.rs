@@ -32,11 +32,9 @@ impl OpusEncoder {
     /// regardless of voice-activity → DTX off.
     pub fn new_with_dtx(dtx: bool) -> Result<Self> {
         // dtx=false signals VRX-mode (continuous audio, no DTX silence
-        // frames). Build 44 experiment: keep the rest of the Opus config
-        // identical to RX1 (Application::Voip + Signal::Voice + 12.8 kbps
-        // + Narrowband + FEC off). The earlier Audio+Auto+32kbps choice
-        // produced an inexplicable 6 kHz mirror image in client playback;
-        // matching RX1 settings rules out Opus as the cause.
+        // frames). Keep the rest of the Opus config identical to RX1
+        // (Application::Voip + Signal::Voice + 12.8 kbps + Narrowband +
+        // FEC off) so only silence suppression differs.
         let app = Application::Voip;
         let signal = Signal::Voice;
         let bitrate: i32 = 12_800;
@@ -75,11 +73,8 @@ impl OpusEncoder {
     /// In tegenstelling tot de default voice-encoder staat hier **DTX uit**
     /// en gebruiken we **Application::Audio + Signal::Auto**. Een aangesloten
     /// radio levert *continue* audio (bandruis, FM-hiss, CW/SSB) die GEEN
-    /// spraak is. De default Voip+Voice+DTX-config laat de SILK voice-activity-
-    /// detector constante ruis als "stilte" classificeren → DTX stuurt dan
-    /// comfort-noise frames i.p.v. echte audio → precies het "ruis verdwijnt
-    /// langzaam, dan artifacts"-effect (owner-rapport build 119). Auto-signal +
-    /// DTX-uit = getrouwe, continue weergave. Zelfde aanpak als VRX
+    /// spraak is. De default Voip+Voice+DTX-config laat de SILK voice-activity-    /// detector constante ruis als "stilte" classificeren; DTX-uit geeft
+    /// daarom een getrouwe, continue weergave. Zelfde aanpak als VRX
     /// (`new_with_dtx(false)`), maar met FEC aan voor packet-loss-resilience.
     ///
     /// Bandbreedte/latency identiek aan het voice-pad (NB 8kHz, 12.8 kbps,
@@ -220,6 +215,12 @@ impl OpusEncoderWideband {
             encoder,
             encode_buf: vec![0u8; MAX_ENCODED_SIZE],
         })
+    }
+
+    pub fn set_bitrate_bps(&mut self, bitrate: i32) -> Result<()> {
+        self.encoder
+            .set_bitrate(Bitrate::BitsPerSecond(bitrate))
+            .context("set wideband bitrate")
     }
 
     /// Encode a 20ms frame of 320 i16 samples at 16kHz mono.

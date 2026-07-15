@@ -47,6 +47,152 @@ fn packet_type_label(t: u8) -> String {
 }
 
 impl SdrRemoteApp {
+    pub(super) fn catsync_target_freq_mode(&self) -> (u64, u8) {
+        match self.catsync_target {
+            CatSyncTarget::Thetis => (self.frequency_hz, self.mode),
+            CatSyncTarget::Yaesu1 => (self.yaesu_freq_a, self.yaesu_mode),
+            CatSyncTarget::Yaesu2 => (self.yaesu2_freq_a, self.yaesu2_mode),
+        }
+    }
+
+    pub(super) fn catsync_target_tx_active(&self) -> bool {
+        match self.catsync_target {
+            CatSyncTarget::Thetis => self.ptt,
+            CatSyncTarget::Yaesu1 => self.yaesu_tx_active,
+            CatSyncTarget::Yaesu2 => self.yaesu2_tx_active,
+        }
+    }
+
+    pub(super) fn render_websdr_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        target: CatSyncTarget,
+        freq_hz: u64,
+        mode: u8,
+    ) {
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut self.catsync.enabled, "WebSDR mute on TX").changed() {
+                if !self.catsync.enabled {
+                    self.catsync.force_unmute();
+                }
+                self.save_full_config();
+            }
+            if self.catsync_target == target && self.catsync.webview_open() {
+                if self.catsync.is_muted() {
+                    ui.colored_label(Color32::from_rgb(255, 165, 0), "MUTED");
+                } else {
+                    ui.colored_label(Color32::from_rgb(100, 100, 100), "listening");
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let webview_open = self.catsync.webview_open();
+                let target_open = webview_open && self.catsync_target == target;
+                if target_open {
+                    if ui.button("Close WebSDR").clicked() {
+                        self.catsync.close_websdr_window();
+                    }
+                    if ui.button("Reload").on_hover_text(
+                        "Reload WebSDR page and audio after a network interruption",
+                    ).clicked() {
+                        self.catsync_target = target;
+                        self.catsync.reload_websdr_window(freq_hz, mode);
+                    }
+                    ui.colored_label(Color32::from_rgb(100, 200, 100), "Window open");
+                } else {
+                    let button_label = if webview_open { "Use here" } else { "WebSDR" };
+                    if ui.button(button_label).clicked() {
+                        self.catsync_target = target;
+                        if webview_open {
+                            self.catsync.reload_websdr_window(freq_hz, mode);
+                        } else {
+                            self.catsync.open_websdr_window(freq_hz, mode);
+                        }
+                    }
+                }
+                if ui.small_button("ext").on_hover_text("Open in external browser").clicked() {
+                    let url = self.catsync.websdr_tune_url(freq_hz, mode);
+                    let _ = open::that(&url);
+                }
+            });
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("URL:").size(11.0).color(Color32::GRAY));
+            ui.add(egui::TextEdit::singleline(&mut self.catsync.websdr_url)
+                .desired_width(ui.available_width() - 40.0)
+                .font(egui::FontId::proportional(11.0)));
+            if ui.small_button("*").on_hover_text("Add to favorites").clicked() {
+                self.catsync.add_favorite();
+                self.save_full_config();
+            }
+        });
+        if !self.catsync.favorites.is_empty() {
+            let active_url = self.catsync.websdr_url.clone();
+            let editing = self.websdr_favorite_editing;
+            let mut select_idx = None;
+            let mut remove_idx = None;
+            let mut edit_idx: Option<Option<usize>> = None;
+            let mut label_committed = false;
+            for (i, (label, url)) in self.catsync.favorites.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    let active = *url == active_url;
+                    let text_color = if active { Color32::from_rgb(100, 200, 100) } else { Color32::GRAY };
+                    if editing == Some(i) {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(label)
+                                .desired_width(180.0)
+                                .font(egui::FontId::proportional(11.0))
+                                .text_color(text_color),
+                        );
+                        if !resp.has_focus() && !resp.gained_focus() {
+                            resp.request_focus();
+                        }
+                        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if enter || resp.lost_focus() {
+                            edit_idx = Some(None);
+                            label_committed = true;
+                        }
+                    } else {
+                        let text = RichText::new(label.as_str()).size(11.0).color(text_color);
+                        if ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked() {
+                            select_idx = Some(i);
+                        }
+                    }
+                    let type_label = if crate::catsync::is_kiwi_url(url) { "kiwi" } else { "wsdr" };
+                    ui.label(RichText::new(type_label).size(9.0).color(Color32::DARK_GRAY));
+                    let edit_label = if editing == Some(i) { "Done" } else { "Edit" };
+                    if ui.small_button(edit_label).on_hover_text("Rename this favorite").clicked() {
+                        if editing == Some(i) {
+                            edit_idx = Some(None);
+                            label_committed = true;
+                        } else {
+                            edit_idx = Some(Some(i));
+                        }
+                    }
+                    if ui.small_button("X").on_hover_text("Remove").clicked() {
+                        remove_idx = Some(i);
+                    }
+                });
+            }
+            if let Some(new_editing) = edit_idx {
+                self.websdr_favorite_editing = new_editing;
+            }
+            if label_committed {
+                self.save_full_config();
+            }
+            if let Some(idx) = select_idx {
+                self.catsync.select_favorite(idx);
+                self.save_full_config();
+            }
+            if let Some(idx) = remove_idx {
+                if self.websdr_favorite_editing == Some(idx) {
+                    self.websdr_favorite_editing = None;
+                }
+                self.catsync.remove_favorite(idx);
+                self.save_full_config();
+            }
+        }
+    }
+
     pub(super) fn render_thetis_screen(&mut self, ui: &mut egui::Ui) {
         // Power toggle: click = on/off, long press (2s) = shutdown Thetis (ZZBY)
         const SHUTDOWN_HOLD_SECS: f32 = 2.0;
@@ -126,7 +272,7 @@ impl SdrRemoteApp {
             });
         }
 
-        // TX modulation bandwidth (main-radio TX) — PATCH-tx-modulation-bandwidth.
+        // TX modulation bandwidth (main-radio TX) - PATCH-tx-modulation-bandwidth.
         // "Volg RX" mirrors the RX filter 1:1; otherwise set low/high directly.
         ui.separator();
         ui.label(RichText::new("TX modulation bandwidth").strong());
@@ -136,7 +282,7 @@ impl SdrRemoteApp {
             if ui.checkbox(&mut self.tx_filter_follow_rx, "Follow RX bandwidth").changed() {
                 self.last_tx_follow_sent = None; // force resend when following
                 if !self.tx_filter_follow_rx {
-                    // Switched to independent → apply the current manual band now.
+                    // Switched to independent -> apply the current manual band now.
                     let _ = self.cmd_tx.send(Command::SetTxFilter(self.tx_filter_low_hz, self.tx_filter_high_hz));
                 }
             }
@@ -160,7 +306,7 @@ impl SdrRemoteApp {
                 let chi = thi.min(8000);
                 if thi > 8000 {
                     ui.label(RichText::new(format!(
-                        "TX follows RX: {} .. {} Hz (RX wider — TX max 8 kHz)", tlo, chi)).weak());
+                        "TX follows RX: {} .. {} Hz (RX wider - TX max 8 kHz)", tlo, chi)).weak());
                 } else {
                     ui.label(RichText::new(format!("TX follows RX: {} .. {} Hz", tlo, chi)).weak());
                 }
@@ -269,13 +415,13 @@ impl SdrRemoteApp {
             }
         });
 
-        // S-meter source selector — mirrors Thetis Multimeter Sig/Avg/MaxBin
+        // S-meter source selector - mirrors Thetis Multimeter Sig/Avg/MaxBin
         // choice. Applies to both RX1 and RX2 (one shared display mode).
         ui.horizontal(|ui| {
             ui.label("S-meter:");
             for (val, label, tooltip) in [
-                (0u8, "Sig", "WDSP RXA_S_PK — peak-hold with 100ms decay (fast bouncing)"),
-                (1u8, "Avg", "WDSP RXA_S_AV — symmetric RMS-avg over linear power (recommended)"),
+                (0u8, "Sig", "WDSP RXA_S_PK - peak-hold with 100ms decay (fast bouncing)"),
+                (1u8, "Avg", "WDSP RXA_S_AV - symmetric RMS-avg over linear power (recommended)"),
                 (2u8, "MaxBin", "Single highest FFT bin in passband"),
             ] {
                 if ui.selectable_label(self.smeter_source == val, label).on_hover_text(tooltip).clicked() {
@@ -301,139 +447,7 @@ impl SdrRemoteApp {
             }
         });
 
-        // --- WebSDR ---
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut self.catsync.enabled, "WebSDR mute on TX").changed() {
-                if !self.catsync.enabled {
-                    self.catsync.force_unmute();
-                }
-            }
-            if self.catsync.enabled {
-                if self.catsync.is_muted() {
-                    ui.colored_label(Color32::from_rgb(255, 165, 0), "MUTED");
-                } else {
-                    ui.colored_label(Color32::from_rgb(100, 100, 100), "listening");
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let webview_open = self.catsync.webview_open();
-                if webview_open {
-                    if ui.button("Close WebSDR").clicked() {
-                        self.catsync.close_websdr_window();
-                    }
-                    ui.colored_label(Color32::from_rgb(100, 200, 100), "Window open");
-                } else {
-                    if ui.button("WebSDR").clicked() {
-                        self.catsync.open_websdr_window(self.frequency_hz, self.mode);
-                    }
-                }
-                if ui.small_button("ext").on_hover_text("Open in external browser").clicked() {
-                    let url = self.catsync.websdr_tune_url(self.frequency_hz, self.mode);
-                    let _ = open::that(&url);
-                }
-            });
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("URL:").size(11.0).color(Color32::GRAY));
-            ui.add(egui::TextEdit::singleline(&mut self.catsync.websdr_url)
-                .desired_width(ui.available_width() - 40.0)
-                .font(egui::FontId::proportional(11.0)));
-            if ui.small_button("\u{2605}").on_hover_text("Add to favorites").clicked() {
-                self.catsync.add_favorite();
-                self.save_full_config();
-            }
-        });
-        if !self.catsync.favorites.is_empty() {
-            // Snapshot van de active URL — anders houdt iter_mut() de borrow
-            // op self.catsync vast en kunnen we 'm niet vergelijken in de loop.
-            let active_url = self.catsync.websdr_url.clone();
-            let editing = self.websdr_favorite_editing;
-            let mut select_idx = None;
-            let mut remove_idx = None;
-            let mut edit_idx: Option<Option<usize>> = None; // outer Option = was set this frame; inner = new editing value
-            let mut label_committed = false;
-            for (i, (label, url)) in self.catsync.favorites.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    let active = *url == active_url;
-                    let text_color = if active {
-                        Color32::from_rgb(100, 200, 100)
-                    } else {
-                        Color32::GRAY
-                    };
-                    if editing == Some(i) {
-                        // Edit-modus voor deze rij — render TextEdit met focus
-                        // zodat de owner direct kan typen na een Edit-klik.
-                        // Bij Enter of lost_focus committen we de wijziging.
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(label)
-                                .desired_width(180.0)
-                                .font(egui::FontId::proportional(11.0))
-                                .text_color(text_color),
-                        );
-                        if !resp.has_focus() && !resp.gained_focus() {
-                            resp.request_focus();
-                        }
-                        let enter = resp.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if enter || resp.lost_focus() {
-                            edit_idx = Some(None);
-                            label_committed = true;
-                        }
-                    } else {
-                        // Read-only label — klikbaar om te selecteren.
-                        let text = RichText::new(label.as_str())
-                            .size(11.0)
-                            .color(text_color);
-                        if ui
-                            .add(egui::Label::new(text).sense(egui::Sense::click()))
-                            .clicked()
-                        {
-                            select_idx = Some(i);
-                        }
-                    }
-                    let type_label = if crate::catsync::is_kiwi_url(url) { "kiwi" } else { "wsdr" };
-                    ui.label(RichText::new(type_label).size(9.0).color(Color32::DARK_GRAY));
-                    // Edit / Done toggle. In edit-modus toon "Done" zodat de
-                    // gebruiker ziet hoe ze 't veld weer kunnen sluiten zonder
-                    // ergens anders heen te klikken.
-                    let edit_label = if editing == Some(i) { "Done" } else { "Edit" };
-                    if ui
-                        .small_button(edit_label)
-                        .on_hover_text("Rename this favorite")
-                        .clicked()
-                    {
-                        if editing == Some(i) {
-                            edit_idx = Some(None);
-                            label_committed = true;
-                        } else {
-                            edit_idx = Some(Some(i));
-                        }
-                    }
-                    if ui.small_button("X").on_hover_text("Remove").clicked() {
-                        remove_idx = Some(i);
-                    }
-                });
-            }
-            if let Some(new_editing) = edit_idx {
-                self.websdr_favorite_editing = new_editing;
-            }
-            if label_committed {
-                self.save_full_config();
-            }
-            if let Some(idx) = select_idx {
-                self.catsync.select_favorite(idx);
-                self.save_full_config();
-            }
-            if let Some(idx) = remove_idx {
-                // Als de gewiste rij in edit-modus stond, edit-state opruimen
-                // anders zou een volgende rij ongewenst editbaar worden.
-                if self.websdr_favorite_editing == Some(idx) {
-                    self.websdr_favorite_editing = None;
-                }
-                self.catsync.remove_favorite(idx);
-                self.save_full_config();
-            }
-        }
+        self.render_websdr_controls(ui, CatSyncTarget::Thetis, self.frequency_hz, self.mode);
 
         ui.separator();
 
@@ -509,7 +523,7 @@ impl SdrRemoteApp {
                             else { "C".to_string() }
                         });
                     if ui.add_sized([80.0, 16.0], bal_slider).changed() {
-                        // Negate: slider visual left (-) → TCI +40 (which is left audio in Thetis)
+                        // Negate: slider visual left (-) -> TCI +40 (which is left audio in Thetis)
                         self.rx_balance = bal as i8;
                         let tci_val = (-self.rx_balance) as i16 as u16;
                         let _ = self.cmd_tx.send(Command::SetControl(CId::RxBalance, tci_val));
@@ -877,7 +891,7 @@ impl SdrRemoteApp {
                     egui::FontId::proportional(11.0), Color32::from_rgb(200, 200, 220));
             }
 
-            // Handle mouse click/drag in circle — only send when diversity enabled
+            // Handle mouse click/drag in circle - only send when diversity enabled
             if (response.dragged() || response.clicked()) && self.diversity_enabled {
                 if let Some(pos) = response.interact_pointer_pos() {
                     let center = rect.center();
@@ -1129,7 +1143,7 @@ impl SdrRemoteApp {
                         }
                         self.diversity_auto_last_set = Instant::now();
                     } else {
-                        // Both receivers active — read S-meters
+                        // Both receivers active - read S-meters
                         let rx1_dbm = self.smeter;
                         let rx2_dbm = self.rx2_smeter;
                         // Non-ref needs gain to match ref: gain = ref_dBm - nonref_dBm
@@ -1138,7 +1152,7 @@ impl SdrRemoteApp {
                         } else {
                             (rx2_dbm, rx1_dbm) // RX2 is ref, boost RX1
                         };
-                        let diff_db = ref_dbm - nonref_dbm; // positive = non-ref is weaker → needs boost
+                        let diff_db = ref_dbm - nonref_dbm; // positive = non-ref is weaker -> needs boost
                         self.diversity_auto_eq_gain_db = diff_db;
                         let eq_gain = 10.0f32.powf(diff_db / 20.0).clamp(0.1, 10.0);
                         self.diversity_auto_best_gain = eq_gain;
@@ -1196,7 +1210,7 @@ impl SdrRemoteApp {
                         self.diversity_auto_result = 3;
                     }
                 } else if self.diversity_auto_smart && self.diversity_auto_round >= 999 {
-                    // Smart done — handled by measurement phase below
+                    // Smart done - handled by measurement phase below
 
                     let set_gain_fn = |s: &mut Self, gain: f32| {
                         let g = gain.clamp(0.05, 10.0);
@@ -1237,7 +1251,7 @@ impl SdrRemoteApp {
 
                     let round = self.diversity_auto_round;
                     if round >= steps.len() {
-                        // All steps done → measurement phase
+                        // All steps done -> measurement phase
                         self.diversity_auto_round = 999;
                         self.diversity_auto_result = 1;
                     } else {
@@ -1269,7 +1283,7 @@ impl SdrRemoteApp {
                                 }
                                 self.diversity_sa_sub = 1; // next tick: measure
                             } else {
-                                // Round complete — apply best, advance
+                                // Round complete - apply best, advance
                                 set_phase_fn(self, self.diversity_auto_best_phase);
                                 set_gain_fn(self, self.diversity_auto_best_gain);
                                 log::info!("Smart round {}: phase={:.1}° gain={:.3} best={:.1}dBm",
@@ -1387,7 +1401,7 @@ impl SdrRemoteApp {
                                 log::info!("SA {}: -step wins ({:.1} vs {:.1}/{:.1}), step={:.2}",
                                     if is_phase { "phase" } else { "gain" }, minus, center, plus, step);
                             } else {
-                                // Center is best — keep position
+                                // Center is best - keep position
                                 if is_phase {
                                     set_phase(self, self.diversity_auto_best_phase);
                                 } else {
@@ -1405,18 +1419,18 @@ impl SdrRemoteApp {
                             if self.diversity_sa_step < min_step {
                                 // Switch to other param or next iteration
                                 if is_phase {
-                                    // Phase done → switch to gain SA (shrink range per iteration)
+                                    // Phase done -> switch to gain SA (shrink range per iteration)
                                     self.diversity_sa_param = 1;
                                     self.diversity_sa_step = 10.0 / (self.diversity_sa_iteration as f32 + 1.0);
                                 } else {
-                                    // Gain done → next iteration or finish
+                                    // Gain done -> next iteration or finish
                                     self.diversity_sa_iteration += 1;
                                     if self.diversity_sa_iteration < 3 {
                                         // Another phase+gain pass with current best as starting point
                                         self.diversity_sa_param = 0;
                                         self.diversity_sa_step = 45.0 / (self.diversity_sa_iteration as f32 + 1.0); // shrinking start
                                     } else {
-                                        // Done → go to measurement phase
+                                        // Done -> go to measurement phase
                                         self.diversity_auto_round = 999; // skip round processing
                                         self.diversity_auto_result = 1; // trigger final measurement
                                     }
@@ -1428,13 +1442,13 @@ impl SdrRemoteApp {
                     self.diversity_auto_last_set = Instant::now();
                 } else
                 if (self.diversity_auto_round >= rounds.len() || self.diversity_auto_round == 999) && self.diversity_auto_result == 1 {
-                    // Rounds done → turn diversity off to measure baseline
+                    // Rounds done -> turn diversity off to measure baseline
                     self.diversity_enabled = false;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::DiversityEnable, 0));
                     self.diversity_auto_result = 4; // measuring off
                     self.diversity_auto_last_set = Instant::now();
                 } else if self.diversity_auto_result == 4 {
-                    // Diversity OFF — read baseline S-meter
+                    // Diversity OFF - read baseline S-meter
                     self.diversity_auto_start_smeter = smeter_dbm;
                     log::info!("Auto-null: diversity OFF S-meter = {:.1} dBm (raw={})", smeter_dbm, self.smeter);
                     // Turn diversity back on
@@ -1443,10 +1457,10 @@ impl SdrRemoteApp {
                     self.diversity_auto_result = 5;
                     self.diversity_auto_last_set = Instant::now();
                 } else if self.diversity_auto_result == 5 {
-                    // Diversity ON — read final S-meter and compare
+                    // Diversity ON - read final S-meter and compare
                     log::info!("Auto-null: diversity ON S-meter = {:.1} dBm (raw={})", smeter_dbm, self.smeter);
                     let improvement = self.diversity_auto_start_smeter - smeter_dbm;
-                    log::info!("Auto-null: improvement = {:.1} dB (OFF {:.1} → ON {:.1})", improvement, self.diversity_auto_start_smeter, smeter_dbm);
+                    log::info!("Auto-null: improvement = {:.1} dB (OFF {:.1} -> ON {:.1})", improvement, self.diversity_auto_start_smeter, smeter_dbm);
                     self.diversity_auto_improvement_db = improvement;
                     self.diversity_auto_active = false;
                     self.diversity_auto_result = if improvement > 0.5 { 2 } else { 3 };
@@ -1463,7 +1477,7 @@ impl SdrRemoteApp {
                     }
 
                     if round.is_gain_sweep {
-                        // Gain sweep — in dB around best gain (slow) or linear (fast)
+                        // Gain sweep - in dB around best gain (slow) or linear (fast)
                         let gains: Vec<f32> = if self.diversity_auto_slow {
                             // dB sweep around current best gain
                             let center_db = 20.0 * self.diversity_auto_best_gain.max(0.01).log10();
@@ -1504,7 +1518,7 @@ impl SdrRemoteApp {
                             }
                             self.diversity_auto_step += 1;
                         } else {
-                            // Check edge — extend if needed (fast mode only)
+                            // Check edge - extend if needed (fast mode only)
                             if !self.diversity_auto_slow && self.diversity_auto_best_gain > gain_max * 0.9 && gain_max < 10.0 {
                                 self.diversity_gain_multi = (gain_max * 2.0).min(10.0);
                                 self.diversity_auto_step = 0;
@@ -1592,7 +1606,7 @@ impl SdrRemoteApp {
         // wizard" button. Right-to-left layout keeps the wizard button
         // glued to the right edge regardless of window width and never
         // pushes the address/password fields off-screen on narrow windows
-        // — PATCH-4 follow-up: the previous bottom-of-screen placement
+        // - PATCH-4 follow-up: the previous bottom-of-screen placement
         // disappeared off the visible viewport on short windows.
         ui.horizontal(|ui| {
             ui.label("Server:");
@@ -1628,11 +1642,11 @@ impl SdrRemoteApp {
         // PATCH-3: mDNS-discovered servers shown progressively as they
         // arrive. The browse runs in a background thread; the UI just
         // snapshots the latest list each frame. Empty list (no mDNS yet
-        // or no servers on this subnet) is the steady-state — the user
+        // or no servers on this subnet) is the steady-state - the user
         // can still type an IP above.
         //
         // Removal happens via mdns-sd's own `ServiceRemoved` event (TTL
-        // expiry or explicit goodbye) — we do NOT time-prune client-side
+        // expiry or explicit goodbye) - we do NOT time-prune client-side
         // because `ServiceResolved` only fires on first-resolve / change,
         // so a stable server would otherwise get pruned ~30s after the
         // initial scan even while it kept advertising. Refresh button
@@ -1654,7 +1668,7 @@ impl SdrRemoteApp {
                                 }
                             });
                     } else {
-                        ui.label(egui::RichText::new("Scanning local network…").size(11.0).color(egui::Color32::from_rgb(150, 150, 150)));
+                        ui.label(egui::RichText::new("Scanning local network...").size(11.0).color(egui::Color32::from_rgb(150, 150, 150)));
                     }
                     if ui.button("Refresh").clicked() {
                         // Re-arm the browse: drop the current daemon (its
@@ -1666,8 +1680,132 @@ impl SdrRemoteApp {
                 });
             }
         }
+        ui.add_space(6.0);
+        ui.collapsing("Relay connection", |ui| {
+            // Alle velden slaan meteen op bij wijziging (geen aparte "Apply"-knop meer).
+            let mut relay_changed = false;
+            relay_changed |= ui
+                .checkbox(
+                    &mut self.relay_enabled,
+                    "Connect via relay (for clients that cannot port-forward)",
+                )
+                .changed();
+            ui.horizontal(|ui| {
+                ui.label("Relay URL:");
+                relay_changed |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.relay_url)
+                            .desired_width(260.0)
+                            .hint_text("ws://relay.example.com:18080"),
+                    )
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Station name:");
+                relay_changed |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.relay_station)
+                            .desired_width(180.0)
+                            .hint_text("my-station"),
+                    )
+                    .changed();
+                ui.label("Token:");
+                relay_changed |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.relay_token)
+                            .desired_width(160.0)
+                            .password(true),
+                    )
+                    .changed();
+            });
+            if relay_changed {
+                super::config::save_relay_config(
+                    self.relay_enabled,
+                    &self.relay_url,
+                    &self.relay_station,
+                    &self.relay_token,
+                    self.relay_udp_enabled,
+                );
+            }
+            ui.horizontal(|ui| {
+                ui.label("Device name:");
+                if ui
+                    .add(egui::TextEdit::singleline(&mut self.relay_device_name).desired_width(160.0))
+                    .on_hover_text("Shown in the relay log/dashboard to identify this device. Applies on restart.")
+                    .changed()
+                {
+                    super::config::save_relay_device_name(&self.relay_device_name);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(&mut self.relay_udp_enabled, "Audio over UDP (low latency)")
+                    .on_hover_text(
+                        "Route audio + PTT over plain UDP (port 443) instead of the wss tunnel: \
+                         no retransmit, lower and steadier latency. Both this client and the \
+                         server must have it on. Applies on restart.",
+                    )
+                    .changed()
+                {
+                    super::config::save_relay_config(
+                        self.relay_enabled,
+                        &self.relay_url,
+                        &self.relay_station,
+                        &self.relay_token,
+                        self.relay_udp_enabled,
+                    );
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Status:").strong());
+                if self.relay_external {
+                    // Relay is deze sessie de actieve transport -> toon de live status.
+                    if let Some(handle) = self.relay_status.as_ref() {
+                        let status = handle.snapshot();
+                        let color = match status.phase {
+                            sdr_remote_relay::RelayPhase::Authenticated => Color32::from_rgb(50, 200, 50),
+                            sdr_remote_relay::RelayPhase::Connecting
+                            | sdr_remote_relay::RelayPhase::WaitingForPeer
+                            | sdr_remote_relay::RelayPhase::WaitingForConfig => Color32::from_rgb(200, 160, 40),
+                            sdr_remote_relay::RelayPhase::Error => Color32::from_rgb(220, 60, 60),
+                            sdr_remote_relay::RelayPhase::Disabled
+                            | sdr_remote_relay::RelayPhase::Disconnected => Color32::from_rgb(130, 130, 130),
+                        };
+                        // On Error, show the concrete reason inline (why the relay
+                        // refused: device/connection/data limit, block, bad key) rather
+                        // than just the word "Error"; keep the full text on hover too.
+                        let msg = status.message.clone();
+                        let shown = if matches!(status.phase, sdr_remote_relay::RelayPhase::Error)
+                            && !msg.is_empty()
+                        {
+                            msg.clone()
+                        } else {
+                            status.label()
+                        };
+                        ui.colored_label(color, shown).on_hover_text(msg);
+                    }
+                } else if self.relay_enabled {
+                    // Config staat op relay, maar deze sessie draait nog niet via de relay.
+                    ui.colored_label(
+                        Color32::from_rgb(200, 160, 40),
+                        "Saved - restart the client to connect via relay",
+                    );
+                } else {
+                    ui.colored_label(Color32::from_rgb(130, 130, 130), "Off (direct connection)");
+                }
+            });
+            ui.label(
+                egui::RichText::new(
+                    "The relay routes your whole connection (audio, control, PTT) so a client without \
+                     port-forwarding can reach the server. Turning this on/off takes effect after \
+                     restarting the client.",
+                )
+                .size(11.0)
+                .color(Color32::from_rgb(150, 150, 150)),
+            );
+        });
         // PATCH-1: read connect_status from logic-state and render via
-        // i18n helper. Single source of truth — same NL/EN text as Android
+        // i18n helper. Single source of truth - same NL/EN text as Android
         // bridge. The legacy `auth_rejected` / `totp_required` booleans are
         // still set for back-compat but new UI code uses connect_status.
         let connect_status = self.state_rx.borrow().connect_status.clone();
@@ -1682,13 +1820,13 @@ impl SdrRemoteApp {
         // button in BOTH AwaitingTotp AND Failed(WrongTotp) states. Without
         // that, a user who types a wrong TOTP code has no way to retry: the
         // TOTP input field disappears, and pressing the regular Connect
-        // button regresses the engine to "Connecting…" without a path back
+        // button regresses the engine to "Connecting..." without a path back
         // to AwaitingTotp.
         let in_wrong_totp = matches!(
             &connect_status,
             ConnectStatus::Failed(sdr_remote_logic::state::ConnectError::WrongTotp)
         );
-        // PATCH-1 smoke-test fix (2026-05-13): owner feedback — connect-status text
+        // PATCH-1 smoke-test fix (2026-05-13): operator feedback - connect-status text
         // was smaller than surrounding UI; should *stand out*. Headline now 18pt bold,
         // action 14pt (body default, not `.small()`).
         match &connect_status {
@@ -1751,7 +1889,57 @@ impl SdrRemoteApp {
 
         ui.separator();
 
-        // Audio device selection — refresh device list only when combo opened or first time
+        // UI theme: pick a preset (Classic/Dark/Slate) or Custom. Applies immediately and
+        // persists. Custom exposes colour pickers for the base slots; the per-element
+        // colours join the palette in later migration steps.
+        ui.horizontal(|ui| {
+            ui.label("Theme:");
+            let mut sel = self.theme_variant;
+            egui::ComboBox::from_id_salt("theme_select")
+                .selected_text(sel.label())
+                .show_ui(ui, |ui| {
+                    for v in theme::ThemeVariant::ALL {
+                        ui.selectable_value(&mut sel, v, v.label());
+                    }
+                });
+            if sel != self.theme_variant {
+                self.theme_variant = sel;
+                self.save_full_config();
+            }
+        });
+        if self.theme_variant == theme::ThemeVariant::Custom {
+            ui.horizontal(|ui| {
+                ui.label("Custom colours:");
+                let mut p = self.theme_custom;
+                let mut changed = false;
+                ui.label("Background");
+                changed |= ui.color_edit_button_srgba(&mut p.background).changed();
+                ui.label("Widgets");
+                changed |= ui.color_edit_button_srgba(&mut p.widget).changed();
+                ui.label("Text");
+                changed |= ui.color_edit_button_srgba(&mut p.text).changed();
+                ui.label("Slider knob");
+                changed |= ui.color_edit_button_srgba(&mut p.accent).changed();
+                if ui.button("Reset").clicked() {
+                    p = theme::Palette::slate();
+                    changed = true;
+                }
+                if changed {
+                    self.theme_custom = p; // live preview
+                    self.theme_custom_dirty = true;
+                }
+            });
+            // Persist once the user releases the picker (avoids per-frame disk I/O while
+            // dragging the hue/saturation sliders).
+            if self.theme_custom_dirty && ui.input(|i| i.pointer.any_released()) {
+                self.save_full_config();
+                self.theme_custom_dirty = false;
+            }
+        }
+
+        ui.separator();
+
+        // Audio device selection - refresh device list only when combo opened or first time
         // Device enumeration (cpal/WASAPI) blocks the UI thread for 50-200ms on Windows,
         // causing audio hiccups. Only refresh on first render or when user opens the combo.
         let needs_device_refresh = self.device_refresh_at.is_none();
@@ -1821,7 +2009,7 @@ impl SdrRemoteApp {
             }
         });
 
-        // Mic → TX Profile auto-switch mapping
+        // Mic -> TX Profile auto-switch mapping
         if !self.tx_profiles.is_empty() && !self.input_devices.is_empty() {
             ui.separator();
             ui.label("Mic -> TX Profile mapping:");
@@ -1854,13 +2042,67 @@ impl SdrRemoteApp {
         }
 
         ui.separator();
+        // PTT switch-on spike protection for a built-in speaker + mic in one chassis
+        // (tablets/laptops). Off by default so nobody pays extra latency.
+        let mut sp_changed = ui
+            .checkbox(
+                &mut self.spike_protection,
+                "Built-in speaker + mic (PTT spike protection)",
+            )
+            .on_hover_text(
+                "For tablets/laptops where the built-in speaker and mic share one chassis. \
+                 On PTT the speaker is muted instantly and the first few ms of mic are \
+                 discarded, so the switch-on spike is not transmitted. Leave off for a \
+                 headset or well-isolated audio (0 ms, no added latency).",
+            )
+            .changed();
+        if self.spike_protection {
+            ui.indent("spike_delays", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Mic gate-delay Thetis:");
+                    sp_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.mic_gate_delay_thetis_ms)
+                                .range(0..=800)
+                                .suffix(" ms")
+                                .speed(1.0),
+                        )
+                        .changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Mic gate-delay Yaesu:");
+                    sp_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.mic_gate_delay_yaesu_ms)
+                                .range(0..=800)
+                                .suffix(" ms")
+                                .speed(1.0),
+                        )
+                        .changed();
+                });
+                ui.label(
+                    egui::RichText::new("Thetis is usually clean at 0 ms; Yaesu around 100 ms.")
+                        .size(11.0)
+                        .italics(),
+                );
+            });
+        }
+        if sp_changed {
+            crate::ui::config::save_spike_protection(
+                self.spike_protection,
+                self.mic_gate_delay_thetis_ms,
+                self.mic_gate_delay_yaesu_ms,
+            );
+        }
 
-        // Audio levels — single mic bar, label changes with PTT state
+        ui.separator();
+
+        // Audio levels: hide Thetis-only streams in Yaesu-only setups.
         ui.label("Audio Levels:");
         ui.horizontal(|ui| {
-            let (mic_label, mic_level) = if self.yaesu_tx_active {
+            let (mic_label, mic_level) = if self.yaesu_tx_active || self.yaesu2_tx_active {
                 ("Yaesu Mic:", self.yaesu_mic_level)
-            } else if self.ptt {
+            } else if self.ptt && self.thetis_configured {
                 ("Thetis Mic:", self.capture_level)
             } else {
                 ("Mic:       ", self.capture_level)
@@ -1868,31 +2110,28 @@ impl SdrRemoteApp {
             ui.label(mic_label);
             level_bar(ui, mic_level);
         });
-        if self.binaural && self.playback_level_bin_r > 0.0 {
-            ui.horizontal(|ui| {
-                ui.label("RX1 L:     ");
-                level_bar(ui, self.playback_level);
-            });
-            ui.horizontal(|ui| {
-                ui.label("RX1 R:     ");
-                level_bar(ui, self.playback_level_bin_r);
-            });
-        } else {
-            ui.horizontal(|ui| {
-                ui.label("RX1:       ");
-                level_bar(ui, self.playback_level);
-            });
-        }
-        // Render the RX2 bar when either the local toggle is on OR audio
-        // is actually arriving. The OR-fallback turns the bar into a real
-        // data-flow indicator: any future regression in the server's
-        // per-client filter that lets CH2 through without the toggle
-        // would surface immediately instead of going unnoticed.
-        if self.rx2_enabled || self.playback_level_rx2 > 0.0 {
-            ui.horizontal(|ui| {
-                ui.label("RX2:       ");
-                level_bar(ui, self.playback_level_rx2);
-            });
+        if self.thetis_configured {
+            if self.binaural && self.playback_level_bin_r > 0.0 {
+                ui.horizontal(|ui| {
+                    ui.label("RX1 L:     ");
+                    level_bar(ui, self.playback_level);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("RX1 R:     ");
+                    level_bar(ui, self.playback_level_bin_r);
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("RX1:       ");
+                    level_bar(ui, self.playback_level);
+                });
+            }
+            if self.rx2_enabled || self.playback_level_rx2 > 0.0 {
+                ui.horizontal(|ui| {
+                    ui.label("RX2:       ");
+                    level_bar(ui, self.playback_level_rx2);
+                });
+            }
         }
         if self.yaesu_connected || self.yaesu_enabled {
             ui.horizontal(|ui| {
@@ -1900,30 +2139,32 @@ impl SdrRemoteApp {
                 level_bar(ui, self.playback_level_yaesu);
             });
         }
-        // Dual-radio slot 1 (FTX-1): eigen audio-niveau-bar, alleen tonen als
-        // radio 2 verbonden is. Label volgt de model-naamgeving.
-        if self.yaesu2_connected {
+        if self.yaesu2_connected || self.yaesu2_enabled {
             ui.horizontal(|ui| {
                 ui.label(format!("{} RX:", self.yaesu_panel_name(1)));
                 level_bar(ui, self.playback_level_yaesu2);
             });
         }
-        if self.vrx1_enabled || self.playback_level_vrx1 > 0.0 {
-            ui.horizontal(|ui| {
-                ui.label("VRX1:      ");
-                level_bar(ui, self.playback_level_vrx1);
-            });
-        }
-        if self.vrx2_enabled || self.playback_level_vrx2 > 0.0 {
-            ui.horizontal(|ui| {
-                ui.label("VRX2:      ");
-                level_bar(ui, self.playback_level_vrx2);
-            });
+        if self.thetis_configured {
+            if self.vrx1_enabled || self.playback_level_vrx1 > 0.0 {
+                ui.horizontal(|ui| {
+                    ui.label("VRX1:      ");
+                    level_bar(ui, self.playback_level_vrx1);
+                });
+            }
+            if self.vrx2_enabled || self.playback_level_vrx2 > 0.0 {
+                ui.horizontal(|ui| {
+                    ui.label("VRX2:      ");
+                    level_bar(ui, self.playback_level_vrx2);
+                });
+            }
         }
 
         ui.separator();
 
         // Audio recording
+        let rec_yaesu_label = self.yaesu_panel_name(0);
+        let rec_yaesu2_label = self.yaesu_panel_name(1);
         ui.horizontal(|ui| {
             ui.label("Record:");
             if self.recording {
@@ -1935,15 +2176,40 @@ impl SdrRemoteApp {
                     self.recording = false;
                 }
             } else {
-                ui.checkbox(&mut self.rec_rx1, "RX1");
-                if self.rx2_enabled {
-                    ui.checkbox(&mut self.rec_rx2, "RX2");
+                if self.thetis_configured {
+                    ui.checkbox(&mut self.rec_rx1, "RX1");
+                    if self.rx2_enabled {
+                        ui.checkbox(&mut self.rec_rx2, "RX2");
+                    } else {
+                        self.rec_rx2 = false;
+                    }
+                } else {
+                    self.rec_rx1 = false;
+                    self.rec_rx2 = false;
                 }
                 if self.yaesu_connected || self.yaesu_enabled {
-                    ui.checkbox(&mut self.rec_yaesu, "Yaesu");
+                    ui.checkbox(&mut self.rec_yaesu, rec_yaesu_label.as_str());
+                } else {
+                    self.rec_yaesu = false;
                 }
-                let any = self.rec_rx1 || self.rec_rx2 || self.rec_yaesu;
-                if ui.add_enabled(any, egui::Button::new("⏺ Rec")).clicked() {
+                if self.yaesu2_connected || self.yaesu2_enabled {
+                    ui.checkbox(&mut self.rec_yaesu2, rec_yaesu2_label.as_str());
+                } else {
+                    self.rec_yaesu2 = false;
+                }
+                if self.thetis_configured && (self.vrx1_enabled || self.playback_level_vrx1 > 0.0) {
+                    ui.checkbox(&mut self.rec_vrx1, "VRX1");
+                } else {
+                    self.rec_vrx1 = false;
+                }
+                if self.thetis_configured && (self.vrx2_enabled || self.playback_level_vrx2 > 0.0) {
+                    ui.checkbox(&mut self.rec_vrx2, "VRX2");
+                } else {
+                    self.rec_vrx2 = false;
+                }
+                let any = self.rec_rx1 || self.rec_rx2 || self.rec_yaesu
+                    || self.rec_yaesu2 || self.rec_vrx1 || self.rec_vrx2;
+                if ui.add_enabled(any, egui::Button::new("Rec")).clicked() {
                     let path = std::env::current_exe()
                         .ok()
                         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -1952,6 +2218,9 @@ impl SdrRemoteApp {
                         rx1: self.rec_rx1,
                         rx2: self.rec_rx2,
                         yaesu: self.rec_yaesu,
+                        yaesu2: self.rec_yaesu2,
+                        vrx1: self.rec_vrx1,
+                        vrx2: self.rec_vrx2,
                         path: path.to_string_lossy().to_string(),
                     });
                     self.recording = true;
@@ -1985,25 +2254,7 @@ impl SdrRemoteApp {
                 ui.label(format!("{} ms", self.rtt_ms));
                 ui.end_row();
 
-                ui.label("Jitter:");
-                ui.label(format!("{:.1} ms", self.jitter_ms));
-                ui.end_row();
-
-                ui.label("Buffer:");
-                ui.label(format!("{} frames", self.buffer_depth));
-                ui.end_row();
-
-                ui.label("Loss:");
-                ui.label(format!("{}%", self.loss_percent));
-                ui.end_row();
-
-                ui.label("RX packets:");
-                ui.label(format!("{}", self.rx_packets));
-                ui.end_row();
-
-                // Down (RX) — klikbaar voor per-PacketType breakdown van
-                // de laatste 5 s. Gebruik tekst-prefix i.p.v. Unicode-pijl
-                // (egui's default font kan ↓/↑ niet renderen → tofu-glyph).
+                // Down (RX) is clickable for per-PacketType breakdown of the last 5 s.
                 if super::helpers::chevron_label(ui, self.bw_breakdown_expanded, "Down (RX):").clicked() {
                     self.bw_breakdown_expanded = !self.bw_breakdown_expanded;
                 }
@@ -2015,7 +2266,94 @@ impl SdrRemoteApp {
                 ui.end_row();
             });
 
-        // Per-stream breakdown — alleen tonen wanneer de gebruiker
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Audio streams:");
+            // Fase 3c: transport indicator (relay only). Normal = low-latency UDP; when the
+            // network blocks/degrades UDP the audio auto-falls back to the reliable (slower)
+            // wss/TCP path. Honest wording: a brief gap can occur on a sudden total UDP loss.
+            if let Some(handle) = self.relay_status.as_ref() {
+                let st = handle.snapshot();
+                if st.connected {
+                    if st.transport_fallback {
+                        ui.colored_label(
+                            theme::TL_AMBER_TEXT,
+                            "- Transport: TCP fallback (UDP unavailable, higher latency)",
+                        );
+                    } else {
+                        ui.weak("- Transport: UDP");
+                    }
+                }
+            }
+        });
+        egui::Grid::new("audio_stream_stats_grid")
+            .num_columns(5)
+            .spacing([14.0, 3.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Stream").strong().size(11.0));
+                ui.label(egui::RichText::new("Jitter").strong().size(11.0));
+                ui.label(egui::RichText::new("Buffer").strong().size(11.0));
+                ui.label(egui::RichText::new("Packets").strong().size(11.0));
+                ui.label(egui::RichText::new("Loss").strong().size(11.0));
+                ui.end_row();
+
+                let mut shown = false;
+                if self.thetis_configured || self.rx_packets > 0 {
+                    shown = true;
+                    ui.label("Thetis RX");
+                    ui.label(format!("{:.1} ms", self.jitter_ms));
+                    ui.label(format!("{} frames", self.buffer_depth));
+                    ui.label(format!("{}", self.rx_packets));
+                    ui.label(format!("{}%", self.loss_percent));
+                    ui.end_row();
+                }
+                if self.yaesu_connected || self.yaesu_enabled || self.yaesu_audio_packets > 0 {
+                    shown = true;
+                    ui.label("Yaesu 1");
+                    ui.label(format!("{:.1} ms", self.yaesu_jitter_ms));
+                    ui.label(format!("{} frames", self.yaesu_buffer_depth));
+                    ui.label(format!("{}", self.yaesu_audio_packets));
+                    ui.label("-");
+                    ui.end_row();
+                }
+                if self.yaesu2_connected || self.yaesu2_enabled || self.yaesu2_audio_packets > 0 {
+                    shown = true;
+                    ui.label("Yaesu 2");
+                    ui.label(format!("{:.1} ms", self.yaesu2_jitter_ms));
+                    ui.label(format!("{} frames", self.yaesu2_buffer_depth));
+                    ui.label(format!("{}", self.yaesu2_audio_packets));
+                    ui.label("-");
+                    ui.end_row();
+                }
+                if self.thetis_configured && (self.vrx1_enabled || self.vrx1_audio_packets > 0) {
+                    shown = true;
+                    ui.label("VRX1");
+                    ui.label(format!("{:.1} ms", self.vrx1_jitter_ms));
+                    ui.label(format!("{} frames", self.vrx1_buffer_depth));
+                    ui.label(format!("{}", self.vrx1_audio_packets));
+                    ui.label("-");
+                    ui.end_row();
+                }
+                if self.thetis_configured && (self.vrx2_enabled || self.vrx2_audio_packets > 0) {
+                    shown = true;
+                    ui.label("VRX2");
+                    ui.label(format!("{:.1} ms", self.vrx2_jitter_ms));
+                    ui.label(format!("{} frames", self.vrx2_buffer_depth));
+                    ui.label(format!("{}", self.vrx2_audio_packets));
+                    ui.label("-");
+                    ui.end_row();
+                }
+                if !shown {
+                    ui.label(egui::RichText::new("No audio stream yet").color(egui::Color32::GRAY));
+                    ui.label("");
+                    ui.label("");
+                    ui.label("");
+                    ui.label("");
+                    ui.end_row();
+                }
+            });
+
+        // Per-stream breakdown - alleen tonen wanneer de gebruiker
         // op "Down" heeft geklikt. Lijst is leeg in de eerste ~5 s
         // na connect (engine vult 'm bij elke 5 s window-rollover).
         if self.bw_breakdown_expanded {
@@ -2025,7 +2363,7 @@ impl SdrRemoteApp {
                 .spacing([20.0, 2.0])
                 .show(ui, |ui| {
                     if self.bw_breakdown.is_empty() {
-                        ui.label(egui::RichText::new("  (verzamelen ~5 s ...)").size(11.0).color(egui::Color32::GRAY));
+                        ui.label(egui::RichText::new("  (collecting ~5 s ...)").size(11.0).color(egui::Color32::GRAY));
                         ui.label("");
                         ui.end_row();
                     } else {
@@ -2038,49 +2376,62 @@ impl SdrRemoteApp {
                 });
         }
 
-        // Data-saving toggle: zet de DX-cluster spot-stream UIT op metered links.
-        // Bespaart ~6-10 Kbit/s in steady-state. Default ON.
-        ui.add_space(4.0);
-        let mut dx_spots = self.dx_spots_enabled;
-        if ui.checkbox(&mut dx_spots, "DX spots ontvangen").changed() {
-            self.dx_spots_enabled = dx_spots;
-            let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetDxSpotsEnabled(dx_spots));
-        }
-
-        // Wideband Thetis audio opt-in: stuurt RX1/RX2/BinR in 16 kHz Opus
-        // i.p.v. 8 kHz default. Default UIT (verdubbelt bandbreedte per
-        // kanaal). Aanzetten voor FM/AM/broadcast-luisteren via ANAN.
-        let mut wb = self.thetis_wideband_audio;
-        if ui.checkbox(&mut wb, "Wideband Thetis audio (FM/AM helderder, ~2× data)").changed() {
-            self.thetis_wideband_audio = wb;
-            let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetThetisWidebandAudio(wb));
-            self.save_full_config();
-        }
-
-        // VRX audio-rate: NB / WB / Auto (PATCH-vrx-wide-sam-ux). Auto kiest
-        // per VRX 16 kHz zodra de filter-bandbreedte ≥ 4 kHz is. Geldt voor
-        // VRX1 én VRX2; losgekoppeld van de Thetis-wideband-toggle hierboven.
-        ui.horizontal(|ui| {
-            ui.label("VRX audio rate:");
-            let labels = ["NB (8k)", "WB (16k)", "Auto"];
-            let mut sel = (self.vrx_rate_mode as usize).min(2);
-            egui::ComboBox::from_id_source("vrx_audio_rate")
-                .selected_text(labels[sel])
-                .show_ui(ui, |ui| {
-                    for (i, lbl) in labels.iter().enumerate() {
-                        ui.selectable_value(&mut sel, i, *lbl);
-                    }
-                });
-            if sel as u8 != self.vrx_rate_mode {
-                self.vrx_rate_mode = sel as u8;
-                let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetVrxRateMode(self.vrx_rate_mode));
+        if self.thetis_configured {
+            // Data-saving toggle: disables the DX-cluster spot stream on metered links.
+            ui.add_space(4.0);
+            let mut dx_spots = self.dx_spots_enabled;
+            if ui.checkbox(&mut dx_spots, "Receive DX spots").changed() {
+                self.dx_spots_enabled = dx_spots;
+                let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetDxSpotsEnabled(dx_spots));
             }
-        }).response.on_hover_text("VRX audio sample rate. Auto: 16 kHz when the VRX filter is ≥4 kHz wide, else 8 kHz — per VRX.");
 
-        // TCI Status
-        ui.separator();
-        ui.label("TCI Status:");
-        egui::Grid::new("tci_grid")
+            // Wideband Thetis audio opt-in: sends RX1/RX2/BinR in 16 kHz Opus
+            // instead of the default 8 kHz. Default OFF (doubles bandwidth per
+            // channel). Useful for FM/AM/broadcast listening via ANAN.
+            let mut wb = self.thetis_wideband_audio;
+            if ui.checkbox(&mut wb, "Wideband Thetis audio (FM/AM clearer, ~2x data)").changed() {
+                self.thetis_wideband_audio = wb;
+                let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetThetisWidebandAudio(wb));
+                self.save_full_config();
+            }
+
+            // VRX audio-rate: NB / WB / Auto, independent per VRX.
+            ui.horizontal(|ui| {
+                let labels = ["NB (8k)", "WB (16k)", "Auto"];
+                ui.label("VRX1 rate:");
+                let mut sel1 = (self.vrx_rate_mode as usize).min(2);
+                egui::ComboBox::from_id_source("vrx1_audio_rate")
+                    .selected_text(labels[sel1])
+                    .show_ui(ui, |ui| {
+                        for (i, lbl) in labels.iter().enumerate() {
+                            ui.selectable_value(&mut sel1, i, *lbl);
+                        }
+                    });
+                if sel1 as u8 != self.vrx_rate_mode {
+                    self.vrx_rate_mode = sel1 as u8;
+                    let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetVrxRateMode(self.vrx_rate_mode));
+                }
+                ui.label("VRX2 rate:");
+                let mut sel2 = (self.vrx_rate_mode2 as usize).min(2);
+                egui::ComboBox::from_id_source("vrx2_audio_rate")
+                    .selected_text(labels[sel2])
+                    .show_ui(ui, |ui| {
+                        for (i, lbl) in labels.iter().enumerate() {
+                            ui.selectable_value(&mut sel2, i, *lbl);
+                        }
+                    });
+                if sel2 as u8 != self.vrx_rate_mode2 {
+                    self.vrx_rate_mode2 = sel2 as u8;
+                    let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetVrxRateMode2(self.vrx_rate_mode2));
+                }
+            }).response.on_hover_text("Per-VRX audio sample rate. Auto: 16 kHz when that VRX's filter is >=4 kHz wide, else 8 kHz. Independent per client.");
+        }
+
+        if self.thetis_configured {
+            // TCI Status
+            ui.separator();
+            ui.label("TCI Status:");
+            egui::Grid::new("tci_grid")
             .num_columns(2)
             .spacing([20.0, 4.0])
             .show(ui, |ui| {
@@ -2105,6 +2456,7 @@ impl SdrRemoteApp {
                 ui.label(if self.vfo_sync { "ON" } else { "OFF" });
                 ui.end_row();
             });
+        }
 
         // Remote reboot / shutdown
         ui.separator();
@@ -2157,6 +2509,8 @@ impl SdrRemoteApp {
                                 // Auto-detect: if action is encoder-type, default to Encoder
                                 match self.midi_learn_action {
                                     MidiAction::VfoATune | MidiAction::VfoBTune
+                                    | MidiAction::Vrx1Tune | MidiAction::Vrx2Tune
+                                    | MidiAction::Radio1Tune | MidiAction::Radio2Tune
                                     | MidiAction::NrLevel => crate::midi::ControlType::Encoder,
                                     MidiAction::MasterVolume | MidiAction::VfoAVolume
                                     | MidiAction::VfoBVolume | MidiAction::TxGain
@@ -2165,7 +2519,9 @@ impl SdrRemoteApp {
                                     | MidiAction::TuneDrive | MidiAction::MonVolume
                                     | MidiAction::RxBalance | MidiAction::RitOffset
                                     | MidiAction::XitOffset | MidiAction::YaesuVolume
-                                    | MidiAction::YaesuRfGain | MidiAction::YaesuMicGain
+                                    | MidiAction::Radio2Volume | MidiAction::Vrx1Volume
+                                    | MidiAction::Vrx2Volume | MidiAction::YaesuRfGain
+                                    | MidiAction::YaesuMicGain
                                     | MidiAction::SpectrumZoom | MidiAction::SpectrumPan
                                     | MidiAction::RefLevel | MidiAction::WaterfallContrast
                                     | MidiAction::Rx2SpectrumZoom | MidiAction::Rx2SpectrumPan
@@ -2207,6 +2563,24 @@ impl SdrRemoteApp {
                         }
                         MidiAction::BandDown if pressed => {
                             self.midi_band_step(-1);
+                        }
+                        MidiAction::Rx2BandUp if pressed => {
+                            self.midi_band_step_for(Vfo::B, 1);
+                        }
+                        MidiAction::Rx2BandDown if pressed => {
+                            self.midi_band_step_for(Vfo::B, -1);
+                        }
+                        MidiAction::Radio1BandUp if pressed => {
+                            let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 5));
+                        }
+                        MidiAction::Radio1BandDown if pressed => {
+                            let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 6));
+                        }
+                        MidiAction::Radio2BandUp if pressed => {
+                            let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 5));
+                        }
+                        MidiAction::Radio2BandDown if pressed => {
+                            let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 6));
                         }
                         MidiAction::NrToggle if pressed => {
                             let new_nr = if self.nr_level > 0 { 0 } else { 2 };
@@ -2258,7 +2632,7 @@ impl SdrRemoteApp {
                             }
                         }
                         MidiAction::NrLevel if pressed => {
-                            // Cycle NR level: 0 → 1 → 2 → 3 → 4 → 0
+                            // Cycle NR level: 0 -> 1 -> 2 -> 3 -> 4 -> 0
                             let next = (self.nr_level + 1) % 5;
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::NoiseReduction, next as u16));
                         }
@@ -2288,7 +2662,7 @@ impl SdrRemoteApp {
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::SqlEnable, if self.sql_enable { 0 } else { 1 }));
                         }
                         MidiAction::TuneToggle if pressed => {
-                            // Toggle tune — send 1 to activate, server handles state
+                            // Toggle tune - send 1 to activate, server handles state
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::ThetisTune, 1));
                         }
                         MidiAction::MuteAll if pressed => {
@@ -2309,6 +2683,18 @@ impl SdrRemoteApp {
                             } else {
                                 let _ = self.cmd_tx.send(Command::SetYaesuPtt(pressed));
                                 self.midi.send_led(MidiAction::YaesuPtt, pressed);
+                            }
+                        }
+                        MidiAction::Radio2Ptt => {
+                            if self.midi_ptt_toggle_mode {
+                                if pressed {
+                                    let new_tx = !self.yaesu2_tx_active;
+                                    let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(new_tx));
+                                    self.midi.send_led(MidiAction::Radio2Ptt, new_tx);
+                                }
+                            } else {
+                                let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(pressed));
+                                self.midi.send_led(MidiAction::Radio2Ptt, pressed);
                             }
                         }
                         _ => {}
@@ -2410,7 +2796,7 @@ impl SdrRemoteApp {
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::RxBalance, bal as u16));
                         }
                         MidiAction::RitOffset => {
-                            // Slider: 0-127 → ±1270 Hz in 20 Hz steps (center=0)
+                            // Slider: 0-127 -> ±1270 Hz in 20 Hz steps (center=0)
                             let hz = ((value as i16 - 64) * 20).clamp(-9999, 9999);
                             self.rit_offset = hz;
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::RitOffset, hz as u16));
@@ -2421,9 +2807,20 @@ impl SdrRemoteApp {
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::XitOffset, hz as u16));
                         }
                         MidiAction::YaesuVolume => {
-                            // Log scale: 0.001..1.0
-                            self.yaesu_volume = (0.001_f32 * (1000.0_f32).powf(frac)).max(0.001);
+                            self.yaesu_volume = Self::midi_log_volume(frac);
                             let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
+                        }
+                        MidiAction::Radio2Volume => {
+                            self.yaesu2_volume = Self::midi_log_volume(frac);
+                            let _ = self.cmd_tx.send(Command::SetYaesu2Volume(self.yaesu2_volume));
+                        }
+                        MidiAction::Vrx1Volume => {
+                            self.vrx1_volume = Self::midi_log_volume(frac);
+                            let _ = self.cmd_tx.send(Command::SetVrxVolume(self.vrx1_volume));
+                        }
+                        MidiAction::Vrx2Volume => {
+                            self.vrx2_volume = Self::midi_log_volume(frac);
+                            let _ = self.cmd_tx.send(Command::SetVrx2Volume(self.vrx2_volume));
                         }
                         MidiAction::YaesuRfGain => {
                             self.yaesu_rf_gain = (frac * 255.0).round() as u16;
@@ -2464,6 +2861,22 @@ impl SdrRemoteApp {
                             let new_freq = (self.rx2_frequency_hz as i64 + clamped as i64 * step as i64).max(0) as u64;
                             let _ = self.cmd_tx.send(Command::SetFrequencyRx2(new_freq));
                             self.set_pending_freq_b(new_freq);
+                        }
+                        MidiAction::Vrx1Tune => {
+                            self.midi_vrx_tune(0, delta, step);
+                        }
+                        MidiAction::Vrx2Tune => {
+                            self.midi_vrx_tune(1, delta, step);
+                        }
+                        MidiAction::Radio1Tune => {
+                            let new_freq = (self.yaesu_freq_a as i64 + delta as i64 * step as i64).max(0) as u64;
+                            let _ = self.cmd_tx.send(Command::SetYaesuFreq(new_freq));
+                            self.set_pending_yaesu_freq(0, new_freq);
+                        }
+                        MidiAction::Radio2Tune => {
+                            let new_freq = (self.yaesu2_freq_a as i64 + delta as i64 * step as i64).max(0) as u64;
+                            let _ = self.cmd_tx.send(Command::SetYaesu2Freq(new_freq));
+                            self.set_pending_yaesu_freq(1, new_freq);
                         }
                         MidiAction::SpectrumZoom | MidiAction::Rx2SpectrumZoom => {
                             let factor = 1.1_f32.powi(delta as i32);
@@ -2526,24 +2939,150 @@ impl SdrRemoteApp {
         }
     }
 
+    fn midi_log_volume(frac: f32) -> f32 {
+        (0.001_f32 * (1000.0_f32).powf(frac)).max(0.001)
+    }
+
+    fn midi_vrx_tune(&mut self, vrx_id: u8, delta: i8, step_hz: u64) {
+        let (center, span, current, source) = if vrx_id == 0 {
+            (
+                self.full_spectrum_center_hz,
+                self.full_spectrum_span_hz,
+                self.vrx1_freq_hz,
+                self.frequency_hz,
+            )
+        } else {
+            (
+                self.rx2_full_spectrum_center_hz,
+                self.rx2_full_spectrum_span_hz,
+                self.vrx2_freq_hz,
+                self.rx2_frequency_hz,
+            )
+        };
+        let center = if center > 0 { center as u64 } else { source };
+        let span = if span > 0 { span as u64 } else { 384_000 };
+        let min_hz = center.saturating_sub(span / 2);
+        let max_hz = center + span / 2;
+        let base = if current > 0 { current } else { source }.clamp(min_hz, max_hz);
+        let next = (base as i64 + delta as i64 * step_hz as i64)
+            .clamp(min_hz as i64, max_hz as i64) as u64;
+        if vrx_id == 0 {
+            self.vrx1_freq_hz = next;
+            let _ = self.cmd_tx.send(Command::SetVrxFrequency(next));
+        } else {
+            self.vrx2_freq_hz = next;
+            let _ = self.cmd_tx.send(Command::SetVrx2Frequency(next));
+        }
+    }
+
     pub(super) fn midi_band_step(&mut self, direction: i32) {
+        self.midi_band_step_for(Vfo::A, direction);
+    }
+
+    pub(super) fn midi_band_step_for(&mut self, vfo: Vfo, direction: i32) {
         const BANDS: &[(&str, u64)] = &[
             ("160m", 1_900_000), ("80m", 3_700_000), ("60m", 5_351_000),
             ("40m", 7_100_000), ("30m", 10_120_000), ("20m", 14_200_000),
             ("17m", 18_100_000), ("15m", 21_200_000), ("12m", 24_930_000),
             ("10m", 28_500_000), ("6m", 50_200_000),
         ];
-        let current = band_label(self.frequency_hz);
+        let freq_hz = match vfo {
+            Vfo::A => self.frequency_hz,
+            Vfo::B => self.rx2_frequency_hz,
+        };
+        let current = band_label(freq_hz);
         let idx = BANDS.iter().position(|&(name, _)| name == current);
         let new_idx = match idx {
             Some(i) => (i as i32 + direction).rem_euclid(BANDS.len() as i32) as usize,
             None => 0,
         };
-        self.save_current_band(Vfo::A);
-        self.restore_band(Vfo::A, BANDS[new_idx].0, BANDS[new_idx].1);
+        self.save_current_band(vfo);
+        self.restore_band(vfo, BANDS[new_idx].0, BANDS[new_idx].1);
         self.save_full_config();
     }
 
+    fn render_midi_action_section(ui: &mut egui::Ui, title: &str) {
+        ui.add_space(3.0);
+        ui.label(RichText::new(title).strong().color(Color32::from_rgb(170, 205, 240)));
+    }
+
+    fn render_midi_action_pair(
+        ui: &mut egui::Ui,
+        selected: &mut crate::midi::MidiAction,
+        left: crate::midi::MidiAction,
+        right: crate::midi::MidiAction,
+    ) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(selected, left, left.label());
+            ui.selectable_value(selected, right, right.label());
+        });
+    }
+
+    fn render_midi_action_single(
+        ui: &mut egui::Ui,
+        selected: &mut crate::midi::MidiAction,
+        action: crate::midi::MidiAction,
+    ) {
+        ui.selectable_value(selected, action, action.label());
+    }
+
+    fn render_midi_action_picker(ui: &mut egui::Ui, selected: &mut crate::midi::MidiAction) {
+        use crate::midi::MidiAction;
+
+        Self::render_midi_action_section(ui, "RX");
+        Self::render_midi_action_pair(ui, selected, MidiAction::VfoATune, MidiAction::VfoBTune);
+        Self::render_midi_action_pair(ui, selected, MidiAction::VfoAVolume, MidiAction::VfoBVolume);
+        Self::render_midi_action_pair(ui, selected, MidiAction::BandUp, MidiAction::Rx2BandUp);
+        Self::render_midi_action_pair(ui, selected, MidiAction::BandDown, MidiAction::Rx2BandDown);
+        Self::render_midi_action_single(ui, selected, MidiAction::Ptt);
+
+        ui.separator();
+        Self::render_midi_action_section(ui, "VRX");
+        Self::render_midi_action_pair(ui, selected, MidiAction::Vrx1Tune, MidiAction::Vrx2Tune);
+        Self::render_midi_action_pair(ui, selected, MidiAction::Vrx1Volume, MidiAction::Vrx2Volume);
+
+        ui.separator();
+        Self::render_midi_action_section(ui, "Radio");
+        Self::render_midi_action_pair(ui, selected, MidiAction::YaesuPtt, MidiAction::Radio2Ptt);
+        Self::render_midi_action_pair(ui, selected, MidiAction::Radio1Tune, MidiAction::Radio2Tune);
+        Self::render_midi_action_pair(ui, selected, MidiAction::YaesuVolume, MidiAction::Radio2Volume);
+        Self::render_midi_action_pair(ui, selected, MidiAction::Radio1BandUp, MidiAction::Radio2BandUp);
+        Self::render_midi_action_pair(ui, selected, MidiAction::Radio1BandDown, MidiAction::Radio2BandDown);
+
+        ui.separator();
+        Self::render_midi_action_section(ui, "Other / advanced");
+        const PRIMARY_ACTIONS: &[MidiAction] = &[
+            MidiAction::Ptt,
+            MidiAction::VfoATune,
+            MidiAction::VfoBTune,
+            MidiAction::VfoAVolume,
+            MidiAction::VfoBVolume,
+            MidiAction::BandUp,
+            MidiAction::BandDown,
+            MidiAction::Rx2BandUp,
+            MidiAction::Rx2BandDown,
+            MidiAction::Vrx1Tune,
+            MidiAction::Vrx2Tune,
+            MidiAction::Vrx1Volume,
+            MidiAction::Vrx2Volume,
+            MidiAction::YaesuPtt,
+            MidiAction::Radio2Ptt,
+            MidiAction::Radio1Tune,
+            MidiAction::Radio2Tune,
+            MidiAction::YaesuVolume,
+            MidiAction::Radio2Volume,
+            MidiAction::Radio1BandUp,
+            MidiAction::Radio1BandDown,
+            MidiAction::Radio2BandUp,
+            MidiAction::Radio2BandDown,
+        ];
+        for action in crate::midi::MidiAction::ALL {
+            if PRIMARY_ACTIONS.contains(action) {
+                continue;
+            }
+            Self::render_midi_action_single(ui, selected, *action);
+        }
+    }
     pub(super) fn render_midi_screen(&mut self, ui: &mut egui::Ui) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 
@@ -2683,14 +3222,9 @@ impl SdrRemoteApp {
                 ui.label("Add:");
                 egui::ComboBox::from_id_salt("midi_learn_action")
                     .selected_text(self.midi_learn_action.label())
+                    .width(280.0)
                     .show_ui(ui, |ui| {
-                        for action in crate::midi::MidiAction::ALL {
-                            ui.selectable_value(
-                                &mut self.midi_learn_action,
-                                *action,
-                                action.label(),
-                            );
-                        }
+                        Self::render_midi_action_picker(ui, &mut self.midi_learn_action);
                     });
                 if ui.button("Learn").clicked() && self.midi.is_connected() {
                     self.midi_learn_for = Some(mappings.len());

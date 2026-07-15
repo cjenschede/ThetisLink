@@ -4,7 +4,7 @@
 //!
 //! Publishes `_thetislink._udp.local.` so desktop and Android clients on
 //! the same LAN can find the server without the user having to type an
-//! IP address. Failure is silent — manual IP entry remains the always-on
+//! IP address. Failure is silent - manual IP entry remains the always-on
 //! fallback for cross-subnet / VPN / internet scenarios.
 //!
 //! TXT records:
@@ -46,7 +46,7 @@ impl MdnsAdvertiser {
         let mut props: HashMap<String, String> = HashMap::new();
         props.insert("version".to_string(), sdr_remote_core::VERSION.to_string());
         if let Some(name) = friendly_name {
-            // Only publish the `name` key when actually configured — avoids
+            // Only publish the `name` key when actually configured - avoids
             // a misleading TXT key that just duplicates the instance name.
             props.insert("name".to_string(), name.to_string());
         }
@@ -77,7 +77,7 @@ impl MdnsAdvertiser {
 
     /// Explicit graceful shutdown: deregister + stop daemon.
     /// Drop will also call this, but explicit shutdown gives the caller a
-    /// chance to log unregister failures (warnings only — best-effort).
+    /// chance to log unregister failures (warnings only - best-effort).
     pub fn shutdown(self) {
         let fullname = self.fullname.clone();
         match self.daemon.unregister(&fullname) {
@@ -96,7 +96,7 @@ impl MdnsAdvertiser {
 
 fn detect_hostname() -> String {
     // Windows sets COMPUTERNAME; POSIX shells set HOSTNAME; fall back to
-    // a stable generic. No external syscall — sufficient for an mDNS label.
+    // a stable generic. No external syscall - sufficient for an mDNS label.
     std::env::var("COMPUTERNAME")
         .ok()
         .or_else(|| std::env::var("HOSTNAME").ok())

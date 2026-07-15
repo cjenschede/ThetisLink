@@ -7,7 +7,7 @@ mod meters;
 mod window_placement;
 mod spectrum;
 pub(crate) mod theme;
-mod config;
+pub(crate) mod config;
 mod devices;
 mod screens;
 mod wizard;
@@ -20,10 +20,10 @@ pub(crate) use helpers::*;
 pub(crate) use meters::*;
 pub(crate) use spectrum::*;
 
-/// Convert RX filter edges (signed Hz) to the TX modulation filter band — a
+/// Convert RX filter edges (signed Hz) to the TX modulation filter band - a
 /// POSITIVE audio passband (Thetis applies the sideband per mode).
-/// - one-sided (USB both ≥0, LSB both ≤0) → min..max of magnitudes;
-/// - straddling 0 (AM/SAM/FM/DSB stored as −W..+W) → 0..max(|lo|,|hi|).
+/// - one-sided (USB both ≥0, LSB both ≤0) -> min..max of magnitudes;
+/// - straddling 0 (AM/SAM/FM/DSB stored as −W..+W) -> 0..max(|lo|,|hi|).
 /// Without the straddle case a symmetric AM band collapses to W..W (zero-wide).
 pub(crate) fn rx_to_tx_band(low_hz: i32, high_hz: i32) -> (i32, i32) {
     if low_hz < 0 && high_hz > 0 {
@@ -32,7 +32,28 @@ pub(crate) fn rx_to_tx_band(low_hz: i32, high_hz: i32) -> (i32, i32) {
         (low_hz.abs().min(high_hz.abs()), low_hz.abs().max(high_hz.abs()))
     }
 }
+
+pub(super) fn yaesu_mic_gain_to_display(gain: f32) -> f32 {
+    (gain / 0.4).clamp(0.05, 1.0)
+}
+
+pub(super) fn yaesu_mic_gain_from_display(display: f32) -> f32 {
+    (display * 0.4).clamp(0.02, 0.4)
+}
 pub(crate) use config::{load_window_size, load_window_pos, save_config, load_config, NUM_MEMORIES};
+
+/// Startup check for the MAIN window's saved position: true when a usable part would land
+/// on a currently-connected monitor. Lets `main.rs` drop `with_position()` for a position
+/// left on a since-disconnected/rearranged monitor, so the main window can never open
+/// off-screen (self-heal). Mirrors the per-pop-out check, but uses the system DPI because
+/// no egui context exists yet at startup. On non-Windows / query failure it returns true.
+pub(crate) fn main_window_pos_visible(pos: [f32; 2], size: [f32; 2]) -> bool {
+    window_placement::saved_window_is_visible(
+        egui::pos2(pos[0], pos[1]),
+        egui::vec2(size[0], size[1]),
+        window_placement::system_ppp(),
+    )
+}
 
 use std::time::Instant;
 
@@ -154,7 +175,7 @@ impl WaterfallRingBuffer {
     }
 }
 
-/// egui application — communicates with engine via watch/mpsc channels
+/// egui application - communicates with engine via watch/mpsc channels
 pub struct SdrRemoteApp {
     state_rx: watch::Receiver<RadioState>,
     cmd_tx: mpsc::UnboundedSender<Command>,
@@ -171,12 +192,19 @@ pub struct SdrRemoteApp {
     ptt_toggle_mode: bool,       // false=push-to-talk (momentary), true=toggle (click on/off)
     yaesu_ptt_toggle_mode: bool, // independent Yaesu PTT mode
     yaesu_mouse_ptt: bool,       // tracks local Yaesu momentary PTT button state
+    // PTT switch-on spike protection (built-in speaker+mic in one chassis). See config.rs.
+    spike_protection: bool,
+    mic_gate_delay_thetis_ms: u32,
+    mic_gate_delay_yaesu_ms: u32,
     // Audio recording / playback
     recording: bool,
     playing: bool,
     rec_rx1: bool,
     rec_rx2: bool,
     rec_yaesu: bool,
+    rec_yaesu2: bool,
+    rec_vrx1: bool,
+    rec_vrx2: bool,
     last_recorded_path: Option<String>,
     midi_ptt_toggle_mode: bool,  // independent MIDI PTT mode
     /// S-meter source: 0=Sig, 1=Avg (default), 2=MaxBin. Single setting shared
@@ -184,7 +212,7 @@ pub struct SdrRemoteApp {
     /// via ControlId::SmeterSources whenever it changes.
     smeter_source: u8,
     /// TL2-1 ctun-auto-recenter setup-vink "Allow zoom below 2x (with smear during tune)".
-    /// Default false → zoom-min 2x. True → zoom-min 1x toegestaan.
+    /// Default false -> zoom-min 2x. True -> zoom-min 1x toegestaan.
     allow_zoom_below_2x: bool,
     /// PATCH-1: UI language for connect-status / connect-error display.
     /// "en" or "nl" from config; defaults to "en".
@@ -223,7 +251,7 @@ pub struct SdrRemoteApp {
     diversity_sa_center_smeter: f32,
     diversity_sa_plus_smeter: f32,
     diversity_sa_minus_smeter: f32,
-    diversity_sa_iteration: u8,       // alternation counter (phase→gain→phase→gain)
+    diversity_sa_iteration: u8,       // alternation counter (phase->gain->phase->gain)
     diversity_phase: f32,      // -180.0 to +180.0 degrees
     ddc_sample_rate_rx1: u16,  // kHz (0=unknown)
     ddc_sample_rate_rx2: u16,  // kHz (0=unknown)
@@ -238,7 +266,7 @@ pub struct SdrRemoteApp {
     device_refresh_at: Option<Instant>,
     selected_input: String,
     selected_output: String,
-    /// Mic device → TX profile name mapping (auto-switch on mic change)
+    /// Mic device -> TX profile name mapping (auto-switch on mic change)
     mic_profile_map: std::collections::HashMap<String, String>,
     // Config values tracked by UI (sent as commands on change)
     rx_volume: f32,       // Thetis ZZLA (for control panel "RX1 Vol")
@@ -254,6 +282,18 @@ pub struct SdrRemoteApp {
     jitter_ms: f32,
     buffer_depth: u32,
     rx_packets: u64,
+    yaesu_audio_packets: u64,
+    yaesu_jitter_ms: f32,
+    yaesu_buffer_depth: u32,
+    yaesu2_audio_packets: u64,
+    yaesu2_jitter_ms: f32,
+    yaesu2_buffer_depth: u32,
+    vrx1_audio_packets: u64,
+    vrx1_jitter_ms: f32,
+    vrx1_buffer_depth: u32,
+    vrx2_audio_packets: u64,
+    vrx2_jitter_ms: f32,
+    vrx2_buffer_depth: u32,
     down_kbps: u32,
     up_kbps: u32,
     bw_breakdown: Vec<(u8, u32)>,
@@ -268,7 +308,7 @@ pub struct SdrRemoteApp {
     yaesu_mic_level: f32,
     frequency_hz: u64,
     mode: u8,
-    /// RX1 S-meter — dBm in RX mode, watts in TX mode (disambiguated by
+    /// RX1 S-meter - dBm in RX mode, watts in TX mode (disambiguated by
     /// `self.ptt || self.other_tx`).  `SMETER_NO_DATA_DBM` (-200.0) before
     /// the first sample arrives.
     smeter: f32,
@@ -292,7 +332,7 @@ pub struct SdrRemoteApp {
     filter_low_hz: i32,
     filter_high_hz: i32,
     filter_changed_at: Option<Instant>,
-    // TX modulation filter (PATCH-tx-modulation-bandwidth) — main-radio TX,
+    // TX modulation filter (PATCH-tx-modulation-bandwidth) - main-radio TX,
     // not VRX. `follow_rx` mirrors the RX filter 1:1; otherwise the low/high
     // fields set it independently. Greyed unless the server reports support.
     tx_filter_follow_rx: bool,
@@ -302,6 +342,7 @@ pub struct SdrRemoteApp {
     tx_filter_initialized: bool,
     last_tx_follow_sent: Option<(i32, i32)>,
     tx_follow_last_send_at: Option<Instant>,
+    thetis_configured: bool,
     thetis_starting: bool,
     // Spectrum + waterfall
     spectrum_enabled: bool,
@@ -326,11 +367,15 @@ pub struct SdrRemoteApp {
     last_sent_zoom: f32,
     last_sent_pan: f32,
     zoom_pan_changed_at: Option<Instant>,
-    // Frequency change tracking (prevents bounce: local→server_old→server_new)
+    // Frequency change tracking (prevents bounce: local->server_old->server_new)
     pending_freq: Option<u64>,
     pending_freq_at: Option<Instant>,
     rx2_pending_freq: Option<u64>,
     rx2_pending_freq_at: Option<Instant>,
+    yaesu_pending_freq: Option<u64>,
+    yaesu_pending_freq_at: Option<Instant>,
+    yaesu2_pending_freq: Option<u64>,
+    yaesu2_pending_freq_at: Option<Instant>,
     rx1_force_full_tuning: bool,
     rx2_force_full_tuning: bool,
     // Waterfall ring buffer
@@ -369,7 +414,7 @@ pub struct SdrRemoteApp {
     log_buffer: LogBuffer,
     show_log: bool,
     show_about: bool,
-    // VRX joint window — two channels (VRX1 on RX1+VFO-A, VRX2 on
+    // VRX joint window - two channels (VRX1 on RX1+VFO-A, VRX2 on
     // RX2+VFO-B), shown side-by-side in one popout viewport.
     show_vrx: bool,
     vrx1_enabled: bool,
@@ -388,7 +433,8 @@ pub struct SdrRemoteApp {
     /// VRX audio-rate mode: 0=NB, 1=WB, 2=Auto. One setting for both VRX
     /// (server-tab dropdown). Persisted.
     vrx_rate_mode: u8,
-    /// Last auto-tune freq applied to the display (per VRX) — to detect
+    vrx_rate_mode2: u8,
+    /// Last auto-tune freq applied to the display (per VRX) - to detect
     /// fresh server pushes without re-snapping every frame.
     last_vrx1_autotune_hz: u64,
     last_vrx2_autotune_hz: u64,
@@ -404,7 +450,7 @@ pub struct SdrRemoteApp {
     /// VRX freq, restored on DDC-center bucket changes.
     vrx1_freq_by_bucket: std::collections::HashMap<u64, u64>,
     vrx2_freq_by_bucket: std::collections::HashMap<u64, u64>,
-    /// Last DDC center we saw — used to detect bucket-switches.
+    /// Last DDC center we saw - used to detect bucket-switches.
     last_vrx1_ddc_center_hz: u64,
     last_vrx2_ddc_center_hz: u64,
     /// VRX spectrum zoom levels (per VRX). 32× default = ~12 kHz view
@@ -470,7 +516,7 @@ pub struct SdrRemoteApp {
     vrx2_smeter_initialized: bool,
     vrx2_smeter_peak: f32,
     vrx2_smeter_peak_time: Instant,
-    /// Texture handles for VRX waterfall rendering — one per VRX so
+    /// Texture handles for VRX waterfall rendering - one per VRX so
     /// zoom/pan stays independent. Rebuilt on each render from the
     /// shared RX1/RX2 waterfall ring buffers (no duplicate storage).
     vrx1_waterfall_texture: Option<egui::TextureHandle>,
@@ -492,11 +538,25 @@ pub struct SdrRemoteApp {
     /// `None` if the mDNS daemon failed to start (silent fallback to
     /// manual IP entry).
     mdns_browse: Option<crate::mdns::BrowseHandle>,
+    /// Phase A relay monitor: status-only outbound WebSocket path.
+    relay_enabled: bool,
+    relay_url: String,
+    relay_station: String,
+    relay_token: String,
+    relay_instance_id: String,
+    relay_device_name: String,
+    relay_udp_enabled: bool,
+    relay_monitor: Option<sdr_remote_relay::RelayMonitor>,
+    relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
+    /// Phase C: relay draait als transport (monitor in main.rs). Dan geen eigen
+    /// monitor beheren; config-wijzigingen vereisen een app-herstart.
+    relay_external: bool,
     /// PATCH-4 first-run wizard. `Some` while the wizard owns the
     /// viewport; transitions back to `None` on Skip / Finished / when
-    /// the owner re-launches the wizard manually.
+    /// the operator re-launches the wizard manually.
     wizard_state: Option<wizard::WizardState>,
     device_tab: u8, // 0=Amplitec, 1=Tuner, 2=SPE, 3=RF2K, 4=UltraBeam
+    amplitec_available: bool,
     amplitec_connected: bool,
     amplitec_switch_a: u8,
     amplitec_switch_b: u8,
@@ -520,6 +580,7 @@ pub struct SdrRemoteApp {
     /// naar config geschreven.
     websdr_favorite_editing: Option<usize>,
     // Tuner state
+    tuner_available: bool,
     tuner_connected: bool,
     tuner_state: u8,       // 0=Idle, 1=Tuning, 2=DoneOk, 3=Timeout, 4=Aborted
     tuner_can_tune: bool,
@@ -631,6 +692,8 @@ pub struct SdrRemoteApp {
     yaesu_freq_b: u64,
     yaesu_mode: u8,
     yaesu_smeter: u16,
+    yaesu_smeter_peak: u16,
+    yaesu_smeter_peak_time: Instant,
     yaesu_tx_active: bool,
     yaesu_power_on: bool,
     yaesu_volume: f32,
@@ -643,13 +706,17 @@ pub struct SdrRemoteApp {
     yaesu2_freq_b: u64,
     yaesu2_mode: u8,
     yaesu2_smeter: u16,
+    yaesu2_smeter_peak: u16,
+    yaesu2_smeter_peak_time: Instant,
     yaesu2_tx_active: bool,
     yaesu2_power_on: bool,
     yaesu2_split: bool,
     yaesu2_scan: bool,
     yaesu2_vfo_select: u8,      // 0=VFO, 1=Memory, 2=MemTune
     yaesu2_memory_channel: u16,
-    yaesu2_tuner_active: bool, // lokale toggle-state voor de Tune-knop
+    yaesu2_tuner_state: u8, // interne ATU-stand van de radio (0=off,1=on,2=tuning) via AC;-poll
+    yaesu2_feature_toggles: u32, // DSP/functie-toggles bitfield (PATCH-yaesu-extra-controls)
+    yaesu2_feature_levels: [u8; 16], // multi-state/level-waarden (Fase B: AGC, IPO)
     yaesu2_squelch: u16,
     yaesu2_rf_gain: u16,
     yaesu2_rf_power: u16,
@@ -664,7 +731,7 @@ pub struct SdrRemoteApp {
     yaesu2_control_changed_at: Option<std::time::Instant>, // debounce slider-sync
     yaesu2_volume: f32,
     // Eigen enable + PTT-mode voor radio 2 (los van radio 1), zodat elke Yaesu
-    // z'n eigen aan/uit en Push-to-talk/Toggle-keuze heeft (owner-eis dual-radio).
+    // z'n eigen aan/uit en Push-to-talk/Toggle-keuze heeft (operator-eis dual-radio).
     yaesu2_enabled: bool,
     yaesu2_ptt_toggle_mode: bool,
     yaesu2_enable_sent: bool,
@@ -675,7 +742,7 @@ pub struct SdrRemoteApp {
     // Cooldown-guard voor de auto-swap die HF naar A forceert (FTX-1: HF wint de
     // USB-audio, dus HF moet op de bestuurde/TX-kant A staan, anders split).
     yaesu2_hf_swap_at: Option<std::time::Instant>,
-    // Slot-1 (FTX-1) eigen popout-window — los van het 991A-window.
+    // Slot-1 (FTX-1) eigen popout-window - los van het 991A-window.
     yaesu2_popout: bool,
     yaesu2_popout_pos: Option<egui::Pos2>,
     yaesu2_popout_size: Option<egui::Vec2>,
@@ -700,7 +767,7 @@ pub struct SdrRemoteApp {
     /// Subsequent renders omit `with_position()` to avoid a feedback loop
     /// where every frame egui re-asserts the saved position, the OS rounds
     /// it by a sub-pixel, we read the new value back, save, and re-assert
-    /// → the window appears to jitter / vibrate after a manual move. The
+    /// -> the window appears to jitter / vibrate after a manual move. The
     /// flags reset to `false` when the popout closes so the next reopen
     /// applies the saved position fresh.
     spectrum_popout_init_applied: bool,
@@ -709,7 +776,12 @@ pub struct SdrRemoteApp {
     yaesu_popout_init_applied: bool,
     yaesu_popout_first_frame: bool,
     yaesu_enable_sent: bool,
-    yaesu_mic_gain: f32, // multiplier for Yaesu USB TX audio (default 20x)
+    yaesu_mic_gain: f32, // internal multiplier for Yaesu USB TX audio
+    // Client-side TX-compressor (0-100) + AGC-toggle per radio (net als de EQ).
+    yaesu_compressor: u8,
+    yaesu2_compressor: u8,
+    yaesu_tx_agc: bool,
+    yaesu2_tx_agc: bool,
     yaesu_eq_enabled: bool,
     yaesu_eq_gains: [f32; 5], // -12..+12 dB per band
     yaesu_eq_profiles: Vec<(String, bool, [f32; 5], f32)>, // (name, enabled, gains, mic_gain)
@@ -721,7 +793,20 @@ pub struct SdrRemoteApp {
     yaesu_rf_power: u16,      // 0-100 (TX power)
     yaesu_scan_active: bool,
     yaesu_split_active: bool,
-    yaesu_tuner_active: bool,
+    yaesu_tuner_state: u8, // interne ATU-stand van de radio (0=off,1=on,2=tuning) via AC;-poll
+    yaesu_feature_toggles: u32, // DSP/functie-toggles bitfield (PATCH-yaesu-extra-controls)
+    yaesu_feature_levels: [u8; 16], // multi-state/level-waarden (Fase B: AGC, IPO)
+    // Fase C level-sliders (gedebouncet), [slot][NB,DNR,Processor,AMC]. Gesynct uit
+    // feature_levels[8..12] als de debounce (yaesu_control_changed_at) verlopen is.
+    yaesu_level_sliders: [[i32; 4]; 2],
+    // Fase D freq-sliders (gedebouncet), [slot][Contour,APF,Notch]. Uit feature_freqs.
+    yaesu_freq_sliders: [[i32; 3]; 2],
+    // Clarifier-offset (§15) per slot, signed Hz - display uit feature_freqs[3].
+    yaesu_clar_offset: i16,
+    yaesu2_clar_offset: i16,
+    // Gekozen stapgrootte voor de touch-vriendelijke frequentie-stapper (§16), gedeeld
+    // over hoofd-RX en beide Yaesu-VFO's.
+    tune_step_hz: i64,
     yaesu_in_memory_mode: bool,
     yaesu_current_mem_ch: Option<usize>, // index into yaesu_mem_channels
     yaesu_enabled: bool,
@@ -759,7 +844,7 @@ pub struct SdrRemoteApp {
     rx2_smooth_display_center_hz: f64, // RX2 smoothed display center
     smooth_alpha: f64,               // shared smoothing alpha for current frame
     last_frame_time: Instant,
-    // DX-cluster spot stream — data-saving toggle (Server-tab)
+    // DX-cluster spot stream - data-saving toggle (Server-tab)
     dx_spots_enabled: bool,
     // RX2 / VFO-B
     rx2_enabled: bool,
@@ -782,6 +867,13 @@ pub struct SdrRemoteApp {
     /// next launch can re-apply it via `with_position()`. `None` until the
     /// first frame reads `viewport().outer_rect`.
     main_window_pos: Option<egui::Pos2>,
+    /// Selected UI theme (switches the egui base visuals). Persisted as `theme=`.
+    theme_variant: theme::ThemeVariant,
+    /// Editable palette for the Custom theme. Persisted as `theme_custom=`.
+    theme_custom: theme::Palette,
+    /// Custom-palette edited this interaction; persist on pointer-release (avoids
+    /// per-frame disk I/O while dragging the colour picker).
+    theme_custom_dirty: bool,
     /// Last S-meter rects in popout viewports (screen coords) for A⇔B overlay
     popout_rx1_smeter_rect: egui::Rect,
     popout_rx2_smeter_rect: egui::Rect,
@@ -798,7 +890,7 @@ pub struct SdrRemoteApp {
     rx2_nr_level: u8,
     rx2_anf_on: bool,
     rx2_freq_step_index: usize,
-    /// Inline freq-edit state voor RX2 — symmetrisch met `freq_editing` op RX1
+    /// Inline freq-edit state voor RX2 - symmetrisch met `freq_editing` op RX1
     /// (PATCH-rx2-inline-edit).
     rx2_freq_editing: bool,
     rx2_freq_edit_text: String,
@@ -876,18 +968,24 @@ pub struct SdrRemoteApp {
     midi_last_dir_b: i8,     // last encoder direction for VFO B (-1/+1)
     // CatSync (WebSDR browser mute on TX)
     catsync: crate::catsync::CatSync,
+    catsync_target: CatSyncTarget,
 }
 
 
-/// VRX-kanaal-id voor de gedeelde VRX-controls renderer. VRX1 luistert op RX1+VFO-A,
-/// VRX2 op RX2+VFO-B. Eén `render_vrx_channel_controls` tekent beide (parity door
-/// constructie) — zie docs/internal/UI-STYLE-GUIDE.md.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatSyncTarget {
+    Thetis,
+    Yaesu1,
+    Yaesu2,
+}
+
+/// VRX channel id for the shared VRX controls renderer. VRX1 follows RX1/VFO-A,
+/// VRX2 follows RX2/VFO-B. One renderer keeps both channels visually in parity.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VrxChannel {
     Vrx1,
     Vrx2,
 }
-
 impl VrxChannel {
     fn id(self) -> u8 {
         match self {
@@ -1056,7 +1154,7 @@ impl SdrRemoteApp {
                     match ch { VrxChannel::Vrx1 => self.vrx1_mode = mode_val, VrxChannel::Vrx2 => self.vrx2_mode = mode_val };
                     let (lo, hi) = vrx_mode_default_filter(mode_val, cur_bw);
                     // Default-filter bij deze mode: lokale filter-state + persist alleen
-                    // committen na een bevestigde send (dispatch-return-discipline —
+                    // committen na een bevestigde send (dispatch-return-discipline -
                     // geen UI/server-drift bij een gefaalde send).
                     if self.cmd_tx.send(Command::SetVrxFilter(id, lo, hi)).is_ok() {
                         match ch {
@@ -1074,7 +1172,7 @@ impl SdrRemoteApp {
             ui.horizontal(|ui| {
                 let mut at = match ch { VrxChannel::Vrx1 => self.vrx1_auto_tune, VrxChannel::Vrx2 => self.vrx2_auto_tune };
                 if ui.add_enabled(connected, egui::Checkbox::new(&mut at, "Auto-tune to carrier"))
-                    .on_hover_text("SAM: follow the AM carrier — the VFO snaps onto the carrier so the filter stays symmetric around it. Locks within ±3 kHz.")
+                    .on_hover_text("SAM: follow the AM carrier - the VFO snaps onto the carrier so the filter stays symmetric around it. Locks within ±3 kHz.")
                     .changed()
                     && self.cmd_tx.send(Command::SetVrxAutoTune(id, at)).is_ok()
                 {
@@ -1239,7 +1337,7 @@ impl SdrRemoteApp {
             });
             ui.separator();
             let remaining = ui.available_height();
-            // Plot en waterval even hoog (owner-wens); 16 px = de label-strip in het
+            // Plot en waterval even hoog (operator-wens); 16 px = de label-strip in het
             // spectrum, TL_INNER_GAP_Y = ruimte tussen plot en waterval.
             let spec_h = ((remaining - 16.0 - theme::TL_INNER_GAP_Y) / 2.0).max(40.0);
             let wf_h = spec_h;
@@ -1361,16 +1459,73 @@ impl SdrRemoteApp {
             self.rx2_spectrum_span_hz,
         );
     }
+    fn set_pending_yaesu_freq(&mut self, slot: u8, freq: u64) {
+        let now = Instant::now();
+        if slot == 0 {
+            self.yaesu_freq_a = freq;
+            self.yaesu_pending_freq = Some(freq);
+            self.yaesu_pending_freq_at = Some(now);
+        } else {
+            self.yaesu2_freq_a = freq;
+            self.yaesu2_pending_freq = Some(freq);
+            self.yaesu2_pending_freq_at = Some(now);
+        }
+    }
+
+    fn accept_yaesu_freq(
+        current: &mut u64,
+        pending: &mut Option<u64>,
+        pending_at: &mut Option<Instant>,
+        state_freq: u64,
+    ) {
+        if let Some(target) = *pending {
+            let age_ms = pending_at.map_or(u128::MAX, |t| t.elapsed().as_millis());
+            if age_ms >= 120 {
+                let delta = (state_freq as i64 - target as i64).unsigned_abs();
+                if delta == 0 || age_ms > 1000 {
+                    *pending = None;
+                    *pending_at = None;
+                }
+            }
+        }
+        if pending.is_none() {
+            *current = state_freq;
+        }
+    }
 
     pub fn new(
         state_rx: watch::Receiver<RadioState>,
         cmd_tx: mpsc::UnboundedSender<Command>,
         log_buffer: LogBuffer,
+        // Phase C: als de relay als transport wordt gebruikt draait de monitor in
+        // main.rs; dan tonen we alleen zijn status (geen tweede relay-verbinding).
+        external_relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
     ) -> Self {
         let config = load_config();
 
         let input_devices = crate::audio::list_input_devices();
         let output_devices = crate::audio::list_output_devices();
+        let relay_initial = sdr_remote_relay::RelayConfig {
+            enabled: config.relay_enabled,
+            url: config.relay_url.clone(),
+            station: config.relay_station.clone(),
+            token: config.relay_token.clone(),
+            role: sdr_remote_relay::RelayRole::Client,
+            instance: config.relay_instance_id.clone(),
+            name: config.relay_device_name.clone(),
+            udp_port: sdr_remote_relay::relay_udp_port_resolve(config.relay_udp_enabled),
+        };
+        let (relay_monitor, relay_status, relay_external) = if let Some(ext) = external_relay_status {
+            // Relay-transport: monitor draait in main.rs. Toon alleen status; geen
+            // eigen monitor (er mag maar een relay-verbinding per client zijn).
+            (None, Some(ext), true)
+        } else if relay_initial.enabled {
+            let m = sdr_remote_relay::RelayMonitor::start_threaded(relay_initial);
+            let s = m.status_handle();
+            (Some(m), Some(s), false)
+        } else {
+            (None, None, false)
+        };
 
         // Send initial device selections to engine
         if !config.input_device.is_empty() {
@@ -1429,11 +1584,17 @@ impl SdrRemoteApp {
             ptt_toggle_mode: config.ptt_toggle,
             yaesu_ptt_toggle_mode: config.yaesu_ptt_toggle,
             yaesu_mouse_ptt: false,
+            spike_protection: config.spike_protection,
+            mic_gate_delay_thetis_ms: config.mic_gate_delay_thetis_ms,
+            mic_gate_delay_yaesu_ms: config.mic_gate_delay_yaesu_ms,
             recording: false,
             playing: false,
             rec_rx1: true,
             rec_rx2: false,
             rec_yaesu: false,
+            rec_yaesu2: false,
+            rec_vrx1: false,
+            rec_vrx2: false,
             last_recorded_path: None,
             midi_ptt_toggle_mode: config.midi_ptt_toggle,
             smeter_source: config.smeter_source,
@@ -1500,6 +1661,18 @@ impl SdrRemoteApp {
             jitter_ms: 0.0,
             buffer_depth: 0,
             rx_packets: 0,
+            yaesu_audio_packets: 0,
+            yaesu_jitter_ms: 0.0,
+            yaesu_buffer_depth: 0,
+            yaesu2_audio_packets: 0,
+            yaesu2_jitter_ms: 0.0,
+            yaesu2_buffer_depth: 0,
+            vrx1_audio_packets: 0,
+            vrx1_jitter_ms: 0.0,
+            vrx1_buffer_depth: 0,
+            vrx2_audio_packets: 0,
+            vrx2_jitter_ms: 0.0,
+            vrx2_buffer_depth: 0,
             down_kbps: 0,
             up_kbps: 0,
             bw_breakdown: Vec::new(),
@@ -1542,6 +1715,7 @@ impl SdrRemoteApp {
             tx_filter_initialized: false,
             last_tx_follow_sent: None,
             tx_follow_last_send_at: None,
+            thetis_configured: true,
             thetis_starting: false,
             spectrum_enabled: config.spectrum_enabled,
             spectrum_bins: Vec::new(),
@@ -1565,6 +1739,10 @@ impl SdrRemoteApp {
             pending_freq_at: None,
             rx2_pending_freq: None,
             rx2_pending_freq_at: None,
+            yaesu_pending_freq: None,
+            yaesu_pending_freq_at: None,
+            yaesu2_pending_freq: None,
+            yaesu2_pending_freq_at: None,
             rx1_force_full_tuning: false,
             rx2_force_full_tuning: false,
             waterfall: WaterfallRingBuffer::new(200),
@@ -1603,6 +1781,7 @@ impl SdrRemoteApp {
             vrx1_auto_tune: false,
             vrx2_auto_tune: false,
             vrx_rate_mode: 2, // default Auto
+            vrx_rate_mode2: 2, // default Auto (VRX2, per-client per-VRX rate)
             last_vrx1_autotune_hz: 0,
             last_vrx2_autotune_hz: 0,
             vrx_popout_pos: config.vrx_popout_pos.map(|(x, y)| egui::pos2(x, y)),
@@ -1677,11 +1856,21 @@ impl SdrRemoteApp {
             last_connect_status: sdr_remote_logic::state::ConnectStatus::Disconnected,
             // PATCH-3: kick off the mDNS browse on app start. Daemon-init failure
             // is caught inside `BrowseHandle::start` and surfaces as an empty
-            // dropdown — manual IP entry stays available.
+            // dropdown - manual IP entry stays available.
             mdns_browse: Some(crate::mdns::BrowseHandle::start()),
+            relay_enabled: config.relay_enabled,
+            relay_url: config.relay_url.clone(),
+            relay_station: config.relay_station.clone(),
+            relay_token: config.relay_token.clone(),
+            relay_instance_id: config.relay_instance_id.clone(),
+            relay_device_name: config.relay_device_name.clone(),
+            relay_udp_enabled: config.relay_udp_enabled,
+            relay_monitor,
+            relay_status,
+            relay_external,
             // PATCH-4: arm the first-run wizard if the user has never had a
             // successful connect (counter==0). Seeds with whatever
-            // server/password the config already has — wizard still walks
+            // server/password the config already has - wizard still walks
             // through the steps but the fields are pre-populated.
             wizard_state: if crate::ui::config::is_first_run() {
                 Some(wizard::WizardState::new(
@@ -1692,6 +1881,7 @@ impl SdrRemoteApp {
                 None
             },
             device_tab: config.device_tab,
+            amplitec_available: false,
             amplitec_connected: false,
             amplitec_switch_a: 0,
             amplitec_switch_b: 0,
@@ -1704,6 +1894,7 @@ impl SdrRemoteApp {
             amplitec_power_edit_tx_blocked: [false; 6],
             amplitec_power_show: false,
             websdr_favorite_editing: None,
+            tuner_available: false,
             tuner_connected: false,
             tuner_state: 0,
             tuner_can_tune: false,
@@ -1809,6 +2000,8 @@ impl SdrRemoteApp {
             yaesu_freq_b: 0,
             yaesu_mode: 1,
             yaesu_smeter: 0,
+            yaesu_smeter_peak: 0,
+            yaesu_smeter_peak_time: Instant::now(),
             yaesu_tx_active: false,
             yaesu_power_on: false,
             yaesu_volume: config.yaesu_volume,
@@ -1819,13 +2012,17 @@ impl SdrRemoteApp {
             yaesu2_freq_b: 0,
             yaesu2_mode: 1,
             yaesu2_smeter: 0,
+            yaesu2_smeter_peak: 0,
+            yaesu2_smeter_peak_time: Instant::now(),
             yaesu2_tx_active: false,
             yaesu2_power_on: false,
             yaesu2_split: false,
             yaesu2_scan: false,
             yaesu2_vfo_select: 0,
             yaesu2_memory_channel: 0,
-            yaesu2_tuner_active: false,
+            yaesu2_tuner_state: 0,
+            yaesu2_feature_toggles: 0,
+            yaesu2_feature_levels: [0u8; 16],
             yaesu2_squelch: 0,
             yaesu2_rf_gain: 0,
             yaesu2_rf_power: 0,
@@ -1873,6 +2070,10 @@ impl SdrRemoteApp {
             // Standalone persistente mic-gain (laatste schuif-waarde), los van
             // het EQ-profiel zodat de waarde altijd onthouden wordt.
             yaesu_mic_gain: config.yaesu_mic_gain,
+            yaesu_compressor: config.yaesu_compressor,
+            yaesu2_compressor: config.yaesu2_compressor,
+            yaesu_tx_agc: config.yaesu_tx_agc,
+            yaesu2_tx_agc: config.yaesu2_tx_agc,
             yaesu_eq_enabled: {
                 // Load active EQ profile from config
                 config.yaesu_eq_profiles.iter()
@@ -1893,7 +2094,14 @@ impl SdrRemoteApp {
             yaesu_rf_power: 50,
             yaesu_scan_active: false,
             yaesu_split_active: false,
-            yaesu_tuner_active: false,
+            yaesu_tuner_state: 0,
+            yaesu_feature_toggles: 0,
+            yaesu_feature_levels: [0u8; 16],
+            yaesu_level_sliders: [[0i32; 4]; 2],
+            yaesu_freq_sliders: [[0i32; 3]; 2],
+            yaesu_clar_offset: 0,
+            yaesu2_clar_offset: 0,
+            tune_step_hz: 1_000,
             yaesu_in_memory_mode: false,
             yaesu_current_mem_ch: None,
             yaesu_enabled: config.yaesu_enabled,
@@ -1944,6 +2152,10 @@ impl SdrRemoteApp {
             collapse_yaesu_menu: config.collapse_yaesu_menu,
             yaesu_memories_h: config.yaesu_memories_h,
             main_window_pos: config.main_window_pos.map(|(x, y)| egui::pos2(x, y)),
+            theme_variant: theme::ThemeVariant::from_str(&config.theme),
+            theme_custom: theme::Palette::from_config_string(&config.theme_custom)
+                .unwrap_or_else(theme::Palette::slate),
+            theme_custom_dirty: false,
             popout_rx1_smeter_rect: egui::Rect::NOTHING,
             popout_rx2_smeter_rect: egui::Rect::NOTHING,
             rx2_volume: config.rx2_volume,
@@ -2036,6 +2248,7 @@ impl SdrRemoteApp {
                 cs.favorites = config.catsync_favorites;
                 cs
             },
+            catsync_target: CatSyncTarget::Thetis,
         };
 
         // Load MIDI mappings from config
@@ -2058,7 +2271,7 @@ impl SdrRemoteApp {
     /// Apply persisted popout geometry to a ViewportBuilder. Both
     /// `with_position()` AND `with_inner_size()` are only included on the
     /// first frame after the popout opens. Subsequent frames omit both so
-    /// the OS keeps the window wherever the user dragged or resized it —
+    /// the OS keeps the window wherever the user dragged or resized it -
     /// without that gating the OS gets a fresh "go to this rect" request
     /// every frame and the window oscillates between successive committed
     /// rects during an active move / resize gesture.
@@ -2087,7 +2300,7 @@ impl SdrRemoteApp {
                 // coordinates that fall outside any current display; egui would
                 // then open the viewport off-screen (= invisible). Query the OS
                 // work-areas and only re-apply the position when a usable part
-                // of the window lands on a connected monitor — otherwise omit
+                // of the window lands on a connected monitor - otherwise omit
                 // with_position() and let it open on the primary monitor. On
                 // non-Windows / query failure this returns true (trust the
                 // saved value). Manual "Recenter windows" stays as a fallback.
@@ -2099,7 +2312,7 @@ impl SdrRemoteApp {
                     b = b.with_position(p);
                 } else {
                     log::warn!(
-                        "popout: saved pos ({}, {}) valt buiten alle aangesloten monitoren — open op primair scherm",
+                        "popout: saved pos ({}, {}) valt buiten alle aangesloten monitoren - open op primair scherm",
                         p.x, p.y
                     );
                 }
@@ -2122,7 +2335,7 @@ impl SdrRemoteApp {
         pos: &mut Option<egui::Pos2>,
         size: &mut Option<egui::Vec2>,
     ) -> bool {
-        // Grootte via screen_rect (egui's canvas — beweegt betrouwbaar mee bij
+        // Grootte via screen_rect (egui's canvas - beweegt betrouwbaar mee bij
         // resize; viewport().inner_rect bleek bevroren). Positie via outer_rect
         // (enige bron voor venster-positie).
         let outer = ctx.input(|i| i.viewport().outer_rect);
@@ -2146,12 +2359,12 @@ impl SdrRemoteApp {
     /// Recovery for a pop-out left on a now-disconnected second monitor:
     /// egui/eframe never tell the app which monitors are currently connected,
     /// so the restored absolute position cannot be auto-validated against the
-    /// live monitor layout. This is the manual escape hatch — it replaces
+    /// live monitor layout. This is the manual escape hatch - it replaces
     /// hand-editing the `*_popout_pos` lines in the .conf and restarting.
     /// Positions are anchored just inside the main window (always visible) and
     /// staggered so stacked pop-outs don't perfectly overlap. Clearing each
     /// `*_init_applied` flag makes `apply_popout_geometry` re-apply the new
-    /// position on the next frame, so an open pop-out moves immediately — no
+    /// position on the next frame, so an open pop-out moves immediately - no
     /// restart needed.
     fn recenter_popouts(&mut self, ctx: &egui::Context) {
         let anchor = ctx.input(|i| i.viewport().outer_rect)
@@ -2238,6 +2451,35 @@ impl SdrRemoteApp {
             });
     }
 
+    /// Mic gate-delay (ms) for the given PTT path, honoring spike-protection.
+    /// Returns 0 when protection is off - no added latency for isolated/headset audio.
+    fn ptt_gate_delay_ms(&self, yaesu: bool) -> u32 {
+        if !self.spike_protection {
+            0
+        } else if yaesu {
+            self.mic_gate_delay_yaesu_ms
+        } else {
+            self.mic_gate_delay_thetis_ms
+        }
+    }
+
+    /// PTT side-effects that protect a built-in speaker+mic from the switch-on
+    /// spike: instantly mute local playback, and on keyup set the per-path mic
+    /// gate-delay so the spike decays before mic audio reaches TX. Sent right
+    /// before the PTT command so the engine applies the delay before it opens the
+    /// capture gate. Playback-mute is unconditional (correct for any TX, half-duplex);
+    /// the gate-delay is 0 unless spike-protection is on. Call edge-triggered only.
+    fn apply_ptt_spike_protection(&self, yaesu: bool, active: bool) {
+        if active {
+            let _ = self
+                .cmd_tx
+                .send(Command::SetMicGateDelayMs(self.ptt_gate_delay_ms(yaesu)));
+            let _ = self.cmd_tx.send(Command::SetPlaybackMute(true));
+        } else {
+            let _ = self.cmd_tx.send(Command::SetPlaybackMute(false));
+        }
+    }
+
     fn save_ptt_config(&self) {
         if let Ok(exe) = std::env::current_exe() {
             let path = exe.with_file_name("thetislink-client.conf");
@@ -2248,18 +2490,56 @@ impl SdrRemoteApp {
                         && !l.starts_with("yaesu_ptt_toggle=")
                         && !l.starts_with("yaesu2_enabled=") && !l.starts_with("yaesu2_ptt_toggle=")
                         && !l.starts_with("yaesu2_popout=")
-                        && !l.starts_with("yaesu_mic_gain=") && !l.starts_with("yaesu2_mic_gain="))
+                        && !l.starts_with("yaesu_mic_gain=") && !l.starts_with("yaesu2_mic_gain=")
+                        && !l.starts_with("yaesu_compressor=") && !l.starts_with("yaesu2_compressor=")
+                        && !l.starts_with("yaesu_tx_agc=") && !l.starts_with("yaesu2_tx_agc="))
                     .collect::<Vec<_>>().join("\n");
                 content.push_str(&format!(
-                    "\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\n",
+                    "\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\n",
                     self.ptt_toggle_mode, self.yaesu_ptt_toggle_mode, self.midi_ptt_toggle_mode,
                     self.yaesu2_enabled, self.yaesu2_ptt_toggle_mode,
-                    self.yaesu2_popout, self.yaesu_mic_gain, self.yaesu2_mic_gain));
+                    self.yaesu2_popout, self.yaesu_mic_gain, self.yaesu2_mic_gain,
+                    self.yaesu_compressor, self.yaesu2_compressor, self.yaesu_tx_agc, self.yaesu2_tx_agc));
                 let _ = std::fs::write(path, content);
             }
         }
     }
 
+    fn relay_config(&self) -> sdr_remote_relay::RelayConfig {
+        sdr_remote_relay::RelayConfig {
+            enabled: self.relay_enabled,
+            url: self.relay_url.trim().to_string(),
+            station: self.relay_station.trim().to_string(),
+            token: self.relay_token.clone(),
+            role: sdr_remote_relay::RelayRole::Client,
+            instance: self.relay_instance_id.clone(),
+            name: self.relay_device_name.clone(),
+            udp_port: sdr_remote_relay::relay_udp_port_resolve(self.relay_udp_enabled),
+        }
+    }
+
+    fn sync_relay_monitor(&mut self) {
+        if self.relay_external {
+            // Relay draait als transport (monitor in main.rs); een live restart hier
+            // zou een tweede relay-verbinding maken. Config-wijziging = app-herstart.
+            return;
+        }
+        let cfg = self.relay_config();
+        if !cfg.enabled {
+            if let Some(monitor) = self.relay_monitor.take() {
+                monitor.stop();
+            }
+            self.relay_status = None;
+            return;
+        }
+        if let Some(monitor) = self.relay_monitor.as_ref() {
+            monitor.update_config(cfg);
+        } else {
+            let monitor = sdr_remote_relay::RelayMonitor::start_threaded(cfg);
+            self.relay_status = Some(monitor.status_handle());
+            self.relay_monitor = Some(monitor);
+        }
+    }
     fn save_full_config(&self) {
         save_config(
             &self.server_input,
@@ -2359,6 +2639,8 @@ impl SdrRemoteApp {
             &self.catsync.websdr_url,
             &self.catsync.favorites,
             &self.mic_profile_map,
+            self.theme_variant.as_str(),
+            &self.theme_custom.to_config_string(),
         );
     }
 
@@ -2435,7 +2717,7 @@ impl SdrRemoteApp {
     }
 
     // ---------------------------------------------------------------------
-    // controls-scaffolding — sub-stap 4 writeback-extract
+    // controls-scaffolding - sub-stap 4 writeback-extract
     // ---------------------------------------------------------------------
 
     /// Bouw een `RxChannelState` snapshot voor RX1. Neemt `freq_edit_text`
@@ -2452,7 +2734,7 @@ impl SdrRemoteApp {
     }
 
     /// Bouw een `RxChannelState` snapshot voor RX2. Draagt nu ook inline-edit
-    /// state (PATCH-rx2-inline-edit — symmetrisch met RX1).
+    /// state (PATCH-rx2-inline-edit - symmetrisch met RX1).
     fn rx2_snap(&mut self) -> controls::RxChannelState {
         controls::RxChannelState {
             frequency_hz: self.rx2_frequency_hz,
@@ -2576,6 +2858,9 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
             // Sync local mic gain to engine
             let _ = self.cmd_tx.send(Command::SetYaesuTxGain(self.yaesu_mic_gain));
+            // Sync client-side TX-keten (compressor + AGC) radio 1.
+            let _ = self.cmd_tx.send(Command::SetYaesuCompressor(self.yaesu_compressor));
+            let _ = self.cmd_tx.send(Command::SetYaesuTxAgc(self.yaesu_tx_agc));
             // Auto-read memory channels for channel name info
             self.yaesu_mem_radio_received = false;
             let _ = self.cmd_tx.send(Command::SetControl(
@@ -2583,7 +2868,7 @@ impl SdrRemoteApp {
             self.yaesu_enable_sent = true;
         }
         // Dual-radio slot 1: dezelfde Yaesu-enable schakelt ook de 2e radio in.
-        // De client is dual-radio-bewust → stuurt Yaesu2Enable=1 (komt op
+        // De client is dual-radio-bewust -> stuurt Yaesu2Enable=1 (komt op
         // yaesu2_addrs, krijgt RadioInfo + slot-1 data) en zet het muted-gestarte
         // slot-1 volume op de UI-waarde (unmute, build-88-les).
         if state.connected && self.yaesu2_enabled && !self.yaesu2_enable_sent {
@@ -2591,10 +2876,13 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetYaesu2Volume(self.yaesu2_volume));
             // Sync lokale mic-gain naar engine (zoals 991A).
             let _ = self.cmd_tx.send(Command::SetYaesu2TxGain(self.yaesu2_mic_gain));
-            // FT0 = MAIN als actieve RX/TX → audio volgt A/MAIN (springt niet naar SUB).
+            // Sync client-side TX-keten (compressor + AGC) radio 2 (FTX-1).
+            let _ = self.cmd_tx.send(Command::SetYaesu2Compressor(self.yaesu2_compressor));
+            let _ = self.cmd_tx.send(Command::SetYaesu2TxAgc(self.yaesu2_tx_agc));
+            // FT0 = MAIN als actieve RX/TX -> audio volgt A/MAIN (springt niet naar SUB).
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 11));
             // Auto-read geheugens NIET direct: radio+server zijn vlak na connect te
-            // druk → MR-scan mist kanalen. Uitstellen ~1,5s (vuurt hieronder).
+            // druk -> MR-scan mist kanalen. Uitstellen ~1,5s (vuurt hieronder).
             self.yaesu2_autoread_at = Some(Instant::now() + std::time::Duration::from_millis(1500));
             self.yaesu2_enable_sent = true;
         }
@@ -2614,7 +2902,7 @@ impl SdrRemoteApp {
         }
         // Forceer HF naar A (FTX-1): HF wint altijd de USB-audio. Staat HF op B
         // terwijl A VHF/UHF is, dan zou je op A zenden (FT0) maar HF op B horen =
-        // split. Een A/B-swap (SV) brengt HF naar A/MAIN → audio + TX + bediening
+        // split. Een A/B-swap (SV) brengt HF naar A/MAIN -> audio + TX + bediening
         // weer samen op A. (<100 MHz = HF/laag incl. 6m/4m = de SDR-ontvanger;
         // >100 MHz = VHF/UHF.) 2s cooldown voorkomt herhaald swappen vóór de
         // state-update binnen is.
@@ -2636,7 +2924,7 @@ impl SdrRemoteApp {
         // session's VRX state (or vice versa).
         if state.connected && self.vrx_state_sync_pending {
             // Re-send wideband audio toggle on (re)connect. App::new fires
-            // it before server_addr is set, which drops the command —
+            // it before server_addr is set, which drops the command -
             // server then defaults to NB until user toggles. Resending
             // here after handshake fixes the startup mismatch.
             let _ = self.cmd_tx.send(Command::SetThetisWidebandAudio(self.thetis_wideband_audio));
@@ -2655,8 +2943,9 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetVrx2Enabled(self.vrx2_enabled));
             let _ = self.cmd_tx.send(Command::SetVrxFilter(0, self.vrx1_filter_low_hz, self.vrx1_filter_high_hz));
             let _ = self.cmd_tx.send(Command::SetVrxFilter(1, self.vrx2_filter_low_hz, self.vrx2_filter_high_hz));
-            // VRX rate-mode + SAM auto-tune (PATCH-vrx-wide-sam-ux) — resync.
+            // VRX rate-mode + SAM auto-tune (PATCH-vrx-wide-sam-ux) - resync.
             let _ = self.cmd_tx.send(Command::SetVrxRateMode(self.vrx_rate_mode));
+            let _ = self.cmd_tx.send(Command::SetVrxRateMode2(self.vrx_rate_mode2));
             let _ = self.cmd_tx.send(Command::SetVrxAutoTune(0, self.vrx1_auto_tune));
             let _ = self.cmd_tx.send(Command::SetVrxAutoTune(1, self.vrx2_auto_tune));
             // Re-send effective high-res spectrum on (re)connect.
@@ -2679,9 +2968,9 @@ impl SdrRemoteApp {
             self.vrx_state_sync_pending = true;
         }
         // TL2-1 ctun-auto-recenter: snapshot vorige connected-state vóór mutation,
-        // anders detecteren we false→true reconnects niet (een oudere
+        // anders detecteren we false->true reconnects niet (een oudere
         // `state.connected && !self.connected` check werkte nooit omdat
-        // self.connected hier al gemuteerd zou zijn). Bug was latent — de
+        // self.connected hier al gemuteerd zou zijn). Bug was latent - de
         // zoom-reset-block op reconnect werd waarschijnlijk al langer overgeslagen.
         let was_connected = self.connected;
         self.connected = state.connected;
@@ -2690,6 +2979,18 @@ impl SdrRemoteApp {
         self.jitter_ms = state.jitter_ms;
         self.buffer_depth = state.buffer_depth;
         self.rx_packets = state.rx_packets;
+        self.yaesu_audio_packets = state.yaesu_audio_packets;
+        self.yaesu_jitter_ms = state.yaesu_jitter_ms;
+        self.yaesu_buffer_depth = state.yaesu_buffer_depth;
+        self.yaesu2_audio_packets = state.yaesu2_audio_packets;
+        self.yaesu2_jitter_ms = state.yaesu2_jitter_ms;
+        self.yaesu2_buffer_depth = state.yaesu2_buffer_depth;
+        self.vrx1_audio_packets = state.vrx1_audio_packets;
+        self.vrx1_jitter_ms = state.vrx1_jitter_ms;
+        self.vrx1_buffer_depth = state.vrx1_buffer_depth;
+        self.vrx2_audio_packets = state.vrx2_audio_packets;
+        self.vrx2_jitter_ms = state.vrx2_jitter_ms;
+        self.vrx2_buffer_depth = state.vrx2_buffer_depth;
         self.down_kbps = state.down_kbps;
         self.up_kbps = state.up_kbps;
         self.bw_breakdown = state.bw_breakdown.clone();
@@ -2744,9 +3045,9 @@ impl SdrRemoteApp {
             self.smeter_peak = state.smeter;
             self.smeter_peak_time = Instant::now();
         }
-        // Reset zoom on reconnect (connected false→true) or power ON
+        // Reset zoom on reconnect (connected false->true) or power ON
         // Span is reset to 0 so the first spectrum packet triggers zoom calculation.
-        // Use `was_connected` snapshot — see comment above on connected-state mutation.
+        // Use `was_connected` snapshot - see comment above on connected-state mutation.
         let reconnected = state.connected && !was_connected;
         if reconnected || (state.power_on && !self.power_on) {
             self.full_spectrum_span_hz = 0;
@@ -2759,7 +3060,7 @@ impl SdrRemoteApp {
             self.rx2_last_sent_zoom = 0.0;
             self.rx2_last_sent_pan = 0.0;
             self.rx2_zoom_pan_changed_at = Some(Instant::now());
-            // Reset TCI control states to defaults — server will push current values
+            // Reset TCI control states to defaults - server will push current values
             self.vfo_sync = false;
             self.mon_on = false;
             self.nb_enable = false;
@@ -2777,7 +3078,7 @@ impl SdrRemoteApp {
                 sdr_remote_core::protocol::ControlId::AllowZoomBelow2x,
                 if self.allow_zoom_below_2x { 1 } else { 0 },
             ));
-            // Also push S-meter source choice on (re)connect — engine state
+            // Also push S-meter source choice on (re)connect - engine state
             // and UI state must agree so the right subscription mask is sent.
             let _ = self.cmd_tx.send(Command::SetSmeterSource(self.smeter_source));
         }
@@ -2807,6 +3108,7 @@ impl SdrRemoteApp {
             self.last_recorded_path = Some(p.clone());
         }
         self.thetis_swr_x100 = state.thetis_swr_x100;
+        self.thetis_configured = state.thetis_configured;
         // Once user changes filter locally, client is authoritative until mode changes.
         // filter_changed_at is cleared on mode change (above), so new mode values are accepted.
         if self.filter_changed_at.is_none() {
@@ -2814,7 +3116,7 @@ impl SdrRemoteApp {
             self.filter_high_hz = state.filter_high_hz;
         }
         self.thetis_starting = state.thetis_starting;
-        // TCI controls — suppress server sync for 500ms after local change
+        // TCI controls - suppress server sync for 500ms after local change
         let tci_accept = self.tci_control_changed_at
             .map_or(true, |t| t.elapsed().as_millis() > 1000);
         if tci_accept {
@@ -2931,7 +3233,7 @@ impl SdrRemoteApp {
             }
         }
         if state.full_spectrum_sequence != self.full_spectrum_sequence && !state.full_spectrum_bins.is_empty() {
-            // Adjust default zoom when span first becomes known (0 → real value)
+            // Adjust default zoom when span first becomes known (0 -> real value)
             let old_span = self.full_spectrum_span_hz;
             self.full_spectrum_bins = state.full_spectrum_bins;
             self.full_spectrum_center_hz = state.full_spectrum_center_hz;
@@ -3065,7 +3367,7 @@ impl SdrRemoteApp {
         };
 
         if !self.vrx1_enabled {
-            // VRX1 disabled → freeze S-meter at -127 dBm (visual "no signal")
+            // VRX1 disabled -> freeze S-meter at -127 dBm (visual "no signal")
             self.vrx1_smeter_dbm = -127.0;
             self.vrx1_smeter_peak = -127.0;
             self.vrx1_smeter_initialized = false;
@@ -3125,7 +3427,7 @@ impl SdrRemoteApp {
         }
         // (pending_freq already cleared above, before frequency acceptance)
 
-        // Delayed auto_ref restore after TX→RX transition
+        // Delayed auto_ref restore after TX->RX transition
         if let Some(at) = self.tx_spectrum_restore_auto_at {
             if Instant::now() >= at {
                 if let Some(saved) = self.tx_spectrum_saved_auto_ref.take() {
@@ -3245,6 +3547,7 @@ impl SdrRemoteApp {
         let old_a = self.amplitec_switch_a;
         let old_b = self.amplitec_switch_b;
         let was_connected = self.amplitec_connected;
+        self.amplitec_available = state.amplitec_available;
         self.amplitec_connected = state.amplitec_connected;
         self.amplitec_switch_a = state.amplitec_switch_a;
         self.amplitec_switch_b = state.amplitec_switch_b;
@@ -3252,7 +3555,7 @@ impl SdrRemoteApp {
             self.amplitec_labels = state.amplitec_labels;
         }
         // Power-cap tabel: bij eerste push van server initialiseren we
-        // de edit-state. Daarna alleen de read-only spiegel updaten —
+        // de edit-state. Daarna alleen de read-only spiegel updaten -
         // de operator's in-progress edits worden niet overschreven.
         let was_loaded = self.amplitec_power_loaded;
         self.amplitec_power_max_w = state.amplitec_power_max_w;
@@ -3280,12 +3583,13 @@ impl SdrRemoteApp {
 
         // Tuner state
         let old_tuner_state = self.tuner_state;
+        self.tuner_available = state.tuner_available;
         self.tuner_connected = state.tuner_connected;
         self.tuner_state = state.tuner_state;
         self.tuner_can_tune = state.tuner_can_tune;
-        // Track tune frequency: on real tune (TUNING → DONE_OK/DONE_ASSUMED) or first
+        // Track tune frequency: on real tune (TUNING -> DONE_OK/DONE_ASSUMED) or first
         // done-state after connect (tune_freq still 0). Ignores the fake
-        // IDLE → done-state transitions from the server's stale override.
+        // IDLE -> done-state transitions from the server's stale override.
         let tuner_done = state.tuner_state == 2 || state.tuner_state == 5;
         if tuner_done && (old_tuner_state == 1 || self.tuner_tune_freq == 0) {
             self.tuner_tune_freq = self.frequency_hz;
@@ -3383,24 +3687,52 @@ impl SdrRemoteApp {
         self.rotor_available = state.rotor_available;
         // Yaesu
         self.yaesu_connected = state.yaesu_connected;
-        self.yaesu_freq_a = state.yaesu_freq_a;
+        Self::accept_yaesu_freq(
+            &mut self.yaesu_freq_a,
+            &mut self.yaesu_pending_freq,
+            &mut self.yaesu_pending_freq_at,
+            state.yaesu_freq_a,
+        );
         self.yaesu_freq_b = state.yaesu_freq_b;
         self.yaesu_mode = state.yaesu_mode;
         self.yaesu_smeter = state.yaesu_smeter;
+        if state.yaesu_smeter >= self.yaesu_smeter_peak {
+            self.yaesu_smeter_peak = state.yaesu_smeter;
+            self.yaesu_smeter_peak_time = Instant::now();
+        } else if self.yaesu_smeter_peak_time.elapsed().as_secs_f32() > 2.0 {
+            self.yaesu_smeter_peak = state.yaesu_smeter;
+            self.yaesu_smeter_peak_time = Instant::now();
+        }
         self.yaesu_tx_active = state.yaesu_tx_active;
         self.yaesu_power_on = state.yaesu_power_on;
         // Dual-radio slot 1
         self.yaesu_model = state.yaesu_model;
         self.yaesu2_model = state.yaesu2_model;
         self.yaesu2_connected = state.yaesu2_connected;
-        self.yaesu2_freq_a = state.yaesu2_freq_a;
+        Self::accept_yaesu_freq(
+            &mut self.yaesu2_freq_a,
+            &mut self.yaesu2_pending_freq,
+            &mut self.yaesu2_pending_freq_at,
+            state.yaesu2_freq_a,
+        );
         self.yaesu2_freq_b = state.yaesu2_freq_b;
         self.yaesu2_mode = state.yaesu2_mode;
         self.yaesu2_smeter = state.yaesu2_smeter;
+        if state.yaesu2_smeter >= self.yaesu2_smeter_peak {
+            self.yaesu2_smeter_peak = state.yaesu2_smeter;
+            self.yaesu2_smeter_peak_time = Instant::now();
+        } else if self.yaesu2_smeter_peak_time.elapsed().as_secs_f32() > 2.0 {
+            self.yaesu2_smeter_peak = state.yaesu2_smeter;
+            self.yaesu2_smeter_peak_time = Instant::now();
+        }
         self.yaesu2_tx_active = state.yaesu2_tx_active;
         self.yaesu2_power_on = state.yaesu2_power_on;
         self.yaesu2_split = state.yaesu2_split;
         self.yaesu2_scan = state.yaesu2_scan;
+        self.yaesu2_tuner_state = state.yaesu2_tuner_state;
+        self.yaesu2_feature_levels = state.yaesu2_feature_levels;
+        self.yaesu2_clar_offset = state.yaesu2_feature_freqs[3] as i16; // clarifier-offset (§15)
+        // yaesu2_feature_toggles wordt achter de debounce gesynct (optimistische toggles).
         self.yaesu2_vfo_select = state.yaesu2_vfo_select;
         self.yaesu2_memory_channel = state.yaesu2_memory_channel;
         // Slider-sync met debounce (1s na lokale wijziging), zoals slot 0.
@@ -3411,8 +3743,11 @@ impl SdrRemoteApp {
             self.yaesu2_squelch = state.yaesu2_squelch as u16;
             self.yaesu2_rf_gain = state.yaesu2_rf_gain as u16;
             self.yaesu2_rf_power = state.yaesu2_tx_power as u16;
+            for j in 0..4 { self.yaesu_level_sliders[1][j] = state.yaesu2_feature_levels[8 + j] as i32; }
+            for j in 0..3 { self.yaesu_freq_sliders[1][j] = state.yaesu2_feature_freqs[j] as i32; }
+            self.yaesu2_feature_toggles = state.yaesu2_feature_toggles;
         }
-        // Sync slider values from radio — debounce 1s after local change
+        // Sync slider values from radio - debounce 1s after local change
         let yaesu_accept = self.yaesu_control_changed_at
             .map_or(true, |t| t.elapsed().as_millis() > 1000);
         if state.yaesu_connected && yaesu_accept {
@@ -3420,9 +3755,16 @@ impl SdrRemoteApp {
             self.yaesu_squelch = state.yaesu_squelch as u16;
             self.yaesu_rf_gain = state.yaesu_rf_gain as u16;
             self.yaesu_rf_power = state.yaesu_tx_power as u16;
+            for j in 0..4 { self.yaesu_level_sliders[0][j] = state.yaesu_feature_levels[8 + j] as i32; }
+            for j in 0..3 { self.yaesu_freq_sliders[0][j] = state.yaesu_feature_freqs[j] as i32; }
+            self.yaesu_feature_toggles = state.yaesu_feature_toggles;
         }
         self.yaesu_split_active = state.yaesu_split;
         self.yaesu_scan_active = state.yaesu_scan;
+        self.yaesu_tuner_state = state.yaesu_tuner_state;
+        self.yaesu_feature_levels = state.yaesu_feature_levels;
+        self.yaesu_clar_offset = state.yaesu_feature_freqs[3] as i16; // clarifier-offset (§15)
+        // yaesu_feature_toggles wordt achter de debounce gesynct (optimistische toggles).
         self.yaesu_in_memory_mode = state.yaesu_vfo_select == 1 || state.yaesu_vfo_select == 2; // 1=Memory, 2=MemTune (not 3=VFO B)
         // Find the current memory channel in our loaded list
         if self.yaesu_in_memory_mode && state.yaesu_memory_channel > 0 {
@@ -3471,7 +3813,7 @@ impl SdrRemoteApp {
             self.yaesu_mem_radio_received = false;
             self.yaesu_menu_received = false;
         }
-        // Slot-1 (FTX-1) geheugen-dump → yaesu2_mem_channels (Fase B). Geen MENU-tak
+        // Slot-1 (FTX-1) geheugen-dump -> yaesu2_mem_channels (Fase B). Geen MENU-tak
         // (EX-menu = Fase C). FTX-1 MT/MR-formaat te verifiëren op hardware.
         if let Some(ref text) = state.yaesu2_memory_data {
             if let Some(menu_body) = text.strip_prefix("MENU:") {
@@ -3483,7 +3825,7 @@ impl SdrRemoteApp {
                             .map(|(a, v)| (a.trim().to_string(), v.trim().to_string())))
                         .filter(|(a, _)| a.len() == 6)
                         .collect();
-                    self.yaesu2_menu_edits.clear(); // verse waarden → bewerk-buffers resetten
+                    self.yaesu2_menu_edits.clear(); // verse waarden -> bewerk-buffers resetten
                     log::info!("[radio1] received {} EX menu values", self.yaesu2_menu_entries.len());
                 }
             } else if !self.yaesu2_mem_radio_received {
@@ -3564,7 +3906,7 @@ impl SdrRemoteApp {
         }
         // Sync RX2 Vol from Thetis ZZLB (same as RX1 Vol syncs from ZZLA)
         if state.rx2_af_gain != self.rx2_af_gain_display {
-            log::info!("UI: RX2 AF gain {} → {}, slider {:.0}% → {:.0}%",
+            log::info!("UI: RX2 AF gain {} -> {}, slider {:.0}% -> {:.0}%",
                 self.rx2_af_gain_display, state.rx2_af_gain,
                 self.rx2_volume * 100.0, state.rx2_af_gain as f32);
             self.rx2_volume = state.rx2_af_gain as f32 / 100.0;
@@ -3747,7 +4089,7 @@ impl SdrRemoteApp {
                 self.save_full_config();
             }
 
-            // FFT size selector — labels computed from current DDC sample rate
+            // FFT size selector - labels computed from current DDC sample rate
             let ddc_rate = if self.ddc_sample_rate_rx1 > 0 { self.ddc_sample_rate_rx1 as u32 * 1000 } else { 384_000 };
             let auto_fft = sdr_remote_core::ddc_fft_size(ddc_rate);
             let auto_k = auto_fft / 1024;
@@ -3783,7 +4125,7 @@ impl SdrRemoteApp {
                         }
                     }
                 });
-            // Height slider — only in the main Radio tab. Popouts fill the
+            // Height slider - only in the main Radio tab. Popouts fill the
             // whole window and ignore this setting.
             if !is_popout {
                 ui.label("H:");
@@ -3840,7 +4182,7 @@ impl SdrRemoteApp {
         let dt = now.duration_since(self.last_frame_time).as_secs_f64();
         self.last_frame_time = now;
         // Exponential smoothing: ~90% of the way in ~50ms (alpha = 1 - e^(-dt/tau))
-        let tau = 0.02; // 20ms time constant — fast but smooth
+        let tau = 0.02; // 20ms time constant - fast but smooth
         let alpha = (1.0 - (-dt / tau).exp()).clamp(0.0, 1.0);
         self.smooth_alpha = alpha;
         if self.pending_freq.is_some() {
@@ -3855,7 +4197,7 @@ impl SdrRemoteApp {
             self.smooth_display_center_hz = target_center;
         }
         let smooth_center = self.smooth_display_center_hz as u64;
-        // VFO marker follows the smooth center (minus pan offset) — stays perfectly stationary
+        // VFO marker follows the smooth center (minus pan offset) - stays perfectly stationary
         let smooth_vfo = (self.smooth_display_center_hz
             - self.spectrum_pan as f64 * self.full_spectrum_span_hz as f64) as u64;
 
@@ -3915,7 +4257,7 @@ impl SdrRemoteApp {
             &SpectrumPlotConfig { is_popout, ..RX1_PLOT_CONFIG },
         );
         // Drag-handle for resizing spectrum + waterfall height in the main
-        // Radio tab. Popouts skip — they always fill their window.
+        // Radio tab. Popouts skip - they always fill their window.
         if !is_popout {
             let handle_h = 6.0;
             let (rect, response) = ui.allocate_exact_size(
@@ -3929,7 +4271,7 @@ impl SdrRemoteApp {
                 visuals.widgets.inactive.bg_fill
             };
             ui.painter().rect_filled(rect, 2.0, fill);
-            // Small visual "grip" — three short horizontal lines centred.
+            // Small visual "grip" - three short horizontal lines centred.
             let grip_color = visuals.widgets.inactive.fg_stroke.color;
             let cx = rect.center().x;
             let cy = rect.center().y;
@@ -3956,7 +4298,7 @@ impl SdrRemoteApp {
 
     /// Render RX1 controls only (VFO, S-meter, band, mode, freq step, filter, NR, ANF).
     /// `surface` bepaalt welke UI-oppervlakte dit is (MainTab, PopoutSeparate,
-    /// PopoutJoined) — meegegeven aan de controls-helpers voor coverage en events.
+    /// PopoutJoined) - meegegeven aan de controls-helpers voor coverage en events.
     fn render_rx1_controls(&mut self, ui: &mut egui::Ui, surface: controls::UiSurface) {
         if self.popout_meter_analog {
             let total_w = ui.available_width();
@@ -4097,7 +4439,7 @@ impl SdrRemoteApp {
             },
         );
         // Alleen lokale state muteren als dispatch daadwerkelijk een command stuurde
-        // (niet bij Disconnected / SendFailed) — anders drift UI-state vs. server-state.
+        // (niet bij Disconnected / SendFailed) - anders drift UI-state vs. server-state.
         if let Some((click, true)) = mode_action {
             self.mode = click.mode;
             self.filter_changed_at = None;
@@ -4122,7 +4464,7 @@ impl SdrRemoteApp {
                 })
             },
         );
-        // Alleen pending_freq updaten als dispatch slaagde — anders UI-drift.
+        // Alleen pending_freq updaten als dispatch slaagde - anders UI-drift.
         if let Some((new_freq, true)) = step_action {
             self.set_pending_freq_a(new_freq);
         }
@@ -4188,7 +4530,7 @@ impl SdrRemoteApp {
                     self.nr_level = new_val;
                 }
 
-                // NB cycle: OFF → NB1 → NB2 (extensions) → OFF
+                // NB cycle: OFF -> NB1 -> NB2 (extensions) -> OFF
                 let nb_label = match self.nb_level { 1 => "NB1".to_string(), 2 => "NB2".to_string(), _ => "NB".to_string() };
                 let nb_btn = if self.nb_level > 0 {
                     egui::Button::new(RichText::new(&nb_label).strong())
@@ -4324,7 +4666,7 @@ impl SdrRemoteApp {
 
         // -- Top bar: frequency + mode (via render_frequency_display) --
         // PATCH-rx2-inline-edit: RX2 krijgt nu dezelfde inline-edit UX als RX1
-        // (klik VFO B label → edit → Enter → dispatch). Scroll-wheel blijft
+        // (klik VFO B label -> edit -> Enter -> dispatch). Scroll-wheel blijft
         // werken (Extended density is niet scroll-gated).
         let _ = is_popout; // parameter blijft voor signature-compat; not-popout is dode code.
         ui.horizontal(|ui| {
@@ -4555,7 +4897,7 @@ impl SdrRemoteApp {
                     self.rx2_nr_level = new_val;
                 }
 
-                // NB cycle: OFF → NB1 → NB2 (extensions) → OFF
+                // NB cycle: OFF -> NB1 -> NB2 (extensions) -> OFF
                 let rx2_nb_label = match self.rx2_nb_level { 1 => "NB1".to_string(), 2 => "NB2".to_string(), _ => "NB".to_string() };
                 let nb_btn = if self.rx2_nb_level > 0 {
                     egui::Button::new(RichText::new(&rx2_nb_label).strong())
@@ -4601,13 +4943,13 @@ impl SdrRemoteApp {
                 });
             }
         }
-        // Filter edge drag — always send both low+high (server expects pair)
+        // Filter edge drag - always send both low+high (server expects pair)
         {
             use sdr_remote_core::protocol::ControlId;
             let drag_lo: Option<i32> = ctx.memory(|mem| mem.data.get_temp(egui::Id::new("spectrum_filter_low")));
             let drag_hi: Option<i32> = ctx.memory(|mem| mem.data.get_temp(egui::Id::new("spectrum_filter_high")));
             // In symmetric modes (AM/SAM/DSB/FM/DRM) Thetis forces ±W around the
-            // carrier — dragging one edge there must mirror to both, otherwise
+            // carrier - dragging one edge there must mirror to both, otherwise
             // TL2 shows an asymmetric band Thetis can't honour and narrowing one
             // edge appears to do nothing (Thetis keeps the wider side).
             let sym = is_symmetric_mode(self.mode);
@@ -4918,32 +5260,24 @@ impl SdrRemoteApp {
 
 impl eframe::App for SdrRemoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Bump UI frame id — stempelt alle UiEvents met monotone frame-id voor
+        // Bump UI frame id - stempelt alle UiEvents met monotone frame-id voor
         // timeline-correlatie.
         controls::begin_frame();
 
         // Clear per-frame flags
         ctx.memory_mut(|mem| mem.data.remove::<bool>(egui::Id::new("freq_scroll_consumed")));
 
-        // Light grey background, lighter widget fills for contrast
-        let mut visuals = ctx.style().visuals.clone();
-        let light_grey = Color32::from_rgb(230, 230, 230);
-        visuals.panel_fill = light_grey;
-        visuals.window_fill = light_grey;
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(210, 210, 215);
-        visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(210, 210, 215);
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(195, 195, 200);
-        visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(195, 195, 200);
-        visuals.widgets.active.bg_fill = Color32::from_rgb(180, 180, 190);
-        visuals.widgets.active.weak_bg_fill = Color32::from_rgb(180, 180, 190);
-        ctx.set_visuals(visuals);
+        // Base egui visuals per selected theme (step 1). Classic reproduces the original
+        // light-grey scheme; Dark is the tuned dark scheme. Colours that read from
+        // ui.visuals() follow automatically; hard-coded ones are migrated in later steps.
+        theme::apply_visuals(ctx, self.theme_variant, &self.theme_custom);
 
         self.sync_state();
         self.process_midi_events();
 
         // PATCH-4: first-run / re-launched wizard owns the viewport
         // while present. Render it edge-to-edge and short-circuit the
-        // rest of update() — none of the regular UI panes are valid
+        // rest of update() - none of the regular UI panes are valid
         // until the wizard exits.
         if self.wizard_state.is_some() {
             let lang = if self.ui_language == "nl" {
@@ -4967,7 +5301,7 @@ impl eframe::App for SdrRemoteApp {
             match outcome {
                 wizard::WizardOutcome::Continue => {}
                 wizard::WizardOutcome::SkipToManual => {
-                    // No config write — wizard re-arms on next launch.
+                    // No config write - wizard re-arms on next launch.
                     self.wizard_state = None;
                 }
                 wizard::WizardOutcome::Finished => {
@@ -4988,13 +5322,15 @@ impl eframe::App for SdrRemoteApp {
 
         // PATCH-4: bump the successful-connect counter the first time the
         // user reaches Connected (incl. when they skipped the wizard).
-        // Idempotent — mark_successful_connect() no-ops past 0.
+        // Idempotent - mark_successful_connect() no-ops past 0.
         if self.connected {
             crate::ui::config::mark_successful_connect();
         }
 
-        // Sync frequency to embedded WebSDR (debounced)
-        self.catsync.sync_freq(self.frequency_hz, self.mode);
+        // Sync frequency and mute state to the selected WebSDR target.
+        let (websdr_freq_hz, websdr_mode) = self.catsync_target_freq_mode();
+        self.catsync.sync_freq(websdr_freq_hz, websdr_mode);
+        self.catsync.update_mute(self.catsync_target_tx_active());
 
         // (TX spectrum override sets ref/range directly in PTT handler)
 
@@ -5002,7 +5338,7 @@ impl eframe::App for SdrRemoteApp {
         // on pointer-up like popouts to avoid disk-I/O stalls during a drag
         // (which causes the OS to oscillate the window between frames).
         // Grootte via screen_rect (altijd beschikbaar; i.viewport().inner_rect kan
-        // None zijn op Windows/eframe → capture vuurde dan nooit).
+        // None zijn op Windows/eframe -> capture vuurde dan nooit).
         {
             let sr = ctx.screen_rect();
             let (w, h) = (sr.width(), sr.height());
@@ -5040,7 +5376,7 @@ impl eframe::App for SdrRemoteApp {
                 self.local_volume = 1.0;
                 let _ = self.cmd_tx.send(Command::SetLocalVolume(1.0));
             }
-            // VFO A popout without VFO B → mute VFO B
+            // VFO A popout without VFO B -> mute VFO B
             if self.spectrum_popout && !self.rx2_popout && self.vfo_b_volume > 0.001 {
                 self.vfo_b_volume = 0.001;
                 let _ = self.cmd_tx.send(Command::SetVfoBVolume(0.001));
@@ -5051,7 +5387,7 @@ impl eframe::App for SdrRemoteApp {
         // Tuning-latch op view-data verwijderd (experiment 2026-05-06): de
         // per-row absolute mapping in render_waterfall (spectrum.rs:646)
         // gebruikt elke row's eigen center_hz + span_hz. Late detail-FFT-rows
-        // worden dus automatisch op hun werkelijke freq-positie gerenderd —
+        // worden dus automatisch op hun werkelijke freq-positie gerenderd -
         // 1-2 rows kort op verschoven plek tijdens snel tunen, daarna self-
         // correcting. Voorheen werd view-data weggegooid tijdens tuning-
         // latch zodat alleen full-DDC (grover) in de row kwam.
@@ -5061,7 +5397,7 @@ impl eframe::App for SdrRemoteApp {
             &self.spectrum_bins, self.spectrum_center_hz, self.spectrum_span_hz,
         );
 
-        // Push RX2 waterfall data — zelfde principe als RX1.
+        // Push RX2 waterfall data - zelfde principe als RX1.
         self.rx2_waterfall.push(
             &self.rx2_full_spectrum_bins, self.rx2_full_spectrum_center_hz,
             self.rx2_full_spectrum_span_hz, self.rx2_full_spectrum_sequence,
@@ -5101,7 +5437,7 @@ impl eframe::App for SdrRemoteApp {
                 }).inner;
                 if current_pos_rx_only {
                     response.clone().on_hover_text(
-                        "Active Amplitec antenna is RX-only — transmit is blocked",
+                        "Active Amplitec antenna is RX-only - transmit is blocked",
                     );
                 }
 
@@ -5121,7 +5457,7 @@ impl eframe::App for SdrRemoteApp {
                 }
 
                 let space_held = ui.input(|i| i.key_down(egui::Key::Space));
-                // RX-only Amplitec positie: onderdruk de client-PTT volledig —
+                // RX-only Amplitec positie: onderdruk de client-PTT volledig -
                 // ook spatiebalk en MIDI. Reset bovendien de toggle-states
                 // (mouse/MIDI), anders blijft een tijdens RX-only ingedrukte
                 // toggle "aan" hangen en gaat 'ie alsnog zenden zodra we van
@@ -5135,10 +5471,9 @@ impl eframe::App for SdrRemoteApp {
                     && !current_pos_rx_only;
                 if new_ptt != self.ptt {
                     self.midi.send_led(crate::midi::MidiAction::Ptt, new_ptt);
-                    self.catsync.update_mute(new_ptt);
                     // TX spectrum override
                     if new_ptt {
-                        // Entering TX: save ref, range, auto — then set TX defaults
+                        // Entering TX: save ref, range, auto - then set TX defaults
                         self.tx_spectrum_saved_ref_db = Some(self.spectrum_ref_db);
                         self.tx_spectrum_saved_range = Some(self.spectrum_range_db);
                         self.tx_spectrum_saved_auto_ref = Some(self.auto_ref_enabled);
@@ -5171,17 +5506,18 @@ impl eframe::App for SdrRemoteApp {
                         }
                     }
                 }
+                self.apply_ptt_spike_protection(false, new_ptt);
                 let _ = self.cmd_tx.send(Command::SetPtt(new_ptt));
                 self.ptt = new_ptt;
 
                 // Tune button (visible when tuner available on the active antenna).
-                // Multi-tuner note: stale-detection is handled SERVER-side now —
+                // Multi-tuner note: stale-detection is handled SERVER-side now -
                 // the server tracks per-tuner tune frequency and already broadcasts
                 // state = IDLE when the VFO has drifted >25 kHz from the active
                 // tuner's last-tune freq. Client-side stale check used to apply a
                 // second filter on top, but its `tuner_tune_freq` only updated on
-                // TUNING→DONE_OK transitions, so an Amplitec switch (which sees
-                // IDLE→DONE_OK without TUNING) left the client comparing against
+                // TUNING->DONE_OK transitions, so an Amplitec switch (which sees
+                // IDLE->DONE_OK without TUNING) left the client comparing against
                 // the wrong tuner's freq. Drop the client-side gate and trust the
                 // server state directly.
                 if self.tuner_can_tune && self.tuner_connected {
@@ -5295,59 +5631,64 @@ impl eframe::App for SdrRemoteApp {
             });
         });
 
-        // Volume + RX2 + Connect row (between PTT bar and tabs)
+        // Thetis volume/RX2 controls + Connect row (between PTT bar and tabs).
         egui::TopBottomPanel::top("vol_rx2_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // Volume slider: role depends on popout state
-                let both_popout = self.spectrum_popout && self.rx2_popout;
-                if both_popout {
-                    ui.label("Master:");
-                    let slider = egui::Slider::new(&mut self.local_volume, 0.001..=1.0)
-                        .logarithmic(true)
-                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-                    if ui.add(slider).changed() {
-                        let _ = self.cmd_tx.send(Command::SetLocalVolume(self.local_volume));
-                        self.save_full_config();
-                    }
-                } else {
-                    ui.label("VFO A:");
-                    let slider = egui::Slider::new(&mut self.vfo_a_volume, 0.001..=1.0)
-                        .logarithmic(true)
-                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-                    if ui.add(slider).changed() {
-                        let _ = self.cmd_tx.send(Command::SetVfoAVolume(self.vfo_a_volume));
-                        self.save_full_config();
-                    }
-                }
-
-                ui.separator();
-
-                // RX2 toggle
-                let rx2_btn = if self.rx2_enabled {
-                    egui::Button::new(RichText::new("RX2").size(12.0).strong())
-                        .fill(Color32::from_rgb(100, 160, 230))
-                } else {
-                    egui::Button::new(RichText::new("RX2").size(12.0))
-                };
-                if ui.add(rx2_btn).on_hover_text("Enable/disable RX2.").clicked() {
-                    self.rx2_enabled = !self.rx2_enabled;
-                    let _ = self.cmd_tx.send(Command::SetRx2Enabled(self.rx2_enabled));
-                    if self.rx2_enabled {
-                        let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(true));
-                        self.rx2_last_sent_zoom = 0.0;
-                        self.rx2_last_sent_pan = 0.0;
-                        self.rx2_zoom_pan_changed_at = Some(Instant::now());
-                        if self.spectrum_popout {
-                            self.rx2_popout = true;
+                if self.thetis_configured {
+                    // Volume slider: role depends on popout state.
+                    let both_popout = self.spectrum_popout && self.rx2_popout;
+                    if both_popout {
+                        ui.label("Master:");
+                        let slider = egui::Slider::new(&mut self.local_volume, 0.001..=1.0)
+                            .logarithmic(true)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                        if ui.add(slider).changed() {
+                            let _ = self.cmd_tx.send(Command::SetLocalVolume(self.local_volume));
+                            self.save_full_config();
                         }
                     } else {
-                        let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
-                        self.rx2_popout = false;
+                        ui.label("VFO A:");
+                        let slider = egui::Slider::new(&mut self.vfo_a_volume, 0.001..=1.0)
+                            .logarithmic(true)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                        if ui.add(slider).changed() {
+                            let _ = self.cmd_tx.send(Command::SetVfoAVolume(self.vfo_a_volume));
+                            self.save_full_config();
+                        }
                     }
-                    self.save_full_config();
-                }
 
-                ui.separator();
+                    ui.separator();
+
+                    // RX2 toggle.
+                    let rx2_btn = if self.rx2_enabled {
+                        egui::Button::new(RichText::new("RX2").size(12.0).strong())
+                            .fill(Color32::from_rgb(100, 160, 230))
+                    } else {
+                        egui::Button::new(RichText::new("RX2").size(12.0))
+                    };
+                    if ui.add(rx2_btn).on_hover_text("Enable/disable RX2.").clicked() {
+                        self.rx2_enabled = !self.rx2_enabled;
+                        let _ = self.cmd_tx.send(Command::SetRx2Enabled(self.rx2_enabled));
+                        if self.rx2_enabled {
+                            let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(true));
+                            self.rx2_last_sent_zoom = 0.0;
+                            self.rx2_last_sent_pan = 0.0;
+                            self.rx2_zoom_pan_changed_at = Some(Instant::now());
+                            if self.spectrum_popout {
+                                self.rx2_popout = true;
+                            }
+                        } else {
+                            let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
+                            self.rx2_popout = false;
+                        }
+                        self.save_full_config();
+                    }
+
+                    ui.separator();
+                } else {
+                    self.rx2_popout = false;
+                    self.show_vrx = false;
+                }
 
                 // Connect/Disconnect button + status
                 if self.connected {
@@ -5359,9 +5700,9 @@ impl eframe::App for SdrRemoteApp {
                     ui.colored_label(Color32::GREEN, "Connected");
                 } else {
                     // PATCH-1 smoke-test fix (2026-05-12): when we are mid-auth in
-                    // AwaitingTotp, Connect must not be clickable — the user should
+                    // AwaitingTotp, Connect must not be clickable - the user should
                     // use the Verify-button on the 2FA input. A second Connect-press
-                    // would otherwise pull the engine back to "Connecting…" while
+                    // would otherwise pull the engine back to "Connecting..." while
                     // the server still has an active PendingTotp session, which
                     // would never recover.
                     let in_awaiting_totp = matches!(
@@ -5388,7 +5729,14 @@ impl eframe::App for SdrRemoteApp {
                         self.rx2_last_sent_pan = 0.0;
                         self.rx2_zoom_pan_changed_at = Some(Instant::now());
                         let pw = if self.password_input.is_empty() { None } else { Some(self.password_input.clone()) };
-                        let _ = self.cmd_tx.send(Command::Connect(self.server_input.clone(), pw));
+                        // In relay-modus is er geen server-IP: stuur een placeholder-label
+                        // (de Relay-transport negeert het adres; de engine skipt de DNS-check).
+                        let connect_addr = if self.relay_external {
+                            format!("relay:{}", self.relay_station)
+                        } else {
+                            self.server_input.clone()
+                        };
+                        let _ = self.cmd_tx.send(Command::Connect(connect_addr, pw));
                         self.save_full_config();
                     }
                     ui.colored_label(Color32::RED, "Disconnected");
@@ -5420,14 +5768,14 @@ impl eframe::App for SdrRemoteApp {
                 // PATCH-1 smoke-test fix (2026-05-12 #2): show connect-status
                 // error globally in the top bar so users on any tab see it,
                 // not just on the Server tab. Avoids the "press Connect on
-                // Radio tab → silent failure" UX gap.
+                // Radio tab -> silent failure" UX gap.
                 {
                     use sdr_remote_logic::i18n::{connect_status_text, Lang};
                     use sdr_remote_logic::state::ConnectStatus;
                     let connect_status = self.state_rx.borrow().connect_status.clone();
                     let lang = if self.ui_language == "nl" { Lang::Nl } else { Lang::En };
                     // PATCH-1 smoke-test fix (2026-05-13): top-bar headline 16pt bold
-                    // so it stands out — owner feedback: was smaller than other UI.
+                    // so it stands out - operator feedback: was smaller than other UI.
                     match &connect_status {
                         ConnectStatus::Failed(_) => {
                             let (headline, _) = connect_status_text(&connect_status, lang, sdr_remote_logic::i18n::Platform::Desktop);
@@ -5448,9 +5796,14 @@ impl eframe::App for SdrRemoteApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            if !self.thetis_configured && matches!(self.active_tab, Tab::Radio | Tab::Thetis) {
+                self.active_tab = Tab::Devices;
+            }
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.active_tab, Tab::Radio, "Radio");
-                ui.selectable_value(&mut self.active_tab, Tab::Thetis, "Thetis");
+                if self.thetis_configured {
+                    ui.selectable_value(&mut self.active_tab, Tab::Radio, "Radio");
+                    ui.selectable_value(&mut self.active_tab, Tab::Thetis, "Thetis");
+                }
                 ui.selectable_value(&mut self.active_tab, Tab::Server, "Server");
                 ui.selectable_value(&mut self.active_tab, Tab::Devices, "Devices");
                 ui.selectable_value(&mut self.active_tab, Tab::Midi, "MIDI");
@@ -5459,16 +5812,20 @@ impl eframe::App for SdrRemoteApp {
                         self.show_about = !self.show_about;
                     }
                     ui.toggle_value(&mut self.show_log, RichText::new("Log").size(11.0));
-                    let prev_show_vrx = self.show_vrx;
-                    ui.toggle_value(&mut self.show_vrx, RichText::new("VRX").size(11.0));
-                    if prev_show_vrx != self.show_vrx {
-                        log::info!("VRX popout toggle: {} → {}", prev_show_vrx, self.show_vrx);
-                    }
-                    if prev_show_vrx && !self.show_vrx {
-                        // Toggle-driven close — mirror the X-button close
-                        // path so window geometry persists either way.
-                        self.vrx_popout_init_applied = false;
-                        self.save_full_config();
+                    if self.thetis_configured {
+                        let prev_show_vrx = self.show_vrx;
+                        ui.toggle_value(&mut self.show_vrx, RichText::new("VRX").size(11.0));
+                        if prev_show_vrx != self.show_vrx {
+                            log::info!("VRX popout toggle: {} -> {}", prev_show_vrx, self.show_vrx);
+                        }
+                        if prev_show_vrx && !self.show_vrx {
+                            // Toggle-driven close mirrors the X-button close path
+                            // so window geometry persists either way.
+                            self.vrx_popout_init_applied = false;
+                            self.save_full_config();
+                        }
+                    } else {
+                        self.show_vrx = false;
                     }
                 });
             });
@@ -5494,7 +5851,7 @@ impl eframe::App for SdrRemoteApp {
             // tall spectrum_total_h) and the total content height exceeds
             // the window. Spectrum height itself is fixed at
             // `self.spectrum_total_h` (set via the H: slider / drag-handle
-            // below the waterfall) — without the ScrollArea wrapper any
+            // below the waterfall) - without the ScrollArea wrapper any
             // overflow would push content off-screen.
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
 
@@ -5599,7 +5956,7 @@ impl eframe::App for SdrRemoteApp {
                 }
             }
 
-            // Mode buttons (via controls::render_mode_selector — Basic density = 4 modes)
+            // Mode buttons (via controls::render_mode_selector - Basic density = 4 modes)
             // Tab::Radio mode-block had voorheen `ui.add(btn)` zonder
             // connected-guard.
             let ptt_active = self.ptt;
@@ -5812,7 +6169,7 @@ impl eframe::App for SdrRemoteApp {
 
         // Pop-out viewports: joined or separate. Both gates intentionally
         // omit a bins/connected check so the popout opens at its saved
-        // geometry from the very first frame — same UX as the Yaesu popout.
+        // geometry from the very first frame - same UX as the Yaesu popout.
         // The popout's content gates internally on bin-availability and
         // shows a "Waiting for ..." placeholder pre-connect.
         let show_rx1_popout = self.spectrum_popout && self.spectrum_enabled;
@@ -5887,8 +6244,8 @@ impl eframe::App for SdrRemoteApp {
                     if r1.is_positive() && r2.is_positive() {
                         if self.popout_meter_analog {
                             // Analog: 60×28 button just left of RX1 meter,
-                            // top-aligned — mirrors the Split button on RX2.
-                            // Default styling (no fill) — blue is reserved for
+                            // top-aligned - mirrors the Split button on RX2.
+                            // Default styling (no fill) - blue is reserved for
                             // toggled-on state in this app; A<>B is momentary.
                             // Use a centered child-UI so the button text is
                             // horizontally centered (matches Split).
@@ -5917,7 +6274,7 @@ impl eframe::App for SdrRemoteApp {
                             // Separate Area ID from the analog one to avoid
                             // egui caching a previous frame's larger size
                             // constraint and triggering character-wrap of
-                            // "A<>B" when toggling Analog → Bar.
+                            // "A<>B" when toggling Analog -> Bar.
                             let center_x = (r1.right() + r2.left()) / 2.0;
                             let center_y = (r1.center().y + r2.center().y) / 2.0;
                             let pos = egui::pos2(center_x - 23.0, center_y - 10.0);
@@ -6086,7 +6443,7 @@ impl eframe::App for SdrRemoteApp {
                     // Fixed PTT button at bottom
                     egui::TopBottomPanel::bottom("yaesu_ptt_panel").show(ctx, |ui| {
                         ui.horizontal(|ui| {
-                            // PTT button — locked when other client is transmitting
+                            // PTT button - locked when other client is transmitting
                             let (ptt_color, ptt_text, ptt_locked) = if self.other_tx {
                                 (Color32::from_rgb(200, 120, 0), "TX in use", true)
                             } else if self.yaesu_tx_active {
@@ -6101,6 +6458,7 @@ impl eframe::App for SdrRemoteApp {
                             if self.yaesu_ptt_toggle_mode {
                                 if response.clicked() {
                                     let new_tx = !self.yaesu_tx_active;
+                                    self.apply_ptt_spike_protection(true, new_tx);
                                     let _ = self.cmd_tx.send(Command::SetYaesuPtt(new_tx));
                                 }
                             } else {
@@ -6111,23 +6469,23 @@ impl eframe::App for SdrRemoteApp {
                                 });
                                 if pressing != self.yaesu_mouse_ptt {
                                     self.yaesu_mouse_ptt = pressing;
+                                    self.apply_ptt_spike_protection(true, pressing);
                                     let _ = self.cmd_tx.send(Command::SetYaesuPtt(pressing));
                                 }
                             }
 
                             ui.separator();
 
-                            // Mic gain slider for Yaesu USB TX audio
-                            ui.label("Mic gain:");
-                            let slider = egui::Slider::new(&mut self.yaesu_mic_gain, 0.05..=3.0)
+                            ui.label("Volume:");
+                            let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
                                 .logarithmic(true)
-                                .custom_formatter(|v, _| format!("{:.2}x", v));
-                            let resp = ui.add(slider);
+                                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                            let resp = ui.add_sized([140.0, 16.0], slider);
                             if resp.changed() {
-                                let _ = self.cmd_tx.send(Command::SetYaesuTxGain(self.yaesu_mic_gain));
+                                let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
                             }
                             if resp.drag_stopped() {
-                                self.save_ptt_config(); // persist mic-gain
+                                self.save_full_config();
                             }
                         });
                     });
@@ -6141,10 +6499,10 @@ impl eframe::App for SdrRemoteApp {
             );
         }
 
-        // Slot-1 (FTX-1) eigen popout-window — los van het 991A-window, geroute
+        // Slot-1 (FTX-1) eigen popout-window - los van het 991A-window, geroute
         // naar slot 1. Verschijnt zodra slot 1 *enabled* is (config), net als het
-        // 991A-window op yaesu_enabled — dus direct bij opstart, ook zonder connect.
-        if self.yaesu2_popout && self.yaesu2_enabled {
+        // 991A-window op yaesu_enabled - dus direct bij opstart, ook zonder connect.
+        if self.yaesu2_popout && (self.yaesu2_enabled || self.yaesu2_connected) {
             let title = self.yaesu_window_title(1);
             let vb = Self::apply_popout_geometry(
                 ViewportBuilder::default().with_title(title),
@@ -6183,6 +6541,7 @@ impl eframe::App for SdrRemoteApp {
                             if self.yaesu2_ptt_toggle_mode {
                                 if response.clicked() {
                                     let new_tx = !self.yaesu2_tx_active;
+                                    self.apply_ptt_spike_protection(true, new_tx);
                                     let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(new_tx));
                                 }
                             } else {
@@ -6192,20 +6551,21 @@ impl eframe::App for SdrRemoteApp {
                                 });
                                 if pressing != self.yaesu2_mouse_ptt {
                                     self.yaesu2_mouse_ptt = pressing;
+                                    self.apply_ptt_spike_protection(true, pressing);
                                     let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(pressing));
                                 }
                             }
                             ui.separator();
-                            ui.label("Mic gain:");
-                            let slider = egui::Slider::new(&mut self.yaesu2_mic_gain, 0.05..=3.0)
+                            ui.label("Volume:");
+                            let slider = egui::Slider::new(&mut self.yaesu2_volume, 0.001..=1.0)
                                 .logarithmic(true)
-                                .custom_formatter(|v, _| format!("{:.2}x", v));
-                            let resp = ui.add(slider);
+                                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                            let resp = ui.add_sized([140.0, 16.0], slider);
                             if resp.changed() {
-                                let _ = self.cmd_tx.send(Command::SetYaesu2TxGain(self.yaesu2_mic_gain));
+                                let _ = self.cmd_tx.send(Command::SetYaesu2Volume(self.yaesu2_volume));
                             }
                             if resp.drag_stopped() {
-                                self.save_ptt_config(); // persist mic-gain
+                                self.save_full_config();
                             }
                         });
                     });
@@ -6287,7 +6647,7 @@ impl eframe::App for SdrRemoteApp {
             }
         }
 
-        // VRX joint popout window — VRX1 (left) listens on RX1 IQ +
+        // VRX joint popout window - VRX1 (left) listens on RX1 IQ +
         // VFO-A, VRX2 (right) on RX2 IQ + VFO-B. Audio is mixed into
         // the main playback alongside RX1 / RX2 / Yaesu.
         if self.show_vrx {
@@ -6315,7 +6675,7 @@ impl eframe::App for SdrRemoteApp {
                 vb,
                 |ctx, _class| {
                     if ctx.input(|i| i.viewport().close_requested()) {
-                        log::info!("VRX popout: close_requested fired → show_vrx=false");
+                        log::info!("VRX popout: close_requested fired -> show_vrx=false");
                         self.show_vrx = false;
                         self.vrx_popout_init_applied = false;
                         self.vrx1_waterfall_texture = None;
@@ -6329,7 +6689,7 @@ impl eframe::App for SdrRemoteApp {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         {
                             // Compute DDC ranges per channel. center+span
-                            // come from the spectrum packets — fall back
+                            // come from the spectrum packets - fall back
                             // to VFO ± 192 kHz before any spectrum has
                             // arrived so the input range is non-empty.
                             let vrx1_ddc_center: u64 = if self.full_spectrum_center_hz > 0 {
@@ -6420,24 +6780,25 @@ impl eframe::App for SdrRemoteApp {
                             ui.label(RichText::new("ThetisLink").size(22.0).strong());
                             ui.label(RichText::new(format!("v{}", sdr_remote_core::version_string())).size(14.0));
                             ui.add_space(4.0);
-                            ui.label("Remote control for Thetis SDR + Yaesu FT-991A");
+                            ui.label("Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
                         });
                         ui.add_space(8.0);
                         ui.separator();
 
                         ui.label(RichText::new("Author").size(13.0).strong());
-                        ui.label("Chiron van der Burgt — PA3GHM");
+                        ui.label("Chiron van der Burgt - PA3GHM");
 
                         ui.add_space(6.0);
                         ui.label(RichText::new("Special Thanks").size(13.0).strong());
-                        ui.label("Richie (ramdor) — Thetis SDR development, TCI protocol extensions");
+                        ui.label("Richie (ramdor) - Thetis SDR development, TCI protocol extensions");
 
                         ui.add_space(6.0);
                         ui.label(RichText::new("Protocols & External Services").size(13.0).strong());
-                        ui.label("TCI — Expert Electronics / Thetis");
-                        ui.label("DX Spider — DX cluster telnet protocol");
+                        ui.label("TCI - Expert Electronics / Thetis");
+                        ui.label("DX Spider - DX cluster telnet protocol");
                         ui.label("HPSDR / OpenHPSDR Protocol 2");
-                        ui.label("WebSDR (PA3FWM) / KiwiSDR — CatSync targets");
+                        ui.label("WebSDR (PA3FWM) / KiwiSDR - CatSync targets");
+                        ui.label("ThetisLink Relay - self-hosted WebSocket + UDP relay (internet remote)");
 
                         ui.add_space(6.0);
                         ui.label(RichText::new("Hardware Support").size(13.0).strong());
@@ -6445,12 +6806,14 @@ impl eframe::App for SdrRemoteApp {
                             for (dev, iface) in [
                                 ("ANAN 7000DLE", "TCI (via Thetis)"),
                                 ("Yaesu FT-991A", "Serial CAT + USB Audio"),
+                                ("Yaesu FTX-1", "Serial CAT + USB Audio"),
                                 ("RF2K-S PA", "HTTP API"),
                                 ("SPE Expert 1.3K-FA", "Serial"),
-                                ("JC-4s Tuner", "Serial (DTR)"),
+                                ("StockCorner JC-4s / JC-3s Tuner", "MCP2221A USB-HID"),
                                 ("UltraBeam RCU-06", "Serial"),
                                 ("Amplitec 6/2", "Serial"),
                                 ("EA7HG Visual Rotor", "UDP"),
+                                ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
                                 ("PstRotator (any supported rotor)", "XML over UDP"),
                             ] {
                                 ui.label(dev);
@@ -6471,6 +6834,8 @@ impl eframe::App for SdrRemoteApp {
                             ("ringbuf", "Lock-free buffers"),
                             ("tokio-tungstenite", "TCI WebSocket"),
                             ("serialport", "Yaesu CAT"),
+                            ("mcp2221-hal", "MCP2221A USB-HID (tuners, rotor)"),
+                            ("rustls", "Relay TLS (wss)"),
                             ("midir", "MIDI controller"),
                             ("wry", "WebView (CatSync)"),
                         ];
@@ -6490,7 +6855,8 @@ impl eframe::App for SdrRemoteApp {
                             ui.label("Source:");
                             ui.hyperlink("https://github.com/cjenschede/ThetisLink");
                         });
-                        ui.label("Based on the Thetis SDR lineage — see ATTRIBUTION.md");
+                        ui.label("Based on the Thetis SDR lineage - see ATTRIBUTION.md");
+                        ui.label("Third-party licenses & SBOM: see NOTICE.md, THIRD-PARTY-LICENSES.html");
 
                         ui.add_space(12.0);
                         ui.vertical_centered(|ui| {

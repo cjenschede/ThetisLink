@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -92,12 +93,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
 
     // PATCH-4: first-run wizard owns the viewport until the user finishes
     // it OR explicitly skips. `wizardActive` is also flipped on by a small
-    // "Re-run setup wizard" entry in the settings dialog so an owner can
+    // "Re-run setup wizard" entry in the settings dialog so an operator can
     // restart it manually after a fresh app install OR a misconfigure.
     var wizardActive by rememberSaveable {
         mutableStateOf(WizardPrefs.isFirstRun(context))
     }
-    // Bump the counter on every transition into Connected — covers both
+    // Bump the counter on every transition into Connected - covers both
     // the wizard path and the skipped-wizard / manual path.
     LaunchedEffect(state.connected) {
         if (state.connected) WizardPrefs.markSuccessful(context)
@@ -134,12 +135,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val volumeUpHeld by (activity?.volumeUpHeld ?: MutableStateFlow(false)).collectAsStateWithLifecycle()
     val lastKeyEvent by (activity?.lastKeyEvent ?: MutableStateFlow("")).collectAsStateWithLifecycle()
 
-    // Volume state — loaded from SharedPreferences, persists across restarts
+    // Volume state - loaded from SharedPreferences, persists across restarts
     val rxVolumeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("rx_volume", 0.5f)) }
     val localVolumeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("local_volume", 1f)) }
     val txGainState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("tx_gain", 0.5f)) }
 
-    // AGC state — loaded from SharedPreferences, persists across restarts
+    // AGC state - loaded from SharedPreferences, persists across restarts
     var agcEnabled by rememberSaveable { mutableStateOf(prefs.getBoolean("agc_enabled", false)) }
 
     // TX profiles from SharedPreferences
@@ -174,12 +175,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val waterfallRingBuffer = remember { com.sdrremote.ui.components.WaterfallRingBuffer(100) }
 
     // TL2-1 ctun-auto-recenter: push allow_zoom_below_2x state naar server bij elke
-    // (re)connect. Server enforced strictest over alle clients (zolang één client
+    // (re)connect. Server enforced strictest over alle clients (zolang een client
     // vink-uit heeft, server klemt zoom-min op 2x voor alle clients).
     LaunchedEffect(state.connected) {
         if (state.connected) {
             viewModel.setControl(0x63, if (allowZoomBelow2xState.value) 1 else 0)
-            // Push S-meter source subscription too — server's per-client session
+            // Push S-meter source subscription too - server's per-client session
             // resets to default 0x22 (Avg) on every new session, so we restore
             // the user's saved choice after auth completes.
             val mask = when (smeterSourceState.value) {
@@ -210,7 +211,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     var autoRefFrames by remember { mutableIntStateOf(0) }
     var autoRefInitialized by remember { mutableStateOf(false) }
 
-    // TX spectrum override — save/restore ref + range + auto on PTT transitions
+    // TX spectrum override - save/restore ref + range + auto on PTT transitions
     var txSavedRef by remember { mutableStateOf<Float?>(null) }
     var txSavedRange by remember { mutableStateOf<Float?>(null) }
     var txSavedAutoRef by remember { mutableStateOf<Boolean?>(null) }
@@ -244,7 +245,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Per-band WF contrast tracking
     var currentBand by remember { mutableStateOf<String?>(null) }
 
-    // Auto ref level calculation — runs on each new spectrum frame
+    // Auto ref level calculation - runs on each new spectrum frame
     val spectrumSeq = state.spectrumSequence
     LaunchedEffect(spectrumSeq) {
         if (!autoRefEnabled) return@LaunchedEffect
@@ -284,7 +285,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         }
     }
 
-    // Per-band WF contrast tracking — runs on frequency change
+    // Per-band WF contrast tracking - runs on frequency change
     val freqHz = state.frequencyHz
     LaunchedEffect(freqHz) {
         val newBand = freqToBand(freqHz)
@@ -312,7 +313,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     var pendingFreq by remember { mutableLongStateOf(0L) }
 
     // Clear pending when spectrum center or VFO catches up to the new frequency
-    // (During CTUN, spectrum center stays fixed but VFO changes — check both)
+    // (During CTUN, spectrum center stays fixed but VFO changes - check both)
     val specCenterHz = state.spectrumCenterHz
     val currentVfoHz = state.frequencyHz
     LaunchedEffect(specCenterHz, currentVfoHz, pendingFreq) {
@@ -334,6 +335,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             if (spectrumEnabled) {
                 viewModel.enableSpectrum(true)
                 viewModel.setSpectrumFps(5)
+                // Zonder max_bins valt de server terug op zijn (veel hogere) default ->
+                // enorme spectrum-datarate bij connect. Zet dezelfde limiet als de
+                // spectrum-toggle (2048) zodat de rate meteen klopt.
+                viewModel.setSpectrumMaxBins(2048)
                 viewModel.setSpectrumZoom(spectrumZoomState.floatValue)
                 viewModel.setSpectrumPan(spectrumPanState.floatValue)
             }
@@ -343,7 +348,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Track DDC span for dynamic zoom calculation
     var lastFullSpanHz by remember { mutableLongStateOf(0L) }
 
-    // Reset zoom when Thetis comes online (power OFF→ON)
+    // Reset zoom when Thetis comes online (power OFF->ON)
     val powerOn = state.powerOn
     LaunchedEffect(powerOn) {
         if (powerOn) {
@@ -441,7 +446,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         }
     }
 
-    // Stable callbacks — same lambda reference across recompositions.
+    // Stable callbacks - same lambda reference across recompositions.
     val onRxVolumeChange: (Float) -> Unit = remember {
         { v ->
             rxVolumeState.floatValue = v
@@ -453,7 +458,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         { v ->
             localVolumeState.floatValue = v
             if (viewModel.yaesuMode.value) {
-                viewModel.yaesuVolume(v)
+                viewModel.yaesuVolumeSel(v) // geselecteerde radio (niet altijd radio1)
             } else {
                 viewModel.setLocalVolume(v)
             }
@@ -518,32 +523,36 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Text("ThetisLink", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Text("v$versionName", fontSize = 14.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(4.dp))
-                    Text("Remote control for\nThetis SDR + Yaesu FT-991A", fontSize = 13.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    Text("Remote control for\nThetis SDR + Yaesu FT-991A / FTX-1\n(dual-radio)", fontSize = 13.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(10.dp))
                     HorizontalDivider()
                     Spacer(Modifier.height(6.dp))
                     Text("Author", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("Chiron van der Burgt — PA3GHM", fontSize = 12.sp)
+                    Text("Chiron van der Burgt - PA3GHM", fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
                     Text("Special Thanks", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("Richie (ramdor) — Thetis SDR, TCI extensions", fontSize = 12.sp)
+                    Text("Richie (ramdor) - Thetis SDR, TCI extensions", fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
                     Text("Protocols", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("TCI — Expert Electronics / Thetis", fontSize = 11.sp)
-                    Text("DX Spider — DX cluster", fontSize = 11.sp)
+                    Text("TCI - Expert Electronics / Thetis", fontSize = 11.sp)
+                    Text("DX Spider - DX cluster", fontSize = 11.sp)
                     Text("HPSDR / OpenHPSDR Protocol 2", fontSize = 11.sp)
-                    Text("WebSDR (PA3FWM) / KiwiSDR — CatSync", fontSize = 11.sp)
+                    Text("WebSDR (PA3FWM) / KiwiSDR - CatSync", fontSize = 11.sp)
+                    Text("ThetisLink Relay - WS + UDP (internet remote)", fontSize = 11.sp)
                     Spacer(Modifier.height(6.dp))
                     Text("Hardware", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     for ((dev, iface) in listOf(
                         "ANAN 7000DLE" to "TCI",
                         "Yaesu FT-991A" to "Serial + USB Audio",
+                        "Yaesu FTX-1" to "Serial + USB Audio",
                         "RF2K-S PA" to "HTTP",
                         "SPE Expert 1.3K-FA" to "Serial",
-                        "JC-4s Tuner" to "Serial",
+                        "JC-4s / JC-3s Tuner" to "MCP2221A (USB)",
                         "UltraBeam RCU-06" to "Serial",
                         "Amplitec 6/2" to "Serial",
                         "EA7HG Rotor" to "UDP",
+                        "PstRotator (rotors)" to "XML over UDP",
+                        "Yaesu G-1000DXC Rotor" to "MCP2221A (USB)",
                     )) {
                         Row(modifier = Modifier.fillMaxWidth()) {
                             Text(dev, fontSize = 11.sp, modifier = Modifier.weight(0.55f))
@@ -559,6 +568,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         "audiopus" to "Opus codec",
                         "rubato" to "Resampling",
                         "rustfft" to "FFT spectrum",
+                        "rustls" to "Relay TLS (wss)",
                         "UniFFI" to "Rust-Kotlin bridge",
                         "Jetpack Compose" to "Android UI",
                     )) {
@@ -570,9 +580,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Spacer(Modifier.height(6.dp))
                     Text("License", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("GPL-2.0-or-later (see LICENSE)", fontSize = 11.sp)
-                    Text("Copyright © 2025-2026 Chiron van der Burgt", fontSize = 11.sp)
+                    Text("Copyright (c) 2025-2026 Chiron van der Burgt", fontSize = 11.sp)
                     Text("Source: github.com/cjenschede/ThetisLink", fontSize = 11.sp)
-                    Text("Based on the Thetis SDR lineage — see ATTRIBUTION.md", fontSize = 11.sp)
+                    Text("Based on the Thetis SDR lineage - see ATTRIBUTION.md", fontSize = 11.sp)
+                    Text("Third-party licenses & SBOM: see NOTICE.md, THIRD-PARTY-LICENSES.html", fontSize = 11.sp)
                 }
             },
             confirmButton = {
@@ -589,7 +600,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     }
 
     // Tuner stale-detection is handled SERVER-side per Amplitec position now;
-    // the previously-tracked `tunerTuneFreq` here only updated on TUNING→
+    // the previously-tracked `tunerTuneFreq` here only updated on TUNING->
     // DONE_OK transitions and so kept comparing against the wrong tuner's
     // freq across an Amplitec switch. The button colour below reads the
     // server-broadcast tunerState directly.
@@ -600,6 +611,41 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Auto-switch to Devices when Yaesu is activated
     LaunchedEffect(yaesuActive) {
         if (yaesuActive) showDevices = true
+    }
+
+    // Data-besparing: abonneer alleen op de Yaesu-radio's als het Yaesu-window open is
+    // (devices-scherm zichtbaar en Yaesu-tab (id 6) geselecteerd). Buiten dit window blijft
+    // alleen een actief-beluisterde radio geabonneerd (zie ViewModel.updateYaesuSubscriptions).
+    val yaesuWindowOpen = showDevices && deviceSubTab == 6
+    LaunchedEffect(yaesuWindowOpen) {
+        viewModel.setYaesuWindowOpen(yaesuWindowOpen)
+    }
+
+    // Spectrum 30 s screen-grace (PATCH-android-yaesu-presence-datasaver, punt 1).
+    // Desired-state, gekeyd op showDevices + yaesuActive + connected (reconnect-edge)
+    // zodat window-wissel, Yaesu-toggle en reconnect de juiste spectrum-state opnieuw
+    // toepassen (voorkomt een stale spectrum-subscription):
+    //  - Yaesu actief      -> spectrum uit (geen grace).
+    //  - op hoofdscherm     -> spectrum aan (+ FPS-restore).
+    //  - hoofdscherm >30 s verlaten -> spectrum uit; binnen 30 s terug = effect cancelt.
+    LaunchedEffect(showDevices, yaesuActive, connected, spectrumEnabled) {
+        if (!connected) return@LaunchedEffect
+        when {
+            // Spectrum alleen streamen als de gebruiker het ook aan heeft staan; de
+            // grace regelt daarbovenop het data-besparen bij scherm-wissel. Zonder
+            // deze gate liep spectrum al bij connect (toggle uit) -> hoge datarate.
+            yaesuActive || !spectrumEnabled -> viewModel.setSpectrumActive(false)
+            !showDevices -> {
+                android.util.Log.i("MainScreen", "grace cancelled -> spectrum on")
+                viewModel.setSpectrumActive(true)
+            }
+            else -> {
+                android.util.Log.i("MainScreen", "grace: armed 30s")
+                delay(30_000)
+                android.util.Log.i("MainScreen", "grace expired -> spectrum off")
+                viewModel.setSpectrumActive(false)
+            }
+        }
     }
 
     Surface(
@@ -620,29 +666,40 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        if (state.rf2kActive && state.rf2kErrorState != 0) {
-                            Button(
-                                onClick = { viewModel.rf2kErrorReset() },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                modifier = Modifier.padding(bottom = 4.dp),
-                            ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            if (state.rf2kActive && state.rf2kErrorState != 0) {
+                                Button(
+                                    onClick = { viewModel.rf2kErrorReset() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    modifier = Modifier.padding(bottom = 4.dp),
+                                ) {
+                                    Text(
+                                        "RF2K-S Reset",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                    )
+                                }
+                            } else {
                                 Text(
-                                    "RF2K-S Reset",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
+                                    text = "ThetisLink v${version()}",
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                 )
                             }
-                        } else {
-                            Text(
-                                text = "ThetisLink v${version()}",
-                                fontSize = 16.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                modifier = Modifier.padding(bottom = 4.dp),
-                            )
+                            if (showDevices || yaesuActive) {
+                                TextButton(
+                                    onClick = { showSettings = true },
+                                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                                    modifier = Modifier.padding(top = 2.dp),
+                                ) {
+                                    Icon(Icons.Default.Settings, contentDescription = null)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Settings", fontSize = 12.sp)
+                                }
+                            }
                         }
-                        Spacer(Modifier.weight(1f))
                         SingleChoiceSegmentedButtonRow {
                             SegmentedButton(
                                 selected = !showDevices,
@@ -702,18 +759,22 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             onRotorStop = { viewModel.rotorStop() },
                             onRotorCw = { viewModel.rotorCw() },
                             onRotorCcw = { viewModel.rotorCcw() },
-                            onYaesuEnable = { viewModel.yaesuEnable(it) },
-                            onYaesuPtt = { viewModel.yaesuPtt(it) },
-                            onYaesuVolume = { viewModel.yaesuVolume(it) },
-                            onYaesuSelectVfo = { viewModel.yaesuSelectVfo(it) },
-                            onYaesuMode = { viewModel.yaesuMode(it) },
-                            onYaesuButton = { viewModel.yaesuButton(it) },
-                            onYaesuRecallMemory = { viewModel.yaesuRecallMemory(it) },
-                            onYaesuControl = { id, value -> viewModel.setControl(id, value) },
-                            onYaesuFreq = { viewModel.yaesuFreq(it) },
-                            onYaesuEqBand = { band, gain -> viewModel.yaesuEqBand(band, gain) },
-                            onYaesuEqEnabled = { viewModel.yaesuEqEnabled(it) },
-                            onYaesuTxGain = { viewModel.yaesuTxGain(it) },
+                            onYaesuEnable = { viewModel.setYaesuActive(it) },
+                            onYaesuPtt = { viewModel.yaesuPttSel(it) },
+                            onYaesuVolume = { viewModel.yaesuVolumeSel(it) },
+                            onYaesuSelectVfo = { viewModel.yaesuSelectVfoSel(it) },
+                            onYaesuMode = { viewModel.yaesuModeSel(it) },
+                            onYaesuButton = { viewModel.yaesuButtonSel(it) },
+                            onYaesuRecallMemory = { viewModel.yaesuRecallMemorySel(it) },
+                            onYaesuControl = { id, value -> viewModel.yaesuSetControlSel(id, value) },
+                            onYaesuFreq = { viewModel.yaesuFreqSel(it) },
+                            onYaesuEqBand = { band, gain -> viewModel.yaesuEqBandSel(band, gain) },
+                            onYaesuEqEnabled = { viewModel.yaesuEqEnabledSel(it) },
+                            onYaesuCompressor = { viewModel.yaesuCompressor(it) },
+                            onYaesuTxAgc = { viewModel.yaesuTxAgc(it) },
+                            onYaesuTxGain = { viewModel.yaesuTxGainSel(it) },
+                            onYaesuSelectRadio = { viewModel.selectRadio(it) },
+                            onYaesuDspControl = { control, value -> viewModel.yaesuControlSel(control, value) },
                             yaesuActive = yaesuActive,
                             selectedTab = deviceSubTab,
                             onTabChange = { deviceSubTab = it },
@@ -798,9 +859,36 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 if (yaesuActive) {
                     item {
                         Text(
-                            "Yaesu active — go to Devices",
+                            "Yaesu active - go to Devices",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(16.dp),
+                        )
+                        AudioStats(
+                            captureLevel = state.captureLevel,
+                            playbackLevel = if (state.selectedRadio == 1) state.playbackLevelYaesu2 else state.playbackLevelYaesu,
+                            rttMs = state.rttMs,
+                            jitterMs = state.jitterMs,
+                            bufferDepth = state.bufferDepth,
+                            lossPercent = state.lossPercent,
+                            rxPackets = state.rxPackets,
+                            yaesuAudioPackets = state.yaesuAudioPackets,
+                            yaesuJitterMs = state.yaesuJitterMs,
+                            yaesuBufferDepth = state.yaesuBufferDepth,
+                            yaesu2AudioPackets = state.yaesu2AudioPackets,
+                            yaesu2JitterMs = state.yaesu2JitterMs,
+                            yaesu2BufferDepth = state.yaesu2BufferDepth,
+                            vrx1AudioPackets = state.vrx1AudioPackets,
+                            vrx1JitterMs = state.vrx1JitterMs,
+                            vrx1BufferDepth = state.vrx1BufferDepth,
+                            vrx2AudioPackets = state.vrx2AudioPackets,
+                            vrx2JitterMs = state.vrx2JitterMs,
+                            vrx2BufferDepth = state.vrx2BufferDepth,
+                            downKbps = state.downKbps,
+                            upKbps = state.upKbps,
+                            showThetisAudio = false,
+                            yaesu1Visible = state.selectedRadio == 0 && state.yaesuConnected,
+                            yaesu2Visible = state.selectedRadio == 1 && state.yaesu2Connected,
+                            relayTransportFallback = state.relayTransportFallback,
                         )
                     }
                 }
@@ -1030,8 +1118,26 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         bufferDepth = state.bufferDepth,
                         lossPercent = state.lossPercent,
                         rxPackets = state.rxPackets,
+                        yaesuAudioPackets = state.yaesuAudioPackets,
+                        yaesuJitterMs = state.yaesuJitterMs,
+                        yaesuBufferDepth = state.yaesuBufferDepth,
+                        yaesu2AudioPackets = state.yaesu2AudioPackets,
+                        yaesu2JitterMs = state.yaesu2JitterMs,
+                        yaesu2BufferDepth = state.yaesu2BufferDepth,
+                        vrx1AudioPackets = state.vrx1AudioPackets,
+                        vrx1JitterMs = state.vrx1JitterMs,
+                        vrx1BufferDepth = state.vrx1BufferDepth,
+                        vrx2AudioPackets = state.vrx2AudioPackets,
+                        vrx2JitterMs = state.vrx2JitterMs,
+                        vrx2BufferDepth = state.vrx2BufferDepth,
                         downKbps = state.downKbps,
                         upKbps = state.upKbps,
+                        showThetisAudio = state.thetisConfigured || state.rxPackets > 0L,
+                        yaesu1Visible = state.yaesuConnected,
+                        yaesu2Visible = state.yaesu2Connected,
+                        vrx1Visible = state.vrx1AudioPackets > 0L,
+                        vrx2Visible = state.vrx2AudioPackets > 0L,
+                        relayTransportFallback = state.relayTransportFallback,
                     )
                 }
 
@@ -1056,7 +1162,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         Spacer(Modifier.width(8.dp))
                         // PATCH-4 follow-up: parity with the desktop
                         // "Re-run setup wizard" entry on the Server tab.
-                        // Owner-escape-hatch to relaunch the wizard
+                        // Operator-escape-hatch to relaunch the wizard
                         // manually without wiping app data.
                         TextButton(onClick = { wizardActive = true }) {
                             Text("Wizard")

@@ -120,11 +120,28 @@ impl JitterBuffer {
         self.last_arrival_ms = Some(arrival_ms);
         self.last_packet_ts = Some(frame.timestamp);
 
-        // Drop packets that arrived too late
+        // Drop packets that arrived too late — UNLESS they are so far behind that
+        // the sender must have restarted its sequence (e.g. server restart). A
+        // genuinely late/reordered packet is at most a handful behind next_seq; a
+        // stream restart is thousands behind. Without this, a fresh low-sequence
+        // stream is discarded as "too late" against a stale high next_seq and the
+        // audio stays silent for minutes (until the sender's sequence climbs back).
+        // Re-baseline the buffer on such a backward jump so playout resumes at once.
+        const STREAM_RESTART_BACKJUMP: u32 = 1000;
         if let Some(next) = self.next_seq {
             if is_seq_before(frame.sequence, next) {
-                self.stats_late += 1;
-                return;
+                if next.wrapping_sub(frame.sequence) > STREAM_RESTART_BACKJUMP {
+                    log::info!(
+                        "Jitter buffer stream restart: seq {} << next {} — re-baselining",
+                        frame.sequence, next
+                    );
+                    self.buffer.clear();
+                    self.next_seq = None;
+                    self.refilling = false;
+                } else {
+                    self.stats_late += 1;
+                    return;
+                }
             }
         }
 
@@ -397,6 +414,57 @@ mod tests {
         // Now push a late packet (seq 0)
         jb.push(make_frame(0), 60);
         assert_eq!(jb.stats_late, 1);
+    }
+
+    #[test]
+    fn small_backward_still_late_dropped() {
+        // A packet only slightly behind next_seq is a genuine late/reordered packet
+        // and must still be dropped — NOT treated as a stream restart (build 15).
+        let mut jb = JitterBuffer::new(2, 10);
+        jb.push(make_frame(100), 0);
+        jb.push(make_frame(101), 20);
+        let _ = jb.pull();
+        let _ = jb.pull(); // next_seq now 102
+        jb.push(make_frame(100), 40); // 2 behind → late
+        assert_eq!(jb.stats_late, 1);
+        assert!(!jb.buffer.contains_key(&100));
+    }
+
+    #[test]
+    fn large_backjump_rebaselines() {
+        // A packet far behind next_seq signals a sender restart → re-baseline
+        // (clear + next_seq=None) and keep the fresh packet, not drop it (build 15).
+        let mut jb = JitterBuffer::new(2, 10);
+        jb.push(make_frame(5000), 0);
+        jb.push(make_frame(5001), 20);
+        let _ = jb.pull();
+        let _ = jb.pull(); // next_seq now 5002
+        jb.push(make_frame(2), 40); // 5000 behind → stream restart
+        assert_eq!(jb.stats_late, 0, "restart packet must not be counted late");
+        assert!(jb.buffer.contains_key(&2), "fresh packet re-baselined into buffer");
+        assert!(jb.next_seq.is_none(), "next_seq reset for re-init on next pull");
+    }
+
+    #[test]
+    fn wraparound_late_not_rebaselined() {
+        // A u32 sequence wrap (MAX -> 0) is a normal forward step; a packet just
+        // before the wrap is late (small backward), not a restart. Build frames
+        // manually — make_frame's `seq * 20` timestamp overflows near u32::MAX.
+        let f = |seq: u32, ts: u32| BufferedFrame {
+            sequence: seq,
+            timestamp: ts,
+            opus_data: vec![0u8; 32],
+            ptt: false,
+            wideband: false,
+        };
+        let mut jb = JitterBuffer::new(2, 10);
+        jb.push(f(u32::MAX - 1, 0), 0);
+        jb.push(f(u32::MAX, 20), 20);
+        let _ = jb.pull();
+        let _ = jb.pull(); // next_seq now 0 (wrapped)
+        jb.push(f(u32::MAX, 40), 40); // 1 behind across wrap → late, not restart
+        assert_eq!(jb.stats_late, 1);
+        assert!(jb.next_seq.is_some(), "wrap-late must not trigger re-baseline");
     }
 
     #[test]

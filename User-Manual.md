@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.3.0 — Gebruikershandleiding
+﻿# ThetisLink v2.4.0 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -6,13 +6,14 @@
 2. [Server configuratie](#server-configuratie)
 3. [Server starten](#server-starten)
 4. [Client verbinden](#client-verbinden)
-5. [Bediening](#bediening)
-6. [Apparaten](#apparaten)
-7. [Yaesu FT-991A](#yaesu-ft-991a)
-8. [Diversity ontvangst](#diversity-ontvangst)
-9. [DX Cluster](#dx-cluster)
-10. [Macro's](#macros)
-11. [Naamconventies](#naamconventies)
+5. [Internet-remote via relay](#internet-remote-via-relay-v240)
+6. [Bediening](#bediening)
+7. [Apparaten](#apparaten)
+8. [Yaesu FT-991A](#yaesu-ft-991a)
+9. [Diversity ontvangst](#diversity-ontvangst)
+10. [DX Cluster](#dx-cluster)
+11. [Macro's](#macros)
+12. [Naamconventies](#naamconventies)
 
 ---
 
@@ -47,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.3.0.apk` | Android client app |
+| `ThetisLink-2.4.0.apk` | Android client app |
 | `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -92,7 +93,7 @@ flowchart TB
     Server <--> Yaesu[Yaesu FT-991A<br>COM + USB Audio]
 ```
 
-Alle audio (RX/TX), IQ spectrum data en besturing gaan via één enkele TCI WebSocket verbinding. ThetisLink v2.3.0 gebruikt geen aparte CAT TCP verbinding — TCI dekt alle benodigde commando's, zowel met stock Thetis v2.10.3.15 als met de PA3GHM fork. Geen VB-Cable of andere drivers nodig.
+Alle audio (RX/TX), IQ spectrum data en besturing gaan via één enkele TCI WebSocket verbinding. ThetisLink v2.4.0 gebruikt geen aparte CAT TCP verbinding — TCI dekt alle benodigde commando's, zowel met stock Thetis v2.10.3.15 als met de PA3GHM fork. Geen VB-Cable of andere drivers nodig.
 
 > **Het netwerkpad in beeld:** een geïllustreerde uitleg van hoe audio, spectrum en besturing over het netwerk reizen staat online: **[Het netwerkpad](https://cjenschede.github.io/ThetisLink/Netwerk-uitleg.html)**.
 
@@ -173,6 +174,56 @@ Een handmatig ingevuld IP-adres werkt onafhankelijk van mDNS; je hoeft dus niet 
 
 ---
 
+## Internet-remote via relay (v2.4.0)
+
+Op hetzelfde netwerk (LAN/WiFi) verbindt de client rechtstreeks met de server — daar is geen relay voor nodig. Wil je **over het internet** verbinden vanaf een plek buiten je eigen netwerk, dan zijn er twee wegen:
+
+1. **Port-forward** op de router thuis naar de server-PC (UDP 4580). Werkt alleen als je een publiek IP hebt en de router-config kunt aanpassen.
+2. **Relay** (nieuw in v2.4.0). Zowel de server (station) als de client verbinden **naar buiten** met een kleine relay-server op een VPS. Geen port-forward nodig, en het werkt ook achter **CGNAT** (waar de provider je geen eigen publiek IP geeft). Dit is de aanbevolen weg voor internet-remote.
+
+De relay draait op een eigen server (VPS) die je zelf host — hij is niet meegeleverd als kant-en-klare download, maar als broncode + Docker-image (zie de installatiehandleiding en `thetislink-relay/DEPLOY-wss.md`). Eén relay bedient één of meer stations; de server-PC hoeft niet bereikbaar te zijn van buitenaf.
+
+> **De relay proberen zonder zelf te hosten?** Voor de eerste gebruikers die de relay willen uitproberen kan PA3GHM je — op verzoek en zolang er plek is — tijdelijk toevoegen aan een testrelay. Let op: dit is een **tijdelijke server met een beperkt aantal plekken**, dus zonder garantie op beschikbaarheid of continuïteit. Neem contact op met PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM).
+
+### Hoe het verbindt
+
+Zowel het station (server) als de client openen een uitgaande verbinding naar de relay:
+
+- **Besturing + spectrum** lopen over een beveiligde WebSocket (**wss**, TCP-poort 443) — versleuteld door de TLS van de relay (Caddy regelt het certificaat).
+- **Audio + PTT** lopen over **UDP** (poort 443) voor minimale vertraging, net als op het LAN.
+
+De relay koppelt de client aan het juiste station op basis van een **room/station-naam** en een **stationsleutel**. Deze gegevens vul je één keer in bij server en client (exacte velden en stappen: zie `Installatie.md`). Zolang beide met dezelfde room en sleutel bij de relay ingelogd zijn, is de verbinding identiek te bedienen als een directe LAN-verbinding.
+
+### Automatische terugval naar TCP (make-before-break)
+
+Sommige netwerken (bedrijfs-WiFi, gast-netwerken, restrictieve mobiele providers) blokkeren UDP. Zonder maatregel zou de audio dan wegvallen terwijl besturing en spectrum blijven werken. ThetisLink lost dit vanaf v2.4.0 automatisch op:
+
+- Merkt de client dat er **geen UDP-audio** meer binnenkomt, dan vraagt hij het station om de audio **door de wss-tunnel (TCP)** te sturen. De overschakeling gebeurt *make-before-break*: het nieuwe pad wordt opgebouwd vóór het oude losgelaten wordt, zodat je geen gat in de audio hoort.
+- Zodra UDP weer beschikbaar is, schakelt de verbinding **vanzelf terug** naar UDP (de laagste latency).
+- De terugval geldt alleen voor de audio/PTT; besturing en spectrum liepen al over wss.
+
+**Transport-indicator.** Je ziet altijd welk pad de audio nu gebruikt:
+
+- **Desktop:** in het **Server-tabblad**, naast "Audio streams:" — grijs **"Transport: UDP"** in normale toestand, of amber **"TCP fallback"** als de audio tijdelijk door de tunnel loopt.
+- **Android:** in het statistieken-paneel, naast "Statistics:" — dezelfde amber **"TCP fallback"**-melding.
+
+Zie je "TCP fallback" tijdens normaal LAN-gebruik zonder relay, dan is er niets aan de hand — de indicator is alleen betekenisvol bij een relay-verbinding. Blijft hij op een relay-verbinding hangen op "TCP fallback", dan blokkeert je netwerk UDP structureel; de audio werkt door, alleen met iets meer vertraging.
+
+> **UDP uitzetten (optioneel).** Weet je op voorhand dat je netwerk UDP blokkeert, dan kun je de client/Android op **alleen-wss** zetten, zodat hij niet eerst UDP probeert. Standaard staat UDP aan (laagste latency) met automatische terugval als vangnet.
+
+### Relay-beheer (dashboard)
+
+Wie de relay host, heeft een **web-dashboard** voor beheer, bereikbaar via de relay (achter TLS, alleen intern/beveiligd toegankelijk — niet vanaf het publieke internet zonder inlog):
+
+- **Inloggen** met een beheerderswachtwoord (veilig opgeslagen met Argon2id-hashing, niet als platte tekst).
+- **Apparaten/stations** beheren: het maximum aantal toegelaten apparaten instellen en apparaten blokkeren.
+- **Verbruik en quota** per station en apparaat: dataverbruik zien en per station het maximum aantal apparaten/clients en een maandelijkse datalimiet instellen.
+- **Database-backup** knop ("Backup DB"): downloadt een consistente kopie van de relay-database (via `VACUUM INTO`, dus zonder de relay te stoppen). Handig voor een periodieke veiligstelling. Gevoelige beheeracties zoals deze export worden met het IP van de aanvrager in het relay-log genoteerd.
+
+De relay-configuratie (stationsleutels, beheerderswachtwoord) staat in een `.env`-bestand op de VPS. Dit bestand bevat geheimen en hoort **nooit** publiek of in een repository terecht te komen — zie `Installatie.md`.
+
+---
+
 ## Bediening
 
 ### VFO en frequentie
@@ -237,6 +288,8 @@ ThetisLink biedt drie PTT modi:
 - **MIDI PTT:** aparte MIDI PTT-modus via een toegewezen MIDI controller knop, onafhankelijk van de desktop PTT-modus
 
 **Android — externe BT remote (ZL-01 of vergelijkbaar):** een Bluetooth-knop die zich gedraagt als externe touch-device kan als PTT-knop gebruikt worden. ThetisLink onderschept de touch-events en mappt ze naar PTT down/up. Werkt alleen als het scherm actief is (aanraak-events worden alleen door Android afgeleverd op een wakker scherm).
+
+**PTT-spike-onderdrukking (v2.4.0):** op een tablet/laptop met ingebouwde speaker én microfoon in één behuizing kan de inschakel-plop bij PTT-on meegezonden worden. Zet in de client de optie **"Built-in speaker + mic (PTT spike protection)"** aan: bij PTT wordt de speaker direct gemut en worden de eerste milliseconden mic-audio weggegooid, zodat de plop niet uitgezonden wordt. De **mic gate-delay** is apart instelbaar voor Thetis en Yaesu. Laat de optie **uit** bij een headset of goed geïsoleerde audio (0 ms, geen extra latency).
 
 ### TX meter (v2.0.0)
 
@@ -337,6 +390,7 @@ Ingebouwde WebView voor WebSDR en KiwiSDR ontvangst:
 - Frequentie synchronisatie: WebSDR volgt de VFO
 - Automatisch muten tijdens zenden
 - Favorietenlijst met ster-icoon
+- **Herlaad-knop (v2.4.0):** laadt de WebSDR-pagina snel opnieuw na een netwerk-onderbreking, zonder de client te herstarten
 
 ### MIDI Controller
 
@@ -346,6 +400,20 @@ Desktop en Android ondersteunen USB MIDI controllers:
 - Beschikbare functies: PTT (met LED), VFO tune, volumes, drive, NR, ANF, mode, band, power
 - Encoder stappen: 1 Hz, 10 Hz, 100 Hz, 1 kHz
 - **MIDI PTT modus:** aparte PTT-modus voor MIDI, onafhankelijk van de spatiebalk PTT-modus
+
+### Thema en UI-kleuren (v2.4.0)
+
+De desktop-client heeft een **thema-keuze** in het Server-tabblad. Naast de standaardstijl zijn er voorgedefinieerde donkere varianten, plus een volledig instelbaar eigen thema:
+
+- **Classic** — de oorspronkelijke ThetisLink-stijl.
+- **Dark** / **Slate** — donkere varianten met minder helderheid, prettiger bij avondgebruik.
+- **Custom** — kies zelf de kleuren. Met de kleurkiezers stel je in:
+  - **Background** — de achtergrond van de vensters.
+  - **Widgets** — de vulkleur van knoppen en velden.
+  - **Text** — de tekstkleur.
+  - **Slider knop** — de accentkleur van de schuifknoppen en hun rail.
+
+De keuze wordt bewaard in `thetislink-client.conf` en hersteld bij de volgende start. Het thema is puur cosmetisch — spectrum- en waterval-kleuren (het signaalniveau-palet) blijven ongewijzigd zodat signalen op elke achtergrond gelijk afleesbaar blijven.
 
 ---
 
@@ -599,6 +667,32 @@ Auto-DFM is niet actief in DATA-FM ('A'), USB ('2'), FM-N ('B') of andere modes 
 
 Bekende beperkingen: mode-wijziging tijdens active TX kan de auto-restore verwarren; vermijd mode-knoppen drukken terwijl PTT actief is. Bij server-crash tijdens TX moet je handmatig terug naar FM (de server kan z'n tussenstaat niet automatisch herstellen).
 
+### SSB-zenden via USB-audio (v2.4.0)
+
+Vanaf v2.4.0 kun je de Yaesu ook in **SSB (LSB/USB)** remote laten zenden met de USB-microfoonaudio — voorheen accepteerde de radio USB-mic-TX alleen in (DATA-)FM. De server kiest bij het zenden automatisch de juiste modulatiebron:
+
+- **FT-991A:** bij PTT in SSB (LSB/USB) schakelt ThetisLink **SSB MIC SELECT = REAR** en **SSB PORT SELECT = USB** (EX106/EX109), zodat de USB-audio de zender moduleert; bij loslaten wordt de oorspronkelijke routing hersteld. (Voor AM geldt hetzelfde principe met de AM-menu's.)
+- **FTX-1:** ThetisLink laat de **interne automatische modulatiebron** van de FTX-1 ongemoeid — die kiest de USB-audio zelf, dus er wordt géén menu-instelling geforceerd.
+- **Let op:** de automatische DATA-omschakeling geldt alleen voor **FM → DATA-FM**, niet voor SSB. SSB blijft in de gewone SSB-mode en gebruikt de REAR/USB-routing hierboven.
+
+De SSB-USB-routing wordt standaard **per PTT** toegepast en tussen overs teruggezet (in opt-out-modus presence-based hersteld). Met de **Exit**-knop zet je de radio terug naar zijn vaste MIC/DATA-basis. De TX-audio-uitgang wordt herhaald geopend tot het USB-CODEC-device vrij is.
+
+### TX-audiobewerking: compressor + AGC (v2.4.0)
+
+Voor de Yaesu-zendtak biedt de client (desktop én Android) een **spraakcompressor** en een **AGC-schakelaar**, naast de bestaande **TX-EQ** — allemaal **per radio** instelbaar. Zo geef je de USB-modulatie meer draagkracht zonder de Yaesu-instellingen zelf aan te passen. De AGC-cyclus loopt netjes FAST → MID → SLOW → AUTO.
+
+### Clarifier (RIT/XIT) (v2.4.0)
+
+Beide Yaesu-radio's hebben een **clarifier**: schakel RIT en/of XIT in, verstel de offset in stappen en wis 'm met één knop. Handig om zender en ontvanger los van elkaar iets te verschuiven zonder de VFO te verzetten.
+
+### Yaesu-bediening op Android (v2.4.0)
+
+De Android-client heeft nu vrijwel dezelfde Yaesu-bediening als de desktop: een **radio 1 / radio 2-selector** (dual-radio), een volledig inklapbaar **DSP-paneel** (ATT/AGC/NB/NR/IPO/Contour/APF/Notch/Proc/AMC), **touch-frequentietuning** (grote tikbare digit-tuner + stapper), de interne **ATU** (Tune + ATU aan/uit) en de **clarifier**.
+
+### Databesparing op mobiel (v2.4.0)
+
+Om mobiel dataverbruik te beperken stuurt de server geen Thetis-RX-audio meer naar clients die alleen een Yaesu beluisteren, en wordt Yaesu-data alleen gestreamd zolang het Yaesu-venster open/actief is (met een korte spectrum-grace bij hervatten). Zo betaal je op 4G/5G niet voor streams die je niet gebruikt.
+
 ### Configuratie
 
 ```
@@ -679,8 +773,8 @@ Op Android is er een **Smart Null** knop die het resultaat in dB toont na afloop
 
 De client heeft een ingebouwde audio recorder en speler:
 
-- **Record** knop in de Server tab met checkboxes voor **RX1**, **RX2** en **Yaesu** — selecteer welke audiokanalen je wilt opnemen
-- Opnames worden opgeslagen als WAV bestanden (8 kHz, mono) naast de client executable, met een timestamp in de bestandsnaam
+- **Record** knop in de Server tab met per-kanaal checkboxes: **RX1**, **RX2**, **Yaesu 1**, **Yaesu 2**, **VRX1** en **VRX2** (v2.4.0) — elk vakje verschijnt alleen als dat kanaal beschikbaar/ingeschakeld is. Selecteer welke kanalen je wilt opnemen
+- Opnames worden opgeslagen als WAV bestanden (mono) naast de client executable, met een timestamp in de bestandsnaam. De sample-rate volgt de [RX-bandbreedte](#rx-bandbreedte-smalbreed-v220)-instelling — 8 kHz (smal) of 16 kHz (breed)
 - **Play** knop speelt de laatste opname af:
   - **Zonder PTT:** het opgenomen geluid wordt via de speakers afgespeeld, gemixt met de ontvangst-audio
   - **Met PTT ingedrukt:** de opname vervangt de microfoon (TX inject) — handig om je eigen modulatie te testen of een CQ-bericht te herhalen
@@ -849,6 +943,7 @@ Als het spectrum (lijn) en de waterval niet synchroon lopen bij het pannen, hers
 
 | Versie | Hoogtepunten |
 |---|---|
+| **2.4.0** | **Brede release: relay v2 (lage-latency UDP-audio + automatische TCP-terugval + beheer-dashboard), Yaesu SSB-via-USB + TX-compressor/AGC + clarifier, grote Android Yaesu-pariteit, uitgebreide verbindingsmonitoring en desktop-thema's.** Backwards-compatible met v2.3.x — wire-protocol VERSION 3 ongewijzigd; alle relay-toevoegingen zitten in de aparte relay-laag en de relay-tunnel, niet in het radio-protocol. **Relay** (self-hosted VPS, bron + Docker): station en client verbinden uitgaand (wss/TCP 443 voor besturing+spectrum, UDP 443 voor audio+PTT), werkt achter CGNAT/zonder port-forward. **Automatische UDP→wss-terugval** (make-before-break) met een **transport-indicator** op desktop én Android; UDP-tokens roteren periodiek. **Beheer-dashboard** met Argon2id-login, apparaat-/stationbeheer met verbruik/quota per device en een **database-backup**-knop. **Yaesu**: **SSB-zenden via USB-audio** (991A schakelt per PTT SSB MIC SELECT=REAR + PORT SELECT=USB; FTX-1 laat zijn interne auto-modulatiebron ongemoeid; auto-DATA alleen FM→DATA-FM, niet SSB; hybride per-PTT-routing + Exit), client-side **TX-compressor + AGC** per radio, **clarifier (RIT/XIT)**. **Android Yaesu-pariteit**: dual-radio-selector, volledig DSP-paneel, touch freq-tuning, interne ATU. **Databesparing mobiel** (geen Thetis-RX naar Yaesu-only clients; Yaesu-data alleen bij open venster). **Verbindingsmonitoring** fors uitgebreid (per-stream jitter/buffer/packets/loss + bandbreedte-uitsplitsing, desktop+Android). **Desktop-thema's** (Classic/Dark/Slate/Custom). Robuustheid: hoofdvenster-zelfherstel, jitter-buffer-resync bij stream-herstart, spectrum-bin-begrenzing als vangnet. **WebSDR herlaad-knop.** Geen Thetis-fork-wijziging — stock v2.10.3.15 volstaat. |
 | **2.3.0** | **Synchrone AM (SAM-PLL) + AM auto-tune + instelbare TX-modulatiebandbreedte.** Backwards-compatible met v2.1.x/v2.2.0 — wire-protocol VERSION 3 ongewijzigd; nieuwe packet-/control-types (0x2A/0x2B, control 0x75–0x79) zijn additief en per-client gegate. **SAM** is nu een echte synchrone AM-demodulator (kritisch gedempte carrier-tracking PLL, WDSP `amd.c`-stijl, ±3 kHz vangbereik) i.p.v. pseudo-SAM; **auto-tune-to-carrier** laat de luisterfrequentie/VFO de draaggolf volgen via een twee-traps ruis-robuuste AFC. **Per-VRX audiobandbreedte** NB/WB/Auto, onafhankelijk per kanaal. **Instelbare TX-modulatiebandbreedte** in het desktop Thetis-tabblad (Volg RX of onafhankelijk low/high, 0–8 kHz), met symmetrische filter-mirror in AM/SAM/DSB/FM. Fixes: mode-wissel tijdens PTT niet meer doorgegeven (Thetis-desync-workaround), Follow-RX direct beschikbaar bij verbinden, automatisch terughalen van pop-out-vensters van een losgekoppelde monitor + handmatige "Recenter windows"-knop. Android ongewijzigd (geen VRX). Geen Thetis-fork-wijziging — stock v2.10.3.14+ volstaat. |
 | **2.2.0** | **Virtuele ontvangers (VRX) + tweede Yaesu-radio (FT-991A + FTX-1).** Backward-compatible met v2.1.x — wire-protocol VERSION 3 ongewijzigd; de nieuwe packet-types (0x21–0x29) zijn additief en per-client gegate, dus v2.1.x-clients ontvangen ze nooit. **VRX1/VRX2** virtuele ontvangers uit de brede DDC-stroom via een FFT-channelizer, elk met eigen frequentie, mode (USB/LSB/AM/SAM/FM), filter, high-res spectrum/waterval en S-meter in één gezamenlijk popout-venster; NB/WB Opus-audio; per-bucket frequentiegeheugen + persistentie. **Dual-radio** tweede Yaesu-kanaal met model-autodetect (`ID;` 0670/0840), per-radio audio/CAT/geheugen, `RadioInfo`-paneelnaamgeving, **FTX-1 WIRES-X** EX-menu en een **software-squelch** (alleen FM-familie). **Schakelbare RX-bandbreedte** (Thetis + VRX + Yaesu, alleen ontvangst) en een **`#N` audio-device-index** voor identieke USB-codecs; dynamische WAV-opnamerate. Geïllustreerde VRX-leerboeken online (zie Documentatie). Pair met **Thetis fork PA3GHM TL2-4**; stock Thetis blijft ondersteund. |
 | **2.1.0** | **Yaesu G-1000DXC rotor via MCP2221A, opt-in wideband Thetis RX, Amplitec reconnect, RX2 filter-fixes.** Backwards-compatible met v2.0.4 — wire-protocol ongewijzigd; 2.0.4-clients praten gewoon met 2.1.0-server (en omgekeerd). **Yaesu G-1000DXC rotor-backend** als 3e optie naast EA7HG en PstRotator: directe aansturing via Adafruit MCP2221A breakout (5 V mod), met soft-start/soft-stop ramp (1-200 %/s, default 50%), adaptive ADC poll-rate (30 Hz tijdens beweging / 1 Hz bij stilstand, mediaan-filter tegen 50/100 Hz netvoeding-ripple), kortste-route optie voor rotors met overlap-zone (max_deg > 360°), en kalibratie-wizard (Park CCW / Park CW). **Opt-in wideband Thetis RX** via fork-extensie — breekt geen stock-Thetis pad. **Amplitec 6/2 reconnect** na power-cycle + venster verschijnt ook bij offline-start (was: venster bleef onzichtbaar tot server-restart). **RX2 mode-switch filter-restore** (modulation-handler honoreert server filter-update bij modus-wissel) + per-channel filter-edge drag (RX1/RX2 drag-state gescheiden). **Yaesu EQ profile mic-gain persistence** (mic-slider wordt mee opgeslagen met band/treble); **scherpere TX resampler anti-alias filter**. **Modulaire multi-tuner wizard** met per-slot Add/Rename/Delete, classificatie-scan, inklapbaar MCP2221A-blok. **Status-paneel scroll-stabiliteit** (snapshot-cache bij lock-contentie; MCP2221A uitgeklapte sectie springt niet meer terug omhoog). UI-polish: chevron-labels op alle collapsible toggles, Settings-tab ScrollArea, Amplitec antenne-rename via right-click. Pair met **Thetis fork PA3GHM TL2-4** voor de volledige feature-set; stock Thetis blijft ondersteund. |

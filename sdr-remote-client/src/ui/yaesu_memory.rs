@@ -221,14 +221,14 @@ pub fn mode_string_to_yaesu_cat(mode: &str) -> char {
 }
 
 /// Map mode string to internal mode number (Thetis numbering) for the server.
-/// FM → DATA-FM (internal 5, but Yaesu CAT char 'A') for USB mic compatibility.
+/// FM -> DATA-FM (internal 5, but Yaesu CAT char 'A') for USB mic compatibility.
 pub fn mode_string_to_internal(mode: &str) -> u8 {
     match mode.trim() {
         "LSB" => 0,
         "USB" => 1,
         "CW" => 3,
         "CW-R" => 4,
-        "FM" | "FM-N" | "DATA-FM" | "C4FM" => 5, // all FM variants → internal FM
+        "FM" | "FM-N" | "DATA-FM" | "C4FM" => 5, // all FM variants -> internal FM
         "AM" | "AM-N" => 6,
         "RTTY-USB" | "DATA-USB" => 7,
         "RTTY-LSB" | "DATA-LSB" => 9,
@@ -244,7 +244,7 @@ pub fn format_freq_display(hz: u64) -> String {
     format!("{}.{:03}.{:02}", mhz, khz, sub)
 }
 
-/// Parse offset frequency string to Hz. "600 kHz" → 600000, "1,60 MHz" → 1600000
+/// Parse offset frequency string to Hz. "600 kHz" -> 600000, "1,60 MHz" -> 1600000
 pub fn parse_offset_hz(s: &str) -> u64 {
     let s = s.trim();
     if s.is_empty() { return 0; }
