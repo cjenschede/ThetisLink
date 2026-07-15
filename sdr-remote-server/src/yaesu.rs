@@ -1828,14 +1828,18 @@ fn resp_payload(cmd: &str, resp: &str) -> String {
     t.strip_prefix(cmd).unwrap_or(t).to_string()
 }
 
-/// Read all memory channels (001-099) from the FT-991A via MT commands.
+/// Read all memory channels (001-117) from the FT-991A via MT commands.
+/// Range per de FT-991A CAT-spec: 001-099 = gewone geheugens, 100-117 = PMS
+/// (P-1L..P-9U). Voorheen stopte de read bij 099 waardoor kanaal 100+ wegviel;
+/// de write accepteerde 1-117 al. (De FTX-1 gebruikt 00001-00099 + P-01L-tekst
+/// voor PMS, dus die read-tak blijft op 99 - zie read_all_memories_ftx1.)
 /// MT response format (41 chars):
 ///   MT P1(3:ch) P2(9:freq) P3(5:clar) P4(1:rxclar) P5(1:txclar)
 ///   P6(1:mode) P7(1:status) P8(1:tone) P9(2:00) P10(1:shift) P11(1:0) P12(12:TAG) ;
 fn read_all_memories(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, String> {
     let mut channels = Vec::new();
 
-    for ch in 1..=99u16 {
+    for ch in 1..=117u16 {
         let response = cat_query(port, &format!("MT{:03};", ch));
 
         if response.trim().is_empty() || response.contains("?;") {
@@ -1941,7 +1945,7 @@ fn read_all_memories(port: &mut Box<dyn serialport::SerialPort>) -> Result<Strin
         out.push_str(line);
         out.push('\n');
     }
-    info!("Yaesu: read {} non-empty memory channels out of 99", channels.len());
+    info!("Yaesu: read {} non-empty memory channels out of 117", channels.len());
     Ok(out)
 }
 

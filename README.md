@@ -1,6 +1,6 @@
 # ThetisLink
 
-> **Current release: [v2.4.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.4.0)** —
+> **Current release: [v2.4.1](https://github.com/cjenschede/ThetisLink/releases/tag/v2.4.1)** —
 > **Relay v2:** relayed **audio + PTT now travel over low-latency UDP** through the
 > VPS relay (previously wss/TCP), with **automatic UDP↔TCP fallback** — if the network
 > blocks or degrades UDP, the audio switches to the reliable path and back again on its
@@ -18,7 +18,7 @@
 > connections interoperate with v2.3.0, and the relay path is a coordinated upgrade
 > (mixed setups stay on wss audio). Pair with **Thetis fork PA3GHM TL2-4** for the full
 > feature-set; stock Thetis remains supported.
-> Download `ThetisLink-2.4.0.zip` from the
+> Download `ThetisLink-2.4.1.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all PDF manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are

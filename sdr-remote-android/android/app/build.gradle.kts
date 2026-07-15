@@ -14,8 +14,8 @@ android {
         applicationId = "com.sdrremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 55
-        versionName = "2.4.0"
+        versionCode = 56
+        versionName = "2.4.1"
     }
 
     buildTypes {

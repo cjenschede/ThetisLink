@@ -399,6 +399,20 @@ pub fn render_status_panel(
             if let Some(rotor) = shared.rotor_slot.get() {
                 ui.separator();
                 render_rotor_row(ui, rotor);
+            } else {
+                // Rotor (MCP2221A) niet gebonden. Toon een koppel-rij zodat een
+                // al-geprogrammeerd rot_-bord vanuit een schone .conf alsnog aan
+                // config.rotors gekoppeld kan worden - dit koppel-scherm ontbrak
+                // t.o.v. de tuners (render_tuner_disabled_row).
+                let backend_is_mcp =
+                    crate::config::load().rotor_backend == "mcp2221_yaesu";
+                let rot_board_detected = cached_scan_serials().iter().any(|s| {
+                    s.starts_with(crate::mcp2221_scan::BoardKind::ROTOR_PREFIX)
+                });
+                if backend_is_mcp || rot_board_detected {
+                    ui.separator();
+                    render_rotor_disabled_row(ui);
+                }
             }
             // 7c - board scan: list all MCP2221A devices on the USB bus so
             // the operator can figure out which USB serial belongs to which
@@ -1129,6 +1143,97 @@ fn render_rotor_row(
     });
 }
 
+/// Rotor niet gebonden terwijl de MCP2221A-backend is gekozen (of er een
+/// rot_-bord op de bus staat): laat de operator een gedetecteerd rot_-bord
+/// koppelen aan `config.rotors[0]`. Analoog aan [`render_tuner_disabled_row`].
+/// Dit fixt het gat dat een al-geprogrammeerd rot_-bord vanuit een schone
+/// `.conf` niet via de GUI gekoppeld kon worden (bij tuners kan dat wel via de
+/// MCP-serial dropdown; bij de rotor ontbrak dat scherm). Het koppelen zet
+/// meteen `enabled`, de serial én de rotor-backend goed en herstart de server.
+fn render_rotor_disabled_row(ui: &mut egui::Ui) {
+    use crate::mcp2221_scan::BoardKind;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Yaesu rotor").strong());
+            ui.colored_label(
+                Color32::from_rgb(220, 160, 40),
+                "Not linked \u{2014} select a rotor board to enable",
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("MCP serial:");
+            let current_serial: String = crate::config::load()
+                .rotors
+                .first()
+                .map(|r| r.mcp_serial.clone())
+                .unwrap_or_default();
+            let mut chosen = current_serial.clone();
+            let rot_boards: Vec<String> = cached_scan_serials()
+                .into_iter()
+                .filter(|s| s.starts_with(BoardKind::ROTOR_PREFIX))
+                .collect();
+            egui::ComboBox::from_id_salt("rotor_mcp_serial_disabled")
+                .selected_text(if chosen.is_empty() {
+                    "(select rot_ board)".to_string()
+                } else {
+                    chosen.clone()
+                })
+                .show_ui(ui, |ui| {
+                    let mut options = rot_boards.clone();
+                    if !current_serial.is_empty()
+                        && !options.iter().any(|s| s == &current_serial)
+                    {
+                        options.push(current_serial.clone());
+                    }
+                    options.sort();
+                    options.dedup();
+                    if options.is_empty() {
+                        ui.colored_label(
+                            Color32::from_rgb(180, 180, 180),
+                            "(no rot_ board detected \u{2014} run Scan, or program one via 'Add board' below)",
+                        );
+                    } else {
+                        for opt in &options {
+                            ui.selectable_value(&mut chosen, opt.clone(), opt);
+                        }
+                    }
+                });
+            if chosen != current_serial && !chosen.is_empty() {
+                let chosen_for_log = chosen.clone();
+                crate::config::modify_config(|c| {
+                    if c.rotors.is_empty() {
+                        c.rotors.push(crate::config::RotorConfig::default());
+                    }
+                    let name = chosen
+                        .strip_prefix(BoardKind::ROTOR_PREFIX)
+                        .unwrap_or(&chosen)
+                        .to_string();
+                    c.rotors[0].enabled = true;
+                    c.rotors[0].mcp_serial = chosen.clone();
+                    if c.rotors[0].name.is_empty() {
+                        c.rotors[0].name = name;
+                    }
+                    // Koppelen impliceert de MCP-rotor-backend; zonder deze zou
+                    // de server na restart de EA7HG-backend maken en niet binden.
+                    c.rotor_backend = "mcp2221_yaesu".to_string();
+                });
+                log::info!(
+                    "Rotor MCP serial linked to \"{}\" (backend -> mcp2221_yaesu) \u{2014} auto-restart",
+                    chosen_for_log,
+                );
+                restart_server();
+            }
+        });
+        ui.label(
+            RichText::new(
+                "  Tip: heeft het bord nog geen rot_-naam? Programmeer het eerst via 'Add board' hieronder (functie Rotor).",
+            )
+            .small()
+            .color(Color32::from_rgb(160, 160, 160)),
+        );
+    });
+}
+
 fn render_board_scan_section(ui: &mut egui::Ui) {
     let cache = scan_cache();
 
@@ -1285,6 +1390,11 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                                 r.mcp_serial = new_serial.clone();
                                                 c.rotors.push(r);
                                             }
+                                            // Een rotor-bord claimen impliceert de
+                                            // MCP-rotor-backend; anders bindt de
+                                            // server 'm na restart niet (blijft op
+                                            // de default ea7hg staan).
+                                            c.rotor_backend = "mcp2221_yaesu".to_string();
                                         });
                                     })
                                     .map_err(|e| format!("{:?}", e))

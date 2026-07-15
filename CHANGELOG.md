@@ -16,6 +16,33 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.4.1] — 2026-07-16 (Rotor link screen · Settings visibility · recorded-audio TX playback rate · FT-991A memory 100+)
+
+> **Patch release.** Bug fixes only, no protocol or feature changes. Fully interoperable
+> with v2.4.0; wire protocol `VERSION` stays 3. Stock Thetis v2.10.3.15 is sufficient.
+
+### Fixed
+- **Rotor (MCP2221A) could not be linked from a clean config.** The MCP2221A section had no
+  "link an existing board" step for the rotor — tuners already had one — so an
+  already-programmed `rot_` board could not be attached to the rotor slot from a fresh
+  `thetislink-server.conf`; it stayed amber even though the scan detected the board. A link
+  row (MCP-serial dropdown) now writes the rotor entry and selects the MCP2221A rotor backend
+  in one action; "Add board → Rotor" also sets the backend.
+- **Settings button disappeared after an MCP2221A scan.** The status/scan list could push the
+  bottom Settings button out of view (the panel itself does not scroll), forcing an Exit +
+  restart. The bottom controls now reserve the correct height, so Exit and Settings stay
+  visible regardless of the list length.
+- **Recorded audio played back too slowly / stuttering through the radio.** Playback to the
+  transmitter (TX inject) ignored the recording's sample rate: a 16 kHz recording played at
+  half speed on the main radio, and any recording played 3–6× too slow through a Yaesu.
+  The TX-inject path is now sample-rate-aware (speaker playback was already correct).
+  Recording itself was already correct for every channel (RX1/RX2/Yaesu 1-2/VRX1-2).
+- **FT-991A memory channels 100–117 were not read.** The memory read stopped at channel 099,
+  so the FT-991A PMS channels (100–117, i.e. P-1L…P-9U) never appeared in the memory editor —
+  a channel stored at 100+ went missing. The read now covers the full CAT range 001–117 (the
+  write side already accepted it). The FTX-1 is unaffected: its regular memory is 001–099 and
+  its PMS uses a different (`P-01L`) addressing, so that path stays at 099.
+
 ## [2.4.0] — 2026-07-15 (Relay v2 UDP audio + auto TCP fallback · Yaesu SSB-over-USB & TX processing · full Android Yaesu parity · expanded monitoring · desktop themes)
 
 > **A broad release.** Beyond the relay, this version brings remote **SSB transmit over

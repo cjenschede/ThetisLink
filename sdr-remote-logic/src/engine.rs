@@ -4170,43 +4170,66 @@ impl ClientEngine {
                     // WAV TX playback: bypass mic capture when playing back a TX recording
                     if playback_is_tx && (ptt || yaesu_ptt) && playback_wav.is_some() {
                         let wav = playback_wav.as_ref().unwrap();
-                        let samples_per_tick = FRAME_SAMPLES; // 160 samples at 8kHz per 20ms
+                        // Aantal WAV-samples per 20 ms bij de HEADER-rate (8k->160,
+                        // 16k->320). Voorheen stond hier vast FRAME_SAMPLES (8k) plus
+                        // een blinde sample-duplicatie naar "16k"; een 16 kHz-opname
+                        // speelde daardoor half zo snel af, en de Yaesu-tak stopte
+                        // ruwe 8/16k-samples in een capture-rate (48k) accumulator
+                        // -> 3-6x te langzaam + hakkelen. Nu rate-aware.
+                        let samples_per_tick = (playback_wav_rate as usize * 20) / 1000;
                         let remaining = wav.len() - playback_pos;
                         let to_read = samples_per_tick.min(remaining);
                         if to_read > 0 {
-                            let pcm_8k: Vec<i16> = wav[playback_pos..playback_pos + to_read].to_vec();
-                            // Upsample 8kHz -> 16kHz by duplicating each sample
-                            let pcm_16k: Vec<i16> = pcm_8k.iter().flat_map(|&s| [s, s]).collect();
-                            let pcm_f32: Vec<f32> = pcm_16k.iter()
-                                .map(|&s| (s as f32 / 32767.0) * tx_gain)
+                            let src_f32: Vec<f32> = wav[playback_pos..playback_pos + to_read]
+                                .iter()
+                                .map(|&s| s as f32 / 32768.0)
                                 .collect();
-                            if pcm_f32.len() >= FRAME_SAMPLES_WIDEBAND {
-                                let pcm_i16: Vec<i16> = pcm_f32.iter()
-                                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                                    .collect();
-                                match encoder.encode(&pcm_i16[..FRAME_SAMPLES_WIDEBAND]) {
-                                    Ok(opus_data) => {
-                                        let flags = Flags::NONE.with_ptt(thetis_ptt);
-                                        let pkt = AudioPacket {
-                                            flags,
-                                            sequence: tx_sequence,
-                                            timestamp: start.elapsed().as_millis() as u32,
-                                            opus_data,
-                                        };
-                                        tx_sequence = tx_sequence.wrapping_add(1);
-                                        let mut buf = Vec::with_capacity(MAX_PACKET_SIZE);
-                                        pkt.serialize(&mut buf);
-                                        let _ = send_tx!(&buf, addr.as_str());
+
+                            // Thetis-hoofdradio TX: resample header-rate -> 16 kHz voor
+                            // de wideband Opus-encoder. Alleen als Thetis-PTT actief is.
+                            if ptt {
+                                let f16 = resample_linear(
+                                    &src_f32,
+                                    playback_wav_rate,
+                                    NETWORK_SAMPLE_RATE_WIDEBAND,
+                                );
+                                if f16.len() >= FRAME_SAMPLES_WIDEBAND {
+                                    let pcm_i16: Vec<i16> = f16[..FRAME_SAMPLES_WIDEBAND]
+                                        .iter()
+                                        .map(|&s| {
+                                            (s * tx_gain * 32767.0).clamp(-32768.0, 32767.0) as i16
+                                        })
+                                        .collect();
+                                    match encoder.encode(&pcm_i16) {
+                                        Ok(opus_data) => {
+                                            let flags = Flags::NONE.with_ptt(thetis_ptt);
+                                            let pkt = AudioPacket {
+                                                flags,
+                                                sequence: tx_sequence,
+                                                timestamp: start.elapsed().as_millis() as u32,
+                                                opus_data,
+                                            };
+                                            tx_sequence = tx_sequence.wrapping_add(1);
+                                            let mut buf = Vec::with_capacity(MAX_PACKET_SIZE);
+                                            pkt.serialize(&mut buf);
+                                            let _ = send_tx!(&buf, addr.as_str());
+                                        }
+                                        Err(e) => warn!("WAV TX encode error: {}", e),
                                     }
-                                    Err(e) => warn!("WAV TX encode error: {}", e),
                                 }
                             }
-                            playback_pos += to_read;
-                            // Also feed to Yaesu TX if Yaesu PTT active
+
+                            // Yaesu TX: voer op capture_rate in yaesu_tx_accum, exact zoals
+                            // de live mic (regel ~4227). De drain verderop resamplet
+                            // capture -> 16k en past EQ/compressor/gain toe, dus hier
+                            // geen tx_gain (raw), net als de mic-tak.
                             if yaesu_ptt || yaesu2_ptt {
-                                let f32_chunk: Vec<f32> = pcm_8k.iter().map(|&s| s as f32 / 32768.0).collect();
-                                yaesu_tx_accum.extend_from_slice(&f32_chunk);
+                                let fcap =
+                                    resample_linear(&src_f32, playback_wav_rate, capture_rate);
+                                yaesu_tx_accum.extend_from_slice(&fcap);
                             }
+
+                            playback_pos += to_read;
                         }
                         if playback_pos >= wav.len() {
                             info!("WAV TX playback finished");
@@ -4422,6 +4445,30 @@ fn yaesu_tx_bitrate_for_mode(mode: u8) -> i32 {
 }
 
 /// Resample i16 network-rate PCM -> f32 device rate
+/// Simpele lineaire resample voor WAV-TX-playback (recorded-message replay).
+/// Niet latency-/HF-kritisch, dus lineaire interpolatie volstaat en is
+/// stateless (geen resampler-state per tick). Gebruikt om een opgenomen WAV van
+/// zijn header-rate (8 of 16 kHz) naar de doel-rate te brengen: 16 kHz voor de
+/// Thetis-TX-encoder, of `capture_rate` voor de Yaesu-TX-accumulator.
+fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if input.is_empty() || from_rate == 0 || to_rate == 0 || from_rate == to_rate {
+        return input.to_vec();
+    }
+    let ratio = to_rate as f64 / from_rate as f64;
+    let out_len = ((input.len() as f64) * ratio).round() as usize;
+    let last = input.len() - 1;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src = i as f64 / ratio;
+        let idx = src.floor() as usize;
+        let frac = (src - idx as f64) as f32;
+        let a = input[idx.min(last)];
+        let b = input[(idx + 1).min(last)];
+        out.push(a + (b - a) * frac);
+    }
+    out
+}
+
 fn resample_to_device(resampler: &mut impl rubato::Resampler<f32>, pcm_i16: &[i16]) -> Vec<f32> {
     let input_f32: Vec<f32> = pcm_i16.iter().map(|&s| s as f32 / 32768.0).collect();
     match resampler.process(&[input_f32], None) {

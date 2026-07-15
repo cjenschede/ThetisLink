@@ -1308,7 +1308,16 @@ impl eframe::App for ServerApp {
                     });
                     ui.separator();
 
-                    let available = ui.available_height() - 30.0;
+                    // Reserveer onderaan ruimte voor de twee gestapelde knoppen
+                    // (Exit + Settings) met hun separators, zodat een lange
+                    // status/scan-lijst ze niet uit beeld duwt. Voorheen stond
+                    // hier een vaste 30px - te weinig voor twee knoppen, waardoor
+                    // na een Adafruit-Scan de Settings-knop onbereikbaar werd
+                    // (het paneel zelf scrollt niet, alleen de ScrollArea).
+                    let btn_h = ui.spacing().interact_size.y;
+                    let gap = ui.spacing().item_spacing.y;
+                    let bottom_reserve = 2.0 * (btn_h + gap) + 2.0 * (6.0 + gap) + 8.0;
+                    let available = (ui.available_height() - bottom_reserve).max(60.0);
                     match self.status_view {
                         StatusView::Status => {
                             egui::ScrollArea::vertical()
