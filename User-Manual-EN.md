@@ -1,4 +1,4 @@
-# ThetisLink v2.4.1 - User Manual
+# ThetisLink v2.4.2 - User Manual
 
 ## Table of Contents
 
@@ -9,7 +9,7 @@
 5. [Internet remote via relay](#internet-remote-via-relay-v240)
 6. [Operation](#operation)
 7. [Devices](#devices)
-8. [Yaesu FT-991A](#yaesu-ft-991a)
+8. [Yaesu FT-991A / FTX-1](#yaesu-ft-991a--ftx-1)
 9. [Diversity reception](#diversity-reception)
 10. [DX Cluster](#dx-cluster)
 11. [Macros](#macros)
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.4.1.apk` | Android client app |
+| `ThetisLink-2.4.2.apk` | Android client app |
 | `Installation.pdf` | Installation guide (English) |
 | `User-Manual-EN.pdf` | User manual (English, this document) |
 | `Technical-Reference.pdf` | Technical reference (English) |
@@ -89,8 +89,8 @@ flowchart TB
     Server <--> SPE[SPE 1.3K-FA<br>COM 115200]
     Server <--> RF2K[RF2K-S PA<br>HTTP :8080]
     Server <--> UB[UltraBeam RCU-06<br>COM]
-    Server <--> Rotor[EA7HG Rotor<br>UDP]
-    Server <--> Yaesu[Yaesu FT-991A<br>COM + USB Audio]
+    Server <--> Rotor[Rotor: EA7HG / PstRotator / G-1000DXC<br>UDP / MCP2221A]
+    Server <--> Yaesu[Yaesu FT-991A / FTX-1<br>COM + USB Audio]
 ```
 
 All audio (RX/TX), IQ spectrum data and control go through a single TCI WebSocket connection. ThetisLink v2.4.0 does not use a separate CAT TCP connection — TCI covers all required commands, with both stock Thetis v2.10.3.15 and the PA3GHM fork. No VB-Cable or other drivers required.
@@ -289,7 +289,7 @@ ThetisLink offers three PTT modes:
 
 **Android — external BT remote (ZL-01 or similar):** a Bluetooth button that behaves as an external touch device can be used as a PTT button. ThetisLink intercepts the touch events and maps them to PTT down/up. Only works while the screen is active (touch events are only delivered to a wakeful screen on Android).
 
-**PTT spike suppression (v2.4.0):** on a tablet/laptop with a built-in speaker and microphone in one chassis, the switch-on plop at PTT-on can be transmitted. Enable **"Built-in speaker + mic (PTT spike protection)"** in the client: on PTT the speaker is muted instantly and the first few milliseconds of mic audio are discarded, so the spike is not transmitted. The **mic gate-delay** is separately adjustable for Thetis and Yaesu. Leave the option **off** for a headset or well-isolated audio (0 ms, no added latency).
+**PTT spike suppression (v2.4.0):** on a tablet/laptop with a built-in speaker and microphone in one chassis, the switch-on plop at PTT-on can be transmitted. Enable **"Built-in speaker + mic (PTT spike protection)"** in the client: on PTT the speaker is muted instantly and the first few milliseconds of mic audio are discarded, so the spike is not transmitted. The **mic gate-delay** is separately adjustable for Thetis and Yaesu. Leave the option **off** for a headset or well-isolated audio (0 ms, no added latency). Since **v2.4.2** the receive audio of the other receivers stays audible during transmit; the internal-speaker mute applies **only** when this spike-protection option is enabled.
 
 ### TX meter (v2.0.0)
 
@@ -639,7 +639,7 @@ The raw RX-packet log line is at debug level by default, so the server log is no
 
 ---
 
-## Yaesu FT-991A
+## Yaesu FT-991A / FTX-1
 
 ThetisLink can control a Yaesu FT-991A transceiver as a second radio alongside the ANAN. The Yaesu is connected via a serial USB COM port.
 
@@ -779,6 +779,9 @@ The client has a built-in audio recorder and player:
   - **Without PTT:** the recorded audio is played through the speakers, mixed with the receive audio
   - **With PTT held:** the recording replaces the microphone (TX inject) — useful for testing your own modulation or repeating a CQ message
 - **Stop** button cancels playback. At the end of the recording it stops automatically.
+- **Play volume** slider (0–2×) next to Play/Stop trims the level of a recording sent to the transmitter (v2.4.2).
+- On TX inject the recording goes out **clean at line level**: it bypasses the microphone processing chain (5-band EQ, compressor, AGC and the mic-gain boost), so an already line-level recording is no longer overmodulated. For the main radio, Thetis's transmit **TX-EQ is bypassed for the duration and restored to its exact prior state afterwards**; for a Yaesu the mic EQ is skipped the same way (v2.4.2).
+- While a recording is being transmitted, the audio level bar shows the **transmitted level**, not the (muted) microphone (v2.4.2).
 
 ---
 
@@ -943,6 +946,7 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
+| **2.4.2** | **Bug-fix patch (recorded-audio playback to the radio).** One additive wire-protocol control (`ThetisTxeq = 0x90`); `VERSION` stays 3, so a direct connection stays interoperable with v2.4.0/v2.4.1. Stock Thetis v2.10.3.15 suffices; no fork change; Android functionally unchanged (APK rebuilt). **Recorded audio transmitted through the radio is no longer overmodulated** — playback now bypasses the live-mic chain (EQ/compressor/AGC + 4× boost) and goes out clean at line level for Thetis and both Yaesu radios; **playback to the 2nd Yaesu (FTX-1)** now comes through; **Thetis TX-EQ is bypassed automatically during playback and restored to its exact prior state afterwards**; a **play-volume slider** (0–2×) and a **transmit-level meter during playback** were added; **RX audio stays audible during TX** (the internal-speaker mute is now tied to PTT spike-protection). |
 | **2.4.1** | **Bug-fix patch.** Fully interoperable with v2.4.0 (wire protocol VERSION 3 unchanged; stock Thetis v2.10.3.15 suffices). The **rotor (MCP2221A)** can now be linked from a clean config (the link screen was missing — only tuners had one); the **Settings button** no longer disappears after an MCP2221A scan; **recorded audio played through the radio** (TX inject) no longer plays too slowly/stuttering (the TX path ignored the recording's sample rate — speaker playback was already correct); **FT-991A memory 100–117** (PMS channels) is now read as well (it stopped at 099). FTX-1 unchanged. |
 | **2.4.0** | **A broad release: relay v2 (low-latency UDP audio + automatic TCP fallback + admin dashboard), Yaesu SSB-over-USB + TX compressor/AGC + clarifier, a large Android Yaesu-parity push, greatly expanded connection monitoring, and desktop themes.** Backwards-compatible with v2.3.x — wire protocol VERSION 3 unchanged; all relay additions live in the separate relay layer and tunnel, not in the radio protocol. **Relay** (self-hosted VPS, source + Docker): station and client connect outbound (wss/TCP 443 for control+spectrum, UDP 443 for audio+PTT), works behind CGNAT/without port forward. **Automatic UDP→wss fallback** (make-before-break) with a **transport indicator** on desktop and Android; UDP tokens rotate periodically. **Admin dashboard** with Argon2id login, device/station management with per-device usage/quota, and a **database backup** button. **Yaesu**: **SSB transmit over the USB audio** (991A switches SSB MIC SELECT=REAR + PORT SELECT=USB per PTT; FTX-1 leaves its internal auto modulation-source untouched; auto-DATA is FM→DATA-FM only, not SSB; hybrid per-PTT routing + Exit), client-side **TX compressor + AGC** per radio, **clarifier (RIT/XIT)**. **Android Yaesu parity**: dual-radio selector, full DSP panel, touch frequency tuning, internal ATU. **Mobile data-saving** (no Thetis RX to Yaesu-only clients; Yaesu data only while its window is open). **Connection monitoring** greatly expanded (per-stream jitter/buffer/packets/loss + bandwidth breakdown, desktop+Android). **Desktop themes** (Classic/Dark/Slate/Custom). Robustness: main-window self-heal, jitter-buffer resync on stream restart, spectrum bin-count safety net. **WebSDR reload button.** No Thetis-fork change — stock v2.10.3.15 suffices. |
 | **2.3.0** | **Synchronous AM (SAM-PLL) + AM auto-tune + settable TX modulation bandwidth.** Backwards-compatible with v2.1.x/v2.2.0 — wire protocol VERSION 3 unchanged; new packet/control types (0x2A/0x2B, control 0x75–0x79) are additive and per-client gated. **SAM** is now a real synchronous-AM demodulator (critically-damped carrier-tracking PLL, WDSP `amd.c` style, ±3 kHz capture) instead of pseudo-SAM; **auto-tune-to-carrier** makes the listen frequency/VFO follow the carrier via a two-speed noise-robust AFC. **Per-VRX audio bandwidth** NB/WB/Auto, independent per channel. **Settable TX modulation bandwidth** in the desktop Thetis tab (Follow RX or independent low/high, 0–8 kHz), with a symmetric filter mirror in AM/SAM/DSB/FM. Fixes: mode change during PTT no longer forwarded (Thetis desync workaround), Follow RX available immediately on connect, automatic recovery of pop-out windows from a disconnected monitor + manual "Recenter windows" button. Android unchanged (no VRX). No Thetis-fork change — stock v2.10.3.14+ suffices. |

@@ -1,8 +1,8 @@
-﻿# ThetisLink v2.4.1 - Installatiehandleiding
+﻿# ThetisLink v2.4.2 - Installatiehandleiding
 
 ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket.
 
-**Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt — zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A als tweede radio (via COM-poort).
+**Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt — zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A / FTX-1 als tweede radio (via COM-poort).
 
 **PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.4.0 werkt prima met stock Thetis v2.10.3.15 via TCI alleen — er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-extensiegedrag van stock v2.10.3.15 behouden (let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata). Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
 
@@ -16,7 +16,7 @@ ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, s
 |---------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - draait op de PC naast Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.4.1.apk | ThetisLink Android Client - telefoon/tablet |
+| ThetisLink-2.4.2.apk | ThetisLink Android Client - telefoon/tablet |
 | Installatie.pdf | Deze handleiding (Nederlands) |
 | User-Manual.pdf | Gebruikershandleiding (Nederlands) |
 | Technische-Referentie.pdf | Technische referentie (Nederlands) |
@@ -32,6 +32,10 @@ ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, s
 
 ## Overzicht
 
+Thetis praat met de ThetisLink Server via één TCI WebSocket-verbinding; de client(s) verbinden vervolgens met die server. Voor die verbinding tussen client en server zijn er **twee methodes** — kies degene die bij jouw netwerk past.
+
+### Methode 1 — directe verbinding
+
 ```mermaid
 flowchart LR
     Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
@@ -39,17 +43,29 @@ flowchart LR
     Server <-->|"UDP :4580"| Android[ThetisLink Android Client<br>telefoon]
 ```
 
-**Thetis -> ThetisLink Server** (één TCI WebSocket verbinding):
+De client bereikt de server **rechtstreeks** over UDP-poort 4580. Op je eigen netwerk (LAN/WiFi) werkt dit meteen. Van buiten je netwerk kan het ook direct, mits je **port forwarding** instelt (de router stuurt UDP 4580 door naar de Server-PC) en een eigen publiek IP-adres hebt.
+
+### Methode 2 — via een relay (v2.4.0)
+
+```mermaid
+flowchart LR
+    Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
+    Server -->|"uitgaand :443"| Relay[Relay op externe server<br>VPS]
+    Desktop[ThetisLink Desktop Client] -->|"uitgaand :443"| Relay
+    Android[ThetisLink Android Client] -->|"uitgaand :443"| Relay
+```
+
+Is een directe verbinding **geen optie** — bijvoorbeeld achter **CGNAT** (je krijgt geen eigen publiek IP-adres) of zonder toegang tot de router — dan verbinden de server én de client allebei *uitgaand* met een **relay op een externe server (VPS)**; er is dan geen port forward nodig. Deze methode heeft dus wél een **afhankelijkheid van die externe relay-server**. De relay kun je zelf hosten, of PA3GHM voegt je op verzoek tijdelijk toe (beperkt aantal plekken).
+
+> Beide methodes staan volledig uitgewerkt in [Netwerk](#netwerk) verderop (secties *Gebruik via internet* en *... met de relay*).
+
+**Wat er over de verbinding gaat** (bij beide methodes gelijk):
+
+**Thetis -> ThetisLink Server** (één TCI WebSocket-verbinding):
 - Audio (RX en TX streams), spectrum/waterfall (IQ data), besturing (frequentie, mode, controls)
 
-**ThetisLink Server -> ThetisLink Clients** (UDP poort 4580):
-- Alles: audio, spectrum, besturing, apparaatstatus - in één UDP-verbinding per ThetisLink Client
-
-**Verbinden van buiten je eigen netwerk** (twee methodes):
-- **Port forwarding** — router stuurt UDP 4580 door naar de ThetisLink Server PC. Vereist een eigen publiek IP-adres.
-- **Relay (v2.4.0)** — achter **CGNAT** of zonder router-toegang: server én client verbinden *uitgaand* met een relay op een VPS, geen port forward nodig. De relay kun je zelf hosten, of PA3GHM voegt je op verzoek tijdelijk toe (beperkt aantal plekken).
-
-Beide staan uitgewerkt in [Netwerk](#netwerk) verderop (secties *Gebruik via internet* en *... met de relay*).
+**ThetisLink Server -> ThetisLink Clients**:
+- Alles: audio, spectrum, besturing, apparaatstatus - in één verbinding per ThetisLink Client (direct via UDP 4580, of getunneld via de relay)
 
 ---
 
@@ -141,7 +157,7 @@ In de ThetisLink Server GUI kun je externe apparaten aansluiten. Elk apparaat he
 | EA7HG Visual Rotor | UDP | IP:poort (bijv. `192.168.1.66:2570`) |
 | PstRotator (uitgaand) | UDP/XML | host:poort van de PstRotator-PC (bijv. `192.168.1.70:12000`) + lokale feedback-poort `12001`; werkt voor elk rotormodel dat PstRotator zelf ondersteunt |
 | Yaesu G-1000DXC rotor (**) | USB-HID | Adafruit MCP2221A breakout in 5 V-mode, BST82 gate-switches op pin 1/2 + DAC op pin 3 + ADC via 1,8 k + 2,2 k deler op pin 4 |
-| Yaesu FT-991A | Serieel (USB) | COM poort (zie hieronder) |
+| Yaesu FT-991A / FTX-1 | Serieel (USB) | COM poort (zie hieronder) |
 
 > (*) De StockCorner JC-4s en JC-3s tuners hebben geen standaard seriele interface. Vanaf v2.0.3 wordt elke tuner aangestuurd via een **Adafruit MCP2221A USB-naar-HID breakout** met een transistor-trapje op de grey "start"-draad en een 1 MΩ + 1 MΩ spanningsdeler op de yellow "tune-status"-draad. Tot twee tuners parallel worden ondersteund; elk bord krijgt een uniek USB-serienummer dat je vanuit het server status-paneel kunt programmeren. De volledige wiring + UI-flow staat in de Gebruikershandleiding (`User-Manual.md`). Dit is geen kant-en-klaar product — neem contact op voor details.
 
@@ -149,9 +165,9 @@ In de ThetisLink Server GUI kun je externe apparaten aansluiten. Elk apparaat he
 
 > **Rotor-backend keuze**: in de Server GUI onder *Rotor → backend* kies je tussen **EA7HG Visual Rotor**, **PstRotator (XML/UDP)** of **Yaesu G-1000DXC (MCP2221A)**. Eén tegelijk actief; van het client-paneel uit (kompas, GoTo, Stop) is geen verschil zichtbaar — de keuze bepaalt alleen hoe de server met de rotorhardware praat. Voor PstRotator-setup zie de Gebruikershandleiding, sectie "Rotor backends → PstRotator (XML/UDP)".
 
-#### Yaesu FT-991A USB driver
+#### Yaesu FT-991A / FTX-1 USB driver
 
-De Yaesu FT-991A gebruikt een **Silicon Labs CP210x** USB-naar-serieel chip. De driver is te downloaden op:
+De Yaesu FT-991A en FTX-1 gebruiken een **Silicon Labs CP210x** USB-naar-serieel chip. De driver is te downloaden op:
 
 https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers
 
@@ -254,14 +270,14 @@ Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Statu
 ### 4.1 APK installeren
 
 **Via bestandsbeheer:**
-1. Kopieer `ThetisLink-2.4.1.apk` naar je telefoon (USB, e-mail, of cloud)
+1. Kopieer `ThetisLink-2.4.2.apk` naar je telefoon (USB, e-mail, of cloud)
 2. Open het APK-bestand op de telefoon
 3. Sta "Installeren van onbekende bronnen" toe als gevraagd
 4. Installeer
 
 **Via ADB** (met USB-debugging ingeschakeld):
 ```
-adb install ThetisLink-2.4.1.apk
+adb install ThetisLink-2.4.2.apk
 ```
 
 ### 4.2 Verbinden — begeleide setup-wizard

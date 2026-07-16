@@ -1,10 +1,10 @@
-# ThetisLink v2.4.1 - Technical Reference
+# ThetisLink v2.4.2 - Technical Reference
 
 ## 1. Overview
 
-ThetisLink is a system for remote operation of an ANAN 7000DLE + Thetis SDR receiver and a Yaesu FT-991A transceiver over a network connection. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
+ThetisLink is a system for remote operation of an ANAN 7000DLE + Thetis SDR receiver and up to two Yaesu transceivers (FT-991A / FTX-1) over a network connection. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
 
-**Version:** v2.4.1 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.4.2 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
 **Target platform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Design priority:** latency > bandwidth > features
@@ -26,7 +26,7 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.4.1`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.4.2`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
 
@@ -1702,9 +1702,9 @@ Replaces the separate Audio (0x01), AudioRx2 (0x0E) and AudioBinR (0x1A) packets
 | 0 | RX1 | Opus narrowband | 8 kHz | Always (Thetis RX) |
 | 1 | BinR | Opus narrowband | 8 kHz | Binaural on (RX1 right channel) |
 | 2 | RX2 | Opus narrowband | 8 kHz | RX2 enabled |
-| 3 | Yaesu RX | Opus narrowband | 8 kHz | Yaesu FT-991A connected |
+| 3 | Yaesu RX | Opus narrowband | 8 kHz | Yaesu radio (FT-991A / FTX-1) connected |
 
-CH3 (Yaesu) is added when an FT-991A is connected via USB serial + USB Audio CODEC. The Yaesu RX path runs in parallel with the Thetis RX path; the client mixes CH0 (or CH1/2) and CH3 according to the user's audio routing settings. On Yaesu PTT the server captures from the client mic into Yaesu CH3 TX (Opus wideband 16 kHz, see §26) and routes Thetis RX away from the speaker for the duration of TX.
+CH3 (Yaesu) is added when a Yaesu radio (FT-991A or FTX-1) is connected via USB serial + USB Audio CODEC. The Yaesu RX path runs in parallel with the Thetis RX path; the client mixes CH0 (or CH1/2) and CH3 according to the user's audio routing settings. On Yaesu PTT the server captures from the client mic into Yaesu CH3 TX (Opus wideband 16 kHz, see §26) and routes Thetis RX away from the speaker for the duration of TX.
 
 ### Advantages
 
@@ -1878,7 +1878,7 @@ The server executes the command on the Windows host where the server is running.
 
 ---
 
-## 26. Yaesu FT-991A Integration
+## 26. Yaesu FT-991A / FTX-1 Integration
 
 ### Overview
 

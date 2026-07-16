@@ -16,6 +16,47 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.4.2] — 2026-07-16 (Recorded-audio playback to the radio: clean modulation · Thetis TX-EQ bypass · play-volume)
+
+> **Patch release.** One additive wire-protocol addition only (a new client→server control
+> `ThetisTxeq = 0x90`); `VERSION` stays 3, so a direct connection stays fully interoperable
+> with v2.4.0 / v2.4.1 (an older peer simply ignores the new control). Stock Thetis v2.10.3.15
+> is sufficient — no Thetis-fork change. Android is functionally unchanged; the APK is rebuilt
+> at 2.4.2.
+
+### Fixed
+- **Recorded audio transmitted through the radio was overmodulated / distorted.** Playback to
+  the transmitter (TX inject) ran through the live-microphone processing chain — 5-band EQ,
+  compressor, AGC and the 4× mic-gain boost — so an already line-level recording clipped.
+  Playback now bypasses the mic chain entirely for Thetis and both Yaesu radios: the recording
+  goes out clean at line level (only the play-volume scaling is applied). Live-microphone
+  transmit is unchanged.
+- **Playback to the 2nd Yaesu (FTX-1 / radio 2) did not come through.** The WAV-TX inject path
+  was missing the radio-2 PTT case, so a recording only reached the main radio and the first
+  Yaesu.
+- **RX audio was muted on all receivers during transmit.** Pressing PTT on one receiver
+  silenced the audio of every other receiver in that client. RX audio now stays audible during
+  TX; the internal-speaker mute (to suppress the PTT plop) applies only when PTT
+  spike-protection is enabled.
+- **State was not reset after a playback ended or on disconnect.** The live microphone could
+  stay mic-chain-bypassed after a recording finished, and Thetis TX-EQ could be left off after
+  a manual disconnect or app shutdown mid-playback. Both are now reset / restored on teardown.
+
+### Added
+- **Thetis TX-EQ is bypassed automatically while a recording is played to the main radio,** and
+  restored afterwards — mirroring Thetis's own record/playback behaviour, so the transmit
+  profile's EQ does not colour the recording. The server reads the operator's actual TX-EQ
+  setting first and restores that exact state (falls back to on if it cannot read it).
+- **Play-volume slider** next to Play/Stop (0–2×) to trim the level of a recording sent to the
+  transmitter.
+- **Transmit level meter during playback** — the audio bar shows the level of the audio
+  actually being transmitted while a recording plays, instead of the (muted) microphone.
+
+### Notes
+- Recordings at a sample rate other than 8 kHz or 16 kHz (only possible with an externally
+  imported WAV — ThetisLink records only 8/16 kHz) are now refused with a clear log message
+  instead of being played back at the wrong speed.
+
 ## [2.4.1] — 2026-07-16 (Rotor link screen · Settings visibility · recorded-audio TX playback rate · FT-991A memory 100+)
 
 > **Patch release.** Bug fixes only, no protocol or feature changes. Fully interoperable

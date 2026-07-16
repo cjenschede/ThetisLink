@@ -270,6 +270,7 @@ pub struct SdrRemoteApp {
     mic_profile_map: std::collections::HashMap<String, String>,
     // Config values tracked by UI (sent as commands on change)
     rx_volume: f32,       // Thetis ZZLA (for control panel "RX1 Vol")
+    play_volume: f32,     // Client-only WAV-playback ('Play') volume
     vfo_a_volume: f32,    // Client-only VFO A playback volume
     vfo_b_volume: f32,    // Client-only VFO B playback volume
     local_volume: f32,    // Client-only master volume
@@ -1537,6 +1538,7 @@ impl SdrRemoteApp {
         let _ = cmd_tx.send(Command::SetRxVolume(config.rx_volume));
         let _ = cmd_tx.send(Command::SetTxGain(config.tx_gain));
         let _ = cmd_tx.send(Command::SetVfoAVolume(config.vfo_a_volume));
+        let _ = cmd_tx.send(Command::SetPlayVolume(config.play_volume));
         let _ = cmd_tx.send(Command::SetVfoBVolume(config.vfo_b_volume));
         let _ = cmd_tx.send(Command::SetLocalVolume(config.local_volume));
         let _ = cmd_tx.send(Command::SetRx2Volume(config.rx2_volume));
@@ -1650,6 +1652,7 @@ impl SdrRemoteApp {
             mic_profile_map: config.mic_profile_map.clone(),
             selected_output: config.output_device,
             rx_volume: config.rx_volume,
+            play_volume: config.play_volume,
             vfo_a_volume: config.vfo_a_volume,
             vfo_b_volume: config.vfo_b_volume,
             local_volume: config.local_volume,
@@ -2467,14 +2470,22 @@ impl SdrRemoteApp {
     /// spike: instantly mute local playback, and on keyup set the per-path mic
     /// gate-delay so the spike decays before mic audio reaches TX. Sent right
     /// before the PTT command so the engine applies the delay before it opens the
-    /// capture gate. Playback-mute is unconditional (correct for any TX, half-duplex);
-    /// the gate-delay is 0 unless spike-protection is on. Call edge-triggered only.
+    /// capture gate. Call edge-triggered only.
+    ///
+    /// Playback-mute is now gated on spike-protection. ThetisLink is a
+    /// multi-receiver client (RX1/RX2/VRX/Yaesu); muting ALL local RX audio during
+    /// a TX on one of them is only wanted for a built-in speaker+mic (feedback +
+    /// switch-on spike). With a headset / well-isolated audio (spike-protection
+    /// off, the default) the operator wants to keep monitoring the other receivers
+    /// while transmitting, so we do NOT mute. Keyup always unmutes (harmless).
     fn apply_ptt_spike_protection(&self, yaesu: bool, active: bool) {
         if active {
             let _ = self
                 .cmd_tx
                 .send(Command::SetMicGateDelayMs(self.ptt_gate_delay_ms(yaesu)));
-            let _ = self.cmd_tx.send(Command::SetPlaybackMute(true));
+            if self.spike_protection {
+                let _ = self.cmd_tx.send(Command::SetPlaybackMute(true));
+            }
         } else {
             let _ = self.cmd_tx.send(Command::SetPlaybackMute(false));
         }
@@ -2546,6 +2557,7 @@ impl SdrRemoteApp {
             &self.password_input,
             self.rx_volume,
             self.tx_gain,
+            self.play_volume,
             self.vfo_a_volume,
             self.vfo_b_volume,
             self.local_volume,

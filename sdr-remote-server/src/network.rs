@@ -2972,6 +2972,18 @@ impl NetworkService {
                                 ControlId::TxProfile => {
                                     ptt.set_tx_profile(ctrl.value.min(99) as u8).await;
                                 }
+                                ControlId::ThetisTxeq => {
+                                    // Thetis TX-EQ bypass tijdens WAV-playback naar de
+                                    // hoofdradio (over TCI run_cat_ex). value 0 = start
+                                    // bypass: query de huidige ZZET-stand, bewaar 'm en
+                                    // zet TX-EQ uit. value 1 = einde: herstel exact de
+                                    // bewaarde stand - net als Thetis' eigen playback.
+                                    if ctrl.value != 0 {
+                                        ptt.tci.thetis_txeq_bypass_end().await;
+                                    } else {
+                                        ptt.tci.thetis_txeq_bypass_begin().await;
+                                    }
+                                }
                                 ControlId::NoiseReduction => {
                                     ptt.set_nr(ctrl.value.min(4) as u8).await;
                                 }

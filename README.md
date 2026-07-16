@@ -1,6 +1,6 @@
 # ThetisLink
 
-> **Current release: [v2.4.1](https://github.com/cjenschede/ThetisLink/releases/tag/v2.4.1)** —
+> **Current release: [v2.4.2](https://github.com/cjenschede/ThetisLink/releases/tag/v2.4.2)** —
 > **Relay v2:** relayed **audio + PTT now travel over low-latency UDP** through the
 > VPS relay (previously wss/TCP), with **automatic UDP↔TCP fallback** — if the network
 > blocks or degrades UDP, the audio switches to the reliable path and back again on its
@@ -18,7 +18,7 @@
 > connections interoperate with v2.3.0, and the relay path is a coordinated upgrade
 > (mixed setups stay on wss audio). Pair with **Thetis fork PA3GHM TL2-4** for the full
 > feature-set; stock Thetis remains supported.
-> Download `ThetisLink-2.4.1.zip` from the
+> Download `ThetisLink-2.4.2.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all PDF manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are
@@ -49,6 +49,8 @@ radio control over the network via TCI WebSocket.
 - External device control: Amplitec 6/2 (auto-reconnect over USB), two StockCorner JC-4s/JC-3s tuners in parallel (MCP2221A USB-HID), SPE Expert 1.3K-FA, RF2K-S, UltraBeam RCU-06, and three rotor backends — EA7HG Visual Rotor, PstRotator, and direct Yaesu G-1000DXC via MCP2221A (5 V breakout, BST82 gate switches, position-feedback ADC)
 - Up to two Yaesu radios (FT-991A and/or FTX-1, any mix) running in parallel as independent channels alongside the Thetis SDR — each with its own CAT COM port, USB audio, frequency, mode, PTT and memory channels (model auto-detected)
 - MIDI controller support (desktop + Android)
+- Bluetooth remote PTT (e.g. ZL-01)
+- Embedded WebSDR / KiwiSDR panel with frequency sync and auto-mute on TX
 - DX Cluster with spectrum overlay
 - Mandatory password authentication (HMAC-SHA256) with optional TOTP 2FA
 - Smart and Ultra diversity auto-null algorithms

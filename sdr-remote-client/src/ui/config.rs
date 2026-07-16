@@ -52,6 +52,8 @@ pub(crate) struct ClientConfig {
     pub(crate) password: String,
     pub(crate) rx_volume: f32,
     pub(crate) tx_gain: f32,
+    /// WAV-playback ('Play') volume, client-only. 1.0 = opgenomen niveau.
+    pub(crate) play_volume: f32,
     pub(crate) vfo_a_volume: f32,
     pub(crate) vfo_b_volume: f32,
     pub(crate) local_volume: f32,
@@ -237,6 +239,7 @@ impl Default for ClientConfig {
             password: String::new(),
             rx_volume: 0.2,
             tx_gain: 0.5,
+            play_volume: 1.0,
             vfo_a_volume: 1.0,
             vfo_b_volume: 1.0,
             local_volume: 1.0,
@@ -765,6 +768,11 @@ pub(crate) fn load_config() -> ClientConfig {
                 config.yaesu_memories_h = v.clamp(100.0, 800.0);
             }
             has_keys = true;
+        } else if let Some(val) = line.strip_prefix("play_volume=") {
+            if let Ok(v) = val.trim().parse::<f32>() {
+                config.play_volume = v.clamp(0.0, 4.0);
+            }
+            has_keys = true;
         } else if let Some(val) = line.strip_prefix("vfo_a_volume=") {
             if let Ok(v) = val.trim().parse::<f32>() {
                 config.vfo_a_volume = v.clamp(0.0, 1.0);
@@ -1026,6 +1034,7 @@ pub(crate) fn save_config(
     password: &str,
     volume: f32,
     tx_gain: f32,
+    play_volume: f32,
     vfo_a_volume: f32,
     vfo_b_volume: f32,
     local_volume: f32,
@@ -1125,8 +1134,8 @@ pub(crate) fn save_config(
     if let Ok(exe) = std::env::current_exe() {
         let path = exe.with_file_name(CONFIG_FILE);
         let pw_enc = if password.is_empty() { String::new() } else { sdr_remote_core::auth::obfuscate_password(password) };
-        let mut content = format!("server={}\npassword={}\nvolume={:.2}\ntx_gain={:.2}\nvfo_a_volume={:.2}\nvfo_b_volume={:.2}\nlocal_volume={:.2}\nrx2_volume={:.2}\n",
-            server, pw_enc, volume, tx_gain, vfo_a_volume, vfo_b_volume, local_volume, rx2_volume);
+        let mut content = format!("server={}\npassword={}\nvolume={:.2}\ntx_gain={:.2}\nplay_volume={:.2}\nvfo_a_volume={:.2}\nvfo_b_volume={:.2}\nlocal_volume={:.2}\nrx2_volume={:.2}\n",
+            server, pw_enc, volume, tx_gain, play_volume, vfo_a_volume, vfo_b_volume, local_volume, rx2_volume);
         if !input_device.is_empty() {
             content.push_str(&format!("input_device={}\n", input_device));
         }

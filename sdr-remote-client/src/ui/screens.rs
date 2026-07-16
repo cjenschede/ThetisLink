@@ -2238,6 +2238,20 @@ impl SdrRemoteApp {
                             self.playing = false;
                         }
                     }
+                    // Play-volume: schaalt de WAV-playback (speaker + TX-inject).
+                    ui.label("Play vol:");
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut self.play_volume, 0.0..=2.0)
+                                .fixed_decimals(2),
+                        )
+                        .on_hover_text(
+                            "WAV-playback niveau (Play). 1.00 = opgenomen niveau. Lager = zachter, tegen overmodulatie bij een luide opname.",
+                        )
+                        .changed()
+                    {
+                        let _ = self.cmd_tx.send(Command::SetPlayVolume(self.play_volume));
+                    }
                 }
             }
         });

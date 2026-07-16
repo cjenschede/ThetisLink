@@ -16,6 +16,7 @@ pub enum Command {
     SetVfoAVolume(f32),      // local RX1 playback volume (client-only, independent of Thetis ZZLA)
     SetVfoBVolume(f32),      // local RX2 playback volume (client-only, independent of Thetis ZZLB)
     SetTxGain(f32),
+    SetPlayVolume(f32),  // WAV-playback ('Play') level, client-only
     SetFrequency(u64),
     SetMode(u8),
     SetControl(ControlId, u16),

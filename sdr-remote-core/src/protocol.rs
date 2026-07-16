@@ -503,6 +503,11 @@ pub enum ControlId {
     Yaesu2ReadMenus = 0x8E,
     /// Slot-1 set EX menu item. Spiegel van YaesuSetMenu.
     Yaesu2SetMenu = 0x8F,
+    /// Thetis TX-EQ on/off (client→server; CAT `ZZET` via TCI `run_cat_ex`).
+    /// value 0 = TXEQ off, 1 = on. Used to bypass the mic-profile TX-EQ during
+    /// WAV-playback to the main radio (off on Play-start, restore on stop),
+    /// mirroring Thetis' own record/playback behaviour.
+    ThetisTxeq = 0x90,
 }
 
 impl ControlId {

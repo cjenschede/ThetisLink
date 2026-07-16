@@ -490,6 +490,7 @@ impl ClientEngine {
         let mut vfo_a_volume: f32 = 1.0; // Additional client-only RX1 gain (VFO A Vol slider)
         let mut local_volume: f32 = 1.0; // Master playback gain (client-only)
         let mut tx_gain: f32 = 0.5;
+        let mut play_volume: f32 = 1.0; // WAV-playback ('Play') level (client-only)
         let mut last_sent_volume: u16 = 0;
         let mut rx_volume_synced: bool = false; // Don't send ZZLA until server value received
         let mut agc = TxAgc::new();
@@ -525,6 +526,9 @@ impl ClientEngine {
         let mut playback_wav_rate: u32 = NETWORK_SAMPLE_RATE;
         let mut playback_pos: usize = 0;
         let mut playback_is_tx: bool = false;
+        // True zolang we voor een WAV-playback naar de hoofdradio de Thetis-TXEQ
+        // hebben uitgezet (om te herstellen bij stop/PTT-los/afloop).
+        let mut thetis_txeq_bypassed: bool = false;
 
         let mut yaesu_volume: f32 = 0.5;   // Yaesu audio volume (client-only)
         // Slot-1 volume start GEDEMPT (0.0) — verplicht per les uit build 88
@@ -755,6 +759,19 @@ impl ClientEngine {
                     Command::Disconnect => {
                         // Send disconnect to server before clearing
                         if let Some(ref addr) = server_addr {
+                            // Restore Thetis TXEQ if a WAV-playback left it bypassed —
+                            // must happen while the server address is still valid.
+                            if thetis_txeq_bypassed {
+                                let ctrl = ControlPacket {
+                                    control_id: ControlId::ThetisTxeq,
+                                    value: 1,
+                                };
+                                let mut cbuf = [0u8; ControlPacket::SIZE];
+                                ctrl.serialize(&mut cbuf);
+                                let _ = send_tx!(&cbuf, addr.as_str());
+                                thetis_txeq_bypassed = false;
+                                info!("Thetis TXEQ restored (disconnect)");
+                            }
                             let mut buf = [0u8; DisconnectPacket::SIZE];
                             DisconnectPacket::serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
@@ -847,6 +864,9 @@ impl ClientEngine {
                     }
                     Command::SetTxGain(v) => {
                         tx_gain = v;
+                    }
+                    Command::SetPlayVolume(v) => {
+                        play_volume = v.clamp(0.0, 4.0);
                     }
                     Command::SetAgcEnabled(enabled) => {
                         agc_enabled = enabled;
@@ -1572,28 +1592,29 @@ impl ClientEngine {
                     }
                     Command::PlayRecording { path } => {
                         match crate::wav::read_wav(std::path::Path::new(&path)) {
-                            Ok((rate, samples)) => {
-                                let supported_rate = match rate {
-                                    NETWORK_SAMPLE_RATE | NETWORK_SAMPLE_RATE_WIDEBAND => rate,
-                                    other => {
-                                        warn!("Playback: unsupported WAV sample rate {} Hz, treating as 8 kHz", other);
-                                        NETWORK_SAMPLE_RATE
-                                    }
-                                };
-                                info!("Playback: loaded {} ({:.1}s, {} Hz, {} samples)",
-                                    path, samples.len() as f32 / rate.max(1) as f32, rate, samples.len());
-                                playback_wav = Some(samples);
-                                playback_wav_rate = supported_rate;
-                                playback_pos = 0;
-                                playback_is_tx = ptt || yaesu_ptt || yaesu2_ptt;
-                                state.playing = true;
-                            }
+                            Ok((rate, samples)) => match rate {
+                                NETWORK_SAMPLE_RATE | NETWORK_SAMPLE_RATE_WIDEBAND => {
+                                    info!("Playback: loaded {} ({:.1}s, {} Hz, {} samples)",
+                                        path, samples.len() as f32 / rate.max(1) as f32, rate, samples.len());
+                                    playback_wav = Some(samples);
+                                    playback_wav_rate = rate;
+                                    playback_pos = 0;
+                                    playback_is_tx = ptt || yaesu_ptt || yaesu2_ptt;
+                                    state.playing = true;
+                                }
+                                other => {
+                                    // TL records only 8 k / 16 k. Reject other rates rather
+                                    // than misplay them at the wrong speed.
+                                    warn!("Playback: unsupported WAV sample rate {} Hz (only 8000/16000 Hz supported) - not played", other);
+                                }
+                            },
                             Err(e) => warn!("Failed to load WAV: {}", e),
                         }
                     }
                     Command::StopPlayback => {
                         playback_wav = None;
                         playback_pos = 0;
+                        playback_is_tx = false;
                         state.playing = false;
                         info!("Playback stopped");
                     }
@@ -2585,6 +2606,9 @@ impl ClientEngine {
                                     }
                                 }
                                 ControlId::TxProfile => state.tx_profile = ctrl.value as u8,
+                                // Client->server only (WAV-playback TXEQ-bypass); de server
+                                // broadcast 'm nooit terug, dus hier no-op.
+                                ControlId::ThetisTxeq => {}
                                 ControlId::NoiseReduction => state.nr_level = ctrl.value.min(4) as u8,
                                 ControlId::AutoNotchFilter => state.anf_on = ctrl.value != 0,
                                 ControlId::DriveLevel => state.drive_level = ctrl.value.min(100) as u8,
@@ -3890,7 +3914,8 @@ impl ClientEngine {
                                     playback_buf.resize(target, 0.0);
                                     bin_r_buf.resize(target, 0.0);
                                     for (i, &s) in resampled.iter().enumerate() {
-                                        let sample = (s * local_volume).clamp(-1.0, 1.0);
+                                        // play_volume-schuif ook op speaker-playback.
+                                        let sample = (s * local_volume * play_volume).clamp(-1.0, 1.0);
                                         playback_buf[i] = sample;
                                         bin_r_buf[i] = sample;
                                     }
@@ -3900,6 +3925,7 @@ impl ClientEngine {
                                     info!("WAV speaker playback finished");
                                     playback_wav = None;
                                     playback_pos = 0;
+                                    playback_is_tx = false;
                                     state.playing = false;
                                 }
                             }
@@ -4167,8 +4193,28 @@ impl ClientEngine {
                     // Update capture level
                     state.capture_level = audio.capture_level();
 
+                    // Thetis-TXEQ-bypass tijdens WAV-playback naar de HOOFDRADIO (Thetis-PTT):
+                    // zet de mic-profiel-TX-EQ uit tijdens Play en herstel bij stop/PTT-los/
+                    // afloop - net als Thetis' eigen record/playback. Alleen Thetis (ptt); de
+                    // Yaesu-EQ wordt al client-side overgeslagen. Edge-getriggerd via de flag.
+                    let thetis_wav_tx_active = playback_is_tx && ptt && playback_wav.is_some();
+                    if thetis_wav_tx_active != thetis_txeq_bypassed {
+                        let ctrl = ControlPacket {
+                            control_id: ControlId::ThetisTxeq,
+                            value: if thetis_wav_tx_active { 0 } else { 1 },
+                        };
+                        let mut cbuf = [0u8; ControlPacket::SIZE];
+                        ctrl.serialize(&mut cbuf);
+                        let _ = send_tx!(&cbuf, addr.as_str());
+                        thetis_txeq_bypassed = thetis_wav_tx_active;
+                        info!(
+                            "Thetis TXEQ {} (WAV playback)",
+                            if thetis_wav_tx_active { "off" } else { "restored" }
+                        );
+                    }
+
                     // WAV TX playback: bypass mic capture when playing back a TX recording
-                    if playback_is_tx && (ptt || yaesu_ptt) && playback_wav.is_some() {
+                    if playback_is_tx && (ptt || yaesu_ptt || yaesu2_ptt) && playback_wav.is_some() {
                         let wav = playback_wav.as_ref().unwrap();
                         // Aantal WAV-samples per 20 ms bij de HEADER-rate (8k->160,
                         // 16k->320). Voorheen stond hier vast FRAME_SAMPLES (8k) plus
@@ -4180,10 +4226,32 @@ impl ClientEngine {
                         let remaining = wav.len() - playback_pos;
                         let to_read = samples_per_tick.min(remaining);
                         if to_read > 0 {
+                            // play_volume-schuif: schaalt de opgenomen WAV. Toegepast op
+                            // src_f32 zodat zowel de meter (RMS hieronder) als beide
+                            // TX-takken (Thetis + Yaesu) het aangepaste niveau volgen.
                             let src_f32: Vec<f32> = wav[playback_pos..playback_pos + to_read]
                                 .iter()
-                                .map(|&s| s as f32 / 32768.0)
+                                .map(|&s| (s as f32 / 32768.0) * play_volume)
                                 .collect();
+
+                            // Meter tijdens Play: toon het niveau van de UITGEZONDEN WAV
+                            // (niet de gemute mic). RMS van dit 20ms-blok naar de juiste
+                            // bar (Thetis of Yaesu). De drain hieronder overschrijft
+                            // yaesu_mic_level anders met de gemute mic / geschaalde WAV -
+                            // dat is gegate op !playback_is_tx.
+                            let wav_rms = if src_f32.is_empty() {
+                                0.0
+                            } else {
+                                (src_f32.iter().map(|s| s * s).sum::<f32>()
+                                    / src_f32.len() as f32)
+                                    .sqrt()
+                            };
+                            if ptt {
+                                state.capture_level = wav_rms;
+                            }
+                            if yaesu_ptt || yaesu2_ptt {
+                                state.yaesu_mic_level = wav_rms;
+                            }
 
                             // Thetis-hoofdradio TX: resample header-rate -> 16 kHz voor
                             // de wideband Opus-encoder. Alleen als Thetis-PTT actief is.
@@ -4219,10 +4287,13 @@ impl ClientEngine {
                                 }
                             }
 
-                            // Yaesu TX: voer op capture_rate in yaesu_tx_accum, exact zoals
-                            // de live mic (regel ~4227). De drain verderop resamplet
-                            // capture -> 16k en past EQ/compressor/gain toe, dus hier
-                            // geen tx_gain (raw), net als de mic-tak.
+                            // Yaesu TX: voer op capture_rate in yaesu_tx_accum. GEEN pre-
+                            // attenuatie: de drain slaat voor WAV-playback de mic-keten over
+                            // (compressor/AGC + de 4x mic-boost). Die 4x + comp/AGC zijn
+                            // bedoeld voor een STILLE, dynamische mic; een opgenomen WAV zit
+                            // al op lijn-niveau. De AGC zou de WAV terug omhoog normaliseren
+                            // waarna de 4x alsnog clipt (vervorming). Nu gaat de WAV clean als
+                            // lijn-niveau door de keten: alleen play_volume + mic_gain.
                             if yaesu_ptt || yaesu2_ptt {
                                 let fcap =
                                     resample_linear(&src_f32, playback_wav_rate, capture_rate);
@@ -4235,6 +4306,7 @@ impl ClientEngine {
                             info!("WAV TX playback finished");
                             playback_wav = None;
                             playback_pos = 0;
+                            playback_is_tx = false;
                             state.playing = false;
                         }
                         // Drain mic capture to prevent buffer buildup
@@ -4343,19 +4415,29 @@ impl ClientEngine {
 
                             // Apply 5-band EQ at capture rate (before resampling).
                             // Per-radio: slot-1 PTT → radio-2 EQ, anders radio-1 EQ.
-                            if yaesu2_ptt {
-                                yaesu2_eq.process(&mut chunk);
-                            } else {
-                                yaesu_eq.process(&mut chunk);
+                            // ALLEEN voor de live mic: de TX-mic-EQ hoort bij de microfoon,
+                            // niet bij een directe WAV-playback (die moet klinken zoals
+                            // opgenomen). Dus overslaan tijdens playback_is_tx.
+                            if !playback_is_tx {
+                                if yaesu2_ptt {
+                                    yaesu2_eq.process(&mut chunk);
+                                } else {
+                                    yaesu_eq.process(&mut chunk);
+                                }
                             }
 
                             // Measure Yaesu mic level (after EQ) for the UI meter.
-                            let level_sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
-                            state.yaesu_mic_level = if chunk.is_empty() {
-                                0.0
-                            } else {
-                                (level_sum_sq / chunk.len() as f32).sqrt()
-                            };
+                            // Tijdens WAV-Play niet overschrijven: dan toont de meter het
+                            // uitgezonden WAV-niveau (in het WAV-blok gezet), niet de
+                            // gemute mic / de 1/4-geschaalde WAV-chunk.
+                            if !playback_is_tx {
+                                let level_sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
+                                state.yaesu_mic_level = if chunk.is_empty() {
+                                    0.0
+                                } else {
+                                    (level_sum_sq / chunk.len() as f32).sqrt()
+                                };
+                            }
 
                             // Resample to 16kHz and apply Yaesu-specific mic gain before Opus.
                             let mic_gain = if yaesu2_ptt { yaesu2_local_mic_gain } else { yaesu_local_mic_gain };
@@ -4364,18 +4446,24 @@ impl ClientEngine {
                             // compressor → AGC, vóór de handmatige tx_gain/mic_gain-trim.
                             // Per radio (net als de EQ): slot-1 PTT → radio-2 keten.
                             // Compressor werkt zelf-gated op amount; AGC op de eigen toggle.
-                            if yaesu2_ptt {
-                                yaesu2_compressor.process(&mut resampled);
-                                if yaesu2_tx_agc_enabled {
-                                    yaesu2_agc.process(&mut resampled);
-                                }
-                            } else {
-                                yaesu_compressor.process(&mut resampled);
-                                if yaesu_tx_agc_enabled {
-                                    yaesu_agc.process(&mut resampled);
+                            // Mic-keten (compressor + AGC) ALLEEN voor live mic, niet voor
+                            // WAV-playback (die is al lijn-niveau; comp/AGC zou 'm vervormen).
+                            if !playback_is_tx {
+                                if yaesu2_ptt {
+                                    yaesu2_compressor.process(&mut resampled);
+                                    if yaesu2_tx_agc_enabled {
+                                        yaesu2_agc.process(&mut resampled);
+                                    }
+                                } else {
+                                    yaesu_compressor.process(&mut resampled);
+                                    if yaesu_tx_agc_enabled {
+                                        yaesu_agc.process(&mut resampled);
+                                    }
                                 }
                             }
-                            let final_scale = mic_gain * 4.0;
+                            // Live mic krijgt de 4x stille-mic-boost; WAV-playback gaat op
+                            // lijn-niveau (alleen mic_gain, geen 4x) zodat 'ie niet clipt.
+                            let final_scale = if playback_is_tx { mic_gain } else { mic_gain * 4.0 };
                             let desired_bitrate = yaesu_tx_bitrate_for_mode(if yaesu2_ptt { state.yaesu2_mode } else { state.yaesu_mode });
                             if desired_bitrate != yaesu_tx_bitrate_bps {
                                 match yaesu_tx_encoder.set_bitrate_bps(desired_bitrate) {
@@ -4423,6 +4511,18 @@ impl ClientEngine {
                 _ = shutdown.changed() => {
                     info!("Client network shutting down");
                     if let Some(ref addr) = server_addr {
+                        // Restore Thetis TXEQ if a WAV-playback left it bypassed.
+                        if thetis_txeq_bypassed {
+                            let ctrl = ControlPacket {
+                                control_id: ControlId::ThetisTxeq,
+                                value: 1,
+                            };
+                            let mut cbuf = [0u8; ControlPacket::SIZE];
+                            ctrl.serialize(&mut cbuf);
+                            let _ = send_tx!(&cbuf, addr.as_str());
+                            thetis_txeq_bypassed = false;
+                            info!("Thetis TXEQ restored (shutdown)");
+                        }
                         let mut buf = [0u8; DisconnectPacket::SIZE];
                         DisconnectPacket::serialize(&mut buf);
                         let _ = send_tx!(&buf, addr.as_str());

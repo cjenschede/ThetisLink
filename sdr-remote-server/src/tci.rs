@@ -95,6 +95,14 @@ pub struct TciConnection {
     pub filter_index: u8,
     pub filter_rx2_index: u8,
     pub fm_deviation: u8,
+    // Thetis TX-EQ (ZZET) snapshot for WAV-playback bypass. During a WAV
+    // playback to the main radio the client asks us to turn TX-EQ off; we
+    // query the operator's real setting first so we can restore the exact
+    // prior state afterwards (not just force it on).
+    pub thetis_txeq: bool,
+    txeq_bypass_saved: Option<bool>,
+    txeq_bypass_pending: bool,
+    txeq_bypass_active: bool,
     // TX Monitor (MON_ENABLE)
     pub mon_on: bool,
     // VFO Sync readback
@@ -327,6 +335,10 @@ impl TciConnection {
             filter_index: 3,
             filter_rx2_index: 3,
             fm_deviation: 1,
+            thetis_txeq: true,
+            txeq_bypass_saved: None,
+            txeq_bypass_pending: false,
+            txeq_bypass_active: false,
             mon_on: false,
             vfo_sync_on: false,
             agc_mode: 3,
@@ -492,6 +504,31 @@ impl TciConnection {
                 self.handle_disconnect();
             }
         }
+    }
+
+    /// Begin the Thetis TX-EQ bypass for WAV-playback to the main radio.
+    /// Queries the current ZZET state; the RunCatExResponse handler snapshots
+    /// it and then turns TX-EQ off. Idempotent while a bypass is active/pending.
+    pub async fn thetis_txeq_bypass_begin(&mut self) {
+        if self.txeq_bypass_active || self.txeq_bypass_pending {
+            return;
+        }
+        self.txeq_bypass_pending = true;
+        self.run_cat("ZZET").await;
+    }
+
+    /// End the bypass: restore TX-EQ to the snapshotted prior state (defaults
+    /// to on if we never captured one, e.g. the query never answered).
+    pub async fn thetis_txeq_bypass_end(&mut self) {
+        if !self.txeq_bypass_active && !self.txeq_bypass_pending {
+            return;
+        }
+        let restore_on = self.txeq_bypass_saved.unwrap_or(true);
+        self.txeq_bypass_pending = false;
+        self.txeq_bypass_active = false;
+        self.txeq_bypass_saved = None;
+        self.run_cat(if restore_on { "ZZET1" } else { "ZZET0" }).await;
+        info!("Thetis TXEQ bypass end: restored to {}", if restore_on { "on" } else { "off" });
     }
 
     /// Called periodically (from safety check) to drain notifications and update state.
@@ -1237,6 +1274,22 @@ impl TciConnection {
                                 info!("TCI: filter preset RX2 = {} (was {})", idx, self.filter_rx2_index);
                                 self.filter_rx2_index = idx;
                             }
+                        }
+                    }
+                } else if cmd_upper.starts_with("ZZET") {
+                    // TX-EQ (ZZET) query/echo: response is "ZZET1"/"ZZET0".
+                    // Cache the state; if a WAV-playback bypass is pending,
+                    // snapshot the operator's real setting and then turn
+                    // TX-EQ off so we can restore it exactly afterwards.
+                    if let Some(c) = resp_upper.strip_prefix("ZZET").and_then(|s| s.chars().next()) {
+                        let on = c == '1';
+                        self.thetis_txeq = on;
+                        if self.txeq_bypass_pending {
+                            self.txeq_bypass_saved = Some(on);
+                            self.txeq_bypass_pending = false;
+                            self.txeq_bypass_active = true;
+                            self.run_cat("ZZET0").await;
+                            info!("Thetis TXEQ bypass: saved prior = {}, TX-EQ off", if on { "on" } else { "off" });
                         }
                     }
                 } else {

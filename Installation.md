@@ -1,8 +1,8 @@
-# ThetisLink v2.4.1 - Installation Guide
+# ThetisLink v2.4.2 - Installation Guide
 
 ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full radio control over the network via TCI WebSocket.
 
-**Compatibility:** ThetisLink talks only to **Thetis** (via TCI WebSocket) and not directly to the SDR hardware. It therefore works with any SDR device supported by **Thetis v2.10.3.15** (official release by ramdor) — both HPSDR Protocol 1 (Hermes, Angelia, Orion) and HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optional: Yaesu FT-991A as a second radio (via COM port).
+**Compatibility:** ThetisLink talks only to **Thetis** (via TCI WebSocket) and not directly to the SDR hardware. It therefore works with any SDR device supported by **Thetis v2.10.3.15** (official release by ramdor) — both HPSDR Protocol 1 (Hermes, Angelia, Orion) and HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optional: Yaesu FT-991A / FTX-1 as a second radio (via COM port).
 
 **PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.4.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.4.1.apk | ThetisLink Android Client - phone/tablet |
+| ThetisLink-2.4.2.apk | ThetisLink Android Client - phone/tablet |
 | Installation.pdf | Installation guide (English, this document) |
 | User-Manual-EN.pdf | User manual (English) |
 | Technical-Reference.pdf | Technical reference (English) |
@@ -32,6 +32,10 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 
 ## Overview
 
+Thetis talks to the ThetisLink Server over a single TCI WebSocket connection; the client(s) then connect to that server. For the connection between client and server there are **two methods** — pick the one that suits your network.
+
+### Method 1 — direct connection
+
 ```mermaid
 flowchart LR
     Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
@@ -39,17 +43,29 @@ flowchart LR
     Server <-->|"UDP :4580"| Android[ThetisLink Android Client<br>phone]
 ```
 
+The client reaches the server **directly** over UDP port 4580. On your own network (LAN/WiFi) this works right away. From outside your network it can also be direct, provided you set up **port forwarding** (the router forwards UDP 4580 to the Server PC) and have your own public IP address.
+
+### Method 2 — via a relay (v2.4.0)
+
+```mermaid
+flowchart LR
+    Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
+    Server -->|"outbound :443"| Relay[Relay on external server<br>VPS]
+    Desktop[ThetisLink Desktop Client] -->|"outbound :443"| Relay
+    Android[ThetisLink Android Client] -->|"outbound :443"| Relay
+```
+
+If a direct connection is **not an option** — for example behind **CGNAT** (you do not get your own public IP address) or without access to the router — the server and the client both connect *outbound* to a **relay on an external server (VPS)**; no port forward is then needed. This method therefore does carry a **dependency on that external relay server**. Host the relay yourself, or PA3GHM can temporarily add you on request (limited number of slots).
+
+> Both methods are detailed in full in [Network](#network) below (sections *Using via internet* and *... with the relay*).
+
+**What travels over the connection** (identical for both methods):
+
 **Thetis -> ThetisLink Server** (single TCI WebSocket connection):
 - Audio (RX and TX streams), spectrum/waterfall (IQ data), control (frequency, mode, controls)
 
-**ThetisLink Server -> ThetisLink Clients** (UDP port 4580):
-- Everything: audio, spectrum, control, device status - in a single UDP connection per ThetisLink Client
-
-**Connecting from outside your own network** (two methods):
-- **Port forwarding** — the router forwards UDP 4580 to the ThetisLink Server PC. Requires your own public IP address.
-- **Relay (v2.4.0)** — behind **CGNAT** or without router access: the server and client both connect *outbound* to a relay on a VPS, no port forward needed. Host it yourself, or PA3GHM can temporarily add you on request (limited number of slots).
-
-Both are detailed in [Network](#network) below (sections *Using via internet* and *... with the relay*).
+**ThetisLink Server -> ThetisLink Clients**:
+- Everything: audio, spectrum, control, device status - in a single connection per ThetisLink Client (directly over UDP 4580, or tunnelled through the relay)
 
 ---
 
@@ -141,7 +157,7 @@ In the ThetisLink Server GUI you can connect external devices. Each device has a
 | EA7HG Visual Rotor | UDP | IP:port (e.g. `192.168.1.66:2570`) |
 | PstRotator (outgoing) | UDP/XML | host:port of the PstRotator PC (e.g. `192.168.1.70:12000`) + local feedback port `12001`; supports any rotor model PstRotator itself drives |
 | Yaesu G-1000DXC rotor (**) | USB-HID | Adafruit MCP2221A breakout in 5 V mode, BST82 gate switches on pin 1/2 + DAC on pin 3 + ADC via 1.8 k + 2.2 k divider on pin 4 |
-| Yaesu FT-991A | Serial (USB) | COM port (see below) |
+| Yaesu FT-991A / FTX-1 | Serial (USB) | COM port (see below) |
 
 > (*) The StockCorner JC-4s and JC-3s tuners do not have a standard serial interface. From v2.0.3 each tuner is driven via an **Adafruit MCP2221A USB-to-HID breakout** with a transistor stage on the grey "start" wire and a 1 MΩ + 1 MΩ voltage divider on the yellow "tune-status" wire. Up to two tuners are supported in parallel; each board receives a unique USB serial number that you program from the server status panel. The full wiring and UI flow is documented in the User Manual (`User-Manual-EN.md`). This is not an off-the-shelf product — contact for details.
 
@@ -149,9 +165,9 @@ In the ThetisLink Server GUI you can connect external devices. Each device has a
 
 > **Rotor backend choice**: in the Server GUI under *Rotor → backend* choose between **EA7HG Visual Rotor**, **PstRotator (XML/UDP)** or **Yaesu G-1000DXC (MCP2221A)**. One at a time is active; the client panel (compass, GoTo, Stop) looks the same regardless — the choice only affects how the server talks to the rotor hardware. For PstRotator setup see the User Manual, section "Rotor backends → PstRotator (XML/UDP)".
 
-#### Yaesu FT-991A USB driver
+#### Yaesu FT-991A / FTX-1 USB driver
 
-The Yaesu FT-991A uses a **Silicon Labs CP210x** USB-to-serial chip. The driver can be downloaded at:
+The Yaesu FT-991A and FTX-1 use a **Silicon Labs CP210x** USB-to-serial chip. The driver can be downloaded at:
 
 https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers
 
@@ -254,14 +270,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 ### 4.1 Installing the APK
 
 **Via file manager:**
-1. Copy `ThetisLink-2.4.1.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.4.2.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.4.1.apk
+adb install ThetisLink-2.4.2.apk
 ```
 
 ### 4.2 Connecting — guided setup wizard
