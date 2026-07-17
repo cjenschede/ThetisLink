@@ -1597,10 +1597,11 @@ impl SdrRemoteApp {
                         }
                         let sl_label = if has_toggle { "" } else { label };
                         let resp = ui.add(egui::Slider::new(&mut self.yaesu_level_sliders[s][j], lo..=hi).text(sl_label));
+                        let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_level_sliders[s][j], lo..=hi, ((hi - lo) as f64 / 50.0).max(1.0));
                         // Send alleen op drag-release (of een niet-sleep-wijziging: klik/toets),
                         // niet op elke tussenwaarde - anders burst een sleep CAT-commando's over
                         // de seriële Yaesu-link (deelt met de poll -> CAT-lag). Eindwaarde altijd.
-                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) || scrolled {
                             let v = self.yaesu_level_sliders[s][j] as u16;
                             let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, ctrl, v));
                             if slot == 0 {
@@ -1633,10 +1634,11 @@ impl SdrRemoteApp {
                             self.yaesu_toggle_flip(slot, on_ctrl as u32);
                         }
                         let resp = ui.add(egui::Slider::new(&mut self.yaesu_freq_sliders[s][fidx], flo..=fhi).text("Hz"));
+                        let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_freq_sliders[s][fidx], flo..=fhi, ((fhi - flo) as f64 / 50.0).max(1.0));
                         // Send op drag-release i.p.v. elke tussenwaarde - brede freq-sliders
                         // (Contour 10-3200, Notch 1-320) zouden anders tientallen CAT-commando's
                         // per sleep queuen. Eindwaarde altijd verzonden.
-                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) || scrolled {
                             let v = self.yaesu_freq_sliders[s][fidx] as u16;
                             let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, freq_ctrl, v));
                             if slot == 0 {
@@ -1866,7 +1868,9 @@ impl SdrRemoteApp {
                 ui.label("SQL");
                 let sql_slider = egui::Slider::new(&mut self.yaesu_squelch, 0..=100)
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([slider_w, 16.0], sql_slider).changed() {
+                let resp = ui.add_sized([slider_w, 16.0], sql_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_squelch, 0..=100, 1.0);
+                if resp.changed() || scrolled {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuSquelch, self.yaesu_squelch));
                     self.yaesu_control_changed_at = Some(Instant::now());
                 }
@@ -1874,7 +1878,9 @@ impl SdrRemoteApp {
                 ui.label("PWR");
                 let pwr_slider = egui::Slider::new(&mut self.yaesu_rf_power, 0..=100)
                     .custom_formatter(|v, _| format!("{:.0}W", v));
-                if ui.add_sized([slider_w, 16.0], pwr_slider).changed() {
+                let resp = ui.add_sized([slider_w, 16.0], pwr_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_rf_power, 0..=100, 1.0);
+                if resp.changed() || scrolled {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuRfPower, self.yaesu_rf_power as u16));
                     self.yaesu_control_changed_at = Some(Instant::now());
                 }
@@ -1884,7 +1890,9 @@ impl SdrRemoteApp {
                 ui.label("RF Gain");
                 let rf_slider = egui::Slider::new(&mut self.yaesu_rf_gain, 0..=255)
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([slider_w, 16.0], rf_slider).changed() {
+                let resp = ui.add_sized([slider_w, 16.0], rf_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_rf_gain, 0..=255, 2.0);
+                if resp.changed() || scrolled {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuRfGain, self.yaesu_rf_gain));
                     self.yaesu_control_changed_at = Some(Instant::now());
                 }
@@ -1925,11 +1933,12 @@ impl SdrRemoteApp {
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.2}x", v));
             let resp = ui.add_sized([140.0, 16.0], slider);
-            if resp.changed() {
+            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut mic_gain_display, 0.05..=1.0, 0.02);
+            if resp.changed() || scrolled {
                 self.yaesu_mic_gain = super::yaesu_mic_gain_from_display(mic_gain_display);
                 let _ = self.cmd_tx.send(Command::SetYaesuTxGain(self.yaesu_mic_gain));
             }
-            if resp.drag_stopped() {
+            if resp.drag_stopped() || scrolled {
                 self.save_ptt_config();
             }
         });
@@ -2141,7 +2150,9 @@ impl SdrRemoteApp {
                         let slider = egui::Slider::new(&mut g, -12.0..=12.0)
                             .vertical()
                             .custom_formatter(|v, _| format!("{:+.0}", v));
-                        if ui.add_sized([20.0, 60.0], slider).changed() {
+                        let resp = ui.add_sized([20.0, 60.0], slider);
+                        let scrolled = super::helpers::slider_wheel(ui, &resp, &mut g, -12.0..=12.0, 0.5);
+                        if resp.changed() || scrolled {
                             gains[i] = g;
                             let _ = tx.send(mk_band(i as u8, g));
                         }
@@ -2158,11 +2169,12 @@ impl SdrRemoteApp {
                 let mut c = comp as f32;
                 let resp = ui.add(egui::Slider::new(&mut c, 0.0..=100.0)
                     .custom_formatter(|v, _| format!("{:.0}", v)));
-                if resp.changed() {
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut c, 0.0..=100.0, 2.0);
+                if resp.changed() || scrolled {
                     comp = c.round() as u8;
                     let _ = tx.send(mk_comp(comp));
                 }
-                if resp.drag_stopped() { chain_dirty = true; }
+                if resp.drag_stopped() || scrolled { chain_dirty = true; }
             });
         });
 
@@ -2379,14 +2391,18 @@ impl SdrRemoteApp {
                 ui.label("SQL");
                 let sql = egui::Slider::new(&mut self.yaesu2_squelch, 0..=100)
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([slider_w, 16.0], sql).changed() {
+                let resp = ui.add_sized([slider_w, 16.0], sql);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu2_squelch, 0..=100, 1.0);
+                if resp.changed() || scrolled {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Squelch, self.yaesu2_squelch));
                     self.yaesu2_control_changed_at = Some(std::time::Instant::now());
                 }
                 ui.label("PWR");
                 let pwr = egui::Slider::new(&mut self.yaesu2_rf_power, 0..=100)
                     .custom_formatter(|v, _| format!("{:.0}W", v));
-                if ui.add_sized([slider_w, 16.0], pwr).changed() {
+                let resp = ui.add_sized([slider_w, 16.0], pwr);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu2_rf_power, 0..=100, 1.0);
+                if resp.changed() || scrolled {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2RfPower, self.yaesu2_rf_power));
                     self.yaesu2_control_changed_at = Some(std::time::Instant::now());
                 }
@@ -2395,7 +2411,9 @@ impl SdrRemoteApp {
                 ui.label("RF Gain");
                 let rf = egui::Slider::new(&mut self.yaesu2_rf_gain, 0..=255)
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([slider_w, 16.0], rf).changed() {
+                let resp = ui.add_sized([slider_w, 16.0], rf);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu2_rf_gain, 0..=255, 2.0);
+                if resp.changed() || scrolled {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2RfGain, self.yaesu2_rf_gain));
                     self.yaesu2_control_changed_at = Some(std::time::Instant::now());
                 }
@@ -2427,11 +2445,12 @@ impl SdrRemoteApp {
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.2}x", v));
             let resp = ui.add_sized([140.0, 16.0], slider);
-            if resp.changed() {
+            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut mic_gain_display, 0.05..=1.0, 0.02);
+            if resp.changed() || scrolled {
                 self.yaesu2_mic_gain = super::yaesu_mic_gain_from_display(mic_gain_display);
                 let _ = self.cmd_tx.send(Command::SetYaesu2TxGain(self.yaesu2_mic_gain));
             }
-            if resp.drag_stopped() {
+            if resp.drag_stopped() || scrolled {
                 self.save_ptt_config();
             }
         });
@@ -3119,14 +3138,18 @@ impl SdrRemoteApp {
                     let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
                         .logarithmic(true)
                         .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-                    if ui.add_sized([180.0, 16.0], slider).changed() {
+                    let resp = ui.add_sized([180.0, 16.0], slider);
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_volume, 0.001..=1.0, 0.02);
+                    if resp.changed() || scrolled {
                         let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
                     }
                 } else {
                     let slider = egui::Slider::new(&mut self.yaesu2_volume, 0.001..=1.0)
                         .logarithmic(true)
                         .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-                    if ui.add_sized([180.0, 16.0], slider).changed() {
+                    let resp = ui.add_sized([180.0, 16.0], slider);
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu2_volume, 0.001..=1.0, 0.02);
+                    if resp.changed() || scrolled {
                         let _ = self.cmd_tx.send(Command::SetYaesu2Volume(self.yaesu2_volume));
                     }
                 }

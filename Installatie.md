@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.4.2 - Installatiehandleiding
+﻿# ThetisLink v2.4.3 - Installatiehandleiding
 
 ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket.
 
@@ -16,7 +16,7 @@ ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, s
 |---------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - draait op de PC naast Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.4.2.apk | ThetisLink Android Client - telefoon/tablet |
+| ThetisLink-2.4.3.apk | ThetisLink Android Client - telefoon/tablet |
 | Installatie.pdf | Deze handleiding (Nederlands) |
 | User-Manual.pdf | Gebruikershandleiding (Nederlands) |
 | Technische-Referentie.pdf | Technische referentie (Nederlands) |
@@ -56,6 +56,8 @@ flowchart LR
 ```
 
 Is een directe verbinding **geen optie** — bijvoorbeeld achter **CGNAT** (je krijgt geen eigen publiek IP-adres) of zonder toegang tot de router — dan verbinden de server én de client allebei *uitgaand* met een **relay op een externe server (VPS)**; er is dan geen port forward nodig. Deze methode heeft dus wél een **afhankelijkheid van die externe relay-server**. De relay kun je zelf hosten, of PA3GHM voegt je op verzoek tijdelijk toe (beperkt aantal plekken).
+
+> **De server ondersteunt beide methodes tegelijk.** Zodra er een relay is geconfigureerd, kiest elke client zelf of hij direct of via de relay verbindt. Eén server kan dus meerdere clients tegelijk bedienen — sommige direct, andere via de relay.
 
 > Beide methodes staan volledig uitgewerkt in [Netwerk](#netwerk) verderop (secties *Gebruik via internet* en *... met de relay*).
 
@@ -270,14 +272,14 @@ Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Statu
 ### 4.1 APK installeren
 
 **Via bestandsbeheer:**
-1. Kopieer `ThetisLink-2.4.2.apk` naar je telefoon (USB, e-mail, of cloud)
+1. Kopieer `ThetisLink-2.4.3.apk` naar je telefoon (USB, e-mail, of cloud)
 2. Open het APK-bestand op de telefoon
 3. Sta "Installeren van onbekende bronnen" toe als gevraagd
 4. Installeer
 
 **Via ADB** (met USB-debugging ingeschakeld):
 ```
-adb install ThetisLink-2.4.2.apk
+adb install ThetisLink-2.4.3.apk
 ```
 
 ### 4.2 Verbinden — begeleide setup-wizard

@@ -1,4 +1,4 @@
-# ThetisLink v2.4.2 - Installation Guide
+# ThetisLink v2.4.3 - Installation Guide
 
 ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full radio control over the network via TCI WebSocket.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.4.2.apk | ThetisLink Android Client - phone/tablet |
+| ThetisLink-2.4.3.apk | ThetisLink Android Client - phone/tablet |
 | Installation.pdf | Installation guide (English, this document) |
 | User-Manual-EN.pdf | User manual (English) |
 | Technical-Reference.pdf | Technical reference (English) |
@@ -56,6 +56,8 @@ flowchart LR
 ```
 
 If a direct connection is **not an option** — for example behind **CGNAT** (you do not get your own public IP address) or without access to the router — the server and the client both connect *outbound* to a **relay on an external server (VPS)**; no port forward is then needed. This method therefore does carry a **dependency on that external relay server**. Host the relay yourself, or PA3GHM can temporarily add you on request (limited number of slots).
+
+> **The server supports both methods at the same time.** Once a relay is configured, each client decides for itself whether to connect directly or via the relay. A single server can therefore serve multiple clients concurrently — some direct, some via the relay.
 
 > Both methods are detailed in full in [Network](#network) below (sections *Using via internet* and *... with the relay*).
 
@@ -270,14 +272,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 ### 4.1 Installing the APK
 
 **Via file manager:**
-1. Copy `ThetisLink-2.4.2.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.4.3.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.4.2.apk
+adb install ThetisLink-2.4.3.apk
 ```
 
 ### 4.2 Connecting — guided setup wizard

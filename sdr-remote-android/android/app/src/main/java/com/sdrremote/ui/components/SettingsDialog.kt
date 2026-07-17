@@ -100,6 +100,10 @@ fun SettingsDialog(
                 var relayStation by remember { mutableStateOf(prefs.getString("relay_station", "") ?: "") }
                 var relayToken by remember { mutableStateOf(prefs.getString("relay_token", "") ?: "") }
                 var relayDeviceName by remember { mutableStateOf(prefs.getString("relay_device_name", "") ?: "") }
+                // Whether the relay is the active transport THIS session (written by the
+                // ViewModel at bridge creation). Used to show a restart notice when the
+                // live toggle differs - symmetric for turning the relay on AND off.
+                val relayActiveSession = remember { prefs.getBoolean("relay_active_session", false) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Connect via relay:", fontSize = 14.sp)
                     Spacer(Modifier.width(8.dp))
@@ -113,6 +117,17 @@ fun SettingsDialog(
                     fontSize = 11.sp,
                     color = Color.Gray,
                 )
+                // Dynamic restart notice: appears when the current relay config differs
+                // from what is active this session (turning it on OR off).
+                val relayConfiguredNow = relayEnabled && relayUrl.isNotBlank() && relayStation.isNotBlank()
+                if (relayConfiguredNow != relayActiveSession) {
+                    Text(
+                        if (relayActiveSession) "Saved - restart the app to stop using the relay"
+                        else "Saved - restart the app to connect via relay",
+                        fontSize = 11.sp,
+                        color = Color(0xFFC8A028),
+                    )
+                }
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
                     value = relayUrl,

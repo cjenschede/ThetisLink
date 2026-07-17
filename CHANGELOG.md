@@ -16,6 +16,36 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.4.3] — 2026-07-17 (Relay connection clarity · client colour-coding · slider mouse-wheel)
+
+> **Patch release.** No wire-protocol change (`VERSION` stays 3, fully interoperable with
+> v2.4.x). Stock Thetis v2.10.3.15 is sufficient — no Thetis-fork change. Desktop and Android
+> both updated; the APK is rebuilt at 2.4.3.
+
+### Changed
+- **When connected through the relay, the connection area no longer shows the direct server
+  IP** (which is not the actual route — the relay decides the destination via station/token,
+  so the IP was misleading). It now shows **"Via relay: &lt;station&gt;"** plus the live relay
+  status on desktop, and the relay destination on Android. Direct connections are unchanged.
+- **The server's client list colour-codes each client by connection type** — direct clients in
+  ThetisLink blue, relayed clients in cyan (with a "(relay)" tag and a small legend). The amber
+  authenticating/stale cue still takes precedence.
+
+### Added
+- **Mouse-wheel scroll on every desktop slider.** Hovering a slider and scrolling now nudges it
+  by one step per notch (volumes/gains/squelch/RIT-XIT/CW/drive/monitor, diversity gain/phase,
+  the VRX and RX1/RX2 spectrum ref/range/zoom/pan/waterfall controls, and all Yaesu 1 & 2
+  controls). Disabled read-out sliders do not scroll.
+- **A restart notice when toggling the relay on _or_ off** (previously only shown when turning
+  it on) — desktop and the Android settings page — so it is clear the change takes effect after
+  a restart.
+
+### Notes
+- The documentation now states explicitly that **the server supports both connection methods at
+  the same time**: with a relay configured, each client independently chooses direct or relay,
+  so one server can serve a mix of direct and relayed clients concurrently. The installation
+  overview now shows both methods with their own diagram.
+
 ## [2.4.2] — 2026-07-16 (Recorded-audio playback to the radio: clean modulation · Thetis TX-EQ bypass · play-volume)
 
 > **Patch release.** One additive wire-protocol addition only (a new client→server control

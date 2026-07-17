@@ -2,6 +2,41 @@
 
 use super::*;
 
+/// Mouse-wheel support for a slider. Call this right AFTER `ui.add(slider)`
+/// with the slider's Response and the same value/range: while the pointer is
+/// over the slider, one wheel notch moves the value by `step` (clamped to
+/// `range`). Returns true if the wheel changed the value, so the caller can
+/// OR it with `resp.changed()` before sending its command. Kept as a post-hoc
+/// helper (not a slider builder) so it composes with any slider config
+/// (log scale, formatters, width) without lifetime churn.
+pub(crate) fn slider_wheel<N: egui::emath::Numeric>(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    value: &mut N,
+    range: std::ops::RangeInclusive<N>,
+    step: f64,
+) -> bool {
+    // Never scroll a disabled slider (display-only readouts stay put).
+    if !resp.enabled() || !resp.hovered() {
+        return false;
+    }
+    let scroll = ui.input(|i| i.raw_scroll_delta.y);
+    if scroll == 0.0 {
+        return false;
+    }
+    let dir = if scroll > 0.0 { 1.0 } else { -1.0 };
+    let cur = value.to_f64();
+    let lo = range.start().to_f64();
+    let hi = range.end().to_f64();
+    let nv = (cur + dir * step).clamp(lo, hi);
+    if (nv - cur).abs() > f64::EPSILON {
+        *value = N::from_f64(nv);
+        true
+    } else {
+        false
+    }
+}
+
 /// Collapsible-section header met handmatig getekende gevulde
 /// driehoek-chevron. Gespiegeld van `sdr-remote-server/src/ui/utils.rs`
 /// zodat client en server dezelfde visuele stijl gebruiken - geen

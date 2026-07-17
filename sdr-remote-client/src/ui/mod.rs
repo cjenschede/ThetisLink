@@ -1137,7 +1137,8 @@ impl SdrRemoteApp {
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)))
                 .on_hover_text(vol_hover);
-            if resp.changed() && self.vrx_send_volume(ch, volume) {
+            let scrolled = helpers::slider_wheel(ui, &resp, &mut volume, 0.001..=1.0, 0.02);
+            if (resp.changed() || scrolled) && self.vrx_send_volume(ch, volume) {
                 match ch { VrxChannel::Vrx1 => self.vrx1_volume = volume, VrxChannel::Vrx2 => self.vrx2_volume = volume };
                 self.save_full_config();
             }
@@ -1254,13 +1255,17 @@ impl SdrRemoteApp {
                     let mut disp = match ch { VrxChannel::Vrx1 => self.vrx1_ref_db, VrxChannel::Vrx2 => self.vrx2_ref_db };
                     ui.add_enabled(false, egui::Slider::new(&mut disp, -90.0..=0.0).suffix(" dB").step_by(5.0))
                         .on_hover_text("Spectrum reference level in dB.");
-                } else if ui.add(egui::Slider::new(
+                } else {
+                    let resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_ref_db, VrxChannel::Vrx2 => &mut self.vrx2_ref_db },
                         -90.0..=0.0).suffix(" dB").step_by(5.0))
-                    .on_hover_text("Spectrum reference level in dB.")
-                    .changed()
-                {
-                    changed = true;
+                        .on_hover_text("Spectrum reference level in dB.");
+                    let scrolled = helpers::slider_wheel(ui, &resp,
+                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_ref_db, VrxChannel::Vrx2 => &mut self.vrx2_ref_db },
+                        -90.0..=0.0, 5.0);
+                    if resp.changed() || scrolled {
+                        changed = true;
+                    }
                 }
                 if ui.checkbox(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_auto_ref, VrxChannel::Vrx2 => &mut self.vrx2_auto_ref },
@@ -1275,12 +1280,14 @@ impl SdrRemoteApp {
                     self.save_full_config();
                 }
                 ui.label("Range:");
-                if ui.add(egui::Slider::new(
+                let resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_range_db, VrxChannel::Vrx2 => &mut self.vrx2_range_db },
                         20.0..=130.0).suffix(" dB").step_by(5.0))
-                    .on_hover_text("Spectrum vertical range in dB.")
-                    .changed()
-                {
+                    .on_hover_text("Spectrum vertical range in dB.");
+                let scrolled = helpers::slider_wheel(ui, &resp,
+                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_range_db, VrxChannel::Vrx2 => &mut self.vrx2_range_db },
+                    20.0..=130.0, 5.0);
+                if resp.changed() || scrolled {
                     match ch {
                         VrxChannel::Vrx1 => if self.vrx1_auto_ref { self.vrx1_auto_ref_frames = 0; self.vrx1_auto_ref_initialized = false; },
                         VrxChannel::Vrx2 => if self.vrx2_auto_ref { self.vrx2_auto_ref_frames = 0; self.vrx2_auto_ref_initialized = false; },
@@ -1299,12 +1306,15 @@ impl SdrRemoteApp {
                     VrxChannel::Vrx1 => if self.vrx1_spectrum_zoom < zoom_min { self.vrx1_spectrum_zoom = zoom_min; },
                     VrxChannel::Vrx2 => if self.vrx2_spectrum_zoom < zoom_min { self.vrx2_spectrum_zoom = zoom_min; },
                 }
-                if ui.add(egui::Slider::new(
+                let resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => &mut self.vrx2_spectrum_zoom },
                         zoom_min..=1024.0).logarithmic(true).custom_formatter(|v, _| format!("{:.0}x", v)))
-                    .on_hover_text("Spectrum zoom factor.")
-                    .changed()
-                {
+                    .on_hover_text("Spectrum zoom factor.");
+                let zoom_cur = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
+                let scrolled = helpers::slider_wheel(ui, &resp,
+                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => &mut self.vrx2_spectrum_zoom },
+                    zoom_min..=1024.0, (zoom_cur as f64 * 0.1).max(1.0));
+                if resp.changed() || scrolled {
                     match ch {
                         VrxChannel::Vrx1 => { let mp = (0.5 - 0.5 / self.vrx1_spectrum_zoom) * 0.05; self.vrx1_pan = self.vrx1_pan.clamp(-mp, mp); self.vrx1_zoom_initialized = true; }
                         VrxChannel::Vrx2 => { let mp = (0.5 - 0.5 / self.vrx2_spectrum_zoom) * 0.05; self.vrx2_pan = self.vrx2_pan.clamp(-mp, mp); self.vrx2_zoom_initialized = true; }
@@ -1317,17 +1327,23 @@ impl SdrRemoteApp {
                 ui.label("Pan:");
                 let zoom_now = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
                 let max_pan = if zoom_now > 1.01 { (0.5 - 0.5 / zoom_now) * 0.05 } else { 0.0 };
-                changed |= ui.add(egui::Slider::new(
+                let pan_resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_pan, VrxChannel::Vrx2 => &mut self.vrx2_pan },
                         -max_pan..=max_pan).custom_formatter(|v, _| format!("{:+.2}", v)))
-                    .on_hover_text("Pan inside the zoomed spectrum view.")
-                    .changed();
+                    .on_hover_text("Pan inside the zoomed spectrum view.");
+                let pan_scrolled = helpers::slider_wheel(ui, &pan_resp,
+                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_pan, VrxChannel::Vrx2 => &mut self.vrx2_pan },
+                    -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
+                changed |= pan_resp.changed() || pan_scrolled;
                 ui.label("WF:");
-                changed |= ui.add(egui::Slider::new(
+                let wf_resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_wf_contrast, VrxChannel::Vrx2 => &mut self.vrx2_wf_contrast },
                         0.3..=3.0).logarithmic(true).custom_formatter(|v, _| format!("{:.1}", v)))
-                    .on_hover_text("Waterfall contrast.")
-                    .changed();
+                    .on_hover_text("Waterfall contrast.");
+                let wf_scrolled = helpers::slider_wheel(ui, &wf_resp,
+                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_wf_contrast, VrxChannel::Vrx2 => &mut self.vrx2_wf_contrast },
+                    0.3..=3.0, 0.1);
+                changed |= wf_resp.changed() || wf_scrolled;
                 let ddc_sr = match ch { VrxChannel::Vrx1 => self.ddc_sample_rate_rx1, VrxChannel::Vrx2 => self.ddc_sample_rate_rx2 };
                 let ddc_rate = if ddc_sr > 0 { ddc_sr as u32 * 1000 } else { 384_000 };
                 let auto_k = sdr_remote_core::ddc_fft_size(ddc_rate) / 1024;
@@ -4028,11 +4044,15 @@ impl SdrRemoteApp {
                     .suffix(" dB")
                     .step_by(5.0)
                 );
-            } else if ui.add(egui::Slider::new(&mut self.spectrum_ref_db, -90.0..=0.0)
-                .suffix(" dB")
-                .step_by(5.0)
-            ).on_hover_text("Spectrum reference level in dB.").changed() {
-                self.save_full_config();
+            } else {
+                let resp = ui.add(egui::Slider::new(&mut self.spectrum_ref_db, -90.0..=0.0)
+                    .suffix(" dB")
+                    .step_by(5.0)
+                ).on_hover_text("Spectrum reference level in dB.");
+                let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_ref_db, -90.0..=0.0, 5.0);
+                if resp.changed() || scrolled {
+                    self.save_full_config();
+                }
             }
             if ui.checkbox(&mut self.auto_ref_enabled, "Auto").on_hover_text("Automatically track the reference level.").changed() {
                 if self.auto_ref_enabled {
@@ -4042,10 +4062,12 @@ impl SdrRemoteApp {
                 self.save_full_config();
             }
             ui.label("Range:");
-            if ui.add(egui::Slider::new(&mut self.spectrum_range_db, 20.0..=130.0)
+            let resp = ui.add(egui::Slider::new(&mut self.spectrum_range_db, 20.0..=130.0)
                 .suffix(" dB")
                 .step_by(5.0)
-            ).on_hover_text("Spectrum vertical range in dB.").changed() {
+            ).on_hover_text("Spectrum vertical range in dB.");
+            let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_range_db, 20.0..=130.0, 5.0);
+            if resp.changed() || scrolled {
                 if self.auto_ref_enabled {
                     self.auto_ref_frames = 0;
                     self.auto_ref_initialized = false;
@@ -4064,10 +4086,13 @@ impl SdrRemoteApp {
             if self.spectrum_zoom < zoom_min {
                 self.spectrum_zoom = zoom_min;
             }
-            let zoom_changed = ui.add(egui::Slider::new(&mut self.spectrum_zoom, zoom_min..=1024.0)
+            let zoom_resp = ui.add(egui::Slider::new(&mut self.spectrum_zoom, zoom_min..=1024.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}x", v))
-            ).on_hover_text("Spectrum zoom factor.").changed();
+            ).on_hover_text("Spectrum zoom factor.");
+            let zoom_step = (self.spectrum_zoom as f64 * 0.1).max(1.0);
+            let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.spectrum_zoom, zoom_min..=1024.0, zoom_step);
+            let zoom_changed = zoom_resp.changed() || zoom_scrolled;
             if zoom_changed {
                 let max_pan = (0.5 - 0.5 / self.spectrum_zoom) * 0.05;
                 self.spectrum_pan = self.spectrum_pan.clamp(-max_pan, max_pan);
@@ -4086,14 +4111,18 @@ impl SdrRemoteApp {
             }
             ui.label("Pan:");
             let max_pan = if self.spectrum_zoom > 1.01 { (0.5 - 0.5 / self.spectrum_zoom) * 0.05 } else { 0.0 };
-            let pan_changed = ui.add(egui::Slider::new(&mut self.spectrum_pan, -max_pan..=max_pan)
+            let pan_resp = ui.add(egui::Slider::new(&mut self.spectrum_pan, -max_pan..=max_pan)
                 .custom_formatter(|v, _| format!("{:+.2}", v))
-            ).on_hover_text("Pan inside the zoomed spectrum view.").changed();
+            ).on_hover_text("Pan inside the zoomed spectrum view.");
+            let pan_scrolled = helpers::slider_wheel(ui, &pan_resp, &mut self.spectrum_pan, -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
+            let pan_changed = pan_resp.changed() || pan_scrolled;
             ui.label("WF:");
-            if ui.add(egui::Slider::new(&mut self.waterfall_contrast, 0.3..=3.0)
+            let wf_resp = ui.add(egui::Slider::new(&mut self.waterfall_contrast, 0.3..=3.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.1}", v))
-            ).on_hover_text("Waterfall contrast.").changed() {
+            ).on_hover_text("Waterfall contrast.");
+            let wf_scrolled = helpers::slider_wheel(ui, &wf_resp, &mut self.waterfall_contrast, 0.3..=3.0, 0.1);
+            if wf_resp.changed() || wf_scrolled {
                 // Update per-band storage
                 if let Some(ref band) = self.current_band {
                     self.wf_contrast_per_band.insert(band.clone(), self.waterfall_contrast);
@@ -4141,9 +4170,11 @@ impl SdrRemoteApp {
             // whole window and ignore this setting.
             if !is_popout {
                 ui.label("H:");
-                if ui.add(egui::Slider::new(&mut self.spectrum_total_h, 300.0..=1200.0)
+                let resp = ui.add(egui::Slider::new(&mut self.spectrum_total_h, 300.0..=1200.0)
                     .custom_formatter(|v, _| format!("{:.0}", v))
-                ).on_hover_text("Total height of the spectrum + waterfall block in pixels. The page becomes scrollable when content overflows.").changed() {
+                ).on_hover_text("Total height of the spectrum + waterfall block in pixels. The page becomes scrollable when content overflows.");
+                let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_total_h, 300.0..=1200.0, 20.0);
+                if resp.changed() || scrolled {
                     self.save_full_config();
                 }
             }
@@ -4407,7 +4438,9 @@ impl SdrRemoteApp {
             let vol_slider = egui::Slider::new(&mut self.vfo_a_volume, 0.001..=1.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            if ui.add(vol_slider).on_hover_text("Set mix volume.").changed() {
+            let resp = ui.add(vol_slider).on_hover_text("Set mix volume.");
+            let scrolled = helpers::slider_wheel(ui, &resp, &mut self.vfo_a_volume, 0.001..=1.0, 0.02);
+            if resp.changed() || scrolled {
                 let _ = self.cmd_tx.send(Command::SetVfoAVolume(self.vfo_a_volume));
                 self.save_full_config();
             }
@@ -4771,7 +4804,9 @@ impl SdrRemoteApp {
             let vol_slider = egui::Slider::new(&mut self.vfo_b_volume, 0.001..=1.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            if ui.add(vol_slider).on_hover_text("Set mix volume.").changed() {
+            let resp = ui.add(vol_slider).on_hover_text("Set mix volume.");
+            let scrolled = helpers::slider_wheel(ui, &resp, &mut self.vfo_b_volume, 0.001..=1.0, 0.02);
+            if resp.changed() || scrolled {
                 let _ = self.cmd_tx.send(Command::SetVfoBVolume(self.vfo_b_volume));
                 self.save_full_config();
             }
@@ -5068,11 +5103,15 @@ impl SdrRemoteApp {
                         .suffix(" dB")
                         .step_by(5.0)
                     );
-                } else if ui.add(egui::Slider::new(&mut self.rx2_spectrum_ref_db, -90.0..=0.0)
-                    .suffix(" dB")
-                    .step_by(5.0)
-                ).on_hover_text("Spectrum reference level in dB.").changed() {
-                    self.save_full_config();
+                } else {
+                    let resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_ref_db, -90.0..=0.0)
+                        .suffix(" dB")
+                        .step_by(5.0)
+                    ).on_hover_text("Spectrum reference level in dB.");
+                    let scrolled = helpers::slider_wheel(ui, &resp, &mut self.rx2_spectrum_ref_db, -90.0..=0.0, 5.0);
+                    if resp.changed() || scrolled {
+                        self.save_full_config();
+                    }
                 }
                 if ui.checkbox(&mut self.rx2_auto_ref_enabled, "Auto").on_hover_text("Automatically track the reference level.").changed() {
                     if self.rx2_auto_ref_enabled {
@@ -5082,10 +5121,12 @@ impl SdrRemoteApp {
                     self.save_full_config();
                 }
                 ui.label("Range:");
-                if ui.add(egui::Slider::new(&mut self.rx2_spectrum_range_db, 20.0..=130.0)
+                let resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_range_db, 20.0..=130.0)
                     .suffix(" dB")
                     .step_by(5.0)
-                ).on_hover_text("Spectrum vertical range in dB.").changed() {
+                ).on_hover_text("Spectrum vertical range in dB.");
+                let scrolled = helpers::slider_wheel(ui, &resp, &mut self.rx2_spectrum_range_db, 20.0..=130.0, 5.0);
+                if resp.changed() || scrolled {
                     if self.rx2_auto_ref_enabled {
                         self.rx2_auto_ref_frames = 0;
                         self.rx2_auto_ref_initialized = false;
@@ -5103,24 +5144,31 @@ impl SdrRemoteApp {
                 if self.rx2_spectrum_zoom < zoom_min_rx2 {
                     self.rx2_spectrum_zoom = zoom_min_rx2;
                 }
-                let zoom_changed = ui.add(egui::Slider::new(&mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0)
+                let zoom_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0)
                     .logarithmic(true)
                     .custom_formatter(|v, _| format!("{:.0}x", v))
-                ).on_hover_text("Spectrum zoom factor.").changed();
+                ).on_hover_text("Spectrum zoom factor.");
+                let zoom_step = (self.rx2_spectrum_zoom as f64 * 0.1).max(1.0);
+                let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0, zoom_step);
+                let zoom_changed = zoom_resp.changed() || zoom_scrolled;
                 if zoom_changed {
                     let max_pan = (0.5 - 0.5 / self.rx2_spectrum_zoom) * 0.05;
                     self.rx2_spectrum_pan = self.rx2_spectrum_pan.clamp(-max_pan, max_pan);
                 }
                 ui.label("Pan:");
                 let max_pan = if self.rx2_spectrum_zoom > 1.01 { (0.5 - 0.5 / self.rx2_spectrum_zoom) * 0.05 } else { 0.0 };
-                let pan_changed = ui.add(egui::Slider::new(&mut self.rx2_spectrum_pan, -max_pan..=max_pan)
+                let pan_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_pan, -max_pan..=max_pan)
                     .custom_formatter(|v, _| format!("{:+.2}", v))
-                ).on_hover_text("Pan inside the zoomed spectrum view.").changed();
+                ).on_hover_text("Pan inside the zoomed spectrum view.");
+                let pan_scrolled = helpers::slider_wheel(ui, &pan_resp, &mut self.rx2_spectrum_pan, -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
+                let pan_changed = pan_resp.changed() || pan_scrolled;
                 ui.label("WF:");
-                if ui.add(egui::Slider::new(&mut self.rx2_waterfall_contrast, 0.3..=3.0)
+                let wf_resp = ui.add(egui::Slider::new(&mut self.rx2_waterfall_contrast, 0.3..=3.0)
                     .logarithmic(true)
                     .custom_formatter(|v, _| format!("{:.1}", v))
-                ).on_hover_text("Waterfall contrast.").changed() {
+                ).on_hover_text("Waterfall contrast.");
+                let wf_scrolled = helpers::slider_wheel(ui, &wf_resp, &mut self.rx2_waterfall_contrast, 0.3..=3.0, 0.1);
+                if wf_resp.changed() || wf_scrolled {
                     self.save_full_config();
                 }
 
@@ -5654,7 +5702,9 @@ impl eframe::App for SdrRemoteApp {
                         let slider = egui::Slider::new(&mut self.local_volume, 0.001..=1.0)
                             .logarithmic(true)
                             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-                        if ui.add(slider).changed() {
+                        let resp = ui.add(slider);
+                        let scrolled = helpers::slider_wheel(ui, &resp, &mut self.local_volume, 0.001..=1.0, 0.02);
+                        if resp.changed() || scrolled {
                             let _ = self.cmd_tx.send(Command::SetLocalVolume(self.local_volume));
                             self.save_full_config();
                         }
@@ -5663,7 +5713,9 @@ impl eframe::App for SdrRemoteApp {
                         let slider = egui::Slider::new(&mut self.vfo_a_volume, 0.001..=1.0)
                             .logarithmic(true)
                             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-                        if ui.add(slider).changed() {
+                        let resp = ui.add(slider);
+                        let scrolled = helpers::slider_wheel(ui, &resp, &mut self.vfo_a_volume, 0.001..=1.0, 0.02);
+                        if resp.changed() || scrolled {
                             let _ = self.cmd_tx.send(Command::SetVfoAVolume(self.vfo_a_volume));
                             self.save_full_config();
                         }
@@ -6148,7 +6200,9 @@ impl eframe::App for SdrRemoteApp {
                 let mut drive_f32 = self.drive_level as f32;
                 let slider = egui::Slider::new(&mut drive_f32, 0.0..=100.0)
                     .custom_formatter(|v, _| format!("{:.0}%", v));
-                if ui.add(slider).changed() {
+                let resp = ui.add(slider);
+                let scrolled = helpers::slider_wheel(ui, &resp, &mut drive_f32, 0.0..=100.0, 2.0);
+                if resp.changed() || scrolled {
                     let new_val = drive_f32.round() as u8;
                     if new_val != self.drive_level {
                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::DriveLevel, new_val as u16));
@@ -6493,10 +6547,11 @@ impl eframe::App for SdrRemoteApp {
                                 .logarithmic(true)
                                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
                             let resp = ui.add_sized([140.0, 16.0], slider);
-                            if resp.changed() {
+                            let scrolled = helpers::slider_wheel(ui, &resp, &mut self.yaesu_volume, 0.001..=1.0, 0.02);
+                            if resp.changed() || scrolled {
                                 let _ = self.cmd_tx.send(Command::SetYaesuVolume(self.yaesu_volume));
                             }
-                            if resp.drag_stopped() {
+                            if resp.drag_stopped() || scrolled {
                                 self.save_full_config();
                             }
                         });
@@ -6573,10 +6628,11 @@ impl eframe::App for SdrRemoteApp {
                                 .logarithmic(true)
                                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
                             let resp = ui.add_sized([140.0, 16.0], slider);
-                            if resp.changed() {
+                            let scrolled = helpers::slider_wheel(ui, &resp, &mut self.yaesu2_volume, 0.001..=1.0, 0.02);
+                            if resp.changed() || scrolled {
                                 let _ = self.cmd_tx.send(Command::SetYaesu2Volume(self.yaesu2_volume));
                             }
-                            if resp.drag_stopped() {
+                            if resp.drag_stopped() || scrolled {
                                 self.save_full_config();
                             }
                         });

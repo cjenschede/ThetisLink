@@ -387,7 +387,9 @@ impl SdrRemoteApp {
             ui.label("RX1 Vol: ");
             let slider = egui::Slider::new(&mut self.rx_volume, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            if ui.add(slider).changed() {
+            let resp = ui.add(slider);
+            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.rx_volume, 0.0..=1.0, 0.02);
+            if resp.changed() || scrolled {
                 let _ = self.cmd_tx.send(Command::SetRxVolume(self.rx_volume));
                 self.save_full_config();
             }
@@ -398,7 +400,9 @@ impl SdrRemoteApp {
             ui.label("RX2 Vol: ");
             let slider = egui::Slider::new(&mut self.rx2_volume, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            if ui.add(slider).changed() {
+            let resp = ui.add(slider);
+            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.rx2_volume, 0.0..=1.0, 0.02);
+            if resp.changed() || scrolled {
                 let _ = self.cmd_tx.send(Command::SetRx2Volume(self.rx2_volume));
                 self.save_full_config();
             }
@@ -409,7 +413,9 @@ impl SdrRemoteApp {
             ui.label("TX Gain: ");
             let slider = egui::Slider::new(&mut self.tx_gain, 0.0..=3.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            if ui.add(slider).changed() {
+            let resp = ui.add(slider);
+            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.tx_gain, 0.0..=3.0, 0.05);
+            if resp.changed() || scrolled {
                 let _ = self.cmd_tx.send(Command::SetTxGain(self.tx_gain));
                 self.save_full_config();
             }
@@ -522,7 +528,9 @@ impl SdrRemoteApp {
                             else if v > 1.0 { format!("R{:.0}", v) }
                             else { "C".to_string() }
                         });
-                    if ui.add_sized([80.0, 16.0], bal_slider).changed() {
+                    let resp = ui.add_sized([80.0, 16.0], bal_slider);
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut bal, -40.0..=40.0, 1.0);
+                    if resp.changed() || scrolled {
                         // Negate: slider visual left (-) -> TCI +40 (which is left audio in Thetis)
                         self.rx_balance = bal as i8;
                         let tci_val = (-self.rx_balance) as i16 as u16;
@@ -544,7 +552,9 @@ impl SdrRemoteApp {
                     let mut gain = self.agc_gain as f32;
                     let gain_slider = egui::Slider::new(&mut gain, 0.0..=120.0)
                         .custom_formatter(|v, _| format!("{:.0}", v));
-                    if ui.add_sized([120.0, 16.0], gain_slider).changed() {
+                    let resp = ui.add_sized([120.0, 16.0], gain_slider);
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut gain, 0.0..=120.0, 2.0);
+                    if resp.changed() || scrolled {
                         self.agc_gain = gain as u8;
                         tci_set!(self, CId::AgcGain, self.agc_gain as u16);
                     }
@@ -567,7 +577,9 @@ impl SdrRemoteApp {
                     .step_by(10.0)
                     .suffix(" Hz")
                     .custom_formatter(|v, _| format!("{:+.0}", v));
-                if ui.add_sized([120.0, 16.0], rit_slider).changed() {
+                let resp = ui.add_sized([120.0, 16.0], rit_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut rit_hz, -9999.0..=9999.0, 10.0);
+                if resp.changed() || scrolled {
                     self.rit_offset = rit_hz as i16;
                     tci_set!(self, CId::RitOffset, self.rit_offset as u16);
                 }
@@ -596,7 +608,9 @@ impl SdrRemoteApp {
                     .step_by(10.0)
                     .suffix(" Hz")
                     .custom_formatter(|v, _| format!("{:+.0}", v));
-                if ui.add_sized([120.0, 16.0], xit_slider).changed() {
+                let resp = ui.add_sized([120.0, 16.0], xit_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut xit_hz, -9999.0..=9999.0, 10.0);
+                if resp.changed() || scrolled {
                     self.xit_offset = xit_hz as i16;
                     tci_set!(self, CId::XitOffset, self.xit_offset as u16);
                 }
@@ -620,7 +634,9 @@ impl SdrRemoteApp {
                 let mut sql_val = self.sql_level as f32;
                 let sql_slider = egui::Slider::new(&mut sql_val, 0.0..=160.0)
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([100.0, 16.0], sql_slider).changed() {
+                let resp = ui.add_sized([100.0, 16.0], sql_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut sql_val, 0.0..=160.0, 2.0);
+                if resp.changed() || scrolled {
                     self.sql_level = sql_val as u8;
                     tci_set!(self, CId::SqlLevel, self.sql_level as u16);
                 }
@@ -632,7 +648,9 @@ impl SdrRemoteApp {
                 let cw_slider = egui::Slider::new(&mut cw_spd, 1.0..=60.0)
                     .suffix(" WPM")
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([120.0, 16.0], cw_slider).changed() {
+                let resp = ui.add_sized([120.0, 16.0], cw_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut cw_spd, 1.0..=60.0, 1.0);
+                if resp.changed() || scrolled {
                     self.cw_keyer_speed = cw_spd as u8;
                     tci_set!(self, CId::CwKeyerSpeed, self.cw_keyer_speed as u16);
                 }
@@ -645,7 +663,9 @@ impl SdrRemoteApp {
                 let td_slider = egui::Slider::new(&mut td, 0.0..=100.0)
                     .suffix("%")
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([100.0, 16.0], td_slider).changed() {
+                let resp = ui.add_sized([100.0, 16.0], td_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut td, 0.0..=100.0, 2.0);
+                if resp.changed() || scrolled {
                     self.tune_drive = td as u8;
                     tci_set!(self, CId::TuneDrive, self.tune_drive as u16);
                 }
@@ -657,7 +677,9 @@ impl SdrRemoteApp {
                 let mv_slider = egui::Slider::new(&mut mv, -40.0..=0.0)
                     .suffix(" dB")
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([100.0, 16.0], mv_slider).changed() {
+                let resp = ui.add_sized([100.0, 16.0], mv_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut mv, -40.0..=0.0, 1.0);
+                if resp.changed() || scrolled {
                     self.mon_volume = mv as i8;
                     tci_set!(self, CId::MonitorVolume, self.mon_volume as i16 as u16);
                 }
@@ -726,7 +748,9 @@ impl SdrRemoteApp {
                     let mut gain = self.rx2_agc_gain as f32;
                     let gain_slider = egui::Slider::new(&mut gain, 0.0..=120.0)
                         .custom_formatter(|v, _| format!("{:.0}", v));
-                    if ui.add_sized([120.0, 16.0], gain_slider).changed() {
+                    let resp = ui.add_sized([120.0, 16.0], gain_slider);
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut gain, 0.0..=120.0, 2.0);
+                    if resp.changed() || scrolled {
                         self.rx2_agc_gain = gain as u8;
                         tci_set!(self, CId::Rx2AgcGain, self.rx2_agc_gain as u16);
                     }
@@ -743,7 +767,9 @@ impl SdrRemoteApp {
                 let mut sql_val = self.rx2_sql_level as f32;
                 let sql_slider = egui::Slider::new(&mut sql_val, 0.0..=160.0)
                     .custom_formatter(|v, _| format!("{:.0}", v));
-                if ui.add_sized([100.0, 16.0], sql_slider).changed() {
+                let resp = ui.add_sized([100.0, 16.0], sql_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut sql_val, 0.0..=160.0, 2.0);
+                if resp.changed() || scrolled {
                     self.rx2_sql_level = sql_val as u8;
                     tci_set!(self, CId::Rx2SqlLevel, self.rx2_sql_level as u16);
                 }
@@ -933,7 +959,8 @@ impl SdrRemoteApp {
                     .custom_formatter(|v, _| format!("{:.0}", v))
                     .step_by(1.0);
                 let gm_resp = ui.add_sized([160.0, 16.0], gm_slider);
-                if gm_resp.changed() {
+                let gm_scrolled = super::helpers::slider_wheel(ui, &gm_resp, &mut self.diversity_gain_multi, 1.0..=10.0, 1.0);
+                if gm_resp.changed() || gm_scrolled {
                     let val = (self.diversity_gain_multi * 100.0).clamp(100.0, 1000.0) as u16;
                     let _ = self.cmd_tx.send(Command::SetControl(
                         ControlId::DiversityGainMulti, val));
@@ -951,7 +978,9 @@ impl SdrRemoteApp {
                     let g1_slider = egui::Slider::new(&mut self.diversity_gain_rx1, 0.0..=10.0)
                         .custom_formatter(|v, _| format!("{:.3}", v))
                         .step_by(0.001);
-                    if ui.add_sized([160.0, 16.0], g1_slider).changed() && self.diversity_enabled {
+                    let resp = ui.add_sized([160.0, 16.0], g1_slider);
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.diversity_gain_rx1, 0.0..=10.0, 0.1);
+                    if (resp.changed() || scrolled) && self.diversity_enabled {
                         let val = (self.diversity_gain_rx1 * 1000.0) as u16;
                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::DiversityGainRx1, val));
                     }
@@ -967,7 +996,9 @@ impl SdrRemoteApp {
                     let g2_slider = egui::Slider::new(&mut self.diversity_gain_rx2, 0.0..=10.0)
                         .custom_formatter(|v, _| format!("{:.3}", v))
                         .step_by(0.001);
-                    if ui.add_sized([160.0, 16.0], g2_slider).changed() && self.diversity_enabled {
+                    let resp = ui.add_sized([160.0, 16.0], g2_slider);
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.diversity_gain_rx2, 0.0..=10.0, 0.1);
+                    if (resp.changed() || scrolled) && self.diversity_enabled {
                         let val = (self.diversity_gain_rx2 * 1000.0) as u16;
                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::DiversityGainRx2, val));
                     }
@@ -984,7 +1015,9 @@ impl SdrRemoteApp {
                 let phase_slider = egui::Slider::new(&mut self.diversity_phase, -180.0..=180.0)
                     .custom_formatter(|v, _| format!("{:.1}°", v))
                     .step_by(0.1);
-                if ui.add_sized([160.0, 16.0], phase_slider).changed() && self.diversity_enabled {
+                let resp = ui.add_sized([160.0, 16.0], phase_slider);
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.diversity_phase, -180.0..=180.0, 1.0);
+                if (resp.changed() || scrolled) && self.diversity_enabled {
                     let encoded = ((self.diversity_phase * 100.0) as i32 + 18000) as u16;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::DiversityPhase, encoded));
                 }
@@ -1609,9 +1642,40 @@ impl SdrRemoteApp {
         // - PATCH-4 follow-up: the previous bottom-of-screen placement
         // disappeared off the visible viewport on short windows.
         ui.horizontal(|ui| {
-            ui.label("Server:");
             let enabled = !self.connected;
-            ui.add_enabled(enabled, egui::TextEdit::singleline(&mut self.server_input).desired_width(150.0));
+            if self.relay_external {
+                // Relay is de actieve transport: het directe server-IP is niet de
+                // route (de relay bepaalt de bestemming via station/token). Toon de
+                // relay-bestemming + live status i.p.v. een misleidend IP-veld.
+                ui.label("Via relay:");
+                let station = self.relay_station.trim();
+                ui.label(
+                    egui::RichText::new(if station.is_empty() { "(station)" } else { station })
+                        .strong(),
+                );
+                if let Some(handle) = self.relay_status.as_ref() {
+                    let status = handle.snapshot();
+                    let color = match status.phase {
+                        sdr_remote_relay::RelayPhase::Authenticated => Color32::from_rgb(50, 200, 50),
+                        sdr_remote_relay::RelayPhase::Connecting
+                        | sdr_remote_relay::RelayPhase::WaitingForPeer
+                        | sdr_remote_relay::RelayPhase::WaitingForConfig => Color32::from_rgb(200, 160, 40),
+                        sdr_remote_relay::RelayPhase::Error => Color32::from_rgb(220, 60, 60),
+                        sdr_remote_relay::RelayPhase::Disabled
+                        | sdr_remote_relay::RelayPhase::Disconnected => Color32::from_rgb(130, 130, 130),
+                    };
+                    let msg = status.message.clone();
+                    let shown = if matches!(status.phase, sdr_remote_relay::RelayPhase::Error) && !msg.is_empty() {
+                        msg.clone()
+                    } else {
+                        status.label()
+                    };
+                    ui.colored_label(color, shown).on_hover_text(msg);
+                }
+            } else {
+                ui.label("Server:");
+                ui.add_enabled(enabled, egui::TextEdit::singleline(&mut self.server_input).desired_width(150.0));
+            }
             ui.label("Password:");
             ui.add_enabled(enabled, egui::TextEdit::singleline(&mut self.password_input)
                 .desired_width(100.0).password(true).hint_text("(required)"));
@@ -1758,7 +1822,15 @@ impl SdrRemoteApp {
             });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Status:").strong());
-                if self.relay_external {
+                if self.relay_external && !self.relay_enabled {
+                    // Relay draait nog als transport deze sessie, maar de gebruiker
+                    // heeft 'm net uitgezet -> net als bij aanzetten pas actief na
+                    // een herstart. Toon dezelfde restart-melding (symmetrisch).
+                    ui.colored_label(
+                        Color32::from_rgb(200, 160, 40),
+                        "Saved - restart the client to stop using the relay",
+                    );
+                } else if self.relay_external {
                     // Relay is deze sessie de actieve transport -> toon de live status.
                     if let Some(handle) = self.relay_status.as_ref() {
                         let status = handle.snapshot();
@@ -2240,16 +2312,16 @@ impl SdrRemoteApp {
                     }
                     // Play-volume: schaalt de WAV-playback (speaker + TX-inject).
                     ui.label("Play vol:");
-                    if ui
+                    let resp = ui
                         .add(
                             egui::Slider::new(&mut self.play_volume, 0.0..=2.0)
                                 .fixed_decimals(2),
                         )
                         .on_hover_text(
                             "WAV-playback niveau (Play). 1.00 = opgenomen niveau. Lager = zachter, tegen overmodulatie bij een luide opname.",
-                        )
-                        .changed()
-                    {
+                        );
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.play_volume, 0.0..=2.0, 0.05);
+                    if resp.changed() || scrolled {
                         let _ = self.cmd_tx.send(Command::SetPlayVolume(self.play_volume));
                     }
                 }

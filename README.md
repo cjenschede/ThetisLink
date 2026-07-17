@@ -1,6 +1,6 @@
 # ThetisLink
 
-> **Current release: [v2.4.2](https://github.com/cjenschede/ThetisLink/releases/tag/v2.4.2)** —
+> **Current release: [v2.4.3](https://github.com/cjenschede/ThetisLink/releases/tag/v2.4.3)** —
 > **Relay v2:** relayed **audio + PTT now travel over low-latency UDP** through the
 > VPS relay (previously wss/TCP), with **automatic UDP↔TCP fallback** — if the network
 > blocks or degrades UDP, the audio switches to the reliable path and back again on its
@@ -18,7 +18,7 @@
 > connections interoperate with v2.3.0, and the relay path is a coordinated upgrade
 > (mixed setups stay on wss audio). Pair with **Thetis fork PA3GHM TL2-4** for the full
 > feature-set; stock Thetis remains supported.
-> Download `ThetisLink-2.4.2.zip` from the
+> Download `ThetisLink-2.4.3.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all PDF manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are
@@ -43,6 +43,7 @@ radio control over the network via TCI WebSocket.
 ## Features
 
 - Real-time bidirectional audio (Opus codec, minimal latency)
+- Two ways to connect — directly (LAN, or over the internet via router port-forward) or through a self-hosted VPS relay (works behind CGNAT, no port-forward). The server supports **both at the same time**: once a relay is configured, each client decides for itself whether to connect directly or via the relay, so one server can serve multiple clients concurrently — some direct, some relayed
 - Spectrum and waterfall display (up to 1536 kHz with the PA3GHM Thetis fork)
 - Full RX2/VFO-B support with diversity reception
 - Virtual receivers (VRX1/VRX2): two independent receivers carved from the wideband DDC stream by an FFT channelizer, each with its own frequency, mode (USB/LSB/AM/SAM/FM), filter, high-resolution spectrum/waterfall and S-meter — including synchronous AM (SAM) with a carrier-tracking PLL, AM auto-tune-to-carrier, and a per-VRX NB/WB/Auto audio rate

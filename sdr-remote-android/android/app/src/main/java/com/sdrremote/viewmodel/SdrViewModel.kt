@@ -94,6 +94,12 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             // Audio over UDP (low latency) vs wss (encrypted). Default on; matches the
             // desktop toggle. Applied at bridge creation, so a change needs an app restart.
             val relayUdpEnabled = prefs.getBoolean("relay_udp_enabled", true)
+            // Record whether the relay is actually the active transport THIS session
+            // (mirrors the bridge condition below). The settings dialog compares the
+            // live toggle against this to show a "restart to apply" notice - symmetric
+            // for turning the relay on AND off.
+            val relayActiveSession = relayEnabled && relayUrl.isNotBlank() && relayStation.isNotBlank()
+            prefs.edit().putBoolean("relay_active_session", relayActiveSession).apply()
             bridge = SdrBridge(relayEnabled, relayUrl, relayStation, relayToken, relayInstance, deviceName, relayUdpEnabled)
             Log.i(TAG, "SdrBridge created successfully (relay=$relayEnabled, udp=$relayUdpEnabled)")
             startPolling()

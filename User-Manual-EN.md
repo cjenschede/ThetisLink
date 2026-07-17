@@ -1,4 +1,4 @@
-# ThetisLink v2.4.2 - User Manual
+# ThetisLink v2.4.3 - User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.4.2.apk` | Android client app |
+| `ThetisLink-2.4.3.apk` | Android client app |
 | `Installation.pdf` | Installation guide (English) |
 | `User-Manual-EN.pdf` | User manual (English, this document) |
 | `Technical-Reference.pdf` | Technical reference (English) |
@@ -182,6 +182,8 @@ On the same network (LAN/WiFi) the client connects directly to the server — no
 2. **Relay** (new in v2.4.0). Both the server (station) and the client connect **outbound** to a small relay server on a VPS. No port forward needed, and it works behind **CGNAT** too (where your provider does not give you a public IP of your own). This is the recommended route for internet remote.
 
 The relay runs on its own server (VPS) that you host yourself — it is not shipped as a ready-made download, but as source code + a Docker image (see the installation guide and `thetislink-relay/DEPLOY-wss.md`). One relay serves one or more stations; the server PC does not need to be reachable from the outside.
+
+The server supports both routes at the same time: once a relay is configured, **each client decides for itself** whether to connect directly or via the relay. A single server can therefore serve several clients at once, some direct and some via the relay — you do not have to pick one route for the whole setup.
 
 > **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. Contact PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM).
 
@@ -946,6 +948,7 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
+| **2.4.3** | **Relay connection clarity + colour-coded client list + slider mouse-wheel.** No wire-protocol change (`VERSION` stays 3, fully interoperable with v2.4.x); stock Thetis v2.10.3.15 suffices; no fork change; desktop + Android both updated (APK rebuilt). When connected via the relay, the connection area shows **"Via relay: &lt;station&gt;"** + relay status instead of the (irrelevant) direct server IP. The server's client list **colour-codes** each client by connection type (direct = blue, relay = cyan). **Mouse-wheel scroll on every desktop slider.** A **restart notice** now appears when toggling the relay on _or_ off (desktop + Android). Docs clarify that the server serves **both** direct and relayed clients at once — each client chooses independently. |
 | **2.4.2** | **Bug-fix patch (recorded-audio playback to the radio).** One additive wire-protocol control (`ThetisTxeq = 0x90`); `VERSION` stays 3, so a direct connection stays interoperable with v2.4.0/v2.4.1. Stock Thetis v2.10.3.15 suffices; no fork change; Android functionally unchanged (APK rebuilt). **Recorded audio transmitted through the radio is no longer overmodulated** — playback now bypasses the live-mic chain (EQ/compressor/AGC + 4× boost) and goes out clean at line level for Thetis and both Yaesu radios; **playback to the 2nd Yaesu (FTX-1)** now comes through; **Thetis TX-EQ is bypassed automatically during playback and restored to its exact prior state afterwards**; a **play-volume slider** (0–2×) and a **transmit-level meter during playback** were added; **RX audio stays audible during TX** (the internal-speaker mute is now tied to PTT spike-protection). |
 | **2.4.1** | **Bug-fix patch.** Fully interoperable with v2.4.0 (wire protocol VERSION 3 unchanged; stock Thetis v2.10.3.15 suffices). The **rotor (MCP2221A)** can now be linked from a clean config (the link screen was missing — only tuners had one); the **Settings button** no longer disappears after an MCP2221A scan; **recorded audio played through the radio** (TX inject) no longer plays too slowly/stuttering (the TX path ignored the recording's sample rate — speaker playback was already correct); **FT-991A memory 100–117** (PMS channels) is now read as well (it stopped at 099). FTX-1 unchanged. |
 | **2.4.0** | **A broad release: relay v2 (low-latency UDP audio + automatic TCP fallback + admin dashboard), Yaesu SSB-over-USB + TX compressor/AGC + clarifier, a large Android Yaesu-parity push, greatly expanded connection monitoring, and desktop themes.** Backwards-compatible with v2.3.x — wire protocol VERSION 3 unchanged; all relay additions live in the separate relay layer and tunnel, not in the radio protocol. **Relay** (self-hosted VPS, source + Docker): station and client connect outbound (wss/TCP 443 for control+spectrum, UDP 443 for audio+PTT), works behind CGNAT/without port forward. **Automatic UDP→wss fallback** (make-before-break) with a **transport indicator** on desktop and Android; UDP tokens rotate periodically. **Admin dashboard** with Argon2id login, device/station management with per-device usage/quota, and a **database backup** button. **Yaesu**: **SSB transmit over the USB audio** (991A switches SSB MIC SELECT=REAR + PORT SELECT=USB per PTT; FTX-1 leaves its internal auto modulation-source untouched; auto-DATA is FM→DATA-FM only, not SSB; hybrid per-PTT routing + Exit), client-side **TX compressor + AGC** per radio, **clarifier (RIT/XIT)**. **Android Yaesu parity**: dual-radio selector, full DSP panel, touch frequency tuning, internal ATU. **Mobile data-saving** (no Thetis RX to Yaesu-only clients; Yaesu data only while its window is open). **Connection monitoring** greatly expanded (per-stream jitter/buffer/packets/loss + bandwidth breakdown, desktop+Android). **Desktop themes** (Classic/Dark/Slate/Custom). Robustness: main-window self-heal, jitter-buffer resync on stream restart, spectrum bin-count safety net. **WebSDR reload button.** No Thetis-fork change — stock v2.10.3.15 suffices. |

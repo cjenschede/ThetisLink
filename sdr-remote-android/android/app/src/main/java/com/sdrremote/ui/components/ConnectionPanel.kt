@@ -61,6 +61,15 @@ fun ConnectionPanel(
     val prefs = remember { context.getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE) }
     var serverInput by rememberSaveable { mutableStateOf(prefs.getString("server_addr", "192.168.1.79:4580") ?: "192.168.1.79:4580") }
 
+    // When the relay is the active route the direct server-IP is not relevant
+    // (the relay decides the destination via station/token), so we replace the
+    // IP field with the relay destination. Mirrors the bridge's relay-tunnel
+    // condition (relay enabled + url + station all set).
+    val relayEnabled = prefs.getBoolean("relay_enabled", false)
+    val relayUrl = prefs.getString("relay_url", "") ?: ""
+    val relayStation = prefs.getString("relay_station", "") ?: ""
+    val viaRelay = relayEnabled && relayUrl.isNotBlank() && relayStation.isNotBlank()
+
     // PATCH-3: NSD-based mDNS discovery — only runs while ConnectionPanel
     // is in the composition AND the user is not yet connected. Multicast
     // lock is acquired in start() and released in stop(); leaving the
@@ -79,14 +88,25 @@ fun ConnectionPanel(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        OutlinedTextField(
-            value = serverInput,
-            onValueChange = { serverInput = it },
-            label = { Text("Server") },
-            singleLine = true,
-            enabled = !connected,
-            modifier = Modifier.weight(1f),
-        )
+        if (viaRelay) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Via relay", fontSize = 11.sp, color = Color(0xFF989898))
+                Text(
+                    if (relayStation.isNotBlank()) relayStation else "(station)",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        } else {
+            OutlinedTextField(
+                value = serverInput,
+                onValueChange = { serverInput = it },
+                label = { Text("Server") },
+                singleLine = true,
+                enabled = !connected,
+                modifier = Modifier.weight(1f),
+            )
+        }
 
         if (connected) {
             val btnColor = if (audioError) Color(0xFFC62828) else Color(0xFF666666)
@@ -121,7 +141,7 @@ fun ConnectionPanel(
     // to render; user still has the manual IP field above as the always-on
     // fallback. List appears progressively as scans resolve, so we don't
     // gate Connect on it.
-    if (!connected && discoveredServers.isNotEmpty()) {
+    if (!connected && !viaRelay && discoveredServers.isNotEmpty()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             verticalAlignment = Alignment.CenterVertically,

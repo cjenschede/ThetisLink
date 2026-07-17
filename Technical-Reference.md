@@ -1,10 +1,10 @@
-# ThetisLink v2.4.2 - Technical Reference
+# ThetisLink v2.4.3 - Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of an ANAN 7000DLE + Thetis SDR receiver and up to two Yaesu transceivers (FT-991A / FTX-1) over a network connection. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
 
-**Version:** v2.4.2 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.4.3 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
 **Target platform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Design priority:** latency > bandwidth > features
@@ -26,7 +26,7 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.4.2`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.4.3`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
 

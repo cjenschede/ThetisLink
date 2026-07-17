@@ -244,7 +244,27 @@ pub fn render_status_panel(
                             );
                         };
 
-                        cell(ui, c.addr.to_string(), col_widths[0]);
+                        // Colour the client address by connection type: direct
+                        // (real UDP peer) vs relay (synthetic sentinel address in
+                        // 203.0.113.0/24). Keep the amber auth/stale cue on the
+                        // address when that applies - status wins over type.
+                        let is_relay = crate::tracked_socket::is_relay_sentinel(c.addr);
+                        let addr_color = if !c.authenticated || last_seen_age > 5 {
+                            color
+                        } else if is_relay {
+                            Color32::from_rgb(80, 200, 205) // relay = cyan
+                        } else {
+                            Color32::from_rgb(100, 160, 230) // direct = ThetisLink blue
+                        };
+                        let addr_text = if is_relay {
+                            format!("{} (relay)", c.addr)
+                        } else {
+                            c.addr.to_string()
+                        };
+                        ui.add_sized(
+                            [col_widths[0], 16.0],
+                            egui::Label::new(RichText::new(addr_text).monospace().size(11.0).color(addr_color)),
+                        );
                         cell(ui, connected_for, col_widths[1]);
                         cell(ui, format!("{} ms", c.rtt_ms), col_widths[2]);
                         cell(ui, format!("{}%", c.loss_percent), col_widths[3]);
@@ -258,6 +278,12 @@ pub fn render_status_panel(
                         ui.end_row();
                     }
                 });
+            // Legend for the address colour coding.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Connection:").size(10.0).weak());
+                ui.colored_label(Color32::from_rgb(100, 160, 230), RichText::new("direct").size(10.0));
+                ui.colored_label(Color32::from_rgb(80, 200, 205), RichText::new("relay").size(10.0));
+            });
         }
         None => {
             ui.horizontal(|ui| {
