@@ -163,6 +163,14 @@ pub fn parse_tab_string(content: &str) -> Result<Vec<YaesuMemoryChannel>, String
 
 /// Save channels to a .tab file (same format as FT-991A Programmer export).
 pub fn save_tab_file(path: &Path, channels: &[YaesuMemoryChannel]) -> Result<(), String> {
+    std::fs::write(path, to_tab_text(channels))
+        .map_err(|e| format!("Write {}: {}", path.display(), e))
+}
+
+/// Build the tab-separated memory text (same format as the saved `.tab` file).
+/// Kept separate from `save_tab_file` so callers can build the text in memory
+/// without writing to disk.
+pub fn to_tab_text(channels: &[YaesuMemoryChannel]) -> String {
     let mut out = String::new();
 
     // Header
@@ -197,8 +205,7 @@ pub fn save_tab_file(path: &Path, channels: &[YaesuMemoryChannel]) -> Result<(),
         ));
     }
 
-    std::fs::write(path, &out)
-        .map_err(|e| format!("Write {}: {}", path.display(), e))
+    out
 }
 
 /// Map mode string from .tab file to the Yaesu CAT mode character.

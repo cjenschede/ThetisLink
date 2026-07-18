@@ -16,6 +16,38 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.4.4] — 2026-07-18 (Per-radio WebSDR · Yaesu Mem+/Mem- skips empty channels · delete-row popup)
+
+> **Patch release.** No wire-protocol change (`VERSION` stays 3, fully interoperable with
+> v2.4.x). Stock Thetis v2.10.3.15 is sufficient — no Thetis-fork change. Desktop updated;
+> Android functionally unchanged, APK rebuilt at 2.4.4.
+
+### Added
+- **The WebSDR selection is now remembered per radio.** Thetis, the FT-991A and the FTX-1 each
+  keep their own WebSDR URL (and highlighted favourite), so choosing a WebSDR for one radio no
+  longer changes it for the others. The favourites list stays a shared pool, and the single
+  embedded window shows the WebSDR of whichever radio you open it for. Existing configs migrate:
+  the old single URL applies to all three at first, then they can be set apart.
+
+### Fixed
+- **Yaesu Mem+ / Mem- now skips empty memory channels.** Previously it stepped the channel
+  number by ±1 and got stuck on a gap (the FT-991A rejects a recall of an empty channel). It now
+  jumps to the next/previous **filled** channel (using the list from the last memory read, with
+  wrap-around), so one click always moves one populated channel — on the FT-991A and the FTX-1.
+- **The spacebar now keys the Yaesu radio when its pop-out window has focus.** The radio-1/radio-2
+  windows are separate viewports with their own keyboard input, so the main-window spacebar-PTT
+  handler never saw them. Spacebar in a radio window now keys that radio (combined with the mouse
+  PTT, respecting the TX-in-use lock and PTT spike-protection).
+- **The main-window PTT button no longer lights up when no Thetis is configured.** With no Thetis
+  present the Thetis PTT keys nothing, so the button now stays grey/disabled and the
+  spacebar/mouse/MIDI can no longer turn it red.
+
+### Changed
+- **Deleting a memory row now shows a short popup** instead of a permanent line above the table,
+  making clear the row is removed from the local list only. A memory channel cannot be erased
+  from the radio over CAT — that is only possible on the radio's own front panel (hold
+  F(M-LIST), select the channel, tap ERASE).
+
 ## [2.4.3] — 2026-07-17 (Relay connection clarity · client colour-coding · slider mouse-wheel)
 
 > **Patch release.** No wire-protocol change (`VERSION` stays 3, fully interoperable with

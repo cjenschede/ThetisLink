@@ -236,6 +236,10 @@ pub struct YaesuState {
     pub mode_char: char,    // Raw Yaesu mode character ('1'-'E')
     pub vfo_select: u8,     // 0=VFO, 1=Memory, 2=MemTune (from IF P7)
     pub memory_channel: u16, // Current memory channel number (from IF)
+    /// Sorted list of filled memory-channel numbers from the last full read.
+    /// Persists independently of `memory_data` (which is consumed/taken when the
+    /// dump is sent to the client), so Mem+/Mem- can skip empty channels.
+    pub filled_memory_channels: Vec<u16>,
     pub split_active: bool,  // true = split mode active
     pub scan_active: bool,   // true = scanning
     /// Internal ATU state from the `AC;` readback (PATCH-yaesu-internal-atu), normalised:
@@ -290,6 +294,7 @@ impl Default for YaesuState {
             mode_char: '2',
             vfo_select: 0,
             memory_channel: 0,
+            filled_memory_channels: Vec::new(),
             split_active: false,
             scan_active: false,
             tuner_state: 0, // off/bypass until AC; readback says otherwise
@@ -840,6 +845,19 @@ fn yaesu_poll_loop(
                     Ok(tab_text) => {
                         let count = tab_text.lines().count() - 1;
                         info!("{} read {} memory channels", prefix, count);
+                        // Persist the filled channel numbers (first column) so
+                        // Mem+/Mem- can skip empties - memory_data itself is taken
+                        // when sent to the client.
+                        let mut filled: Vec<u16> = tab_text
+                            .lines()
+                            .skip(1)
+                            .filter_map(|l| l.split('\t').next())
+                            .filter_map(|c| c.trim().parse::<u16>().ok())
+                            .filter(|&c| c >= 1)
+                            .collect();
+                        filled.sort_unstable();
+                        filled.dedup();
+                        status.lock().unwrap().filled_memory_channels = filled;
                         *memory_data.lock().unwrap() = Some(tab_text);
                     }
                     Err(e) => warn!("{} memory read failed: {}", prefix, e),
@@ -1986,6 +2004,10 @@ fn write_all_memories(port: &mut Box<dyn serialport::SerialPort>, tab_text: &str
             Ok(mhz) => (mhz * 1_000_000.0).round() as u64,
             Err(_) => continue,
         };
+        // The FT-991A rejects a memory write with frequency 0 (out of the valid
+        // 30 kHz-470 MHz range), so there is no CAT way to clear a channel - a
+        // deleted row is simply not rewritten. Skip freq-0 rows. (Verified on
+        // hardware 2026-07-18: MT with freq 0 -> "?;".)
         if freq_hz == 0 { continue; }
 
         // Memory-storage modes: respect what the client provided. The

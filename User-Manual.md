@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.4.3 — Gebruikershandleiding
+﻿# ThetisLink v2.4.4 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.4.3.apk` | Android client app |
+| `ThetisLink-2.4.4.apk` | Android client app |
 | `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -948,6 +948,7 @@ Als het spectrum (lijn) en de waterval niet synchroon lopen bij het pannen, hers
 
 | Versie | Hoogtepunten |
 |---|---|
+| **2.4.4** | **WebSDR per radio + Yaesu Mem+/Mem- slaat lege kanalen over + delete-rij-popup.** Geen wire-protocol-wijziging (`VERSION` blijft 3, volledig interoperabel met v2.4.x); stock Thetis v2.10.3.15 volstaat; geen fork-wijziging; Android functioneel ongewijzigd (APK herbouwd). De **WebSDR-selectie wordt nu per radio onthouden** (Thetis / FT-991A / FTX-1 onafhankelijk; favorieten blijven een gedeelde pool). **Yaesu Mem+ / Mem- slaat nu lege geheugenkanalen over** — springt naar het volgende/vorige gevulde kanaal i.p.v. vast te lopen op een gat (991A en FTX-1). **Een geheugen-rij verwijderen toont een korte popup** (alleen lokaal uit de lijst; een kanaal wissen kan alleen via de front-knop van de radio, niet via CAT) i.p.v. een vaste regel boven de tabel. De **spatiebalk keyt nu de Yaesu-radio als zijn pop-out-venster de focus heeft**, en de main-window-PTT-knop wordt niet meer rood als er geen Thetis geconfigureerd is. |
 | **2.4.3** | **Duidelijkere relay-verbinding + kleur-gecodeerde clientlijst + slider-muiswiel.** Geen wire-protocol-wijziging (`VERSION` blijft 3, volledig interoperabel met v2.4.x); stock Thetis v2.10.3.15 volstaat; geen fork-wijziging; desktop + Android beide bijgewerkt (APK herbouwd). Bij een relay-verbinding toont het verbindingsgedeelte **"Via relay: &lt;station&gt;"** + relay-status i.p.v. het (irrelevante) directe server-IP. De clientlijst op de server **kleurt** elke client naar verbindingstype (direct = blauw, relay = cyaan). **Muiswiel-scroll op elke desktop-slider.** Een **herstart-melding** verschijnt nu bij het aan- én uitzetten van de relay (desktop + Android). Docs verduidelijken dat de server **beide** methodes tegelijk bedient — elke client kiest zelf. |
 | **2.4.2** | **Bugfix-patch (opgenomen audio afspelen via de radio).** Eén additieve wire-protocol-control (`ThetisTxeq = 0x90`); `VERSION` blijft 3, dus een directe verbinding blijft interoperabel met v2.4.0/v2.4.1. Stock Thetis v2.10.3.15 volstaat; geen fork-wijziging; Android functioneel ongewijzigd (APK herbouwd). **Opgenomen audio uitgezonden via de radio is niet meer overgemoduleerd** — playback omzeilt nu de live-mic-keten (EQ/compressor/AGC + 4×-boost) en gaat schoon op lijnniveau naar buiten voor Thetis en beide Yaesu-radio's; **playback naar de 2e Yaesu (FTX-1)** komt nu door; **Thetis TX-EQ wordt tijdens playback automatisch omzeild en daarna exact op de vorige stand hersteld**; een **play-volume-schuif** (0–2×) en een **zend-niveaumeter tijdens playback** toegevoegd; **RX-audio blijft hoorbaar tijdens TX** (de interne-speaker-mute hangt nu aan PTT-spike-protectie). |
 | **2.4.1** | **Bugfix-patch.** Volledig interoperabel met v2.4.0 (wire-protocol VERSION 3 ongewijzigd; stock Thetis v2.10.3.15 volstaat). De **rotor (MCP2221A)** is nu vanuit een schone conf te koppelen (het koppel-scherm ontbrak — alleen tuners hadden er een); de **Settings-knop** verdwijnt niet meer na een MCP2221A-scan; **opgenomen audio afgespeeld via de radio** (TX-inject) speelt niet meer te langzaam/hakkelend (het TX-pad negeerde de opname-rate — speaker-playback was al goed); **FT-991A-geheugen 100–117** (PMS-kanalen) wordt nu ook ingelezen (stopte bij 099). FTX-1 ongewijzigd. |

@@ -186,6 +186,10 @@ pub(crate) struct ClientConfig {
     pub(crate) smeter_source: u8,
     pub(crate) catsync_enabled: bool,
     pub(crate) catsync_url: String,
+    /// Per-radio WebSDR URL for the two Yaesu radios (independent of Thetis and
+    /// of each other). Empty = fall back to `catsync_url`.
+    pub(crate) catsync_url_y1: String,
+    pub(crate) catsync_url_y2: String,
     pub(crate) catsync_favorites: Vec<(String, String)>,
     /// TL2-1 ctun-auto-recenter: setup-vink "Allow zoom below 2x (waterfall smear during tune)".
     /// Default false -> zoom-min 2x, anti-smear feature volledig actief.
@@ -348,6 +352,8 @@ impl Default for ClientConfig {
             smeter_source: 1,      // Avg matches pre-multi-source server default
             catsync_enabled: false,
             catsync_url: String::new(),
+            catsync_url_y1: String::new(),
+            catsync_url_y2: String::new(),
             catsync_favorites: Vec::new(),
             allow_zoom_below_2x: false,
             spike_protection: false,
@@ -906,6 +912,18 @@ pub(crate) fn load_config() -> ClientConfig {
         } else if let Some(val) = line.strip_prefix("catsync_enabled=") {
             config.catsync_enabled = val.trim() == "true";
             has_keys = true;
+        } else if let Some(val) = line.strip_prefix("catsync_url_y1=") {
+            let v = val.trim();
+            if !v.is_empty() {
+                config.catsync_url_y1 = v.to_string();
+            }
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("catsync_url_y2=") {
+            let v = val.trim();
+            if !v.is_empty() {
+                config.catsync_url_y2 = v.to_string();
+            }
+            has_keys = true;
         } else if let Some(val) = line.strip_prefix("catsync_url=") {
             let v = val.trim();
             if !v.is_empty() {
@@ -1126,6 +1144,8 @@ pub(crate) fn save_config(
     midi_encoder_hz: u64,
     catsync_enabled: bool,
     catsync_url: &str,
+    catsync_url_y1: &str,
+    catsync_url_y2: &str,
     catsync_favorites: &[(String, String)],
     mic_profile_map: &std::collections::HashMap<String, String>,
     theme: &str,
@@ -1351,6 +1371,12 @@ pub(crate) fn save_config(
         content.push_str(&format!("catsync_enabled={}\n", catsync_enabled));
         if !catsync_url.is_empty() {
             content.push_str(&format!("catsync_url={}\n", catsync_url));
+        }
+        if !catsync_url_y1.is_empty() {
+            content.push_str(&format!("catsync_url_y1={}\n", catsync_url_y1));
+        }
+        if !catsync_url_y2.is_empty() {
+            content.push_str(&format!("catsync_url_y2={}\n", catsync_url_y2));
         }
         for (label, url) in catsync_favorites {
             content.push_str(&format!("catsync_fav={}|{}\n", label, url));

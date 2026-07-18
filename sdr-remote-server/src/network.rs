@@ -22,6 +22,23 @@ use sdr_remote_core::{FRAME_SAMPLES_WIDEBAND, FULL_SPECTRUM_BINS, MAX_PACKET_SIZ
 
 use crate::amplitec::AmplitecSwitch;
 use crate::config::ServerConfig;
+
+/// Next (up) or previous (down) memory channel, SKIPPING empty channels. Uses
+/// the filled-channel list when available (wrapping to the first/last filled
+/// channel); falls back to cur+/-1 within 1..=max when the list is empty.
+fn next_memory_channel(filled: &[u16], cur: u16, up: bool, max: u16) -> u16 {
+    if filled.is_empty() {
+        return if up {
+            if cur >= max { 1 } else { cur + 1 }
+        } else if cur <= 1 { max } else { cur - 1 };
+    }
+    if up {
+        filled.iter().copied().find(|&c| c > cur).unwrap_or(filled[0])
+    } else {
+        filled.iter().rev().copied().find(|&c| c < cur).unwrap_or(filled[filled.len() - 1])
+    }
+}
+
 use crate::ptt::PttController;
 use crate::rf2k::Rf2k;
 use crate::session::SessionManager;
@@ -3511,16 +3528,18 @@ impl NetworkService {
                                             info!("Client {} Yaesu button {}: {}", addr, ctrl.value, cat);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(cat.to_string()));
                                         }
-                                        // Memory channel up/down: use MC with current channel +/-1
+                                        // Memory channel up/down: jump to the next/previous NON-EMPTY
+                                        // channel via MC. MC{cur+/-1} gets stuck on gaps (the radio
+                                        // rejects MC to an empty slot) and the radio's UP;/DN; steps
+                                        // the VFO (MemTune), not the channel - so we skip empties using
+                                        // the channel list from the last memory read, falling back to
+                                        // +/-1 when no list is available yet.
                                         if ctrl.value == 9 || ctrl.value == 10 {
-                                            let status = yaesu.status();
-                                            let cur = status.memory_channel;
-                                            let next = if ctrl.value == 9 {
-                                                if cur >= 99 { 1 } else { cur + 1 }
-                                            } else {
-                                                if cur <= 1 { 99 } else { cur - 1 }
-                                            };
-                                            info!("Client {} Yaesu Mem: {} -> {}", addr, cur, next);
+                                            let st = yaesu.status();
+                                            let cur = st.memory_channel;
+                                            let filled = st.filled_memory_channels;
+                                            let next = next_memory_channel(&filled, cur, ctrl.value == 9, 117);
+                                            info!("Client {} Yaesu Mem: {} -> {} (skip empty, {} filled)", addr, cur, next, filled.len());
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RecallMemory(next));
                                         }
                                     }
@@ -3817,11 +3836,15 @@ impl NetworkService {
                                             info!("Client {} [radio1] Yaesu button {}: {}", addr, ctrl.value, cat);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(cat.to_string()));
                                         }
+                                        // Same empty-channel skip as slot 0, via the filled-channel
+                                        // list from the last read (FTX-1 range 1..=99). Falls back to
+                                        // +/-1 when no list is available.
                                         if ctrl.value == 9 || ctrl.value == 10 {
-                                            let cur = yaesu.status().memory_channel;
-                                            let next = if ctrl.value == 9 {
-                                                if cur >= 99 { 1 } else { cur + 1 }
-                                            } else if cur <= 1 { 99 } else { cur - 1 };
+                                            let st = yaesu.status();
+                                            let cur = st.memory_channel;
+                                            let filled = st.filled_memory_channels;
+                                            let next = next_memory_channel(&filled, cur, ctrl.value == 9, 99);
+                                            info!("Client {} [radio1] Yaesu Mem: {} -> {} (skip empty, {} filled)", addr, cur, next, filled.len());
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RecallMemory(next));
                                         }
                                     }

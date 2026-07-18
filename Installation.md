@@ -1,4 +1,4 @@
-# ThetisLink v2.4.3 - Installation Guide
+# ThetisLink v2.4.4 - Installation Guide
 
 ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full radio control over the network via TCI WebSocket.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.4.3.apk | ThetisLink Android Client - phone/tablet |
+| ThetisLink-2.4.4.apk | ThetisLink Android Client - phone/tablet |
 | Installation.pdf | Installation guide (English, this document) |
 | User-Manual-EN.pdf | User manual (English) |
 | Technical-Reference.pdf | Technical reference (English) |
@@ -272,14 +272,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 ### 4.1 Installing the APK
 
 **Via file manager:**
-1. Copy `ThetisLink-2.4.3.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.4.4.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.4.3.apk
+adb install ThetisLink-2.4.4.apk
 ```
 
 ### 4.2 Connecting — guided setup wizard

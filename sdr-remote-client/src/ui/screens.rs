@@ -95,6 +95,7 @@ impl SdrRemoteApp {
                         "Reload WebSDR page and audio after a network interruption",
                     ).clicked() {
                         self.catsync_target = target;
+                        self.catsync.websdr_url = self.websdr_urls[target.idx()].clone();
                         self.catsync.reload_websdr_window(freq_hz, mode);
                     }
                     ui.colored_label(Color32::from_rgb(100, 200, 100), "Window open");
@@ -102,6 +103,7 @@ impl SdrRemoteApp {
                     let button_label = if webview_open { "Use here" } else { "WebSDR" };
                     if ui.button(button_label).clicked() {
                         self.catsync_target = target;
+                        self.catsync.websdr_url = self.websdr_urls[target.idx()].clone();
                         if webview_open {
                             self.catsync.reload_websdr_window(freq_hz, mode);
                         } else {
@@ -110,23 +112,24 @@ impl SdrRemoteApp {
                     }
                 }
                 if ui.small_button("ext").on_hover_text("Open in external browser").clicked() {
-                    let url = self.catsync.websdr_tune_url(freq_hz, mode);
+                    let url = crate::catsync::build_tune_url(&self.websdr_urls[target.idx()], freq_hz, mode);
                     let _ = open::that(&url);
                 }
             });
         });
         ui.horizontal(|ui| {
             ui.label(RichText::new("URL:").size(11.0).color(Color32::GRAY));
-            ui.add(egui::TextEdit::singleline(&mut self.catsync.websdr_url)
+            ui.add(egui::TextEdit::singleline(&mut self.websdr_urls[target.idx()])
                 .desired_width(ui.available_width() - 40.0)
                 .font(egui::FontId::proportional(11.0)));
             if ui.small_button("*").on_hover_text("Add to favorites").clicked() {
-                self.catsync.add_favorite();
+                let url = self.websdr_urls[target.idx()].clone();
+                self.catsync.add_favorite_url(&url);
                 self.save_full_config();
             }
         });
         if !self.catsync.favorites.is_empty() {
-            let active_url = self.catsync.websdr_url.clone();
+            let active_url = self.websdr_urls[target.idx()].clone();
             let editing = self.websdr_favorite_editing;
             let mut select_idx = None;
             let mut remove_idx = None;
@@ -179,8 +182,10 @@ impl SdrRemoteApp {
             if label_committed {
                 self.save_full_config();
             }
-            if let Some(idx) = select_idx {
-                self.catsync.select_favorite(idx);
+            if let Some(sel) = select_idx {
+                if let Some((_, url)) = self.catsync.favorites.get(sel) {
+                    self.websdr_urls[target.idx()] = url.clone();
+                }
                 self.save_full_config();
             }
             if let Some(idx) = remove_idx {

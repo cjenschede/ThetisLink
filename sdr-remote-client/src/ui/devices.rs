@@ -3048,6 +3048,31 @@ impl SdrRemoteApp {
             self.yaesu_mem_channels.remove(idx);
             self.yaesu_mem_selected = None;
             self.yaesu_mem_dirty = true;
+            self.yaesu_mem_delete_popup = true;
+        }
+
+        // Popup shown after a delete: make clear the row is only removed locally
+        // and cannot be erased from the radio over CAT (front-panel only).
+        if self.yaesu_mem_delete_popup {
+            let ctx = ui.ctx().clone();
+            egui::Window::new("Row removed from list")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(&ctx, |ui| {
+                    ui.set_max_width(360.0);
+                    ui.label(
+                        "The row was removed from this list only.\n\n\
+                         A memory channel cannot be erased from the radio over CAT: \
+                         'Write radio' does not delete it, so 'Read radio' brings it \
+                         back. To clear it on the radio, use its front panel \
+                         (hold F(M-LIST), select the channel, tap ERASE).",
+                    );
+                    ui.add_space(8.0);
+                    if ui.button("OK").clicked() {
+                        self.yaesu_mem_delete_popup = false;
+                    }
+                });
         }
     }
 

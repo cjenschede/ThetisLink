@@ -21,7 +21,7 @@ const BROWSER_NAMES: &[&str] = &[
 ];
 
 /// Default WebSDR URL (Maasbree HF)
-const DEFAULT_WEBSDR_URL: &str = "http://sdr.websdrmaasbree.nl:8901/";
+pub(crate) const DEFAULT_WEBSDR_URL: &str = "http://sdr.websdrmaasbree.nl:8901/";
 
 /// Debounce delay for freq sync to WebView (ms)
 const FREQ_SYNC_DEBOUNCE_MS: u128 = 500;
@@ -44,6 +44,25 @@ fn url_to_label(url: &str) -> String {
     let label = host.strip_prefix("www.").unwrap_or(host);
     let label = label.strip_prefix("sdr.").unwrap_or(label);
     label.to_string()
+}
+
+/// Build a WebSDR tune-URL from an explicit base URL (per-target, so it does not
+/// depend on the single active-window URL).
+pub fn build_tune_url(base_url: &str, freq_hz: u64, mode: u8) -> String {
+    let freq_khz = freq_hz as f64 / 1000.0;
+    if is_kiwi_url(base_url) {
+        let mode_str = match mode {
+            0 => "lsb", 1 => "usb", 5 => "nbfm", 6 => "am", 7 => "cw",
+            _ => "usb",
+        };
+        format!("{}?f={:.3}{}&z=9", base_url, freq_khz, mode_str)
+    } else {
+        let mode_str = match mode {
+            0 => "lsb", 1 => "usb", 5 => "fm", 6 => "am",
+            _ => "usb",
+        };
+        format!("{}?tune={:.2}{}", base_url, freq_khz, mode_str)
+    }
 }
 
 pub struct CatSync {
@@ -116,23 +135,26 @@ impl CatSync {
         }
     }
 
-    /// Build WebSDR URL with frequency and mode
+    /// Build WebSDR URL with frequency and mode for the active URL.
     pub fn websdr_tune_url(&self, freq_hz: u64, mode: u8) -> String {
-        if is_kiwi_url(&self.websdr_url) {
-            let mode_str = match mode {
-                0 => "lsb", 1 => "usb", 5 => "nbfm", 6 => "am", 7 => "cw",
-                _ => "usb",
-            };
-            let freq_khz = freq_hz as f64 / 1000.0;
-            format!("{}?f={:.3}{}&z=9", self.websdr_url, freq_khz, mode_str)
-        } else {
-            let mode_str = match mode {
-                0 => "lsb", 1 => "usb", 5 => "fm", 6 => "am",
-                _ => "usb",
-            };
-            let freq_khz = freq_hz as f64 / 1000.0;
-            format!("{}?tune={:.2}{}", self.websdr_url, freq_khz, mode_str)
+        build_tune_url(&self.websdr_url, freq_hz, mode)
+    }
+
+    /// Add an explicit URL to favorites (auto-labelled). Used so a per-target
+    /// URL can be favourited without touching the active-window URL.
+    pub fn add_favorite_url(&mut self, url: &str) {
+        let url = url.trim().to_string();
+        if url.is_empty() {
+            return;
         }
+        if self.favorites.iter().any(|(_, u)| u == &url) {
+            return;
+        }
+        let label = url_to_label(&url);
+        if self.favorites.len() >= MAX_FAVORITES {
+            self.favorites.pop();
+        }
+        self.favorites.push((label, url));
     }
 
     /// Update mute state based on TX. Only acts when enabled and state changes.

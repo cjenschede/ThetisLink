@@ -1,4 +1,4 @@
-# ThetisLink v2.4.3 - User Manual
+# ThetisLink v2.4.4 - User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.4.3.apk` | Android client app |
+| `ThetisLink-2.4.4.apk` | Android client app |
 | `Installation.pdf` | Installation guide (English) |
 | `User-Manual-EN.pdf` | User manual (English, this document) |
 | `Technical-Reference.pdf` | Technical reference (English) |
@@ -948,6 +948,7 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
+| **2.4.4** | **Per-radio WebSDR + Yaesu Mem+/Mem- skips empty channels + delete-row popup.** No wire-protocol change (`VERSION` stays 3, fully interoperable with v2.4.x); stock Thetis v2.10.3.15 suffices; no fork change; Android functionally unchanged (APK rebuilt). The **WebSDR selection is now remembered per radio** (Thetis / FT-991A / FTX-1 independent; favourites stay a shared pool). **Yaesu Mem+ / Mem- now skips empty memory channels** — it jumps to the next/previous filled channel instead of getting stuck on a gap (991A and FTX-1). **Deleting a memory row shows a short popup** (removed from the local list only; a channel can only be erased on the radio's front panel, not over CAT) instead of a permanent line above the table. The **spacebar now keys the Yaesu radio when its pop-out window has focus**, and the main-window PTT button no longer lights up when no Thetis is configured. |
 | **2.4.3** | **Relay connection clarity + colour-coded client list + slider mouse-wheel.** No wire-protocol change (`VERSION` stays 3, fully interoperable with v2.4.x); stock Thetis v2.10.3.15 suffices; no fork change; desktop + Android both updated (APK rebuilt). When connected via the relay, the connection area shows **"Via relay: &lt;station&gt;"** + relay status instead of the (irrelevant) direct server IP. The server's client list **colour-codes** each client by connection type (direct = blue, relay = cyan). **Mouse-wheel scroll on every desktop slider.** A **restart notice** now appears when toggling the relay on _or_ off (desktop + Android). Docs clarify that the server serves **both** direct and relayed clients at once — each client chooses independently. |
 | **2.4.2** | **Bug-fix patch (recorded-audio playback to the radio).** One additive wire-protocol control (`ThetisTxeq = 0x90`); `VERSION` stays 3, so a direct connection stays interoperable with v2.4.0/v2.4.1. Stock Thetis v2.10.3.15 suffices; no fork change; Android functionally unchanged (APK rebuilt). **Recorded audio transmitted through the radio is no longer overmodulated** — playback now bypasses the live-mic chain (EQ/compressor/AGC + 4× boost) and goes out clean at line level for Thetis and both Yaesu radios; **playback to the 2nd Yaesu (FTX-1)** now comes through; **Thetis TX-EQ is bypassed automatically during playback and restored to its exact prior state afterwards**; a **play-volume slider** (0–2×) and a **transmit-level meter during playback** were added; **RX audio stays audible during TX** (the internal-speaker mute is now tied to PTT spike-protection). |
 | **2.4.1** | **Bug-fix patch.** Fully interoperable with v2.4.0 (wire protocol VERSION 3 unchanged; stock Thetis v2.10.3.15 suffices). The **rotor (MCP2221A)** can now be linked from a clean config (the link screen was missing — only tuners had one); the **Settings button** no longer disappears after an MCP2221A scan; **recorded audio played through the radio** (TX inject) no longer plays too slowly/stuttering (the TX path ignored the recording's sample rate — speaker playback was already correct); **FT-991A memory 100–117** (PMS channels) is now read as well (it stopped at 099). FTX-1 unchanged. |

@@ -192,6 +192,10 @@ pub struct SdrRemoteApp {
     ptt_toggle_mode: bool,       // false=push-to-talk (momentary), true=toggle (click on/off)
     yaesu_ptt_toggle_mode: bool, // independent Yaesu PTT mode
     yaesu_mouse_ptt: bool,       // tracks local Yaesu momentary PTT button state
+    /// Last PTT state sent from the Yaesu pop-out (mouse OR spacebar combined),
+    /// so the spacebar-in-window PTT and the mouse PTT don't fight each other.
+    yaesu_ptt_last_sent: bool,
+    yaesu2_ptt_last_sent: bool,
     // PTT switch-on spike protection (built-in speaker+mic in one chassis). See config.rs.
     spike_protection: bool,
     mic_gate_delay_thetis_ms: u32,
@@ -817,6 +821,8 @@ pub struct SdrRemoteApp {
     yaesu_mem_selected: Option<usize>,
     yaesu_mem_filter: String,
     yaesu_mem_dirty: bool,
+    /// Show the "row removed locally only" popup after clicking delete (x).
+    yaesu_mem_delete_popup: bool,
     yaesu_mem_radio_received: bool,
     // Slot-1 (FTX-1) geheugen-state (Fase B). render_yaesu_memories wordt gedeeld
     // via mem::swap van deze velden + yaesu_mem_active_slot (voor read/write-cmd's).
@@ -970,6 +976,10 @@ pub struct SdrRemoteApp {
     // CatSync (WebSDR browser mute on TX)
     catsync: crate::catsync::CatSync,
     catsync_target: CatSyncTarget,
+    /// Per-target selected WebSDR URL (Thetis / Yaesu1 / Yaesu2), so each radio
+    /// remembers its own WebSDR independently. The single embedded window uses
+    /// whichever target's URL was last opened (`catsync.websdr_url`).
+    websdr_urls: [String; 3],
 }
 
 
@@ -978,6 +988,16 @@ pub(crate) enum CatSyncTarget {
     Thetis,
     Yaesu1,
     Yaesu2,
+}
+
+impl CatSyncTarget {
+    pub(crate) fn idx(self) -> usize {
+        match self {
+            CatSyncTarget::Thetis => 0,
+            CatSyncTarget::Yaesu1 => 1,
+            CatSyncTarget::Yaesu2 => 2,
+        }
+    }
 }
 
 /// VRX channel id for the shared VRX controls renderer. VRX1 follows RX1/VFO-A,
@@ -1602,6 +1622,8 @@ impl SdrRemoteApp {
             ptt_toggle_mode: config.ptt_toggle,
             yaesu_ptt_toggle_mode: config.yaesu_ptt_toggle,
             yaesu_mouse_ptt: false,
+            yaesu_ptt_last_sent: false,
+            yaesu2_ptt_last_sent: false,
             spike_protection: config.spike_protection,
             mic_gate_delay_thetis_ms: config.mic_gate_delay_thetis_ms,
             mic_gate_delay_yaesu_ms: config.mic_gate_delay_yaesu_ms,
@@ -2137,6 +2159,7 @@ impl SdrRemoteApp {
             yaesu_mem_selected: None,
             yaesu_mem_filter: String::new(),
             yaesu_mem_dirty: false,
+            yaesu_mem_delete_popup: false,
             yaesu_mem_radio_received: false,
             yaesu2_mem_channels: Vec::new(),
             yaesu2_mem_file: "ftx1_memories.tab".to_string(),
@@ -2262,12 +2285,25 @@ impl SdrRemoteApp {
                 let mut cs = crate::catsync::CatSync::new();
                 cs.enabled = config.catsync_enabled;
                 if !config.catsync_url.is_empty() {
-                    cs.websdr_url = config.catsync_url;
+                    cs.websdr_url = config.catsync_url.clone();
                 }
                 cs.favorites = config.catsync_favorites;
                 cs
             },
             catsync_target: CatSyncTarget::Thetis,
+            websdr_urls: {
+                // Per-target URLs. Thetis uses the legacy `catsync_url` (or the
+                // built-in default); each Yaesu falls back to that base when it
+                // has no URL of its own yet (migration from the old shared URL).
+                let base = if config.catsync_url.is_empty() {
+                    crate::catsync::DEFAULT_WEBSDR_URL.to_string()
+                } else {
+                    config.catsync_url.clone()
+                };
+                let y1 = if config.catsync_url_y1.is_empty() { base.clone() } else { config.catsync_url_y1.clone() };
+                let y2 = if config.catsync_url_y2.is_empty() { base.clone() } else { config.catsync_url_y2.clone() };
+                [base, y1, y2]
+            },
         };
 
         // Load MIDI mappings from config
@@ -2664,7 +2700,9 @@ impl SdrRemoteApp {
             &self.midi.get_mappings(),
             self.midi_encoder_hz,
             self.catsync.enabled,
-            &self.catsync.websdr_url,
+            &self.websdr_urls[0],
+            &self.websdr_urls[1],
+            &self.websdr_urls[2],
             &self.catsync.favorites,
             &self.mic_profile_map,
             self.theme_variant.as_str(),
@@ -5476,7 +5514,11 @@ impl eframe::App for SdrRemoteApp {
                         [self.amplitec_switch_a.saturating_sub(1) as usize];
 
                 // PTT button (compact for top bar)
-                let (ptt_color, ptt_text, ptt_locked) = if current_pos_rx_only {
+                let (ptt_color, ptt_text, ptt_locked) = if !self.thetis_configured {
+                    // No Thetis configured -> this (Thetis) PTT keys nothing. Disable it
+                    // so the spacebar/mouse cannot turn it red for a radio that is absent.
+                    (Color32::from_rgb(60, 60, 60), "PTT", true)
+                } else if current_pos_rx_only {
                     (Color32::from_rgb(120, 50, 50), "RX only", true)
                 } else if self.other_tx {
                     (Color32::from_rgb(200, 120, 0), "TX in use", true)
@@ -5523,12 +5565,15 @@ impl eframe::App for SdrRemoteApp {
                 // toggle "aan" hangen en gaat 'ie alsnog zenden zodra we van
                 // de RX-only positie wegschakelen. Spatiebalk is real-time
                 // (key_down) en wordt door de `&&`-conditie afgevangen.
-                if current_pos_rx_only {
+                if current_pos_rx_only || !self.thetis_configured {
                     self.mouse_ptt = false;
                     self.midi_ptt = false;
                 }
+                // No Thetis -> never key the Thetis PTT (spacebar/mouse/MIDI all suppressed),
+                // so the button cannot go red for a radio that is not there.
                 let new_ptt = (self.mouse_ptt || space_held || self.midi_ptt)
-                    && !current_pos_rx_only;
+                    && !current_pos_rx_only
+                    && self.thetis_configured;
                 if new_ptt != self.ptt {
                     self.midi.send_led(crate::midi::MidiAction::Ptt, new_ptt);
                     // TX spectrum override
@@ -6521,23 +6566,29 @@ impl eframe::App for SdrRemoteApp {
                                 RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
                             ).fill(ptt_color).min_size(egui::vec2(80.0, 40.0));
                             let response = ui.add_enabled(!ptt_locked, ptt_btn);
+                            // Mouse PTT into a single latch (toggle flips it, momentary
+                            // tracks the button hold) so the spacebar can OR with it -
+                            // mirrors the Thetis PTT handler.
                             if self.yaesu_ptt_toggle_mode {
                                 if response.clicked() {
-                                    let new_tx = !self.yaesu_tx_active;
-                                    self.apply_ptt_spike_protection(true, new_tx);
-                                    let _ = self.cmd_tx.send(Command::SetYaesuPtt(new_tx));
+                                    self.yaesu_mouse_ptt = !self.yaesu_mouse_ptt;
                                 }
                             } else {
-                                // Momentary: only send on state changes from THIS button
-                                let pressing = ui.input(|i| {
+                                self.yaesu_mouse_ptt = ui.input(|i| {
                                     i.pointer.primary_down()
                                         && response.rect.contains(i.pointer.interact_pos().unwrap_or(egui::Pos2::ZERO))
                                 });
-                                if pressing != self.yaesu_mouse_ptt {
-                                    self.yaesu_mouse_ptt = pressing;
-                                    self.apply_ptt_spike_protection(true, pressing);
-                                    let _ = self.cmd_tx.send(Command::SetYaesuPtt(pressing));
-                                }
+                            }
+                            // Spacebar keys this radio while ITS OWN window has focus (the
+                            // pop-out is a separate viewport with its own keyboard input,
+                            // so the main-window PTT handler never sees it). Momentary,
+                            // combined with the mouse latch; send only on the combined edge.
+                            let space_held = ui.input(|i| i.key_down(egui::Key::Space));
+                            let want_tx = (self.yaesu_mouse_ptt || space_held) && !ptt_locked;
+                            if want_tx != self.yaesu_ptt_last_sent {
+                                self.yaesu_ptt_last_sent = want_tx;
+                                self.apply_ptt_spike_protection(true, want_tx);
+                                let _ = self.cmd_tx.send(Command::SetYaesuPtt(want_tx));
                             }
 
                             ui.separator();
@@ -6605,22 +6656,24 @@ impl eframe::App for SdrRemoteApp {
                                 RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
                             ).fill(ptt_color).min_size(egui::vec2(80.0, 40.0));
                             let response = ui.add_enabled(!ptt_locked, ptt_btn);
+                            // Mouse PTT latch + spacebar (this viewport's keyboard input),
+                            // same as radio 1.
                             if self.yaesu2_ptt_toggle_mode {
                                 if response.clicked() {
-                                    let new_tx = !self.yaesu2_tx_active;
-                                    self.apply_ptt_spike_protection(true, new_tx);
-                                    let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(new_tx));
+                                    self.yaesu2_mouse_ptt = !self.yaesu2_mouse_ptt;
                                 }
                             } else {
-                                let pressing = ui.input(|i| {
+                                self.yaesu2_mouse_ptt = ui.input(|i| {
                                     i.pointer.primary_down()
                                         && response.rect.contains(i.pointer.interact_pos().unwrap_or(egui::Pos2::ZERO))
                                 });
-                                if pressing != self.yaesu2_mouse_ptt {
-                                    self.yaesu2_mouse_ptt = pressing;
-                                    self.apply_ptt_spike_protection(true, pressing);
-                                    let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(pressing));
-                                }
+                            }
+                            let space_held = ui.input(|i| i.key_down(egui::Key::Space));
+                            let want_tx = (self.yaesu2_mouse_ptt || space_held) && !ptt_locked;
+                            if want_tx != self.yaesu2_ptt_last_sent {
+                                self.yaesu2_ptt_last_sent = want_tx;
+                                self.apply_ptt_spike_protection(true, want_tx);
+                                let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(want_tx));
                             }
                             ui.separator();
                             ui.label("Volume:");
