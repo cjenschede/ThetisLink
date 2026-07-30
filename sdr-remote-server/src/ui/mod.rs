@@ -44,6 +44,9 @@ enum Mode {
 
 pub struct ServerApp {
     tci_addr: String,
+    /// Radio heeft een tweede ontvanger (RX2). Default true; uitzetten voor
+    /// single-receiver radio's -> clients tonen dan nergens RX2/VRX2.
+    rx2_present: bool,
     thetis_path: String,
     yaesu_port: String,
     yaesu_audio_device: String,
@@ -182,6 +185,9 @@ pub struct ServerApp {
     relay_station: String,
     relay_token: String,
     relay_udp_enabled: bool,
+    // UI-thema (gedeeld met de client via de sdr-remote-theme crate)
+    theme_variant: sdr_remote_theme::ThemeVariant,
+    theme_custom: sdr_remote_theme::Palette,
     // Autostart
     autostart: bool,
     pending_autostart: bool,
@@ -233,6 +239,7 @@ impl ServerApp {
 
         Self {
             tci_addr: config.tci_addr.unwrap_or_default(),
+            rx2_present: config.rx2_present,
             thetis_path: config.thetis_path.unwrap_or_default(),
             yaesu_port: config.yaesu_port.unwrap_or_default(),
             yaesu_audio_device: config.yaesu_audio_device.unwrap_or_default(),
@@ -346,6 +353,9 @@ impl ServerApp {
             relay_udp_enabled: config.relay_udp_enabled,
             totp_secret: config.totp_secret.clone().unwrap_or_else(|| sdr_remote_core::auth::generate_totp_secret()),
             main_window_pos: config.main_window_pos,
+            theme_variant: sdr_remote_theme::ThemeVariant::from_str(&config.theme),
+            theme_custom: sdr_remote_theme::Palette::from_config_string(&config.theme_custom)
+                .unwrap_or_else(sdr_remote_theme::Palette::slate),
             autostart: config.autostart,
             pending_autostart: config.autostart,
             main_window_size: config.main_window_size,
@@ -430,6 +440,8 @@ impl ServerApp {
             rf2k_window_size: self.rf2k_window_size,
             ultrabeam_window_size: self.ultrabeam_window_size,
             rotor_window_size: self.rotor_window_size,
+            theme: self.theme_variant.as_str().to_string(),
+            theme_custom: self.theme_custom.to_config_string(),
             autostart: self.autostart,
             active_pa: self.active_pa.load(Ordering::Relaxed),
             // Preserve the persisted per-PA pre-Operate snapshot values; the
@@ -446,6 +458,7 @@ impl ServerApp {
             tuners: crate::config::load().tuners,
             rotors: crate::config::load().rotors,
             tci_addr: if self.tci_addr.trim().is_empty() { None } else { Some(self.tci_addr.trim().to_string()) },
+            rx2_present: self.rx2_present,
             dxcluster_server: self.dxcluster_server.clone(),
             dxcluster_callsign: self.dxcluster_callsign.clone(),
             dxcluster_enabled: self.dxcluster_enabled,
@@ -733,6 +746,8 @@ impl ServerApp {
         config.rf2k_window_size = self.rf2k_window_size;
         config.ultrabeam_window_size = self.ultrabeam_window_size;
         config.rotor_window_size = self.rotor_window_size;
+        config.theme = self.theme_variant.as_str().to_string();
+        config.theme_custom = self.theme_custom.to_config_string();
         config.active_pa = self.active_pa.load(Ordering::Relaxed);
         crate::config::save(&config);
     }
@@ -740,18 +755,9 @@ impl ServerApp {
 
 impl eframe::App for ServerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Light grey background, lighter widget fills for contrast
-        let mut visuals = ctx.style().visuals.clone();
-        let light_grey = egui::Color32::from_rgb(230, 230, 230);
-        visuals.panel_fill = light_grey;
-        visuals.window_fill = light_grey;
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(210, 210, 215);
-        visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(210, 210, 215);
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(195, 195, 200);
-        visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(195, 195, 200);
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(180, 180, 190);
-        visuals.widgets.active.weak_bg_fill = egui::Color32::from_rgb(180, 180, 190);
-        ctx.set_visuals(visuals);
+        // Gedeeld thema met de client. "Classic" is byte-voor-byte het oorspronkelijke
+        // lichtgrijze schema van dit venster, dus de standaard verandert niets.
+        sdr_remote_theme::apply_visuals(ctx, self.theme_variant, &self.theme_custom);
 
         // Auto-start on first frame if configured
         if self.pending_autostart {
@@ -820,6 +826,36 @@ impl eframe::App for ServerApp {
                     ui.heading(format!("ThetisLink Server v{}", sdr_remote_core::VERSION));
                     ui.add_space(10.0);
 
+                    // Thema-keuze: zelfde varianten als de client. Direct zichtbaar,
+                    // want apply_visuals draait elke frame vanuit self.theme_variant.
+                    ui.horizontal(|ui| {
+                        ui.label("Thema:");
+                        egui::ComboBox::from_id_salt("server_theme")
+                            .selected_text(self.theme_variant.label())
+                            .width(140.0)
+                            .show_ui(ui, |ui| {
+                                for v in sdr_remote_theme::ThemeVariant::ALL {
+                                    if ui.selectable_label(self.theme_variant == v, v.label()).clicked() {
+                                        self.theme_variant = v;
+                                    }
+                                }
+                            });
+                        if self.theme_variant == sdr_remote_theme::ThemeVariant::Custom {
+                            let mut edit = |label: &str, c: &mut egui::Color32| {
+                                let mut rgb = [c.r(), c.g(), c.b()];
+                                if ui.color_edit_button_srgb(&mut rgb).on_hover_text(label).changed() {
+                                    *c = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                }
+                            };
+                            edit("Achtergrond", &mut self.theme_custom.background);
+                            edit("Widgets", &mut self.theme_custom.widget);
+                            edit("Tekst", &mut self.theme_custom.text);
+                            edit("Accent (sliders)", &mut self.theme_custom.accent);
+                        }
+                    });
+
+                    ui.add_space(8.0);
+
                     ui.label("Thetis TCI adres (bijv. 127.0.0.1:40001):");
                     ui.text_edit_singleline(&mut self.tci_addr);
 
@@ -827,6 +863,12 @@ impl eframe::App for ServerApp {
 
                     ui.label("Thetis.exe pad (optioneel, voor auto-start):");
                     ui.text_edit_singleline(&mut self.thetis_path);
+
+                    ui.add_space(8.0);
+
+                    ui.checkbox(&mut self.rx2_present, "Radio heeft tweede ontvanger (RX2)")
+                        .on_hover_text("Uit voor single-receiver radio's: clients tonen dan nergens \
+                                        RX2 of VRX2. Wijziging geldt vanaf de volgende serverstart.");
 
                     ui.add_space(8.0);
 

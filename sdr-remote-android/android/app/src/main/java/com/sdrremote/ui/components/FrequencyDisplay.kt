@@ -40,10 +40,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sdrremote.R
 
 private val FREQ_STEPS = longArrayOf(10, 100, 500, 1_000, 10_000)
 private val STEP_LABELS = arrayOf("10", "100", "500", "1k", "10k")
@@ -238,7 +240,7 @@ fun FrequencyDisplay(
                     ButtonDefaults.buttonColors(containerColor = Color(0xFF404040))
                 },
                 modifier = Modifier.weight(1f),
-            ) { Text("Save", fontWeight = if (saveMode) FontWeight.Bold else FontWeight.Normal) }
+            ) { Text(stringResource(R.string.common_save), fontWeight = if (saveMode) FontWeight.Bold else FontWeight.Normal) }
         }
     }
 }

@@ -153,6 +153,8 @@ pub enum Command {
     /// lokaal decoder/resampler pad bij ontvangst van WB-getagde audio
     /// packets.
     SetThetisWidebandAudio(bool),
+    // RX1 audio-abonnement (default aan; false = geen RX1-audio, bandbreedte sparen)
+    SetRx1Enabled(bool),
     // RX2 / VFO-B
     SetRx2Enabled(bool),
     SetVfoSync(bool),

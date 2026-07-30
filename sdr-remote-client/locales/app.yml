@@ -1,0 +1,2183 @@
+# ThetisLink desktop-client translations (rust-i18n v2).
+# Base = English (fallback). Add a language = add its key under each entry.
+# Ham abbreviations / mode names / product names stay identical across languages.
+_version: 2
+
+language:
+  en: "Language"
+  nl: "Taal"
+  de: "Sprache"
+  fr: "Langue"
+
+screen:
+  en: "Screen:"
+  nl: "Scherm:"
+  de: "Bildschirm:"
+  fr: "Écran :"
+
+via_relay:
+  en: "Via relay:"
+  nl: "Via relay:"
+  de: "Über Relay:"
+  fr: "Via relais :"
+
+no_active_streams:
+  en: "  (no active streams)"
+  nl: "  (geen actieve stromen)"
+  de: "  (keine aktiven Streams)"
+  fr: "  (aucun flux actif)"
+
+spectrum_not_received:
+  en: "(spectrum not received yet)"
+  nl: "(spectrum nog niet ontvangen)"
+  de: "(Spektrum noch nicht empfangen)"
+  fr: "(spectre pas encore reçu)"
+
+hover_freq_down:
+  en: "Frequency down by the chosen step"
+  nl: "Frequentie omlaag met de gekozen stap"
+  de: "Frequenz um den gewählten Schritt verringern"
+  fr: "Fréquence vers le bas du pas choisi"
+
+hover_freq_up:
+  en: "Frequency up by the chosen step"
+  nl: "Frequentie omhoog met de gekozen stap"
+  de: "Frequenz um den gewählten Schritt erhöhen"
+  fr: "Fréquence vers le haut du pas choisi"
+
+hover_quick_mem_save:
+  en: "Quick Memory: save current VFO (QI)"
+  nl: "Quick Memory: huidige VFO opslaan (QI)"
+  de: "Quick Memory: aktuellen VFO speichern (QI)"
+  fr: "Quick Memory : enregistrer le VFO actuel (QI)"
+
+hover_take_memories:
+  en: "Copy all memory channels from the other radio (not yet written)"
+  nl: "Neem alle geheugenkanalen van de andere radio over (nog niet geschreven)"
+  de: "Alle Speicherkanäle der anderen Radio übernehmen (noch nicht geschrieben)"
+  fr: "Copier tous les canaux mémoire de l'autre radio (pas encore écrit)"
+
+hover_zoom_below_2x:
+  en: "Allow zooming out below 2x (waterfall smear when tuning between 1x and 1.2x). Off by default for a smear-free experience."
+  nl: "Toestaan om uit te zoomen onder 2x (waterval-smear bij tunen tussen 1x en 1.2x). Default uit voor smear-vrije ervaring."
+  de: "Herauszoomen unter 2x erlauben (Wasserfall-Schmieren beim Abstimmen zwischen 1x und 1,2x). Standardmäßig aus für ein schmierfreies Erlebnis."
+  fr: "Autoriser le dézoom sous 2x (traînée de cascade lors de l'accord entre 1x et 1,2x). Désactivé par défaut pour une expérience sans traînée."
+
+hover_arrange_windows:
+  en: "Arrange windows: drag open windows into rows and snap them to the screen"
+  nl: "Vensters schikken: sleep open vensters in rijen en snap ze op het scherm"
+  de: "Fenster anordnen: offene Fenster in Reihen ziehen und am Bildschirm einrasten"
+  fr: "Organiser les fenêtres : glissez les fenêtres ouvertes en rangées et alignez-les à l'écran"
+
+# ============================================================================
+# Bulk migration (English base only; NL/DE/FR fall back to en until translated)
+# ============================================================================
+
+# --- screens.rs (WebSDR controls) ---
+screen_websdr_mute_on_tx:
+  en: "WebSDR mute on TX"
+  nl: "WebSDR dempen bij TX"
+  de: "WebSDR bei TX stummschalten"
+  fr: "Couper WebSDR en TX"
+screen_muted:
+  en: "MUTED"
+  nl: "GEDEMPT"
+  de: "STUMM"
+  fr: "COUPÉ"
+screen_listening:
+  en: "listening"
+  nl: "luisteren"
+  de: "empfängt"
+  fr: "à l'écoute"
+screen_close_websdr:
+  en: "Close WebSDR"
+  nl: "WebSDR sluiten"
+  de: "WebSDR schließen"
+  fr: "Fermer WebSDR"
+screen_reload:
+  en: "Reload"
+  nl: "Herladen"
+  de: "Neu laden"
+  fr: "Recharger"
+screen_reload_websdr_tooltip:
+  en: "Reload WebSDR page and audio after a network interruption"
+  nl: "WebSDR-pagina en audio herladen na een netwerkonderbreking"
+  de: "WebSDR-Seite und Audio nach einer Netzwerkunterbrechung neu laden"
+  fr: "Recharger la page WebSDR et l'audio après une interruption réseau"
+screen_window_open:
+  en: "Window open"
+  nl: "Venster open"
+  de: "Fenster offen"
+  fr: "Fenêtre ouverte"
+screen_use_here:
+  en: "Use here"
+  nl: "Hier gebruiken"
+  de: "Hier verwenden"
+  fr: "Utiliser ici"
+screen_open_in_external_browser:
+  en: "Open in external browser"
+  nl: "Openen in externe browser"
+  de: "In externem Browser öffnen"
+  fr: "Ouvrir dans un navigateur externe"
+screen_add_to_favorites:
+  en: "Add to favorites"
+  nl: "Toevoegen aan favorieten"
+  de: "Zu Favoriten hinzufügen"
+  fr: "Ajouter aux favoris"
+screen_done:
+  en: "Done"
+  nl: "Klaar"
+  de: "Fertig"
+  fr: "Terminé"
+screen_edit:
+  en: "Edit"
+  nl: "Bewerken"
+  de: "Bearbeiten"
+  fr: "Modifier"
+screen_rename_favorite:
+  en: "Rename this favorite"
+  nl: "Deze favoriet hernoemen"
+  de: "Diesen Favoriten umbenennen"
+  fr: "Renommer ce favori"
+screen_remove:
+  en: "Remove"
+  nl: "Verwijderen"
+  de: "Entfernen"
+  fr: "Supprimer"
+
+# --- screens.rs (Thetis screen: power / tune / TX filter) ---
+screen_shutdown:
+  en: "SHUTDOWN!"
+  nl: "AFSLUITEN!"
+  de: "HERUNTERFAHREN!"
+  fr: "ARRÊTER !"
+screen_hold:
+  en: "HOLD..."
+  nl: "VASTHOUDEN..."
+  de: "HALTEN..."
+  fr: "MAINTENIR..."
+screen_starting:
+  en: "STARTING..."
+  nl: "STARTEN..."
+  de: "STARTET..."
+  fr: "DÉMARRAGE..."
+screen_power_on:
+  en: "POWER ON"
+  nl: "INSCHAKELEN"
+  de: "EINSCHALTEN"
+  fr: "ALLUMER"
+screen_power_off:
+  en: "POWER OFF"
+  nl: "UITSCHAKELEN"
+  de: "AUSSCHALTEN"
+  fr: "ÉTEINDRE"
+screen_tx_profile:
+  en: "TX Profile:"
+  nl: "TX-profiel:"
+  de: "TX-Profil:"
+  fr: "Profil TX :"
+screen_tx_modulation_bandwidth:
+  en: "TX modulation bandwidth"
+  nl: "TX-modulatiebandbreedte"
+  de: "TX-Modulationsbandbreite"
+  fr: "Bande passante de modulation TX"
+screen_tx_filter_unavailable:
+  en: "Unavailable (Thetis reports no TX filter; requires v2.10.3.14+)."
+  nl: "Niet beschikbaar (Thetis meldt geen TX-filter; vereist v2.10.3.14+)."
+  de: "Nicht verfügbar (Thetis meldet keinen TX-Filter; erfordert v2.10.3.14+)."
+  fr: "Indisponible (Thetis ne signale aucun filtre TX ; nécessite v2.10.3.14+)."
+screen_follow_rx_bandwidth:
+  en: "Follow RX bandwidth"
+  nl: "RX-bandbreedte volgen"
+  de: "RX-Bandbreite folgen"
+  fr: "Suivre la bande passante RX"
+screen_low:
+  en: "Low:"
+  nl: "Laag:"
+  de: "Tief:"
+  fr: "Bas :"
+screen_high:
+  en: "High:"
+  nl: "Hoog:"
+  de: "Hoch:"
+  fr: "Haut :"
+screen_tx_follows_rx_clamped:
+  en: "TX follows RX: %{lo} .. %{hi} Hz (RX wider - TX max 8 kHz)"
+  nl: "TX volgt RX: %{lo} .. %{hi} Hz (RX breder - TX max 8 kHz)"
+  de: "TX folgt RX: %{lo} .. %{hi} Hz (RX breiter - TX max 8 kHz)"
+  fr: "TX suit RX : %{lo} .. %{hi} Hz (RX plus large - TX max 8 kHz)"
+screen_tx_follows_rx:
+  en: "TX follows RX: %{lo} .. %{hi} Hz"
+  nl: "TX volgt RX: %{lo} .. %{hi} Hz"
+  de: "TX folgt RX: %{lo} .. %{hi} Hz"
+  fr: "TX suit RX : %{lo} .. %{hi} Hz"
+
+# --- screens.rs (PTT mode / RX groups) ---
+screen_push_to_talk:
+  en: "Push to talk"
+  nl: "Push-to-talk"
+  de: "Push-to-talk"
+  fr: "Push-to-talk"
+screen_toggle:
+  en: "Toggle"
+  nl: "Wisselen"
+  de: "Umschalten"
+  fr: "Bascule"
+screen_audio_label:
+  en: "Audio:"
+  nl: "Audio:"
+  de: "Audio:"
+  fr: "Audio :"
+screen_auto:
+  en: "Auto"
+  nl: "Auto"
+  de: "Auto"
+  fr: "Auto"
+screen_gain:
+  en: "Gain:"
+  nl: "Versterking:"
+  de: "Verstärkung:"
+  fr: "Gain :"
+
+# --- screens.rs (Diversity) ---
+screen_diversity_on:
+  en: "Diversity ON"
+  nl: "Diversity AAN"
+  de: "Diversity EIN"
+  fr: "Diversity activé"
+screen_diversity_off:
+  en: "Diversity OFF"
+  nl: "Diversity UIT"
+  de: "Diversity AUS"
+  fr: "Diversity désactivé"
+screen_source:
+  en: "Source:"
+  nl: "Bron:"
+  de: "Quelle:"
+  fr: "Source :"
+screen_phase_gain_readout:
+  en: "Phase: %{phase}°  Gain: %{gain}"
+  nl: "Fase: %{phase}°  Versterking: %{gain}"
+  de: "Phase: %{phase}°  Verstärkung: %{gain}"
+  fr: "Phase : %{phase}°  Gain : %{gain}"
+screen_gain_multi:
+  en: "Gain Multi:"
+  nl: "Versterking-multi:"
+  de: "Verstärkung-Multi:"
+  fr: "Gain multi :"
+screen_lock_gain:
+  en: "Lock Gain"
+  nl: "Versterking vergrendelen"
+  de: "Verstärkung sperren"
+  fr: "Verrouiller le gain"
+screen_lock_phase:
+  en: "Lock Phase"
+  nl: "Fase vergrendelen"
+  de: "Phase sperren"
+  fr: "Verrouiller la phase"
+screen_phase:
+  en: "Phase:"
+  nl: "Fase:"
+  de: "Phase:"
+  fr: "Phase :"
+screen_smart_thetis_side:
+  en: "Smart (Thetis-side)"
+  nl: "Smart (Thetis-zijde)"
+  de: "Smart (Thetis-Seite)"
+  fr: "Smart (côté Thetis)"
+screen_round_n:
+  en: "Round %{n}..."
+  nl: "Ronde %{n}..."
+  de: "Runde %{n}..."
+  fr: "Tour %{n}..."
+screen_stop:
+  en: "Stop"
+  nl: "Stop"
+  de: "Stopp"
+  fr: "Arrêter"
+screen_auto_null_db:
+  en: "Auto Null (%{db} dB)"
+  nl: "Auto Null (%{db} dB)"
+  de: "Auto Null (%{db} dB)"
+  fr: "Auto Null (%{db} dB)"
+screen_auto_null_no_gain:
+  en: "Auto Null (no gain)"
+  nl: "Auto Null (geen versterking)"
+  de: "Auto Null (keine Verstärkung)"
+  fr: "Auto Null (aucun gain)"
+screen_auto_null:
+  en: "Auto Null"
+  nl: "Auto Null"
+  de: "Auto Null"
+  fr: "Auto Null"
+
+# --- screens.rs (Server screen: connection / relay) ---
+screen_station_placeholder:
+  en: "(station)"
+  nl: "(station)"
+  de: "(Station)"
+  fr: "(station)"
+screen_server:
+  en: "Server:"
+  nl: "Server:"
+  de: "Server:"
+  fr: "Serveur :"
+screen_password:
+  en: "Password:"
+  nl: "Wachtwoord:"
+  de: "Passwort:"
+  fr: "Mot de passe :"
+screen_required_hint:
+  en: "(required)"
+  nl: "(vereist)"
+  de: "(erforderlich)"
+  fr: "(requis)"
+screen_rerun_setup_wizard:
+  en: "Re-run setup wizard"
+  nl: "Setup-wizard opnieuw uitvoeren"
+  de: "Einrichtungsassistent erneut ausführen"
+  fr: "Relancer l'assistant de configuration"
+screen_wizard:
+  en: "Wizard"
+  nl: "Wizard"
+  de: "Assistent"
+  fr: "Assistant"
+screen_recenter_windows_tooltip:
+  en: "Bring pop-out windows back onto the main screen (e.g. after disconnecting a 2nd monitor)"
+  nl: "Losse vensters terug naar het hoofdscherm halen (bijv. na het loskoppelen van een 2e monitor)"
+  de: "Ausgeklappte Fenster zurück auf den Hauptbildschirm holen (z. B. nach dem Trennen eines 2. Monitors)"
+  fr: "Ramener les fenêtres détachées sur l'écran principal (p. ex. après avoir déconnecté un 2e moniteur)"
+screen_recenter_windows:
+  en: "Recenter windows"
+  nl: "Vensters centreren"
+  de: "Fenster zentrieren"
+  fr: "Recentrer les fenêtres"
+screen_found:
+  en: "Found:"
+  nl: "Gevonden:"
+  de: "Gefunden:"
+  fr: "Trouvé :"
+screen_choose_discovered_server:
+  en: "Choose discovered server (%{n})"
+  nl: "Kies gevonden server (%{n})"
+  de: "Gefundenen Server wählen (%{n})"
+  fr: "Choisir un serveur détecté (%{n})"
+screen_scanning_local_network:
+  en: "Scanning local network..."
+  nl: "Lokaal netwerk scannen..."
+  de: "Lokales Netzwerk wird durchsucht..."
+  fr: "Analyse du réseau local..."
+screen_refresh:
+  en: "Refresh"
+  nl: "Vernieuwen"
+  de: "Aktualisieren"
+  fr: "Actualiser"
+screen_relay_connection:
+  en: "Relay connection"
+  nl: "Relay-verbinding"
+  de: "Relay-Verbindung"
+  fr: "Connexion relais"
+screen_connect_via_relay:
+  en: "Connect via relay (for clients that cannot port-forward)"
+  nl: "Verbinden via relay (voor clients die niet kunnen port-forwarden)"
+  de: "Über Relay verbinden (für Clients ohne Port-Weiterleitung)"
+  fr: "Se connecter via relais (pour les clients sans redirection de port)"
+screen_relay_url:
+  en: "Relay URL:"
+  nl: "Relay-URL:"
+  de: "Relay-URL:"
+  fr: "URL du relais :"
+screen_station_name:
+  en: "Station name:"
+  nl: "Stationsnaam:"
+  de: "Stationsname:"
+  fr: "Nom de station :"
+screen_token:
+  en: "Token:"
+  nl: "Token:"
+  de: "Token:"
+  fr: "Jeton :"
+screen_device_name:
+  en: "Device name:"
+  nl: "Apparaatnaam:"
+  de: "Gerätename:"
+  fr: "Nom de l'appareil :"
+screen_device_name_tooltip:
+  en: "Shown in the relay log/dashboard to identify this device. Applies on restart."
+  nl: "Wordt getoond in het relay-log/dashboard om dit apparaat te herkennen. Wordt actief na herstart."
+  de: "Wird im Relay-Log/Dashboard angezeigt, um dieses Gerät zu identifizieren. Wird nach Neustart wirksam."
+  fr: "Affiché dans le journal/tableau de bord du relais pour identifier cet appareil. Prend effet au redémarrage."
+screen_audio_over_udp:
+  en: "Audio over UDP (low latency)"
+  nl: "Audio over UDP (lage latency)"
+  de: "Audio über UDP (niedrige Latenz)"
+  fr: "Audio via UDP (faible latence)"
+screen_audio_over_udp_tooltip:
+  en: "Route audio + PTT over plain UDP (port 443) instead of the wss tunnel: no retransmit, lower and steadier latency. Both this client and the server must have it on. Applies on restart."
+  nl: "Stuur audio + PTT over kale UDP (poort 443) in plaats van de wss-tunnel: geen retransmit, lagere en stabielere latency. Zowel deze client als de server moeten dit aan hebben. Wordt actief na herstart."
+  de: "Audio + PTT über reines UDP (Port 443) statt über den wss-Tunnel leiten: keine erneute Übertragung, niedrigere und stabilere Latenz. Sowohl dieser Client als auch der Server müssen es aktiviert haben. Wird nach Neustart wirksam."
+  fr: "Acheminer l'audio + PTT via UDP brut (port 443) au lieu du tunnel wss : pas de retransmission, latence plus faible et plus stable. Ce client et le serveur doivent tous deux l'activer. Prend effet au redémarrage."
+screen_status:
+  en: "Status:"
+  nl: "Status:"
+  de: "Status:"
+  fr: "Statut :"
+screen_relay_saved_stop:
+  en: "Saved - restart the client to stop using the relay"
+  nl: "Opgeslagen - herstart de client om de relay niet meer te gebruiken"
+  de: "Gespeichert - Client neu starten, um das Relay nicht mehr zu verwenden"
+  fr: "Enregistré - redémarrez le client pour cesser d'utiliser le relais"
+screen_relay_saved_connect:
+  en: "Saved - restart the client to connect via relay"
+  nl: "Opgeslagen - herstart de client om via de relay te verbinden"
+  de: "Gespeichert - Client neu starten, um über das Relay zu verbinden"
+  fr: "Enregistré - redémarrez le client pour vous connecter via le relais"
+screen_relay_off_direct:
+  en: "Off (direct connection)"
+  nl: "Uit (directe verbinding)"
+  de: "Aus (direkte Verbindung)"
+  fr: "Désactivé (connexion directe)"
+screen_relay_description:
+  en: "The relay routes your whole connection (audio, control, PTT) so a client without port-forwarding can reach the server. Turning this on/off takes effect after restarting the client."
+  nl: "De relay routeert je hele verbinding (audio, besturing, PTT) zodat een client zonder port-forwarding de server kan bereiken. Dit aan/uit zetten wordt actief na het herstarten van de client."
+  de: "Das Relay leitet Ihre gesamte Verbindung (Audio, Steuerung, PTT) weiter, damit ein Client ohne Port-Weiterleitung den Server erreichen kann. Das Ein-/Ausschalten wird nach dem Neustart des Clients wirksam."
+  fr: "Le relais achemine toute votre connexion (audio, contrôle, PTT) afin qu'un client sans redirection de port puisse atteindre le serveur. L'activation/désactivation prend effet après le redémarrage du client."
+
+# --- screens.rs (TOTP / connect status) ---
+screen_six_digits:
+  en: "6 digits"
+  nl: "6 cijfers"
+  de: "6 Ziffern"
+  fr: "6 chiffres"
+screen_verify:
+  en: "Verify"
+  nl: "Verifiëren"
+  de: "Überprüfen"
+  fr: "Vérifier"
+screen_retry:
+  en: "Retry:"
+  nl: "Opnieuw:"
+  de: "Erneut:"
+  fr: "Réessayer :"
+screen_password_required_to_connect:
+  en: "Password is required to connect"
+  nl: "Wachtwoord vereist om te verbinden"
+  de: "Passwort zum Verbinden erforderlich"
+  fr: "Mot de passe requis pour se connecter"
+
+# --- screens.rs (Theme) ---
+screen_theme:
+  en: "Theme:"
+  nl: "Thema:"
+  de: "Thema:"
+  fr: "Thème :"
+screen_custom_colours:
+  en: "Custom colours:"
+  nl: "Aangepaste kleuren:"
+  de: "Eigene Farben:"
+  fr: "Couleurs personnalisées :"
+screen_background:
+  en: "Background"
+  nl: "Achtergrond"
+  de: "Hintergrund"
+  fr: "Arrière-plan"
+screen_widgets:
+  en: "Widgets"
+  nl: "Widgets"
+  de: "Widgets"
+  fr: "Widgets"
+screen_text:
+  en: "Text"
+  nl: "Tekst"
+  de: "Text"
+  fr: "Texte"
+screen_slider_knob:
+  en: "Slider knob"
+  nl: "Schuifknop"
+  de: "Schieberegler"
+  fr: "Curseur"
+screen_reset:
+  en: "Reset"
+  nl: "Reset"
+  de: "Zurücksetzen"
+  fr: "Réinitialiser"
+
+# --- screens.rs (Audio devices / mapping) ---
+screen_input:
+  en: "Input:"
+  nl: "Ingang:"
+  de: "Eingang:"
+  fr: "Entrée :"
+screen_output:
+  en: "Output:"
+  nl: "Uitgang:"
+  de: "Ausgang:"
+  fr: "Sortie :"
+screen_default:
+  en: "(Default)"
+  nl: "(Standaard)"
+  de: "(Standard)"
+  fr: "(Par défaut)"
+screen_mic_tx_profile_mapping:
+  en: "Mic -> TX Profile mapping:"
+  nl: "Mic -> TX-profiel-toewijzing:"
+  de: "Mic -> TX-Profil-Zuordnung:"
+  fr: "Correspondance Mic -> profil TX :"
+screen_none_paren:
+  en: "(none)"
+  nl: "(geen)"
+  de: "(keine)"
+  fr: "(aucun)"
+
+# --- screens.rs (Spike protection) ---
+screen_builtin_speaker_mic:
+  en: "Built-in speaker + mic (PTT spike protection)"
+  nl: "Ingebouwde luidspreker + mic (PTT-spike-bescherming)"
+  de: "Eingebauter Lautsprecher + Mic (PTT-Spike-Schutz)"
+  fr: "Haut-parleur + micro intégrés (protection contre le pic PTT)"
+screen_builtin_speaker_mic_tooltip:
+  en: "For tablets/laptops where the built-in speaker and mic share one chassis. On PTT the speaker is muted instantly and the first few ms of mic are discarded, so the switch-on spike is not transmitted. Leave off for a headset or well-isolated audio (0 ms, no added latency)."
+  nl: "Voor tablets/laptops waar de ingebouwde luidspreker en mic in één behuizing zitten. Bij PTT wordt de luidspreker direct gedempt en worden de eerste paar ms van de mic weggegooid, zodat de inschakel-spike niet wordt uitgezonden. Laat uit voor een headset of goed geïsoleerde audio (0 ms, geen extra latency)."
+  de: "Für Tablets/Laptops, bei denen der eingebaute Lautsprecher und das Mic in einem Gehäuse sitzen. Bei PTT wird der Lautsprecher sofort stummgeschaltet und die ersten paar ms des Mics verworfen, sodass der Einschalt-Spike nicht gesendet wird. Bei einem Headset oder gut isolierter Audio aus lassen (0 ms, keine zusätzliche Latenz)."
+  fr: "Pour les tablettes/portables où le haut-parleur et le micro intégrés partagent un même châssis. En PTT, le haut-parleur est coupé instantanément et les premières ms du micro sont ignorées, afin que le pic d'enclenchement ne soit pas transmis. Laissez désactivé pour un casque ou un audio bien isolé (0 ms, aucune latence ajoutée)."
+screen_mic_gate_delay_thetis:
+  en: "Mic gate-delay Thetis:"
+  nl: "Mic gate-delay Thetis:"
+  de: "Mic-Gate-Delay Thetis:"
+  fr: "Délai de gate micro Thetis :"
+screen_mic_gate_delay_yaesu:
+  en: "Mic gate-delay Yaesu:"
+  nl: "Mic gate-delay Yaesu:"
+  de: "Mic-Gate-Delay Yaesu:"
+  fr: "Délai de gate micro Yaesu :"
+screen_gate_delay_hint:
+  en: "Thetis is usually clean at 0 ms; Yaesu around 100 ms."
+  nl: "Thetis is meestal schoon bij 0 ms; Yaesu rond 100 ms."
+  de: "Thetis ist meist bei 0 ms sauber; Yaesu bei etwa 100 ms."
+  fr: "Thetis est généralement propre à 0 ms ; Yaesu autour de 100 ms."
+
+# --- screens.rs (Audio levels / recording) ---
+screen_audio_levels:
+  en: "Audio Levels:"
+  nl: "Audioniveaus:"
+  de: "Audiopegel:"
+  fr: "Niveaux audio :"
+screen_record:
+  en: "Record:"
+  nl: "Opnemen:"
+  de: "Aufnehmen:"
+  fr: "Enregistrer :"
+screen_stop_icon:
+  en: "⏹ Stop"
+  nl: "⏹ Stop"
+  de: "⏹ Stopp"
+  fr: "⏹ Arrêter"
+screen_play_icon:
+  en: "▶ Play"
+  nl: "▶ Afspelen"
+  de: "▶ Wiedergabe"
+  fr: "▶ Lecture"
+screen_play_volume_tooltip:
+  en: "WAV playback level (Play). 1.00 = recorded level. Lower = quieter, to avoid overmodulation on a loud recording."
+  nl: "WAV-afspeelniveau (Afspelen). 1.00 = opgenomen niveau. Lager = zachter, om overmodulatie bij een luide opname te voorkomen."
+  de: "WAV-Wiedergabepegel (Wiedergabe). 1,00 = aufgenommener Pegel. Niedriger = leiser, um Übermodulation bei einer lauten Aufnahme zu vermeiden."
+  fr: "Niveau de lecture WAV (Lecture). 1,00 = niveau enregistré. Plus bas = plus faible, pour éviter la surmodulation d'un enregistrement fort."
+
+# --- screens.rs (Statistics) ---
+screen_statistics:
+  en: "Statistics:"
+  nl: "Statistieken:"
+  de: "Statistik:"
+  fr: "Statistiques :"
+screen_down_rx:
+  en: "Down (RX):"
+  nl: "Omlaag (RX):"
+  de: "Runter (RX):"
+  fr: "Descendant (RX) :"
+screen_up_tx:
+  en: "Up (TX):"
+  nl: "Omhoog (TX):"
+  de: "Hoch (TX):"
+  fr: "Montant (TX) :"
+screen_audio_streams:
+  en: "Audio streams:"
+  nl: "Audiostromen:"
+  de: "Audio-Streams:"
+  fr: "Flux audio :"
+screen_transport_tcp_fallback:
+  en: "- Transport: TCP fallback (UDP unavailable, higher latency)"
+  nl: "- Transport: TCP-fallback (UDP niet beschikbaar, hogere latency)"
+  de: "- Transport: TCP-Fallback (UDP nicht verfügbar, höhere Latenz)"
+  fr: "- Transport : repli TCP (UDP indisponible, latence plus élevée)"
+screen_transport_udp:
+  en: "- Transport: UDP"
+  nl: "- Transport: UDP"
+  de: "- Transport: UDP"
+  fr: "- Transport : UDP"
+screen_col_stream:
+  en: "Stream"
+  nl: "Stroom"
+  de: "Stream"
+  fr: "Flux"
+screen_col_jitter:
+  en: "Jitter"
+  nl: "Jitter"
+  de: "Jitter"
+  fr: "Gigue"
+screen_col_buffer:
+  en: "Buffer"
+  nl: "Buffer"
+  de: "Puffer"
+  fr: "Tampon"
+screen_col_packets:
+  en: "Packets"
+  nl: "Pakketten"
+  de: "Pakete"
+  fr: "Paquets"
+screen_col_loss:
+  en: "Loss"
+  nl: "Verlies"
+  de: "Verlust"
+  fr: "Perte"
+screen_no_audio_stream_yet:
+  en: "No audio stream yet"
+  nl: "Nog geen audiostroom"
+  de: "Noch kein Audio-Stream"
+  fr: "Aucun flux audio pour l'instant"
+screen_collecting_5s:
+  en: "  (collecting ~5 s ...)"
+  nl: "  (verzamelen ~5 s ...)"
+  de: "  (sammelt ~5 s ...)"
+  fr: "  (collecte ~5 s ...)"
+
+# --- screens.rs (Data-saving / VRX rate) ---
+screen_receive_dx_spots:
+  en: "Receive DX spots"
+  nl: "DX-spots ontvangen"
+  de: "DX-Spots empfangen"
+  fr: "Recevoir les spots DX"
+screen_wideband_thetis_audio:
+  en: "Wideband Thetis audio (FM/AM clearer, ~2x data)"
+  nl: "Breedband Thetis-audio (FM/AM helderder, ~2x data)"
+  de: "Breitband-Thetis-Audio (FM/AM klarer, ~2x Daten)"
+  fr: "Audio Thetis large bande (FM/AM plus clair, ~2x de données)"
+screen_vrx1_rate:
+  en: "VRX1 rate:"
+  nl: "VRX1-rate:"
+  de: "VRX1-Rate:"
+  fr: "Débit VRX1 :"
+screen_vrx2_rate:
+  en: "VRX2 rate:"
+  nl: "VRX2-rate:"
+  de: "VRX2-Rate:"
+  fr: "Débit VRX2 :"
+screen_vrx_rate_tooltip:
+  en: "Per-VRX audio sample rate. Auto: 16 kHz when that VRX's filter is >=4 kHz wide, else 8 kHz. Independent per client."
+  nl: "Audio-samplerate per VRX. Auto: 16 kHz als het filter van die VRX >=4 kHz breed is, anders 8 kHz. Onafhankelijk per client."
+  de: "Audio-Abtastrate pro VRX. Auto: 16 kHz, wenn der Filter dieses VRX >=4 kHz breit ist, sonst 8 kHz. Unabhängig pro Client."
+  fr: "Fréquence d'échantillonnage audio par VRX. Auto : 16 kHz lorsque le filtre de ce VRX fait >=4 kHz de large, sinon 8 kHz. Indépendant par client."
+
+# --- screens.rs (TCI status / remote power) ---
+screen_tci_status:
+  en: "TCI Status:"
+  nl: "TCI-status:"
+  de: "TCI-Status:"
+  fr: "Statut TCI :"
+screen_tx_profiles_plural:
+  en: "TX Profiles:"
+  nl: "TX-profielen:"
+  de: "TX-Profile:"
+  fr: "Profils TX :"
+screen_remote_server_pc:
+  en: "Remote server PC:"
+  nl: "Externe server-pc:"
+  de: "Remote-Server-PC:"
+  fr: "PC serveur distant :"
+screen_reboot:
+  en: "Reboot"
+  nl: "Herstarten"
+  de: "Neustart"
+  fr: "Redémarrer"
+screen_shutdown_btn:
+  en: "Shutdown"
+  nl: "Afsluiten"
+  de: "Herunterfahren"
+  fr: "Arrêter"
+screen_cancel:
+  en: "Cancel"
+  nl: "Annuleren"
+  de: "Abbrechen"
+  fr: "Annuler"
+screen_remote_reboot_shutdown:
+  en: "Remote Reboot / Shutdown"
+  nl: "Extern herstarten / afsluiten"
+  de: "Remote-Neustart / Herunterfahren"
+  fr: "Redémarrage / arrêt à distance"
+
+# --- screens.rs (MIDI screen) ---
+screen_radio:
+  en: "Radio"
+  nl: "Radio"
+  de: "Radio"
+  fr: "Radio"
+screen_other_advanced:
+  en: "Other / advanced"
+  nl: "Overig / geavanceerd"
+  de: "Sonstiges / erweitert"
+  fr: "Autre / avancé"
+screen_midi_device:
+  en: "MIDI Device:"
+  nl: "MIDI-apparaat:"
+  de: "MIDI-Gerät:"
+  fr: "Appareil MIDI :"
+screen_no_midi_devices:
+  en: "No MIDI devices found. Click Refresh to scan."
+  nl: "Geen MIDI-apparaten gevonden. Klik op Vernieuwen om te scannen."
+  de: "Keine MIDI-Geräte gefunden. Auf Aktualisieren klicken, um zu suchen."
+  fr: "Aucun appareil MIDI trouvé. Cliquez sur Actualiser pour rechercher."
+screen_select_device:
+  en: "Select device..."
+  nl: "Apparaat selecteren..."
+  de: "Gerät auswählen..."
+  fr: "Sélectionner un appareil..."
+screen_disconnect:
+  en: "Disconnect"
+  nl: "Verbreken"
+  de: "Trennen"
+  fr: "Déconnecter"
+screen_connected:
+  en: "Connected"
+  nl: "Verbonden"
+  de: "Verbunden"
+  fr: "Connecté"
+screen_connect:
+  en: "Connect"
+  nl: "Verbinden"
+  de: "Verbinden"
+  fr: "Connecter"
+screen_disconnected:
+  en: "Disconnected"
+  nl: "Verbroken"
+  de: "Getrennt"
+  fr: "Déconnecté"
+screen_encoder_step:
+  en: "Encoder step:"
+  nl: "Encoder-stap:"
+  de: "Encoder-Schritt:"
+  fr: "Pas d'encodeur :"
+screen_last_midi:
+  en: "Last MIDI:"
+  nl: "Laatste MIDI:"
+  de: "Letztes MIDI:"
+  fr: "Dernier MIDI :"
+screen_mappings:
+  en: "Mappings"
+  nl: "Toewijzingen"
+  de: "Zuordnungen"
+  fr: "Correspondances"
+screen_col_source:
+  en: "Source"
+  nl: "Bron"
+  de: "Quelle"
+  fr: "Source"
+screen_col_type:
+  en: "Type"
+  nl: "Type"
+  de: "Typ"
+  fr: "Type"
+screen_col_action:
+  en: "Action"
+  nl: "Actie"
+  de: "Aktion"
+  fr: "Action"
+screen_learning:
+  en: "Learning:"
+  nl: "Leren:"
+  de: "Lernen:"
+  fr: "Apprentissage :"
+screen_move_control_hint:
+  en: "- Move a control on your MIDI device..."
+  nl: "- Beweeg een regelaar op je MIDI-apparaat..."
+  de: "- Bewegen Sie ein Bedienelement an Ihrem MIDI-Gerät..."
+  fr: "- Actionnez une commande sur votre appareil MIDI..."
+screen_add:
+  en: "Add:"
+  nl: "Toevoegen:"
+  de: "Hinzufügen:"
+  fr: "Ajouter :"
+screen_learn:
+  en: "Learn"
+  nl: "Leren"
+  de: "Lernen"
+  fr: "Apprendre"
+
+# --- spectrum.rs ---
+spec_tx_in_use:
+  en: "TX in use: %{w}W"
+  nl: "TX in gebruik: %{w}W"
+  de: "TX in Betrieb: %{w}W"
+  fr: "TX en cours : %{w}W"
+spec_vrx_hover:
+  en: "Click: tune VRX. Scroll: tune. Drag/scroll filter edge: resize filter."
+  nl: "Klik: VRX afstemmen. Scroll: afstemmen. Sleep/scroll filterrand: filter verschalen."
+  de: "Klick: VRX abstimmen. Scrollen: abstimmen. Filterrand ziehen/scrollen: Filter anpassen."
+  fr: "Clic : accorder le VRX. Molette : accorder. Glisser/molette sur le bord du filtre : redimensionner le filtre."
+spec_wf_hover:
+  en: "Click waterfall to tune VRX."
+  nl: "Klik op de waterval om VRX af te stemmen."
+  de: "Auf den Wasserfall klicken, um VRX abzustimmen."
+  fr: "Cliquez sur la cascade pour accorder le VRX."
+
+# --- mod.rs ---
+main_meter_click_hover:
+  en: "Click: toggle s-meter (bar / analog)"
+  nl: "Klik: s-meter wisselen (balk / analoog)"
+  de: "Klick: S-Meter umschalten (Balken / analog)"
+  fr: "Clic : basculer le S-mètre (barre / analogique)"
+main_vrx_enable_hover:
+  en: "Enable/disable VRX%{n} audio and spectrum."
+  nl: "VRX%{n}-audio en -spectrum in-/uitschakelen."
+  de: "VRX%{n}-Audio und -Spektrum ein-/ausschalten."
+  fr: "Activer/désactiver l'audio et le spectre de VRX%{n}."
+main_vrx_copy_hover_a:
+  en: "Copy VFO-A to VRX%{n}."
+  nl: "Kopieer VFO-A naar VRX%{n}."
+  de: "VFO-A nach VRX%{n} kopieren."
+  fr: "Copier VFO-A vers VRX%{n}."
+main_vrx_copy_hover_b:
+  en: "Copy VFO-B to VRX%{n}."
+  nl: "Kopieer VFO-B naar VRX%{n}."
+  de: "VFO-B nach VRX%{n} kopieren."
+  fr: "Copier VFO-B vers VRX%{n}."
+main_vrx_mode_hover:
+  en: "Set VRX%{n} demodulation mode."
+  nl: "Demodulatiemode van VRX%{n} instellen."
+  de: "Demodulationsmodus von VRX%{n} einstellen."
+  fr: "Définir le mode de démodulation de VRX%{n}."
+main_vrx_bw_hover:
+  en: "Set VRX%{n} audio filter bandwidth."
+  nl: "Audiofilterbandbreedte van VRX%{n} instellen."
+  de: "Audiofilter-Bandbreite von VRX%{n} einstellen."
+  fr: "Définir la bande passante du filtre audio de VRX%{n}."
+main_vrx_vol_hover:
+  en: "Set VRX%{n} mix volume."
+  nl: "Mixvolume van VRX%{n} instellen."
+  de: "Mix-Lautstärke von VRX%{n} einstellen."
+  fr: "Définir le volume de mixage de VRX%{n}."
+main_enable:
+  en: "Enable"
+  nl: "Inschakelen"
+  de: "Aktivieren"
+  fr: "Activer"
+main_copy_vfo:
+  en: "Copy VFO"
+  nl: "VFO kopiëren"
+  de: "VFO kopieren"
+  fr: "Copier VFO"
+main_out_of_band:
+  en: "OUT OF BAND"
+  nl: "BUITEN BAND"
+  de: "AUSSERHALB BAND"
+  fr: "HORS BANDE"
+main_out_of_band_hover:
+  en: "VRX frequency is outside the current receiver window (RX is on another band). Very low sensitivity until the RX band matches the VRX frequency."
+  nl: "VRX-frequentie ligt buiten het huidige ontvangervenster (RX staat op een andere band). Zeer lage gevoeligheid totdat de RX-band overeenkomt met de VRX-frequentie."
+  de: "VRX-Frequenz liegt außerhalb des aktuellen Empfängerfensters (RX ist auf einem anderen Band). Sehr geringe Empfindlichkeit, bis das RX-Band zur VRX-Frequenz passt."
+  fr: "La fréquence VRX est en dehors de la fenêtre du récepteur actuel (RX est sur une autre bande). Sensibilité très faible jusqu'à ce que la bande RX corresponde à la fréquence VRX."
+main_volume_label:
+  en: "Volume:"
+  nl: "Volume:"
+  de: "Lautstärke:"
+  fr: "Volume :"
+main_mode_label:
+  en: "Mode:"
+  nl: "Mode:"
+  de: "Modus:"
+  fr: "Mode :"
+main_bw_label:
+  en: "BW:"
+  nl: "BW:"
+  de: "BW:"
+  fr: "BW :"
+main_auto_tune_carrier:
+  en: "Auto-tune to carrier"
+  nl: "Auto-afstemmen op draaggolf"
+  de: "Auto-Abstimmung auf Träger"
+  fr: "Accord auto sur la porteuse"
+main_auto_tune_carrier_hover:
+  en: "SAM: follow the AM carrier - the VFO snaps onto the carrier so the filter stays symmetric around it. Locks within ±3 kHz."
+  nl: "SAM: volg de AM-draaggolf - de VFO klikt op de draaggolf zodat het filter er symmetrisch omheen blijft. Vergrendelt binnen ±3 kHz."
+  de: "SAM: dem AM-Träger folgen - der VFO rastet auf den Träger, sodass der Filter symmetrisch darum bleibt. Rastet innerhalb ±3 kHz ein."
+  fr: "SAM : suivre la porteuse AM - le VFO se cale sur la porteuse afin que le filtre reste symétrique autour d'elle. Verrouille à ±3 kHz près."
+main_high_res_spectrum:
+  en: "High-res spectrum"
+  nl: "Hoge-resolutiespectrum"
+  de: "Hochauflösendes Spektrum"
+  fr: "Spectre haute résolution"
+main_high_res_spectrum_hover:
+  en: "Request a server-extracted high-resolution VRX spectrum. Uses extra bandwidth."
+  nl: "Vraag een door de server geëxtraheerd hoge-resolutie-VRX-spectrum aan. Gebruikt extra bandbreedte."
+  de: "Ein vom Server extrahiertes hochauflösendes VRX-Spektrum anfordern. Benötigt zusätzliche Bandbreite."
+  fr: "Demander un spectre VRX haute résolution extrait par le serveur. Utilise de la bande passante supplémentaire."
+main_ref_label:
+  en: "Ref:"
+  nl: "Ref:"
+  de: "Ref:"
+  fr: "Réf :"
+main_range_label:
+  en: "Range:"
+  nl: "Bereik:"
+  de: "Bereich:"
+  fr: "Plage :"
+main_zoom_label:
+  en: "Zoom:"
+  nl: "Zoom:"
+  de: "Zoom:"
+  fr: "Zoom :"
+main_pan_label:
+  en: "Pan:"
+  nl: "Pan:"
+  de: "Pan:"
+  fr: "Pan :"
+main_wf_label:
+  en: "WF:"
+  nl: "WF:"
+  de: "WF:"
+  fr: "WF :"
+main_hover_ref:
+  en: "Spectrum reference level in dB."
+  nl: "Spectrum-referentieniveau in dB."
+  de: "Spektrum-Referenzpegel in dB."
+  fr: "Niveau de référence du spectre en dB."
+main_hover_auto_ref:
+  en: "Automatically track the reference level."
+  nl: "Volg het referentieniveau automatisch."
+  de: "Referenzpegel automatisch nachführen."
+  fr: "Suivre automatiquement le niveau de référence."
+main_hover_range:
+  en: "Spectrum vertical range in dB."
+  nl: "Verticaal spectrumbereik in dB."
+  de: "Vertikaler Spektrumbereich in dB."
+  fr: "Plage verticale du spectre en dB."
+main_hover_zoom:
+  en: "Spectrum zoom factor."
+  nl: "Spectrum-zoomfactor."
+  de: "Spektrum-Zoomfaktor."
+  fr: "Facteur de zoom du spectre."
+main_hover_pan:
+  en: "Pan inside the zoomed spectrum view."
+  nl: "Pan binnen het ingezoomde spectrumbeeld."
+  de: "Im gezoomten Spektrumbild verschieben."
+  fr: "Se déplacer dans la vue du spectre zoomée."
+main_hover_wf:
+  en: "Waterfall contrast."
+  nl: "Watervalcontrast."
+  de: "Wasserfall-Kontrast."
+  fr: "Contraste de la cascade."
+main_auto:
+  en: "Auto"
+  nl: "Auto"
+  de: "Auto"
+  fr: "Auto"
+main_allow_zoom_2x:
+  en: "Allow zoom <2x"
+  nl: "Zoom <2x toestaan"
+  de: "Zoom <2x erlauben"
+  fr: "Autoriser le zoom <2x"
+main_hover_server_wide_fft:
+  en: "Server-wide setting - manage via %{rx} spectrum panel."
+  nl: "Server-brede instelling - beheren via het %{rx}-spectrumpaneel."
+  de: "Serverweite Einstellung - über das %{rx}-Spektrumpanel verwalten."
+  fr: "Réglage global du serveur - à gérer via le panneau de spectre %{rx}."
+main_hover_spectrum_height:
+  en: "Total height of the spectrum + waterfall block in pixels. The page becomes scrollable when content overflows."
+  nl: "Totale hoogte van het spectrum + waterval-blok in pixels. De pagina wordt scrollbaar als de inhoud overloopt."
+  de: "Gesamthöhe des Spektrum- + Wasserfallblocks in Pixeln. Die Seite wird scrollbar, wenn der Inhalt überläuft."
+  fr: "Hauteur totale du bloc spectre + cascade en pixels. La page devient défilable lorsque le contenu déborde."
+main_waiting_rx1_spectrum:
+  en: "Waiting for RX1 spectrum data..."
+  nl: "Wachten op RX1-spectrumdata..."
+  de: "Warte auf RX1-Spektrumdaten..."
+  fr: "En attente des données de spectre RX1..."
+main_waiting_rx2_spectrum:
+  en: "Waiting for RX2 spectrum data..."
+  nl: "Wachten op RX2-spectrumdata..."
+  de: "Warte auf RX2-Spektrumdaten..."
+  fr: "En attente des données de spectre RX2..."
+main_hover_narrow_filter:
+  en: "Narrow the filter one step."
+  nl: "Versmal het filter één stap."
+  de: "Filter um einen Schritt verengen."
+  fr: "Rétrécir le filtre d'un pas."
+main_hover_widen_filter:
+  en: "Widen the filter one step."
+  nl: "Verbreed het filter één stap."
+  de: "Filter um einen Schritt verbreitern."
+  fr: "Élargir le filtre d'un pas."
+main_hover_nr:
+  en: "Noise Reduction (click to cycle level)."
+  nl: "Noise Reduction (klik om niveau te doorlopen)."
+  de: "Noise Reduction (klicken, um Stufe zu wechseln)."
+  fr: "Noise Reduction (cliquer pour changer de niveau)."
+main_hover_nb:
+  en: "Noise Blanker (click to cycle)."
+  nl: "Noise Blanker (klik om te doorlopen)."
+  de: "Noise Blanker (klicken zum Wechseln)."
+  fr: "Noise Blanker (cliquer pour changer)."
+main_hover_anf:
+  en: "Auto Notch Filter."
+  nl: "Auto Notch Filter."
+  de: "Auto Notch Filter."
+  fr: "Auto Notch Filter."
+main_hover_mic_agc:
+  en: "Microphone AGC on/off."
+  nl: "Microfoon-AGC aan/uit."
+  de: "Mikrofon-AGC ein/aus."
+  fr: "AGC micro activé/désactivé."
+main_hover_swap_vfo:
+  en: "Swap VFO A and VFO B."
+  nl: "Wissel VFO A en VFO B."
+  de: "VFO A und VFO B tauschen."
+  fr: "Permuter VFO A et VFO B."
+main_hover_set_mix_volume:
+  en: "Set mix volume."
+  nl: "Mixvolume instellen."
+  de: "Mix-Lautstärke einstellen."
+  fr: "Définir le volume de mixage."
+main_hover_tx_monitor:
+  en: "TX Monitor."
+  nl: "TX-monitor."
+  de: "TX-Monitor."
+  fr: "Moniteur TX."
+main_hover_vfo_sync:
+  en: "VFO B follows VFO A."
+  nl: "VFO B volgt VFO A."
+  de: "VFO B folgt VFO A."
+  fr: "VFO B suit VFO A."
+main_filter_label:
+  en: "Filter:"
+  nl: "Filter:"
+  de: "Filter:"
+  fr: "Filtre :"
+main_arrange_windows_title:
+  en: "Arrange windows"
+  nl: "Vensters schikken"
+  de: "Fenster anordnen"
+  fr: "Organiser les fenêtres"
+main_arrange_windows_help:
+  en: "Drag windows into a row. Same row = side by side, more rows = stacked. Choose a screen to assign channels to it; each screen has its own layout."
+  nl: "Sleep vensters in een rij. Zelfde rij = naast elkaar, meer rijen = gestapeld. Kies een scherm om er kanalen aan toe te wijzen; elk scherm heeft zijn eigen lay-out."
+  de: "Fenster in eine Reihe ziehen. Gleiche Reihe = nebeneinander, mehr Reihen = übereinander. Einen Bildschirm wählen, um ihm Kanäle zuzuweisen; jeder Bildschirm hat sein eigenes Layout."
+  fr: "Glissez les fenêtres dans une rangée. Même rangée = côte à côte, plus de rangées = empilées. Choisissez un écran pour lui affecter des canaux ; chaque écran a sa propre disposition."
+main_screen_n:
+  en: "Screen %{n}"
+  nl: "Scherm %{n}"
+  de: "Bildschirm %{n}"
+  fr: "Écran %{n}"
+main_stock_open_windows:
+  en: "Stock (open windows):"
+  nl: "Voorraad (open vensters):"
+  de: "Vorrat (offene Fenster):"
+  fr: "Réserve (fenêtres ouvertes) :"
+main_all_placed:
+  en: "(all placed)"
+  nl: "(allemaal geplaatst)"
+  de: "(alle platziert)"
+  fr: "(toutes placées)"
+main_row_n:
+  en: "Row %{n}"
+  nl: "Rij %{n}"
+  de: "Reihe %{n}"
+  fr: "Rangée %{n}"
+main_drag_here:
+  en: "- drag here -"
+  nl: "- sleep hierheen -"
+  de: "- hierher ziehen -"
+  fr: "- glisser ici -"
+main_add_row:
+  en: "+ row"
+  nl: "+ rij"
+  de: "+ Reihe"
+  fr: "+ rangée"
+main_apply:
+  en: "Apply"
+  nl: "Toepassen"
+  de: "Anwenden"
+  fr: "Appliquer"
+main_empty:
+  en: "Empty"
+  nl: "Leeg"
+  de: "Leer"
+  fr: "Vide"
+main_hover_popouts_split_joined:
+  en: "Popouts split / joined."
+  nl: "Pop-outs gesplitst / samengevoegd."
+  de: "Pop-outs getrennt / zusammengefügt."
+  fr: "Fenêtres détachées séparées / regroupées."
+main_rx_only:
+  en: "RX only"
+  nl: "Alleen RX"
+  de: "Nur RX"
+  fr: "RX seul"
+main_tx_in_use:
+  en: "TX in use"
+  nl: "TX in gebruik"
+  de: "TX in Betrieb"
+  fr: "TX en cours"
+main_hover_rx_only_antenna:
+  en: "Active Amplitec antenna is RX-only - transmit is blocked"
+  nl: "Actieve Amplitec-antenne is alleen-RX - zenden is geblokkeerd"
+  de: "Aktive Amplitec-Antenne ist nur RX - Senden ist blockiert"
+  fr: "L'antenne Amplitec active est RX seul - l'émission est bloquée"
+main_tune_tuning:
+  en: "Tune..."
+  nl: "Tune..."
+  de: "Tune..."
+  fr: "Tune..."
+main_tune_ok:
+  en: "Tune OK"
+  nl: "Tune OK"
+  de: "Tune OK"
+  fr: "Tune OK"
+main_tune_assumed:
+  en: "Tune ~"
+  nl: "Tune ~"
+  de: "Tune ~"
+  fr: "Tune ~"
+main_tune_failed:
+  en: "Tune X"
+  nl: "Tune X"
+  de: "Tune X"
+  fr: "Tune X"
+main_tune:
+  en: "Tune"
+  nl: "Tune"
+  de: "Tune"
+  fr: "Tune"
+main_rf2ks_reset:
+  en: "RF2K-S Reset"
+  nl: "RF2K-S Reset"
+  de: "RF2K-S Reset"
+  fr: "RF2K-S Reset"
+main_ptt_blocked:
+  en: "PTT blocked"
+  nl: "PTT geblokkeerd"
+  de: "PTT blockiert"
+  fr: "PTT bloqué"
+main_master_label:
+  en: "Master:"
+  nl: "Master:"
+  de: "Master:"
+  fr: "Master :"
+main_disconnect:
+  en: "Disconnect"
+  nl: "Verbreken"
+  de: "Trennen"
+  fr: "Déconnecter"
+main_connected:
+  en: "Connected"
+  nl: "Verbonden"
+  de: "Verbunden"
+  fr: "Connecté"
+main_connect:
+  en: "Connect"
+  nl: "Verbinden"
+  de: "Verbinden"
+  fr: "Connecter"
+main_disconnected:
+  en: "Disconnected"
+  nl: "Verbroken"
+  de: "Getrennt"
+  fr: "Déconnecté"
+main_audio_error:
+  en: "Audio error"
+  nl: "Audiofout"
+  de: "Audiofehler"
+  fr: "Erreur audio"
+main_tab_radio:
+  en: "Radio"
+  nl: "Radio"
+  de: "Radio"
+  fr: "Radio"
+main_tab_server:
+  en: "Server"
+  nl: "Server"
+  de: "Server"
+  fr: "Serveur"
+main_tab_devices:
+  en: "Devices"
+  nl: "Apparaten"
+  de: "Geräte"
+  fr: "Appareils"
+main_about:
+  en: "About"
+  nl: "Over"
+  de: "Über"
+  fr: "À propos"
+main_log:
+  en: "Log"
+  nl: "Log"
+  de: "Log"
+  fr: "Journal"
+main_arrange_btn:
+  en: "Arrange"
+  nl: "Schikken"
+  de: "Anordnen"
+  fr: "Organiser"
+main_save:
+  en: "Save"
+  nl: "Opslaan"
+  de: "Speichern"
+  fr: "Enregistrer"
+main_drive_label:
+  en: "Drive:"
+  nl: "Drive:"
+  de: "Drive:"
+  fr: "Drive :"
+main_diversity:
+  en: "Diversity"
+  nl: "Diversity"
+  de: "Diversity"
+  fr: "Diversity"
+main_hover_chip_audio:
+  en: "Enable/disable %{name} audio. Off saves bandwidth."
+  nl: "%{name}-audio in-/uitschakelen. Uit bespaart bandbreedte."
+  de: "%{name}-Audio ein-/ausschalten. Aus spart Bandbreite."
+  fr: "Activer/désactiver l'audio %{name}. Désactivé économise la bande passante."
+main_hover_chip_spectrum:
+  en: "Enable/disable %{name} spectrum (separate from the audio checkbox)."
+  nl: "%{name}-spectrum in-/uitschakelen (los van het audio-vinkje)."
+  de: "%{name}-Spektrum ein-/ausschalten (getrennt vom Audio-Kontrollkästchen)."
+  fr: "Activer/désactiver le spectre %{name} (indépendant de la case audio)."
+main_hover_yaesu_audio:
+  en: "%{label} - audio on/off. Off saves bandwidth."
+  nl: "%{label} - audio aan/uit. Uit bespaart bandbreedte."
+  de: "%{label} - Audio ein/aus. Aus spart Bandbreite."
+  fr: "%{label} - audio activé/désactivé. Désactivé économise la bande passante."
+main_chip_close:
+  en: "close"
+  nl: "sluiten"
+  de: "schließen"
+  fr: "fermer"
+main_chip_win:
+  en: "win"
+  nl: "win"
+  de: "win"
+  fr: "win"
+main_hover_yaesu_window:
+  en: "Open/close the %{label} control window (freq/PTT/DSP)"
+  nl: "Het %{label}-bedieningsvenster openen/sluiten (freq/PTT/DSP)"
+  de: "Das %{label}-Steuerfenster öffnen/schließen (Freq/PTT/DSP)"
+  fr: "Ouvrir/fermer la fenêtre de commande %{label} (fréq/PTT/DSP)"
+main_about_title:
+  en: "About ThetisLink"
+  nl: "Over ThetisLink"
+  de: "Über ThetisLink"
+  fr: "À propos de ThetisLink"
+main_about_tagline:
+  en: "Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)"
+  nl: "Afstandsbediening voor Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)"
+  de: "Fernsteuerung für Thetis SDR + Yaesu FT-991A / FTX-1 (Dual-Radio)"
+  fr: "Commande à distance pour Thetis SDR + Yaesu FT-991A / FTX-1 (double radio)"
+main_about_author:
+  en: "Author"
+  nl: "Auteur"
+  de: "Autor"
+  fr: "Auteur"
+main_about_special_thanks:
+  en: "Special Thanks"
+  nl: "Speciale dank"
+  de: "Besonderer Dank"
+  fr: "Remerciements"
+main_about_protocols:
+  en: "Protocols & External Services"
+  nl: "Protocollen & externe diensten"
+  de: "Protokolle & externe Dienste"
+  fr: "Protocoles et services externes"
+main_about_hardware:
+  en: "Hardware Support"
+  nl: "Hardware-ondersteuning"
+  de: "Hardware-Unterstützung"
+  fr: "Prise en charge matérielle"
+main_about_libraries:
+  en: "Open Source Libraries"
+  nl: "Opensource-bibliotheken"
+  de: "Open-Source-Bibliotheken"
+  fr: "Bibliothèques open source"
+main_about_license:
+  en: "License"
+  nl: "Licentie"
+  de: "Lizenz"
+  fr: "Licence"
+main_source_label:
+  en: "Source:"
+  nl: "Bron:"
+  de: "Quelle:"
+  fr: "Source :"
+main_close:
+  en: "Close"
+  nl: "Sluiten"
+  de: "Schließen"
+  fr: "Fermer"
+main_clear:
+  en: "Clear"
+  nl: "Wissen"
+  de: "Löschen"
+  fr: "Effacer"
+
+# --- devices.rs ---
+dev_no_external_devices:
+  en: "No external devices are configured or online."
+  nl: "Er zijn geen externe apparaten geconfigureerd of online."
+  de: "Es sind keine externen Geräte konfiguriert oder online."
+  fr: "Aucun appareil externe n'est configuré ou en ligne."
+dev_online:
+  en: "Online"
+  nl: "Online"
+  de: "Online"
+  fr: "En ligne"
+dev_offline:
+  en: "Offline"
+  nl: "Offline"
+  de: "Offline"
+  fr: "Hors ligne"
+dev_amplitec_title:
+  en: "Amplitec 6/2 Antenna Switch"
+  nl: "Amplitec 6/2 antenneschakelaar"
+  de: "Amplitec 6/2 Antennenumschalter"
+  fr: "Commutateur d'antenne Amplitec 6/2"
+dev_port_a_txrx:
+  en: "Port A — TX+RX"
+  nl: "Poort A — TX+RX"
+  de: "Port A — TX+RX"
+  fr: "Port A — TX+RX"
+dev_current_colon_val:
+  en: "  Current: %{label}"
+  nl: "  Huidig: %{label}"
+  de: "  Aktuell: %{label}"
+  fr: "  Actuel : %{label}"
+dev_ant_occupied_by_b:
+  en: "Ant%{pos} (%{label}) — occupied by Port B"
+  nl: "Ant%{pos} (%{label}) — bezet door poort B"
+  de: "Ant%{pos} (%{label}) — belegt von Port B"
+  fr: "Ant%{pos} (%{label}) — occupé par le port B"
+dev_port_b_rx:
+  en: "Port B — RX"
+  nl: "Poort B — RX"
+  de: "Port B — RX"
+  fr: "Port B — RX"
+dev_ant_occupied_by_a:
+  en: "Ant%{pos} (%{label}) — occupied by Port A"
+  nl: "Ant%{pos} (%{label}) — bezet door poort A"
+  de: "Ant%{pos} (%{label}) — belegt von Port A"
+  fr: "Ant%{pos} (%{label}) — occupé par le port A"
+dev_power_cap_table:
+  en: "Power-cap table"
+  nl: "Vermogenslimiet-tabel"
+  de: "Leistungsgrenzen-Tabelle"
+  fr: "Table de limite de puissance"
+dev_waiting_for_server:
+  en: "Waiting for server…"
+  nl: "Wachten op server…"
+  de: "Warte auf Server…"
+  fr: "En attente du serveur…"
+dev_label:
+  en: "Label"
+  nl: "Label"
+  de: "Bezeichnung"
+  fr: "Étiquette"
+dev_max_w:
+  en: "Max W"
+  nl: "Max W"
+  de: "Max W"
+  fr: "Max W"
+dev_rx_only:
+  en: "RX-only"
+  nl: "Alleen RX"
+  de: "Nur RX"
+  fr: "RX seul"
+dev_save_to_server:
+  en: "Save to server"
+  nl: "Opslaan op server"
+  de: "Auf Server speichern"
+  fr: "Enregistrer sur le serveur"
+dev_revert:
+  en: "Revert"
+  nl: "Terugdraaien"
+  de: "Zurücksetzen"
+  fr: "Rétablir"
+dev_no_cap:
+  en: "0 W = no cap"
+  nl: "0 W = geen limiet"
+  de: "0 W = keine Grenze"
+  fr: "0 W = aucune limite"
+dev_log:
+  en: "Log"
+  nl: "Log"
+  de: "Log"
+  fr: "Journal"
+dev_jc4s_title:
+  en: "JC-4s Antenna Tuner"
+  nl: "JC-4s antennetuner"
+  de: "JC-4s Antennentuner"
+  fr: "Coupleur d'antenne JC-4s"
+dev_tuning:
+  en: "Tuning..."
+  nl: "Tuning..."
+  de: "Tuning..."
+  fr: "Tuning..."
+dev_tune_ok:
+  en: "Tune OK"
+  nl: "Tune OK"
+  de: "Tune OK"
+  fr: "Tune OK"
+dev_timeout:
+  en: "Timeout"
+  nl: "Time-out"
+  de: "Zeitüberschreitung"
+  fr: "Délai dépassé"
+dev_aborted:
+  en: "Aborted"
+  nl: "Afgebroken"
+  de: "Abgebrochen"
+  fr: "Interrompu"
+dev_done_already_tuned:
+  en: "Done~ (already tuned)"
+  nl: "Klaar~ (al afgestemd)"
+  de: "Fertig~ (bereits abgestimmt)"
+  fr: "Terminé~ (déjà accordé)"
+dev_idle:
+  en: "Idle"
+  nl: "Inactief"
+  de: "Leerlauf"
+  fr: "Inactif"
+dev_status_colon:
+  en: "Status:"
+  nl: "Status:"
+  de: "Status:"
+  fr: "Statut :"
+dev_tune_x:
+  en: "Tune X"
+  nl: "Tune X"
+  de: "Tune X"
+  fr: "Tune X"
+dev_tune_tilde:
+  en: "Tune ~"
+  nl: "Tune ~"
+  de: "Tune ~"
+  fr: "Tune ~"
+dev_tune:
+  en: "Tune"
+  nl: "Tune"
+  de: "Tune"
+  fr: "Tune"
+dev_abort:
+  en: "Abort"
+  nl: "Afbreken"
+  de: "Abbrechen"
+  fr: "Interrompre"
+dev_tuner_not_available:
+  en: "Tuner not available on current antenna"
+  nl: "Tuner niet beschikbaar op huidige antenne"
+  de: "Tuner auf aktueller Antenne nicht verfügbar"
+  fr: "Coupleur non disponible sur l'antenne actuelle"
+dev_active_upper:
+  en: "ACTIVE"
+  nl: "ACTIEF"
+  de: "AKTIV"
+  fr: "ACTIF"
+dev_inactive_upper:
+  en: "INACTIVE"
+  nl: "INACTIEF"
+  de: "INAKTIV"
+  fr: "INACTIF"
+dev_alarm_fmt:
+  en: "ALARM: %{code}"
+  nl: "ALARM: %{code}"
+  de: "ALARM: %{code}"
+  fr: "ALARME : %{code}"
+dev_warning_fmt:
+  en: "Warning: %{code}"
+  nl: "Waarschuwing: %{code}"
+  de: "Warnung: %{code}"
+  fr: "Avertissement : %{code}"
+dev_power_off:
+  en: "Power Off"
+  nl: "Uitschakelen"
+  de: "Ausschalten"
+  fr: "Éteindre"
+dev_power_on:
+  en: "Power On"
+  nl: "Inschakelen"
+  de: "Einschalten"
+  fr: "Allumer"
+dev_operate:
+  en: "Operate"
+  nl: "Operate"
+  de: "Betrieb"
+  fr: "Opérer"
+dev_standby:
+  en: "Standby"
+  nl: "Standby"
+  de: "Standby"
+  fr: "Veille"
+dev_off:
+  en: "Off"
+  nl: "Uit"
+  de: "Aus"
+  fr: "Arrêt"
+dev_low:
+  en: "Low"
+  nl: "Laag"
+  de: "Niedrig"
+  fr: "Bas"
+dev_mid:
+  en: "Mid"
+  nl: "Midden"
+  de: "Mittel"
+  fr: "Moyen"
+dev_high:
+  en: "High"
+  nl: "Hoog"
+  de: "Hoch"
+  fr: "Haut"
+dev_drive_minus:
+  en: "Drive -"
+  nl: "Drive -"
+  de: "Drive -"
+  fr: "Drive -"
+dev_drive_plus:
+  en: "Drive +"
+  nl: "Drive +"
+  de: "Drive +"
+  fr: "Drive +"
+dev_error_state_fmt:
+  en: "Error state: %{state}"
+  nl: "Foutstatus: %{state}"
+  de: "Fehlerzustand: %{state}"
+  fr: "État d'erreur : %{state}"
+dev_reset:
+  en: "Reset"
+  nl: "Reset"
+  de: "Zurücksetzen"
+  fr: "Réinitialiser"
+dev_fw_close:
+  en: "FW Close"
+  nl: "FW sluiten"
+  de: "FW schließen"
+  fr: "Fermer FW"
+dev_tuner_fmt:
+  en: "Tuner: %{mode}"
+  nl: "Tuner: %{mode}"
+  de: "Tuner: %{mode}"
+  fr: "Coupleur : %{mode}"
+dev_manual:
+  en: "Manual"
+  nl: "Handmatig"
+  de: "Manuell"
+  fr: "Manuel"
+dev_auto:
+  en: "Auto"
+  nl: "Auto"
+  de: "Auto"
+  fr: "Auto"
+dev_bypass:
+  en: "Bypass"
+  nl: "Bypass"
+  de: "Bypass"
+  fr: "Bypass"
+dev_store:
+  en: "Store"
+  nl: "Opslaan"
+  de: "Speichern"
+  fr: "Mémoriser"
+dev_drive_w_fmt:
+  en: "Drive: %{w}W"
+  nl: "Drive: %{w}W"
+  de: "Drive: %{w}W"
+  fr: "Drive : %{w}W"
+dev_debug_expanded:
+  en: "Debug ▼"
+  nl: "Debug ▼"
+  de: "Debug ▼"
+  fr: "Debug ▼"
+dev_debug_collapsed:
+  en: "Debug ▶"
+  nl: "Debug ▶"
+  de: "Debug ▶"
+  fr: "Debug ▶"
+dev_system_info:
+  en: "System Info"
+  nl: "Systeeminfo"
+  de: "Systeminfo"
+  fr: "Infos système"
+dev_internal:
+  en: "Internal"
+  nl: "Intern"
+  de: "Intern"
+  fr: "Interne"
+dev_external:
+  en: "External"
+  nl: "Extern"
+  de: "Extern"
+  fr: "Externe"
+dev_uptime_dhm:
+  en: "Uptime: %{d}d %{h}h %{m}m"
+  nl: "Uptime: %{d}d %{h}u %{m}m"
+  de: "Laufzeit: %{d}d %{h}h %{m}m"
+  fr: "Uptime : %{d}j %{h}h %{m}m"
+dev_uptime_hm:
+  en: "Uptime: %{h}h %{m}m"
+  nl: "Uptime: %{h}u %{m}m"
+  de: "Laufzeit: %{h}h %{m}m"
+  fr: "Uptime : %{h}h %{m}m"
+dev_errors_fmt:
+  en: "Errors: %{count}"
+  nl: "Fouten: %{count}"
+  de: "Fehler: %{count}"
+  fr: "Erreurs : %{count}"
+dev_bank_fmt:
+  en: "Bank: %{n}"
+  nl: "Bank: %{n}"
+  de: "Bank: %{n}"
+  fr: "Banque : %{n}"
+dev_frq_delay:
+  en: "FRQ Delay:"
+  nl: "FRQ-vertraging:"
+  de: "FRQ-Verzögerung:"
+  fr: "Délai FRQ :"
+dev_settings:
+  en: "Settings"
+  nl: "Instellingen"
+  de: "Einstellungen"
+  fr: "Paramètres"
+dev_power_colon:
+  en: "Power:"
+  nl: "Vermogen:"
+  de: "Leistung:"
+  fr: "Puissance :"
+dev_high_upper:
+  en: "HIGH"
+  nl: "HOOG"
+  de: "HOCH"
+  fr: "HAUT"
+dev_low_upper:
+  en: "LOW"
+  nl: "LAAG"
+  de: "NIEDRIG"
+  fr: "BAS"
+dev_tuner_6m:
+  en: "Tuner 6m:"
+  nl: "Tuner 6m:"
+  de: "Tuner 6m:"
+  fr: "Coupleur 6m :"
+dev_on_upper:
+  en: "ON"
+  nl: "AAN"
+  de: "EIN"
+  fr: "MARCHE"
+dev_off_upper:
+  en: "OFF"
+  nl: "UIT"
+  de: "AUS"
+  fr: "ARRÊT"
+dev_band_gap:
+  en: "Band gap:"
+  nl: "Bandafstand:"
+  de: "Bandabstand:"
+  fr: "Écart de bande :"
+dev_error_history:
+  en: "Error History"
+  nl: "Foutgeschiedenis"
+  de: "Fehlerverlauf"
+  fr: "Historique des erreurs"
+dev_dangerous:
+  en: "Dangerous"
+  nl: "Gevaarlijk"
+  de: "Gefährlich"
+  fr: "Dangereux"
+dev_zero_fram:
+  en: "Zero FRAM"
+  nl: "Zero FRAM"
+  de: "Zero FRAM"
+  fr: "Zero FRAM"
+dev_warning_upper:
+  en: "WARNING"
+  nl: "WAARSCHUWING"
+  de: "WARNUNG"
+  fr: "AVERTISSEMENT"
+dev_high_power_warn1:
+  en: "Setting HIGH power can damage equipment."
+  nl: "HOOG vermogen instellen kan apparatuur beschadigen."
+  de: "HOHE Leistung einzustellen kann Geräte beschädigen."
+  fr: "Régler une puissance ÉLEVÉE peut endommager l'équipement."
+dev_are_you_sure:
+  en: "Are you sure?"
+  nl: "Weet je het zeker?"
+  de: "Sind Sie sicher?"
+  fr: "Êtes-vous sûr ?"
+dev_yes_set_high:
+  en: "Yes, set HIGH"
+  nl: "Ja, zet HOOG"
+  de: "Ja, HOCH setzen"
+  fr: "Oui, régler HAUT"
+dev_cancel:
+  en: "Cancel"
+  nl: "Annuleren"
+  de: "Abbrechen"
+  fr: "Annuler"
+dev_destructive:
+  en: "DESTRUCTIVE"
+  nl: "DESTRUCTIEF"
+  de: "DESTRUKTIV"
+  fr: "DESTRUCTIF"
+dev_all_mem_erased:
+  en: "All tuner memories will be erased."
+  nl: "Alle tuner-geheugens worden gewist."
+  de: "Alle Tuner-Speicher werden gelöscht."
+  fr: "Toutes les mémoires du coupleur seront effacées."
+dev_cannot_be_undone:
+  en: "This cannot be undone!"
+  nl: "Dit kan niet ongedaan worden gemaakt!"
+  de: "Dies kann nicht rückgängig gemacht werden!"
+  fr: "Cette action est irréversible !"
+dev_yes_zero_fram:
+  en: "Yes, Zero FRAM"
+  nl: "Ja, Zero FRAM"
+  de: "Ja, Zero FRAM"
+  fr: "Oui, Zero FRAM"
+dev_drive_config_expanded:
+  en: "Drive Config ▼"
+  nl: "Drive-config ▼"
+  de: "Drive-Konfig ▼"
+  fr: "Config Drive ▼"
+dev_drive_config_collapsed:
+  en: "Drive Config ▶"
+  nl: "Drive-config ▶"
+  de: "Drive-Konfig ▶"
+  fr: "Config Drive ▶"
+dev_band:
+  en: "Band"
+  nl: "Band"
+  de: "Band"
+  fr: "Bande"
+dev_save_to_pi:
+  en: "Save to Pi"
+  nl: "Opslaan op Pi"
+  de: "Auf Pi speichern"
+  fr: "Enregistrer sur le Pi"
+dev_fw_close_confirm:
+  en: "FW Close confirmation"
+  nl: "FW sluiten bevestiging"
+  de: "FW schließen Bestätigung"
+  fr: "Confirmation de fermeture FW"
+dev_fw_close_confirm_body:
+  en: "Are you sure? This will close the RF2K-S firmware."
+  nl: "Weet je het zeker? Dit sluit de RF2K-S-firmware af."
+  de: "Sind Sie sicher? Dies schließt die RF2K-S-Firmware."
+  fr: "Êtes-vous sûr ? Cela fermera le micrologiciel RF2K-S."
+dev_yes:
+  en: "Yes"
+  nl: "Ja"
+  de: "Ja"
+  fr: "Oui"
+dev_no:
+  en: "No"
+  nl: "Nee"
+  de: "Nein"
+  fr: "Non"
+dev_menu:
+  en: "Menu"
+  nl: "Menu"
+  de: "Menü"
+  fr: "Menu"
+dev_direction:
+  en: "Direction:"
+  nl: "Richting:"
+  de: "Richtung:"
+  fr: "Direction :"
+dev_normal:
+  en: "Normal"
+  nl: "Normaal"
+  de: "Normal"
+  fr: "Normal"
+dev_freq_step:
+  en: "Freq step:"
+  nl: "Freq-stap:"
+  de: "Freq-Schritt:"
+  fr: "Pas de fréq :"
+dev_sync_fmt:
+  en: "Sync %{label}"
+  nl: "Sync %{label}"
+  de: "Sync %{label}"
+  fr: "Sync %{label}"
+dev_set_ultrabeam_to:
+  en: "Set UltraBeam to %{label}: %{khz} kHz"
+  nl: "Zet UltraBeam op %{label}: %{khz} kHz"
+  de: "UltraBeam auf %{label} setzen: %{khz} kHz"
+  fr: "Régler UltraBeam sur %{label} : %{khz} kHz"
+dev_auto_track_fmt:
+  en: "Auto-track %{label} frequency"
+  nl: "%{label}-frequentie automatisch volgen"
+  de: "%{label}-Frequenz automatisch nachführen"
+  fr: "Suivre automatiquement la fréquence %{label}"
+dev_band_colon:
+  en: "Band:"
+  nl: "Band:"
+  de: "Band:"
+  fr: "Bande :"
+dev_retract:
+  en: "Retract"
+  nl: "Intrekken"
+  de: "Einfahren"
+  fr: "Rétracter"
+dev_read_elements:
+  en: "Read Elements"
+  nl: "Elementen lezen"
+  de: "Elemente lesen"
+  fr: "Lire les éléments"
+dev_retract_confirm:
+  en: "Retract confirmation"
+  nl: "Intrekken bevestiging"
+  de: "Einfahren Bestätigung"
+  fr: "Confirmation de rétraction"
+dev_retract_confirm_body:
+  en: "Are you sure? This will retract all elements."
+  nl: "Weet je het zeker? Dit trekt alle elementen in."
+  de: "Sind Sie sicher? Dies fährt alle Elemente ein."
+  fr: "Êtes-vous sûr ? Cela rétractera tous les éléments."
+dev_element_lengths:
+  en: "Element Lengths"
+  nl: "Elementlengtes"
+  de: "Elementlängen"
+  fr: "Longueurs des éléments"
+dev_refresh:
+  en: "Refresh"
+  nl: "Vernieuwen"
+  de: "Aktualisieren"
+  fr: "Actualiser"
+dev_controller_info:
+  en: "Controller Info"
+  nl: "Controller-info"
+  de: "Controller-Info"
+  fr: "Infos contrôleur"
+dev_model_2el:
+  en: "Model: 2 elements 6-40"
+  nl: "Model: 2 elementen 6-40"
+  de: "Modell: 2 Elemente 6-40"
+  fr: "Modèle : 2 éléments 6-40"
+dev_freq_range_fmt:
+  en: "Freq range: %{min} - %{max} MHz"
+  nl: "Freq-bereik: %{min} - %{max} MHz"
+  de: "Freq-Bereich: %{min} - %{max} MHz"
+  fr: "Plage de fréq : %{min} - %{max} MHz"
+dev_user_adjust:
+  en: "User Adjust"
+  nl: "Gebruikersafstelling"
+  de: "Benutzerabgleich"
+  fr: "Réglage utilisateur"
+dev_setup:
+  en: "Setup"
+  nl: "Setup"
+  de: "Einrichtung"
+  fr: "Configuration"
+dev_unknown:
+  en: "Unknown"
+  nl: "Onbekend"
+  de: "Unbekannt"
+  fr: "Inconnu"
+dev_operation_mode_fmt:
+  en: "Operation mode: %{mode}"
+  nl: "Bedrijfsmodus: %{mode}"
+  de: "Betriebsmodus: %{mode}"
+  fr: "Mode de fonctionnement : %{mode}"
+dev_rotor:
+  en: "Rotor"
+  nl: "Rotor"
+  de: "Rotor"
+  fr: "Rotor"
+dev_stop:
+  en: "STOP"
+  nl: "STOP"
+  de: "STOPP"
+  fr: "STOP"
+dev_goto:
+  en: "GoTo:"
+  nl: "Naar:"
+  de: "Zu:"
+  fr: "Aller à :"
+dev_go:
+  en: "Go"
+  nl: "Ga"
+  de: "Los"
+  fr: "Aller"
+dev_dsp_levels:
+  en: "DSP/Levels"
+  nl: "DSP/niveaus"
+  de: "DSP/Pegel"
+  fr: "DSP/niveaux"
+dev_mode:
+  en: "Mode:"
+  nl: "Mode:"
+  de: "Modus:"
+  fr: "Mode :"
+dev_split:
+  en: "Split"
+  nl: "Split"
+  de: "Split"
+  fr: "Split"
+dev_scan:
+  en: "Scan"
+  nl: "Scan"
+  de: "Scan"
+  fr: "Balayage"
+dev_rf_gain:
+  en: "RF Gain"
+  nl: "RF Gain"
+  de: "RF Gain"
+  fr: "RF Gain"
+dev_max_for_band:
+  en: "Max for this band: %{w} W"
+  nl: "Max voor deze band: %{w} W"
+  de: "Max für dieses Band: %{w} W"
+  fr: "Max pour cette bande : %{w} W"
+dev_991a_standby_hover:
+  en: "991A on / standby (CAT PS). Standby keeps the USB/CAT link alive."
+  nl: "991A aan / standby (CAT PS). Standby houdt de USB/CAT-verbinding actief."
+  de: "991A ein / Standby (CAT PS). Standby hält die USB/CAT-Verbindung aktiv."
+  fr: "991A activé / veille (CAT PS). La veille maintient la liaison USB/CAT active."
+dev_radio_powers_off_hover:
+  en: "This radio powers off completely (USB drops) - no remote power-off."
+  nl: "Deze radio schakelt volledig uit (USB valt weg) - geen extern uitschakelen."
+  de: "Diese Radio schaltet vollständig aus (USB fällt weg) - kein Fern-Ausschalten."
+  fr: "Cette radio s'éteint complètement (l'USB se coupe) - pas d'extinction à distance."
+dev_power_on_upper:
+  en: "Power ON"
+  nl: "Aan"
+  de: "Ein"
+  fr: "Marche"
+dev_power_off_upper:
+  en: "Power OFF"
+  nl: "Uit"
+  de: "Aus"
+  fr: "Arrêt"
+dev_high_swr:
+  en: "HIGH SWR"
+  nl: "HOGE SWR"
+  de: "HOHE SWR"
+  fr: "SWR ÉLEVÉ"
+dev_mic_gain:
+  en: "Mic gain:"
+  nl: "Mic-gain:"
+  de: "Mic-Verstärkung:"
+  fr: "Gain micro :"
+dev_memory_channels:
+  en: "Memory Channels"
+  nl: "Geheugenkanalen"
+  de: "Speicherkanäle"
+  fr: "Canaux mémoire"
+dev_radio_settings:
+  en: "Radio Settings (EX Menu)"
+  nl: "Radio-instellingen (EX-menu)"
+  de: "Radio-Einstellungen (EX-Menü)"
+  fr: "Réglages radio (menu EX)"
+dev_audio_fmt:
+  en: "Audio %{label}"
+  nl: "Audio %{label}"
+  de: "Audio %{label}"
+  fr: "Audio %{label}"
+dev_state_fmt:
+  en: "%{label} state"
+  nl: "%{label}-status"
+  de: "%{label}-Zustand"
+  fr: "État %{label}"
+dev_memory_data_fmt:
+  en: "%{label} memory data"
+  nl: "%{label} geheugendata"
+  de: "%{label} Speicherdaten"
+  fr: "Données mémoire %{label}"
+dev_equalizer:
+  en: "Equalizer"
+  nl: "Equalizer"
+  de: "Equalizer"
+  fr: "Égaliseur"
+dev_save:
+  en: "Save"
+  nl: "Opslaan"
+  de: "Speichern"
+  fr: "Enregistrer"
+dev_new:
+  en: "New:"
+  nl: "Nieuw:"
+  de: "Neu:"
+  fr: "Nouveau :"
+dev_recall:
+  en: "Recall"
+  nl: "Oproepen"
+  de: "Abrufen"
+  fr: "Rappeler"
+dev_recall_hover:
+  en: "Quick Memory: recall/cycle stored QMB (QR)"
+  nl: "Quick Memory: opgeslagen QMB oproepen/doorlopen (QR)"
+  de: "Quick Memory: gespeicherten QMB abrufen/durchblättern (QR)"
+  fr: "Quick Memory : rappeler/parcourir le QMB stocké (QR)"
+dev_read_radio:
+  en: "Read radio"
+  nl: "Radio lezen"
+  de: "Radio lesen"
+  fr: "Lire la radio"
+dev_settings_count:
+  en: "%{n} settings"
+  nl: "%{n} instellingen"
+  de: "%{n} Einstellungen"
+  fr: "%{n} réglages"
+dev_filter:
+  en: "Filter:"
+  nl: "Filter:"
+  de: "Filter:"
+  fr: "Filtre :"
+dev_other:
+  en: "Other"
+  nl: "Overig"
+  de: "Sonstige"
+  fr: "Autre"
+dev_set:
+  en: "Set"
+  nl: "Instellen"
+  de: "Setzen"
+  fr: "Définir"
+dev_click_read_radio_153:
+  en: "Click 'Read radio' to load all 153 menu settings."
+  nl: "Klik op 'Radio lezen' om alle 153 menu-instellingen te laden."
+  de: "Auf 'Radio lesen' klicken, um alle 153 Menüeinstellungen zu laden."
+  fr: "Cliquez sur 'Lire la radio' pour charger les 153 réglages du menu."
+dev_setting:
+  en: "Setting"
+  nl: "Instelling"
+  de: "Einstellung"
+  fr: "Réglage"
+dev_value:
+  en: "Value"
+  nl: "Waarde"
+  de: "Wert"
+  fr: "Valeur"
+dev_write_radio:
+  en: "Write radio"
+  nl: "Radio schrijven"
+  de: "Radio schreiben"
+  fr: "Écrire sur la radio"
+dev_load_file:
+  en: "Load file"
+  nl: "Bestand laden"
+  de: "Datei laden"
+  fr: "Charger le fichier"
+dev_import_from:
+  en: "Import from %{name}"
+  nl: "Importeren uit %{name}"
+  de: "Aus %{name} importieren"
+  fr: "Importer depuis %{name}"
+dev_file:
+  en: "File:"
+  nl: "Bestand:"
+  de: "Datei:"
+  fr: "Fichier :"
+dev_channels_count:
+  en: "%{n} channels"
+  nl: "%{n} kanalen"
+  de: "%{n} Kanäle"
+  fr: "%{n} canaux"
+dev_no_channels_loaded:
+  en: "No channels loaded. Set file path and click Load."
+  nl: "Geen kanalen geladen. Stel het bestandspad in en klik op Laden."
+  de: "Keine Kanäle geladen. Dateipfad festlegen und auf Laden klicken."
+  fr: "Aucun canal chargé. Définissez le chemin du fichier et cliquez sur Charger."
+dev_on:
+  en: "On"
+  nl: "Aan"
+  de: "Ein"
+  fr: "Activé"
+dev_name:
+  en: "Name"
+  nl: "Naam"
+  de: "Name"
+  fr: "Nom"
+dev_mode_col:
+  en: "Mode"
+  nl: "Mode"
+  de: "Modus"
+  fr: "Mode"
+dev_offset:
+  en: "Offset"
+  nl: "Offset"
+  de: "Offset"
+  fr: "Décalage"
+dev_tone:
+  en: "Tone"
+  nl: "Toon"
+  de: "Ton"
+  fr: "Tonalité"
+dev_tuner_col:
+  en: "Tuner"
+  nl: "Tuner"
+  de: "Tuner"
+  fr: "Coupleur"
+dev_skip:
+  en: "Skip"
+  nl: "Overslaan"
+  de: "Überspringen"
+  fr: "Ignorer"
+dev_step:
+  en: "Step"
+  nl: "Stap"
+  de: "Schritt"
+  fr: "Pas"
+dev_edit:
+  en: "Edit"
+  nl: "Bewerken"
+  de: "Bearbeiten"
+  fr: "Modifier"
+dev_row_removed_title:
+  en: "Row removed from list"
+  nl: "Rij verwijderd uit lijst"
+  de: "Zeile aus Liste entfernt"
+  fr: "Ligne retirée de la liste"
+dev_row_removed_body:
+  en: "The row was removed from this list only.\n\nA memory channel cannot be erased from the radio over CAT: 'Write radio' does not delete it, so 'Read radio' brings it back. To clear it on the radio, use its front panel (hold F(M-LIST), select the channel, tap ERASE)."
+  nl: "De rij is alleen uit deze lijst verwijderd.\n\nEen geheugenkanaal kan niet via CAT uit de radio worden gewist: 'Radio schrijven' verwijdert het niet, dus 'Radio lezen' haalt het terug. Om het op de radio te wissen, gebruik het frontpaneel (houd F(M-LIST) ingedrukt, selecteer het kanaal, tik op ERASE)."
+  de: "Die Zeile wurde nur aus dieser Liste entfernt.\n\nEin Speicherkanal kann über CAT nicht aus der Radio gelöscht werden: 'Radio schreiben' löscht ihn nicht, sodass 'Radio lesen' ihn zurückholt. Um ihn an der Radio zu löschen, das Bedienfeld verwenden (F(M-LIST) halten, den Kanal wählen, ERASE antippen)."
+  fr: "La ligne n'a été retirée que de cette liste.\n\nUn canal mémoire ne peut pas être effacé de la radio via CAT : 'Écrire sur la radio' ne le supprime pas, donc 'Lire la radio' le ramène. Pour l'effacer sur la radio, utilisez sa façade (maintenez F(M-LIST), sélectionnez le canal, appuyez sur ERASE)."
+dev_ok:
+  en: "OK"
+  nl: "OK"
+  de: "OK"
+  fr: "OK"
+dev_audio_colon:
+  en: "Audio:"
+  nl: "Audio:"
+  de: "Audio:"
+  fr: "Audio :"
+dev_enable:
+  en: "Enable"
+  nl: "Inschakelen"
+  de: "Aktivieren"
+  fr: "Activer"
+dev_close_window:
+  en: "Close window"
+  nl: "Venster sluiten"
+  de: "Fenster schließen"
+  fr: "Fermer la fenêtre"
+dev_open_window:
+  en: "Open window"
+  nl: "Venster openen"
+  de: "Fenster öffnen"
+  fr: "Ouvrir la fenêtre"
+dev_push_to_talk:
+  en: "Push to talk"
+  nl: "Push-to-talk"
+  de: "Push-to-talk"
+  fr: "Push-to-talk"
+dev_toggle:
+  en: "Toggle"
+  nl: "Wisselen"
+  de: "Umschalten"
+  fr: "Bascule"

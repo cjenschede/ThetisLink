@@ -174,11 +174,18 @@ pub struct BridgeRadioState {
     pub yaesu_memory_data: String,
     pub yaesu_model: u8,
     pub yaesu_tuner_state: u8,
+    /// Radio meldt hoge SWR tijdens TX (zelf-wissend).
+    pub yaesu_hi_swr: bool,
+    /// Max TX-vermogen voor de huidige band (uit EX max-power menus; 0 = onbekend).
+    /// De slider klemt hierop, net als de desktop.
+    pub yaesu_tx_power_max: u8,
     // Radio 2 (yaesu2_*) — Android toont één radio tegelijk; de selector kiest welke.
     // De selector toont een radio alleen als 'ie connected is (= geconfigureerd + actief).
     pub yaesu2_connected: bool,
     pub yaesu2_model: u8,
     pub yaesu2_tuner_state: u8,
+    pub yaesu2_hi_swr: bool,
+    pub yaesu2_tx_power_max: u8,
     pub yaesu2_freq_a: u64,
     pub yaesu2_freq_b: u64,
     pub yaesu2_mode: u8,
@@ -398,9 +405,13 @@ impl From<RadioState> for BridgeRadioState {
             yaesu_memory_data: s.yaesu_memory_data.clone().unwrap_or_default(),
             yaesu_model: s.yaesu_model,
             yaesu_tuner_state: s.yaesu_tuner_state,
+            yaesu_hi_swr: s.yaesu_hi_swr,
+            yaesu_tx_power_max: s.yaesu_tx_power_max,
             yaesu2_connected: s.yaesu2_connected,
             yaesu2_model: s.yaesu2_model,
             yaesu2_tuner_state: s.yaesu2_tuner_state,
+            yaesu2_hi_swr: s.yaesu2_hi_swr,
+            yaesu2_tx_power_max: s.yaesu2_tx_power_max,
             yaesu2_freq_a: s.yaesu2_freq_a,
             yaesu2_freq_b: s.yaesu2_freq_b,
             yaesu2_mode: s.yaesu2_mode,
@@ -885,6 +896,17 @@ impl SdrBridge {
     pub fn yaesu_enable(&self, on: bool) {
         let _ = self.cmd_tx.send(Command::SetControl(
             sdr_remote_core::protocol::ControlId::YaesuEnable, on as u16));
+    }
+
+    /// Yaesu radio power on/off (CAT PS). Alleen zinvol op de 991A (PS0=standby,
+    /// USB blijft -> remote weer aan); de FTX-1 gaat echt uit -> UI toont er label-only.
+    pub fn yaesu_power_on_off(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::YaesuPowerOnOff, on as u16));
+    }
+    pub fn yaesu2_power_on_off(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::Yaesu2PowerOnOff, on as u16));
     }
 
     pub fn yaesu_read_memories(&self) {

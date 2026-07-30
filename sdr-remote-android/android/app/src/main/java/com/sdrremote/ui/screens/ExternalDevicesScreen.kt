@@ -3,6 +3,7 @@
 package com.sdrremote.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -20,6 +21,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
@@ -27,8 +32,10 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sdrremote.R
 import com.sdrremote.SdrUiState
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -80,6 +87,7 @@ fun ExternalDevicesScreen(
     onRotorCw: () -> Unit = {},
     onRotorCcw: () -> Unit = {},
     onYaesuEnable: (Boolean) -> Unit = {},
+    onYaesuPowerOnOff: (Boolean) -> Unit = {},
     onYaesuPtt: (Boolean) -> Unit = {},
     onYaesuVolume: (Float) -> Unit = {},
     onYaesuSelectVfo: (Int) -> Unit = {},
@@ -116,10 +124,10 @@ fun ExternalDevicesScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text("No devices configured", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.dev_no_devices), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Configure devices in the server settings.",
+                stringResource(R.string.dev_configure_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -187,7 +195,7 @@ fun ExternalDevicesScreen(
             3 -> Rf2kTab(state, onRf2kOperate, onRf2kTune, onRf2kAnt1, onRf2kAnt2, onRf2kAnt3, onRf2kAnt4, onRf2kAntExt, onRf2kErrorReset, onRf2kClose, onRf2kDriveUp, onRf2kDriveDown, onRf2kTunerMode, onRf2kTunerBypass, onRf2kTunerReset, onRf2kTunerStore, onRf2kTunerLUp, onRf2kTunerLDown, onRf2kTunerCUp, onRf2kTunerCDown, onRf2kTunerK)
             4 -> UltraBeamTab(state, onUbSetFrequency, onUbRetract, onUbReadElements)
             5 -> RotorTab(state, onRotorGoTo, onRotorStop, onRotorCw, onRotorCcw)
-            6 -> YaesuTab(state, onYaesuEnable, onYaesuPtt, onYaesuVolume, onYaesuSelectVfo, onYaesuMode, onYaesuButton, onYaesuRecallMemory, onYaesuControl, onYaesuFreq, yaesuActive, onYaesuEqBand, onYaesuEqEnabled, onYaesuTxGain, onYaesuSelectRadio, onYaesuDspControl, onYaesuCompressor, onYaesuTxAgc)
+            6 -> YaesuTab(state, onYaesuEnable, onYaesuPtt, onYaesuVolume, onYaesuSelectVfo, onYaesuMode, onYaesuButton, onYaesuRecallMemory, onYaesuControl, onYaesuFreq, yaesuActive, onYaesuEqBand, onYaesuEqEnabled, onYaesuTxGain, onYaesuSelectRadio, onYaesuDspControl, onYaesuCompressor, onYaesuTxAgc, onPowerOnOff = onYaesuPowerOnOff)
         }
     }
 }
@@ -228,13 +236,13 @@ private fun AmplitecTab(
     // Poort A — TX+RX
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "Poort A \u2014 ANT1 (TX+RX)",
+            stringResource(R.string.dev_port_a),
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.titleSmall,
         )
         if (state.amplitecSwitchA > 0) {
             Text(
-                "  Huidige: ${labelA(state.amplitecSwitchA)}",
+                stringResource(R.string.dev_amplitec_current, labelA(state.amplitecSwitchA)),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -262,13 +270,13 @@ private fun AmplitecTab(
     // Poort B — RX
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "Poort B \u2014 RX2 (RX)",
+            stringResource(R.string.dev_port_b),
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.titleSmall,
         )
         if (state.amplitecSwitchB > 0) {
             Text(
-                "  Huidige: ${labelB(state.amplitecSwitchB)}",
+                stringResource(R.string.dev_amplitec_current, labelB(state.amplitecSwitchB)),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -366,7 +374,7 @@ private fun TunerTab(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            "JC-4s Antenna Tuner",
+            stringResource(R.string.dev_tuner_title),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
         )
@@ -382,7 +390,7 @@ private fun TunerTab(
         2 -> "Tune OK"
         3 -> "Timeout"
         4 -> "Aborted"
-        5 -> "Done~ (al getuned)"
+        5 -> "Done~ (already tuned)"
         else -> "Idle"
     }
     val stateColor = when (state.tunerState) {
@@ -397,7 +405,7 @@ private fun TunerTab(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Status:")
+        Text(stringResource(R.string.dev_status_label))
         Text(
             stateText,
             color = stateColor,
@@ -441,14 +449,14 @@ private fun TunerTab(
             enabled = state.tunerState == 1,
             modifier = Modifier.height(48.dp),
         ) {
-            Text("Abort", fontSize = 14.sp)
+            Text(stringResource(R.string.dev_abort), fontSize = 14.sp)
         }
     }
 
     if (!state.tunerCanTune && state.tunerConnected) {
         Spacer(Modifier.height(8.dp))
         Text(
-            "Tuner niet beschikbaar op huidige antenne",
+            stringResource(R.string.dev_tuner_unavailable),
             color = amber,
             fontSize = 14.sp,
         )
@@ -482,9 +490,9 @@ private fun SpeExpertTab(
             fontWeight = FontWeight.Bold,
         )
         if (state.speActive) {
-            Text("ACTIEF", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(stringResource(R.string.dev_active), color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 12.sp)
         } else {
-            Text("INACTIEF", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+            Text(stringResource(R.string.dev_inactive), color = Color(0xFF9E9E9E), fontSize = 12.sp)
         }
         StatusIndicator(state.speConnected)
     }
@@ -522,7 +530,7 @@ private fun SpeExpertTab(
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF787878)),
                 modifier = Modifier.height(44.dp),
             ) {
-                Text("Power Off", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.dev_power_off), color = Color.White, fontWeight = FontWeight.Bold)
             }
         } else {
             Button(
@@ -530,15 +538,15 @@ private fun SpeExpertTab(
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF009600)),
                 modifier = Modifier.height(44.dp),
             ) {
-                Text("Power On", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.dev_power_on), color = Color.White, fontWeight = FontWeight.Bold)
             }
         }
 
         // Operate/Standby — shows current state with color
         val (opText, opColor) = when (state.speState) {
-            2 -> "Operate" to Color(0xFF32B432)
-            1 -> "Standby" to amber
-            else -> "Off" to Color(0xFF787878)
+            2 -> stringResource(R.string.dev_operate) to Color(0xFF32B432)
+            1 -> stringResource(R.string.dev_standby) to amber
+            else -> stringResource(R.string.dev_off) to Color(0xFF787878)
         }
         Button(
             onClick = onSpeOperate,
@@ -584,9 +592,9 @@ private fun SpeExpertTab(
         }
 
         val powerLevelText = when (state.spePowerLevel) {
-            0 -> "Low"
-            1 -> "Mid"
-            2 -> "High"
+            0 -> stringResource(R.string.dev_low)
+            1 -> stringResource(R.string.dev_mid)
+            2 -> stringResource(R.string.dev_high)
             else -> "?"
         }
         Button(
@@ -612,8 +620,8 @@ private fun SpeExpertTab(
             modifier = Modifier.height(40.dp),
             contentPadding = PaddingValues(horizontal = 12.dp),
         ) {
-            Text("Drive -")
-        }
+            Text(stringResource(R.string.dev_drive_down))
+}
         Text(
             "${state.driveLevel}%",
             fontWeight = FontWeight.Bold,
@@ -625,7 +633,7 @@ private fun SpeExpertTab(
             modifier = Modifier.height(40.dp),
             contentPadding = PaddingValues(horizontal = 12.dp),
         ) {
-            Text("Drive +")
+            Text(stringResource(R.string.dev_drive_up))
         }
     }
 
@@ -744,7 +752,7 @@ private fun SpeExpertTab(
 private fun StatusIndicator(connected: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         val color = if (connected) Color(0xFF4CAF50) else Color(0xFFF44336)
-        val text = if (connected) "Online" else "Offline"
+        val text = if (connected) stringResource(R.string.dev_online) else stringResource(R.string.dev_offline)
         Text(text, fontSize = 14.sp, color = color, fontWeight = FontWeight.Bold)
     }
 }
@@ -819,9 +827,9 @@ private fun Rf2kTab(
             fontWeight = FontWeight.Bold,
         )
         if (state.rf2kActive) {
-            Text("ACTIEF", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(stringResource(R.string.dev_active), color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 12.sp)
         } else {
-            Text("INACTIEF", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+            Text(stringResource(R.string.dev_inactive), color = Color(0xFF9E9E9E), fontSize = 12.sp)
         }
         StatusIndicator(state.rf2kConnected)
     }
@@ -834,7 +842,7 @@ private fun Rf2kTab(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val errorText = state.rf2kErrorText.ifEmpty { "Error state: ${state.rf2kErrorState}" }
+            val errorText = state.rf2kErrorText.ifEmpty { stringResource(R.string.dev_error_state, state.rf2kErrorState) }
             Text(
                 errorText,
                 color = Color(0xFFF44336),
@@ -846,7 +854,7 @@ private fun Rf2kTab(
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
             ) {
-                Text("Reset", color = Color.White)
+                Text(stringResource(R.string.dev_reset), color = Color.White)
             }
         }
         Spacer(Modifier.height(4.dp))
@@ -858,9 +866,9 @@ private fun Rf2kTab(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val (opText, opColor) = if (state.rf2kOperate) {
-            "Operate" to Color(0xFF32B432)
+            stringResource(R.string.dev_operate) to Color(0xFF32B432)
         } else {
-            "Standby" to amber
+            stringResource(R.string.dev_standby) to amber
         }
         Button(
             onClick = { onRf2kOperate(!state.rf2kOperate) },
@@ -887,7 +895,7 @@ private fun Rf2kTab(
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
             modifier = Modifier.height(44.dp),
         ) {
-            Text("FW Close", color = Color.White)
+            Text(stringResource(R.string.dev_fw_close), color = Color.White)
         }
     }
 
@@ -895,8 +903,8 @@ private fun Rf2kTab(
     if (showFwCloseConfirm) {
         AlertDialog(
             onDismissRequest = { showFwCloseConfirm = false },
-            title = { Text("FW Close confirmation") },
-            text = { Text("Are you sure? This will close the RF2K-S firmware.") },
+            title = { Text(stringResource(R.string.dev_fw_close_confirm_title)) },
+            text = { Text(stringResource(R.string.dev_fw_close_confirm_body)) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -904,10 +912,10 @@ private fun Rf2kTab(
                         showFwCloseConfirm = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
-                ) { Text("Yes", color = Color.White) }
+                ) { Text(stringResource(R.string.common_yes), color = Color.White) }
             },
             dismissButton = {
-                Button(onClick = { showFwCloseConfirm = false }) { Text("No") }
+                Button(onClick = { showFwCloseConfirm = false }) { Text(stringResource(R.string.common_no)) }
             },
         )
     }
@@ -1006,10 +1014,10 @@ private fun Rf2kTab(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text("Tuner: $tunerModeText", color = tunerColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(stringResource(R.string.dev_tuner_label, tunerModeText), color = tunerColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         // MAN/AUTO toggle — shows current state
         if (state.rf2kTunerMode == 2 || state.rf2kTunerMode == 4) {
-            val toggleText = if (isManual) "Manual" else "Auto"
+            val toggleText = if (isManual) stringResource(R.string.dev_manual) else stringResource(R.string.dev_auto)
             Button(
                 onClick = { onRf2kTunerMode(if (isManual) 1u else 0u) },
                 enabled = tunerEditEnabled,
@@ -1028,7 +1036,7 @@ private fun Rf2kTab(
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
             modifier = Modifier.height(28.dp),
         ) {
-            Text("Bypass", fontSize = 11.sp,
+            Text(stringResource(R.string.dev_bypass), fontSize = 11.sp,
                 fontWeight = if (isBypass) FontWeight.Bold else FontWeight.Normal,
                 color = if (isBypass) Color.White else Color.Unspecified)
         }
@@ -1038,13 +1046,13 @@ private fun Rf2kTab(
             enabled = tunerEditEnabled && isManual,
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
             modifier = Modifier.height(28.dp),
-        ) { Text("Reset", fontSize = 11.sp) }
+        ) { Text(stringResource(R.string.dev_reset), fontSize = 11.sp) }
         Button(
             onClick = onRf2kTunerStore,
             enabled = tunerEditEnabled && isManual,
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
             modifier = Modifier.height(28.dp),
-        ) { Text("Store", fontSize = 11.sp) }
+        ) { Text(stringResource(R.string.dev_store), fontSize = 11.sp) }
     }
 
     // Manual L/C/K controls
@@ -1119,7 +1127,7 @@ private fun Rf2kTab(
         if (state.rf2kModulation.isNotEmpty()) {
             Text(state.rf2kModulation, color = modColor, fontWeight = FontWeight.Bold)
         }
-        Text("Drive: ${state.rf2kDriveW}W", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text(stringResource(R.string.dev_drive_watts, state.rf2kDriveW), fontWeight = FontWeight.Bold, fontSize = 16.sp)
 
         val driveEnabled = state.rf2kConnected && state.rf2kOperate && state.rf2kActive
         Button(
@@ -1163,7 +1171,7 @@ private fun Rf2kTab(
 
     if (state.rf2kReflectedW > 0) {
         Spacer(Modifier.height(4.dp))
-        Text("Reflected: ${state.rf2kReflectedW}W", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.dev_reflected, state.rf2kReflectedW), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
     Spacer(Modifier.height(12.dp))
@@ -1173,7 +1181,7 @@ private fun Rf2kTab(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Antenna:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(stringResource(R.string.dev_antenna_label), fontWeight = FontWeight.Bold, fontSize = 13.sp)
         val intAnt = state.rf2kAntennaType == 0
         for ((nr, onClick) in listOf(1 to onRf2kAnt1, 2 to onRf2kAnt2, 3 to onRf2kAnt3, 4 to onRf2kAnt4)) {
             val isActive = intAnt && state.rf2kAntennaNumber == nr
@@ -1331,8 +1339,8 @@ private fun UltraBeamTab(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Dir:", fontWeight = FontWeight.Bold)
-        val dirs = listOf("Normal" to 0, "180\u00B0" to 1, "BiDir" to 2)
+        Text(stringResource(R.string.dev_ub_dir), fontWeight = FontWeight.Bold)
+        val dirs = listOf(stringResource(R.string.dev_ub_normal) to 0, "180\u00B0" to 1, stringResource(R.string.dev_ub_bidir) to 2)
         for ((label, dir) in dirs) {
             val isActive = state.ubDirection == dir
             Button(
@@ -1370,7 +1378,7 @@ private fun UltraBeamTab(
             enabled = state.ubConnected && trackKhz in 1800..54000,
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         ) {
-            Text("Sync $trackLabel")
+            Text(stringResource(R.string.dev_ub_sync, trackLabel))
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1384,7 +1392,7 @@ private fun UltraBeamTab(
                     }
                 },
             )
-            Text("Auto", fontSize = 14.sp)
+            Text(stringResource(R.string.dev_auto), fontSize = 14.sp)
         }
     }
 
@@ -1395,7 +1403,7 @@ private fun UltraBeamTab(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text("Step:", fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.dev_step), fontWeight = FontWeight.Bold)
         val steps = listOf("-100" to -100, "-25" to -25, "+25" to 25, "+100" to 100)
         for ((label, step) in steps) {
             Button(
@@ -1448,7 +1456,7 @@ private fun UltraBeamTab(
     Spacer(Modifier.height(8.dp))
 
     // Band presets
-    Text("Band:", fontWeight = FontWeight.Bold)
+    Text(stringResource(R.string.dev_band), fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(4.dp))
     val presets = listOf(
         "40m" to 7100, "30m" to 10125, "20m" to 14175, "17m" to 18118,
@@ -1493,14 +1501,14 @@ private fun UltraBeamTab(
             enabled = state.ubConnected,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
         ) {
-            Text("Retract", color = Color.White)
-        }
+            Text(stringResource(R.string.dev_retract), color = Color.White)
+}
 
         Button(
             onClick = onUbReadElements,
             enabled = state.ubConnected,
         ) {
-            Text("Read Elements")
+            Text(stringResource(R.string.dev_read_elements))
         }
     }
 
@@ -1508,8 +1516,8 @@ private fun UltraBeamTab(
     if (showRetractConfirm) {
         AlertDialog(
             onDismissRequest = { showRetractConfirm = false },
-            title = { Text("Retract confirmation") },
-            text = { Text("Are you sure? This will retract all elements.") },
+            title = { Text(stringResource(R.string.dev_retract_confirm_title)) },
+            text = { Text(stringResource(R.string.dev_retract_confirm_body)) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -1517,10 +1525,10 @@ private fun UltraBeamTab(
                         showRetractConfirm = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
-                ) { Text("Yes", color = Color.White) }
+                ) { Text(stringResource(R.string.common_yes), color = Color.White) }
             },
             dismissButton = {
-                Button(onClick = { showRetractConfirm = false }) { Text("No") }
+                Button(onClick = { showRetractConfirm = false }) { Text(stringResource(R.string.common_no)) }
             },
         )
     }
@@ -1530,7 +1538,7 @@ private fun UltraBeamTab(
         Spacer(Modifier.height(8.dp))
         HorizontalDivider()
         Spacer(Modifier.height(8.dp))
-        Text("Element lengths (mm):", fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.dev_element_lengths), fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1567,7 +1575,7 @@ private fun RotorTab(
         ) {
             Text("Rotor", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Text(
-                if (connected) "Online" else "Offline",
+                if (connected) stringResource(R.string.dev_online) else stringResource(R.string.dev_offline),
                 color = if (connected) Color(0xFF4CAF50) else Color(0xFFF44336),
                 fontWeight = FontWeight.Bold,
             )
@@ -1594,9 +1602,9 @@ private fun RotorTab(
                 onClick = onStop,
                 enabled = connected,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            ) { Text("STOP") }
+            ) { Text(stringResource(R.string.dev_stop)) }
 
-            Text("GoTo:")
+            Text(stringResource(R.string.dev_goto))
             OutlinedTextField(
                 value = gotoInput,
                 onValueChange = { gotoInput = it },
@@ -1612,7 +1620,7 @@ private fun RotorTab(
                     }
                 },
                 enabled = connected,
-            ) { Text("Go") }
+            ) { Text(stringResource(R.string.dev_go)) }
         }
     }
 }
@@ -1763,6 +1771,7 @@ private fun YaesuTab(
     onDspControl: (Int, Int) -> Unit = { _, _ -> }, // getypt YaesuControl-kanaal (control, value)
     onCompressor: (Int) -> Unit = {}, // client-side spraakcompressor 0-100 (gedeeld)
     onTxAgc: (Boolean) -> Unit = {},  // client-side TX-AGC aan/uit (gedeeld)
+    onPowerOnOff: (Boolean) -> Unit = {}, // radio power on/off (CAT PS) - alleen 991A klikbaar
 ) {
     // Android bedient één Yaesu-radio tegelijk. Bij radio2 tonen we de yaesu2_*-state
     // via het bestaande yaesu_*-veld, zodat de rest van deze composable ongewijzigd blijft.
@@ -1771,6 +1780,7 @@ private fun YaesuTab(
         yaesuConnected = fullState.yaesu2Connected,
         yaesuModel = fullState.yaesu2Model,
         yaesuTunerState = fullState.yaesu2TunerState,
+        yaesuHiSwr = fullState.yaesu2HiSwr,
         yaesuFreqA = fullState.yaesu2FreqA,
         yaesuFreqB = fullState.yaesu2FreqB,
         yaesuMode = fullState.yaesu2Mode,
@@ -1779,6 +1789,7 @@ private fun YaesuTab(
         yaesuPowerOn = fullState.yaesu2PowerOn,
         yaesuAfGain = fullState.yaesu2AfGain,
         yaesuTxPower = fullState.yaesu2TxPower,
+        yaesuTxPowerMax = fullState.yaesu2TxPowerMax,
         yaesuSquelch = fullState.yaesu2Squelch,
         yaesuRfGain = fullState.yaesu2RfGain,
         yaesuMicGain = fullState.yaesu2MicGain,
@@ -1792,7 +1803,7 @@ private fun YaesuTab(
         yaesuFeatureFreqs = fullState.yaesu2FeatureFreqs,
     ) else fullState
     val context = LocalContext.current
-    val modeNames = listOf("LSB", "USB", "DSB", "CW-L", "CW-U", "FM", "AM", "DIGU", "SPEC", "DIGL", "SAM", "DRM")
+    val modeNames = listOf("LSB", "USB", "DSB", "CW-L", "CW-U", "FM", "AM", "DIGU", "SPEC", "DIGL", "SAM", "DRM", "C4FM")
     val modeName = modeNames.getOrElse(state.yaesuMode) { "?" }
     val vfoLabel = when (state.yaesuVfoSelect) { 0 -> "VFO"; 1 -> "MEM"; 2 -> "M-Tune"; else -> "?" }
     val isMemory = state.yaesuVfoSelect == 1
@@ -1833,14 +1844,40 @@ private fun YaesuTab(
             Text("Yaesu $modelName", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Spacer(Modifier.weight(1f))
             val powerColor = if (state.yaesuPowerOn) Color(0xFF00C800) else Color(0xFF808080)
-            Text(
-                if (state.yaesuPowerOn) "ON" else "OFF",
-                color = powerColor,
-                fontWeight = FontWeight.Bold,
-            )
+            // 991A: klikbaar aan/standby (PS0=standby, USB/CAT blijft -> remote weer
+            // aan). FTX-1: label-only, want die gaat echt uit (USB weg, niet remote aan).
+            if (state.yaesuModel == 0) {
+                Text(
+                    if (state.yaesuPowerOn) "ON" else "STBY",
+                    color = powerColor,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { onPowerOnOff(!state.yaesuPowerOn) },
+                )
+            } else {
+                Text(
+                    if (state.yaesuPowerOn) "ON" else "OFF",
+                    color = powerColor,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             Spacer(Modifier.width(8.dp))
             val txColor = if (state.yaesuTxActive) Color(0xFFFF4040) else Color(0xFF00C800)
             Text(if (state.yaesuTxActive) "TX" else "RX", color = txColor, fontWeight = FontWeight.Bold)
+            // Zelfde rood als de desktop TL_SWR_ALERT_TEXT en de SWR-uitlezing >3.0.
+            val swrRed = Color(0xFFFF5050)
+            if (state.yaesuHiSwr) {
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.dev_high_swr), color = swrRed, fontWeight = FontWeight.Bold)
+            }
+            // Het alarm klinkt voor beide radio's, maar deze tab toont er één. Benoem
+            // de andere radio expliciet, anders hoor je een piep zonder zichtbare oorzaak.
+            val otherHiSwr = if (fullState.selectedRadio == 1) fullState.yaesuHiSwr else fullState.yaesu2HiSwr
+            if (otherHiSwr) {
+                val otherModel = if (fullState.selectedRadio == 1) fullState.yaesuModel else fullState.yaesu2Model
+                val otherName = if (otherModel == 1) "FTX-1" else "FT-991A"
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.dev_high_swr_other, otherName), color = swrRed, fontWeight = FontWeight.Bold)
+            }
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
@@ -1858,7 +1895,7 @@ private fun YaesuTab(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Radio:")
+                    Text(stringResource(R.string.dev_radio_label))
                     Button(
                         onClick = { onSelectRadio(0) },
                         enabled = !switchLocked,
@@ -1871,14 +1908,15 @@ private fun YaesuTab(
                     ) { Text("2 - $r2") }
                 }
                 if (switchLocked) {
-                    Text("Radio switch locked during TX", fontSize = 11.sp, color = Color.Gray)
+                    Text(stringResource(R.string.dev_radio_locked), fontSize = 11.sp, color = Color.Gray)
                 }
             }
         }
 
-        // Enable toggle (Yaesu audio — disables Thetis)
+        // Enable toggle (Yaesu audio). Met Thetis = "Yaesu active" (zet Thetis-audio
+        // uit); zonder geconfigureerde Thetis is dit puur de audio-aan/uit-knop.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Yaesu active:")
+            Text(if (fullState.thetisConfigured) stringResource(R.string.dev_yaesu_active_label) else stringResource(R.string.dev_audio_label))
             Spacer(Modifier.width(8.dp))
             Switch(
                 checked = yaesuActive,
@@ -1886,7 +1924,8 @@ private fun YaesuTab(
             )
             if (yaesuActive) {
                 Spacer(Modifier.width(8.dp))
-                Text("Thetis off", fontSize = 12.sp, color = Color.Gray)
+                Text(if (fullState.thetisConfigured) stringResource(R.string.dev_thetis_off) else stringResource(R.string.dev_audio_on),
+                    fontSize = 12.sp, color = Color.Gray)
             }
         }
 
@@ -1903,7 +1942,7 @@ private fun YaesuTab(
             }
             AlertDialog(
                 onDismissRequest = { showFreqDialog = false },
-                title = { Text("Frequency (MHz)") },
+                title = { Text(stringResource(R.string.dev_freq_title)) },
                 text = {
                     OutlinedTextField(
                         value = freqInput,
@@ -1920,10 +1959,10 @@ private fun YaesuTab(
                             onFreqChange((mhz * 1_000_000).toLong())
                         }
                         showFreqDialog = false
-                    }) { Text("OK") }
+                    }) { Text(stringResource(R.string.common_ok)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showFreqDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = { showFreqDialog = false }) { Text(stringResource(R.string.common_cancel)) }
                 },
             )
         }
@@ -1974,7 +2013,7 @@ private fun YaesuTab(
             ) { delta ->
                 onFreqChange((state.yaesuFreqA + delta).coerceAtLeast(0))
             }
-            Text("tik cijfer = afstemmen · lang indrukken = invoeren", fontSize = 10.sp, color = Color.Gray)
+            Text(stringResource(R.string.dev_digit_tuner_hint), fontSize = 10.sp, color = Color.Gray)
             YaesuFreqStepper { delta ->
                 onFreqChange((state.yaesuFreqA + delta).coerceAtLeast(0))
             }
@@ -2022,7 +2061,7 @@ private fun YaesuTab(
 
         // Row 2: Mode buttons (blue = active)
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            val modes = listOf("LSB" to 0, "USB" to 1, "CW" to 3, "CW-R" to 4, "FM" to 5, "AM" to 6, "DIG" to 7)
+            val modes = listOf("LSB" to 0, "USB" to 1, "CW-L" to 3, "CW-U" to 4, "FM" to 5, "AM" to 6, "DIG" to 7)
             modes.forEach { (label, code) ->
                 Button(onClick = { onMode(code) }, modifier = Modifier.weight(1f),
                     colors = if (activeMode == code) ButtonDefaults.buttonColors(containerColor = activeColor)
@@ -2049,7 +2088,7 @@ private fun YaesuTab(
             }, modifier = Modifier.weight(1f),
                 colors = if (state.yaesuScan) ButtonDefaults.buttonColors(containerColor = activeColor)
                     else ButtonDefaults.buttonColors(containerColor = inactiveColor),
-                contentPadding = PaddingValues(4.dp)) { Text("Scan", fontSize = 11.sp) }
+                contentPadding = PaddingValues(4.dp)) { Text(stringResource(R.string.dev_scan), fontSize = 11.sp) }
         }
 
         Spacer(Modifier.height(4.dp))
@@ -2058,7 +2097,9 @@ private fun YaesuTab(
         // tuner_state komt van de radio (AC;-poll): 0=uit, 1=aan, 2=tunend. Waarden
         // 3=Tune-start / 15=ATU-aan / 4=ATU-uit; de server vertaalt per model (991A/FTX-1).
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            val canTune = state.yaesuConnected && state.yaesuFreqA in 1L until 54_000_000L
+            // ATU: HF+6m (<54 MHz) en niet in FM (mode 5).
+            val atuAvail = state.yaesuFreqA in 1L until 54_000_000L && state.yaesuMode != 5
+            val canTune = state.yaesuConnected && atuAvail
             val tuning = state.yaesuTunerState == 2
             val atuOn = state.yaesuTunerState == 1
             Button(
@@ -2071,6 +2112,7 @@ private fun YaesuTab(
             ) { Text(if (tuning) "Tuning…" else "Tune", fontSize = 11.sp) }
             Button(
                 onClick = { onButton(if (atuOn) 4 else 15) },
+                enabled = atuAvail,
                 modifier = Modifier.weight(1f),
                 colors = if (atuOn) ButtonDefaults.buttonColors(containerColor = activeColor)
                     else ButtonDefaults.buttonColors(containerColor = inactiveColor),
@@ -2151,12 +2193,14 @@ private fun YaesuTab(
             }, valueRange = 0f..100f, modifier = Modifier.weight(1f))
             Text("${compLevel.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
-        // RF Power
+        // RF Power - sliderbereik 5..max voor de huidige band (uit EX max-power menus);
+        // 0/onbekend -> 100. Klemt net als de desktop zodat je de band-limiet niet overschrijdt.
+        val pwrMax = if (state.yaesuTxPowerMax.toInt() >= 5) state.yaesuTxPowerMax.toFloat() else 100f
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("PWR:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
-            Slider(value = rfPower, onValueChange = { rfPower = it; onControl(0x2C, it.toInt()) },
-                valueRange = 5f..100f, modifier = Modifier.weight(1f))
-            Text("${rfPower.toInt()}W", fontSize = 11.sp, modifier = Modifier.width(36.dp))
+            Slider(value = rfPower.coerceIn(5f, pwrMax), onValueChange = { rfPower = it; onControl(0x2C, it.toInt()) },
+                valueRange = 5f..pwrMax, modifier = Modifier.weight(1f))
+            Text("${rfPower.coerceIn(5f, pwrMax).toInt()}W", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
 
         // DSP/functie-controls (Fase 2) — inklapbaar, gedeeld voor de geselecteerde radio.
@@ -2207,12 +2251,23 @@ private fun YaesuTab(
             onTxAgc(txAgc)
         }
 
+        // De verticale EQ-gain-sliders zijn inklapbaar achter een pijltje: bij het
+        // scrollen door het scherm werden ze anders per ongeluk versteld. Default
+        // ingeklapt, zodat scrollen ze nooit raakt; klik op "EQ" om ze te tonen.
+        // Per-radio (geen gedeelde instelling): eigen klap-stand voor radio 0 en 1.
+        var eqExp0 by rememberSaveable { mutableStateOf(false) }
+        var eqExp1 by rememberSaveable { mutableStateOf(false) }
+        val eqSlidersExpanded = if (state.selectedRadio == 1) eqExp1 else eqExp0
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = eqEnabled, onCheckedChange = {
                 eqEnabled = it; onEqEnabled(it)
                 eqPrefs.edit().putBoolean("eq_enabled_$eqRadio", it).apply()
             })
-            Text("EQ", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(
+                if (eqSlidersExpanded) "▼ EQ" else "▶ EQ",
+                fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { if (state.selectedRadio == 1) eqExp1 = !eqExp1 else eqExp0 = !eqExp0 }.padding(vertical = 4.dp),
+            )
         }
 
         // Client-side TX-keten: AGC-toggle per radio (radio-processing werkt niet op USB).
@@ -2282,7 +2337,7 @@ private fun YaesuTab(
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     Text(
-                        if (selectedPreset.isEmpty()) "Presets" else selectedPreset,
+                        if (selectedPreset.isEmpty()) stringResource(R.string.dev_presets) else selectedPreset,
                         fontSize = 11.sp,
                         maxLines = 1,
                     )
@@ -2316,7 +2371,7 @@ private fun YaesuTab(
             Button(
                 onClick = { showSaveDialog = true },
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-            ) { Text("Save", fontSize = 11.sp) }
+            ) { Text(stringResource(R.string.common_save), fontSize = 11.sp) }
             Button(
                 onClick = {
                     if (selectedPreset.isNotEmpty()) {
@@ -2339,7 +2394,7 @@ private fun YaesuTab(
                 enabled = selectedPreset.isNotEmpty(),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-            ) { Text("Del", fontSize = 11.sp, color = Color.White) }
+            ) { Text(stringResource(R.string.dev_del), fontSize = 11.sp, color = Color.White) }
         }
 
         // Auto-assign row: BT / Mic buttons
@@ -2348,7 +2403,7 @@ private fun YaesuTab(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Auto:", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.width(32.dp))
+            Text(stringResource(R.string.dev_auto_label), fontSize = 10.sp, color = Color.Gray, modifier = Modifier.width(32.dp))
             OutlinedButton(
                 onClick = {
                     if (selectedPreset.isNotEmpty()) {
@@ -2364,7 +2419,7 @@ private fun YaesuTab(
                 else ButtonDefaults.outlinedButtonColors(),
             ) {
                 Text(
-                    if (btPreset.isEmpty()) "BT Headset: -" else "BT: $btPreset",
+                    if (btPreset.isEmpty()) stringResource(R.string.dev_bt_headset_none) else "BT: $btPreset",
                     fontSize = 10.sp, maxLines = 1,
                 )
             }
@@ -2393,13 +2448,13 @@ private fun YaesuTab(
             var saveName by remember { mutableStateOf(selectedPreset) }
             AlertDialog(
                 onDismissRequest = { showSaveDialog = false },
-                title = { Text("Save EQ Preset") },
+                title = { Text(stringResource(R.string.dev_save_eq_preset)) },
                 text = {
                     OutlinedTextField(
                         value = saveName,
                         onValueChange = { saveName = it },
                         singleLine = true,
-                        label = { Text("Name") },
+                        label = { Text(stringResource(R.string.dev_name)) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 },
@@ -2417,32 +2472,37 @@ private fun YaesuTab(
                             } catch (_: Exception) {}
                         }
                         showSaveDialog = false
-                    }) { Text("Save") }
+                    }) { Text(stringResource(R.string.common_save)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = { showSaveDialog = false }) { Text(stringResource(R.string.common_cancel)) }
                 },
             )
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            bandLabels.forEachIndexed { i, label ->
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(56.dp)) {
-                    Text("${eqGains[i].floatValue.toInt()}", fontSize = 10.sp)
-                    Slider(
-                        value = eqGains[i].floatValue,
-                        onValueChange = {
-                            eqGains[i].floatValue = it; onEqBand(i, it)
-                            eqPrefs.edit().putFloat("eq_band_${eqRadio}_$i", it).apply()
-                        },
-                        valueRange = -12f..12f,
-                        modifier = Modifier.height(100.dp),
-                    )
-                    Text(label, fontSize = 10.sp)
+        if (eqSlidersExpanded) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                bandLabels.forEachIndexed { i, label ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(56.dp)) {
+                        Text("${eqGains[i].floatValue.toInt()}", fontSize = 10.sp)
+                        // Vertical slider: the EQ column has plenty of vertical room, so the
+                        // gain sliders read like a real graphic-EQ (up = boost) instead of
+                        // cramped horizontal ones (feedback #4).
+                        VerticalSlider(
+                            value = eqGains[i].floatValue,
+                            onValueChange = {
+                                eqGains[i].floatValue = it; onEqBand(i, it)
+                                eqPrefs.edit().putFloat("eq_band_${eqRadio}_$i", it).apply()
+                            },
+                            valueRange = -12f..12f,
+                            modifier = Modifier.width(40.dp).height(75.dp),
+                        )
+                        Text(label, fontSize = 10.sp)
+                    }
                 }
             }
         }
@@ -2461,7 +2521,7 @@ private fun YaesuTab(
                 onControl(0x25, 0)
             }, modifier = Modifier.weight(1f), colors = memColor,
                 contentPadding = PaddingValues(4.dp)) {
-                Text(if (memLoading) "Loading..." else "Load Memories", fontSize = 11.sp)
+                Text(if (memLoading) stringResource(R.string.dev_loading) else stringResource(R.string.dev_load_memories), fontSize = 11.sp)
             }
             val setColor = if (settingsLoading) ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
                 else ButtonDefaults.buttonColors()
@@ -2470,7 +2530,7 @@ private fun YaesuTab(
                 onControl(0x2E, 0)
             }, modifier = Modifier.weight(1f), colors = setColor,
                 contentPadding = PaddingValues(4.dp)) {
-                Text(if (settingsLoading) "Loading..." else "Load Settings", fontSize = 11.sp)
+                Text(if (settingsLoading) stringResource(R.string.dev_loading) else stringResource(R.string.dev_load_settings), fontSize = 11.sp)
             }
         }
 
@@ -2487,10 +2547,23 @@ private fun YaesuTab(
             if (settingsLoading) { kotlinx.coroutines.delay(10000); settingsLoading = false }
         }
 
-        // Memory channel list (scrollable)
+        // Memory channel list (scrollable, inklapbaar achter een pijltje - geldt voor de
+        // geselecteerde radio, dus zowel 991A als FTX-1).
+        // Per-radio klap-stand (geen gedeelde instelling).
+        var memExp0 by rememberSaveable { mutableStateOf(false) }
+        var memExp1 by rememberSaveable { mutableStateOf(false) }
+        val memListExpanded = if (state.selectedRadio == 1) memExp1 else memExp0
         if (memChannels.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Text("Geheugenkanalen (${memChannels.size})", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(
+                (if (memListExpanded) "▼ " else "▶ ") + stringResource(R.string.dev_memory_channels, memChannels.size),
+                fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { if (state.selectedRadio == 1) memExp1 = !memExp1 else memExp0 = !memExp0 }
+                    .padding(vertical = 4.dp),
+            )
+            if (memListExpanded) {
             Spacer(Modifier.height(4.dp))
             Column(
                 modifier = Modifier
@@ -2499,10 +2572,21 @@ private fun YaesuTab(
                     .verticalScroll(rememberScrollState())
             ) {
                 memChannels.forEach { mem ->
+                    // Tik op een rij = kanaal oproepen (ControlId::YaesuRecallMemory).
+                    // Het actieve kanaal krijgt een blauwe achtergrond, zodat de lijst
+                    // laat zien waar de radio staat.
+                    val chNum = mem.ch.toIntOrNull()
+                    val isActive = chNum != null &&
+                        chNum == state.yaesuMemoryChannel && state.yaesuVfoSelect == 1
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 2.dp),
+                            .then(
+                                if (chNum != null) Modifier.clickable { onRecallMemory(chNum) }
+                                else Modifier
+                            )
+                            .background(if (isActive) Color(0xFF1A3A5A) else Color.Transparent)
+                            .padding(vertical = 5.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(mem.ch, fontSize = 12.sp, modifier = Modifier.width(22.dp), color = Color.Gray)
@@ -2512,12 +2596,13 @@ private fun YaesuTab(
                     }
                 }
             }
+            }
         }
 
         // Menu settings list (scrollable)
         if (menuItems.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Text("EX Menu (${menuItems.size})", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(stringResource(R.string.dev_ex_menu, menuItems.size), fontWeight = FontWeight.Bold, fontSize = 13.sp)
             Spacer(Modifier.height(4.dp))
             Column(
                 modifier = Modifier
@@ -2529,7 +2614,7 @@ private fun YaesuTab(
                     val parts = item.split(":", limit = 2)
                     val num = parts.getOrElse(0) { "" }.trim().toIntOrNull() ?: 0
                     val value = parts.getOrElse(1) { "" }.trim()
-                    val name = YAESU_MENU_NAMES[num] ?: "Menu $num"
+                    val name = YAESU_MENU_NAMES[num] ?: stringResource(R.string.dev_menu_num, num)
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2572,7 +2657,10 @@ private val DSP_BLUE = Color(0xFF005AC8)
 
 @Composable
 private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
+    // Per-radio klap-stand (geen gedeelde instelling); rememberSaveable zoals EQ/geheugenlijst.
+    var dspExp0 by rememberSaveable { mutableStateOf(false) }
+    var dspExp1 by rememberSaveable { mutableStateOf(false) }
+    val expanded = if (state.selectedRadio == 1) dspExp1 else dspExp0
     val toggles = state.yaesuFeatureToggles
     val levels = state.yaesuFeatureLevels
     val freqs = state.yaesuFeatureFreqs
@@ -2581,20 +2669,25 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
     fun frq(n: Int) = freqs.getOrElse(n) { 0 }
     val isFtx1 = state.yaesuModel == 1
     val isCw = state.yaesuMode == 3 || state.yaesuMode == 4
+    // Band/mode-beschikbaarheid (FT-991A/FTX-1): IPO/ATT alleen op HF+6m (<54 MHz);
+    // NB/DNF/Notch/Contour niet in FM (mode 5); NAR/AGC/DNR werken volgens de 991A OM
+    // wel in FM. BK-IN is CW-only. Buiten bereik -> uitgrijzen.
+    val isFm = state.yaesuMode == 5 || state.yaesuMode == 12  // 12 = C4FM (FM-familie)
+    val hf6m = state.yaesuFreqA in 1L until 54_000_000L
 
     Column {
         Text(
-            if (expanded) "▼ DSP / functies" else "▶ DSP / functies",
+            (if (expanded) "▼ " else "▶ ") + stringResource(R.string.dev_dsp_functions),
             fontWeight = FontWeight.Bold, fontSize = 14.sp,
-            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().clickable { if (state.selectedRadio == 1) dspExp1 = !dspExp1 else dspExp0 = !dspExp0 }.padding(vertical = 4.dp),
         )
         if (expanded) {
             // Toggles: ATT / BK-IN / NAR / DNF
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                DspToggleBtn("ATT", bit(0)) { onDspControl(0, if (bit(0)) 0 else 1) }
-                DspToggleBtn("BK-IN", bit(1)) { onDspControl(1, if (bit(1)) 0 else 1) }
+                DspToggleBtn("ATT", bit(0), hf6m) { onDspControl(0, if (bit(0)) 0 else 1) }
+                DspToggleBtn("BK-IN", bit(1), isCw) { onDspControl(1, if (bit(1)) 0 else 1) }
                 DspToggleBtn("NAR", bit(2)) { onDspControl(2, if (bit(2)) 0 else 1) }
-                DspToggleBtn("DNF", bit(3)) { onDspControl(3, if (bit(3)) 0 else 1) }
+                DspToggleBtn("DNF", bit(3), !isFm) { onDspControl(3, if (bit(3)) 0 else 1) }
             }
             // AGC + IPO cyclus (label toont de stand, geen blauw)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
@@ -2605,18 +2698,20 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
                 }
                 val ipo = lvl(7)
                 val ipoLbl = when (ipo) { 1 -> "AMP1"; 2 -> "AMP2"; else -> "IPO" }
-                OutlinedButton(onClick = { onDspControl(7, (ipo + 1) % 3) }) { Text(ipoLbl, fontSize = 12.sp) }
+                OutlinedButton(onClick = { onDspControl(7, (ipo + 1) % 3) }, enabled = hf6m) { Text(ipoLbl, fontSize = 12.sp) }
             }
             // Niveaus: NB/DNR (991A toggle+slider, FTX-1 slider), AMC (FTX-1-only).
             // Proc (radio-speech-processor) verwijderd: doet niets op USB-audio (de
             // radio-shaping wordt gebypassed op REAR/USB). Client-side EQ/AGC vervangen 't.
-            DspLevelRow("NB", if (isFtx1) null else 13, bit(13), 8, lvl(8), 0f, 10f, onDspControl)
+            // NB niet in FM (tester-bevestigd); DNR/AMC blijven wel bruikbaar (991A OM
+            // beperkt DNR niet tot niet-FM; AMC is TX-audio, FTX-1).
+            DspLevelRow("NB", if (isFtx1) null else 13, bit(13), 8, lvl(8), 0f, 10f, onDspControl, enabled = !isFm)
             DspLevelRow("DNR", if (isFtx1) null else 14, bit(14), 9, lvl(9), 0f, 10f, onDspControl)
             if (isFtx1) DspLevelRow("AMC", null, false, 11, lvl(11), 1f, 100f, onDspControl)
-            // Contour / APF / Notch: aan/uit + frequentie (APF alleen in CW)
-            DspFreqRow("Contour", 15, bit(15), 18, frq(0), 10f, 3200f, true, onDspControl)
+            // Contour / APF / Notch: aan/uit + frequentie (APF alleen in CW; Contour/Notch niet in FM)
+            DspFreqRow("Contour", 15, bit(15), 18, frq(0), 10f, 3200f, !isFm && !isCw, onDspControl)
             DspFreqRow("APF", 16, bit(16), 19, frq(1), 0f, 50f, isCw, onDspControl)
-            DspFreqRow("Notch", 17, bit(17), 20, frq(2), 1f, 320f, true, onDspControl)
+            DspFreqRow("Notch", 17, bit(17), 20, frq(2), 1f, 320f, !isFm, onDspControl)
 
             // Clarifier (Fase 3): RIT/XIT aan/uit (bits 21/22) + offset (freqs[3], signed) + stap.
             val ritOn = bit(21)
@@ -2629,10 +2724,13 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
             ) {
                 DspToggleBtn("RIT", ritOn) { onDspControl(21, if (ritOn) 0 else 1) }
                 DspToggleBtn("XIT", xitOn) { onDspControl(22, if (xitOn) 0 else 1) }
+                // Alleen een actieve (RIT/XIT aan) offset oranje tonen; de 991A kan een
+                // opgeslagen P3-offset teruggeven terwijl de clarifier uit staat.
+                val clarActive = ritOn || xitOn
                 Text(
-                    if (off == 0) "+0 Hz" else "%+d Hz".format(off),
+                    if (clarActive && off != 0) "%+d Hz".format(off) else "+0 Hz",
                     fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    color = if (off == 0) Color(0xFF808080) else Color(0xFFFFAA28),
+                    color = if (clarActive && off != 0) Color(0xFFFFAA28) else Color(0xFF808080),
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
@@ -2652,9 +2750,10 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
 }
 
 @Composable
-private fun DspToggleBtn(label: String, on: Boolean, onClick: () -> Unit) {
+private fun DspToggleBtn(label: String, on: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         colors = if (on) ButtonDefaults.buttonColors(containerColor = DSP_BLUE)
                  else ButtonDefaults.outlinedButtonColors(),
         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
@@ -2668,13 +2767,14 @@ private fun DspLevelRow(
     toggleOn: Boolean,
     levelCtrl: Int, levelValue: Int, min: Float, max: Float,
     onDspControl: (Int, Int) -> Unit,
+    enabled: Boolean = true,
 ) {
     // Bewezen patroon (zoals squelch/RF-gain): stuur op onValueChange, sync uit server-state.
     var v by remember { mutableFloatStateOf(levelValue.toFloat()) }
     LaunchedEffect(levelValue) { v = levelValue.toFloat().coerceIn(min, max) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
         if (toggleCtrl != null) {
-            DspToggleBtn(label, toggleOn) { onDspControl(toggleCtrl, if (toggleOn) 0 else 1) }
+            DspToggleBtn(label, toggleOn, enabled) { onDspControl(toggleCtrl, if (toggleOn) 0 else 1) }
         } else {
             Text(label, fontSize = 12.sp, modifier = Modifier.width(56.dp))
         }
@@ -2682,6 +2782,7 @@ private fun DspLevelRow(
             value = v.coerceIn(min, max),
             onValueChange = { v = it; onDspControl(levelCtrl, it.toInt()) },
             valueRange = min..max,
+            enabled = enabled,
             modifier = Modifier.weight(1f),
         )
         Text("${v.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
@@ -2793,4 +2894,43 @@ private fun formatFreqMhz(hz: Long): String {
     val khz = (hz % 1_000_000) / 1_000
     val sub = (hz % 1_000) / 10
     return "%d.%03d.%02d".format(mhz, khz, sub)
+}
+
+/**
+ * A vertical Material slider. Compose ships only a horizontal Slider, so we render
+ * a normal one and rotate it 270 degrees, swapping the measured width/height so it
+ * occupies a tall-and-narrow box and hit-testing stays correct. Dragging up raises
+ * the value (bottom = min, top = max) — the natural direction for a graphic EQ.
+ * The caller sizes the on-screen footprint via `modifier` (e.g. width x height).
+ */
+@Composable
+private fun VerticalSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+) {
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        valueRange = valueRange,
+        modifier = modifier
+            .graphicsLayer {
+                rotationZ = 270f
+                transformOrigin = TransformOrigin(0f, 0f)
+            }
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(
+                    Constraints(
+                        minWidth = constraints.minHeight,
+                        maxWidth = constraints.maxHeight,
+                        minHeight = constraints.minWidth,
+                        maxHeight = constraints.maxWidth,
+                    )
+                )
+                layout(placeable.height, placeable.width) {
+                    placeable.place(-placeable.width, 0)
+                }
+            },
+    )
 }

@@ -156,6 +156,11 @@ pub struct ServerConfig {
     /// TCI WebSocket address (e.g. "127.0.0.1:40001")
     pub tci_addr: Option<String>,
     pub spectrum_enabled: bool,
+    /// Whether the configured Thetis radio hardware has a second receiver (RX2).
+    /// Default `true` (most ANAN models). Set to `false` for single-receiver
+    /// radios; the server then advertises `SINGLE_RECEIVER` so clients hide
+    /// RX2 + VRX2 everywhere. Only affects display/subscription, not the radio.
+    pub rx2_present: bool,
     /// Path to Thetis.exe for auto-launch (None = disabled)
     pub thetis_path: Option<String>,
     /// Yaesu FT-991A serial port (e.g. "COM8")
@@ -252,7 +257,7 @@ pub struct ServerConfig {
     pub ultrabeam_enabled: bool,
     /// Show UltraBeam control window on start (default true)
     pub show_ultrabeam_window: bool,
-    /// EA7HG Visual Rotor TCP address (e.g. "192.168.1.60:3010")
+    /// EA7HG Visual Rotor UDP address (e.g. "192.168.1.60:3010")
     pub rotor_addr: Option<String>,
     pub rotor_enabled: bool,
     /// Show Rotor control window on start (default true)
@@ -300,6 +305,11 @@ pub struct ServerConfig {
     pub rf2k_window_size: Option<[f32; 2]>,
     pub ultrabeam_window_size: Option<[f32; 2]>,
     pub rotor_window_size: Option<[f32; 2]>,
+    /// UI-thema van de server-GUI: "classic" (default, het oorspronkelijke
+    /// lichtgrijs), "dark", "slate" of "custom". Zelfde varianten als de client.
+    pub theme: String,
+    /// Custom-palet als `bg,widget,text,accent` (elk rrggbb). Leeg = niet ingesteld.
+    pub theme_custom: String,
     /// Auto-start server on launch (skip settings screen)
     pub autostart: bool,
     /// Active PA: 0=none, 1=SPE, 2=RF2K
@@ -349,6 +359,7 @@ impl Default for ServerConfig {
         Self {
             tci_addr: None,
             spectrum_enabled: true,
+            rx2_present: true,
             thetis_path: detect_thetis_path(),
             yaesu_port: None,
             yaesu_enabled: false,
@@ -404,6 +415,8 @@ impl Default for ServerConfig {
             rf2k_window_size: None,
             ultrabeam_window_size: None,
             rotor_window_size: None,
+            theme: "classic".to_string(),
+            theme_custom: String::new(),
             autostart: false,
             active_pa: 0,
             rf2k_saved_drive: None,
@@ -594,6 +607,10 @@ fn load_unlocked() -> ServerConfig {
                     }
                     // Legacy keys (ignored, kept for backward compat with old config files)
                     "input" | "input2" | "output" | "anan_interface" => {}
+                    "rx2_present" => {
+                        // Default true; only an explicit "false" disables RX2.
+                        config.rx2_present = value.trim() != "false";
+                    }
                     "thetis_path" => {
                         let v = value.trim().to_string();
                         if v.is_empty() {
@@ -963,6 +980,12 @@ fn load_unlocked() -> ServerConfig {
                             config.rotor_window_size.get_or_insert([0.0, 0.0])[1] = v;
                         }
                     }
+                    "theme" => {
+                        config.theme = value.trim().to_string();
+                    }
+                    "theme_custom" => {
+                        config.theme_custom = value.trim().to_string();
+                    }
                     "autostart" => {
                         config.autostart = value.trim() == "true";
                     }
@@ -1135,6 +1158,7 @@ fn save_unlocked(config: &ServerConfig) {
     // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1). Apart geblokt zodat het
     // bestaande config-format ongewijzigd blijft bij upgrade (oude bestanden
     // zonder deze keys laden gewoon de defaults: slot 1 disabled).
+    contents.push_str(&format!("rx2_present={}\n", config.rx2_present));
     contents.push_str(&format!("yaesu2_port={}\n", config.yaesu2_port.as_deref().unwrap_or("")));
     contents.push_str(&format!("yaesu2_enabled={}\n", config.yaesu2_enabled));
     contents.push_str(&format!("yaesu2_baud={}\n", config.yaesu2_baud));
@@ -1253,6 +1277,10 @@ fn save_unlocked(config: &ServerConfig) {
     }
     if let Some(sz) = config.rotor_window_size {
         contents.push_str(&format!("rotor_size_w={}\nrotor_size_h={}\n", sz[0], sz[1]));
+    }
+    contents.push_str(&format!("theme={}\n", config.theme));
+    if !config.theme_custom.is_empty() {
+        contents.push_str(&format!("theme_custom={}\n", config.theme_custom));
     }
     contents.push_str(&format!("autostart={}\n", config.autostart));
     contents.push_str(&format!("active_pa={}\n", config.active_pa));

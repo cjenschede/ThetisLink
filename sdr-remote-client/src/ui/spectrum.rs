@@ -488,7 +488,7 @@ pub(crate) fn spectrum_plot(
     // In TX mode `smeter` holds watts (server packs watts × 10 / 10 in engine).
     // In RX mode `smeter` is dBm; -73 dBm = S9, 6 dB per S-unit below S9.
     let meter_text = if other_tx {
-        format!("TX in use: {:.0}W", smeter)
+        rust_i18n::t!("spec_tx_in_use", w = format!("{:.0}", smeter)).to_string()
     } else if transmitting {
         format!("TX: {:.0}W", smeter)
     } else if smeter <= -73.0 {
@@ -885,7 +885,7 @@ pub(crate) fn render_vrx_strip(
     let mut new_freq: Option<u64> = None;
 
     if full_span_hz == 0 || full_bins.is_empty() {
-        ui.label(RichText::new("(spectrum nog niet ontvangen)").size(10.0).color(Color32::GRAY));
+        ui.label(RichText::new(rust_i18n::t!("spectrum_not_received").to_string()).size(10.0).color(Color32::GRAY));
         return None;
     }
 
@@ -916,7 +916,7 @@ pub(crate) fn render_vrx_strip(
         egui::Sense::click_and_drag(),
     );
     // Besluit 9: custom Painter-helper bouwt hover zelf in.
-    let resp = resp.on_hover_text("Click: tune VRX. Scroll: tune. Drag/scroll filter edge: resize filter.");
+    let resp = resp.on_hover_text(rust_i18n::t!("spec_vrx_hover").to_string());
     let plot_rect = egui::Rect::from_min_max(rect.min, P2::new(rect.max.x, rect.max.y - label_h));
     let label_strip = egui::Rect::from_min_max(P2::new(rect.min.x, plot_rect.max.y), rect.max);
     let floor_db = ref_db - range_db;
@@ -927,18 +927,12 @@ pub(crate) fn render_vrx_strip(
         painter.rect_filled(plot_rect, 2.0, Color32::from_rgb(10, 15, 30));
         painter.rect_filled(label_strip, 0.0, Color32::from_rgb(18, 22, 40));
 
-        // When VRX is disabled: dim everything + show overlay text, skip
-        // spectrum/waterfall drawing so the panel visually "freezes" off.
-        if !enabled {
-            painter.rect_filled(plot_rect, 2.0, Color32::from_rgba_premultiplied(0, 0, 0, 140));
-            let disabled_text = "DISABLED";
-            let disabled_font = egui::FontId::proportional(20.0);
-            let disabled_color = Color32::from_rgba_premultiplied(180, 80, 80, 220);
-            let galley = painter.layout_no_wrap(disabled_text.to_string(), disabled_font, disabled_color);
-            let text_pos = egui::Align2::CENTER_CENTER.anchor_size(plot_rect.center(), galley.size());
-            painter.galley(text_pos.min, galley, disabled_color);
-            return None;
-        }
+        // NB: audio (`enabled`) en spectrum zijn onafhankelijke abonnementen
+        // (vink-model). Het spectrum wordt getekend zodra er bins zijn, óók met de
+        // VRX-audio uit — voorheen verborg een `if !enabled`-"DISABLED"-overlay het
+        // spectrum op basis van de audio-vink (koppeling verwijderd). De s-meter
+        // valt vanzelf terug op NoData wanneer de audio uit staat.
+        let _ = enabled;
 
         // ── Nice tick spacing for freq and dB ──
         let tick_spacing_hz = {
@@ -1371,7 +1365,7 @@ pub(crate) fn render_vrx_strip(
         egui::Sense::click(),
     );
     // Besluit 9: custom Painter-helper bouwt hover zelf in.
-    let wf_resp = wf_resp.on_hover_text("Click waterfall to tune VRX.");
+    let wf_resp = wf_resp.on_hover_text(rust_i18n::t!("spec_wf_hover").to_string());
     if ui.is_rect_visible(wf_rect) {
         let painter = ui.painter_at(wf_rect);
         let uv = egui::Rect::from_min_max(P2::new(0.0, 0.0), P2::new(1.0, 1.0));

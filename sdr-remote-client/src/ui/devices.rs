@@ -119,7 +119,7 @@ impl SdrRemoteApp {
         if show_yaesu { tabs.push((6, "Yaesu")); }
 
         if tabs.is_empty() {
-            ui.colored_label(Color32::GRAY, "No external devices are configured or online.");
+            ui.colored_label(Color32::GRAY, rust_i18n::t!("dev_no_external_devices").to_string());
             return;
         }
 
@@ -149,12 +149,12 @@ impl SdrRemoteApp {
     pub(super) fn render_device_amplitec(&mut self, ui: &mut egui::Ui) {
         // Header
         ui.horizontal(|ui| {
-            ui.heading("Amplitec 6/2 Antenna Switch");
+            ui.heading(rust_i18n::t!("dev_amplitec_title").to_string());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.amplitec_connected {
-                    ui.colored_label(Color32::GREEN, "Online");
+                    ui.colored_label(Color32::GREEN, rust_i18n::t!("dev_online").to_string());
                 } else {
-                    ui.colored_label(Color32::RED, "Offline");
+                    ui.colored_label(Color32::RED, rust_i18n::t!("dev_offline").to_string());
                 }
             });
         });
@@ -163,10 +163,10 @@ impl SdrRemoteApp {
         // Poort A - TX+RX
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Poort A \u{2014} TX+RX").strong());
+            ui.label(RichText::new(rust_i18n::t!("dev_port_a_txrx").to_string()).strong());
             if self.amplitec_switch_a > 0 {
                 let label = self.amplitec_label_a(self.amplitec_switch_a);
-                ui.label(format!("  Huidige: {}", label));
+                ui.label(rust_i18n::t!("dev_current_colon_val", label = label).to_string());
             }
         });
         ui.horizontal(|ui| {
@@ -189,7 +189,7 @@ impl SdrRemoteApp {
                     let _ = self.cmd_tx.send(Command::SetAmplitecSwitchA(pos));
                 }
                 if is_blocked {
-                    resp.on_hover_text(format!("Ant{} ({}) \u{2014} bezet door Poort B", pos, label));
+                    resp.on_hover_text(rust_i18n::t!("dev_ant_occupied_by_b", pos = pos, label = label).to_string());
                 }
             }
         });
@@ -198,10 +198,10 @@ impl SdrRemoteApp {
 
         // Poort B - RX
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Poort B \u{2014} RX").strong());
+            ui.label(RichText::new(rust_i18n::t!("dev_port_b_rx").to_string()).strong());
             if self.amplitec_switch_b > 0 {
                 let label = self.amplitec_label_b(self.amplitec_switch_b);
-                ui.label(format!("  Huidige: {}", label));
+                ui.label(rust_i18n::t!("dev_current_colon_val", label = label).to_string());
             }
         });
         ui.horizontal(|ui| {
@@ -224,7 +224,7 @@ impl SdrRemoteApp {
                     let _ = self.cmd_tx.send(Command::SetAmplitecSwitchB(pos));
                 }
                 if is_blocked {
-                    resp.on_hover_text(format!("Ant{} ({}) \u{2014} bezet door Poort A", pos, label));
+                    resp.on_hover_text(rust_i18n::t!("dev_ant_occupied_by_a", pos = pos, label = label).to_string());
                 }
             }
         });
@@ -238,7 +238,7 @@ impl SdrRemoteApp {
         if super::helpers::chevron_label(
             ui,
             self.amplitec_power_show,
-            RichText::new("Power-cap table").strong(),
+            RichText::new(rust_i18n::t!("dev_power_cap_table").to_string()).strong(),
         )
         .clicked()
         {
@@ -249,7 +249,7 @@ impl SdrRemoteApp {
                 if !self.amplitec_power_loaded {
                     ui.colored_label(
                         Color32::from_rgb(180, 180, 180),
-                        "Waiting for server\u{2026}",
+                        rust_i18n::t!("dev_waiting_for_server").to_string(),
                     );
                 } else {
                     egui::Grid::new("amplitec_power_grid")
@@ -257,9 +257,9 @@ impl SdrRemoteApp {
                         .min_col_width(40.0)
                         .show(ui, |ui| {
                             ui.label(RichText::new("Pos").strong());
-                            ui.label(RichText::new("Label").strong());
-                            ui.label(RichText::new("Max W").strong());
-                            ui.label(RichText::new("RX-only").strong());
+                            ui.label(RichText::new(rust_i18n::t!("dev_label").to_string()).strong());
+                            ui.label(RichText::new(rust_i18n::t!("dev_max_w").to_string()).strong());
+                            ui.label(RichText::new(rust_i18n::t!("dev_rx_only").to_string()).strong());
                             ui.end_row();
                             for i in 0..6 {
                                 let pos = (i as u8) + 1;
@@ -282,18 +282,18 @@ impl SdrRemoteApp {
                     ui.horizontal(|ui| {
                         let dirty = self.amplitec_power_edit_max_w != self.amplitec_power_max_w
                             || self.amplitec_power_edit_tx_blocked != self.amplitec_power_tx_blocked;
-                        if ui.add_enabled(dirty, egui::Button::new("Save to server")).clicked() {
+                        if ui.add_enabled(dirty, egui::Button::new(rust_i18n::t!("dev_save_to_server").to_string())).clicked() {
                             let _ = self.cmd_tx.send(Command::SetAmplitecPowerTable {
                                 max_w: self.amplitec_power_edit_max_w,
                                 tx_blocked: self.amplitec_power_edit_tx_blocked,
                             });
                         }
-                        if ui.add_enabled(dirty, egui::Button::new("Revert")).clicked() {
+                        if ui.add_enabled(dirty, egui::Button::new(rust_i18n::t!("dev_revert").to_string())).clicked() {
                             self.amplitec_power_edit_max_w = self.amplitec_power_max_w;
                             self.amplitec_power_edit_tx_blocked = self.amplitec_power_tx_blocked;
                         }
                         ui.label(
-                            RichText::new("0 W = no cap")
+                            RichText::new(rust_i18n::t!("dev_no_cap").to_string())
                                 .size(10.0)
                                 .color(Color32::from_rgb(160, 160, 160)),
                         );
@@ -305,7 +305,7 @@ impl SdrRemoteApp {
         }
 
         // Log
-        ui.label(RichText::new("Log").strong());
+        ui.label(RichText::new(rust_i18n::t!("dev_log").to_string()).strong());
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .max_height(200.0)
@@ -323,12 +323,12 @@ impl SdrRemoteApp {
 
     pub(super) fn render_device_tuner(&mut self, ui: &mut egui::Ui, amber: Color32) {
         ui.horizontal(|ui| {
-            ui.heading("JC-4s Antenna Tuner");
+            ui.heading(rust_i18n::t!("dev_jc4s_title").to_string());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.tuner_connected {
-                    ui.colored_label(Color32::GREEN, "Online");
+                    ui.colored_label(Color32::GREEN, rust_i18n::t!("dev_online").to_string());
                 } else {
-                    ui.colored_label(Color32::RED, "Offline");
+                    ui.colored_label(Color32::RED, rust_i18n::t!("dev_offline").to_string());
                 }
             });
         });
@@ -337,13 +337,13 @@ impl SdrRemoteApp {
 
         // Status
         let olive_green = Color32::from_rgb(120, 160, 40);
-        let state_text = match self.tuner_state {
-            1 => "Tuning...",
-            2 => "Tune OK",
-            3 => "Timeout",
-            4 => "Aborted",
-            5 => "Done~ (already tuned)",
-            _ => "Idle",
+        let state_text: String = match self.tuner_state {
+            1 => rust_i18n::t!("dev_tuning").to_string(),
+            2 => rust_i18n::t!("dev_tune_ok").to_string(),
+            3 => rust_i18n::t!("dev_timeout").to_string(),
+            4 => rust_i18n::t!("dev_aborted").to_string(),
+            5 => rust_i18n::t!("dev_done_already_tuned").to_string(),
+            _ => rust_i18n::t!("dev_idle").to_string(),
         };
         let state_color = match self.tuner_state {
             1 => Color32::from_rgb(60, 120, 220),
@@ -353,7 +353,7 @@ impl SdrRemoteApp {
             _ => Color32::GRAY,
         };
         ui.horizontal(|ui| {
-            ui.label("Status:");
+            ui.label(rust_i18n::t!("dev_status_colon").to_string());
             ui.colored_label(state_color, RichText::new(state_text).strong().size(16.0));
         });
 
@@ -362,13 +362,13 @@ impl SdrRemoteApp {
         // Tune button
         let can_start = self.tuner_connected && self.tuner_can_tune
             && (self.tuner_state == 0 || self.tuner_state == 2 || self.tuner_state == 5);
-        let (tune_color, tune_text) = match self.tuner_state {
-            1 => (Color32::from_rgb(60, 120, 220), "Tuning..."),
-            2 => (Color32::from_rgb(50, 180, 50), "Tune OK"),
-            3 => (amber, "Tune X"),
-            4 => (amber, "Tune X"),
-            5 => (olive_green, "Tune ~"),
-            _ => (Color32::from_rgb(80, 80, 80), "Tune"),
+        let (tune_color, tune_text): (Color32, String) = match self.tuner_state {
+            1 => (Color32::from_rgb(60, 120, 220), rust_i18n::t!("dev_tuning").to_string()),
+            2 => (Color32::from_rgb(50, 180, 50), rust_i18n::t!("dev_tune_ok").to_string()),
+            3 => (amber, rust_i18n::t!("dev_tune_x").to_string()),
+            4 => (amber, rust_i18n::t!("dev_tune_x").to_string()),
+            5 => (olive_green, rust_i18n::t!("dev_tune_tilde").to_string()),
+            _ => (Color32::from_rgb(80, 80, 80), rust_i18n::t!("dev_tune").to_string()),
         };
         ui.horizontal(|ui| {
             let btn = egui::Button::new(RichText::new(tune_text).color(Color32::WHITE).strong().size(16.0))
@@ -379,7 +379,7 @@ impl SdrRemoteApp {
             }
 
             let abort_enabled = self.tuner_state == 1;
-            let abort_btn = egui::Button::new(RichText::new("Abort").size(14.0))
+            let abort_btn = egui::Button::new(RichText::new(rust_i18n::t!("dev_abort").to_string()).size(14.0))
                 .min_size(Vec2::new(60.0, 32.0));
             if ui.add_enabled(abort_enabled, abort_btn).clicked() {
                 let _ = self.cmd_tx.send(Command::TunerAbort);
@@ -388,7 +388,7 @@ impl SdrRemoteApp {
 
         if !self.tuner_can_tune {
             ui.add_space(4.0);
-            ui.colored_label(amber, "Tuner not available on current antenna");
+            ui.colored_label(amber, rust_i18n::t!("dev_tuner_not_available").to_string());
         }
     }
 
@@ -397,15 +397,15 @@ impl SdrRemoteApp {
         ui.horizontal(|ui| {
             ui.heading("SPE Expert 1.3K-FA");
             if self.spe_active {
-                ui.colored_label(Color32::from_rgb(50, 180, 50), RichText::new("ACTIVE").strong());
+                ui.colored_label(Color32::from_rgb(50, 180, 50), RichText::new(rust_i18n::t!("dev_active_upper").to_string()).strong());
             } else {
-                ui.colored_label(Color32::from_rgb(140, 140, 140), "INACTIVE");
+                ui.colored_label(Color32::from_rgb(140, 140, 140), rust_i18n::t!("dev_inactive_upper").to_string());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.spe_connected {
-                    ui.colored_label(Color32::GREEN, "Online");
+                    ui.colored_label(Color32::GREEN, rust_i18n::t!("dev_online").to_string());
                 } else {
-                    ui.colored_label(Color32::RED, "Offline");
+                    ui.colored_label(Color32::RED, rust_i18n::t!("dev_offline").to_string());
                 }
             });
         });
@@ -413,11 +413,13 @@ impl SdrRemoteApp {
 
         // Warning / Alarm (prominent, above everything)
         if self.spe_alarm != b'N' && self.spe_alarm != 0 {
+            let code = (self.spe_alarm as char).to_string();
             ui.colored_label(Color32::from_rgb(255, 80, 80),
-                RichText::new(format!("ALARM: {}", self.spe_alarm as char)).strong());
+                RichText::new(rust_i18n::t!("dev_alarm_fmt", code = code).to_string()).strong());
         } else if self.spe_warning != b'N' && self.spe_warning != 0 {
+            let code = (self.spe_warning as char).to_string();
             ui.colored_label(amber,
-                RichText::new(format!("Warning: {}", self.spe_warning as char)).strong());
+                RichText::new(rust_i18n::t!("dev_warning_fmt", code = code).to_string()).strong());
         }
 
         ui.add_space(4.0);
@@ -426,13 +428,13 @@ impl SdrRemoteApp {
         ui.horizontal(|ui| {
             // Power - shows current state
             if !self.spe_connected || self.spe_state == 0 {
-                let btn = egui::Button::new(RichText::new("Power Off").strong().color(Color32::WHITE))
+                let btn = egui::Button::new(RichText::new(rust_i18n::t!("dev_power_off").to_string()).strong().color(Color32::WHITE))
                     .fill(Color32::from_rgb(120, 120, 120));
                 if ui.add(btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SpePowerOn);
                 }
             } else {
-                let btn = egui::Button::new(RichText::new("Power On").strong().color(Color32::WHITE))
+                let btn = egui::Button::new(RichText::new(rust_i18n::t!("dev_power_on").to_string()).strong().color(Color32::WHITE))
                     .fill(Color32::from_rgb(0, 150, 0));
                 if ui.add(btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SpeOff);
@@ -440,10 +442,10 @@ impl SdrRemoteApp {
             }
 
             // Operate/Standby - shows current state
-            let (op_text, op_color) = match self.spe_state {
-                2 => ("Operate", Color32::from_rgb(50, 180, 50)),
-                1 => ("Standby", amber),
-                _ => ("Off", Color32::from_rgb(120, 120, 120)),
+            let (op_text, op_color): (String, Color32) = match self.spe_state {
+                2 => (rust_i18n::t!("dev_operate").to_string(), Color32::from_rgb(50, 180, 50)),
+                1 => (rust_i18n::t!("dev_standby").to_string(), amber),
+                _ => (rust_i18n::t!("dev_off").to_string(), Color32::from_rgb(120, 120, 120)),
             };
             let btn = egui::Button::new(RichText::new(op_text).strong().color(Color32::WHITE))
                 .fill(op_color);
@@ -453,7 +455,7 @@ impl SdrRemoteApp {
 
             // Tune
             if ui.add_enabled(self.spe_connected && self.spe_state == 2,
-                egui::Button::new("Tune")).clicked() {
+                egui::Button::new(rust_i18n::t!("dev_tune").to_string())).clicked() {
                 let _ = self.cmd_tx.send(Command::SpeTune);
             }
         });
@@ -481,11 +483,11 @@ impl SdrRemoteApp {
             }
 
             // Power level toggle
-            let pwr_text = match self.spe_power_level {
-                0 => "Low",
-                1 => "Mid",
-                2 => "High",
-                _ => "?",
+            let pwr_text: String = match self.spe_power_level {
+                0 => rust_i18n::t!("dev_low").to_string(),
+                1 => rust_i18n::t!("dev_mid").to_string(),
+                2 => rust_i18n::t!("dev_high").to_string(),
+                _ => "?".to_string(),
             };
             if ui.add_enabled(self.spe_connected, egui::Button::new(pwr_text)).clicked() {
                 let _ = self.cmd_tx.send(Command::SpePower);
@@ -495,11 +497,11 @@ impl SdrRemoteApp {
 
             // Drive level +/-
             let drive_enabled = self.spe_connected && self.spe_state == 2 && self.spe_active;
-            if ui.add_enabled(drive_enabled, egui::Button::new("Drive -")).clicked() {
+            if ui.add_enabled(drive_enabled, egui::Button::new(rust_i18n::t!("dev_drive_minus").to_string())).clicked() {
                 let _ = self.cmd_tx.send(Command::SpeDriveDown);
             }
             ui.label(format!("{}%", self.drive_level));
-            if ui.add_enabled(drive_enabled, egui::Button::new("Drive +")).clicked() {
+            if ui.add_enabled(drive_enabled, egui::Button::new(rust_i18n::t!("dev_drive_plus").to_string())).clicked() {
                 let _ = self.cmd_tx.send(Command::SpeDriveUp);
             }
         });
@@ -602,15 +604,15 @@ impl SdrRemoteApp {
             };
             ui.heading(title);
             if self.rf2k_active {
-                ui.colored_label(Color32::from_rgb(50, 180, 50), RichText::new("ACTIVE").strong());
+                ui.colored_label(Color32::from_rgb(50, 180, 50), RichText::new(rust_i18n::t!("dev_active_upper").to_string()).strong());
             } else {
-                ui.colored_label(Color32::from_rgb(140, 140, 140), "INACTIVE");
+                ui.colored_label(Color32::from_rgb(140, 140, 140), rust_i18n::t!("dev_inactive_upper").to_string());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.rf2k_connected {
-                    ui.colored_label(Color32::GREEN, "Online");
+                    ui.colored_label(Color32::GREEN, rust_i18n::t!("dev_online").to_string());
                 } else {
-                    ui.colored_label(Color32::RED, "Offline");
+                    ui.colored_label(Color32::RED, rust_i18n::t!("dev_offline").to_string());
                 }
             });
         });
@@ -619,14 +621,15 @@ impl SdrRemoteApp {
         // Error bar
         if self.rf2k_error_state != 0 {
             let error_text = if self.rf2k_error_text.is_empty() {
-                format!("Error state: {}", self.rf2k_error_state)
+                let state = self.rf2k_error_state;
+                rust_i18n::t!("dev_error_state_fmt", state = state).to_string()
             } else {
                 self.rf2k_error_text.clone()
             };
             ui.horizontal(|ui| {
                 ui.colored_label(Color32::from_rgb(255, 80, 80),
                     RichText::new(&error_text).strong());
-                if ui.button("Reset").clicked() {
+                if ui.button(rust_i18n::t!("dev_reset").to_string()).clicked() {
                     let _ = self.cmd_tx.send(Command::Rf2kErrorReset);
                 }
             });
@@ -634,10 +637,10 @@ impl SdrRemoteApp {
 
         // Row 1: Operate/Standby + Tune + FW Close
         ui.horizontal(|ui| {
-            let (op_text, op_color) = if self.rf2k_operate {
-                ("Operate", Color32::from_rgb(50, 180, 50))
+            let (op_text, op_color): (String, Color32) = if self.rf2k_operate {
+                (rust_i18n::t!("dev_operate").to_string(), Color32::from_rgb(50, 180, 50))
             } else {
-                ("Standby", amber)
+                (rust_i18n::t!("dev_standby").to_string(), amber)
             };
             let btn = egui::Button::new(RichText::new(op_text).strong().color(Color32::WHITE))
                 .fill(op_color);
@@ -646,13 +649,13 @@ impl SdrRemoteApp {
             }
 
             if ui.add_enabled(self.rf2k_connected && self.rf2k_operate,
-                egui::Button::new("Tune")).clicked() {
+                egui::Button::new(rust_i18n::t!("dev_tune").to_string())).clicked() {
                 let _ = self.cmd_tx.send(Command::Rf2kTune);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add_enabled(self.rf2k_connected,
-                    egui::Button::new(RichText::new("FW Close").color(Color32::from_rgb(255, 100, 100)))
+                    egui::Button::new(RichText::new(rust_i18n::t!("dev_fw_close").to_string()).color(Color32::from_rgb(255, 100, 100)))
                 ).clicked() {
                     self.rf2k_confirm_fw_close = true;
                 }
@@ -783,15 +786,15 @@ impl SdrRemoteApp {
                 2 => Color32::from_rgb(100, 160, 255),
                 _ => ui.visuals().text_color(),
             };
-            ui.colored_label(mode_color, RichText::new(format!("Tuner: {}", mode_text)).strong());
+            ui.colored_label(mode_color, RichText::new(rust_i18n::t!("dev_tuner_fmt", mode = mode_text).to_string()).strong());
 
             // MAN/AUTO toggle - shows current state
             if self.rf2k_tuner_mode == 2 || self.rf2k_tuner_mode == 4 {
                 let (_toggle_text, toggle_btn) = if is_manual {
-                    ("Manual", egui::Button::new(RichText::new("Manual").strong())
+                    ("Manual", egui::Button::new(RichText::new(rust_i18n::t!("dev_manual").to_string()).strong())
                         .fill(Color32::from_rgb(100, 160, 230)).small())
                 } else {
-                    ("Auto", egui::Button::new(RichText::new("Auto").strong())
+                    ("Auto", egui::Button::new(RichText::new(rust_i18n::t!("dev_auto").to_string()).strong())
                         .fill(Color32::from_rgb(100, 160, 230)).small())
                 };
                 if ui.add_enabled(tuner_edit, toggle_btn).clicked() {
@@ -802,20 +805,20 @@ impl SdrRemoteApp {
             // Bypass - shows current state
             let is_bypass = self.rf2k_tuner_mode == 1 || self.rf2k_tuner_setup == "BYPASS";
             let byp_btn = if is_bypass {
-                egui::Button::new(RichText::new("Bypass").strong())
+                egui::Button::new(RichText::new(rust_i18n::t!("dev_bypass").to_string()).strong())
                     .fill(Color32::from_rgb(255, 170, 40)).small()
             } else {
-                egui::Button::new("Bypass").small()
+                egui::Button::new(rust_i18n::t!("dev_bypass").to_string()).small()
             };
             if ui.add_enabled(tuner_edit, byp_btn).clicked() {
                 let _ = self.cmd_tx.send(Command::Rf2kTunerBypass(!is_bypass));
             }
 
             // Reset + Store (manual only)
-            if ui.add_enabled(tuner_edit && is_manual, egui::Button::new("Reset").small()).clicked() {
+            if ui.add_enabled(tuner_edit && is_manual, egui::Button::new(rust_i18n::t!("dev_reset").to_string()).small()).clicked() {
                 let _ = self.cmd_tx.send(Command::Rf2kTunerReset);
             }
-            if ui.add_enabled(tuner_edit && is_manual, egui::Button::new("Store").small()).clicked() {
+            if ui.add_enabled(tuner_edit && is_manual, egui::Button::new(rust_i18n::t!("dev_store").to_string()).small()).clicked() {
                 let _ = self.cmd_tx.send(Command::Rf2kTunerStore);
             }
         });
@@ -868,7 +871,8 @@ impl SdrRemoteApp {
             if !self.rf2k_modulation.is_empty() {
                 ui.colored_label(mod_color, RichText::new(&self.rf2k_modulation).strong());
             }
-            ui.label(format!("Drive: {}W", self.rf2k_drive_w));
+            let w = self.rf2k_drive_w;
+            ui.label(rust_i18n::t!("dev_drive_w_fmt", w = w).to_string());
 
             let drive_enabled = self.rf2k_connected && self.rf2k_operate && self.rf2k_active;
             if ui.add_enabled(drive_enabled, egui::Button::new("-")).clicked() {
@@ -897,39 +901,43 @@ impl SdrRemoteApp {
         // --- Debug section (Fase D) ---
         if self.rf2k_debug_available {
             ui.add_space(6.0);
-            let debug_header = if self.rf2k_show_debug { "Debug ▼" } else { "Debug ▶" };
+            let debug_header = if self.rf2k_show_debug { rust_i18n::t!("dev_debug_expanded").to_string() } else { rust_i18n::t!("dev_debug_collapsed").to_string() };
             if ui.selectable_label(self.rf2k_show_debug, RichText::new(debug_header).strong()).clicked() {
                 self.rf2k_show_debug = !self.rf2k_show_debug;
             }
 
             if self.rf2k_show_debug {
                 ui.indent("rf2k_debug_c", |ui| {
-                    ui.label(RichText::new("System Info").strong());
+                    ui.label(RichText::new(rust_i18n::t!("dev_system_info").to_string()).strong());
                     ui.horizontal(|ui| {
                         ui.label(format!("FW: v{}", self.rf2k_controller_version));
                         if !self.rf2k_hw_revision.is_empty() {
                             ui.label(format!("HW: {}", self.rf2k_hw_revision));
                         }
                         ui.label(format!("BIAS: {:.1}%", self.rf2k_bias_pct_x10 as f32 / 10.0));
-                        let psu = match self.rf2k_psu_source { 0 => "Internal", 1 => "External", 2 => "CAN Ctrl", _ => "?" };
+                        let psu: String = match self.rf2k_psu_source { 0 => rust_i18n::t!("dev_internal").to_string(), 1 => rust_i18n::t!("dev_external").to_string(), 2 => "CAN Ctrl".to_string(), _ => "?".to_string() };
                         ui.label(format!("PSU: {}", psu));
                     });
                     ui.horizontal(|ui| {
                         let hours = self.rf2k_uptime_s / 3600;
                         let mins = (self.rf2k_uptime_s % 3600) / 60;
                         if hours >= 24 {
-                            ui.label(format!("Uptime: {}d {}h {}m", hours / 24, hours % 24, mins));
+                            let d = hours / 24; let h = hours % 24; let m = mins;
+                            ui.label(rust_i18n::t!("dev_uptime_dhm", d = d, h = h, m = m).to_string());
                         } else {
-                            ui.label(format!("Uptime: {}h {}m", hours, mins));
+                            let h = hours; let m = mins;
+                            ui.label(rust_i18n::t!("dev_uptime_hm", h = h, m = m).to_string());
                         }
                         let tx_h = self.rf2k_tx_time_s / 3600;
                         let tx_m = (self.rf2k_tx_time_s % 3600) / 60;
                         ui.label(format!("TX: {}h {:02}m", tx_h, tx_m));
-                        ui.label(format!("Errors: {}", self.rf2k_error_count));
+                        let count = self.rf2k_error_count;
+                        ui.label(rust_i18n::t!("dev_errors_fmt", count = count).to_string());
                     });
                     ui.horizontal(|ui| {
-                        ui.label(format!("Bank: {}", self.rf2k_storage_bank));
-                        ui.label("FRQ Delay:");
+                        let n = self.rf2k_storage_bank;
+                        ui.label(rust_i18n::t!("dev_bank_fmt", n = n).to_string());
+                        ui.label(rust_i18n::t!("dev_frq_delay").to_string());
                         if ui.add_enabled(self.rf2k_connected, egui::Button::new("−").small()).clicked() {
                             let _ = self.cmd_tx.send(Command::Rf2kFrqDelayDown);
                         }
@@ -940,13 +948,13 @@ impl SdrRemoteApp {
                     });
 
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Settings").strong());
+                    ui.label(RichText::new(rust_i18n::t!("dev_settings").to_string()).strong());
                     ui.horizontal(|ui| {
-                        ui.label("Power:");
-                        let (pe5_text, pe5_color) = if self.rf2k_high_power {
-                            ("HIGH", Color32::from_rgb(255, 80, 80))
+                        ui.label(rust_i18n::t!("dev_power_colon").to_string());
+                        let (pe5_text, pe5_color): (String, Color32) = if self.rf2k_high_power {
+                            (rust_i18n::t!("dev_high_upper").to_string(), Color32::from_rgb(255, 80, 80))
                         } else {
-                            ("LOW", Color32::from_rgb(50, 180, 50))
+                            (rust_i18n::t!("dev_low_upper").to_string(), Color32::from_rgb(50, 180, 50))
                         };
                         let pe5_btn = egui::Button::new(RichText::new(pe5_text).strong().color(Color32::WHITE)).fill(pe5_color);
                         if ui.add_enabled(self.rf2k_connected, pe5_btn).clicked() {
@@ -957,15 +965,15 @@ impl SdrRemoteApp {
                             }
                         }
                         ui.separator();
-                        ui.label("Tuner 6m:");
-                        let t6m = if self.rf2k_tuner_6m { "ON" } else { "OFF" };
+                        ui.label(rust_i18n::t!("dev_tuner_6m").to_string());
+                        let t6m = if self.rf2k_tuner_6m { rust_i18n::t!("dev_on_upper").to_string() } else { rust_i18n::t!("dev_off_upper").to_string() };
                         if ui.add_enabled(self.rf2k_connected, egui::Button::new(t6m).small()).clicked() {
                             let _ = self.cmd_tx.send(Command::Rf2kSetTuner6m(!self.rf2k_tuner_6m));
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Band gap:");
-                        let bg = if self.rf2k_band_gap_allowed { "ON" } else { "OFF" };
+                        ui.label(rust_i18n::t!("dev_band_gap").to_string());
+                        let bg = if self.rf2k_band_gap_allowed { rust_i18n::t!("dev_on_upper").to_string() } else { rust_i18n::t!("dev_off_upper").to_string() };
                         if ui.add_enabled(self.rf2k_connected, egui::Button::new(bg).small()).clicked() {
                             let _ = self.cmd_tx.send(Command::Rf2kSetBandGap(!self.rf2k_band_gap_allowed));
                         }
@@ -992,7 +1000,7 @@ impl SdrRemoteApp {
 
                     if !self.rf2k_error_history.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("Error History").strong());
+                        ui.label(RichText::new(rust_i18n::t!("dev_error_history").to_string()).strong());
                         egui::ScrollArea::vertical().max_height(100.0).id_salt("rf2k_err_hist_c").show(ui, |ui| {
                             for (time, err) in self.rf2k_error_history.iter().rev() {
                                 ui.horizontal(|ui| {
@@ -1004,8 +1012,8 @@ impl SdrRemoteApp {
                     }
 
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Dangerous").strong());
-                    let zero_btn = egui::Button::new(RichText::new("Zero FRAM").color(Color32::from_rgb(255, 100, 100)));
+                    ui.label(RichText::new(rust_i18n::t!("dev_dangerous").to_string()).strong());
+                    let zero_btn = egui::Button::new(RichText::new(rust_i18n::t!("dev_zero_fram").to_string()).color(Color32::from_rgb(255, 100, 100)));
                     if ui.add_enabled(self.rf2k_connected, zero_btn).clicked() {
                         self.rf2k_confirm_zero_fram = true;
                     }
@@ -1014,36 +1022,36 @@ impl SdrRemoteApp {
 
             // Confirmation dialogs
             if self.rf2k_confirm_high_power {
-                egui::Window::new("WARNING")
+                egui::Window::new(rust_i18n::t!("dev_warning_upper").to_string())
                     .collapsible(false).resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ui.ctx(), |ui| {
-                        ui.label("Setting HIGH power can damage equipment.");
-                        ui.label("Are you sure?");
+                        ui.label(rust_i18n::t!("dev_high_power_warn1").to_string());
+                        ui.label(rust_i18n::t!("dev_are_you_sure").to_string());
                         ui.horizontal(|ui| {
-                            if ui.button("Yes, set HIGH").clicked() {
+                            if ui.button(rust_i18n::t!("dev_yes_set_high").to_string()).clicked() {
                                 let _ = self.cmd_tx.send(Command::Rf2kSetHighPower(true));
                                 self.rf2k_confirm_high_power = false;
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(rust_i18n::t!("dev_cancel").to_string()).clicked() {
                                 self.rf2k_confirm_high_power = false;
                             }
                         });
                     });
             }
             if self.rf2k_confirm_zero_fram {
-                egui::Window::new("DESTRUCTIVE")
+                egui::Window::new(rust_i18n::t!("dev_destructive").to_string())
                     .collapsible(false).resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ui.ctx(), |ui| {
-                        ui.label("All tuner memories will be erased.");
-                        ui.label("This cannot be undone!");
+                        ui.label(rust_i18n::t!("dev_all_mem_erased").to_string());
+                        ui.label(rust_i18n::t!("dev_cannot_be_undone").to_string());
                         ui.horizontal(|ui| {
-                            if ui.button(RichText::new("Yes, Zero FRAM").color(Color32::from_rgb(255, 80, 80))).clicked() {
+                            if ui.button(RichText::new(rust_i18n::t!("dev_yes_zero_fram").to_string()).color(Color32::from_rgb(255, 80, 80))).clicked() {
                                 let _ = self.cmd_tx.send(Command::Rf2kZeroFRAM);
                                 self.rf2k_confirm_zero_fram = false;
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(rust_i18n::t!("dev_cancel").to_string()).clicked() {
                                 self.rf2k_confirm_zero_fram = false;
                             }
                         });
@@ -1052,7 +1060,7 @@ impl SdrRemoteApp {
 
             // --- Drive Config section ---
             ui.add_space(6.0);
-            let drive_header = if self.rf2k_show_drive_config { "Drive Config ▼" } else { "Drive Config ▶" };
+            let drive_header = if self.rf2k_show_drive_config { rust_i18n::t!("dev_drive_config_expanded").to_string() } else { rust_i18n::t!("dev_drive_config_collapsed").to_string() };
             if ui.selectable_label(self.rf2k_show_drive_config, RichText::new(drive_header).strong()).clicked() {
                 self.rf2k_show_drive_config = !self.rf2k_show_drive_config;
                 if self.rf2k_show_drive_config && !self.rf2k_drive_loaded {
@@ -1074,7 +1082,7 @@ impl SdrRemoteApp {
                     let bands = ["160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"];
                     let categories = ["SSB", "AM", "CONT"];
                     egui::Grid::new("rf2k_drive_grid_c").striped(true).min_col_width(40.0).show(ui, |ui| {
-                        ui.label(RichText::new("Band").strong());
+                        ui.label(RichText::new(rust_i18n::t!("dev_band").to_string()).strong());
                         for cat in &categories { ui.label(RichText::new(*cat).strong()); }
                         ui.end_row();
                         for band_idx in 0..11 {
@@ -1090,7 +1098,7 @@ impl SdrRemoteApp {
                         }
                     });
                     ui.add_space(4.0);
-                    if ui.add_enabled(self.rf2k_connected, egui::Button::new("Save to Pi")).clicked() {
+                    if ui.add_enabled(self.rf2k_connected, egui::Button::new(rust_i18n::t!("dev_save_to_pi").to_string())).clicked() {
                         for cat_idx in 0..3u8 {
                             let current = match cat_idx { 0 => &self.rf2k_drive_config_ssb, 1 => &self.rf2k_drive_config_am, _ => &self.rf2k_drive_config_cont };
                             for band_idx in 0..11u8 {
@@ -1107,19 +1115,19 @@ impl SdrRemoteApp {
 
         // FW Close confirmation popup
         if self.rf2k_confirm_fw_close {
-            egui::Window::new("FW Close confirmation")
+            egui::Window::new(rust_i18n::t!("dev_fw_close_confirm").to_string())
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    ui.label("Are you sure? This will close the RF2K-S firmware.");
+                    ui.label(rust_i18n::t!("dev_fw_close_confirm_body").to_string());
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Yes").clicked() {
+                        if ui.button(rust_i18n::t!("dev_yes").to_string()).clicked() {
                             let _ = self.cmd_tx.send(Command::Rf2kClose);
                             self.rf2k_confirm_fw_close = false;
                         }
-                        if ui.button("No").clicked() {
+                        if ui.button(rust_i18n::t!("dev_no").to_string()).clicked() {
                             self.rf2k_confirm_fw_close = false;
                         }
                     });
@@ -1134,15 +1142,15 @@ impl SdrRemoteApp {
             ui.heading("UltraBeam RCU-06");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.ub_connected {
-                    ui.colored_label(Color32::GREEN, "Online");
+                    ui.colored_label(Color32::GREEN, rust_i18n::t!("dev_online").to_string());
                 } else {
-                    ui.colored_label(Color32::RED, "Offline");
+                    ui.colored_label(Color32::RED, rust_i18n::t!("dev_offline").to_string());
                 }
                 if self.ub_fw_major > 0 {
                     ui.label(format!("FW {}.{}", self.ub_fw_major, self.ub_fw_minor));
                 }
                 ui.separator();
-                if super::helpers::chevron_label(ui, self.ub_show_menu, "Menu").clicked() {
+                if super::helpers::chevron_label(ui, self.ub_show_menu, rust_i18n::t!("dev_menu").to_string()).clicked() {
                     self.ub_show_menu = !self.ub_show_menu;
                     if self.ub_show_menu {
                         let _ = self.cmd_tx.send(Command::UbReadElements);
@@ -1169,25 +1177,29 @@ impl SdrRemoteApp {
 
         // Direction buttons
         ui.horizontal(|ui| {
-            ui.label("Direction:");
-            let dirs = [("Normal", 0u8), ("180\u{00B0}", 1), ("BiDir", 2)];
-            for &(label, dir) in &dirs {
-                let is_active = self.ub_direction == dir;
+            ui.label(rust_i18n::t!("dev_direction").to_string());
+            let dirs: [(String, u8); 3] = [
+                (rust_i18n::t!("dev_normal").to_string(), 0u8),
+                ("180\u{00B0}".to_string(), 1),
+                ("BiDir".to_string(), 2),
+            ];
+            for (label, dir) in &dirs {
+                let is_active = self.ub_direction == *dir;
                 let btn = if is_active {
-                    egui::Button::new(RichText::new(label).strong().color(Color32::WHITE))
+                    egui::Button::new(RichText::new(label.as_str()).strong().color(Color32::WHITE))
                         .fill(Color32::from_rgb(50, 180, 50))
                 } else {
-                    egui::Button::new(label)
+                    egui::Button::new(label.as_str())
                 };
                 if ui.add_enabled(self.ub_connected, btn).clicked() {
-                    let _ = self.cmd_tx.send(Command::UbSetFrequency(self.ub_frequency_khz, dir));
+                    let _ = self.cmd_tx.send(Command::UbSetFrequency(self.ub_frequency_khz, *dir));
                 }
             }
         });
 
         // Frequency step buttons + sync
         ui.horizontal(|ui| {
-            ui.label("Freq step:");
+            ui.label(rust_i18n::t!("dev_freq_step").to_string());
             for &(label, step) in &[("-100", -100i32), ("-25", -25), ("+25", 25), ("+100", 100)] {
                 if ui.add_enabled(self.ub_connected && self.ub_frequency_khz > 0,
                     egui::Button::new(label)).clicked() {
@@ -1200,15 +1212,15 @@ impl SdrRemoteApp {
             let track_khz = (track_hz / 1000) as u16;
             let can_sync = self.ub_connected && track_khz >= 1800 && track_khz <= 54000
                 && track_khz != self.ub_frequency_khz;
-            let sync_btn = egui::Button::new(RichText::new(format!("Sync {}", track_label)).strong())
+            let sync_btn = egui::Button::new(RichText::new(rust_i18n::t!("dev_sync_fmt", label = track_label).to_string()).strong())
                 .fill(if can_sync { Color32::from_rgb(50, 130, 200) } else { Color32::from_rgb(80, 80, 80) });
             if ui.add_enabled(can_sync, sync_btn).on_hover_text(
-                format!("Stel UltraBeam in op {}: {} kHz", track_label, track_khz)
+                rust_i18n::t!("dev_set_ultrabeam_to", label = track_label, khz = track_khz).to_string()
             ).clicked() {
                 let _ = self.cmd_tx.send(Command::UbSetFrequency(track_khz, self.ub_direction));
             }
-            ui.checkbox(&mut self.ub_auto_track, "Auto")
-                .on_hover_text(format!("Auto-track {} frequency", track_label));
+            ui.checkbox(&mut self.ub_auto_track, rust_i18n::t!("dev_auto").to_string())
+                .on_hover_text(rust_i18n::t!("dev_auto_track_fmt", label = track_label).to_string());
         });
 
         // Per-motor moving + progress bar (alleen tonen bij beweging).
@@ -1241,7 +1253,7 @@ impl SdrRemoteApp {
 
         // Band presets
         ui.horizontal_wrapped(|ui| {
-            ui.label("Band:");
+            ui.label(rust_i18n::t!("dev_band_colon").to_string());
             let presets: &[(&str, u16)] = &[
                 ("40m", 7100), ("30m", 10125), ("20m", 14175), ("17m", 18118),
                 ("15m", 21225), ("12m", 24940), ("10m", 28500), ("6m", 50150),
@@ -1259,33 +1271,33 @@ impl SdrRemoteApp {
         // Retract with confirmation
         ui.horizontal(|ui| {
             if ui.add_enabled(self.ub_connected,
-                egui::Button::new(RichText::new("Retract").color(Color32::from_rgb(255, 100, 100)))
+                egui::Button::new(RichText::new(rust_i18n::t!("dev_retract").to_string()).color(Color32::from_rgb(255, 100, 100)))
             ).clicked() {
                 self.ub_confirm_retract = true;
             }
 
             // Read elements
             if ui.add_enabled(self.ub_connected,
-                egui::Button::new("Read Elements")).clicked() {
+                egui::Button::new(rust_i18n::t!("dev_read_elements").to_string())).clicked() {
                 let _ = self.cmd_tx.send(Command::UbReadElements);
             }
         });
 
         // Retract confirmation popup
         if self.ub_confirm_retract {
-            egui::Window::new("Retract confirmation")
+            egui::Window::new(rust_i18n::t!("dev_retract_confirm").to_string())
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    ui.label("Are you sure? This will retract all elements.");
+                    ui.label(rust_i18n::t!("dev_retract_confirm_body").to_string());
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Yes").clicked() {
+                        if ui.button(rust_i18n::t!("dev_yes").to_string()).clicked() {
                             let _ = self.cmd_tx.send(Command::UbRetract);
                             self.ub_confirm_retract = false;
                         }
-                        if ui.button("No").clicked() {
+                        if ui.button(rust_i18n::t!("dev_no").to_string()).clicked() {
                             self.ub_confirm_retract = false;
                         }
                     });
@@ -1298,10 +1310,10 @@ impl SdrRemoteApp {
         if self.ub_show_menu {
             ui.add_space(8.0);
             ui.separator();
-            ui.label(RichText::new("Menu").strong().size(16.0));
+            ui.label(RichText::new(rust_i18n::t!("dev_menu").to_string()).strong().size(16.0));
 
             ui.add_space(4.0);
-            ui.label(RichText::new("Element Lengths").strong());
+            ui.label(RichText::new(rust_i18n::t!("dev_element_lengths").to_string()).strong());
             ui.indent("ub_elements_client", |ui| {
                 for i in 0..6 {
                     let len = self.ub_elements_mm[i];
@@ -1322,28 +1334,29 @@ impl SdrRemoteApp {
                         ui.label(format!("E{}: --", i + 1));
                     }
                 }
-                if ui.add_enabled(self.ub_connected, egui::Button::new("Refresh")).clicked() {
+                if ui.add_enabled(self.ub_connected, egui::Button::new(rust_i18n::t!("dev_refresh").to_string())).clicked() {
                     let _ = self.cmd_tx.send(Command::UbReadElements);
                 }
             });
 
             ui.add_space(8.0);
-            ui.label(RichText::new("Controller Info").strong());
+            ui.label(RichText::new(rust_i18n::t!("dev_controller_info").to_string()).strong());
             ui.indent("ub_info_client", |ui| {
-                ui.label("Model: 2 elements 6-40");
+                ui.label(rust_i18n::t!("dev_model_2el").to_string());
                 if self.ub_fw_major > 0 {
                     ui.label(format!("FW: v{}.{:02}", self.ub_fw_major, self.ub_fw_minor));
                 }
                 if self.ub_freq_min_mhz > 0 && self.ub_freq_max_mhz > 0 {
-                    ui.label(format!("Freq range: {} - {} MHz", self.ub_freq_min_mhz, self.ub_freq_max_mhz));
+                    let min = self.ub_freq_min_mhz; let max = self.ub_freq_max_mhz;
+                    ui.label(rust_i18n::t!("dev_freq_range_fmt", min = min, max = max).to_string());
                 }
-                let op_label = match self.ub_operation {
-                    0 => "Normal",
-                    2 => "User Adjust",
-                    3 => "Setup",
-                    _ => "Unknown",
+                let op_label: String = match self.ub_operation {
+                    0 => rust_i18n::t!("dev_normal").to_string(),
+                    2 => rust_i18n::t!("dev_user_adjust").to_string(),
+                    3 => rust_i18n::t!("dev_setup").to_string(),
+                    _ => rust_i18n::t!("dev_unknown").to_string(),
                 };
-                ui.label(format!("Operation mode: {}", op_label));
+                ui.label(rust_i18n::t!("dev_operation_mode_fmt", mode = op_label).to_string());
             });
         }
     }
@@ -1351,12 +1364,12 @@ impl SdrRemoteApp {
     pub(super) fn render_device_rotor(&mut self, ui: &mut egui::Ui) {
         // Header
         ui.horizontal(|ui| {
-            ui.heading("Rotor");
+            ui.heading(rust_i18n::t!("dev_rotor").to_string());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.rotor_connected {
-                    ui.colored_label(Color32::GREEN, "Online");
+                    ui.colored_label(Color32::GREEN, rust_i18n::t!("dev_online").to_string());
                 } else {
-                    ui.colored_label(Color32::RED, "Offline");
+                    ui.colored_label(Color32::RED, rust_i18n::t!("dev_offline").to_string());
                 }
             });
         });
@@ -1374,13 +1387,13 @@ impl SdrRemoteApp {
 
         // Stop button + GoTo text input
         ui.horizontal(|ui| {
-            if ui.add_enabled(self.rotor_connected, egui::Button::new("STOP").min_size(egui::vec2(70.0, 30.0))).clicked() {
+            if ui.add_enabled(self.rotor_connected, egui::Button::new(rust_i18n::t!("dev_stop").to_string()).min_size(egui::vec2(70.0, 30.0))).clicked() {
                 let _ = self.cmd_tx.send(Command::RotorStop);
             }
 
-            ui.label("GoTo:");
+            ui.label(rust_i18n::t!("dev_goto").to_string());
             let resp = ui.add(egui::TextEdit::singleline(&mut self.rotor_goto_input).desired_width(60.0));
-            if (ui.add_enabled(self.rotor_connected, egui::Button::new("Go")).clicked()
+            if (ui.add_enabled(self.rotor_connected, egui::Button::new(rust_i18n::t!("dev_go").to_string())).clicked()
                 || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
                 && self.rotor_connected
             {
@@ -1498,7 +1511,28 @@ impl SdrRemoteApp {
         }
     }
 
+    /// Band/mode-beschikbaarheid van Yaesu-controls (FT-991A/FTX-1), per slot:
+    /// - `hf_6m`: IPO/ATT en de interne ATU bestaan alleen op HF+6m (<54 MHz); op
+    ///   2m/70cm heeft de radio geen menu-optie ervoor (tester-melding: knop klapt
+    ///   na ~1 s terug). Buiten HF+6m uitgrijzen.
+    /// - `is_fm`: NB/DNF/Notch/Contour + ATU zijn in FM niet bruikbaar op de 991A
+    ///   (NAR/AGC/DNR werken volgens de 991A OM juist wél in FM).
+    /// yaesu_mode-encoding: 5 = FM (zie render_yaesu_popout mode_label).
+    fn yaesu_band_mode(&self, slot: u8) -> (bool, bool) {
+        let (freq, mode) = if slot == 0 {
+            (self.yaesu_freq_a, self.yaesu_mode)
+        } else {
+            (self.yaesu2_freq_a, self.yaesu2_mode)
+        };
+        // freq >= 1: bij connect (freq nog 0) geen HF-only-knoppen aanzetten vóór de
+        // band bekend is (pariteit met Android). is_fm = FM-familie (5=FM, 12=C4FM).
+        (freq >= 1 && freq < 54_000_000, matches!(mode, 5 | 12))
+    }
+
     fn render_yaesu_dsp_block(&mut self, ui: &mut egui::Ui, slot: u8, toggles: u32, levels: [u8; 16]) {
+        let (hf_6m, is_fm) = self.yaesu_band_mode(slot);
+        // BK-IN is CW-only (991A OM: Break-In staat volledig onder CW Mode Operation).
+        let is_cw = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 3 | 4);
         let toggle_btn = |label: &str, on: bool| {
             if on {
                 egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
@@ -1509,13 +1543,13 @@ impl SdrRemoteApp {
         };
         ui.horizontal_wrapped(|ui| {
             ui.label("DSP:");
-            let att_on = toggles & (1 << 0) != 0; // YaesuCtrl::RfAtt
-            if ui.add(toggle_btn("ATT", att_on)).clicked() {
+            let att_on = toggles & (1 << 0) != 0; // YaesuCtrl::RfAtt (HF+6m only)
+            if ui.add_enabled(hf_6m, toggle_btn("ATT", att_on)).clicked() {
                 let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 0, if att_on { 0 } else { 1 }));
                 self.yaesu_toggle_flip(slot, 0);
             }
-            let bi_on = toggles & (1 << 1) != 0; // YaesuCtrl::BreakIn
-            if ui.add(toggle_btn("BK-IN", bi_on)).clicked() {
+            let bi_on = toggles & (1 << 1) != 0; // YaesuCtrl::BreakIn (CW-only)
+            if ui.add_enabled(is_cw, toggle_btn("BK-IN", bi_on)).clicked() {
                 let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 1, if bi_on { 0 } else { 1 }));
                 self.yaesu_toggle_flip(slot, 1);
             }
@@ -1524,8 +1558,8 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 2, if nar_on { 0 } else { 1 }));
                 self.yaesu_toggle_flip(slot, 2);
             }
-            let dnf_on = toggles & (1 << 3) != 0; // YaesuCtrl::AutoNotch (DNF)
-            if ui.add(toggle_btn("DNF", dnf_on)).clicked() {
+            let dnf_on = toggles & (1 << 3) != 0; // YaesuCtrl::AutoNotch (DNF; niet in FM)
+            if ui.add_enabled(!is_fm, toggle_btn("DNF", dnf_on)).clicked() {
                 let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 3, if dnf_on { 0 } else { 1 }));
                 self.yaesu_toggle_flip(slot, 3);
             }
@@ -1544,7 +1578,7 @@ impl SdrRemoteApp {
             // Pre-amp/IPO cyclus (HF) - YaesuCtrl::PreAmp index 7. Label toont de stand.
             let ipo = levels[7];
             let ipo_lbl = match ipo { 0 => "IPO", 1 => "AMP1", _ => "AMP2" };
-            if ui.add(egui::Button::new(RichText::new(ipo_lbl).size(11.0))
+            if ui.add_enabled(hf_6m, egui::Button::new(RichText::new(ipo_lbl).size(11.0))
                 .min_size(egui::vec2(52.0, 20.0))).clicked() {
                 let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 7, ((ipo + 1) % 3) as u16));
             }
@@ -1561,8 +1595,10 @@ impl SdrRemoteApp {
         let is_ftx1 = (if slot == 0 { self.yaesu_model } else { self.yaesu2_model }) == 1;
         // APF is CW-only (mode 3=CW, 4=CW-R); buiten CW uitgrijzen.
         let is_cw = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 3 | 4);
+        // NB/DNR/Contour/Notch zijn in FM (mode 5) niet bruikbaar -> uitgrijzen.
+        let is_fm = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 5 | 12);
         let toggles = if slot == 0 { self.yaesu_feature_toggles } else { self.yaesu2_feature_toggles };
-        egui::CollapsingHeader::new("DSP/Levels")
+        egui::CollapsingHeader::new(rust_i18n::t!("dev_dsp_levels").to_string())
             .id_salt(("yaesu_levels", slot))
             .show(ui, |ui| {
                 // (level-ctrl, label, min, max, ftx1_only, on/off-ctrl voor 991A)
@@ -1576,6 +1612,10 @@ impl SdrRemoteApp {
                 ];
                 for (j, &(ctrl, label, lo, hi, ftx1_only, toggle_ctrl)) in specs.iter().enumerate() {
                     if ftx1_only && !is_ftx1 { continue; }
+                    // NB niet in FM (tester-bevestigd op hardware). DNR blijft: de 991A OM
+                    // beperkt DNR-ruisreductie niet tot niet-FM. AMC (TX-audio) altijd bruikbaar.
+                    let row_enabled = !(is_fm && label == "NB");
+                    ui.add_enabled_ui(row_enabled, |ui| {
                     ui.horizontal(|ui| {
                         // 991A: aparte aan/uit-knop vóór de niveau-slider (FTX-1 codeert
                         // "uit" in het niveau zelf, dus daar geen toggle).
@@ -1611,6 +1651,7 @@ impl SdrRemoteApp {
                             }
                         }
                     });
+                    });
                 }
                 // Fase D: Contour / APF / Manual-Notch - aan/uit-knop + frequentie-slider.
                 let dspecs: [(usize, &str, u8, u8, i32, i32); 3] = [
@@ -1619,7 +1660,11 @@ impl SdrRemoteApp {
                     (2, "Notch", 17, 20, 1, 320),
                 ];
                 for &(fidx, label, on_ctrl, freq_ctrl, flo, fhi) in dspecs.iter() {
-                    let enabled = label != "APF" || is_cw; // APF alleen in CW
+                    let enabled = match label {
+                        "APF" => is_cw,                    // APF alleen in CW (beide OM's)
+                        "Contour" => !is_fm && !is_cw,     // Contour: niet in FM, niet in CW (FTX-1 OM)
+                        _ => !is_fm,                       // Notch: niet in FM (manual notch werkt wel in CW)
+                    };
                     ui.add_enabled_ui(enabled, |ui| {
                     ui.horizontal(|ui| {
                         let on = toggles & (1 << on_ctrl) != 0;
@@ -1681,11 +1726,14 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, 22, if xit_on { 0 } else { 1 }));
                 self.yaesu_toggle_flip(slot, 22);
             }
-            // Offset-display (signed): oranje als ≠0, grijs als 0.
-            let (txt, col) = if offset == 0 {
-                (" +0000 Hz".to_string(), Color32::from_rgb(120, 120, 120))
-            } else {
+            // Offset-display (signed): oranje alleen als RIT/XIT AAN staat én ≠0; anders
+            // grijs. De 991A kan een opgeslagen P3-offset teruggeven terwijl de clarifier
+            // uit is - die is dan niet actief, dus niet als actieve offset tonen.
+            let clar_active = rit_on || xit_on;
+            let (txt, col) = if clar_active && offset != 0 {
                 (format!("{:+05} Hz", offset), Color32::from_rgb(255, 170, 40))
+            } else {
+                (" +0000 Hz".to_string(), Color32::from_rgb(120, 120, 120))
             };
             ui.label(RichText::new(txt).size(11.0).family(egui::FontFamily::Monospace).color(col));
         });
@@ -1711,7 +1759,7 @@ impl SdrRemoteApp {
     pub(super) fn render_yaesu_popout(&mut self, ui: &mut egui::Ui) {
         let mode_label = match self.yaesu_mode {
             0 => "LSB", 1 => "USB", 3 => "CW-L", 4 => "CW-U",
-            5 => "FM", 6 => "AM", 7 => "DIGU", 9 => "DIGL",
+            5 => "FM", 6 => "AM", 7 => "DIGU", 9 => "DIGL", 12 => "C4FM",
             _ => "?",
         };
 
@@ -1778,12 +1826,12 @@ impl SdrRemoteApp {
             use sdr_remote_core::protocol::ControlId;
             let btn = |text: &str| egui::Button::new(RichText::new(text).size(11.0))
                 .min_size(egui::vec2(38.0, 20.0));
-            let mode_names = ["LSB","USB","CW","CW-R","FM","AM","DIG-U","DIG-L","RTTY","C4FM","DATA-FM","DATA-USB"];
+            let mode_names = ["LSB","USB","CW-L","CW-U","FM","AM","DIG-U","DIG-L","RTTY","C4FM","DATA-FM","DATA-USB"];
             let mode_codes: &[u8] = &[0, 1, 3, 4, 5, 6, 7, 9, 9, 5, 5, 7];
 
             // Mode buttons
             ui.horizontal(|ui| {
-                ui.label("Mode:");
+                ui.label(rust_i18n::t!("dev_mode").to_string());
                 for (i, &name) in mode_names.iter().enumerate().take(8) {
                     let mb = if mode_codes[i] == self.yaesu_mode {
                         egui::Button::new(RichText::new(name).size(11.0).color(Color32::WHITE))
@@ -1814,19 +1862,21 @@ impl SdrRemoteApp {
                 if ui.add(btn("A=B")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 0));
                 }
+                let split_lbl = rust_i18n::t!("dev_split").to_string();
                 let split_btn = if self.yaesu_split_active {
-                    egui::Button::new(RichText::new("Split").size(11.0).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(split_lbl.as_str()).size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(180, 100, 0)).min_size(egui::vec2(38.0, 20.0))
-                } else { btn("Split") };
+                } else { btn(split_lbl.as_str()) };
                 if ui.add(split_btn).clicked() {
                     self.yaesu_split_active = !self.yaesu_split_active;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton,
                         if self.yaesu_split_active { 7 } else { 8 }));
                 }
+                let scan_lbl = rust_i18n::t!("dev_scan").to_string();
                 let scan_btn = if self.yaesu_scan_active {
-                    egui::Button::new(RichText::new("Scan").size(11.0).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(scan_lbl.as_str()).size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(0, 120, 0)).min_size(egui::vec2(38.0, 20.0))
-                } else { btn("Scan") };
+                } else { btn(scan_lbl.as_str()) };
                 if ui.add(scan_btn).clicked() {
                     self.yaesu_scan_active = !self.yaesu_scan_active;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton,
@@ -1834,12 +1884,15 @@ impl SdrRemoteApp {
                 }
                 // Interne ATU: momentane Tune (band-gated: HF+6m, <54 MHz) + aan/uit-toggle
                 // die de echte radio-stand toont (via AC;-poll). PATCH-yaesu-internal-atu.
-                let can_tune = self.yaesu_connected && self.yaesu_freq_a < 54_000_000;
+                // ATU: HF+6m (<54 MHz) en niet in FM (mode 5).
+                let atu_avail = self.yaesu_freq_a >= 1 && self.yaesu_freq_a < 54_000_000 && !matches!(self.yaesu_mode, 5 | 12);
+                let can_tune = self.yaesu_connected && atu_avail;
+                let tune_lbl = rust_i18n::t!("dev_tune").to_string();
                 let tune_btn = if self.yaesu_tuner_state == 2 {
                     // Actief aan het tunen -> rode voortgangsindicatie.
-                    egui::Button::new(RichText::new("Tune").size(11.0).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(tune_lbl.as_str()).size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(180, 0, 0)).min_size(egui::vec2(38.0, 20.0))
-                } else { btn("Tune") };
+                } else { btn(tune_lbl.as_str()) };
                 if ui.add_enabled(can_tune, tune_btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 3)); // start tuning (momentaan)
                 }
@@ -1848,7 +1901,7 @@ impl SdrRemoteApp {
                     egui::Button::new(RichText::new("ATU").size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(38.0, 20.0))
                 } else { btn("ATU") };
-                if ui.add(atu_btn).clicked() {
+                if ui.add_enabled(atu_avail, atu_btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton,
                         if atu_on { 4 } else { 15 })); // toggle: uit (AC000) / aan (AC001)
                 }
@@ -1876,18 +1929,29 @@ impl SdrRemoteApp {
                 }
 
                 ui.label("PWR");
-                let pwr_slider = egui::Slider::new(&mut self.yaesu_rf_power, 0..=100)
+                // Sliderbereik 5..=max voor de huidige band (uit EX137-140); 0/onbekend -> 100.
+                let pwr_max = if self.yaesu_tx_power_max >= 5 { self.yaesu_tx_power_max } else { 100 };
+                if self.yaesu_rf_power > pwr_max { self.yaesu_rf_power = pwr_max; }
+                let pwr_slider = egui::Slider::new(&mut self.yaesu_rf_power, 5..=pwr_max)
                     .custom_formatter(|v, _| format!("{:.0}W", v));
-                let resp = ui.add_sized([slider_w, 16.0], pwr_slider);
-                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_rf_power, 0..=100, 1.0);
+                let resp = ui.add_sized([slider_w, 16.0], pwr_slider)
+                    .on_hover_text(rust_i18n::t!("dev_max_for_band", w = pwr_max).to_string());
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_rf_power, 5..=pwr_max, 1.0);
                 if resp.changed() || scrolled {
-                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuRfPower, self.yaesu_rf_power as u16));
+                    // Blokkeer de readback-sync zolang je aan het schuiven bent, zodat de
+                    // (tragere) radio-terugmelding de slider niet heen-en-weer laat bouncen.
                     self.yaesu_control_changed_at = Some(Instant::now());
+                }
+                // Stuur pas bij LOSLATEN (of klik/scroll), niet elke frame tijdens het slepen.
+                if scrolled || resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuRfPower, self.yaesu_rf_power as u16));
+                    self.yaesu_power_pending = Some(self.yaesu_rf_power);
+                    self.yaesu_power_pending_at = Some(std::time::Instant::now());
                 }
                 ui.end_row();
 
                 ui.allocate_space(egui::vec2(label_w, 0.0));
-                ui.label("RF Gain");
+                ui.label(rust_i18n::t!("dev_rf_gain").to_string());
                 let rf_slider = egui::Slider::new(&mut self.yaesu_rf_gain, 0..=255)
                     .custom_formatter(|v, _| format!("{:.0}", v));
                 let resp = ui.add_sized([slider_w, 16.0], rf_slider);
@@ -1902,8 +1966,16 @@ impl SdrRemoteApp {
 
         ui.separator();
 
-        // S-meter bar
-        yaesu_smeter_bar(ui, self.yaesu_smeter, self.yaesu_smeter_peak);
+        // S-meter (klik wisselt balk <-> analoog; analoog op dezelfde plek als de balk).
+        let mw = ui.available_width().min(350.0).max(200.0);
+        let mrect = if self.meter_analog[super::M_YAESU1] {
+            smeter_analog_sized(ui,
+                yaesu_raw_to_dbm(self.yaesu_smeter), yaesu_raw_to_dbm(self.yaesu_smeter_peak),
+                false, false, Some((mw, 110.0)))
+        } else {
+            yaesu_smeter_bar(ui, self.yaesu_smeter, self.yaesu_smeter_peak)
+        };
+        self.meter_click(ui, mrect, super::M_YAESU1);
 
         ui.separator();
 
@@ -1916,7 +1988,32 @@ impl SdrRemoteApp {
             };
             ui.colored_label(tx_color, RichText::new(tx_text).size(16.0).strong());
             ui.separator();
-            ui.label(if self.yaesu_power_on { "Power ON" } else { "Power OFF" });
+            // Radio-aan/uit via CAT PS. ALLEEN veilig als klikbare knop op de 991A
+            // (code 0): daar is PS0 = standby, CAT/USB blijft leven -> remote weer
+            // aan. De FTX-1 (en onbekende types) gaan bij PS0 ECHT uit incl. USB ->
+            // niet meer remote aan te zetten. Daarom voor die alleen een status-label.
+            let on_col = Color32::from_rgb(0, 150, 0);
+            let off_col = Color32::from_rgb(90, 90, 90);
+            if self.yaesu_model == 0 {
+                let (txt, col): (String, Color32) = if self.yaesu_power_on { (rust_i18n::t!("dev_power_on_upper").to_string(), on_col) } else { (rust_i18n::t!("dev_standby").to_string(), off_col) };
+                if ui.add(egui::Button::new(RichText::new(txt).color(Color32::WHITE)).fill(col))
+                    .on_hover_text(rust_i18n::t!("dev_991a_standby_hover").to_string())
+                    .clicked()
+                {
+                    let _ = self.cmd_tx.send(Command::SetControl(
+                        sdr_remote_core::protocol::ControlId::YaesuPowerOnOff,
+                        if self.yaesu_power_on { 0 } else { 1 }));
+                }
+            } else {
+                ui.colored_label(if self.yaesu_power_on { on_col } else { off_col },
+                    if self.yaesu_power_on { rust_i18n::t!("dev_power_on_upper").to_string() } else { rust_i18n::t!("dev_power_off_upper").to_string() })
+                    .on_hover_text(rust_i18n::t!("dev_radio_powers_off_hover").to_string());
+            }
+            if self.yaesu_hi_swr {
+                ui.separator();
+                ui.colored_label(theme::TL_SWR_ALERT_TEXT,
+                    RichText::new(rust_i18n::t!("dev_high_swr").to_string()).size(16.0).strong());
+            }
         });
 
         ui.separator();
@@ -1927,7 +2024,7 @@ impl SdrRemoteApp {
         // Mic gain slider for Yaesu USB TX audio. Display 0.5 maps
         // to the empirically matched internal gain 0.2.
         ui.horizontal(|ui| {
-            ui.label("Mic gain:");
+            ui.label(rust_i18n::t!("dev_mic_gain").to_string());
             let mut mic_gain_display = super::yaesu_mic_gain_to_display(self.yaesu_mic_gain);
             let slider = egui::Slider::new(&mut mic_gain_display, 0.05..=1.0)
                 .logarithmic(true)
@@ -1955,7 +2052,7 @@ impl SdrRemoteApp {
         if super::helpers::chevron_label(
             ui,
             self.collapse_yaesu_memories,
-            RichText::new("Memory Channels").strong().size(14.0),
+            RichText::new(rust_i18n::t!("dev_memory_channels").to_string()).strong().size(14.0),
         )
         .clicked()
         {
@@ -2015,7 +2112,7 @@ impl SdrRemoteApp {
         if super::helpers::chevron_label(
             ui,
             self.collapse_yaesu_menu,
-            RichText::new("Radio Settings (EX Menu)").strong().size(14.0),
+            RichText::new(rust_i18n::t!("dev_radio_settings").to_string()).strong().size(14.0),
         )
         .clicked()
         {
@@ -2030,27 +2127,38 @@ impl SdrRemoteApp {
     }
 
     /// Paneel-/venster-naam voor een radio-slot (PATCH-dual-radio-991a-ftx1).
-    /// Model uit RadioInfo (0=991A, 1=FTX1). Bij twee dezelfde modellen krijgt
-    /// elk een index ("991A 1"/"991A 2"); verschillende modellen = kale naam.
-    /// Window-titel per radio-slot: "ThetisLink - Radio {N}: Yaesu {model}".
-    /// Generiek, gebruikt door beide popout-windows (model uit RadioInfo).
+    /// Window-titel per radio-slot: "ThetisLink - Yaesu {N}: {type}" — consistent
+    /// met de server-tab en de detail-tab (via yaesu_slot_label). Type uit RadioInfo.
     pub(super) fn yaesu_window_title(&self, slot: u8) -> String {
-        let code = if slot == 0 { self.yaesu_model } else { self.yaesu2_model };
-        let model = match code {
-            0 => "Yaesu FT-991A",
-            1 => "Yaesu FTX-1",
-            _ => "Yaesu",
-        };
-        format!("ThetisLink - Radio {}: {}", slot + 1, model)
+        format!("ThetisLink - {}", self.yaesu_slot_label(slot))
     }
 
-    pub(super) fn yaesu_panel_name(&self, slot: u8) -> String {
+    /// Puur het server-gerapporteerde radio-type per slot (het RadioInfo-model-byte),
+    /// zonder slot-suffix. Naam komt uit de canonieke core-tabel (`radio_model_name`)
+    /// zodat een nieuw radiotype vanzelf meekomt. Voor de "Yaesu N: <type>"-weergave.
+    pub(super) fn yaesu_type_name(&self, slot: u8) -> &'static str {
         let code = if slot == 0 { self.yaesu_model } else { self.yaesu2_model };
-        let name = match code { 0 => "991A", 1 => "FTX1", _ => "Radio" };
-        if self.yaesu_model == self.yaesu2_model && self.yaesu2_connected {
-            format!("{} {}", name, slot + 1)
-        } else {
-            name.to_string()
+        sdr_remote_core::protocol::radio_model_name(code)
+    }
+
+    /// Consistente slot-weergave: "Yaesu 1: 991A" / "Yaesu 2: FTX1". Slotnummer +
+    /// het actieve type uit de server-config (RadioInfo). Overal in de server-tab.
+    pub(super) fn yaesu_slot_label(&self, slot: u8) -> String {
+        format!("Yaesu {}: {}", slot + 1, self.yaesu_type_name(slot))
+    }
+
+    /// Naam voor een packet-type in de bitstream/dataverbruik-uitsplitsing. Voor de
+    /// Yaesu-slot-gebonden types injecteert dit het consistente "Yaesu N: <type>"-
+    /// label (zelfde als levels/streams/recording); de rest valt terug op de
+    /// statische packet-type-tabel.
+    pub(super) fn bitstream_label(&self, t: u8) -> String {
+        match t {
+            0x16 => { let label = self.yaesu_slot_label(0); rust_i18n::t!("dev_audio_fmt", label = label).to_string() }
+            0x17 => { let label = self.yaesu_slot_label(0); rust_i18n::t!("dev_state_fmt", label = label).to_string() }
+            0x19 => { let label = self.yaesu_slot_label(0); rust_i18n::t!("dev_memory_data_fmt", label = label).to_string() }
+            0x25 => { let label = self.yaesu_slot_label(1); rust_i18n::t!("dev_audio_fmt", label = label).to_string() }
+            0x26 => { let label = self.yaesu_slot_label(1); rust_i18n::t!("dev_state_fmt", label = label).to_string() }
+            _ => super::screens::packet_type_label(t),
         }
     }
 
@@ -2065,7 +2173,7 @@ impl SdrRemoteApp {
     pub(super) fn render_yaesu_eq(&mut self, ui: &mut egui::Ui, slot: u8) {
         let mut collapse = if slot == 0 { self.collapse_yaesu_eq } else { self.collapse_yaesu2_eq };
         if super::helpers::chevron_label(ui, collapse,
-            RichText::new("Equalizer").strong().size(14.0)).clicked()
+            RichText::new(rust_i18n::t!("dev_equalizer").to_string()).strong().size(14.0)).clicked()
         {
             collapse = !collapse;
             if slot == 0 { self.collapse_yaesu_eq = collapse; } else { self.collapse_yaesu2_eq = collapse; }
@@ -2115,7 +2223,7 @@ impl SdrRemoteApp {
                             }
                         }
                     });
-                if ui.small_button("Save").clicked() && !active.is_empty() {
+                if ui.small_button(rust_i18n::t!("dev_save").to_string()).clicked() && !active.is_empty() {
                     let name = active.clone();
                     if let Some(p) = profiles.iter_mut().find(|(n, _, _, _)| *n == name) {
                         p.1 = enabled; p.2 = gains; p.3 = mic_gain;
@@ -2131,7 +2239,7 @@ impl SdrRemoteApp {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("New:");
+                ui.label(rust_i18n::t!("dev_new").to_string());
                 ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(100.0));
                 if ui.small_button("+").clicked() && !new_name.is_empty() {
                     let name = new_name.clone();
@@ -2219,7 +2327,7 @@ impl SdrRemoteApp {
     pub(super) fn render_yaesu2_panel(&mut self, ui: &mut egui::Ui) {
         let mode_label = match self.yaesu2_mode {
             0 => "LSB", 1 => "USB", 3 => "CW-L", 4 => "CW-U",
-            5 => "FM", 6 => "AM", 7 => "DIGU", 9 => "DIGL", _ => "?",
+            5 => "FM", 6 => "AM", 7 => "DIGU", 9 => "DIGL", 12 => "C4FM", _ => "?",
         };
         // A/B + V/M bovenaan (zelfde volgorde als 991A-paneel) + mode-label rechts.
         ui.horizontal(|ui| {
@@ -2283,10 +2391,10 @@ impl SdrRemoteApp {
         {
             let btn = |text: &str| egui::Button::new(RichText::new(text).size(11.0))
                 .min_size(egui::vec2(38.0, 20.0));
-            let mode_names = ["LSB", "USB", "CW", "CW-R", "FM", "AM", "DIG-U", "DIG-L"];
+            let mode_names = ["LSB", "USB", "CW-L", "CW-U", "FM", "AM", "DIG-U", "DIG-L"];
             let mode_codes: &[u8] = &[0, 1, 3, 4, 5, 6, 7, 9];
             ui.horizontal_wrapped(|ui| {
-                ui.label("Mode:");
+                ui.label(rust_i18n::t!("dev_mode").to_string());
                 for (i, &name) in mode_names.iter().enumerate() {
                     let mb = if mode_codes[i] == self.yaesu2_mode {
                         egui::Button::new(RichText::new(name).size(11.0).color(Color32::WHITE))
@@ -2322,19 +2430,21 @@ impl SdrRemoteApp {
                 if ui.add(btn("A=B")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 0));
                 }
+                let split_lbl = rust_i18n::t!("dev_split").to_string();
                 let split_btn = if self.yaesu2_split {
-                    egui::Button::new(RichText::new("Split").size(11.0).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(split_lbl.as_str()).size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(180, 100, 0)).min_size(egui::vec2(38.0, 20.0))
-                } else { btn("Split") };
+                } else { btn(split_lbl.as_str()) };
                 if ui.add(split_btn).clicked() {
                     self.yaesu2_split = !self.yaesu2_split;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button,
                         if self.yaesu2_split { 7 } else { 8 }));
                 }
+                let scan_lbl = rust_i18n::t!("dev_scan").to_string();
                 let scan_btn = if self.yaesu2_scan {
-                    egui::Button::new(RichText::new("Scan").size(11.0).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(scan_lbl.as_str()).size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(0, 120, 0)).min_size(egui::vec2(38.0, 20.0))
-                } else { btn("Scan") };
+                } else { btn(scan_lbl.as_str()) };
                 if ui.add(scan_btn).clicked() {
                     self.yaesu2_scan = !self.yaesu2_scan;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button,
@@ -2342,11 +2452,14 @@ impl SdrRemoteApp {
                 }
                 // Interne ATU (FTX-1): momentane Tune (band-gated <54 MHz) + aan/uit-toggle
                 // met echte stand via AC;-poll. Server stuurt AC003 voor tune-start (FTX-1).
-                let can_tune = self.yaesu2_connected && self.yaesu2_freq_a < 54_000_000;
+                // ATU: HF+6m (<54 MHz) en niet in FM (mode 5).
+                let atu_avail = self.yaesu2_freq_a >= 1 && self.yaesu2_freq_a < 54_000_000 && !matches!(self.yaesu2_mode, 5 | 12);
+                let can_tune = self.yaesu2_connected && atu_avail;
+                let tune_lbl = rust_i18n::t!("dev_tune").to_string();
                 let tune_btn = if self.yaesu2_tuner_state == 2 {
-                    egui::Button::new(RichText::new("Tune").size(11.0).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(tune_lbl.as_str()).size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(180, 0, 0)).min_size(egui::vec2(38.0, 20.0))
-                } else { btn("Tune") };
+                } else { btn(tune_lbl.as_str()) };
                 if ui.add_enabled(can_tune, tune_btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 3)); // start tuning (momentaan)
                 }
@@ -2355,7 +2468,7 @@ impl SdrRemoteApp {
                     egui::Button::new(RichText::new("ATU").size(11.0).color(Color32::WHITE))
                         .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(38.0, 20.0))
                 } else { btn("ATU") };
-                if ui.add(atu_btn).clicked() {
+                if ui.add_enabled(atu_avail, atu_btn).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button,
                         if atu_on { 4 } else { 15 })); // toggle: uit (AC000) / aan (AC001)
                 }
@@ -2370,13 +2483,15 @@ impl SdrRemoteApp {
             // Store = huidige VFO in QMB (QI;), Recall = QMB doorlopen (QR;).
             ui.horizontal(|ui| {
                 ui.label("QMB:");
-                if ui.add(btn("Store"))
-                    .on_hover_text("Quick Memory: huidige VFO opslaan (QI)").clicked()
+                let store_lbl = rust_i18n::t!("dev_store").to_string();
+                if ui.add(btn(store_lbl.as_str()))
+                    .on_hover_text(rust_i18n::t!("hover_quick_mem_save").to_string()).clicked()
                 {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 13));
                 }
-                if ui.add(btn("Recall"))
-                    .on_hover_text("Quick Memory: opgeslagen QMB terughalen/doorlopen (QR)").clicked()
+                let recall_lbl = rust_i18n::t!("dev_recall").to_string();
+                if ui.add(btn(recall_lbl.as_str()))
+                    .on_hover_text(rust_i18n::t!("dev_recall_hover").to_string()).clicked()
                 {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 14));
                 }
@@ -2398,17 +2513,24 @@ impl SdrRemoteApp {
                     self.yaesu2_control_changed_at = Some(std::time::Instant::now());
                 }
                 ui.label("PWR");
-                let pwr = egui::Slider::new(&mut self.yaesu2_rf_power, 0..=100)
+                let pwr_max2 = if self.yaesu2_tx_power_max >= 5 { self.yaesu2_tx_power_max } else { 100 };
+                if self.yaesu2_rf_power > pwr_max2 { self.yaesu2_rf_power = pwr_max2; }
+                let pwr = egui::Slider::new(&mut self.yaesu2_rf_power, 5..=pwr_max2)
                     .custom_formatter(|v, _| format!("{:.0}W", v));
-                let resp = ui.add_sized([slider_w, 16.0], pwr);
-                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu2_rf_power, 0..=100, 1.0);
+                let resp = ui.add_sized([slider_w, 16.0], pwr)
+                    .on_hover_text(rust_i18n::t!("dev_max_for_band", w = pwr_max2).to_string());
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu2_rf_power, 5..=pwr_max2, 1.0);
                 if resp.changed() || scrolled {
-                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2RfPower, self.yaesu2_rf_power));
                     self.yaesu2_control_changed_at = Some(std::time::Instant::now());
+                }
+                if scrolled || resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2RfPower, self.yaesu2_rf_power));
+                    self.yaesu2_power_pending = Some(self.yaesu2_rf_power);
+                    self.yaesu2_power_pending_at = Some(std::time::Instant::now());
                 }
                 ui.end_row();
                 ui.allocate_space(egui::vec2(55.0, 0.0));
-                ui.label("RF Gain");
+                ui.label(rust_i18n::t!("dev_rf_gain").to_string());
                 let rf = egui::Slider::new(&mut self.yaesu2_rf_gain, 0..=255)
                     .custom_formatter(|v, _| format!("{:.0}", v));
                 let resp = ui.add_sized([slider_w, 16.0], rf);
@@ -2421,8 +2543,16 @@ impl SdrRemoteApp {
             });
         }
         ui.separator();
-        // S-meter bar
-        yaesu_smeter_bar(ui, self.yaesu2_smeter, self.yaesu2_smeter_peak);
+        // S-meter (klik wisselt balk <-> analoog; analoog op dezelfde plek).
+        let mw2 = ui.available_width().min(350.0).max(200.0);
+        let mrect2 = if self.meter_analog[super::M_YAESU2] {
+            smeter_analog_sized(ui,
+                yaesu_raw_to_dbm(self.yaesu2_smeter), yaesu_raw_to_dbm(self.yaesu2_smeter_peak),
+                false, false, Some((mw2, 110.0)))
+        } else {
+            yaesu_smeter_bar(ui, self.yaesu2_smeter, self.yaesu2_smeter_peak)
+        };
+        self.meter_click(ui, mrect2, super::M_YAESU2);
         ui.separator();
         // Status: RX/TX + power on/off (spiegel van het 991A-paneel).
         ui.horizontal(|ui| {
@@ -2433,13 +2563,35 @@ impl SdrRemoteApp {
             };
             ui.colored_label(tx_color, RichText::new(tx_text).size(16.0).strong());
             ui.separator();
-            ui.label(if self.yaesu2_power_on { "Power ON" } else { "Power OFF" });
+            // Zie slot 0: klikbaar alleen op de 991A (standby); anders label.
+            let on_col = Color32::from_rgb(0, 150, 0);
+            let off_col = Color32::from_rgb(90, 90, 90);
+            if self.yaesu2_model == 0 {
+                let (txt, col): (String, Color32) = if self.yaesu2_power_on { (rust_i18n::t!("dev_power_on_upper").to_string(), on_col) } else { (rust_i18n::t!("dev_standby").to_string(), off_col) };
+                if ui.add(egui::Button::new(RichText::new(txt).color(Color32::WHITE)).fill(col))
+                    .on_hover_text(rust_i18n::t!("dev_991a_standby_hover").to_string())
+                    .clicked()
+                {
+                    let _ = self.cmd_tx.send(Command::SetControl(
+                        sdr_remote_core::protocol::ControlId::Yaesu2PowerOnOff,
+                        if self.yaesu2_power_on { 0 } else { 1 }));
+                }
+            } else {
+                ui.colored_label(if self.yaesu2_power_on { on_col } else { off_col },
+                    if self.yaesu2_power_on { rust_i18n::t!("dev_power_on_upper").to_string() } else { rust_i18n::t!("dev_power_off_upper").to_string() })
+                    .on_hover_text(rust_i18n::t!("dev_radio_powers_off_hover").to_string());
+            }
+            if self.yaesu2_hi_swr {
+                ui.separator();
+                ui.colored_label(theme::TL_SWR_ALERT_TEXT,
+                    RichText::new(rust_i18n::t!("dev_high_swr").to_string()).size(16.0).strong());
+            }
         });
         ui.separator();
         self.render_websdr_controls(ui, CatSyncTarget::Yaesu2, self.yaesu2_freq_a, self.yaesu2_mode);
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label("Mic gain:");
+            ui.label(rust_i18n::t!("dev_mic_gain").to_string());
             let mut mic_gain_display = super::yaesu_mic_gain_to_display(self.yaesu2_mic_gain);
             let slider = egui::Slider::new(&mut mic_gain_display, 0.05..=1.0)
                 .logarithmic(true)
@@ -2460,7 +2612,7 @@ impl SdrRemoteApp {
         ui.separator();
         // Memory Channels - zelfde gedeelde tabel als het 991A-window (via slot 1).
         if super::helpers::chevron_label(ui, self.collapse_yaesu2_memories,
-            RichText::new("Memory Channels").strong().size(14.0)).clicked()
+            RichText::new(rust_i18n::t!("dev_memory_channels").to_string()).strong().size(14.0)).clicked()
         {
             self.collapse_yaesu2_memories = !self.collapse_yaesu2_memories;
         }
@@ -2483,7 +2635,7 @@ impl SdrRemoteApp {
         // Radio Settings (EX Menu) - FTX-1 hiërarchisch. C1: ruwe adres/waarde-lijst
         // ter verificatie van de server-scan; C3 maakt er een P1>P2>P3 browser van.
         if super::helpers::chevron_label(ui, self.collapse_yaesu2_menu,
-            RichText::new("Radio Settings (EX Menu)").strong().size(14.0)).clicked()
+            RichText::new(rust_i18n::t!("dev_radio_settings").to_string()).strong().size(14.0)).clicked()
         {
             self.collapse_yaesu2_menu = !self.collapse_yaesu2_menu;
         }
@@ -2498,14 +2650,15 @@ impl SdrRemoteApp {
     fn render_yaesu2_ex_menu(&mut self, ui: &mut egui::Ui) {
         use super::ftx1_ex_chart;
         ui.horizontal(|ui| {
-            if ui.button("Read radio").clicked() {
+            if ui.button(rust_i18n::t!("dev_read_radio").to_string()).clicked() {
                 self.yaesu2_menu_received = false;
                 let _ = self.cmd_tx.send(Command::SetControl(
                     sdr_remote_core::protocol::ControlId::Yaesu2ReadMenus, 0));
             }
-            ui.label(format!("{} settings", self.yaesu2_menu_entries.len()));
+            let n = self.yaesu2_menu_entries.len();
+            ui.label(rust_i18n::t!("dev_settings_count", n = n).to_string());
             ui.separator();
-            ui.label("Filter:");
+            ui.label(rust_i18n::t!("dev_filter").to_string());
             ui.add(egui::TextEdit::singleline(&mut self.yaesu2_menu_filter).desired_width(120.0));
             if !self.yaesu2_menu_filter.is_empty() && ui.button("x").clicked() {
                 self.yaesu2_menu_filter.clear();
@@ -2519,7 +2672,7 @@ impl SdrRemoteApp {
         for (addr, val) in &self.yaesu2_menu_entries {
             let (group, sub, desc) = match ftx1_ex_chart::lookup(addr) {
                 Some((g, s, d)) => (g.to_string(), s.to_string(), d.to_string()),
-                None => ("Other".to_string(), String::new(), addr.clone()),
+                None => (rust_i18n::t!("dev_other").to_string(), String::new(), addr.clone()),
             };
             if !filt.is_empty()
                 && !desc.to_lowercase().contains(&filt)
@@ -2561,7 +2714,7 @@ impl SdrRemoteApp {
                                         .desired_width(70.0)
                                         .font(egui::FontId::monospace(11.0)));
                                     // Set alleen tonen als de buffer afwijkt van de radio-waarde.
-                                    if buf.as_str() != val.as_str() && ui.small_button("Set").clicked() {
+                                    if buf.as_str() != val.as_str() && ui.small_button(rust_i18n::t!("dev_set").to_string()).clicked() {
                                         to_set = Some((addr.clone(), buf.clone()));
                                     }
                                 });
@@ -2590,7 +2743,7 @@ impl SdrRemoteApp {
         use super::yaesu_menu;
 
         ui.horizontal(|ui| {
-            if ui.button("Read radio").clicked() {
+            if ui.button(rust_i18n::t!("dev_read_radio").to_string()).clicked() {
                 self.yaesu_menu_received = false;
                 let _ = self.cmd_tx.send(Command::SetControl(
                     sdr_remote_core::protocol::ControlId::YaesuReadMenus, 0));
@@ -2598,7 +2751,7 @@ impl SdrRemoteApp {
         });
 
         if self.yaesu_menu_items.is_empty() {
-            ui.label("Click 'Read radio' to load all 153 menu settings.");
+            ui.label(rust_i18n::t!("dev_click_read_radio_153").to_string());
             return;
         }
 
@@ -2610,8 +2763,8 @@ impl SdrRemoteApp {
                 .spacing([6.0, 2.0])
                 .show(ui, |ui| {
                     ui.label(RichText::new("#").strong());
-                    ui.label(RichText::new("Setting").strong());
-                    ui.label(RichText::new("Value").strong());
+                    ui.label(RichText::new(rust_i18n::t!("dev_setting").to_string()).strong());
+                    ui.label(RichText::new(rust_i18n::t!("dev_value").to_string()).strong());
                     ui.label(RichText::new("").strong());
                     ui.end_row();
 
@@ -2676,7 +2829,7 @@ impl SdrRemoteApp {
         use super::yaesu_memory;
 
         ui.horizontal(|ui| {
-            if ui.button("Read radio").clicked() {
+            if ui.button(rust_i18n::t!("dev_read_radio").to_string()).clicked() {
                 self.yaesu_mem_radio_received = false; // allow processing new data
                 // Read/write routeren naar de actieve radio (slot 0 = 991A, 1 = FTX-1).
                 let cmd = if self.yaesu_mem_active_slot == 0 {
@@ -2687,7 +2840,7 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetControl(cmd, 0));
             }
             if !self.yaesu_mem_channels.is_empty() {
-                if ui.button("Write radio").clicked() {
+                if ui.button(rust_i18n::t!("dev_write_radio").to_string()).clicked() {
                     let path = std::path::Path::new(&self.yaesu_mem_file);
                     // Save to file first, then send to server for writing
                     let _ = yaesu_memory::save_tab_file(path, &self.yaesu_mem_channels);
@@ -2701,7 +2854,7 @@ impl SdrRemoteApp {
                     }
                 }
             }
-            if ui.button("Load file").clicked() {
+            if ui.button(rust_i18n::t!("dev_load_file").to_string()).clicked() {
                 let path = std::path::Path::new(&self.yaesu_mem_file);
                 match yaesu_memory::parse_tab_file(path) {
                     Ok(ch) => {
@@ -2714,7 +2867,7 @@ impl SdrRemoteApp {
                 }
             }
             if self.yaesu_mem_dirty {
-                if ui.button("Save").clicked() {
+                if ui.button(rust_i18n::t!("dev_save").to_string()).clicked() {
                     let path = std::path::Path::new(&self.yaesu_mem_file);
                     match yaesu_memory::save_tab_file(path, &self.yaesu_mem_channels) {
                         Ok(()) => {
@@ -2745,8 +2898,9 @@ impl SdrRemoteApp {
             // "Write radio" gaat het écht naar de radio.
             if !self.yaesu2_mem_channels.is_empty() {
                 let from_radio = if self.yaesu_mem_active_slot == 0 { 2 } else { 1 };
-                if ui.button(format!("Import from Radio {}", from_radio))
-                    .on_hover_text("Neem alle geheugenkanalen van de andere radio over (nog niet geschreven)")
+                let name = self.yaesu_slot_label(from_radio - 1);
+                if ui.button(rust_i18n::t!("dev_import_from", name = name).to_string())
+                    .on_hover_text(rust_i18n::t!("hover_take_memories").to_string())
                     .clicked()
                 {
                     self.yaesu_mem_channels = self.yaesu2_mem_channels.clone();
@@ -2760,24 +2914,25 @@ impl SdrRemoteApp {
 
         // File path
         ui.horizontal(|ui| {
-            ui.label("File:");
+            ui.label(rust_i18n::t!("dev_file").to_string());
             ui.add(egui::TextEdit::singleline(&mut self.yaesu_mem_file).desired_width(250.0));
         });
 
         // Filter
         ui.horizontal(|ui| {
-            ui.label("Filter:");
+            ui.label(rust_i18n::t!("dev_filter").to_string());
             ui.add(egui::TextEdit::singleline(&mut self.yaesu_mem_filter).desired_width(150.0));
             if !self.yaesu_mem_filter.is_empty() {
                 if ui.button("×").clicked() {
                     self.yaesu_mem_filter.clear();
                 }
             }
-            ui.label(format!("{} channels", self.yaesu_mem_channels.len()));
+            let n = self.yaesu_mem_channels.len();
+            ui.label(rust_i18n::t!("dev_channels_count", n = n).to_string());
         });
 
         if self.yaesu_mem_channels.is_empty() {
-            ui.label("No channels loaded. Set file path and click Load.");
+            ui.label(rust_i18n::t!("dev_no_channels_loaded").to_string());
             return;
         }
 
@@ -2790,7 +2945,7 @@ impl SdrRemoteApp {
         // Use a horizontal layout so the table can exceed the viewport width
         egui::ScrollArea::both().show(ui, |ui| {
             let header_style = |t: &str| RichText::new(t).strong().size(11.0);
-            let on_off = |v: bool| if v { "On" } else { "-" };
+            let on_off = |v: bool| if v { rust_i18n::t!("dev_on").to_string() } else { "-".to_string() };
 
             egui::Grid::new("yaesu_mem_grid")
                 .striped(true)
@@ -2799,9 +2954,27 @@ impl SdrRemoteApp {
                 .num_columns(17)
                 .show(ui, |ui| {
                     // Header row
-                    for h in &["CH", "Name", "RX Freq", "Mode", "Dir", "Offset", "Tone", "CTCSS/DCS",
-                               "AGC", "NB", "DNR", "IPO", "ATT", "Tuner", "Skip", "Step", ""] {
-                        ui.label(header_style(h));
+                    let headers: [String; 17] = [
+                        "CH".to_string(),
+                        rust_i18n::t!("dev_name").to_string(),
+                        "RX Freq".to_string(),
+                        rust_i18n::t!("dev_mode_col").to_string(),
+                        "Dir".to_string(),
+                        rust_i18n::t!("dev_offset").to_string(),
+                        rust_i18n::t!("dev_tone").to_string(),
+                        "CTCSS/DCS".to_string(),
+                        "AGC".to_string(),
+                        "NB".to_string(),
+                        "DNR".to_string(),
+                        "IPO".to_string(),
+                        "ATT".to_string(),
+                        rust_i18n::t!("dev_tuner_col").to_string(),
+                        rust_i18n::t!("dev_skip").to_string(),
+                        rust_i18n::t!("dev_step").to_string(),
+                        String::new(),
+                    ];
+                    for h in &headers {
+                        ui.label(header_style(h.as_str()));
                     }
                     ui.end_row();
 
@@ -2976,7 +3149,7 @@ impl SdrRemoteApp {
 
                             // Actions
                             ui.horizontal(|ui| {
-                                if ui.small_button("Tune").clicked() {
+                                if ui.small_button(rust_i18n::t!("dev_tune").to_string()).clicked() {
                                     tune_action = Some((ch.rx_freq_hz, yaesu_memory::mode_string_to_internal(&ch.mode), ch.channel_number));
                                 }
                                 if ui.small_button("×").clicked() { delete_idx = Some(idx); }
@@ -3026,7 +3199,7 @@ impl SdrRemoteApp {
                             ui.label(RichText::new(on_off(ch.skip)).color(c));
                             ui.label(RichText::new(&ch.step).color(c));
 
-                            if ui.small_button("Edit").clicked() {
+                            if ui.small_button(rust_i18n::t!("dev_edit").to_string()).clicked() {
                                 self.yaesu_mem_selected = Some(idx);
                             }
 
@@ -3055,21 +3228,15 @@ impl SdrRemoteApp {
         // and cannot be erased from the radio over CAT (front-panel only).
         if self.yaesu_mem_delete_popup {
             let ctx = ui.ctx().clone();
-            egui::Window::new("Row removed from list")
+            egui::Window::new(rust_i18n::t!("dev_row_removed_title").to_string())
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(&ctx, |ui| {
                     ui.set_max_width(360.0);
-                    ui.label(
-                        "The row was removed from this list only.\n\n\
-                         A memory channel cannot be erased from the radio over CAT: \
-                         'Write radio' does not delete it, so 'Read radio' brings it \
-                         back. To clear it on the radio, use its front panel \
-                         (hold F(M-LIST), select the channel, tap ERASE).",
-                    );
+                    ui.label(rust_i18n::t!("dev_row_removed_body").to_string());
                     ui.add_space(8.0);
-                    if ui.button("OK").clicked() {
+                    if ui.button(rust_i18n::t!("dev_ok").to_string()).clicked() {
                         self.yaesu_mem_delete_popup = false;
                     }
                 });
@@ -3086,6 +3253,7 @@ impl SdrRemoteApp {
             6 => "AM",
             7 => "DIGU",
             9 => "DIGL",
+            12 => "C4FM",
             _ => "?",
         }
     }
@@ -3102,7 +3270,7 @@ impl SdrRemoteApp {
     }
 
     fn render_yaesu_compact_status(&mut self, ui: &mut egui::Ui, slot: u8) {
-        let (freq_a, freq_b, mode, power_on, tx_active, smeter, target) = if slot == 0 {
+        let (freq_a, freq_b, mode, power_on, tx_active, smeter, hi_swr, target) = if slot == 0 {
             (
                 self.yaesu_freq_a,
                 self.yaesu_freq_b,
@@ -3110,6 +3278,7 @@ impl SdrRemoteApp {
                 self.yaesu_power_on,
                 self.yaesu_tx_active,
                 self.yaesu_smeter,
+                self.yaesu_hi_swr,
                 CatSyncTarget::Yaesu1,
             )
         } else {
@@ -3120,6 +3289,7 @@ impl SdrRemoteApp {
                 self.yaesu2_power_on,
                 self.yaesu2_tx_active,
                 self.yaesu2_smeter,
+                self.yaesu2_hi_swr,
                 CatSyncTarget::Yaesu2,
             )
         };
@@ -3138,19 +3308,25 @@ impl SdrRemoteApp {
                     .size(14.0));
                 ui.end_row();
 
-                ui.label("Mode:");
+                ui.label(rust_i18n::t!("dev_mode").to_string());
                 ui.label(RichText::new(Self::yaesu_compact_mode_label(mode)).size(14.0).strong());
                 ui.end_row();
 
-                ui.label("Power:");
-                ui.label(if power_on { "ON" } else { "OFF" });
+                ui.label(rust_i18n::t!("dev_power_colon").to_string());
+                ui.label(if power_on { rust_i18n::t!("dev_on_upper").to_string() } else { rust_i18n::t!("dev_off_upper").to_string() });
                 ui.end_row();
 
                 ui.label("TX:");
-                ui.label(if tx_active {
-                    RichText::new("TX").color(Color32::RED).strong()
-                } else {
-                    RichText::new("RX").color(Color32::GREEN)
+                ui.horizontal(|ui| {
+                    ui.label(if tx_active {
+                        RichText::new("TX").color(Color32::RED).strong()
+                    } else {
+                        RichText::new("RX").color(Color32::GREEN)
+                    });
+                    if hi_swr {
+                        ui.label(RichText::new(rust_i18n::t!("dev_high_swr").to_string())
+                            .color(theme::TL_SWR_ALERT_TEXT).strong());
+                    }
                 });
                 ui.end_row();
 
@@ -3158,7 +3334,7 @@ impl SdrRemoteApp {
                 ui.label(RichText::new(Self::yaesu_compact_smeter_label(smeter)).strong());
                 ui.end_row();
 
-                ui.label("Audio:");
+                ui.label(rust_i18n::t!("dev_audio_colon").to_string());
                 if slot == 0 {
                     let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
                         .logarithmic(true)
@@ -3191,15 +3367,15 @@ impl SdrRemoteApp {
 
         if show_radio1 {
             ui.horizontal(|ui| {
-                ui.heading(format!("Radio 1: {}", self.yaesu_panel_name(0)));
+                ui.heading(self.yaesu_slot_label(0));
                 ui.separator();
-                if ui.checkbox(&mut self.yaesu_enabled, "Enable").changed() {
+                if ui.checkbox(&mut self.yaesu_enabled, rust_i18n::t!("dev_enable").to_string()).changed() {
                     let _ = self.cmd_tx.send(Command::SetControl(
                         sdr_remote_core::protocol::ControlId::YaesuEnable, self.yaesu_enabled as u16));
                 }
                 ui.separator();
                 if self.yaesu_enabled {
-                    let popout_label = if self.yaesu_popout { "Close window" } else { "Open window" };
+                    let popout_label = if self.yaesu_popout { rust_i18n::t!("dev_close_window").to_string() } else { rust_i18n::t!("dev_open_window").to_string() };
                     if ui.button(popout_label).clicked() {
                         self.yaesu_popout = !self.yaesu_popout;
                     }
@@ -3207,11 +3383,11 @@ impl SdrRemoteApp {
             });
             ui.horizontal(|ui| {
                 ui.label("PTT:");
-                if ui.selectable_label(!self.yaesu_ptt_toggle_mode, "Push to talk").clicked() {
+                if ui.selectable_label(!self.yaesu_ptt_toggle_mode, rust_i18n::t!("dev_push_to_talk").to_string()).clicked() {
                     self.yaesu_ptt_toggle_mode = false;
                     self.save_ptt_config();
                 }
-                if ui.selectable_label(self.yaesu_ptt_toggle_mode, "Toggle").clicked() {
+                if ui.selectable_label(self.yaesu_ptt_toggle_mode, rust_i18n::t!("dev_toggle").to_string()).clicked() {
                     self.yaesu_ptt_toggle_mode = true;
                     self.save_ptt_config();
                 }
@@ -3225,9 +3401,9 @@ impl SdrRemoteApp {
                 ui.separator();
             }
             ui.horizontal(|ui| {
-                ui.heading(format!("Radio 2: {}", self.yaesu_panel_name(1)));
+                ui.heading(self.yaesu_slot_label(1));
                 ui.separator();
-                if ui.checkbox(&mut self.yaesu2_enabled, "Enable").changed() {
+                if ui.checkbox(&mut self.yaesu2_enabled, rust_i18n::t!("dev_enable").to_string()).changed() {
                     let _ = self.cmd_tx.send(Command::SetYaesu2Enable(self.yaesu2_enabled));
                     if !self.yaesu2_enabled {
                         self.yaesu2_popout = false;
@@ -3236,7 +3412,7 @@ impl SdrRemoteApp {
                 }
                 ui.separator();
                 if self.yaesu2_enabled {
-                    let popout_label = if self.yaesu2_popout { "Close window" } else { "Open window" };
+                    let popout_label = if self.yaesu2_popout { rust_i18n::t!("dev_close_window").to_string() } else { rust_i18n::t!("dev_open_window").to_string() };
                     if ui.button(popout_label).clicked() {
                         self.yaesu2_popout = !self.yaesu2_popout;
                         self.save_ptt_config();
@@ -3245,11 +3421,11 @@ impl SdrRemoteApp {
             });
             ui.horizontal(|ui| {
                 ui.label("PTT:");
-                if ui.selectable_label(!self.yaesu2_ptt_toggle_mode, "Push to talk").clicked() {
+                if ui.selectable_label(!self.yaesu2_ptt_toggle_mode, rust_i18n::t!("dev_push_to_talk").to_string()).clicked() {
                     self.yaesu2_ptt_toggle_mode = false;
                     self.save_ptt_config();
                 }
-                if ui.selectable_label(self.yaesu2_ptt_toggle_mode, "Toggle").clicked() {
+                if ui.selectable_label(self.yaesu2_ptt_toggle_mode, rust_i18n::t!("dev_toggle").to_string()).clicked() {
                     self.yaesu2_ptt_toggle_mode = true;
                     self.save_ptt_config();
                 }

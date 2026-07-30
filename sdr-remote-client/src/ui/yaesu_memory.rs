@@ -208,25 +208,6 @@ pub fn to_tab_text(channels: &[YaesuMemoryChannel]) -> String {
     out
 }
 
-/// Map mode string from .tab file to the Yaesu CAT mode character.
-/// IMPORTANT: FM modes are sent as DATA-FM ('A') because USB mic audio
-/// only works in DATA-FM mode on the FT-991A (FM PKT PORT SELECT=USB).
-pub fn mode_string_to_yaesu_cat(mode: &str) -> char {
-    match mode.trim() {
-        "LSB" => '1',
-        "USB" => '2',
-        "CW" => '3',
-        "FM" | "FM-N" | "DATA-FM" | "C4FM" => 'A', // DATA-FM for USB mic
-        "AM" | "AM-N" => '5',
-        "RTTY-LSB" => '6',
-        "CW-R" => '7',
-        "DATA-LSB" => '8',
-        "RTTY-USB" => '9',
-        "DATA-USB" => 'C',
-        _ => '2', // default USB
-    }
-}
-
 /// Map mode string to internal mode number (Thetis numbering) for the server.
 /// FM -> DATA-FM (internal 5, but Yaesu CAT char 'A') for USB mic compatibility.
 pub fn mode_string_to_internal(mode: &str) -> u8 {

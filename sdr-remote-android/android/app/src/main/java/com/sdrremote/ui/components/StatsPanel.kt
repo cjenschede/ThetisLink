@@ -28,8 +28,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sdrremote.R
 import kotlin.math.log10
 
 // Consumes vertical scroll on slider rows so LazyColumn doesn't intercept horizontal drags
@@ -50,8 +52,8 @@ fun VolumeControls(
     onTxGainChange: (Float) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        VolumeSlider(label = "RX Volume", initial = rxVolume, onChange = onRxVolumeChange)
-        VolumeSlider(label = "TX Gain", initial = txGain, maxValue = 3f, onChange = onTxGainChange)
+        VolumeSlider(label = stringResource(R.string.stats_rx_volume), initial = rxVolume, onChange = onRxVolumeChange)
+        VolumeSlider(label = stringResource(R.string.stats_tx_gain), initial = txGain, maxValue = 3f, onChange = onTxGainChange)
     }
 }
 
@@ -89,20 +91,20 @@ fun AudioStats(
     relayTransportFallback: Boolean = false,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text("Audio Levels:", fontSize = 14.sp)
+        Text(stringResource(R.string.stats_audio_levels), fontSize = 14.sp)
         LevelMeter(label = "MIC", level = captureLevel)
         LevelMeter(label = "RX", level = playbackLevel)
 
         Spacer(Modifier.height(8.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Statistics:", fontSize = 14.sp)
+            Text(stringResource(R.string.stats_statistics), fontSize = 14.sp)
             // Fase 3c: relay transport indicator. Normal = low-latency UDP; when the
             // network blocks/degrades UDP the audio auto-falls back to reliable wss/TCP.
             if (relayTransportFallback) {
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "TCP fallback",
+                    stringResource(R.string.stats_tcp_fallback),
                     fontSize = 11.sp,
                     color = androidx.compose.ui.graphics.Color(0xFFFFAA28),
                 )
@@ -249,11 +251,11 @@ private fun StatsGrid(
 ) {
     Column(modifier = Modifier.padding(start = 8.dp)) {
         StatRow("RTT", "$rttMs ms")
-        StatRow("Down", "$downKbps Kbit/s")
-        StatRow("Up", "$upKbps Kbit/s")
+        StatRow(stringResource(R.string.stats_down), "$downKbps Kbit/s")
+        StatRow(stringResource(R.string.stats_up), "$upKbps Kbit/s")
 
         Spacer(Modifier.height(6.dp))
-        Text("Audio streams:", fontSize = 13.sp, color = Color.Gray)
+        Text(stringResource(R.string.stats_audio_streams), fontSize = 13.sp, color = Color.Gray)
         AudioStreamHeader()
 
         var shown = false
@@ -278,7 +280,7 @@ private fun StatsGrid(
             AudioStreamRow("VRX2", vrx2JitterMs, vrx2BufferDepth, vrx2AudioPackets, "-")
         }
         if (!shown) {
-            Text("No audio stream yet", fontSize = 12.sp, color = Color.Gray)
+            Text(stringResource(R.string.stats_no_stream), fontSize = 12.sp, color = Color.Gray)
         }
     }
 }
@@ -291,11 +293,11 @@ private fun AudioStreamHeader() {
             .padding(top = 2.dp, bottom = 1.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        AudioCell("Stream", 0.26f, header = true)
-        AudioCell("Jitter", 0.20f, header = true)
-        AudioCell("Buffer", 0.18f, header = true)
-        AudioCell("Packets", 0.24f, header = true)
-        AudioCell("Loss", 0.12f, header = true)
+        AudioCell(stringResource(R.string.stats_col_stream), 0.26f, header = true)
+        AudioCell(stringResource(R.string.stats_col_jitter), 0.20f, header = true)
+        AudioCell(stringResource(R.string.stats_col_buffer), 0.18f, header = true)
+        AudioCell(stringResource(R.string.stats_col_packets), 0.24f, header = true)
+        AudioCell(stringResource(R.string.stats_col_loss), 0.12f, header = true)
     }
 }
 

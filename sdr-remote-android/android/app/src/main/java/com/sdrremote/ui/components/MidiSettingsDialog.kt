@@ -12,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import com.sdrremote.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,26 +68,26 @@ fun MidiSettingsDialog(
             color = MaterialTheme.colorScheme.surface,
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("MIDI Controller", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.midi_title), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
 
                 // Device selection
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Device:", modifier = Modifier.width(60.dp))
+                    Text(stringResource(R.string.midi_device), modifier = Modifier.width(60.dp))
                     Button(onClick = { ports = midi.listDevices() }, modifier = Modifier.padding(end = 8.dp)) {
-                        Text("Scan")
+                        Text(stringResource(R.string.midi_scan))
                     }
                     if (connectedDevice.isNotEmpty()) {
                         Button(onClick = { midi.disconnect(); midi.saveMappings() }) {
-                            Text("Disconnect")
+                            Text(stringResource(R.string.common_disconnect))
                         }
                     }
                 }
 
                 if (connectedDevice.isNotEmpty()) {
-                    Text("Connected: $connectedDevice", color = Color(0xFF4CAF50), fontSize = 13.sp)
+                    Text(stringResource(R.string.midi_connected, connectedDevice), color = Color(0xFF4CAF50), fontSize = 13.sp)
                 } else if (ports.isEmpty()) {
-                    Text("No MIDI devices found", color = Color.Gray, fontSize = 13.sp)
+                    Text(stringResource(R.string.midi_no_devices), color = Color.Gray, fontSize = 13.sp)
                 } else {
                     ports.forEach { name ->
                         Button(
@@ -103,14 +105,14 @@ fun MidiSettingsDialog(
 
                 // Activity monitor
                 if (lastEvent.isNotEmpty()) {
-                    Text("Last MIDI: $lastEvent", fontSize = 12.sp, color = Color(0xFF90CAF9))
+                    Text(stringResource(R.string.midi_last, lastEvent), fontSize = 12.sp, color = Color(0xFF90CAF9))
                     Spacer(Modifier.height(4.dp))
                 }
 
                 // Learn mode indicator
                 if (learnForAction != null) {
                     Text(
-                        "Press a MIDI control for: ${learnForAction!!.label}",
+                        stringResource(R.string.midi_learn_prompt, learnForAction!!.label),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFFFFA726),
@@ -119,20 +121,20 @@ fun MidiSettingsDialog(
                         learnForAction = null
                         midi.learnMode = false
                     }) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.common_cancel))
                     }
                     Spacer(Modifier.height(4.dp))
                 }
 
                 // Current mappings
-                Text("Mappings:", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(stringResource(R.string.midi_mappings), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
 
                 // Force recomposition on mappingsVersion change
                 key(mappingsVersion) {
                     val currentMappings = midi.mappings.toList()
                     if (currentMappings.isEmpty()) {
-                        Text("No mappings configured", color = Color.Gray, fontSize = 13.sp)
+                        Text(stringResource(R.string.midi_no_mappings), color = Color.Gray, fontSize = 13.sp)
                     } else {
                         LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = 200.dp)) {
                             itemsIndexed(currentMappings) { idx, mapping ->
@@ -145,7 +147,7 @@ fun MidiSettingsDialog(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        "${mapping.sourceLabel()} → ${mapping.action.label} (${mapping.controlType.label})",
+                                        stringResource(R.string.midi_mapping_row, mapping.sourceLabel(), mapping.action.label, mapping.controlType.label),
                                         fontSize = 12.sp,
                                         modifier = Modifier.weight(1f),
                                     )
@@ -167,7 +169,7 @@ fun MidiSettingsDialog(
                 Spacer(Modifier.height(8.dp))
 
                 // Add mapping buttons
-                Text("Add mapping:", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(stringResource(R.string.midi_add_mapping), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
 
                 val actions = MidiAction.entries
@@ -183,7 +185,7 @@ fun MidiSettingsDialog(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         ) {
-                            Text("Learn: ${action.label}", fontSize = 13.sp)
+                            Text(stringResource(R.string.midi_learn_action, action.label), fontSize = 13.sp)
                         }
                     }
                 }
@@ -194,7 +196,7 @@ fun MidiSettingsDialog(
                         midi.learnMode = false
                         onDismiss()
                     }) {
-                        Text("Close")
+                        Text(stringResource(R.string.common_close))
                     }
                 }
             }

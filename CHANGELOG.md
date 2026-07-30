@@ -16,7 +16,107 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
-## [2.4.4] — 2026-07-18 (Per-radio WebSDR · Yaesu Mem+/Mem- skips empty channels · delete-row popup)
+## [2.5.0] — 2026-07-30 (Independent channels · VRX windows + window-arranger · per-channel s-meter · Yaesu power & per-band TX power · Yaesu mode-gating + memory→VFO · multilingual (EN/NL/DE/FR) · Android parity)
+
+> **Feature release.** Several **additive, backward-compatible** wire fields were added
+> (`tx_power_max`, `Rx1Enable`, `YaesuStateEnable`, `YaesuPowerOnOff`, and a `SINGLE_RECEIVER`
+> state flag) —
+> old clients ignore them and the new client falls back gracefully against an old server, so
+> there is no protocol break. The wire protocol stays **VERSION = 3** and is
+> backward-compatible with v2.4.x. The later additions in this release (multilingual UI,
+> Yaesu control gating, memory→VFO escape, and reading the 991A clarifier offset back) are
+> client- or server-local or reuse existing fields, so they add **no further wire change**.
+> The server-side features below need the 2.5.0 **server**; the
+> desktop and Android clients are both updated. Stock Thetis v2.10.3.x is sufficient (no
+> Thetis-fork change required for these features).
+>
+> **Relay packaging.** The relay ships as a **source + Docker-Compose bundle**
+> (`thetislink-relay-source.tar.gz`, a checksummed release asset in `SHA256SUMS.txt`) —
+> **not** a prebuilt binary or container image. Self-host it with
+> `docker compose up -d --build`. It is only needed for internet remote access behind
+> CGNAT / without a port-forward; a direct (LAN or port-forward) connection does not use it.
+
+### Added
+- **Every channel now has its own independent audio and spectrum switches.** RX1, RX2, VRX1 and
+  VRX2 each get a separate audio-tick and spectrum-toggle, so you can run any combination — for
+  example only a VRX spectrum with no RX audio, to save bandwidth. A VRX is now a fully standalone
+  channel with its **own spectrum and s-meter**, no longer tied to whether its parent RX is on.
+- **VRX1 and VRX2 are separate, independently-placeable windows** (previously one combined window).
+- **"Arrange windows" drag-grid.** A new *Schik* button opens a panel where you drag the open
+  spectrum/Yaesu windows into rows and snap them onto the screen in one click (side-by-side,
+  stacked, 2×2, 2-plus-1, …). Layouts are **per monitor**: pick a screen, arrange its windows,
+  apply everything at once.
+- **Per-channel s-meter style.** Click any s-meter to switch it between the analog arc and the bar;
+  the choice is remembered per channel (RX1/RX2/VRX1/VRX2/Yaesu 1/Yaesu 2). The separate
+  "S: Analog/Bar" button is gone.
+- **Yaesu radios on the main screen.** Each connected Yaesu shows a compact chip (audio on/off +
+  open-window button) at the top, so you no longer have to go to Devices to enable it.
+- **Yaesu audio can be muted while the control window stays live.** The audio subscription and the
+  radio-state subscription are now separate server-side, so muting a Yaesu keeps its frequency,
+  s-meter and CAT updating in the open window (and stops the audio bandwidth).
+- **Yaesu power control.** The FT-991A gets a clickable **Power / Standby** button (CAT `PS` —
+  standby keeps the USB/CAT alive so the radio can be woken remotely). The FTX-1 shows the power
+  state as a label only, because it powers off completely (USB drops, so it cannot be woken
+  remotely).
+- **Yaesu TX-power slider now matches the radio's real per-band maximum.** The server reads the
+  FT-991A's max-power menus (EX137–140) and the slider runs 5 W…max for the current band (e.g. 50 W
+  on 2 m/70 cm, your EX value on HF). The FTX-1 follows the same per-band limits per head.
+- **"Single receiver" server setting.** For radios with only one receiver you can switch RX2 off in
+  the server; clients then hide RX2 and VRX2 everywhere.
+- **Consistent "Yaesu N: type" naming** (e.g. *Yaesu 1: 991A*) across the whole UI — main screen,
+  device panels, window titles, and the server-status tab.
+- **SWR alarm.** A red **HIGH SWR** indicator plus an audible warning tone when the radio reports a
+  high SWR during transmit — on both the desktop and Android.
+- **The server settings window now follows the same light/dark theme** as the client.
+- **Android:** when no Thetis is configured, the Radio tab shows the Yaesu view directly (with the
+  "Yaesu active" toggle re-labelled as the audio on/off), and the FT-991A gets the same
+  Power/Standby button as the desktop. The Yaesu **EQ sliders are now half-height** (more compact
+  panel), and you can **recall a memory channel by tapping it** in the list. The EQ sliders and the
+  memory-channel list are **collapsible behind a chevron** (so you don't nudge them while scrolling),
+  and the app now **exits cleanly** when swiped away.
+- **The apps are now multilingual.** The interface is **English by default**, with **Dutch, German
+  and French** translations. The Android app follows your phone's language automatically (falling
+  back to English if it is set to another language); the desktop client has a **language picker** in
+  the server tab. Ham-radio terminology, mode names and product names are deliberately left
+  untranslated.
+- **Changing frequency on a Yaesu in memory mode now slides it to VFO.** When you tune an FT-991A
+  or FTX-1 that is sitting on a memory channel, the radio copies that channel to VFO-A, keeps its
+  mode, and follows your new frequency — so you spin off a memory channel seamlessly instead of the
+  tune being ignored.
+
+### Changed
+- **The server-status tab is now dynamic:** it shows only the audio levels, streams, recording
+  options and data-usage of the components that are actually active, instead of a fixed list.
+- **The channel chips moved to their own row** (RX1 aligned under the VFO-A volume) so the main
+  window can be made narrower.
+- **Yaesu controls now grey out when they don't apply to the current band or mode.** Verified
+  against the FT-991A operating manual: IPO/ATT/ATU are HF–50 MHz only, BK-IN/APF are CW-only,
+  Contour is greyed in CW, and so on — so you can see at a glance what the radio will accept. The
+  FT-991A's **CW/CW-R modes are now labelled CW-L/CW-U** to match the sideband.
+
+### Fixed
+- A series of coupling bugs where a channel's **spectrum secretly depended on its audio** being on:
+  a VRX spectrum showing empty without VRX audio, the loss metric jumping to 100 % on a VRX-only
+  setup (which then dropped the spectrum), RX2 audio disappearing when RX1 audio was turned off,
+  the RX2 spectrum centring on the wrong frequency without RX2 audio, and RX2 audio volume being
+  muted by the pop-out. Spectrum-without-audio now works correctly for every channel.
+- **Pop-out window positions now restore reliably** after snapping, closing and reopening
+  (RX1/RX2/VRX/Yaesu windows) — previously some close paths lost the saved position.
+- **The Yaesu TX-power slider no longer bounces** after you release it (it now waits for the radio
+  to confirm your value before following the read-back).
+- Stale **HIGH SWR** is cleared when a radio disconnects.
+- **The client now follows the CLAR (clarifier) knob on the FT-991A itself.** The 991A does not
+  report its clarifier offset directly, so it is now read from the IF status — turning the physical
+  CLAR knob (including in memory mode) is reflected in the client's RIT/XIT display.
+- **A transient network reset no longer stops the server.** `recv_from` errors such as
+  ConnectionReset/Aborted — common on Windows when a client drops — are handled instead of being
+  fatal.
+- **Audio error-recovery now rebuilds the resampler**, fixing a case where audio could stay broken
+  after a device glitch until a restart.
+
+
+
+## [2.4.4] — 2026-07-17 (WebSDR per radio · Yaesu Mem+/Mem- empty-skip · spacebar-PTT in Yaesu windows · no phantom Thetis-PTT)
 
 > **Patch release.** No wire-protocol change (`VERSION` stays 3, fully interoperable with
 > v2.4.x). Stock Thetis v2.10.3.15 is sufficient — no Thetis-fork change. Desktop updated;

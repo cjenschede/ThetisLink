@@ -39,8 +39,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sdrremote.R
 import com.sdrremote.nsd.MdnsDiscovery
 
 /** PATCH-4: first-run connection wizard for Android. Mirrors the
@@ -131,25 +133,25 @@ fun ConnectWizard(
     if (skipConfirmOpen) {
         AlertDialog(
             onDismissRequest = { skipConfirmOpen = false },
-            title = { Text("Skip wizard?") },
-            text = { Text("Jump straight to the regular connect screen. Your config is not updated, so the wizard will appear again next time you start the app.") },
+            title = { Text(stringResource(R.string.wizard_skip_title)) },
+            text = { Text(stringResource(R.string.wizard_skip_body)) },
             confirmButton = {
                 TextButton(onClick = {
                     skipConfirmOpen = false
                     onSkip()
-                }) { Text("Skip") }
+                }) { Text(stringResource(R.string.wizard_skip)) }
             },
             dismissButton = {
-                TextButton(onClick = { skipConfirmOpen = false }) { Text("Stay") }
+                TextButton(onClick = { skipConfirmOpen = false }) { Text(stringResource(R.string.wizard_stay)) }
             },
         )
     }
 
     val (stepIdx, totalSteps, stepLabel) = when (step) {
-        WizardStep.DiscoverServer -> Triple(1, 4, "Find the server")
-        WizardStep.EnterPassword, WizardStep.Verifying -> Triple(2, 4, "Enter password")
-        WizardStep.AwaitingTotp, WizardStep.Verifying2fa -> Triple(3, 4, "2FA code")
-        WizardStep.Success -> Triple(4, 4, "Connected")
+        WizardStep.DiscoverServer -> Triple(1, 4, stringResource(R.string.wizard_step_find))
+        WizardStep.EnterPassword, WizardStep.Verifying -> Triple(2, 4, stringResource(R.string.wizard_step_password))
+        WizardStep.AwaitingTotp, WizardStep.Verifying2fa -> Triple(3, 4, stringResource(R.string.wizard_2fa_code))
+        WizardStep.Success -> Triple(4, 4, stringResource(R.string.common_connected))
     }
 
     Column(
@@ -165,12 +167,12 @@ fun ConnectWizard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                "Step $stepIdx of $totalSteps: $stepLabel",
+                stringResource(R.string.wizard_step_header, stepIdx, totalSteps, stepLabel),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = { skipConfirmOpen = true }) {
-                Text("Skip", fontSize = 12.sp)
+                Text(stringResource(R.string.wizard_skip), fontSize = 12.sp)
             }
         }
         LinearProgressIndicator(
@@ -180,13 +182,13 @@ fun ConnectWizard(
 
         when (step) {
             WizardStep.DiscoverServer -> {
-                Text("Pick a server from the list or enter the address manually.")
+                Text(stringResource(R.string.wizard_pick_server))
                 if (discoveredServers.isNotEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Found:", fontSize = 12.sp)
+                        Text(stringResource(R.string.conn_found), fontSize = 12.sp)
                         Spacer(Modifier.width(8.dp))
                         TextButton(onClick = { dropdownOpen = true }) {
-                            Text("Discovered (${discoveredServers.size})")
+                            Text(stringResource(R.string.wizard_discovered, discoveredServers.size))
                         }
                         DropdownMenu(
                             expanded = dropdownOpen,
@@ -205,7 +207,7 @@ fun ConnectWizard(
                     }
                 } else {
                     Text(
-                        "Scanning local network…",
+                        stringResource(R.string.wizard_scanning),
                         fontSize = 11.sp,
                         color = Color(0xFF989898),
                     )
@@ -213,21 +215,21 @@ fun ConnectWizard(
                 OutlinedTextField(
                     value = serverInput,
                     onValueChange = { serverInput = it },
-                    label = { Text("Server") },
+                    label = { Text(stringResource(R.string.conn_server)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
                     onClick = { step = WizardStep.EnterPassword },
                     enabled = serverInput.isNotBlank(),
-                ) { Text("Next") }
+                ) { Text(stringResource(R.string.wizard_next)) }
             }
             WizardStep.EnterPassword -> {
-                Text("Enter the server password. Ask the operator of the server PC for it.")
+                Text(stringResource(R.string.wizard_password_body))
                 OutlinedTextField(
                     value = passwordInput,
                     onValueChange = { passwordInput = it },
-                    label = { Text("Password") },
+                    label = { Text(stringResource(R.string.settings_password)) },
                     singleLine = true,
                     visualTransformation = if (passwordVisible)
                         androidx.compose.ui.text.input.VisualTransformation.None
@@ -240,11 +242,11 @@ fun ConnectWizard(
                         checked = passwordVisible,
                         onCheckedChange = { passwordVisible = it },
                     )
-                    Text("Show password", fontSize = 12.sp)
+                    Text(stringResource(R.string.wizard_show_password), fontSize = 12.sp)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { step = WizardStep.DiscoverServer }) {
-                        Text("Back")
+                        Text(stringResource(R.string.wizard_back))
                     }
                     Button(
                         onClick = {
@@ -252,22 +254,22 @@ fun ConnectWizard(
                             step = WizardStep.Verifying
                         },
                         enabled = passwordInput.isNotBlank(),
-                    ) { Text("Connect") }
+                    ) { Text(stringResource(R.string.common_connect)) }
                 }
             }
             WizardStep.Verifying -> {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator()
                     Spacer(Modifier.width(12.dp))
-                    Text("Connecting…")
+                    Text(stringResource(R.string.wizard_connecting))
                 }
             }
             WizardStep.AwaitingTotp -> {
-                Text("Open your authenticator app and enter the 6-digit code.")
+                Text(stringResource(R.string.wizard_totp_body))
                 OutlinedTextField(
                     value = totpInput,
                     onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) totpInput = it },
-                    label = { Text("2FA code") },
+                    label = { Text(stringResource(R.string.wizard_2fa_code)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -275,7 +277,7 @@ fun ConnectWizard(
                     TextButton(onClick = {
                         onDisconnect()
                         step = WizardStep.EnterPassword
-                    }) { Text("Back") }
+                    }) { Text(stringResource(R.string.wizard_back)) }
                     Button(
                         onClick = {
                             onSendTotp(totpInput)
@@ -283,25 +285,25 @@ fun ConnectWizard(
                             step = WizardStep.Verifying2fa
                         },
                         enabled = totpInput.length == 6,
-                    ) { Text("Verify") }
+                    ) { Text(stringResource(R.string.conn_verify)) }
                 }
             }
             WizardStep.Verifying2fa -> {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator()
                     Spacer(Modifier.width(12.dp))
-                    Text("Verifying 2FA code…")
+                    Text(stringResource(R.string.wizard_verifying_2fa))
                 }
             }
             WizardStep.Success -> {
                 Text(
-                    "Connected!",
+                    stringResource(R.string.wizard_connected),
                     fontSize = 22.sp,
                     color = Color(0xFF32B432),
                 )
-                Text("Next time you start the app the wizard is skipped automatically.")
+                Text(stringResource(R.string.wizard_success_body))
                 Button(onClick = { onFinished(serverInput, passwordInput) }) {
-                    Text("Done")
+                    Text(stringResource(R.string.wizard_done))
                 }
             }
         }

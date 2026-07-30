@@ -22,9 +22,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sdrremote.R
 
 /**
  * PTT button with two modes:
@@ -50,7 +52,7 @@ fun PttButton(
         else -> Color(0xFF3C3C3C)
     }
     val label = when {
-        pttDenied -> "TX in use"
+        pttDenied -> stringResource(R.string.ptt_tx_in_use)
         active -> "TX"
         else -> "PTT"
     }

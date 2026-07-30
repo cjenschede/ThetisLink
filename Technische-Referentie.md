@@ -1,10 +1,10 @@
-# ThetisLink v2.4.4 — Technische Documentatie
+# ThetisLink v2.5.0 — Technische Documentatie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een ANAN 7000DLE + Thetis SDR-ontvanger en maximaal twee Yaesu transceivers (FT-991A / FTX-1) via een netwerkverbinding. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
 
-**Versie:** v2.4.4 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.5.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -26,9 +26,13 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.4.4`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.5.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.5.0 highlights
+
+**Onafhankelijke audio + spectrum per kanaal, aparte VRX-vensters met een per-monitor vensterschikker, S-meter wisselen door klikken, Yaesu op het hoofdscherm met aan/stand-by + TX-vermogen per band, een één-ontvanger-instelling, en een hoog-SWR-alarm.** Backwards-compatible met v2.4.x — wire `VERSION` blijft 3; de toevoegingen zijn twee trailing-`YaesuState`-velden (`hi_swr`, `tx_power_max`, genegeerd door oudere clients), vijf nieuwe per-client-gegate `ControlId`-waarden (`Rx1Enable 0x91`, `YaesuStateEnable`/`Yaesu2StateEnable 0x92/0x93`, `YaesuPowerOnOff`/`Yaesu2PowerOnOff 0x94/0x95`) en een `SINGLE_RECEIVER`-heartbeatvlag (zie [Protocol-toevoegingen (v2.5.0)](#protocol-toevoegingen-v250)). Elk kanaal (RX1/RX2/VRX1/VRX2/Yaesu 1-2) is nu een eigen audio- + spectrum-abonnement — een venster openen zet de data aan, sluiten zet ze uit — zodat een VRX een volledig zelfstandig kanaal is met eigen spectrum en S-meter. **VRX1/VRX2 krijgen elk een eigen venster** (voorheen één gecombineerd pop-out) en een **Vensters-schikken**-sleepraster snapt alle open vensters in een layout, toewijsbaar **per monitor**. Het **S-metertype wissel je door op de meter te klikken** en wordt per kanaal onthouden. Yaesu-radio's verschijnen op het **hoofdscherm** (inschakelen + vensterknop, aanwezigheids-gegate) met consistente **"Yaesu N: type"**-naamgeving vanaf de server; de **audio kan gedempt worden terwijl het bedieningsvenster live blijft** (aparte audio- vs. status-abonnement); de FT-991A krijgt een **aan/stand-by**-knop (CAT `PS`; de FTX-1 is alleen-label omdat zijn USB wegvalt bij uitschakelen); en de **TX-vermogensslider volgt het werkelijke maximum per band** (HF/50/144/430-maxvermogensmenu's gelezen bij verbinden, server-side afgedwongen). Een **hoog-SWR-waarschuwingstoon** klinkt voor de Yaesu-radio's (991A `RI0`, FTX-1 `RI`). Een **één-ontvanger**-serverinstelling verbergt RX2/VRX2 voor radio's met één ontvanger. Android krijgt de 991A-power-knop en een Yaesu-eerst Radio-tabblad als er geen Thetis is geconfigureerd. Geen Thetis-fork-update nodig (stock v2.10.3.15 volstaat).
 
 ### v2.4.0 highlights
 
@@ -129,7 +133,7 @@ De v2.0.0 release is een grote stap ten opzichte van de v0.x-lijn. Belangrijkste
 
 ## 2. Architectuur
 
-ThetisLink v2.4.0 gebruikt één enkele TCI WebSocket verbinding naar Thetis voor audio, IQ en alle radio-commando's. Met de PA3GHM fork breiden de aanvullende `_ex` commando's het oppervlak uit (CTUN auto-recenter, diversity, per-RX DDC sample rate, `rx_only_ex` preventieve TX-inhibit). Tegen zowel stock v2.10.3.15 als de fork is geen parallelle CAT-verbinding meer nodig.
+ThetisLink gebruikt één enkele TCI WebSocket verbinding naar Thetis voor audio, IQ en alle radio-commando's. Met de PA3GHM fork breiden de aanvullende `_ex` commando's het oppervlak uit (CTUN auto-recenter, diversity, per-RX DDC sample rate, `rx_only_ex` preventieve TX-inhibit). Tegen zowel stock v2.10.3.15 als de fork is geen parallelle CAT-verbinding meer nodig.
 
 ```mermaid
 flowchart LR
@@ -191,68 +195,108 @@ flowchart TB
 
 ```
 sdr-remote/
-├── Cargo.toml                  # Workspace root
+├── Cargo.toml                  # Workspace root (members hieronder)
 ├── Technische-Referentie.md    # Dit document
 ├── sdr-remote-core/            # Gedeelde library (protocol, codec, jitter, auth)
 │   └── src/
-│       ├── lib.rs              # Constanten (sample rates, frame sizes, poort)
-│       ├── protocol.rs         # Packet format, serialisatie, deserialisatie
+│       ├── lib.rs              # Constanten (sample rates, frame sizes, poort, VERSION/BUILD)
+│       ├── protocol.rs         # Packet format, ControlId, serialisatie, deserialisatie
 │       ├── codec.rs            # Opus encode/decode wrapper
 │       ├── jitter.rs           # Adaptieve jitter buffer
-│       └── auth.rs             # HMAC-SHA256 authenticatie
-├── sdr-remote-logic/           # Platform-onafhankelijke client engine
+│       └── auth.rs             # HMAC-SHA256 authenticatie + TOTP
+├── sdr-remote-logic/           # Platform-onafhankelijke client engine (geen egui)
 │   └── src/
 │       ├── lib.rs              # Crate root
 │       ├── state.rs            # RadioState (read-only, broadcast via watch channel)
 │       ├── commands.rs         # Command enum (UI → engine via mpsc channel)
-│       ├── audio.rs            # AudioBackend trait (platform-abstractie)
-│       └── engine.rs           # ClientEngine (netwerk, codec, resampling, jitter)
+│       ├── audio.rs            # AudioBackend trait + SWR-alarm beep-mixer
+│       ├── engine.rs           # ClientEngine (netwerk, codec, resampling, jitter)
+│       ├── eq.rs               # TX-EQ / compressor / AGC-bewerking
+│       ├── i18n.rs             # NL/EN string-tabellen
+│       └── wav.rs              # WAV opname/afspeel-helpers
+├── sdr-remote-theme/           # Gedeeld UI-kleurpalet / theme-constanten
+├── vrx-rs/                     # VRX-engine: FFT-channelizer + per-VRX Opus/runtime
+│   └── src/                    # channelizer.rs, opus.rs, runtime.rs, config.rs, wav.rs
+├── sdr-remote-relay/           # Relay-client-library (in server + client gelinkt)
+├── thetislink-relay/           # Self-hosted VPS-relay-binary
+│   └── src/                    # main.rs (forwarder), admin_api.rs, store.rs (SQLite)
 ├── sdr-remote-server/          # Windows server (draait naast Thetis)
 │   └── src/
 │       ├── main.rs             # Opstart, argument parsing, shutdown
-│       ├── network.rs          # UDP send/receive, resampling, playout timer
+│       ├── network.rs          # UDP send/receive, resampling, playout timer, per-client routing
+│       ├── session.rs          # Client sessie management (multi-client, abonnement-sets)
+│       ├── tracked_socket.rs   # UDP-socket-wrapper met per-stream byte/packet-tellers
+│       ├── mdns.rs             # mDNS service-advertentie (lokale discovery)
 │       ├── tci.rs              # TciConnection: TCI WebSocket client + state + streams
 │       ├── tci_commands.rs     # TCI command sender (audio/IQ/_ex commando's)
 │       ├── tci_parser.rs       # TCI tekst/binair parser
 │       ├── ctun_recenter.rs    # CTUN auto-recenter (auto_recenter_ex cap)
 │       ├── audio_loops.rs      # Audio bundling + IQ consumer loops
-│       ├── ptt.rs              # PttController: PTT safety (bevat TciConnection)
-│       ├── session.rs          # Client sessie management (multi-client)
 │       ├── spectrum.rs         # SpectrumProcessor: DDC FFT pipeline + test generator
+│       ├── vrx_manager.rs      # Per-client VRX abonnement/runtime-bookkeeping
+│       ├── vrx_bridge.rs       # Brug tussen de IQ-stroom en de vrx-rs engine
+│       ├── ptt.rs              # PttController: PTT safety (bevat TciConnection)
+│       ├── power_cap.rs        # Per-positie RF-power-cap (SPE/RF2K DriveDown)
 │       ├── dxcluster.rs        # DX Cluster telnet client
 │       ├── macros.rs           # CW keyer macro's
-│       ├── yaesu.rs            # Yaesu FT-991A CAT serieel controller (auto-DFM)
+│       ├── yaesu.rs            # Yaesu FT-991A / FTX-1 CAT serieel controller (dual-radio, auto-DFM, SSB-over-USB, aan/stand-by, TX-vermogen per band, SWR)
 │       ├── amplitec.rs         # Amplitec antenne-switch
 │       ├── rf2k.rs             # RF2K-S PA HTTP controller
 │       ├── spe_expert.rs       # SPE Expert 1.3K-FA serieel controller
 │       ├── ultrabeam.rs        # UltraBeam RCU-06 serieel controller
-│       ├── rotor.rs            # EA7HG Visual Rotor UDP controller
+│       ├── rotor.rs            # Rotor-besturing (EA7HG UDP-backend + dispatch)
+│       ├── pstrotator.rs       # PstRotator UDP/XML rotor-backend (verzenden)
+│       ├── pstrotator_listen.rs# PstRotator/Log4OM inkomende listener
+│       ├── mcp2221_yaesu_rotor.rs # G-1000DXC rotor via MCP2221A (ADC + soft-start)
 │       ├── tuner.rs            # JC-4s/JC-3s tuner controllers (MCP2221A USB-HID)
 │       ├── mcp2221_debug.rs    # MCP2221A USB-HID bridge (GP2 + GP1 ADC)
 │       ├── mcp2221_scan.rs     # USB-HID board scan + serial programming
+│       ├── audio_stats.rs      # Per-stream bandbreedte/jitter/loss-statistieken
 │       ├── config.rs           # Server configuratie (persistent)
 │       └── ui/                 # Server GUI (egui)
 ├── sdr-remote-client/          # Desktop client (egui)
+│   ├── locales/               # rust-i18n UI-vertalingen (app.yml: EN/NL/DE/FR)
 │   └── src/
 │       ├── main.rs             # Opstart, engine + UI threading
 │       ├── audio.rs            # cpal AudioBackend impl + device listing
-│       ├── ui.rs               # egui UI, config opslag
+│       ├── mdns.rs             # mDNS server-discovery (lokaal netwerk)
+│       ├── midi.rs             # MIDI-controller-invoer
 │       ├── websdr.rs           # Win32 venster + wry WebView (embedded WebSDR/KiwiSDR)
-│       └── catsync.rs          # WebSDR kanaalcommunicatie, favorites, debounced freq sync
+│       ├── catsync.rs          # WebSDR kanaalcommunicatie, favorites, debounced freq sync
+│       └── ui/                 # egui UI (per gebied opgesplitst)
+│           ├── mod.rs          # Hoofd-app, vensters, schikker, per-kanaal state
+│           ├── devices.rs      # Apparaat-panelen (Yaesu, PA, tuner, rotor, antenne)
+│           ├── screens.rs      # Hoofdscherm-layout + chips
+│           ├── spectrum.rs     # Hoofd-spectrum/waterval-plot
+│           ├── channel_spectrum.rs # Per-kanaal spectrum/waterval
+│           ├── meters.rs       # S-meter (balk + analoog) rendering
+│           ├── theme.rs        # Client-lokale theme-helpers
+│           ├── config.rs       # Config-opslag
+│           ├── helpers.rs      # Gedeelde widget-helpers (sliders, hover)
+│           ├── window_placement.rs # Monitor-geometrie + pop-out-plaatsing
+│           ├── wizard.rs       # First-run connect-wizard
+│           ├── yaesu_memory.rs # Yaesu geheugenkanaal-tabel
+│           ├── yaesu_menu.rs   # Yaesu EX-menu-editor
+│           └── ftx1_ex_chart.rs# FTX-1 EX-menu-referentiekaart
 └── sdr-remote-android/         # Android client (Kotlin/Compose + Rust via UniFFI)
     ├── src/
     │   ├── lib.rs              # JNI entrypoint, Android logging
-    │   ├── bridge.rs           # UniFFI bridge (Rust ↔ Kotlin)
+    │   ├── bridge.rs           # UniFFI bridge (Rust ↔ Kotlin), AppState
     │   ├── audio_oboe.rs       # Oboe AudioBackend impl (AAudio)
     │   └── sdr_remote.udl      # UniFFI interface definitie
     └── android/                # Android Studio project
         └── app/src/main/java/com/sdrremote/
             ├── MainActivity.kt
+            ├── SdrUiState.kt           # Compose UI-state-model
             ├── viewmodel/SdrViewModel.kt
             └── ui/
-                ├── screens/MainScreen.kt
-                └── components/         # Compose UI componenten
+                ├── screens/            # MainScreen, ExternalDevicesScreen, ConnectWizard
+                └── components/         # Compose UI componenten (RadioControls, StatsPanel, …)
 ```
+
+> **Ook een workspace-member:** `mcp2221-test` (een losstaande MCP2221A hardware-testharnas, niet meegeleverd). De map `vendor/mcp2221-hal` bevat een vendored dependency die de MCP2221A-paden gebruiken.
+
+> **Internationalisatie (i18n).** Twee mechanismen naast elkaar: (1) een handgeschreven NL/EN-stringtabel in `sdr-remote-logic/src/i18n.rs` voor connect-status/foutmeldingen, gedeeld met Android via UniFFI; (2) sinds v2.5.0 een **rust-i18n**-systeem voor de desktop-UI-chrome (`sdr-remote-client/locales/app.yml`, EN-basis + NL/DE/FR) met een **taal-picker** in het Server-tabblad. Android heeft eigen string-resources (`values-nl/de/fr`) met OS-taal-detectie en EN-fallback. Ham-vaktermen, mode-namen en productnamen blijven onvertaald.
 
 ---
 
@@ -276,9 +320,10 @@ sdr-remote/
 | `futures-util` | 0.3 | StreamExt/SinkExt voor WebSocket (server) |
 | `serialport` | 4.7 | Serieel USB communicatie (apparaten) |
 | `midir` | 0.10 | MIDI interface |
-| `wry` | 0.x | WebView voor embedded WebSDR/KiwiSDR venster (client) |
-| `hmac`/`sha2` | — | HMAC-SHA256 authenticatie |
-| `rand` | — | Random nonce generatie |
+| `wry` | 0.54 | WebView voor embedded WebSDR/KiwiSDR venster (client) |
+| `hmac`/`sha2` | 0.12/0.10 | HMAC-SHA256 authenticatie |
+| `rand` | 0.8 | Random nonce generatie |
+| `tracing`/`tracing-subscriber`/`tracing-appender` | 0.1/0.3/0.2 | Gestructureerde logging + roterende file-appender |
 
 **Build-optimalisatie:** Dependencies worden ook in dev mode geoptimaliseerd (`[profile.dev.package."*"] opt-level = 2`) omdat Opus en rubato te traag zijn zonder optimalisatie.
 
@@ -295,9 +340,9 @@ Elk packet begint met dezelfde header:
 | Offset | Grootte | Veld | Waarde |
 |--------|---------|------|--------|
 | 0 | 1 | Magic | `0xAA` |
-| 1 | 1 | Version | `2` (was `1` in v0.x; v1 clients zijn niet wire-compatibel met v2 servers en vice versa) |
+| 1 | 1 | Version | `3` (opgehoogd 1→2 in v2.0.0, 2→3 in v2.0.3; client en server moeten dezelfde wire-VERSION delen) |
 | 2 | 1 | PacketType | Zie onder |
-| 3 | 1 | Flags | Bit 0 = PTT actief |
+| 3 | 1 | Flags | Bit 0 = PTT actief; bit 1 = `AUDIO_WIDEBAND` (16 kHz Opus-payload) |
 
 ### Packet Types
 
@@ -341,7 +386,7 @@ Periodiek (elke 500ms) door client verzonden voor verbindingsbewaking en RTT-met
 
 Backward compatible: oude clients zonder capabilities (16 bytes) worden geaccepteerd.
 
-#### HeartbeatAck (0x03) — 12-16 bytes
+#### HeartbeatAck (0x03) — 12-20 bytes
 
 Server antwoord op Heartbeat. Echoot de client's timestamp terug voor RTT-berekening.
 
@@ -351,6 +396,9 @@ Server antwoord op Heartbeat. Echoot de client's timestamp terug voor RTT-bereke
 | 4-7 | 4 | EchoSequence | Geechode heartbeat sequence |
 | 8-11 | 4 | EchoTime | Geechode client timestamp |
 | 12-15 | 4 | Capabilities | Negotiated capabilities (u32, optioneel) |
+| 16-19 | 4 | StateFlags | `ServerStateFlags`-bitveld (u32, optioneel; geadverteerd via capability-bit 3) |
+
+Backward-compatible: een oudere server stuurt alleen 12-16 bytes (geen StateFlags); een client die een ontbrekend veld leest behandelt het als nul.
 
 **Capability flags:**
 
@@ -359,6 +407,7 @@ Server antwoord op Heartbeat. Echoot de client's timestamp terug voor RTT-bereke
 | 0 | WIDEBAND_AUDIO | 16kHz wideband Opus |
 | 1 | SPECTRUM | Spectrum/waterfall data |
 | 2 | RX2 | RX2/VFO-B dual receiver |
+| 3 | REPORTS_STATE_FLAGS | Server vult het HeartbeatAck StateFlags-veld (bv. `SINGLE_RECEIVER`) |
 
 Negotiation via intersectie: server stuurt alleen flags die beide kanten ondersteunen.
 
@@ -397,7 +446,7 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0x0B | FilterLow | signed Hz | Filter low cut (i16 als u16) |
 | 0x0C | FilterHigh | signed Hz | Filter high cut (i16 als u16) |
 | 0x1A | SpectrumMaxBins | 64-32768 | Max bins per packet (0=default 8192) |
-| 0x1C | SpectrumFftSize | 32/64/128/256 | FFT grootte in K (0=auto) |
+| 0x1C | SpectrumFftSize | 32/65/131/262 | FFT-grootte in K = 32768/65536/131072/262144 (0=auto) |
 | 0x1D | SpectrumBinDepth | 8/16 | Bin depth: 8=u8 (1 byte/bin), 16=u16 (2 bytes/bin) |
 
 **ControlId waarden — RX2/VFO-B:**
@@ -419,7 +468,7 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0x1B | Rx2SpectrumMaxBins | 64-32768 | RX2 max bins |
 | 0x3D | DdcSampleRateRx1 | kHz (bijv. 384) | Per-RX DDC rate (stock `iq_samplerate`, fork `ddc_sample_rate_ex`) |
 | 0x3E | DdcSampleRateRx2 | kHz | Per-RX DDC rate RX2 |
-| 0x3F | Rx2SpectrumFftSize | 32/64/128/256 | FFT grootte in K (RX2) |
+| 0x3F | Rx2SpectrumFftSize | 32/65/131/262 | FFT-grootte in K = 32768/65536/131072/262144 (RX2) |
 
 **ControlId waarden — TCI Controls (v0.5.3):**
 
@@ -473,11 +522,11 @@ Stuurt bedieningscommando's (bidirectioneel).
 | ID | Naam | Waarden | Beschrijving |
 |----|------|---------|-------------|
 | 0x58 | TuneDrive | 0-100 | Tune drive level |
-| 0x59 | MonitorVolume | 0-100 | Monitor volume |
+| 0x59 | MonitorVolume | dB (i8 als u16, typ. -40..0) | Monitor volume |
 | 0x5A | Mute | 0/1 | Master mute |
 | 0x5B | RxMute | 0/1 | RX mute |
 | 0x5C | ManualNotchFilter | 0/1 | Handmatige notch filter RX1 |
-| 0x5D | RxBalance | -100..+100 (als u16) | RX audio balans |
+| 0x5D | RxBalance | -40..+40 (i8 als u16) | RX audio balans |
 | 0x5E | CwKey | 0/1 | CW key down/up |
 | 0x5F | CwMacroStop | trigger | Stop CW macro |
 | 0x60 | Rx2ManualNotchFilter | 0/1 | Handmatige notch filter RX2 |
@@ -495,7 +544,7 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0x23 | YaesuMicGain | gain x10 | ThetisLink TX gain (200 = 20.0x) |
 | 0x24 | YaesuMode | mode nr | Operating mode |
 | 0x25 | YaesuReadMemories | trigger | Lees alle geheugens |
-| 0x26 | YaesuRecallMemory | 1-99 | Memory channel recall |
+| 0x26 | YaesuRecallMemory | 1-117 | Memory channel recall (991A 1-117 incl. PMS; FTX-1 5-cijferig) |
 | 0x27 | YaesuWriteMemories | trigger | Schrijf alle geheugens |
 | 0x28 | YaesuSelectVfo | 0=A, 1=B, 2=swap | VFO selectie |
 | 0x29 | YaesuSquelch | 0-255 | Squelch niveau |
@@ -548,12 +597,12 @@ Zelfde formaat, voor RX2 mode.
 
 #### S-meter Packet (0x09) — 6 bytes
 
-Server->client. Raw waarde 0-260 (12 per S-unit, S9=108). Tijdens TX: forward power in watts x10.
+Server->client. Sinds wire-VERSION 3 is het `Level`-veld een **signed i16 in deci-eenheden**: op RX is het dBm×10 (bv. -73 dBm → S9 → waarde -730); tijdens TX is het forward power in watts×10. De client mapt dBm naar de 0-228 S-meter-displayschaal (S0=0, S9=108, S9+60=228). (Vóór VERSION 3 was dit een unsigned 0-260 displaywaarde.)
 
 | Offset | Grootte | Veld | Beschrijving |
 |--------|---------|------|--------------|
 | 0-3 | 4 | Header | Magic, version, type=0x09, flags |
-| 4-5 | 2 | Level | S-meter niveau of TX power (u16) |
+| 4-5 | 2 | Level | S-meter niveau (dBm×10) of TX power (W×10) — **signed i16** |
 
 #### SmeterRx2 (0x11) — 6 bytes
 
@@ -711,6 +760,72 @@ De nieuwe packet-types worden **nooit naar elke client gebroadcast** — elk gaa
 
 Omdat de default van elke gate **uit** is, ontvangt een v2.1.x-client (die nooit `VrxEnable*` / `Yaesu2Enable` stuurt) geen van de `0x21`–`0x29` packet-types — geen parse-fouten, geen log-spam, geen verspilde bandbreedte.
 
+### Aanvullende message- en control-types (referentie)
+
+De onderstaande additieve types zijn geïntroduceerd in v2.0.3–v2.4.2 en worden per client gegate/genegotieerd; ze staan hier voor de volledigheid naast de hoofdtabellen hierboven.
+
+**Server → client packet-types:**
+
+| ID | Naam | Toelichting |
+|----|------|-------------|
+| 0x1C | SmeterSig | RX1 S-meter "Sig" (peak-hold)-bron. Zelfde 6-byte layout als `S-meter` (0x09); welke bronnen streamen wordt gekozen met `SmeterSources` (0x64). |
+| 0x1D | SmeterMaxBin | RX1 S-meter "MaxBin" (sterkste FFT-bin)-bron. |
+| 0x1E | SmeterRx2Sig | RX2 "Sig"-bron. |
+| 0x1F | SmeterRx2MaxBin | RX2 "MaxBin"-bron. |
+| 0x20 | AmplitecPowerTable | Amplitec per-band power-cap-tabel push (`AmplitecPowerTablePacket`, SIZE 22). |
+| 0x2A | FrequencyVrxActual | Werkelijke VRX-luisterfrequentie na snappen / SAM auto-tune (server-echo, per `vrx_id`). |
+| 0x2B | TxFilterBand | TX-modulatiefilter-band (low/high-randen) push (`TxFilterBandPacket`, SIZE 12). |
+| 0x2C | YaesuControl | Getypt Yaesu-control-kanaal (SIZE 8). |
+| 0x2D | YaesuFeature | Yaesu DSP-feature-state-snapshot (toggles/levels/freqs; SIZE 33). |
+| 0x2E | YaesuPresence | Yaesu radio-aanwezigheid (geconfigureerd + actief) per slot (SIZE 8). |
+
+**Control-waarden (client ↔ server):**
+
+| ID | Naam | Waarden | Beschrijving |
+|----|------|---------|--------------|
+| 0x64 | SmeterSources | bitmask | Welke S-meter-bron-packets (Sig / Avg / MaxBin) de server streamt. |
+| 0x65 | DxSpotsEnabled | 0/1 | Per-client DX-cluster-spot-stream aan/uit (default aan). |
+| 0x75 | VrxAudioRate | 0=NB,1=WB,2=Auto | VRX1 audio-bandbreedte-mode. |
+| 0x76 | VrxSamAutoTune | 0/1 | VRX1 SAM auto-tune-naar-carrier. |
+| 0x77 | VrxSamAutoTune2 | 0/1 | VRX2 SAM auto-tune-naar-carrier. |
+| 0x78 | TxFilterLow | Hz (u16) | TX-modulatiefilter lage rand. |
+| 0x79 | TxFilterHigh | Hz (u16) | TX-modulatiefilter hoge rand. |
+| 0x7A | VrxAudioRate2 | 0=NB,1=WB,2=Auto | VRX2 audio-bandbreedte-mode. |
+| 0x90 | ThetisTxeq | 0/1 | Bypass/herstel Thetis TX-EQ tijdens afspelen van opgenomen audio. |
+
+### Protocol-toevoegingen (v2.5.0)
+
+Wire-protocol `VERSION` blijft **3** in v2.5.0. De toevoegingen zijn (a) twee trailing-velden op het bestaande `YaesuState`-packet, (b) vijf nieuwe `ControlId`-waarden, en (c) één heartbeat-statusvlagbit. Alle zijn additief en interoperabel met elke v2.4.x-peer.
+
+#### `YaesuState` (0x17) trailing-velden
+
+`YaesuStatePacket` kreeg twee trailing-velden, gedeserialiseerd met per-veld lengte-guards (`if buf.len() > pos`), zodat een korter v2.4.x-packet nog steeds parse't en de ontbrekende velden defaulten naar nul/false:
+
+| Veld | Type | Betekenis |
+|-------|------|-----------|
+| `hi_swr` | bool (u8) | Hoog-SWR-alarmstatus. Beide radio's via hun eigen Hi-SWR-vlag: FT-991A via `RI0` (FT-991A CAT OM 1711-D), FTX-1 via de `RI` P2-vlag (zie §Yaesu). Stuurt de client-side waarschuwingstoon aan. |
+| `tx_power_max` | u8 | Maximum TX-vermogen van de radio voor de huidige band (0 = onbekend). Gelezen uit de HF/50/144/430-MHz max-vermogens-EX-menu's bij verbinden; de client klemt het TX-vermogens-sliderbereik hierop. |
+
+`YaesuState2` (0x26, slot 1) draagt de identieke layout.
+
+#### Nieuwe ControlId-waarden
+
+| ID | Naam | Waarden | Beschrijving |
+|----|------|--------|-------------|
+| 0x91 | Rx1Enable | 0/1 | RX1-audio-abonnement aan/uit. **Default aan** op de server, zodat een oudere client die dit nooit stuurt RX1-audio blijft krijgen. Een client die alleen VRX gebruikt zet dit op 0 om de RX1-audiostroom te stoppen (bandbreedte sparen). Dit is het mechanisme achter het onafhankelijke-audio-per-kanaal-feature. |
+| 0x92 | YaesuStateEnable | 0/1 | Slot-0 **status/bediening**-abonnement, los van audio. Bij 1 ontvangt de client `YaesuState` + geheugen + feature-pushes **zonder** de audiostroom — de "audio dempen, bedieningsvenster live houden"-splitsing. |
+| 0x93 | Yaesu2StateEnable | 0/1 | Slot-1 spiegel van `YaesuStateEnable`. |
+| 0x94 | YaesuPowerOnOff | 0/1 | Slot-0 aan/stand-by. 1 → CAT `PS1;` (aan), 0 → `PS0;` (stand-by). Alleen FT-991A; de FTX-1 verliest zijn USB-verbinding bij power-off, dus de client toont dit alleen voor de 991A. |
+| 0x95 | Yaesu2PowerOnOff | 0/1 | Slot-1 spiegel van `YaesuPowerOnOff`. |
+
+#### Gesplitste audio- vs. status-abonnement
+
+De server houdt nu per slot een aparte **status**-adresset bij naast de audioset. `yaesu_state_addrs()` / `yaesu2_state_addrs()` bevatten elke client waar `state_enabled || yaesu_enabled` (audio impliceert dus status), terwijl `yaesu_addrs()` audio-only blijft. Status-/feature-/geheugen-sends richten zich op de statusset; de SSB-audiostroom op de audioset. Zo kan een client alleen op status abonneren (via `YaesuStateEnable`) en de audio dempen zonder de S-meter-/CAT-feed te verliezen.
+
+#### Heartbeat `SINGLE_RECEIVER`-vlag
+
+`ServerStateFlags` in de `HeartbeatAck` kreeg `SINGLE_RECEIVER = 1 << 4`, gezet als de server met **één** ontvanger is geconfigureerd (`rx2_present = false`). Het bit is **geïnverteerd** (gezet = enkel) zodat een all-zero vlagveld van een oudere server het standaard twee-ontvanger-gedrag behoudt. Clients die het bit zien, verbergen RX2 en VRX2 in de hele UI.
+
 ---
 
 ## 6. Opus Codec Configuratie
@@ -829,7 +944,7 @@ TCI (Transceiver Control Interface) is een WebSocket-gebaseerd protocol ingebouw
 
 ### Stock vs fork TCI sub-protocol
 
-ThetisLink v2.4.0 praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork (TL2-4)**. Het basisprotocol is identiek — maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-4).
+ThetisLink praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork (TL2-4)**. Het basisprotocol is identiek — maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-4).
 
 **Capability-negotiation:** bij verbinden vraagt de client `tci_caps_ex;` op. Met de fork (en de "ThetisLink extensions" Setup-checkbox aan) antwoordt Thetis met een lijst van ondersteunde `_ex` capabilities (`auto_recenter_ex`, `rx_filter_preset_ex`, `ddc_sample_rate_ex`, `diversity_ex`, ...). Stock Thetis implementeert `tci_caps_ex` niet en het verzoek timet uit → ThetisLink valt terug op stock-mode gedrag.
 
@@ -1107,7 +1222,7 @@ Alle controls zijn bidirectioneel: server ontvangt push updates via TCI en broad
 ### S-meter / TX Power Indicator
 
 De meter bar is context-afhankelijk op basis van PTT status:
-- **RX:** S-meter met 0-260 schaal (12 per S-unit, S9=108). Groen tot S9, rood boven S9.
+- **RX:** S-meter op de 0-228 displayschaal (S0=0, S9=108, S9+60=228; server stuurt dBm×10). Groen tot S9, rood boven S9.
 - **TX:** Forward power bar met 0-100W schaal. Volledig rood.
 
 ### Configuratie bestand
@@ -1323,7 +1438,7 @@ ThetisLink heeft 7 wire-protocol `DeviceType`-waarden (0x01..0x07). Status wordt
 
 | Waarde | Apparaat | Verbinding |
 |--------|----------|-----------|
-| 0x01 | Amplitec 6/2 Antenneschakelaar | Serieel USB-TTL, 9600 baud |
+| 0x01 | Amplitec 6/2 Antenneschakelaar | Serieel USB-TTL, 19200 baud |
 | 0x02 | JC-4s / JC-3s Antenna Tuner (tot 2 parallel) | Adafruit MCP2221A USB-HID |
 | 0x03 | SPE Expert 1.3K-FA Eindversterker | Serieel USB, 115200 baud |
 | 0x04 | RF2K-S Eindversterker | TCP/IP |
@@ -1458,7 +1573,7 @@ Pre-v2.0.0 las de parser byte 8 als `motors_moving` — die byte is in werkelijk
 
 Rotor controller voor draaibare antennes. Arduino Mega 2560 met W5100 LAN module.
 
-**Verbinding:** UDP, poort 2570. Gebaseerd op Prosistel protocol.
+**Verbinding:** UDP naar een door de gebruiker ingesteld `host:poort` (geen vaste default; bv. `192.168.1.60:3010`). Gebaseerd op het Prosistel-protocol.
 
 **Commando's:**
 
@@ -1946,13 +2061,13 @@ Alle 153 setup menu-items zijn uitleesbaar en instelbaar via het **EX commando**
 | V/M | `VM;` | Toggle VFO <-> Memory mode |
 | Mode (8 knoppen) | `MD0{x};` | LSB/USB/CW/CW-R/FM/AM/DIG-U/DIG-L |
 | Band +/- | `BU0;`/`BD0;` | Band up/down (VFO-A) |
-| Mem +/- | `MC{n+/-1};` | Stap door memory kanalen 1-99 |
+| Mem +/- | `MC{n};` | Stap naar het volgende/vorige **gevulde** memory-kanaal (slaat lege over); FT-991A dekt 1-117 (incl. PMS 100-117), FTX-1 gebruikt zijn eigen 5-cijferige vorm |
 | A=B | `AB;` | Kopieer VFO A -> B |
 | Split | `ST1;`/`ST0;` | Split mode toggle |
 | Scan | `SC1;`/`SC0;` | Memory/VFO scan toggle |
 | Tune | `AC002;`/`AC000;` | Tuner on/off |
 | SQL | `SQ0{nnn};` | Squelch slider (0-255) |
-| PWR | `PC{nnn};` | RF power slider (0-100) |
+| PWR | `PC{nnn};` (991A) / `PC{head}{nnn};` (FTX-1) | RF-vermogensslider, geklemd 5 W…max-per-band (`tx_power_max()` uit de EX max-vermogensmenu's) |
 | MIC | `MG{nnn};` | Mic gain slider (0-100) |
 | RF Gain | `RG0{nnn};` | RF gain slider (0-255) |
 
@@ -2119,9 +2234,9 @@ Slot 1 heeft eigen audio (`AudioYaesu2` 0x25), state (`YaesuState2` 0x26), frequ
 
 De hardware-squelch van de FTX-1 gate't zijn USB-audio niet, dus een FM-kanaal zou continu ruis streamen. Een **server-side software-squelch** lost dit op:
 
-- De fast-poll-loop voegt voor de FTX-1 `RI0;` toe naast `SM0;` (de 991A heeft geen `RI` en wordt er niet op gepolld). Het `RI` P8-veld rapporteert de busy-status van de radio -> `squelch_open`.
+- De fast-poll-loop voegt `RI0;` toe naast `SM0;` voor beide modellen - op de FTX-1 voor de `RI` P8-busy-vlag (hieronder) plus de P2 Hi-SWR-vlag, op de 991A alleen voor zijn `RI0` P2 Hi-SWR-vlag. Het `RI` P8-veld (FTX-1) rapporteert de busy-status van de radio -> `squelch_open`.
 - Bij gesloten squelch faded de audio-loop de FTX-1 (Yaesu) USB-audio naar stilte (een korte gate-envelope, ~200 ms volledige fade) in plaats van abrupt af te kappen; alleen de fade-randen worden gelogd. Dit gate't alleen het USB-audiopad van de radio zelf — niet de VRX- of Thetis-audio.
-- **Alleen FM-familie-modes.** Gating geldt voor internal mode 5 (FM / FM-N / DATA-FM). Op SSB/CW/AM/data is de busy-flag betekenisloos, dus audio gaat altijd door. `squelch_open` is default **true** (open), zodat een radio zonder `RI` (de 991A) of elk kanaal vóór de eerste poll nooit gegate wordt.
+- **Alleen FM-familie-modes.** Gating geldt voor internal mode 5 (FM / FM-N / DATA-FM). Op SSB/CW/AM/data is de busy-flag betekenisloos, dus audio gaat altijd door. `squelch_open` is default **true** (open), zodat een radio die niet software-squelch-gated is (de 991A) of elk kanaal vóór de eerste poll nooit gegate wordt.
 
 De FTX-1 **WIRES-X** EX-menu-velden zijn toegevoegd aan de EX-editor (§26).
 

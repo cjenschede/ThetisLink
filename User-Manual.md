@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.4.4 — Gebruikershandleiding
+﻿# ThetisLink v2.5.0 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.4.4.apk` | Android client app |
+| `ThetisLink-2.5.0.apk` | Android client app |
 | `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -93,7 +93,7 @@ flowchart TB
     Server <--> Yaesu[Yaesu FT-991A / FTX-1<br>COM + USB Audio]
 ```
 
-Alle audio (RX/TX), IQ spectrum data en besturing gaan via één enkele TCI WebSocket verbinding. ThetisLink v2.4.0 gebruikt geen aparte CAT TCP verbinding — TCI dekt alle benodigde commando's, zowel met stock Thetis v2.10.3.15 als met de PA3GHM fork. Geen VB-Cable of andere drivers nodig.
+Alle audio (RX/TX), IQ spectrum data en besturing gaan via één enkele TCI WebSocket verbinding. ThetisLink gebruikt geen aparte CAT TCP verbinding — TCI dekt alle benodigde commando's, zowel met stock Thetis v2.10.3.15 als met de PA3GHM fork. Geen VB-Cable of andere drivers nodig.
 
 > **Het netwerkpad in beeld:** een geïllustreerde uitleg van hoe audio, spectrum en besturing over het netwerk reizen staat online: **[Het netwerkpad](https://cjenschede.github.io/ThetisLink/Netwerk-uitleg.html)**.
 
@@ -231,7 +231,7 @@ De relay-configuratie (stationsleutels, beheerderswachtwoord) staat in een `.env
 ### VFO en frequentie
 
 - **Frequentie display:** klik om direct een frequentie in te voeren
-- **Stap knoppen:** +/- in stappen van 10 Hz, 100 Hz, 1 kHz, 10 kHz
+- **Stap knoppen:** +/- in stappen van 10 Hz, 100 Hz, 500 Hz, 1 kHz, 10 kHz
 - **Scroll wheel:** op het spectrum = 1 kHz stappen
 - **Klik op spectrum:** tune naar die frequentie
 - **Waterval klik (Android):** tune naar klik-positie
@@ -248,7 +248,7 @@ Bij bandwisseling worden deze automatisch hersteld. Daarnaast zijn er 5 vrije ge
 
 ### Mode
 
-Selecteerbaar: LSB, USB, CW, AM, FM, DATA-FM, DIG
+Op het hoofd-Radio-tabblad: LSB, USB, AM, SAM, FM. De pop-out-vensters voegen de volledige set toe: LSB, USB, CW-L, CW-U, AM, SAM, FM, DIGU, DIGL. (DATA-FM is een Yaesu-radio-mode, geen Thetis-mode — zie de Yaesu-sectie.)
 
 ### CW keyer (v2.0.0)
 
@@ -263,9 +263,10 @@ Snelheid en macro-content zijn instelbaar in de client.
 ### Filter
 
 De filterbreedte is instelbaar met +/- knoppen. Presets zijn beschikbaar per mode:
-- **CW:** 50, 100, 200, 500, 1000 Hz
-- **SSB:** 1800, 2400, 2700, 3100, 3600 Hz
-- **AM/FM:** 6000, 8000, 10000, 12000 Hz
+- **CW:** 50, 100, 250, 500, 1000 Hz
+- **SSB:** 1800, 2100, 2400, 2700, 3000, 3300, 3600, 4000 Hz
+- **AM:** 4000, 6000, 8000, 10000, 12000 Hz
+- **FM:** 5000, 10000 Hz
 
 **Filter preset tracking (v2.0.0, met fork):** met de PA3GHM fork synchroniseert de huidige Thetis-filter-preset (F1, F2, F3, VAR1, VAR2 of NONE) live naar de client. De client toont welke preset Thetis nu actief heeft en je kunt via dezelfde knop-set switchen — geen handmatig dubbel-instellen tussen client en Thetis-UI nodig.
 
@@ -333,15 +334,25 @@ Tijdens zenden (TX) wordt het spectrum automatisch aangepast voor goede weergave
 
 ### Popout vensters
 
-De client ondersteunt losse vensters:
+De client ondersteunt een los venster per kanaal:
 - **RX1 spectrum** — alleen RX1 spectrum + waterval met bediening
 - **RX2 spectrum** — alleen RX2 spectrum + waterval met bediening
 - **Joined** — RX1 en RX2 naast elkaar met gedeelde bediening
+- **VRX1 / VRX2** — vanaf v2.5.0 heeft elke virtuele ontvanger een **eigen** venster (zie [Virtuele ontvangers](#virtuele-ontvangers-vrx-v220))
+- **Yaesu 1 / Yaesu 2** — een bedieningsvenster per aangesloten Yaesu-radio
 
 In popout vensters zijn beschikbaar:
-- S-meter (bar of analoog naaldmeter, wisselbaar via toggle knop)
+- S-meter (bar of analoog naaldmeter — vanaf v2.5.0 **klik je op de meter zelf** om te wisselen, en de keuze wordt per kanaal onthouden)
 - Alle band/mode/filter/NR/ANF bediening
 - VFO A<>B wisselknop (links-onder bij analoge naaldmeter)
+
+**Onafhankelijke audio en spectrum per kanaal (v2.5.0).** Elk kanaal (RX1, RX2, VRX1, VRX2, Yaesu 1/2) is een eigen abonnement: audio en spectrum/waterval worden onafhankelijk ingeschakeld. Een venster openen zet de data van dat kanaal aan, sluiten zet ze weer uit — zo verbruik je alleen netwerk en CPU voor de kanalen die je echt gebruikt.
+
+**Vensterposities worden onthouden (v2.5.0).** Elk pop-out venster (inclusief de Yaesu-vensters) keert terug op de positie en grootte waar je het laatst stond.
+
+### Vensters schikken (v2.5.0)
+
+Een **Vensters schikken**-weergave legt al je open kanaalvensters op een sleepraster, zodat je ze in één stap netjes in een layout snapt in plaats van elk venster met de hand te verslepen. Bij **meerdere monitoren** wijs je kanalen aan verschillende schermen toe — bijv. RX1 + RX2 op de hoofdmonitor en de VRX-/Yaesu-vensters op een tweede scherm — en pas je de layout toe; elk venster springt naar zijn toegewezen cel op de gekozen monitor.
 
 ### VFO B / RX2
 
@@ -351,11 +362,13 @@ Volledige tweede ontvanger ondersteuning:
 - VFO Sync: VFO B volgt automatisch VFO A
 - A<>B: wissel VFO A en B
 
+**Radio's met één ontvanger (v2.5.0).** Heeft je Thetis-radio maar één ontvanger, zet dan **"Radio heeft tweede ontvanger (RX2)"** uit in de server-instellingen (standaard: aan). ThetisLink verbergt dan overal RX2 en VRX2 — geen lege tweede-ontvanger-chips of -vensters — zodat de UI klopt met de hardware. Is er helemaal geen Thetis geconfigureerd, dan worden geen van de RX1/RX2/VRX-chips getoond.
+
 ### Virtuele ontvangers (VRX, v2.2.0)
 
 Naast de twee fysieke ontvangers (RX1/RX2) biedt ThetisLink vanaf v2.2.0 twee **virtuele ontvangers**: **VRX1** (gekoppeld aan RX1/VFO-A) en **VRX2** (gekoppeld aan RX2/VFO-B). Een VRX is een onafhankelijke ontvanger die uit de brede IQ-stroom van de DDC wordt "uitgesneden" — je kunt er dus binnen de huidige DDC-bandbreedte vrij mee rondluisteren zonder de hoofd-VFO te verzetten. Handig om bijvoorbeeld een tweede station op dezelfde band te volgen terwijl je hoofdontvangst op zijn plek blijft.
 
-**Joint VRX pop-out openen:** beide virtuele ontvangers worden samen in één los pop-out venster getoond, met VRX1 en VRX2 naast elkaar. Open het venster vanuit de client; positie en grootte worden onthouden.
+**Aparte vensters (v2.5.0):** VRX1 en VRX2 openen elk in hun **eigen** pop-out venster, zodat je ze onafhankelijk kunt plaatsen — op verschillende delen van het scherm of op verschillende monitoren (zie [Vensters schikken](#vensters-schikken-v250)). Positie en grootte van elk venster worden onthouden. (Vóór v2.5.0 stonden beide samen in één gezamenlijk pop-out.)
 
 **Per-VRX instellingen:**
 - **Aan/uit** per VRX — een VRX verbruikt pas netwerk en CPU als je hem inschakelt.
@@ -399,8 +412,8 @@ Ingebouwde WebView voor WebSDR en KiwiSDR ontvangst:
 Desktop en Android ondersteunen USB MIDI controllers:
 - **Scan** knop zoekt beschikbare MIDI apparaten
 - **Learn** modus: druk op een MIDI knop/slider, wijs een functie toe
-- Beschikbare functies: PTT (met LED), VFO tune, volumes, drive, NR, ANF, mode, band, power
-- Encoder stappen: 1 Hz, 10 Hz, 100 Hz, 1 kHz
+- Beschikbare functies (een grote set): PTT (met LED), VFO tune (hoofd / RX2 / VRX / Yaesu), volumes en balans, drive, NR/ANF/NB/APF, AGC-mode + gain, mode, band, power, spectrum zoom/pan/ref-niveau/waterval-contrast, filter breder/smaller, VFO-lock, RIT/XIT toggle + offset, squelch toggle + niveau, CW-snelheid, Tune toggle + drive, mute, en per-Yaesu volume/RF-gain/mic-gain/PTT
+- Encoder stappen: 1 Hz, 10 Hz, 100 Hz, 500 Hz, 1 kHz
 - **MIDI PTT modus:** aparte PTT-modus voor MIDI, onafhankelijk van de spatiebalk PTT-modus
 
 ### Thema en UI-kleuren (v2.4.0)
@@ -416,6 +429,10 @@ De desktop-client heeft een **thema-keuze** in het Server-tabblad. Naast de stan
   - **Slider knop** — de accentkleur van de schuifknoppen en hun rail.
 
 De keuze wordt bewaard in `thetislink-client.conf` en hersteld bij de volgende start. Het thema is puur cosmetisch — spectrum- en waterval-kleuren (het signaalniveau-palet) blijven ongewijzigd zodat signalen op elke achtergrond gelijk afleesbaar blijven.
+
+### Taal (v2.5.0)
+
+ThetisLink is meertalig. De interface staat standaard op **Engels**, met vertalingen naar **Nederlands, Duits en Frans**. Op de **desktop** kies je de taal met een **taal-picker in het Server-tabblad** (onder *Relay connection*, boven *Theme*); de keuze wordt bewaard in `thetislink-client.conf`. De **Android**-app volgt automatisch de taal van je telefoon en valt terug op Engels als die op een andere taal staat. Ham-vaktermen, mode-namen (LSB, CW-L, …) en productnamen blijven bewust onvertaald.
 
 ---
 
@@ -650,7 +667,7 @@ ThetisLink kan een Yaesu FT-991A transceiver aansturen als tweede radio naast de
 - **Frequentie:** uitlezen en instellen van de huidige frequentie
 - **Mode:** uitlezen en instellen (LSB, USB, CW, AM, FM, DATA-FM, DIG)
 - **VFO A/B:** schakelen tussen VFO A en VFO B
-- **Geheugenkanalen:** worden automatisch ingeladen bij het inschakelen van de Yaesu in de server. Kanalen met naam worden weergegeven in de UI. Edit + "Write radio" past frequentie, naam, mode, shift en tone-mode (aan/uit) per kanaal aan. **Let op (v2.1.1+):** de specifieke CTCSS-tone-frequentie wordt niet door TL2 geschreven — alleen "tone aan/uit" gaat mee. Tone-frequentie per kanaal stel je in op de FT-991A zelf.
+- **Geheugenkanalen:** worden automatisch ingeladen bij het inschakelen van de Yaesu in de server. Kanalen met naam worden weergegeven in de UI. Edit + "Write radio" past frequentie, naam, mode, shift en tone-mode (aan/uit) per kanaal aan. **Let op (v2.1.1+):** de specifieke CTCSS-tone-frequentie wordt niet door TL2 geschreven — alleen "tone aan/uit" gaat mee. Tone-frequentie per kanaal stel je in op de FT-991A zelf. **Verzet je de frequentie terwijl je op een geheugenkanaal staat (v2.5.0), dan kopieert ThetisLink het kanaal naar VFO-A (mode behouden) en volgt je nieuwe frequentie — je glijdt naadloos van geheugen naar VFO (991A + FTX-1).**
 - **Menu editor:** Yaesu menu-instellingen uitlezen en wijzigen via de server UI
 - **Audio:** de Yaesu USB audio wordt door de server gecaptured en via het AudioRx2 kanaal naar de client gestuurd, waar het gemixt wordt met het ANAN RX-signaal
 - **Auto-DFM tijdens TX (v2.0.0):** zie subsectie hieronder
@@ -685,11 +702,34 @@ Voor de Yaesu-zendtak biedt de client (desktop én Android) een **spraakcompress
 
 ### Clarifier (RIT/XIT) (v2.4.0)
 
-Beide Yaesu-radio's hebben een **clarifier**: schakel RIT en/of XIT in, verstel de offset in stappen en wis 'm met één knop. Handig om zender en ontvanger los van elkaar iets te verschuiven zonder de VFO te verzetten.
+Beide Yaesu-radio's hebben een **clarifier**: schakel RIT en/of XIT in, verstel de offset in stappen en wis 'm met één knop. Handig om zender en ontvanger los van elkaar iets te verschuiven zonder de VFO te verzetten. **Draai je aan de fysieke CLAR-knop op de 991A zelf (v2.5.0), dan volgt de client die offset ook** — de 991A meldt de offset niet los terug, dus ThetisLink leest hem uit het IF-statusbericht, óók in memory-mode.
+
+### Yaesu op het hoofdscherm (v2.5.0)
+
+Vanaf v2.5.0 heeft elke aangesloten Yaesu een **inschakelvinkje en een vensterknop op het hoofdscherm**, naast de RX/VRX-chips (alleen zichtbaar als de radio aanwezig is). Je hoeft dus niet meer via een menu een radio te openen — één klik schakelt hem in en opent zijn bedieningsvenster. Elke venstertitel luidt **"Yaesu 1: &lt;type&gt;"** / **"Yaesu 2: &lt;type&gt;"**, waarbij het type (991A / FTX1) van de server komt, zodat de twee radio's altijd correct benoemd zijn en een toekomstig derde model automatisch volgt.
+
+### Audio en bediening gesplitst (v2.5.0)
+
+Je kunt nu de **audio van een Yaesu dempen terwijl het bedieningsvenster live blijft**. De S-meter, CAT-status en alle bediening blijven bijwerken ook met de audio uit — handig om een radio in de gaten te houden (of te bedienen) zonder mee te luisteren, en zonder bandbreedte aan de audiostroom te verspillen. Audio en de bedienings-/statusstroom zijn aparte abonnementen op de server.
+
+### Aan/stand-by (v2.5.0)
+
+- **FT-991A:** het bedieningsvenster heeft een **Power**-knop die de radio tussen **aan en stand-by** schakelt (CAT `PS1;` / `PS0;`). In stand-by houdt de 991A zijn USB-verbinding in leven, zodat ThetisLink hem op afstand weer aan kan zetten.
+- **FTX-1:** de FTX-1 blijft **niet** bereikbaar via USB als hij uit staat (de hele USB-verbinding valt weg), dus op afstand weer aanzetten kan niet. Zijn venster toont de power-status daarom **alleen als label** — geen remote aan/uit voor de FTX-1.
+
+### TX-vermogen per band (v2.5.0)
+
+De Yaesu **TX-vermogensslider** volgt nu het **werkelijke maximum per band** van de radio. Bij het verbinden leest de server de maximum-vermogensmenu's uit (HF / 50 / 144 / 430 MHz), en het sliderbereik past zich aan de band aan waar je op zit — zo kun je niet meer instellen dan de radio op die band toelaat, en blijft het volledige bruikbare bereik beschikbaar waar de radio dat wél toestaat. De radio bewaakt de grens zelf; ThetisLink toont alleen het juiste bereik.
+
+### Hoog-SWR-alarm (v2.5.0)
+
+Meldt een aangesloten Yaesu een **hoge SWR** tijdens het zenden, dan laat de client een korte, herhalende **waarschuwingstoon** horen (880 Hz, gemengd in de audio die je al hoort), zodat je een slechte aanpassing merkt ook als je niet op de meter let. De hoog-SWR-status komt van de radio's eigen **Hi-SWR-vlag** (FT-991A via `RI0`, FTX-1 via zijn `RI`-status) — het geijkte trip-punt van de radio zelf, dus er is niets in te stellen. (Let op: de FT-991A zet zijn Hi-SWR-vlag pas bij een vrij hoge mismatch, rond 5:1, omdat daar de eigen bescherming van de radio ingrijpt.) De toon stopt vanzelf kort nadat de SWR is gezakt.
 
 ### Yaesu-bediening op Android (v2.4.0)
 
 De Android-client heeft nu vrijwel dezelfde Yaesu-bediening als de desktop: een **radio 1 / radio 2-selector** (dual-radio), een volledig inklapbaar **DSP-paneel** (ATT/AGC/NB/NR/IPO/Contour/APF/Notch/Proc/AMC), **touch-frequentietuning** (grote tikbare digit-tuner + stapper), de interne **ATU** (Tune + ATU aan/uit) en de **clarifier**.
+
+**Toevoegingen v2.5.0:** de **FT-991A aan/stand-by-knop** zit nu ook op Android (tik op de power-indicator om te wisselen tussen aan ↔ stand-by). En als er **geen Thetis is geconfigureerd**, opent het Radio-tabblad direct op de Yaesu — de "Yaesu actief"-schakelaar wordt dan een simpele **audio aan/uit**-schakelaar, net als op de desktop bij een Yaesu-only opstelling. De Yaesu **EQ-sliders zijn nu halve hoogte** voor een compacter paneel, en je kunt een **geheugenkanaal oproepen door erop te tikken** in de lijst. De **EQ-sliders en de geheugenkanalen-lijst zijn inklapbaar** achter een pijltje (zodat je ze niet per ongeluk verstelt bij het scrollen), en de app **sluit netjes af** wanneer je hem wegveegt.
 
 ### Databesparing op mobiel (v2.4.0)
 
@@ -756,9 +796,11 @@ ThetisLink ondersteunt diversity ontvangst via RX1 en RX2. Dit combineert twee a
 
 Diversity werkt ook in combinatie met de popout vensters (Joined view) voor een overzichtelijke weergave van beide ontvangers.
 
-### Smart en Ultra Auto-Null (Diversity)
+### Auto-Null (Diversity)
 
-Naast handmatige diversity-instelling biedt ThetisLink twee automatische null-algoritmen:
+Naast handmatige diversity-instelling biedt het Auto-Null-dropdown vier modes:
+
+- **Fast / Slow:** een enkele-pass automatische null-zoektocht — Fast ruilt nauwkeurigheid voor snelheid, Slow is grondiger.
 
 - **Smart:** voert een AVG sweep uit over 360° + 90° in stappen van 5° met settle-tijd per stap. Duurt circa 9 seconden. Betrouwbaar en nauwkeurig.
 - **Ultra:** continue forward/backward sweep zonder settle-tijd, aanzienlijk sneller (circa 5 seconden). Geschikt als je snel een nulpunt wilt vinden.
@@ -948,6 +990,7 @@ Als het spectrum (lijn) en de waterval niet synchroon lopen bij het pannen, hers
 
 | Versie | Hoogtepunten |
 |---|---|
+| **2.5.0** | **Onafhankelijke vensters per kanaal (eigen audio + spectrum), aparte VRX-vensters + een Vensters-schikken-sleepraster (per monitor), S-meter wisselen door erop te klikken, Yaesu op het hoofdscherm met aan/stand-by + TX-vermogen per band, een één-ontvanger-instelling, en een hoog-SWR-alarm.** Backward-compatible met v2.4.x — wire-protocol VERSION blijft 3; de toevoegingen zijn backward-compatible — oude clients negeren de nieuwe trailing-`YaesuStatePacket`-velden (`tx_power_max` + `hi_swr`), en de nieuwe controls zijn per-client gegate (`Rx1Enable` `0x91`, `YaesuStateEnable`/`Yaesu2StateEnable` `0x92/0x93`, `YaesuPowerOnOff`/`Yaesu2PowerOnOff` `0x94/0x95`), plus een `SINGLE_RECEIVER`-heartbeatvlag. Stock Thetis v2.10.3.15 volstaat; geen fork-wijziging. **Elk kanaal** (RX1/RX2/VRX1/VRX2/Yaesu 1–2) is een eigen abonnement — een venster openen zet zijn audio + spectrum aan, sluiten zet ze uit. **VRX1/VRX2 krijgen nu een eigen venster** (waren één gezamenlijk pop-out) en een **Vensters-schikken**-weergave snapt alle open vensters in een layout, toewijsbaar **per monitor**. **S-metertype wissel je door op de meter te klikken** en wordt per kanaal onthouden. **Yaesu op het hoofdscherm** (inschakelen + vensterknop, aanwezigheids-gegate), **"Yaesu N: type"-naamgeving vanaf de server**, **audio/bediening gesplitst** (audio dempen terwijl bedieningsvenster + S-meter/CAT live blijven), **991A aan/stand-by** (`PS`; de FTX-1 is alleen-label omdat zijn USB wegvalt als hij uit staat), en een **TX-vermogensslider per band** (leest bij verbinden de HF/50/144/430-maxvermogensmenu's uit). **Hoog-SWR-waarschuwingstoon** voor de Yaesu-radio's (991A `RI0`, FTX-1 `RI`). Een **één-ontvanger-serverinstelling** verbergt RX2/VRX2 voor een radio met één ontvanger. **Android**: de 991A aan/stand-by-knop, plus een Yaesu-eerst Radio-tabblad als er geen Thetis is geconfigureerd (de schakelaar wordt audio aan/uit). **Meertalig** (EN-basis + NL/DE/FR; desktop-taalpicker in het Server-tabblad, Android volgt de telefoon-taal met EN-fallback). **Yaesu-bediening grijst nu per band/mode uit** (991A OM-geverifieerd: IPO/ATT/ATU alleen HF-50 MHz, BK-IN/APF alleen CW, Contour grijs in CW) en de 991A-modes **CW/CW-R heten nu CW-L/CW-U**. **Memory→VFO**: de frequentie verzetten op een geheugenkanaal kopieert het naar VFO-A (mode behouden) en volgt je nieuwe frequentie (991A + FTX-1). De client **volgt nu ook de fysieke CLAR-knop** op de 991A (uit het IF-statusbericht, óók in memory-mode). |
 | **2.4.4** | **WebSDR per radio + Yaesu Mem+/Mem- slaat lege kanalen over + delete-rij-popup.** Geen wire-protocol-wijziging (`VERSION` blijft 3, volledig interoperabel met v2.4.x); stock Thetis v2.10.3.15 volstaat; geen fork-wijziging; Android functioneel ongewijzigd (APK herbouwd). De **WebSDR-selectie wordt nu per radio onthouden** (Thetis / FT-991A / FTX-1 onafhankelijk; favorieten blijven een gedeelde pool). **Yaesu Mem+ / Mem- slaat nu lege geheugenkanalen over** — springt naar het volgende/vorige gevulde kanaal i.p.v. vast te lopen op een gat (991A en FTX-1). **Een geheugen-rij verwijderen toont een korte popup** (alleen lokaal uit de lijst; een kanaal wissen kan alleen via de front-knop van de radio, niet via CAT) i.p.v. een vaste regel boven de tabel. De **spatiebalk keyt nu de Yaesu-radio als zijn pop-out-venster de focus heeft**, en de main-window-PTT-knop wordt niet meer rood als er geen Thetis geconfigureerd is. |
 | **2.4.3** | **Duidelijkere relay-verbinding + kleur-gecodeerde clientlijst + slider-muiswiel.** Geen wire-protocol-wijziging (`VERSION` blijft 3, volledig interoperabel met v2.4.x); stock Thetis v2.10.3.15 volstaat; geen fork-wijziging; desktop + Android beide bijgewerkt (APK herbouwd). Bij een relay-verbinding toont het verbindingsgedeelte **"Via relay: &lt;station&gt;"** + relay-status i.p.v. het (irrelevante) directe server-IP. De clientlijst op de server **kleurt** elke client naar verbindingstype (direct = blauw, relay = cyaan). **Muiswiel-scroll op elke desktop-slider.** Een **herstart-melding** verschijnt nu bij het aan- én uitzetten van de relay (desktop + Android). Docs verduidelijken dat de server **beide** methodes tegelijk bedient — elke client kiest zelf. |
 | **2.4.2** | **Bugfix-patch (opgenomen audio afspelen via de radio).** Eén additieve wire-protocol-control (`ThetisTxeq = 0x90`); `VERSION` blijft 3, dus een directe verbinding blijft interoperabel met v2.4.0/v2.4.1. Stock Thetis v2.10.3.15 volstaat; geen fork-wijziging; Android functioneel ongewijzigd (APK herbouwd). **Opgenomen audio uitgezonden via de radio is niet meer overgemoduleerd** — playback omzeilt nu de live-mic-keten (EQ/compressor/AGC + 4×-boost) en gaat schoon op lijnniveau naar buiten voor Thetis en beide Yaesu-radio's; **playback naar de 2e Yaesu (FTX-1)** komt nu door; **Thetis TX-EQ wordt tijdens playback automatisch omzeild en daarna exact op de vorige stand hersteld**; een **play-volume-schuif** (0–2×) en een **zend-niveaumeter tijdens playback** toegevoegd; **RX-audio blijft hoorbaar tijdens TX** (de interne-speaker-mute hangt nu aan PTT-spike-protectie). |

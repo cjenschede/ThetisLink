@@ -147,9 +147,13 @@ dictionary BridgeRadioState {
     string yaesu_memory_data;
     u8 yaesu_model;
     u8 yaesu_tuner_state;
+    boolean yaesu_hi_swr;
+    u8 yaesu_tx_power_max;
     boolean yaesu2_connected;
     u8 yaesu2_model;
     u8 yaesu2_tuner_state;
+    boolean yaesu2_hi_swr;
+    u8 yaesu2_tx_power_max;
     u64 yaesu2_freq_a;
     u64 yaesu2_freq_b;
     u8 yaesu2_mode;
@@ -263,6 +267,8 @@ interface SdrBridge {
     void rotor_cw();
     void rotor_ccw();
     void yaesu_enable(boolean on);
+    void yaesu_power_on_off(boolean on);
+    void yaesu2_power_on_off(boolean on);
     void yaesu_read_memories();
     void yaesu_ptt(boolean on);
     void yaesu_volume(f32 vol);

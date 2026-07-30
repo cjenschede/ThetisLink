@@ -234,7 +234,8 @@ pub enum ControlId {
     MonitorOn = 0x1E,
     /// Thetis TUNE on/off (value 0/1, CAT: ZZTU)
     ThetisTune = 0x1F,
-    /// Yaesu stream enable (value 0/1: client requests Yaesu audio+state on/off)
+    /// Yaesu AUDIO-abonnement (value 0/1). State (freq/s-meter/CAT) loopt sinds de
+    /// audio/state-split via YaesuStateEnable; deze control zet alleen de audiostroom.
     YaesuEnable = 0x20,
     /// Yaesu PTT (value 0/1: TX0/TX1 via Yaesu CAT)
     YaesuPtt = 0x21,
@@ -508,6 +509,22 @@ pub enum ControlId {
     /// WAV-playback to the main radio (off on Play-start, restore on stop),
     /// mirroring Thetis' own record/playback behaviour.
     ThetisTxeq = 0x90,
+    /// RX1 audio-abonnement (value 0/1). Default AAN op de server, zodat oude
+    /// clients die dit nooit sturen RX1-audio blijven krijgen. Een client die
+    /// alleen VRX gebruikt zet dit op 0 om de RX1-audiostroom te stoppen
+    /// (bandbreedte sparen). REFACTOR-audio-spectrum-per-channel fase 3.
+    Rx1Enable = 0x91,
+    /// Yaesu slot-0 STATE-abonnement (value 0/1), LOS van de audio. Client zet dit
+    /// aan als het bedieningsvenster open is: dan lopen freq/s-meter/CAT/feature door
+    /// ook met de audio (YaesuEnable) uit = mute met live venster. Default UIT; audio-
+    /// abonnees krijgen state sowieso (state_addrs = state_enabled || yaesu_enabled).
+    YaesuStateEnable = 0x92,
+    /// Slot-1 spiegel van YaesuStateEnable.
+    Yaesu2StateEnable = 0x93,
+    /// Yaesu radio power on/off (value 0/1 -> CAT `PS1`/`PS0`). Zet de radio
+    /// volledig aan of uit (geen aparte standby bij Yaesu).
+    YaesuPowerOnOff = 0x94,
+    Yaesu2PowerOnOff = 0x95,
 }
 
 impl ControlId {
@@ -996,6 +1013,13 @@ impl ServerStateFlags {
     /// clients must not turn a missing TCI connection into a user-facing
     /// "Radio not reachable" warning; Yaesu-only installs are valid.
     pub const THETIS_CONFIGURED: u32 = 1 << 3;
+    /// The configured Thetis radio hardware has only ONE receiver (no RX2).
+    /// Set by the server operator when the radio model is single-receiver.
+    /// **Inverted on purpose**: absent = the normal 2-receiver default, so
+    /// older servers (which never set this) and the default config both keep
+    /// RX2/VRX2 visible. Only when POSITIVELY set do clients hide RX2 + VRX2
+    /// everywhere. Only trustworthy when capabilities advertises REPORTS_STATE_FLAGS.
+    pub const SINGLE_RECEIVER: u32 = 1 << 4;
 
     pub fn has(self, flag: u32) -> bool {
         self.0 & flag != 0
@@ -1739,10 +1763,17 @@ pub struct YaesuStatePacket {
     /// Internal ATU state (PATCH-yaesu-internal-atu): 0=off/bypass, 1=on, 2=tuning-in-progress.
     /// Additive trailing field — normalised server-side from the `AC;` readback (never raw P3).
     pub tuner_state: u8,
+    /// High-SWR alarm (PATCH-swr-alarm): FTX-1 from RI P2 (0/1), 991A from RM6 >=
+    /// threshold. Additive trailing field — false on old servers/packets.
+    pub hi_swr: bool,
+    /// Max TX-vermogen (watt) voor de HUIDIGE zendband (PATCH-yaesu-power-scaling).
+    /// Additief trailing veld; **0 = nog onbekend** (oude server / vóór de eerste
+    /// EX-uitlezing), NIET 0 watt. De client schaalt de slider naar `5..=max`.
+    pub tx_power_max: u8,
 }
 
 impl YaesuStatePacket {
-    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1; // 36 bytes
+    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1; // 38 bytes
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         self.serialize_as_type(buf, PacketType::YaesuState);
@@ -1769,13 +1800,17 @@ impl YaesuStatePacket {
         buf[pos] = self.mic_gain; pos += 1;
         buf[pos] = self.split as u8; pos += 1;
         buf[pos] = self.scan as u8; pos += 1;
-        buf[pos] = self.tuner_state;
+        buf[pos] = self.tuner_state; pos += 1;
+        buf[pos] = self.hi_swr as u8; pos += 1;
+        buf[pos] = self.tx_power_max;
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
-        // Accept old 30-byte packets (without squelch) for backward compat
-        if buf.len() < Self::SIZE - 1 {
-            bail!("YaesuState packet too short: {} < {}", buf.len(), Self::SIZE - 1);
+        // Accept old shorter packets (missing trailing additive fields squelch..
+        // tuner_state/hi_swr) for backward compat; the per-field guards below fill
+        // absent trailing bytes with defaults.
+        if buf.len() < Self::SIZE - 3 {
+            bail!("YaesuState packet too short: {} < {}", buf.len(), Self::SIZE - 3);
         }
         let mut pos = Header::SIZE;
         let freq_a = u64::from_be_bytes(buf[pos..pos + 8].try_into().unwrap()); pos += 8;
@@ -1793,8 +1828,10 @@ impl YaesuStatePacket {
         let mic_gain = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
         let split = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
         let scan = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
-        let tuner_state = if buf.len() > pos { buf[pos] } else { 0 };
-        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan, tuner_state })
+        let tuner_state = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
+        let hi_swr = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
+        let tx_power_max = if buf.len() > pos { buf[pos] } else { 0 };
+        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan, tuner_state, hi_swr, tx_power_max })
     }
 }
 
@@ -1983,6 +2020,19 @@ impl YaesuFeaturePacket {
             }
         }
         Ok(Self { slot, toggles, levels, freqs })
+    }
+}
+
+/// Canonieke korte weergavenaam voor een Yaesu radio-modelcode (het `model`-byte
+/// uit `RadioInfo`/`YaesuPresence`). **Single source of truth**: dit is de enige
+/// plek waar een modelcode aan een naam wordt gekoppeld. Server (log-prefixes) én
+/// client (alle "Yaesu N: <type>"-labels) lezen hier — een nieuw radiotype voeg je
+/// hier één keer toe en de naam volgt overal automatisch. 0 = FT-991A, 1 = FTX-1.
+pub fn radio_model_name(code: u8) -> &'static str {
+    match code {
+        0 => "991A",
+        1 => "FTX1",
+        _ => "Radio",
     }
 }
 

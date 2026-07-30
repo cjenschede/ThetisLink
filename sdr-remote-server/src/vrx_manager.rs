@@ -24,9 +24,8 @@ use std::sync::{Arc, Mutex};
 
 use vrx_rs::VrxControlState;
 
-/// Audio rate-mode: NB (8 kHz) / WB (16 kHz) / Auto (resolve per filter width).
-pub const RATE_NB: u8 = 0;
-pub const RATE_WB: u8 = 1;
+/// Audio rate-mode: Auto (resolve per filter width). NB/WB are represented by the
+/// non-Auto path; only the Auto sentinel is referenced by name.
 pub const RATE_AUTO: u8 = 2;
 
 /// Per-(client, channel) VRX state.
@@ -110,12 +109,6 @@ impl PerClientVrxManager {
             .unwrap_or(0)
     }
 
-    /// Remove all VRX state for a client (disconnect/timeout). Returns true if an
-    /// entry existed. Call sites log `active_runtimes` and assert no leak.
-    pub fn remove_client(&mut self, addr: &SocketAddr) -> bool {
-        self.clients.remove(addr).is_some()
-    }
-
     /// Safety-net: drop entries for clients no longer active. Returns the number
     /// dropped (0 in steady state). Guards against a missed teardown path.
     /// Takes a slice (not a `HashSet`) so callers on the audio path don't have to
@@ -128,10 +121,6 @@ impl PerClientVrxManager {
 
     pub fn client_count(&self) -> usize {
         self.clients.len()
-    }
-
-    pub fn contains(&self, addr: &SocketAddr) -> bool {
-        self.clients.contains_key(addr)
     }
 }
 
@@ -163,11 +152,12 @@ mod tests {
     #[test]
     fn rate_mode_and_span_per_client_channel() {
         let mut m = PerClientVrxManager::new();
-        m.set_rate_mode(a(1), 0, RATE_NB);
-        m.set_rate_mode(a(1), 1, RATE_WB);
+        // Rate modes: 0 = NB, 1 = WB, RATE_AUTO = 2.
+        m.set_rate_mode(a(1), 0, 0);
+        m.set_rate_mode(a(1), 1, 1);
         m.set_spectrum_span(a(1), 0, 24);
-        assert_eq!(m.rate_mode(&a(1), 0), RATE_NB);
-        assert_eq!(m.rate_mode(&a(1), 1), RATE_WB);
+        assert_eq!(m.rate_mode(&a(1), 0), 0);
+        assert_eq!(m.rate_mode(&a(1), 1), 1);
         assert_eq!(m.spectrum_span(&a(1), 0), 24);
         // Unknown client -> defaults.
         assert_eq!(m.rate_mode(&a(9), 0), RATE_AUTO);
@@ -175,16 +165,16 @@ mod tests {
     }
 
     #[test]
-    fn remove_and_retain_cleanup() {
+    fn retain_active_cleanup() {
         let mut m = PerClientVrxManager::new();
         m.control(a(1), 0);
         m.control(a(2), 0);
         m.control(a(3), 0);
         assert_eq!(m.client_count(), 3);
-        assert!(m.remove_client(&a(2)));
-        assert!(!m.remove_client(&a(2))); // idempotent
+        // retain_active drops entries for clients no longer active.
+        assert_eq!(m.retain_active(&[a(1), a(2)]), 1); // drops a(3)
         assert_eq!(m.client_count(), 2);
-        assert_eq!(m.retain_active(&[a(1)]), 1); // drops a(3)
-        assert!(m.contains(&a(1)) && !m.contains(&a(3)));
+        assert_eq!(m.retain_active(&[a(1)]), 1); // drops a(2)
+        assert_eq!(m.client_count(), 1);
     }
 }

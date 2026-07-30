@@ -385,7 +385,7 @@ pub(crate) fn render_freq_stepper(ui: &mut egui::Ui, step_hz: &mut i64) -> Optio
     ui.horizontal(|ui| {
         if ui.add(egui::Button::new(RichText::new("−").size(15.0))
             .min_size(egui::vec2(42.0, 24.0)))
-            .on_hover_text("Frequentie omlaag met de gekozen stap").clicked()
+            .on_hover_text(rust_i18n::t!("hover_freq_down").to_string()).clicked()
         {
             delta = Some(-*step_hz);
         }
@@ -401,7 +401,7 @@ pub(crate) fn render_freq_stepper(ui: &mut egui::Ui, step_hz: &mut i64) -> Optio
         }
         if ui.add(egui::Button::new(RichText::new("+").size(15.0))
             .min_size(egui::vec2(42.0, 24.0)))
-            .on_hover_text("Frequentie omhoog met de gekozen stap").clicked()
+            .on_hover_text(rust_i18n::t!("hover_freq_up").to_string()).clicked()
         {
             delta = Some(*step_hz);
         }

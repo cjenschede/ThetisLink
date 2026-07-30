@@ -107,31 +107,10 @@ impl CatSync {
         }
     }
 
-    /// Add current URL as favorite (with auto-label)
-    pub fn add_favorite(&mut self) {
-        let url = self.websdr_url.trim().to_string();
-        if url.is_empty() { return; }
-        // Don't add duplicates
-        if self.favorites.iter().any(|(_, u)| u == &url) { return; }
-        // Auto-generate label from hostname
-        let label = url_to_label(&url);
-        if self.favorites.len() >= MAX_FAVORITES {
-            self.favorites.pop();
-        }
-        self.favorites.push((label, url));
-    }
-
     /// Remove favorite by index
     pub fn remove_favorite(&mut self, idx: usize) {
         if idx < self.favorites.len() {
             self.favorites.remove(idx);
-        }
-    }
-
-    /// Select a favorite (sets active URL)
-    pub fn select_favorite(&mut self, idx: usize) {
-        if let Some((_, url)) = self.favorites.get(idx) {
-            self.websdr_url = url.clone();
         }
     }
 

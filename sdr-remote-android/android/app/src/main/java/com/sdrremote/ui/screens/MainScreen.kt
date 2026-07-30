@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,6 +60,7 @@ import com.sdrremote.ui.components.VolumeControls
 import com.sdrremote.ui.components.WaterfallView
 import com.sdrremote.ui.components.parseTxProfiles
 import com.sdrremote.viewmodel.SdrViewModel
+import com.sdrremote.R
 import uniffi.sdr_remote.version
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SegmentedButton
@@ -132,6 +134,9 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val activity = context as? com.sdrremote.MainActivity
     val volumePttEnabled = prefs.getBoolean("volume_ptt", false)
     LaunchedEffect(volumePttEnabled) { activity?.volumePttEnabled = volumePttEnabled }
+    // Phone's own volume buttons as PTT (separate opt-in; never Bluetooth volume)
+    val volumeKeysPttEnabled = prefs.getBoolean("volume_keys_ptt", false)
+    LaunchedEffect(volumeKeysPttEnabled) { activity?.volumeKeysPttEnabled = volumeKeysPttEnabled }
     val volumeUpHeld by (activity?.volumeUpHeld ?: MutableStateFlow(false)).collectAsStateWithLifecycle()
     val lastKeyEvent by (activity?.lastKeyEvent ?: MutableStateFlow("")).collectAsStateWithLifecycle()
 
@@ -517,30 +522,30 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         val versionName = try { context.packageManager.getPackageInfo(context.packageName, 0).versionName } catch (_: Exception) { "?" }
         AlertDialog(
             onDismissRequest = { showAbout = false },
-            title = { Text("About ThetisLink") },
+            title = { Text(stringResource(R.string.main_about_title)) },
             text = {
                 Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     Text("ThetisLink", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Text("v$versionName", fontSize = 14.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(4.dp))
-                    Text("Remote control for\nThetis SDR + Yaesu FT-991A / FTX-1\n(dual-radio)", fontSize = 13.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    Text(stringResource(R.string.main_about_subtitle), fontSize = 13.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(10.dp))
                     HorizontalDivider()
                     Spacer(Modifier.height(6.dp))
-                    Text("Author", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(stringResource(R.string.main_about_author), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("Chiron van der Burgt - PA3GHM", fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
-                    Text("Special Thanks", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(stringResource(R.string.main_about_thanks), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("Richie (ramdor) - Thetis SDR, TCI extensions", fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
-                    Text("Protocols", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(stringResource(R.string.main_about_protocols), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("TCI - Expert Electronics / Thetis", fontSize = 11.sp)
                     Text("DX Spider - DX cluster", fontSize = 11.sp)
                     Text("HPSDR / OpenHPSDR Protocol 2", fontSize = 11.sp)
                     Text("WebSDR (PA3FWM) / KiwiSDR - CatSync", fontSize = 11.sp)
                     Text("ThetisLink Relay - WS + UDP (internet remote)", fontSize = 11.sp)
                     Spacer(Modifier.height(6.dp))
-                    Text("Hardware", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(stringResource(R.string.main_about_hardware), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     for ((dev, iface) in listOf(
                         "ANAN 7000DLE" to "TCI",
                         "Yaesu FT-991A" to "Serial + USB Audio",
@@ -560,7 +565,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         }
                     }
                     Spacer(Modifier.height(6.dp))
-                    Text("Libraries", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(stringResource(R.string.main_about_libraries), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     for ((lib, purpose) in listOf(
                         "tokio" to "Async runtime",
                         "egui" to "Desktop GUI",
@@ -578,7 +583,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         }
                     }
                     Spacer(Modifier.height(6.dp))
-                    Text("License", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(stringResource(R.string.main_about_license_header), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("GPL-2.0-or-later (see LICENSE)", fontSize = 11.sp)
                     Text("Copyright (c) 2025-2026 Chiron van der Burgt", fontSize = 11.sp)
                     Text("Source: github.com/cjenschede/ThetisLink", fontSize = 11.sp)
@@ -587,7 +592,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showAbout = false }) { Text("Close") }
+                TextButton(onClick = { showAbout = false }) { Text(stringResource(R.string.common_close)) }
             }
         )
     }
@@ -675,7 +680,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                     modifier = Modifier.padding(bottom = 4.dp),
                                 ) {
                                     Text(
-                                        "RF2K-S Reset",
+                                        stringResource(R.string.main_rf2ks_reset),
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.sp,
@@ -696,7 +701,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                 ) {
                                     Icon(Icons.Default.Settings, contentDescription = null)
                                     Spacer(Modifier.width(4.dp))
-                                    Text("Settings", fontSize = 12.sp)
+                                    Text(stringResource(R.string.main_settings), fontSize = 12.sp)
                                 }
                             }
                         }
@@ -705,12 +710,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                 selected = !showDevices,
                                 onClick = { showDevices = false },
                                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            ) { Text("Radio", fontSize = 12.sp) }
+                            ) { Text(stringResource(R.string.main_radio), fontSize = 12.sp) }
                             SegmentedButton(
                                 selected = showDevices,
                                 onClick = { showDevices = true },
                                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            ) { Text("Devices", fontSize = 12.sp) }
+                            ) { Text(stringResource(R.string.main_devices), fontSize = 12.sp) }
                         }
                     }
                 }
@@ -760,6 +765,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             onRotorCw = { viewModel.rotorCw() },
                             onRotorCcw = { viewModel.rotorCcw() },
                             onYaesuEnable = { viewModel.setYaesuActive(it) },
+                            onYaesuPowerOnOff = { viewModel.yaesuPowerOnOffSel(it) },
                             onYaesuPtt = { viewModel.yaesuPttSel(it) },
                             onYaesuVolume = { viewModel.yaesuVolumeSel(it) },
                             onYaesuSelectVfo = { viewModel.yaesuSelectVfoSel(it) },
@@ -785,7 +791,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 if (state.initError != null) {
                     item {
                         Text(
-                            text = "Native library error: ${state.initError}",
+                            text = stringResource(R.string.main_native_error, state.initError ?: ""),
                             color = Color.Red,
                             fontSize = 14.sp,
                             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -842,7 +848,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 if (lastKeyEvent.isNotEmpty()) {
                     item {
                         Text(
-                            text = "Key: $lastKeyEvent",
+                            text = stringResource(R.string.main_key, lastKeyEvent),
                             fontSize = 11.sp,
                             color = Color(0xFF888888),
                             modifier = Modifier.padding(start = 4.dp),
@@ -856,10 +862,13 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Spacer(Modifier.height(8.dp))
                 }
 
-                if (yaesuActive) {
+                // Zonder geconfigureerde Thetis is er niets van Thetis te tonen: laat de
+                // Radio-tab dan direct de Yaesu-weergave zien (audiolevels enz.), ook als
+                // de "Yaesu active"-toggle (= audio aan/uit) uit staat.
+                if (yaesuActive || !state.thetisConfigured) {
                     item {
                         Text(
-                            "Yaesu active - go to Devices",
+                            if (state.thetisConfigured) stringResource(R.string.main_yaesu_active_hint) else stringResource(R.string.main_yaesu_hint),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(16.dp),
                         )
@@ -893,7 +902,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     }
                 }
 
-                if (!yaesuActive) { item {
+                if (!yaesuActive && state.thetisConfigured) { item {
                     FrequencyDisplay(
                         frequencyHz = state.frequencyHz,
                         smeter = state.smeter,
@@ -938,7 +947,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                 ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                             },
                         ) {
-                            Text("Spectrum")
+                            Text(stringResource(R.string.main_spectrum))
                         }
                     }
                 }
@@ -1149,7 +1158,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         TextButton(onClick = { showSettings = true }) {
                             Icon(Icons.Default.Settings, contentDescription = null)
                             Spacer(Modifier.padding(start = 4.dp))
-                            Text("Settings")
+                            Text(stringResource(R.string.main_settings))
                         }
                         Spacer(Modifier.width(8.dp))
                         TextButton(onClick = { showMidiSettings = true }) {
@@ -1157,7 +1166,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         }
                         Spacer(Modifier.width(8.dp))
                         TextButton(onClick = { showAbout = true }) {
-                            Text("About")
+                            Text(stringResource(R.string.main_about))
                         }
                         Spacer(Modifier.width(8.dp))
                         // PATCH-4 follow-up: parity with the desktop
@@ -1165,7 +1174,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         // Operator-escape-hatch to relaunch the wizard
                         // manually without wiping app data.
                         TextButton(onClick = { wizardActive = true }) {
-                            Text("Wizard")
+                            Text(stringResource(R.string.main_wizard))
                         }
                     }
                 }
@@ -1186,7 +1195,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Volume:",
+                        text = stringResource(R.string.main_volume),
                         modifier = Modifier.weight(0.25f),
                         fontSize = 14.sp,
                     )
@@ -1250,7 +1259,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     var lastVolumeUp by remember { mutableStateOf(false) }
                     var btToggled by remember { mutableStateOf(false) }
                     LaunchedEffect(volumeUpHeld) {
-                        if (volumePttEnabled && volumeUpHeld != lastVolumeUp) {
+                        if ((volumePttEnabled || volumeKeysPttEnabled) && volumeUpHeld != lastVolumeUp) {
                             lastVolumeUp = volumeUpHeld
                             if (pttToggleMode) {
                                 // Toggle: only act on press (down), ignore release

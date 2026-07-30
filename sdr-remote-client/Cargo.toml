@@ -17,6 +17,7 @@ cpal = { workspace = true }
 ringbuf = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+sdr-remote-theme = { path = "../sdr-remote-theme" }
 log = { workspace = true }
 env_logger = { workspace = true }
 tracing = { workspace = true }
@@ -26,6 +27,7 @@ anyhow = { workspace = true }
 midir = { workspace = true }
 open = "5"
 chrono = "0.4"
+rust-i18n = "3"
 # PATCH-3: mDNS service browse for local-network server discovery.
 # Same crate + version as the server side - see server Cargo.toml.
 mdns-sd = "=0.19.1"

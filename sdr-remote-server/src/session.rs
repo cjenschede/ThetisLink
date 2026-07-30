@@ -160,6 +160,10 @@ pub struct ClientSession {
     pub spectrum_zoom: f32,
     pub spectrum_pan: f32,
     pub spectrum_max_bins: u16,
+    /// RX1 audio-abonnement. Default AAN, zodat oude clients (die nooit
+    /// `Rx1Enable` sturen) RX1-audio blijven krijgen. Een alleen-VRX-client zet
+    /// dit op false om de RX1-audiostroom te stoppen.
+    pub rx1_enabled: bool,
     pub rx2_enabled: bool,
     pub rx2_spectrum_enabled: bool,
     pub rx2_spectrum_fps: u8,
@@ -168,6 +172,12 @@ pub struct ClientSession {
     pub rx2_spectrum_max_bins: u16,
     pub vfo_sync: bool,
     pub yaesu_enabled: bool,
+    /// Yaesu STATE-abonnement (freq/s-meter/CAT/feature/memory), LOS van audio.
+    /// Gezet via `YaesuStateEnable` als het bedieningsvenster open is. State gaat
+    /// naar `yaesu_state_addrs` = (yaesu_state_enabled || yaesu_enabled), zodat een
+    /// gemute client (audio uit, venster open) toch live state houdt.
+    pub yaesu_state_enabled: bool,
+    pub yaesu2_state_enabled: bool,
     /// Dual-radio slot 1 subscription-gate (PATCH-dual-radio-991a-ftx1, Optie
     /// B-prime). Default false -> oude clients (die `Yaesu2Enable` nooit sturen)
     /// krijgen nooit slot-1 state/audio/memory. Dit is de echte back-compat-guard.
@@ -329,11 +339,12 @@ impl SessionManager {
             spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
             spectrum_zoom: 1.0, spectrum_pan: 0.0,
             spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
+            rx1_enabled: true, // default AAN (back-compat oude clients)
             rx2_enabled: false, rx2_spectrum_enabled: false,
             rx2_spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
             rx2_spectrum_zoom: 1.0, rx2_spectrum_pan: 0.0,
             rx2_spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
-            vfo_sync: false, yaesu_enabled: false, yaesu2_enabled: false, audio_mode: 255,
+            vfo_sync: false, yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false, audio_mode: 255,
             dx_spots_enabled: true,
             allow_zoom_below_2x: false,
             smeter_sources: 0x22,
@@ -427,6 +438,7 @@ impl SessionManager {
                 spectrum_zoom: 1.0,
                 spectrum_pan: 0.0,
                 spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
+                rx1_enabled: true, // default AAN (back-compat oude clients)
                 rx2_enabled: false,
                 rx2_spectrum_enabled: false,
                 rx2_spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
@@ -434,7 +446,7 @@ impl SessionManager {
                 rx2_spectrum_pan: 0.0,
                 rx2_spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
                 vfo_sync: false,
-                yaesu_enabled: false, yaesu2_enabled: false,
+                yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false,
                 audio_mode: 255, // default: CH0 only until client sends AudioMode
                 dx_spots_enabled: true,
                 allow_zoom_below_2x: false,
@@ -593,6 +605,13 @@ impl SessionManager {
         }
     }
 
+    /// Set RX1 audio-abonnement for a client
+    pub fn set_rx1_enabled(&mut self, addr: SocketAddr, enabled: bool) {
+        if let Some(session) = self.clients.get_mut(&addr) {
+            session.rx1_enabled = enabled;
+        }
+    }
+
     /// Set RX2 enabled for a client
     pub fn set_rx2_enabled(&mut self, addr: SocketAddr, enabled: bool) {
         if let Some(session) = self.clients.get_mut(&addr) {
@@ -611,6 +630,18 @@ impl SessionManager {
     pub fn set_yaesu2_enabled(&mut self, addr: SocketAddr, enabled: bool) {
         if let Some(session) = self.clients.get_mut(&addr) {
             session.yaesu2_enabled = enabled;
+        }
+    }
+
+    /// Yaesu STATE-abonnement (los van audio), gezet door `YaesuStateEnable`.
+    pub fn set_yaesu_state_enabled(&mut self, addr: SocketAddr, enabled: bool) {
+        if let Some(session) = self.clients.get_mut(&addr) {
+            session.yaesu_state_enabled = enabled;
+        }
+    }
+    pub fn set_yaesu2_state_enabled(&mut self, addr: SocketAddr, enabled: bool) {
+        if let Some(session) = self.clients.get_mut(&addr) {
+            session.yaesu2_state_enabled = enabled;
         }
     }
 
@@ -706,6 +737,12 @@ impl SessionManager {
         self.clients.get(&addr).map(|s| s.rx2_enabled).unwrap_or(false)
     }
 
+    /// RX1 audio-abonnement voor een client. Default AAN (`true`) voor een
+    /// onbekende/half-opgezette client, zodat oude clients RX1-audio houden.
+    pub fn client_rx1_enabled(&self, addr: SocketAddr) -> bool {
+        self.clients.get(&addr).map(|s| s.rx1_enabled).unwrap_or(true)
+    }
+
     pub fn set_audio_mode(&mut self, addr: SocketAddr, mode: u8) {
         if let Some(session) = self.clients.get_mut(&addr) {
             session.audio_mode = mode;
@@ -750,6 +787,22 @@ impl SessionManager {
     pub fn yaesu_addrs(&self) -> Vec<SocketAddr> {
         self.clients.iter()
             .filter(|(_, s)| s.yaesu_enabled && Self::is_active_authed(s))
+            .map(|(addr, _)| *addr)
+            .collect()
+    }
+
+    /// Slot-0 STATE-abonnees: venster-open (yaesu_state_enabled) OF audio-abonnee
+    /// (yaesu_enabled). Zo houdt een gemute client met open venster live state, en
+    /// audio-abonnees krijgen state sowieso (geen aparte opt-in nodig).
+    pub fn yaesu_state_addrs(&self) -> Vec<SocketAddr> {
+        self.clients.iter()
+            .filter(|(_, s)| (s.yaesu_state_enabled || s.yaesu_enabled) && Self::is_active_authed(s))
+            .map(|(addr, _)| *addr)
+            .collect()
+    }
+    pub fn yaesu2_state_addrs(&self) -> Vec<SocketAddr> {
+        self.clients.iter()
+            .filter(|(_, s)| (s.yaesu2_state_enabled || s.yaesu2_enabled) && Self::is_active_authed(s))
             .map(|(addr, _)| *addr)
             .collect()
     }
@@ -815,10 +868,12 @@ impl SessionManager {
             .any(|s| s.vfo_sync && Self::is_active_authed(s))
     }
 
-    /// Get RX2 spectrum clients: (addr, zoom, pan, max_bins)
+    /// Get RX2 spectrum clients: (addr, zoom, pan, max_bins). Spectrum-abonnement
+    /// staat LOS van het RX2-audio-abonnement (`rx2_enabled`) — een client mag het
+    /// RX2-spectrum willen zonder RX2-audio (bandbreedte sparen). Fase 3b.
     pub fn rx2_spectrum_clients(&self) -> Vec<(SocketAddr, f32, f32, u16)> {
         self.clients.values()
-            .filter(|s| s.rx2_enabled && s.rx2_spectrum_enabled && Self::is_active_authed(s))
+            .filter(|s| s.rx2_spectrum_enabled && Self::is_active_authed(s))
             .map(|s| (s.addr, s.rx2_spectrum_zoom, s.rx2_spectrum_pan, s.rx2_spectrum_max_bins))
             .collect()
     }
@@ -831,10 +886,11 @@ impl SessionManager {
             .collect()
     }
 
-    /// Get addresses of RX2 clients with spectrum enabled (for S-meter gating)
+    /// Get addresses of RX2 clients with spectrum enabled (for S-meter gating).
+    /// Los van `rx2_enabled` (audio) — zie `rx2_spectrum_clients`. Fase 3b.
     pub fn rx2_spectrum_addrs(&self) -> Vec<SocketAddr> {
         self.clients.values()
-            .filter(|s| s.rx2_enabled && s.rx2_spectrum_enabled && Self::is_active_authed(s))
+            .filter(|s| s.rx2_spectrum_enabled && Self::is_active_authed(s))
             .map(|s| s.addr)
             .collect()
     }
@@ -939,12 +995,13 @@ mod tests {
             spectrum_zoom: rx1_zoom,
             spectrum_pan: 0.0,
             spectrum_max_bins: 256,
+            rx1_enabled: true,
             rx2_enabled: rx2_en, rx2_spectrum_enabled: rx2_en,
             rx2_spectrum_fps: 30,
             rx2_spectrum_zoom: rx2_zoom,
             rx2_spectrum_pan: 0.0,
             rx2_spectrum_max_bins: 256,
-            vfo_sync: false, yaesu_enabled: false, yaesu2_enabled: false, audio_mode: 255,
+            vfo_sync: false, yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false, audio_mode: 255,
             dx_spots_enabled: true,
             allow_zoom_below_2x: allow,
             smeter_sources: 0x22,

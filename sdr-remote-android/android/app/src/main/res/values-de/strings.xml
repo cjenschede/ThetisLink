@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Deutsche Übersetzung. Ham-Abkürzungen/Modus-/Produktnamen bleiben Englisch. -->
+<resources>
+    <!-- Common / shared -->
+    <string name="common_connect">Verbinden</string>
+    <string name="common_disconnect">Trennen</string>
+    <string name="common_connected">Verbunden</string>
+    <string name="common_disconnected">Getrennt</string>
+    <string name="common_save">Speichern</string>
+    <string name="common_cancel">Abbrechen</string>
+    <string name="common_close">Schließen</string>
+    <string name="common_yes">Ja</string>
+    <string name="common_no">Nein</string>
+    <string name="common_ok">OK</string>
+
+    <!-- ConnectionPanel -->
+    <string name="conn_via_relay">Über Relay</string>
+    <string name="conn_station_placeholder">(Station)</string>
+    <string name="conn_server">Server</string>
+    <string name="conn_set_password">Passwort in Einstellungen festlegen</string>
+    <string name="conn_found">Gefunden:</string>
+    <string name="conn_choose_server">Gefundenen Server wählen (%1$d)</string>
+    <string name="conn_2fa_code">2FA-Code</string>
+    <string name="conn_verify">Bestätigen</string>
+    <string name="conn_audio_error">Audiofehler — neu verbinden…</string>
+
+    <!-- SettingsDialog -->
+    <string name="settings_title">Einstellungen</string>
+    <string name="settings_server_password">Server-Passwort:</string>
+    <string name="settings_password">Passwort</string>
+    <string name="settings_password_required">Passwort zum Verbinden erforderlich</string>
+    <string name="settings_connect_via_relay">Über Relay verbinden:</string>
+    <string name="settings_relay_hint">Für Clients ohne Portweiterleitung (z. B. mobil). App neu starten zum Anwenden.</string>
+    <string name="settings_relay_saved_stop">Gespeichert - App neu starten, um das Relay nicht mehr zu nutzen</string>
+    <string name="settings_relay_saved_start">Gespeichert - App neu starten, um über das Relay zu verbinden</string>
+    <string name="settings_relay_url">Relay-URL</string>
+    <string name="settings_station_name">Stationsname</string>
+    <string name="settings_token">Token</string>
+    <string name="settings_device_name">Gerätename</string>
+    <string name="settings_device_name_hint">Wird in Relay-Logs angezeigt. App neu starten zum Anwenden.</string>
+    <string name="settings_audio_udp">Audio über UDP (geringe Latenz):</string>
+    <string name="settings_audio_udp_hint">Ein: Audio mit geringster Latenz über UDP. Aus: Audio bleibt auf dem verschlüsselten Relay-Kanal. App neu starten zum Anwenden.</string>
+    <string name="settings_ptt_mode">PTT-Modus:</string>
+    <string name="settings_push_to_talk">Push-to-Talk</string>
+    <string name="settings_toggle">Umschalten</string>
+    <string name="settings_bt_remote_ptt">BT-Fernbedienung = PTT:</string>
+    <string name="settings_bt_remote_hint">BT-Seitenwender oder Kamera-Fernauslöser als PTT</string>
+    <string name="settings_volume_keys_ptt">Lautstärketasten = PTT:</string>
+    <string name="settings_volume_keys_hint">Lautstärketasten des Telefons als PTT (nie Bluetooth)</string>
+    <string name="settings_dx_spots">DX-Spots:</string>
+    <string name="settings_dx_spots_hint">DX-Cluster-Spots empfangen (aus = Daten sparen)</string>
+    <string name="settings_audio_routing">Audio-Routing:</string>
+    <string name="settings_audio_auto">Auto</string>
+    <string name="settings_audio_speaker">Lautsprecher</string>
+    <string name="settings_audio_headset">Headset</string>
+    <string name="settings_headset_named">Headset: %1$s</string>
+    <string name="settings_headset_active">Headset aktiv</string>
+    <string name="settings_handsfree_speaker">Freisprech-Lautsprechermodus</string>
+    <string name="settings_smeter_source">S-Meter-Quelle:</string>
+    <string name="settings_smeter_hint">Avg entspricht Thetis Multimeter Avg (empfohlen)</string>
+    <string name="settings_mic_tx_profile">Mic → TX-Profil:</string>
+    <string name="settings_mic_phone">Telefon-Mikrofon</string>
+    <string name="settings_mic_bt">BT-Headset</string>
+    <string name="settings_none">(keins)</string>
+    <string name="settings_mic_tx_hint">Wechselt TX-Profil automatisch bei Mikrofonwechsel</string>
+    <string name="settings_mic_gate_delay">Mic-Gate-Verzögerung (experimentell):</string>
+    <string name="settings_gate_thetis_mic">Thetis Telefon-Mikrofon</string>
+    <string name="settings_gate_yaesu_mic">Yaesu Telefon-Mikrofon</string>
+    <string name="settings_mic_gate_hint">PTT ist sofort; Mikrofon-Audio öffnet nach dieser Verzögerung. Testbereich: 0-800 ms.</string>
+    <string name="settings_remote_server_pc">Remote-Server-PC:</string>
+    <string name="settings_reboot">Neustart</string>
+    <string name="settings_shutdown">Herunterfahren</string>
+    <string name="settings_remote_reboot_shutdown">Remote-Neustart / Herunterfahren</string>
+
+    <!-- ConnectWizard -->
+    <string name="wizard_skip_title">Assistent überspringen?</string>
+    <string name="wizard_skip_body">Direkt zum normalen Verbindungsbildschirm springen. Deine Konfiguration wird nicht aktualisiert, daher erscheint der Assistent beim nächsten Start erneut.</string>
+    <string name="wizard_skip">Überspringen</string>
+    <string name="wizard_stay">Bleiben</string>
+    <string name="wizard_step_find">Server finden</string>
+    <string name="wizard_step_password">Passwort eingeben</string>
+    <string name="wizard_2fa_code">2FA-Code</string>
+    <string name="wizard_step_header">Schritt %1$d von %2$d: %3$s</string>
+    <string name="wizard_pick_server">Wähle einen Server aus der Liste oder gib die Adresse manuell ein.</string>
+    <string name="wizard_discovered">Gefunden (%1$d)</string>
+    <string name="wizard_scanning">Lokales Netzwerk wird gescannt…</string>
+    <string name="wizard_next">Weiter</string>
+    <string name="wizard_password_body">Gib das Server-Passwort ein. Frage den Betreiber des Server-PCs danach.</string>
+    <string name="wizard_show_password">Passwort anzeigen</string>
+    <string name="wizard_back">Zurück</string>
+    <string name="wizard_connecting">Verbinden…</string>
+    <string name="wizard_totp_body">Öffne deine Authenticator-App und gib den 6-stelligen Code ein.</string>
+    <string name="wizard_verifying_2fa">2FA-Code wird überprüft…</string>
+    <string name="wizard_connected">Verbunden!</string>
+    <string name="wizard_success_body">Beim nächsten Start wird der Assistent automatisch übersprungen.</string>
+    <string name="wizard_done">Fertig</string>
+
+    <!-- StatsPanel -->
+    <string name="stats_rx_volume">RX-Lautstärke</string>
+    <string name="stats_tx_gain">TX-Gain</string>
+    <string name="stats_audio_levels">Audiopegel:</string>
+    <string name="stats_statistics">Statistiken:</string>
+    <string name="stats_tcp_fallback">TCP-Fallback</string>
+    <string name="stats_down">Runter</string>
+    <string name="stats_up">Hoch</string>
+    <string name="stats_audio_streams">Audiostreams:</string>
+    <string name="stats_no_stream">Noch kein Audiostream</string>
+    <string name="stats_col_stream">Stream</string>
+    <string name="stats_col_jitter">Jitter</string>
+    <string name="stats_col_buffer">Puffer</string>
+    <string name="stats_col_packets">Pakete</string>
+    <string name="stats_col_loss">Verlust</string>
+
+    <!-- MidiSettingsDialog -->
+    <string name="midi_title">MIDI-Controller</string>
+    <string name="midi_device">Gerät:</string>
+    <string name="midi_scan">Scannen</string>
+    <string name="midi_connected">Verbunden: %1$s</string>
+    <string name="midi_no_devices">Keine MIDI-Geräte gefunden</string>
+    <string name="midi_last">Letztes MIDI: %1$s</string>
+    <string name="midi_learn_prompt">Drücke ein MIDI-Bedienelement für: %1$s</string>
+    <string name="midi_mappings">Zuordnungen:</string>
+    <string name="midi_no_mappings">Keine Zuordnungen konfiguriert</string>
+    <string name="midi_mapping_row">%1$s → %2$s (%3$s)</string>
+    <string name="midi_add_mapping">Zuordnung hinzufügen:</string>
+    <string name="midi_learn_action">Lernen: %1$s</string>
+
+    <!-- PttButton -->
+    <string name="ptt_tx_in_use">TX in Benutzung</string>
+
+    <!-- RadioControls -->
+    <string name="radio_power_shutdown">HERUNTERFAHREN!</string>
+    <string name="radio_power_hold">HALTEN...</string>
+    <string name="radio_power_starting">STARTET...</string>
+    <string name="radio_power_on">EIN</string>
+    <string name="radio_power_off">AUS</string>
+    <string name="radio_tx_profile">TX-Profil:</string>
+    <string name="radio_carrier_on">Träger EIN</string>
+    <string name="radio_drive">Drive:</string>
+    <string name="radio_phase_gain">Phase: %1$.1f°  Gain: %2$.3f</string>
+    <string name="radio_smart_null">Smart Null</string>
+    <string name="radio_smart_null_active">Smart Null...</string>
+
+    <!-- MainScreen -->
+    <string name="main_about_title">Über ThetisLink</string>
+    <string name="main_about_subtitle">Fernsteuerung für\nThetis SDR + Yaesu FT-991A / FTX-1\n(Dual-Radio)</string>
+    <string name="main_about_author">Autor</string>
+    <string name="main_about_thanks">Besonderer Dank</string>
+    <string name="main_about_protocols">Protokolle</string>
+    <string name="main_about_hardware">Hardware</string>
+    <string name="main_about_libraries">Bibliotheken</string>
+    <string name="main_about_license_header">Lizenz</string>
+    <string name="main_rf2ks_reset">RF2K-S Reset</string>
+    <string name="main_settings">Einstellungen</string>
+    <string name="main_radio">Radio</string>
+    <string name="main_devices">Geräte</string>
+    <string name="main_native_error">Fehler in nativer Bibliothek: %1$s</string>
+    <string name="main_key">Taste: %1$s</string>
+    <string name="main_yaesu_active_hint">Yaesu aktiv - zu Geräte wechseln</string>
+    <string name="main_yaesu_hint">Yaesu - zu Geräte für Bedienung</string>
+    <string name="main_spectrum">Spektrum</string>
+    <string name="main_about">Über</string>
+    <string name="main_wizard">Assistent</string>
+    <string name="main_volume">Lautstärke:</string>
+
+    <!-- ExternalDevicesScreen -->
+    <string name="dev_no_devices">Keine Geräte konfiguriert</string>
+    <string name="dev_configure_hint">Geräte in den Servereinstellungen konfigurieren.</string>
+    <string name="dev_amplitec_current">"  Aktuell: %1$s"</string>
+    <string name="dev_tuner_title">JC-4s Antennentuner</string>
+    <string name="dev_status_label">Status:</string>
+    <string name="dev_abort">Abbrechen</string>
+    <string name="dev_tuner_unavailable">Tuner an aktueller Antenne nicht verfügbar</string>
+    <string name="dev_active">AKTIV</string>
+    <string name="dev_inactive">INAKTIV</string>
+    <string name="dev_power_off">Ausschalten</string>
+    <string name="dev_power_on">Einschalten</string>
+    <string name="dev_operate">Operate</string>
+    <string name="dev_standby">Standby</string>
+    <string name="dev_off">Aus</string>
+    <string name="dev_low">Niedrig</string>
+    <string name="dev_mid">Mittel</string>
+    <string name="dev_high">Hoch</string>
+    <string name="dev_drive_down">Drive -</string>
+    <string name="dev_drive_up">Drive +</string>
+    <string name="dev_online">Online</string>
+    <string name="dev_offline">Offline</string>
+    <string name="dev_error_state">Fehlerstatus: %1$d</string>
+    <string name="dev_reset">Reset</string>
+    <string name="dev_fw_close">FW schließen</string>
+    <string name="dev_fw_close_confirm_title">FW schließen bestätigen</string>
+    <string name="dev_fw_close_confirm_body">Bist du sicher? Dies schließt die RF2K-S-Firmware.</string>
+    <string name="dev_tuner_label">Tuner: %1$s</string>
+    <string name="dev_manual">Manuell</string>
+    <string name="dev_auto">Auto</string>
+    <string name="dev_bypass">Bypass</string>
+    <string name="dev_store">Speichern</string>
+    <string name="dev_drive_watts">Drive: %1$dW</string>
+    <string name="dev_reflected">Reflektiert: %1$dW</string>
+    <string name="dev_antenna_label">Antenne:</string>
+    <string name="dev_ub_dir">Richt.:</string>
+    <string name="dev_ub_normal">Normal</string>
+    <string name="dev_ub_bidir">BiDir</string>
+    <string name="dev_ub_sync">Sync %1$s</string>
+    <string name="dev_step">Schritt:</string>
+    <string name="dev_band">Band:</string>
+    <string name="dev_retract">Einfahren</string>
+    <string name="dev_read_elements">Elemente lesen</string>
+    <string name="dev_retract_confirm_title">Einfahren bestätigen</string>
+    <string name="dev_retract_confirm_body">Bist du sicher? Dies fährt alle Elemente ein.</string>
+    <string name="dev_element_lengths">Elementlängen (mm):</string>
+    <string name="dev_stop">STOPP</string>
+    <string name="dev_goto">GeheZu:</string>
+    <string name="dev_go">Los</string>
+    <string name="dev_high_swr">HOHES SWR</string>
+    <string name="dev_high_swr_other">HOHES SWR (%1$s)</string>
+    <string name="dev_radio_label">Radio:</string>
+    <string name="dev_radio_locked">Radiowechsel während TX gesperrt</string>
+    <string name="dev_yaesu_active_label">Yaesu aktiv:</string>
+    <string name="dev_audio_label">Audio:</string>
+    <string name="dev_thetis_off">Thetis aus</string>
+    <string name="dev_audio_on">Audio ein</string>
+    <string name="dev_freq_title">Frequenz (MHz)</string>
+    <string name="dev_scan">Scannen</string>
+    <string name="dev_presets">Presets</string>
+    <string name="dev_del">Lösch</string>
+    <string name="dev_auto_label">Auto:</string>
+    <string name="dev_bt_headset_none">BT-Headset: -</string>
+    <string name="dev_save_eq_preset">EQ-Preset speichern</string>
+    <string name="dev_name">Name</string>
+    <string name="dev_loading">Lädt...</string>
+    <string name="dev_load_memories">Speicher laden</string>
+    <string name="dev_load_settings">Einstellungen laden</string>
+    <string name="dev_memory_channels">Speicherkanäle (%1$d)</string>
+    <string name="dev_ex_menu">EX-Menü (%1$d)</string>
+    <string name="dev_menu_num">Menü %1$d</string>
+    <string name="dev_dsp_functions">DSP / Funktionen</string>
+    <string name="dev_port_a">Port A — ANT1 (TX+RX)</string>
+    <string name="dev_port_b">Port B — RX2 (RX)</string>
+    <string name="dev_digit_tuner_hint">Ziffer tippen = abstimmen · lang drücken = eingeben</string>
+</resources>

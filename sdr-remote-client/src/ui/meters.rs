@@ -64,7 +64,7 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
         } else {
             format!("TX  {:.0}W", watts)
         };
-        let swr_color = if swr_x100 > 300 { Color32::from_rgb(255, 80, 80) }
+        let swr_color = if swr_x100 > 300 { theme::TL_SWR_ALERT_TEXT }
             else if swr_x100 > 200 { Color32::from_rgb(255, 170, 40) }
             else { Color32::WHITE };
         painter.text(bar_rect.center(), egui::Align2::CENTER_CENTER,
@@ -147,6 +147,14 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
 
 /// Yaesu CAT S-meter bar. The radio reports a raw 0..255-ish SM value;
 /// render it on the same S1..S9 / S9+dB visual scale as the main RX meter.
+/// De Yaesu s-meter-waarde is al de 0-228 display-schaal (S0=0, S9=108, S9+60=228).
+/// De analoge meter verwacht dBm en converteert intern via `dbm_to_display`; dit is
+/// de inverse, zodat we de raw-waarde door de gedeelde analoogmeter kunnen tonen.
+pub(crate) fn yaesu_raw_to_dbm(raw: u16) -> f32 {
+    let disp = (raw as f32).clamp(0.0, 228.0);
+    if disp <= 108.0 { disp / 2.0 - 127.0 } else { (disp - 108.0) / 2.0 - 73.0 }
+}
+
 pub(crate) fn yaesu_smeter_bar(ui: &mut egui::Ui, raw: u16, peak_raw: u16) -> egui::Rect {
     let label_h = 12.0;
     let bar_h = 14.0;

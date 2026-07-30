@@ -337,6 +337,7 @@ fn main() -> Result<()> {
         let config = ServerConfig {
             tci_addr: tci_addr.or(defaults.tci_addr),
             spectrum_enabled: true,
+            rx2_present: defaults.rx2_present,
             thetis_path: thetis_path.or(defaults.thetis_path),
             yaesu_port: defaults.yaesu_port,
             yaesu_enabled: defaults.yaesu_enabled,
@@ -390,6 +391,8 @@ fn main() -> Result<()> {
             rf2k_window_size: None,
             ultrabeam_window_size: None,
             rotor_window_size: None,
+            theme: defaults.theme,
+            theme_custom: defaults.theme_custom,
             autostart: false,
             active_pa: 0,
             rf2k_saved_drive: None,

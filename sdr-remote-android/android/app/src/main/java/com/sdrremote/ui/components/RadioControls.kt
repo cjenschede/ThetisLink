@@ -36,6 +36,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
+import com.sdrremote.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -137,11 +139,11 @@ fun RadioControls(
                 else -> Color(0xFF960000)
             }
             val powerText = when {
-                shuttingDown && holdingPower -> "SHUTDOWN!"
-                holdingPower -> "HOLD..."
-                thetisStarting -> "STARTING..."
-                powerOn -> "POWER ON"
-                else -> "POWER OFF"
+                shuttingDown && holdingPower -> stringResource(R.string.radio_power_shutdown)
+                holdingPower -> stringResource(R.string.radio_power_hold)
+                thetisStarting -> stringResource(R.string.radio_power_starting)
+                powerOn -> stringResource(R.string.radio_power_on)
+                else -> stringResource(R.string.radio_power_off)
             }
 
             Button(
@@ -284,7 +286,7 @@ fun RadioControls(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("TX Profile:")
+                Text(stringResource(R.string.radio_tx_profile))
                 Box {
                     Button(
                         onClick = { profileExpanded = true },
@@ -356,7 +358,7 @@ fun RadioControls(
                     )
                 }
                 if (tuneActive) {
-                    Text("Carrier ON", color = Color(0xFFFF6464))
+                    Text(stringResource(R.string.radio_carrier_on), color = Color(0xFFFF6464))
                 }
             }
         }
@@ -384,7 +386,7 @@ private fun DriveSlider(driveLevel: Int, onDriveChange: (Int) -> Unit) {
             .nestedScroll(SliderNestedScrollConnection),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Drive:", modifier = Modifier.weight(0.2f))
+        Text(stringResource(R.string.radio_drive), modifier = Modifier.weight(0.2f))
         Slider(
             value = localDrive,
             onValueChange = { localDrive = it },
@@ -577,7 +579,7 @@ private fun DiversityCirclePlot(
 
         // Readout
         Text(
-            text = "Phase: %.1f°  Gain: %.3f".format(phase, nonRefGain),
+            text = stringResource(R.string.radio_phase_gain, phase, nonRefGain),
             color = Color(0xFFC8C8DC),
             fontSize = 12.sp,
         )
@@ -622,7 +624,7 @@ private fun DiversityCirclePlot(
                 },
             ) {
                 Text(
-                    if (autoNullActive) "Smart Null..." else "Smart Null",
+                    if (autoNullActive) stringResource(R.string.radio_smart_null_active) else stringResource(R.string.radio_smart_null),
                     color = Color.White,
                 )
             }

@@ -97,6 +97,8 @@ pub(crate) struct ClientConfig {
     pub(crate) yaesu2_popout_size: Option<(f32, f32)>,
     pub(crate) vrx_popout_pos: Option<(f32, f32)>,
     pub(crate) vrx_popout_size: Option<(f32, f32)>,
+    pub(crate) vrx2_popout_pos: Option<(f32, f32)>,
+    pub(crate) vrx2_popout_size: Option<(f32, f32)>,
     // VRX1 per-channel state (was `vrx_volume`/`vrx_enabled`/etc. in
     // build 48 - renamed in build 50 when VRX2 was added; the loader
     // still accepts the old keys for one-version backwards compat).
@@ -131,13 +133,18 @@ pub(crate) struct ClientConfig {
     pub(crate) rx2_spectrum_range_db: f32,
     pub(crate) rx2_auto_ref_enabled: bool,
     pub(crate) rx2_waterfall_contrast: f32,
+    pub(crate) rx1_enabled: bool,
     pub(crate) rx2_enabled: bool,
+    pub(crate) rx2_spectrum_enabled: bool,
     /// Opt-in voor wideband Thetis-audio (RX1/RX2/BinR 16 kHz i.p.v.
     /// 8 kHz default). Verdubbelt RX-bandbreedte per kanaal ongeveer,
     /// dus default false; aan-zetten via Settings -> Audio.
     pub(crate) thetis_wideband_audio: bool,
     pub(crate) popout_joined: bool,
+    /// Legacy globale s-meter-type (gemigreerd naar per-kanaal `meter_analog`).
     pub(crate) popout_meter_analog: bool,
+    /// S-meter-type per kanaal (M_RX1..M_YAESU2). Migreert van popout_meter_analog.
+    pub(crate) meter_analog: [bool; 6],
     pub(crate) spectrum_popout: bool,
     pub(crate) rx2_popout: bool,
     pub(crate) main_window_pos: Option<(f32, f32)>,
@@ -277,6 +284,8 @@ impl Default for ClientConfig {
             yaesu2_popout_size: None,
             vrx_popout_pos: None,
             vrx_popout_size: None,
+            vrx2_popout_pos: None,
+            vrx2_popout_size: None,
             vrx1_volume: None,
             vrx1_enabled: None,
             vrx1_freq_hz: None,
@@ -308,7 +317,9 @@ impl Default for ClientConfig {
             rx2_spectrum_range_db: 100.0,
             rx2_auto_ref_enabled: true,
             rx2_waterfall_contrast: 1.2,
+            rx1_enabled: true, // default AAN
             rx2_enabled: false,
+            rx2_spectrum_enabled: false,
             thetis_wideband_audio: false,
             popout_joined: false,
             device_tab: 0,
@@ -321,6 +332,7 @@ impl Default for ClientConfig {
             yaesu_popout: false,
             yaesu_mem_file: String::new(),
             popout_meter_analog: false,
+            meter_analog: [false; 6],
             spectrum_popout: false,
             rx2_popout: false,
             main_window_pos: None,
@@ -562,6 +574,10 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("vrx_popout_size=") {
             config.vrx_popout_size = parse_f32_pair(val);
+        } else if let Some(val) = line.strip_prefix("vrx2_popout_pos=") {
+            config.vrx2_popout_pos = parse_f32_pair(val);
+        } else if let Some(val) = line.strip_prefix("vrx2_popout_size=") {
+            config.vrx2_popout_size = parse_f32_pair(val);
             has_keys = true;
         // VRX1 keys - accept both legacy `vrx_*` (build 48 and earlier)
         // and new `vrx1_*` (build 50+). New writes use only `vrx1_*`.
@@ -748,6 +764,10 @@ pub(crate) fn load_config() -> ClientConfig {
             }
         } else if let Some(val) = line.strip_prefix("yaesu_mem_file=") {
             config.yaesu_mem_file = val.trim().to_string();
+        } else if let Some(val) = line.strip_prefix("rx1_enabled=") {
+            config.rx1_enabled = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("rx2_spectrum_enabled=") {
+            config.rx2_spectrum_enabled = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("rx2_enabled=") {
             config.rx2_enabled = val.trim() == "true";
             has_keys = true;
@@ -758,7 +778,15 @@ pub(crate) fn load_config() -> ClientConfig {
             config.popout_joined = val.trim() == "true";
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("popout_meter_analog=") {
-            config.popout_meter_analog = val.trim() == "true";
+            // Legacy globaal type -> migreer naar alle kanalen (tenzij een expliciete
+            // meter_analog-regel dit later overschrijft).
+            let on = val.trim() == "true";
+            config.popout_meter_analog = on;
+            config.meter_analog = [on; 6];
+        } else if let Some(val) = line.strip_prefix("meter_analog=") {
+            for (i, part) in val.trim().split(',').enumerate() {
+                if i < 6 { config.meter_analog[i] = part.trim() == "1" || part.trim() == "true"; }
+            }
         } else if let Some(val) = line.strip_prefix("ub_show_menu=") {
             config.ub_show_menu = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("collapse_diversity=") {
@@ -903,7 +931,11 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("language=") {
             let v = val.trim().to_lowercase();
-            config.language = if v == "nl" { "nl".to_string() } else { "en".to_string() };
+            // Accept the UI languages that have a locale (en base + nl/de/fr); unknown -> en.
+            config.language = match v.as_str() {
+                "nl" | "de" | "fr" => v,
+                _ => "en".to_string(),
+            };
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("successful_connects=") {
             // PATCH-4: parse as u32 with default 0 on malformed input.
@@ -1082,6 +1114,8 @@ pub(crate) fn save_config(
     yaesu2_popout_size_arg: Option<(f32, f32)>,
     vrx_popout_pos_arg: Option<(f32, f32)>,
     vrx_popout_size_arg: Option<(f32, f32)>,
+    vrx2_popout_pos_arg: Option<(f32, f32)>,
+    vrx2_popout_size_arg: Option<(f32, f32)>,
     vrx1_volume_arg: Option<f32>,
     vrx1_enabled_arg: Option<bool>,
     vrx1_freq_hz_arg: Option<u64>,
@@ -1113,10 +1147,12 @@ pub(crate) fn save_config(
     rx2_spectrum_range_db: f32,
     rx2_auto_ref_enabled: bool,
     rx2_waterfall_contrast: f32,
+    rx1_enabled: bool,
     rx2_enabled: bool,
+    rx2_spectrum_enabled: bool,
     thetis_wideband_audio: bool,
     popout_joined: bool,
-    popout_meter_analog: bool,
+    meter_analog: [bool; 6],
     spectrum_popout: bool,
     rx2_popout: bool,
     main_window_pos: Option<(f32, f32)>,
@@ -1150,6 +1186,7 @@ pub(crate) fn save_config(
     mic_profile_map: &std::collections::HashMap<String, String>,
     theme: &str,
     theme_custom: &str,
+    language: &str,
 ) {
     if let Ok(exe) = std::env::current_exe() {
         let path = exe.with_file_name(CONFIG_FILE);
@@ -1164,6 +1201,7 @@ pub(crate) fn save_config(
         }
         content.push_str(&format!("agc_enabled={}\n", agc_enabled));
         content.push_str(&format!("theme={}\n", theme));
+        content.push_str(&format!("language={}\n", language));
         if !theme_custom.is_empty() {
             content.push_str(&format!("theme_custom={}\n", theme_custom));
         }
@@ -1210,6 +1248,12 @@ pub(crate) fn save_config(
         }
         if let Some((w, h)) = vrx_popout_size_arg {
             content.push_str(&format!("vrx_popout_size={:.0},{:.0}\n", w, h));
+        }
+        if let Some((x, y)) = vrx2_popout_pos_arg {
+            content.push_str(&format!("vrx2_popout_pos={:.0},{:.0}\n", x, y));
+        }
+        if let Some((w, h)) = vrx2_popout_size_arg {
+            content.push_str(&format!("vrx2_popout_size={:.0},{:.0}\n", w, h));
         }
         if let Some(v) = vrx1_volume_arg {
             content.push_str(&format!("vrx1_volume={:.3}\n", v));
@@ -1302,10 +1346,13 @@ pub(crate) fn save_config(
         content.push_str(&format!("rx2_spectrum_range_db={:.0}\n", rx2_spectrum_range_db));
         content.push_str(&format!("rx2_auto_ref_enabled={}\n", rx2_auto_ref_enabled));
         content.push_str(&format!("rx2_waterfall_contrast={:.2}\n", rx2_waterfall_contrast));
+        content.push_str(&format!("rx1_enabled={}\n", rx1_enabled));
         content.push_str(&format!("rx2_enabled={}\n", rx2_enabled));
+        content.push_str(&format!("rx2_spectrum_enabled={}\n", rx2_spectrum_enabled));
         content.push_str(&format!("thetis_wideband_audio={}\n", thetis_wideband_audio));
         content.push_str(&format!("popout_joined={}\n", popout_joined));
-        content.push_str(&format!("popout_meter_analog={}\n", popout_meter_analog));
+        content.push_str(&format!("meter_analog={}\n",
+            meter_analog.iter().map(|b| if *b { "1" } else { "0" }).collect::<Vec<_>>().join(",")));
         content.push_str(&format!("spectrum_popout={}\n", spectrum_popout));
         content.push_str(&format!("rx2_popout={}\n", rx2_popout));
         if let Some((x, y)) = main_window_pos {

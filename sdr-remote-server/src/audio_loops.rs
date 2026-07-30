@@ -377,20 +377,21 @@ pub async fn tci_multichannel_audio_loop(
                     // - the desktop client UI's "RX2 enabled" toggle must
                     // mute the upstream RX2 stream entirely, not just the
                     // local playback (bandwidth bug uncovered 2026-05-13).
-                    let client_modes: Vec<(std::net::SocketAddr, u8, bool, bool)> = {
+                    let client_modes: Vec<(std::net::SocketAddr, u8, bool, bool, bool)> = {
                         let sess = session.lock().await;
                         addrs
                             .iter()
                             .map(|&a| (
                                 a,
                                 sess.client_audio_mode(a),
+                                sess.client_rx1_enabled(a),
                                 sess.client_rx2_enabled(a),
                                 sess.client_thetis_wideband(a),
                             ))
                             .collect()
                     };
 
-                    for (addr, mode, rx2_enabled, want_wb) in &client_modes {
+                    for (addr, mode, rx1_enabled, rx2_enabled, want_wb) in &client_modes {
                         // Filter channels based on client's audio mode.
                         // Then drop CH2 (RX2) for clients that have RX2
                         // turned off - those bytes would otherwise reach
@@ -415,6 +416,9 @@ pub async fn tci_multichannel_audio_loop(
                                     _ => *ch_id == 0,
                                 };
                                 if !allowed { return false; }
+                                // RX1-audio-abonnement: CH0 (RX1) + CH1 (RX1 imag/BIN)
+                                // vervallen als de client RX1-audio uit heeft (alleen-VRX).
+                                if (*ch_id == 0 || *ch_id == 1) && !rx1_enabled { return false; }
                                 if *ch_id == 2 && !rx2_enabled { return false; }
                                 true
                             })

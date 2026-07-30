@@ -198,6 +198,10 @@ pub struct RadioState {
     pub filter_high_hz: i32,
     /// True unless a modern server explicitly reports that Thetis/TCI is disabled.
     pub thetis_configured: bool,
+    /// True unless a modern server explicitly reports the radio has a single
+    /// receiver (SINGLE_RECEIVER flag). Default true = normal 2-RX radio, so
+    /// old servers and the default config keep RX2/VRX2 visible.
+    pub rx2_present: bool,
     pub thetis_starting: bool,
     pub mon_on: bool,
     pub tx_profile_names: Vec<String>,
@@ -205,8 +209,14 @@ pub struct RadioState {
     // DX-cluster spot stream — toggle voor metered-link data-saving
     pub dx_spots_enabled: bool,
 
+    /// RX1 audio-abonnement (default AAN). False = client wil geen RX1-audio
+    /// (bijv. alleen-VRX-gebruik, bandbreedte sparen).
+    pub rx1_enabled: bool,
+
     // RX2 / VFO-B
     pub rx2_enabled: bool,
+    /// RX2 spectrum-abonnement, LOS van `rx2_enabled` (audio). Fase 3b/4.
+    pub rx2_spectrum_enabled: bool,
     pub vfo_sync: bool,
     pub frequency_rx2_hz: u64,
     pub mode_rx2: u8,
@@ -407,6 +417,9 @@ pub struct RadioState {
     pub yaesu_power_on: bool,
     pub yaesu_af_gain: u8,
     pub yaesu_tx_power: u8,
+    /// Max TX-vermogen (watt) voor de huidige band (PATCH-yaesu-power-scaling).
+    /// 0 = oude server/onbekend -> client valt terug op 100 voor het sliderbereik.
+    pub yaesu_tx_power_max: u8,
     pub yaesu_squelch: u8,
     pub yaesu_rf_gain: u8,
     pub yaesu_mic_gain: u8,
@@ -414,6 +427,9 @@ pub struct RadioState {
     pub yaesu_scan: bool,
     /// Internal ATU state (PATCH-yaesu-internal-atu): 0=off, 1=on, 2=tuning-in-progress.
     pub yaesu_tuner_state: u8,
+    /// Radio reports a high SWR while transmitting. Self-clearing: the radio
+    /// drops the flag as soon as the match is good again.
+    pub yaesu_hi_swr: bool,
     /// Yaesu DSP/function toggles bitfield (PATCH-yaesu-extra-controls): bit N =
     /// `YaesuCtrl` N on/off. Fed by YaesuFeaturePacket. Fase A1: RfAtt(0), BreakIn(1).
     pub yaesu_feature_toggles: u32,
@@ -439,12 +455,14 @@ pub struct RadioState {
     pub yaesu2_power_on: bool,
     pub yaesu2_af_gain: u8,
     pub yaesu2_tx_power: u8,
+    pub yaesu2_tx_power_max: u8,
     pub yaesu2_squelch: u8,
     pub yaesu2_rf_gain: u8,
     pub yaesu2_mic_gain: u8,
     pub yaesu2_split: bool,
     pub yaesu2_scan: bool,
     pub yaesu2_tuner_state: u8,
+    pub yaesu2_hi_swr: bool,
     pub yaesu2_feature_toggles: u32,
     pub yaesu2_feature_levels: [u8; 16],
     pub yaesu2_feature_freqs: [u16; 4],
@@ -547,11 +565,14 @@ impl Default for RadioState {
             filter_low_hz: 0,
             filter_high_hz: 0,
             thetis_configured: true,
+            rx2_present: true,
             thetis_starting: false,
             mon_on: false,
             tx_profile_names: Vec::new(),
             dx_spots_enabled: true,
+            rx1_enabled: true,
             rx2_enabled: false,
+            rx2_spectrum_enabled: false,
             vfo_sync: false,
             frequency_rx2_hz: 0,
             mode_rx2: 0,
@@ -708,6 +729,8 @@ impl Default for RadioState {
             yaesu_smeter: 0,
             yaesu_tx_active: false,
             yaesu_power_on: false,
+            yaesu_tx_power_max: 0,
+            yaesu2_tx_power_max: 0,
             yaesu_af_gain: 0,
             yaesu_tx_power: 0,
             yaesu_squelch: 0,
@@ -716,6 +739,7 @@ impl Default for RadioState {
             yaesu_split: false,
             yaesu_scan: false,
             yaesu_tuner_state: 0,
+            yaesu_hi_swr: false,
             yaesu_feature_toggles: 0,
             yaesu_feature_levels: [0u8; 16],
             yaesu_feature_freqs: [0u16; 4],
@@ -739,6 +763,7 @@ impl Default for RadioState {
             yaesu2_split: false,
             yaesu2_scan: false,
             yaesu2_tuner_state: 0,
+            yaesu2_hi_swr: false,
             yaesu2_feature_toggles: 0,
             yaesu2_feature_levels: [0u8; 16],
             yaesu2_feature_freqs: [0u16; 4],

@@ -32,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.sdrremote.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,9 +92,9 @@ fun ConnectionPanel(
     ) {
         if (viaRelay) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Via relay", fontSize = 11.sp, color = Color(0xFF989898))
+                Text(stringResource(R.string.conn_via_relay), fontSize = 11.sp, color = Color(0xFF989898))
                 Text(
-                    if (relayStation.isNotBlank()) relayStation else "(station)",
+                    if (relayStation.isNotBlank()) relayStation else stringResource(R.string.conn_station_placeholder),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                 )
@@ -101,7 +103,7 @@ fun ConnectionPanel(
             OutlinedTextField(
                 value = serverInput,
                 onValueChange = { serverInput = it },
-                label = { Text("Server") },
+                label = { Text(stringResource(R.string.conn_server)) },
                 singleLine = true,
                 enabled = !connected,
                 modifier = Modifier.weight(1f),
@@ -114,7 +116,7 @@ fun ConnectionPanel(
                 onClick = onDisconnect,
                 colors = ButtonDefaults.buttonColors(containerColor = btnColor),
             ) {
-                Text("Disconnect")
+                Text(stringResource(R.string.common_disconnect))
             }
         } else {
             val pw = prefs.getString("password", "") ?: ""
@@ -129,10 +131,10 @@ fun ConnectionPanel(
                 },
                 enabled = pw.isNotBlank() && !connectStatusIsAwaitingTotp,
             ) {
-                Text("Connect")
+                Text(stringResource(R.string.common_connect))
             }
             if (pw.isBlank()) {
-                Text("Set password in Settings", fontSize = 11.sp, color = Color(0xFFE53935))
+                Text(stringResource(R.string.conn_set_password), fontSize = 11.sp, color = Color(0xFFE53935))
             }
         }
     }
@@ -147,10 +149,10 @@ fun ConnectionPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Found:", fontSize = 12.sp)
+            Text(stringResource(R.string.conn_found), fontSize = 12.sp)
             Box {
                 TextButton(onClick = { discoveryMenuOpen = true }) {
-                    Text("Choose discovered server (${discoveredServers.size})")
+                    Text(stringResource(R.string.conn_choose_server, discoveredServers.size))
                 }
                 DropdownMenu(
                     expanded = discoveryMenuOpen,
@@ -184,7 +186,7 @@ fun ConnectionPanel(
             OutlinedTextField(
                 value = totpInput,
                 onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) totpInput = it },
-                label = { Text(if (connectStatusHeadline.isNotEmpty()) connectStatusHeadline else "2FA Code") },
+                label = { Text(if (connectStatusHeadline.isNotEmpty()) connectStatusHeadline else stringResource(R.string.conn_2fa_code)) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
@@ -192,7 +194,7 @@ fun ConnectionPanel(
                 onClick = { onSendTotp(totpInput); totpInput = "" },
                 enabled = totpInput.length == 6,
             ) {
-                Text("Verify")
+                Text(stringResource(R.string.conn_verify))
             }
         }
         if (connectStatusAction.isNotEmpty()) {
@@ -230,12 +232,12 @@ fun ConnectionPanel(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val statusColor = if (connected) Color(0xFF00C800) else Color(0xFFC80000)
-        val statusText = if (connected) "Connected" else "Disconnected"
+        val statusText = if (connected) stringResource(R.string.common_connected) else stringResource(R.string.common_disconnected)
         Text(text = statusText, color = statusColor, fontSize = 14.sp)
 
         if (audioError) {
             Text(
-                text = "Audio error — reconnecting...",
+                text = stringResource(R.string.conn_audio_error),
                 color = Color(0xFFFFA500),
                 fontSize = 12.sp,
             )

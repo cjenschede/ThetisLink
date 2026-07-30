@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nederlandse vertaling. Ham-afkortingen/mode-namen/product-namen blijven Engels. -->
+<resources>
+    <!-- Common / shared -->
+    <string name="common_connect">Verbinden</string>
+    <string name="common_disconnect">Verbreken</string>
+    <string name="common_connected">Verbonden</string>
+    <string name="common_disconnected">Niet verbonden</string>
+    <string name="common_save">Opslaan</string>
+    <string name="common_cancel">Annuleren</string>
+    <string name="common_close">Sluiten</string>
+    <string name="common_yes">Ja</string>
+    <string name="common_no">Nee</string>
+    <string name="common_ok">OK</string>
+
+    <!-- ConnectionPanel -->
+    <string name="conn_via_relay">Via relay</string>
+    <string name="conn_station_placeholder">(station)</string>
+    <string name="conn_server">Server</string>
+    <string name="conn_set_password">Stel wachtwoord in bij Instellingen</string>
+    <string name="conn_found">Gevonden:</string>
+    <string name="conn_choose_server">Kies gevonden server (%1$d)</string>
+    <string name="conn_2fa_code">2FA-code</string>
+    <string name="conn_verify">Verifiëren</string>
+    <string name="conn_audio_error">Audiofout — opnieuw verbinden…</string>
+
+    <!-- SettingsDialog -->
+    <string name="settings_title">Instellingen</string>
+    <string name="settings_server_password">Serverwachtwoord:</string>
+    <string name="settings_password">Wachtwoord</string>
+    <string name="settings_password_required">Wachtwoord vereist om te verbinden</string>
+    <string name="settings_connect_via_relay">Verbinden via relay:</string>
+    <string name="settings_relay_hint">Voor clients die niet kunnen port-forwarden (bijv. mobiel). Herstart de app om toe te passen.</string>
+    <string name="settings_relay_saved_stop">Opgeslagen - herstart de app om de relay niet meer te gebruiken</string>
+    <string name="settings_relay_saved_start">Opgeslagen - herstart de app om via de relay te verbinden</string>
+    <string name="settings_relay_url">Relay-URL</string>
+    <string name="settings_station_name">Stationsnaam</string>
+    <string name="settings_token">Token</string>
+    <string name="settings_device_name">Apparaatnaam</string>
+    <string name="settings_device_name_hint">Getoond in relay-logs. Herstart de app om toe te passen.</string>
+    <string name="settings_audio_udp">Audio via UDP (lage latency):</string>
+    <string name="settings_audio_udp_hint">Aan: audio met laagste latency via UDP. Uit: audio blijft op het versleutelde relay-kanaal. Herstart de app om toe te passen.</string>
+    <string name="settings_ptt_mode">PTT-modus:</string>
+    <string name="settings_push_to_talk">Push to talk</string>
+    <string name="settings_toggle">Omschakelen</string>
+    <string name="settings_bt_remote_ptt">BT-remote = PTT:</string>
+    <string name="settings_bt_remote_hint">BT-bladwender of cameraremote als PTT</string>
+    <string name="settings_volume_keys_ptt">Volumetoetsen = PTT:</string>
+    <string name="settings_volume_keys_hint">Volumeknoppen van de telefoon als PTT (nooit Bluetooth)</string>
+    <string name="settings_dx_spots">DX-spots:</string>
+    <string name="settings_dx_spots_hint">Ontvang DX-clusterspots (uit = data besparen)</string>
+    <string name="settings_audio_routing">Audio-routing:</string>
+    <string name="settings_audio_auto">Auto</string>
+    <string name="settings_audio_speaker">Luidspreker</string>
+    <string name="settings_audio_headset">Headset</string>
+    <string name="settings_headset_named">Headset: %1$s</string>
+    <string name="settings_headset_active">Headset actief</string>
+    <string name="settings_handsfree_speaker">Handsfree luidsprekermodus</string>
+    <string name="settings_smeter_source">S-meter-bron:</string>
+    <string name="settings_smeter_hint">Avg komt overeen met Thetis Multimeter Avg (aanbevolen)</string>
+    <string name="settings_mic_tx_profile">Mic → TX-profiel:</string>
+    <string name="settings_mic_phone">Telefoonmic</string>
+    <string name="settings_mic_bt">BT-headset</string>
+    <string name="settings_none">(geen)</string>
+    <string name="settings_mic_tx_hint">Schakelt TX-profiel automatisch bij mic-wissel</string>
+    <string name="settings_mic_gate_delay">Mic-gate-vertraging (experimenteel):</string>
+    <string name="settings_gate_thetis_mic">Thetis telefoonmic</string>
+    <string name="settings_gate_yaesu_mic">Yaesu telefoonmic</string>
+    <string name="settings_mic_gate_hint">PTT is direct; mic-audio opent na deze vertraging. Testbereik: 0-800 ms.</string>
+    <string name="settings_remote_server_pc">Externe server-pc:</string>
+    <string name="settings_reboot">Herstarten</string>
+    <string name="settings_shutdown">Afsluiten</string>
+    <string name="settings_remote_reboot_shutdown">Extern herstarten / afsluiten</string>
+
+    <!-- ConnectWizard -->
+    <string name="wizard_skip_title">Wizard overslaan?</string>
+    <string name="wizard_skip_body">Ga direct naar het gewone verbindscherm. Je configuratie wordt niet bijgewerkt, dus de wizard verschijnt de volgende keer opnieuw.</string>
+    <string name="wizard_skip">Overslaan</string>
+    <string name="wizard_stay">Blijven</string>
+    <string name="wizard_step_find">Zoek de server</string>
+    <string name="wizard_step_password">Voer wachtwoord in</string>
+    <string name="wizard_2fa_code">2FA-code</string>
+    <string name="wizard_step_header">Stap %1$d van %2$d: %3$s</string>
+    <string name="wizard_pick_server">Kies een server uit de lijst of voer het adres handmatig in.</string>
+    <string name="wizard_discovered">Gevonden (%1$d)</string>
+    <string name="wizard_scanning">Lokaal netwerk scannen…</string>
+    <string name="wizard_next">Volgende</string>
+    <string name="wizard_password_body">Voer het serverwachtwoord in. Vraag het aan de beheerder van de server-pc.</string>
+    <string name="wizard_show_password">Wachtwoord tonen</string>
+    <string name="wizard_back">Terug</string>
+    <string name="wizard_connecting">Verbinden…</string>
+    <string name="wizard_totp_body">Open je authenticator-app en voer de 6-cijferige code in.</string>
+    <string name="wizard_verifying_2fa">2FA-code verifiëren…</string>
+    <string name="wizard_connected">Verbonden!</string>
+    <string name="wizard_success_body">De volgende keer wordt de wizard automatisch overgeslagen.</string>
+    <string name="wizard_done">Klaar</string>
+
+    <!-- StatsPanel -->
+    <string name="stats_rx_volume">RX-volume</string>
+    <string name="stats_tx_gain">TX-gain</string>
+    <string name="stats_audio_levels">Audioniveaus:</string>
+    <string name="stats_statistics">Statistieken:</string>
+    <string name="stats_tcp_fallback">TCP-fallback</string>
+    <string name="stats_down">Omlaag</string>
+    <string name="stats_up">Omhoog</string>
+    <string name="stats_audio_streams">Audiostreams:</string>
+    <string name="stats_no_stream">Nog geen audiostream</string>
+    <string name="stats_col_stream">Stream</string>
+    <string name="stats_col_jitter">Jitter</string>
+    <string name="stats_col_buffer">Buffer</string>
+    <string name="stats_col_packets">Pakketten</string>
+    <string name="stats_col_loss">Verlies</string>
+
+    <!-- MidiSettingsDialog -->
+    <string name="midi_title">MIDI-controller</string>
+    <string name="midi_device">Apparaat:</string>
+    <string name="midi_scan">Scannen</string>
+    <string name="midi_connected">Verbonden: %1$s</string>
+    <string name="midi_no_devices">Geen MIDI-apparaten gevonden</string>
+    <string name="midi_last">Laatste MIDI: %1$s</string>
+    <string name="midi_learn_prompt">Druk op een MIDI-control voor: %1$s</string>
+    <string name="midi_mappings">Toewijzingen:</string>
+    <string name="midi_no_mappings">Geen toewijzingen ingesteld</string>
+    <string name="midi_mapping_row">%1$s → %2$s (%3$s)</string>
+    <string name="midi_add_mapping">Toewijzing toevoegen:</string>
+    <string name="midi_learn_action">Leren: %1$s</string>
+
+    <!-- PttButton -->
+    <string name="ptt_tx_in_use">TX in gebruik</string>
+
+    <!-- RadioControls -->
+    <string name="radio_power_shutdown">AFSLUITEN!</string>
+    <string name="radio_power_hold">VASTHOUDEN...</string>
+    <string name="radio_power_starting">STARTEN...</string>
+    <string name="radio_power_on">AAN</string>
+    <string name="radio_power_off">UIT</string>
+    <string name="radio_tx_profile">TX-profiel:</string>
+    <string name="radio_carrier_on">Draaggolf AAN</string>
+    <string name="radio_drive">Drive:</string>
+    <string name="radio_phase_gain">Fase: %1$.1f°  Gain: %2$.3f</string>
+    <string name="radio_smart_null">Smart Null</string>
+    <string name="radio_smart_null_active">Smart Null...</string>
+
+    <!-- MainScreen -->
+    <string name="main_about_title">Over ThetisLink</string>
+    <string name="main_about_subtitle">Afstandsbediening voor\nThetis SDR + Yaesu FT-991A / FTX-1\n(dual-radio)</string>
+    <string name="main_about_author">Auteur</string>
+    <string name="main_about_thanks">Met dank aan</string>
+    <string name="main_about_protocols">Protocollen</string>
+    <string name="main_about_hardware">Hardware</string>
+    <string name="main_about_libraries">Libraries</string>
+    <string name="main_about_license_header">Licentie</string>
+    <string name="main_rf2ks_reset">RF2K-S Reset</string>
+    <string name="main_settings">Instellingen</string>
+    <string name="main_radio">Radio</string>
+    <string name="main_devices">Apparaten</string>
+    <string name="main_native_error">Fout in native library: %1$s</string>
+    <string name="main_key">Toets: %1$s</string>
+    <string name="main_yaesu_active_hint">Yaesu actief - ga naar Apparaten</string>
+    <string name="main_yaesu_hint">Yaesu - ga naar Apparaten voor bediening</string>
+    <string name="main_spectrum">Spectrum</string>
+    <string name="main_about">Over</string>
+    <string name="main_wizard">Wizard</string>
+    <string name="main_volume">Volume:</string>
+
+    <!-- ExternalDevicesScreen -->
+    <string name="dev_no_devices">Geen apparaten geconfigureerd</string>
+    <string name="dev_configure_hint">Configureer apparaten in de serverinstellingen.</string>
+    <string name="dev_amplitec_current">"  Huidige: %1$s"</string>
+    <string name="dev_tuner_title">JC-4s Antenne-tuner</string>
+    <string name="dev_status_label">Status:</string>
+    <string name="dev_abort">Afbreken</string>
+    <string name="dev_tuner_unavailable">Tuner niet beschikbaar op huidige antenne</string>
+    <string name="dev_active">ACTIEF</string>
+    <string name="dev_inactive">INACTIEF</string>
+    <string name="dev_power_off">Uitschakelen</string>
+    <string name="dev_power_on">Inschakelen</string>
+    <string name="dev_operate">Operate</string>
+    <string name="dev_standby">Standby</string>
+    <string name="dev_off">Uit</string>
+    <string name="dev_low">Laag</string>
+    <string name="dev_mid">Mid</string>
+    <string name="dev_high">Hoog</string>
+    <string name="dev_drive_down">Drive -</string>
+    <string name="dev_drive_up">Drive +</string>
+    <string name="dev_online">Online</string>
+    <string name="dev_offline">Offline</string>
+    <string name="dev_error_state">Foutstatus: %1$d</string>
+    <string name="dev_reset">Reset</string>
+    <string name="dev_fw_close">FW sluiten</string>
+    <string name="dev_fw_close_confirm_title">FW sluiten bevestigen</string>
+    <string name="dev_fw_close_confirm_body">Weet je het zeker? Dit sluit de RF2K-S-firmware.</string>
+    <string name="dev_tuner_label">Tuner: %1$s</string>
+    <string name="dev_manual">Handmatig</string>
+    <string name="dev_auto">Auto</string>
+    <string name="dev_bypass">Bypass</string>
+    <string name="dev_store">Opslaan</string>
+    <string name="dev_drive_watts">Drive: %1$dW</string>
+    <string name="dev_reflected">Gereflecteerd: %1$dW</string>
+    <string name="dev_antenna_label">Antenne:</string>
+    <string name="dev_ub_dir">Richting:</string>
+    <string name="dev_ub_normal">Normaal</string>
+    <string name="dev_ub_bidir">BiDir</string>
+    <string name="dev_ub_sync">Sync %1$s</string>
+    <string name="dev_step">Stap:</string>
+    <string name="dev_band">Band:</string>
+    <string name="dev_retract">Intrekken</string>
+    <string name="dev_read_elements">Elementen lezen</string>
+    <string name="dev_retract_confirm_title">Intrekken bevestigen</string>
+    <string name="dev_retract_confirm_body">Weet je het zeker? Dit trekt alle elementen in.</string>
+    <string name="dev_element_lengths">Elementlengtes (mm):</string>
+    <string name="dev_stop">STOP</string>
+    <string name="dev_goto">GaNaar:</string>
+    <string name="dev_go">Ga</string>
+    <string name="dev_high_swr">HOGE SWR</string>
+    <string name="dev_high_swr_other">HOGE SWR (%1$s)</string>
+    <string name="dev_radio_label">Radio:</string>
+    <string name="dev_radio_locked">Radiowissel vergrendeld tijdens TX</string>
+    <string name="dev_yaesu_active_label">Yaesu actief:</string>
+    <string name="dev_audio_label">Audio:</string>
+    <string name="dev_thetis_off">Thetis uit</string>
+    <string name="dev_audio_on">audio aan</string>
+    <string name="dev_freq_title">Frequentie (MHz)</string>
+    <string name="dev_scan">Scannen</string>
+    <string name="dev_presets">Presets</string>
+    <string name="dev_del">Verw</string>
+    <string name="dev_auto_label">Auto:</string>
+    <string name="dev_bt_headset_none">BT-headset: -</string>
+    <string name="dev_save_eq_preset">EQ-preset opslaan</string>
+    <string name="dev_name">Naam</string>
+    <string name="dev_loading">Laden...</string>
+    <string name="dev_load_memories">Geheugens laden</string>
+    <string name="dev_load_settings">Instellingen laden</string>
+    <string name="dev_memory_channels">Geheugenkanalen (%1$d)</string>
+    <string name="dev_ex_menu">EX-menu (%1$d)</string>
+    <string name="dev_menu_num">Menu %1$d</string>
+    <string name="dev_dsp_functions">DSP / functies</string>
+    <string name="dev_port_a">Poort A — ANT1 (TX+RX)</string>
+    <string name="dev_port_b">Poort B — RX2 (RX)</string>
+    <string name="dev_digit_tuner_hint">tik cijfer = afstemmen · lang indrukken = invoeren</string>
+</resources>

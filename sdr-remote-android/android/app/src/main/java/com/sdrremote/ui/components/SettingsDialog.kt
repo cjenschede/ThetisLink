@@ -42,6 +42,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.sdrremote.R
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -68,26 +70,26 @@ fun SettingsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Settings") },
+        title = { Text(stringResource(R.string.settings_title)) },
         text = {
             val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
             Column(modifier = Modifier
                 .heightIn(max = maxHeight)
                 .verticalScroll(rememberScrollState())) {
                 // Password
-                Text("Server password:", fontSize = 14.sp)
+                Text(stringResource(R.string.settings_server_password), fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Password") },
+                    label = { Text(stringResource(R.string.settings_password)) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(4.dp))
                 if (password.isBlank()) {
-                    Text("Password is required to connect", fontSize = 12.sp, color = Color(0xFFE53935))
+                    Text(stringResource(R.string.settings_password_required), fontSize = 12.sp, color = Color(0xFFE53935))
                 }
 
                 // Relay connection (Phase C): for clients that cannot port-forward.
@@ -105,7 +107,7 @@ fun SettingsDialog(
                 // live toggle differs - symmetric for turning the relay on AND off.
                 val relayActiveSession = remember { prefs.getBoolean("relay_active_session", false) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Connect via relay:", fontSize = 14.sp)
+                    Text(stringResource(R.string.settings_connect_via_relay), fontSize = 14.sp)
                     Spacer(Modifier.width(8.dp))
                     Switch(
                         checked = relayEnabled,
@@ -113,7 +115,7 @@ fun SettingsDialog(
                     )
                 }
                 Text(
-                    "For clients that cannot port-forward (e.g. mobile). Restart the app to apply.",
+                    stringResource(R.string.settings_relay_hint),
                     fontSize = 11.sp,
                     color = Color.Gray,
                 )
@@ -122,8 +124,8 @@ fun SettingsDialog(
                 val relayConfiguredNow = relayEnabled && relayUrl.isNotBlank() && relayStation.isNotBlank()
                 if (relayConfiguredNow != relayActiveSession) {
                     Text(
-                        if (relayActiveSession) "Saved - restart the app to stop using the relay"
-                        else "Saved - restart the app to connect via relay",
+                        if (relayActiveSession) stringResource(R.string.settings_relay_saved_stop)
+                        else stringResource(R.string.settings_relay_saved_start),
                         fontSize = 11.sp,
                         color = Color(0xFFC8A028),
                     )
@@ -132,7 +134,7 @@ fun SettingsDialog(
                 OutlinedTextField(
                     value = relayUrl,
                     onValueChange = { relayUrl = it; prefs.edit().putString("relay_url", it).apply() },
-                    label = { Text("Relay URL") },
+                    label = { Text(stringResource(R.string.settings_relay_url)) },
                     placeholder = { Text("ws://relay.example.com:18080") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -141,7 +143,7 @@ fun SettingsDialog(
                 OutlinedTextField(
                     value = relayStation,
                     onValueChange = { relayStation = it; prefs.edit().putString("relay_station", it).apply() },
-                    label = { Text("Station name") },
+                    label = { Text(stringResource(R.string.settings_station_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -149,7 +151,7 @@ fun SettingsDialog(
                 OutlinedTextField(
                     value = relayToken,
                     onValueChange = { relayToken = it; prefs.edit().putString("relay_token", it).apply() },
-                    label = { Text("Token") },
+                    label = { Text(stringResource(R.string.settings_token)) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
@@ -158,15 +160,15 @@ fun SettingsDialog(
                 OutlinedTextField(
                     value = relayDeviceName,
                     onValueChange = { relayDeviceName = it; prefs.edit().putString("relay_device_name", it).apply() },
-                    label = { Text("Device name") },
+                    label = { Text(stringResource(R.string.settings_device_name)) },
                     singleLine = true,
-                    supportingText = { Text("Shown in relay logs. Restart the app to apply.") },
+                    supportingText = { Text(stringResource(R.string.settings_device_name_hint)) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
                 var relayUdpEnabled by remember { mutableStateOf(prefs.getBoolean("relay_udp_enabled", true)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Audio over UDP (low latency):", fontSize = 14.sp)
+                    Text(stringResource(R.string.settings_audio_udp), fontSize = 14.sp)
                     Spacer(Modifier.width(8.dp))
                     Switch(
                         checked = relayUdpEnabled,
@@ -174,7 +176,7 @@ fun SettingsDialog(
                     )
                 }
                 Text(
-                    "On: lowest-latency audio over UDP. Off: audio stays on the encrypted relay channel. Restart the app to apply.",
+                    stringResource(R.string.settings_audio_udp_hint),
                     fontSize = 11.sp,
                     color = Color.Gray,
                 )
@@ -183,7 +185,7 @@ fun SettingsDialog(
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
-                Text("PTT mode:", fontSize = 14.sp)
+                Text(stringResource(R.string.settings_ptt_mode), fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
                 var pttToggle by remember { mutableStateOf(prefs.getBoolean("ptt_toggle", false)) }
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -191,49 +193,66 @@ fun SettingsDialog(
                         selected = !pttToggle,
                         onClick = { pttToggle = false; prefs.edit().putBoolean("ptt_toggle", false).apply() },
                         shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    ) { Text("Push to talk", fontSize = 12.sp) }
+                    ) { Text(stringResource(R.string.settings_push_to_talk), fontSize = 12.sp) }
                     SegmentedButton(
                         selected = pttToggle,
                         onClick = { pttToggle = true; prefs.edit().putBoolean("ptt_toggle", true).apply() },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    ) { Text("Toggle", fontSize = 12.sp) }
+                    ) { Text(stringResource(R.string.settings_toggle), fontSize = 12.sp) }
                 }
 
                 // Volume button PTT (BT remote)
                 Spacer(Modifier.height(8.dp))
                 var volumePtt by remember { mutableStateOf(prefs.getBoolean("volume_ptt", false)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("BT Remote = PTT:", fontSize = 14.sp)
+                    Text(stringResource(R.string.settings_bt_remote_ptt), fontSize = 14.sp)
                     Spacer(Modifier.weight(1f))
                     Switch(
                         checked = volumePtt,
                         onCheckedChange = { volumePtt = it; prefs.edit().putBoolean("volume_ptt", it).apply() },
                     )
                 }
-                Text("BT page turner or camera remote as PTT", fontSize = 11.sp, color = Color.Gray)
+                Text(stringResource(R.string.settings_bt_remote_hint), fontSize = 11.sp, color = Color.Gray)
+
+                // Phone volume buttons as PTT (never Bluetooth — headset keeps its own volume)
+                Spacer(Modifier.height(8.dp))
+                var volumeKeysPtt by remember { mutableStateOf(prefs.getBoolean("volume_keys_ptt", false)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.settings_volume_keys_ptt), fontSize = 14.sp)
+                    Spacer(Modifier.weight(1f))
+                    Switch(
+                        checked = volumeKeysPtt,
+                        onCheckedChange = { volumeKeysPtt = it; prefs.edit().putBoolean("volume_keys_ptt", it).apply() },
+                    )
+                }
+                Text(stringResource(R.string.settings_volume_keys_hint), fontSize = 11.sp, color = Color.Gray)
 
                 // DX-cluster spot stream — data-saving toggle voor metered links
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("DX spots:", fontSize = 14.sp)
+                    Text(stringResource(R.string.settings_dx_spots), fontSize = 14.sp)
                     Spacer(Modifier.weight(1f))
                     Switch(
                         checked = dxSpotsEnabled,
                         onCheckedChange = { onDxSpotsEnabledChange(it) },
                     )
                 }
-                Text("Receive DX-cluster spots (off = save data)", fontSize = 11.sp, color = Color.Gray)
+                Text(stringResource(R.string.settings_dx_spots_hint), fontSize = 11.sp, color = Color.Gray)
 
                 // Audio routing
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
-                Text("Audio routing:", fontSize = 14.sp)
+                Text(stringResource(R.string.settings_audio_routing), fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    val labels = listOf("Auto", "Speaker", "Headset")
+                    val labels = listOf(
+                        stringResource(R.string.settings_audio_auto),
+                        stringResource(R.string.settings_audio_speaker),
+                        stringResource(R.string.settings_audio_headset),
+                    )
                     labels.forEachIndexed { index, label ->
                         SegmentedButton(
                             selected = audioMode == index,
@@ -244,11 +263,11 @@ fun SettingsDialog(
                 }
                 Spacer(Modifier.height(4.dp))
                 val statusText = if (headsetActive && headsetName != null) {
-                    "Headset: $headsetName"
+                    stringResource(R.string.settings_headset_named, headsetName)
                 } else if (headsetActive) {
-                    "Headset active"
+                    stringResource(R.string.settings_headset_active)
                 } else {
-                    "Handsfree speaker mode"
+                    stringResource(R.string.settings_handsfree_speaker)
                 }
                 Text(statusText, fontSize = 12.sp, color = if (headsetActive) Color(0xFF00C800) else Color.Gray)
 
@@ -257,7 +276,7 @@ fun SettingsDialog(
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
-                Text("S-meter source:", fontSize = 14.sp)
+                Text(stringResource(R.string.settings_smeter_source), fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     val labels = listOf("Sig", "Avg", "MaxBin")
@@ -269,17 +288,20 @@ fun SettingsDialog(
                         ) { Text(label, fontSize = 12.sp) }
                     }
                 }
-                Text("Avg matches Thetis Multimeter Avg (recommended)", fontSize = 11.sp, color = Color.Gray)
+                Text(stringResource(R.string.settings_smeter_hint), fontSize = 11.sp, color = Color.Gray)
 
                 // Mic → TX Profile mapping (phone mic + BT headset)
                 if (txProfileNames.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
                     HorizontalDivider()
                     Spacer(Modifier.height(8.dp))
-                    Text("Mic → TX Profile:", fontSize = 14.sp)
+                    Text(stringResource(R.string.settings_mic_tx_profile), fontSize = 14.sp)
                     Spacer(Modifier.height(4.dp))
 
-                    val micLabels = listOf("Phone mic", "BT headset")
+                    val micLabels = listOf(
+                        stringResource(R.string.settings_mic_phone),
+                        stringResource(R.string.settings_mic_bt),
+                    )
                     val micKeys = listOf("android_mic", "android_bt")
                     micLabels.forEachIndexed { i, label ->
                         var selectedProfile by remember {
@@ -291,13 +313,13 @@ fun SettingsDialog(
                             Box(modifier = Modifier.weight(0.6f)) {
                                 OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
                                     Text(
-                                        if (selectedProfile.isEmpty()) "(none)" else selectedProfile,
+                                        if (selectedProfile.isEmpty()) stringResource(R.string.settings_none) else selectedProfile,
                                         fontSize = 11.sp, maxLines = 1
                                     )
                                 }
                                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                                     DropdownMenuItem(
-                                        text = { Text("(none)") },
+                                        text = { Text(stringResource(R.string.settings_none)) },
                                         onClick = {
                                             selectedProfile = ""
                                             prefs.edit().putString("mic_profile_${micKeys[i]}", "").apply()
@@ -318,15 +340,19 @@ fun SettingsDialog(
                             }
                         }
                     }
-                    Text("Auto-switches TX profile when mic changes", fontSize = 11.sp, color = Color.Gray)
+                    Text(stringResource(R.string.settings_mic_tx_hint), fontSize = 11.sp, color = Color.Gray)
                 }
 
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
-                Text("Mic gate delay (experimental):", fontSize = 14.sp)
+                Text(stringResource(R.string.settings_mic_gate_delay), fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
-                val gateLabels = listOf("Thetis phone mic", "Yaesu phone mic", "BT headset")
+                val gateLabels = listOf(
+                    stringResource(R.string.settings_gate_thetis_mic),
+                    stringResource(R.string.settings_gate_yaesu_mic),
+                    stringResource(R.string.settings_mic_bt),
+                )
                 val gateKeys = listOf("thetis_android_mic", "yaesu_android_mic", "android_bt")
                 val gateDefaults = listOf(0, 100, 0)
                 gateLabels.forEachIndexed { i, label ->
@@ -351,7 +377,7 @@ fun SettingsDialog(
                     }
                 }
                 Text(
-                    "PTT is immediate; mic audio opens after this delay. Test range: 0-800 ms.",
+                    stringResource(R.string.settings_mic_gate_hint),
                     fontSize = 11.sp,
                     color = Color.Gray,
                 )
@@ -362,7 +388,7 @@ fun SettingsDialog(
                     Spacer(Modifier.height(12.dp))
 
                     if (rebootConfirm) {
-                        Text("Remote server PC:", color = Color.Red, fontSize = 14.sp)
+                        Text(stringResource(R.string.settings_remote_server_pc), color = Color.Red, fontSize = 14.sp)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
@@ -373,7 +399,7 @@ fun SettingsDialog(
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC80000)),
                             ) {
-                                Text("Reboot", color = Color.White)
+                                Text(stringResource(R.string.settings_reboot), color = Color.White)
                             }
                             Button(
                                 onClick = {
@@ -383,19 +409,19 @@ fun SettingsDialog(
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000)),
                             ) {
-                                Text("Shutdown", color = Color.White)
+                                Text(stringResource(R.string.settings_shutdown), color = Color.White)
                             }
                         }
                         Spacer(Modifier.height(4.dp))
                         TextButton(onClick = { rebootConfirm = false }) {
-                            Text("Cancel")
+                            Text(stringResource(R.string.common_cancel))
                         }
                     } else {
                         Button(
                             onClick = { rebootConfirm = true },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF404040)),
                         ) {
-                            Text("Remote Reboot / Shutdown", color = Color.White)
+                            Text(stringResource(R.string.settings_remote_reboot_shutdown), color = Color.White)
                         }
                     }
                 }
@@ -405,10 +431,10 @@ fun SettingsDialog(
             TextButton(onClick = {
                 prefs.edit().putString("password", password).apply()
                 onDismiss()
-            }) { Text("Save") }
+            }) { Text(stringResource(R.string.common_save)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         },
     )
 }

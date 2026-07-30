@@ -20,11 +20,10 @@ pub enum RadioModel {
 
 impl RadioModel {
     /// Short ASCII label for log prefixes (grep-baar, geen Unicode/tofu).
+    /// Delegeert naar de canonieke tabel in core zodat server-logs en client-UI
+    /// dezelfde naam per modelcode gebruiken (single source of truth).
     pub fn label(self) -> &'static str {
-        match self {
-            RadioModel::Ft991a => "991A",
-            RadioModel::Ftx1 => "FTX1",
-        }
+        sdr_remote_core::protocol::radio_model_name(self.as_code())
     }
 
     /// Per-radio log prefix `[radio{slot}/{MODEL}]`. Elke logregel
@@ -215,6 +214,13 @@ impl Ft991aUsbRoutingSnapshot {
         snap
     }
 }
+/// 991A high-SWR alarm threshold on the raw RM6 SWR-meter value (000-255).
+/// Calibrated on hardware 2026-07-21: RM6 ~110 at SWR 2.8 (owner's chosen trip point),
+/// ~0 at 1:1, 173-205 at SWR 4. Kept as a fallback in case the official RI0 Hi-SWR
+/// flag turns out unreliable on some 991A firmware (then revert to this RM6 threshold).
+#[allow(dead_code)]
+const SWR_991A_RAW_THRESHOLD: u16 = 110;
+
 #[derive(Clone, Debug)]
 pub struct YaesuState {
     pub connected: bool,
@@ -235,6 +241,11 @@ pub struct YaesuState {
     pub power_on: bool,
     pub mode_char: char,    // Raw Yaesu mode character ('1'-'E')
     pub vfo_select: u8,     // 0=VFO, 1=Memory, 2=MemTune (from IF P7)
+    /// Aantal IF-polls dat een "nog Memory"-status genegeerd wordt na een
+    /// memory->VFO-escape (SetFreqA). Beschermt de optimistische vfo_select=0
+    /// tegen een IF-antwoord dat nog de oude Memory-status weergeeft en al
+    /// onderweg was toen we de escape stuurden (race). 0 = niet actief.
+    pub vfo_escape_pending: u8,
     pub memory_channel: u16, // Current memory channel number (from IF)
     /// Sorted list of filled memory-channel numbers from the last full read.
     /// Persists independently of `memory_data` (which is consumed/taken when the
@@ -257,6 +268,21 @@ pub struct YaesuState {
     /// radio's zonder RI (991A) of vóór de eerste poll nooit gegate worden.
     /// Drijft de server-side software-squelch op de FTX-1 USB-audio.
     pub squelch_open: bool,
+    /// High-SWR alarm (PATCH-swr-alarm): FTX-1 from RI P2; 991A now from RI0 P2
+    /// (official Hi-SWR flag, FT-991A CAT OM 1711-D) instead of the ungated RM6
+    /// threshold. Only meaningful during TX; clears when the flag drops (P2=0).
+    pub hi_swr: bool,
+    /// Diagnostic: last raw 991A RM6 SWR-meter value (000-255). Not an alarm source
+    /// anymore — kept only so the RI0 Hi-SWR log can show the correlated RM6 reading
+    /// (e.g. to confirm what a dummy load reads on RM6). Server-internal, not on the wire.
+    pub swr_meter_raw: u16,
+    /// Per-band max-power uit de 991A EX-menu's (EX137 HF, EX138 50M, EX139 144M,
+    /// EX140 430M) in watt, gelezen bij connect. 0 = niet gelezen -> per-band default.
+    /// Het live max voor de huidige band komt uit de methode `tx_power_max()`.
+    pub max_pwr_hf: u8,
+    pub max_pwr_50: u8,
+    pub max_pwr_144: u8,
+    pub max_pwr_430: u8,
     /// Auto-DATA PTT-toggle state: true wanneer de huidige TX-cyclus tijdelijk een
     /// DATA-mode gebruikt omdat USB-mic-TX in de gewone mode niet (goed) moduleert.
     /// Only FM uses this path: FM('4')->DATA-FM('A').
@@ -293,6 +319,7 @@ impl Default for YaesuState {
             power_on: false,
             mode_char: '2',
             vfo_select: 0,
+            vfo_escape_pending: 0,
             memory_channel: 0,
             filled_memory_channels: Vec::new(),
             split_active: false,
@@ -302,10 +329,43 @@ impl Default for YaesuState {
             feature_levels: [0u8; 16],
             feature_freqs: [0u16; 4],
             squelch_open: true, // open by default (geen gating tot RI zegt anders)
+            hi_swr: false,
+            swr_meter_raw: 0,
+            max_pwr_hf: 0,
+            max_pwr_50: 0,
+            max_pwr_144: 0,
+            max_pwr_430: 0,
             auto_dfm_active: false,
             auto_dfm_saved_mode: '4',
             auto_dfm_saved_memory_channel: 0,
             ssb_switch_on_ptt: true,
+        }
+    }
+}
+
+impl YaesuState {
+    /// Max TX-vermogen (watt) voor de HUIDIGE band (PATCH-yaesu-power-scaling).
+    /// 991A: uit de gelezen EX-maxima (EX137-140) op basis van de VFO-A-band; niet-
+    /// gelezen of buiten de amateurbanden -> per-band default (de radio klemt zijn
+    /// eigen maximum sowieso zelf, dus een te ruime slider is nooit onveilig).
+    /// FTX-1 (fase B): grof head-max (field=10, Optima=100) tot de EX-mapping getest is.
+    pub fn tx_power_max(&self) -> u8 {
+        // FTX-1 field head: laag-vermogen (5-10 W) op alle banden.
+        if self.power_head == 1 { return 10; }
+        // 991A (head 0) EN FTX-1 Optima/base (head 2): per-band. 991A gebruikt de
+        // gelezen EX-waarden; de FTX-1 Optima valt op dezelfde per-band defaults terug
+        // (HF/50M=100, 144/430=50) - de radio klemt zijn eigen max sowieso zelf.
+        let mhz = self.vfo_a_freq as f64 / 1_000_000.0;
+        if (1.8..=30.0).contains(&mhz) {
+            if self.max_pwr_hf > 0 { self.max_pwr_hf } else { 100 }
+        } else if (50.0..=54.0).contains(&mhz) {
+            if self.max_pwr_50 > 0 { self.max_pwr_50 } else { 100 }
+        } else if (144.0..=148.0).contains(&mhz) {
+            if self.max_pwr_144 > 0 { self.max_pwr_144 } else { 50 }
+        } else if (430.0..=450.0).contains(&mhz) {
+            if self.max_pwr_430 > 0 { self.max_pwr_430 } else { 50 }
+        } else {
+            100 // buiten ham-band: volle range, radio klemt zelf
         }
     }
 }
@@ -341,42 +401,55 @@ pub enum YaesuCmd {
     SetPower(bool),
 }
 
+/// Internal mode-code voor C4FM (Yaesu-specifiek; buiten de Thetis/TS-2000-reeks
+/// 0..11 zodat de client een eigen "C4FM"-label kan tonen i.p.v. FM/USB).
+pub const INTERNAL_C4FM: u8 = 12;
+
 /// Map Yaesu MD0x mode digit to internal mode numbering (Thetis/TS-2000).
-/// Yaesu: 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 6=RTTY-LSB, 7=CW-R, 8=DATA-LSB, 9=RTTY-USB, A=DATA-FM, B=FM-N, C=DATA-USB
-/// Internal: 0=LSB, 1=USB, 2=DSB, 3=CW-L, 4=CW-U, 5=FM, 6=AM, 7=DIGU, 8=SPEC, 9=DIGL, 10=SAM, 11=DRM
-fn yaesu_mode_to_internal(yaesu: char) -> u8 {
+/// MODEL-AFHANKELIJK: de 991A en FTX-1 gebruiken deels andere MD-codes.
+/// - CW is OMGEWISSELD: 991A 3=CW-L/7=CW-R(CW-U); FTX-1 3=CW-U/7=CW-L.
+/// - Extra modes: 991A E=C4FM; FTX-1 E=PSK, F=DATA-FM-N, H=C4FM-DN, I=C4FM-VW.
+/// Internal: 0=LSB 1=USB 2=DSB 3=CW-L 4=CW-U 5=FM 6=AM 7=DIGU 8=SPEC 9=DIGL 10=SAM 11=DRM 12=C4FM
+fn yaesu_mode_to_internal(yaesu: char, model: RadioModel) -> u8 {
+    let ftx1 = matches!(model, RadioModel::Ftx1);
     match yaesu {
         '1' => 0,  // LSB
         '2' => 1,  // USB
-        '3' => 3,  // CW -> CW-L
+        '3' => if ftx1 { 4 } else { 3 },  // FTX-1: CW-U ; 991A: CW -> CW-L
         '4' => 5,  // FM
         '5' => 6,  // AM
         '6' => 9,  // RTTY-LSB -> DIGL
-        '7' => 4,  // CW-R -> CW-U
+        '7' => if ftx1 { 3 } else { 4 },  // FTX-1: CW-L ; 991A: CW-R -> CW-U
         '8' => 9,  // DATA-LSB -> DIGL
         '9' => 7,  // RTTY-USB -> DIGU
         'A' | 'a' => 5,  // DATA-FM -> FM
         'B' | 'b' => 5,  // FM-N -> FM
         'C' | 'c' => 7,  // DATA-USB -> DIGU
+        'D' | 'd' => 6,  // AM-N -> AM (beide)
+        'E' | 'e' => if ftx1 { 7 } else { INTERNAL_C4FM },  // FTX-1: PSK -> DIGU ; 991A: C4FM
+        'F' | 'f' => 5,  // FTX-1: DATA-FM-N -> FM
+        'H' | 'h' | 'I' | 'i' => INTERNAL_C4FM,  // FTX-1: C4FM-DN / C4FM-VW
         _ => 1,    // default USB
     }
 }
 
-/// Map internal mode to Yaesu MD0x mode character.
+/// Map internal mode to Yaesu MD0x mode character (model-afhankelijk, zie boven).
 /// FM is sent as native FM ('4') for normal RX with built-in audio. USB-mic
 /// TX-pad switcht runtime tijdelijk naar DATA-FM ('A') - zie SetPtt-handler in
 /// yaesu_poll_loop. Eerdere implementatie forceerde DATA-FM altijd; operator-test
 /// 2026-05-08 toonde dat USB-mic-audio in stand FM nu werkt na auto-toggle.
-fn internal_mode_to_yaesu(internal: u8) -> char {
+fn internal_mode_to_yaesu(internal: u8, model: RadioModel) -> char {
+    let ftx1 = matches!(model, RadioModel::Ftx1);
     match internal {
         0 => '1',  // LSB
         1 => '2',  // USB
-        3 => '3',  // CW-L -> CW
-        4 => '7',  // CW-U -> CW-R
+        3 => if ftx1 { '7' } else { '3' },  // CW-L : FTX-1 '7', 991A '3'
+        4 => if ftx1 { '3' } else { '7' },  // CW-U : FTX-1 '3', 991A '7' (CW-R)
         5 => '4',  // FM -> FM (RX); auto-switch naar 'A' (DATA-FM) bij PTT-on, terug bij PTT-off
         6 => '5',  // AM
         7 => 'C',  // DIGU -> DATA-USB
         9 => '8',  // DIGL -> DATA-LSB
+        INTERNAL_C4FM => if ftx1 { 'H' } else { 'E' },  // C4FM
         _ => '2',  // default USB
     }
 }
@@ -691,6 +764,26 @@ fn yaesu_reconnect_thread(
             None
         };
 
+        // 991A per-band max-TX-power uit het EX-menu (PATCH-yaesu-power-scaling):
+        // EX137 HF, EX138 50M, EX139 144M, EX140 430M (watt). Bepaalt het client-
+        // sliderbereik per band. FTX-1 = fase B (head-max via tx_power_max()).
+        if !matches!(model, RadioModel::Ftx1) {
+            let rd = |port: &mut Box<dyn serialport::SerialPort>, ex: u16, name: &str| {
+                read_ex_menu_value(port, &prefix, ex, name)
+                    .and_then(|v| v.trim().parse::<u8>().ok())
+                    .unwrap_or(0)
+            };
+            let hf = rd(&mut port, 137, "HF TX MAX POWER");
+            let m50 = rd(&mut port, 138, "50M TX MAX POWER");
+            let m144 = rd(&mut port, 139, "144M TX MAX POWER");
+            let m430 = rd(&mut port, 140, "430M TX MAX POWER");
+            if let Ok(mut s) = status.lock() {
+                s.max_pwr_hf = hf; s.max_pwr_50 = m50; s.max_pwr_144 = m144; s.max_pwr_430 = m430;
+            }
+            info!("{} 991A max-TX-power EX: HF={} 50M={} 144M={} 430M={} (0=niet gelezen -> default)",
+                prefix, hf, m50, m144, m430);
+        }
+
         // Rebuild audio streams onvoorwaardelijk na elke succesvolle open.
         // Bij cold-start (Yaesu was uit toen new() draaide) is het USB
         // audio device pas hier beschikbaar; bij mid-runtime reconnect kan
@@ -901,9 +994,36 @@ fn yaesu_poll_loop(
             }
             Ok(cmd) => {
                 let cmd_str = match cmd {
-                    YaesuCmd::SetFreqA(hz) => format!("FA{:09};", hz),
+                    YaesuCmd::SetFreqA(hz) => {
+                        // Memory-mode escape: de 991A/FTX-1 accepteren geen directe VFO-freq-set
+                        // in memory-mode (vfo_select 1=Memory / 2=MemTune). Bij een freq-wijziging
+                        // kopieren we het kanaal naar VFO-A (MA = MEMORY CHANNEL TO VFO-A; standaard
+                        // verlaat de set daarmee memory-mode), herstellen de HUIDIGE mode (zodat een
+                        // eerdere MemTune-mode-wissel niet verloren gaat - MA kopieert de OPGESLAGEN
+                        // mode), en zetten dan de nieuwe freq. Zo glijd je naadloos van memory naar
+                        // VFO. Optimistisch vfo_select=0 zodat snelle vervolgstappen niet opnieuw MA
+                        // sturen (de IF-poll bevestigt daarna). MA/MD0 werken op beide modellen.
+                        let (vfo_sel, cur_mode) = {
+                            let s = status.lock().unwrap();
+                            (s.vfo_select, s.mode)
+                        };
+                        if vfo_sel != 0 {
+                            {
+                                let mut s = status.lock().unwrap();
+                                s.vfo_select = 0;
+                                // Guard: negeer de eerstvolgende ~15 IF-polls die nog
+                                // "Memory" melden (in-flight/stale) totdat de radio de
+                                // MA-escape echt heeft uitgevoerd en VFO terugrapporteert.
+                                s.vfo_escape_pending = 15;
+                            }
+                            let mc = internal_mode_to_yaesu(cur_mode, model);
+                            format!("MA;MD0{};FA{:09};", mc, hz)
+                        } else {
+                            format!("FA{:09};", hz)
+                        }
+                    }
                     YaesuCmd::SetFreqB(hz) => format!("FB{:09};", hz),
-                    YaesuCmd::SetMode(mode) => format!("MD0{};", internal_mode_to_yaesu(mode)),
+                    YaesuCmd::SetMode(mode) => format!("MD0{};", internal_mode_to_yaesu(mode, model)),
                     YaesuCmd::SetPtt(on) => {
                         // Auto-DATA PTT-toggle: in de gewone modes routeert de Yaesu
                         // USB-mic-audio niet (goed) als TX-modulatiebron - alleen in de
@@ -1075,20 +1195,38 @@ fn yaesu_poll_loop(
                     YaesuCmd::SetAfGain(v) => format!("AG0{:03};", v.min(255)),
                     YaesuCmd::SetTxPower(v) => {
                         // FTX-1 vereist de head-prefix (PC{head}{nnn}); 991A niet (PC{nnn}).
-                        let head = status.lock().unwrap().power_head;
+                        // Server-side clamp op het band/head-maximum (tx_power_max) zodat
+                        // een client die het maximum negeert (bv. oudere Android-slider) de
+                        // radio nooit boven zijn band-limiet kan sturen. Floor = 5 W.
+                        let (head, maxp) = {
+                            let st = status.lock().unwrap();
+                            (st.power_head, st.tx_power_max())
+                        };
+                        let maxp = if maxp >= 5 { maxp } else { 100 };
+                        let v = v.clamp(5, maxp);
                         if head == 0 {
-                            format!("PC{:03};", v.min(100))
+                            format!("PC{:03};", v)
                         } else {
-                            format!("PC{}{:03};", head, v.min(100))
+                            format!("PC{}{:03};", head, v)
                         }
                     }
                     YaesuCmd::SetPower(on) => format!("PS{};", if on { 1 } else { 0 }),
                     // MC = memory recall. FTX-1: MAIN/SUB-prefix + 5-cijferig kanaal
                     // (`MC0{ch:05};`, P1=0=MAIN); 991A: 3-cijferig (`MC{ch:03};`).
                     // Zonder de juiste vorm doen Mem-/Mem+ niets op de FTX-1.
-                    YaesuCmd::RecallMemory(ch) => match model {
-                        RadioModel::Ftx1 => format!("MC0{:05};", ch),
-                        _ => format!("MC{:03};", ch),
+                    YaesuCmd::RecallMemory(ch) => {
+                        // Optimistisch: een recall zet de set in memory-mode, dus vfo_select=1
+                        // meteen (niet wachten op de IF-poll) - anders escaped een snelle
+                        // freq-wijziging erna niet naar VFO (stale-state-venster). IF-poll bevestigt.
+                        {
+                            let mut s = status.lock().unwrap();
+                            s.vfo_select = 1;
+                            s.vfo_escape_pending = 0; // recall = we WILLEN memory: geen escape-guard meer
+                        }
+                        match model {
+                            RadioModel::Ftx1 => format!("MC0{:05};", ch),
+                            _ => format!("MC{:03};", ch),
+                        }
                     },
                     YaesuCmd::SelectVfo(vfo) => {
                         match vfo {
@@ -1186,7 +1324,7 @@ fn yaesu_poll_loop(
                         }
                     }
                     YaesuCmd::WriteMemory { channel, freq_hz, mode, ctcss, shift } => {
-                        let mode_char = internal_mode_to_yaesu(mode);
+                        let mode_char = internal_mode_to_yaesu(mode, model);
                         // MW format mirrors MR response:
                         // MW + P1(1):bank=0 + ??(1):2 + freq(10) + clar(6):+00000
                         // + rxclar(1):0 + txclar(1):0 + mode(1) + vfo(1):2
@@ -1228,11 +1366,12 @@ fn yaesu_poll_loop(
         let now = Instant::now();
 
         // Fast poll: S-meter every 200ms. FTX-1: óók RI0; (P8 = squelch open/dicht)
-        // voor de server-side software-squelch - de FTX-1 gate't zijn USB-audio
-        // niet zelf (anders dan de 991A). 991A krijgt geen RI (heeft het niet).
+        // voor de server-side software-squelch. 991A: óók RM6; (SWR-meter, diagnostisch)
+        // + RI0; (officiële Hi-SWR-vlag P2 uit de FT-991A CAT OM 1711-D — geijkt
+        // trip-punt van de radio zelf, i.p.v. de ongeijkte RM6-drempel).
         if now.duration_since(last_smeter_poll).as_millis() >= 200 {
             last_smeter_poll = now;
-            let fast: &[u8] = if matches!(model, RadioModel::Ftx1) { b"SM0;RI0;" } else { b"SM0;" };
+            let fast: &[u8] = if matches!(model, RadioModel::Ftx1) { b"SM0;RI0;" } else { b"SM0;RM6;RI0;" };
             if let Err(e) = port.write_all(fast) {
                 warn!("{} S-meter poll failed: {}", prefix, e);
                 return;
@@ -1359,11 +1498,11 @@ fn parse_responses(
                     // defaulten - warn één keer per uniek teken zodat een FTX-1-
                     // specifieke mode tijdens de test zichtbaar wordt i.p.v. verzwegen.
                     let known = matches!(mode_char,
-                        '1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'|'9'|'A'|'a'|'B'|'b'|'C'|'c');
+                        '1'..='9'|'A'|'a'|'B'|'b'|'C'|'c'|'D'|'d'|'E'|'e'|'F'|'f'|'H'|'h'|'I'|'i');
                     if !known && warned_modes.insert(mode_char) {
                         warn!("{} onbekende MD mode-code '{}' - val terug op USB; mogelijk model-specifiek", prefix, mode_char);
                     }
-                    let mode = yaesu_mode_to_internal(mode_char);
+                    let mode = yaesu_mode_to_internal(mode_char, model);
                     let mut s = status.lock().unwrap();
                     // Only log/update when internal mode changes (ignore FM<->DATA-FM flips)
                     if mode != s.mode {
@@ -1385,6 +1524,17 @@ fn parse_responses(
                 if payload.len() >= 4 {
                     if let Ok(val) = payload[1..].parse::<u16>() {
                         status.lock().unwrap().smeter = val;
+                    }
+                }
+            }
+            "RM" => {
+                // 991A RM6 = raw SWR meter (000-255). DIAGNOSTIC ONLY now — the alarm
+                // comes from the official RI0 Hi-SWR flag (see the "RI" arm). We keep
+                // the raw value so the RI0 log can show what RM6 read at the same moment
+                // (e.g. to confirm what a dummy load reads on RM6 vs the RI0 flag).
+                if !matches!(model, RadioModel::Ftx1) && payload.starts_with('6') {
+                    if let Ok(raw) = payload[1..].trim().parse::<u16>() {
+                        status.lock().unwrap().swr_meter_raw = raw;
                     }
                 }
             }
@@ -1624,16 +1774,40 @@ fn parse_responses(
                 }
             }
             "RI" => {
-                // FTX-1 Radio Information. P8 (laatste teken) = squelch/BUSY:
-                // 0 = squelch dicht (geen signaal), 1 = open (BUSY). Drijft de
-                // server-side software-squelch op de FTX-1 USB-audio (de FTX-1
-                // gate't zijn USB-audio niet zelf). 991A stuurt geen RI.
-                if let Some(p8) = payload.chars().last() {
-                    let open = p8 == '1';
+                if matches!(model, RadioModel::Ftx1) {
+                    // FTX-1 Radio Information answer = P1..P8 (per FTX-1 CAT manual):
+                    //   P2 = 0 Normal / 1 Hi-SWR
+                    //   P4 = 0 RX / 1 TX / 2 TX-INHIBIT
+                    //   P8 = 0 SQL closed / 1 SQL open (BUSY)  <- drives software-squelch
+                    if let Some(p8) = payload.chars().last() {
+                        let open = p8 == '1';
+                        let mut s = status.lock().unwrap();
+                        if open != s.squelch_open {
+                            info!("{} squelch: {}", prefix, if open { "OPEN (BUSY)" } else { "DICHT" });
+                            s.squelch_open = open;
+                        }
+                    }
+                    // High-SWR flag = P2 (0 Normal / 1 Hi-SWR). The radio only asserts it
+                    // while transmitting into a high SWR; it clears otherwise.
+                    let hi = payload.chars().nth(1) == Some('1');
+                    {
+                        let mut s = status.lock().unwrap();
+                        if hi != s.hi_swr {
+                            if hi { warn!("{} HIGH SWR (RI P2=1)", prefix); }
+                            s.hi_swr = hi;
+                        }
+                    }
+                } else {
+                    // 991A: RI0; -> answer "RI0{P2}" with P2 = 0 Normal / 1 Hi-SWR
+                    // (FT-991A CAT OM 1711-D). This is the radio's OWN calibrated Hi-SWR
+                    // trip, asserted only while transmitting into a high SWR — no per-radio
+                    // threshold guessing (unlike the old RM6 approach that could false-fire
+                    // on a matched/dummy load). payload = "0" + P2, so P2 = char at index 1.
+                    let hi = payload.chars().nth(1) == Some('1');
                     let mut s = status.lock().unwrap();
-                    if open != s.squelch_open {
-                        info!("{} squelch: {}", prefix, if open { "OPEN (BUSY)" } else { "DICHT" });
-                        s.squelch_open = open;
+                    if hi != s.hi_swr {
+                        if hi { warn!("{} HIGH SWR (991A RI0 P2=1; RM6 meter was {})", prefix, s.swr_meter_raw); }
+                        s.hi_swr = hi;
                     }
                 }
             }
@@ -1656,13 +1830,49 @@ fn parse_responses(
                         '2' => 2, // Memory Tune
                         _ => 0,
                     };
-                    if new_vfo != s.vfo_select {
+                    if new_vfo == 0 {
+                        // Radio bevestigt VFO -> escape geland, guard opheffen.
+                        if s.vfo_escape_pending != 0 {
+                            s.vfo_escape_pending = 0;
+                        }
+                        if new_vfo != s.vfo_select {
+                            info!("{} mode: VFO (IF P7='{}')", prefix, p7);
+                            s.vfo_select = new_vfo;
+                        }
+                    } else if s.vfo_escape_pending != 0 {
+                        // We hebben net memory->VFO ge-escaped; dit "nog Memory"-antwoord
+                        // is doorgaans een in-flight/stale IF-poll. Negeer en tel af, zodat
+                        // een echt-mislukte escape na ~15 polls alsnog terugsynct.
+                        // Smoking-gun-diagnose: pas WAARSCHUWEN als alle 15 polls nog Memory
+                        // melden (guard uitgeput) - dan heeft MA de set echt niet naar
+                        // VFO-bediening geschakeld (of de burst is verworpen). Een enkele
+                        // stale poll aan het begin is normaal en mag geen valse fout geven.
+                        s.vfo_escape_pending -= 1;
+                        if s.vfo_escape_pending == 0 {
+                            warn!("{} memory-escape niet bevestigd na 15 IF-polls - radio bleef Memory (P7='{}'); MA schakelde NIET naar VFO (of MD/FA verworpen)", prefix, p7);
+                        }
+                    } else if new_vfo != s.vfo_select {
                         info!("{} mode: {} (IF P7='{}')",
-                            prefix, match new_vfo { 0 => "VFO", 1 => "Memory", _ => "MemTune" }, p7);
+                            prefix, match new_vfo { 1 => "Memory", _ => "MemTune" }, p7);
                         s.vfo_select = new_vfo;
                     }
                     if let Ok(mc) = payload[0..ch_end].parse::<u16>() {
                         s.memory_channel = mc;
+                    }
+                    // 991A clarifier-offset uit IF P3 (tekens [ch_end+9 .. +14], bv.
+                    // "+0050" = +50 Hz). De 991A leest de offset niet los terug (RT/XT
+                    // geven alleen on/off), dus we nemen 'm hier uit IF -> de client volgt
+                    // nu ook een draai aan de CLAR-knop op de set zelf, ook in Memory-mode
+                    // (tester-melding B3). FTX-1 houdt zijn eigen CF001-offsetpad.
+                    if !matches!(model, RadioModel::Ftx1) {
+                        let cs = ch_end + 9;
+                        if let Some(field) = payload.get(cs..cs + 5) {
+                            let sign = field.as_bytes()[0];
+                            if let Ok(mag) = field[1..].trim().parse::<i16>() {
+                                let off = if sign == b'-' { -mag } else { mag };
+                                s.feature_freqs[3] = off as u16;
+                            }
+                        }
                     }
                 } else {
                     // Faal-veilig: afwijkende IF-lengte -> niet indexen

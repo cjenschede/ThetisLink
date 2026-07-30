@@ -305,6 +305,59 @@ impl NetworkService {
         })
     }
 
+    /// Zet beide spectrumprocessors aan/uit op basis van ALLE afnemers.
+    ///
+    /// De RX1-processor voedt zowel het RX1-spectrum als VRX1-high-res; de
+    /// RX2-processor doet hetzelfde voor RX2 en VRX2. Een processor mag dus pas
+    /// uit als geen van beide afnemers hem nog nodig heeft. Eerder keek dit
+    /// alleen naar de RX*-spectrumabonnees, waardoor VRX-high-res stilviel zodra
+    /// de gebruiker het RX-spectrum uitzette.
+    ///
+    /// Aanroepen na elke wijziging van een spectrum-abonnement (RX1, RX2, VRX1,
+    /// VRX2). Het disconnect-pad roept dit bewust NIET aan: dan gaan er dankzij
+    /// de per-stroom-guards in de tick toch geen pakketten meer uit, en herstelt
+    /// de staat zich bij de eerstvolgende abonnementswijziging.
+    ///
+    /// Herberekent ook de frame-rate. Die is per processor globaal en werd
+    /// eerder alleen afgeleid uit de RX-spectrumabonnees. Omdat VRX-high-res nu
+    /// dezelfde frame-gate deelt, zou een oude hoge RX-fps blijven staan nadat
+    /// het RX-spectrum uitgezet is - en dan loopt juist de grootste stroom
+    /// (4096 bins) onnodig snel. `spectrum_max_fps()` valt terug op de default
+    /// zodra er geen RX-spectrumabonnees meer zijn, wat precies het gewenste
+    /// VRX-only-gedrag geeft.
+    async fn refresh_spectrum_processors(&self) {
+        let (rx1_spec, rx1_vrx, rx2_spec, rx2_vrx, fps) = {
+            let sess = self.session.lock().await;
+            (
+                sess.spectrum_addrs().len(),
+                sess.vrx_spectrum_addrs(0).len(),
+                sess.rx2_spectrum_clients().len(),
+                sess.vrx_spectrum_addrs(1).len(),
+                sess.spectrum_max_fps(),
+            )
+        };
+        let rx1_needed = rx1_spec > 0 || rx1_vrx > 0;
+        let rx2_needed = rx2_spec > 0 || rx2_vrx > 0;
+        {
+            let mut sp = self.spectrum.lock().await;
+            sp.set_enabled(rx1_needed);
+            sp.set_fps(fps);
+        }
+        // De RX2-processor krijgt bewust GEEN fps mee: `Rx2SpectrumFps` bewaart de
+        // waarde alleen in de sessie en is nooit toegepast, dus die processor draait
+        // sinds jaar en dag op de default. Hier de RX1-fps opleggen zou RX2-gedrag
+        // veranderen zonder aanleiding.
+        self.rx2_spectrum.lock().await.set_enabled(rx2_needed);
+        // Eén regel die laat zien welke stromen afnemers hebben en wat dat met de
+        // processors doet - genoeg om een "waarom zie ik geen spectrum"-klacht in
+        // één blik te herleiden.
+        info!(
+            "spectrum procs: rx1={} (spec={} vrx1={} fps={}) rx2={} (spec={} vrx2={})",
+            if rx1_needed { "aan" } else { "uit" }, rx1_spec, rx1_vrx, fps,
+            if rx2_needed { "aan" } else { "uit" }, rx2_spec, rx2_vrx
+        );
+    }
+
     pub async fn run(mut self) -> Result<()> {
         let start = Instant::now();
         let yaesu = self.yaesu.clone();
@@ -455,10 +508,15 @@ impl NetworkService {
                     loop {
                         tokio::select! {
                             _ = tick.tick() => {
-                                let addrs = session.lock().await.yaesu_addrs();
+                                // Audio-abonnees (voor SSB-USB-routing/TX) én state-abonnees
+                                // (venster-open OF audio) apart, onder één lock.
+                                let (audio_addrs, addrs) = {
+                                    let s = session.lock().await;
+                                    (s.yaesu_addrs(), s.yaesu_state_addrs())
+                                };
                                 if let Some(ref y) = yaesu {
                                     if !y.status().ssb_switch_on_ptt {
-                                        if !addrs.is_empty() {
+                                        if !audio_addrs.is_empty() {
                                             absent_ticks0 = 0;
                                             if !ssb_applied0 {
                                                 y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(true));
@@ -473,6 +531,7 @@ impl NetworkService {
                                         }
                                     }
                                 }
+                                // State/feature/memory naar de STATE-abonnees.
                                 if addrs.is_empty() { continue; }
                                 if let Some(ref y) = yaesu {
                                     let ys = y.status();
@@ -493,6 +552,8 @@ impl NetworkService {
                                         split: ys.split_active,
                                         scan: ys.scan_active,
                                         tuner_state: ys.tuner_state,
+                                        hi_swr: if ys.connected { ys.hi_swr } else { false },
+                                        tx_power_max: ys.tx_power_max(),
                                     };
                                     let mut buf = [0u8; YaesuStatePacket::SIZE];
                                     pkt.serialize(&mut buf);
@@ -573,10 +634,13 @@ impl NetworkService {
                     loop {
                         tokio::select! {
                             _ = tick.tick() => {
-                                let addrs = session.lock().await.yaesu2_addrs();
+                                let (audio_addrs, addrs) = {
+                                    let s = session.lock().await;
+                                    (s.yaesu2_addrs(), s.yaesu2_state_addrs())
+                                };
                                 if let Some(ref y) = yaesu2 {
                                     if !y.status().ssb_switch_on_ptt {
-                                        if !addrs.is_empty() {
+                                        if !audio_addrs.is_empty() {
                                             absent_ticks1 = 0;
                                             if !ssb_applied1 {
                                                 y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(true));
@@ -611,6 +675,8 @@ impl NetworkService {
                                         split: ys.split_active,
                                         scan: ys.scan_active,
                                         tuner_state: ys.tuner_state,
+                                        hi_swr: if ys.connected { ys.hi_swr } else { false },
+                                        tx_power_max: ys.tx_power_max(),
                                     };
                                     let mut buf = [0u8; YaesuStatePacket::SIZE];
                                     pkt.serialize_as_type(&mut buf, PacketType::YaesuState2);
@@ -654,7 +720,7 @@ impl NetworkService {
                                                 let _ = socket.try_send_to(&send_buf, *addr);
                                             }
                                         }
-                                        info!("[radio1] Sent memory data to {} clients ({}B)", addrs.len(), text_bytes.len());
+                                        info!("[radio2] Sent memory data to {} clients ({}B)", addrs.len(), text_bytes.len());
                                     }
                                 }
                             }
@@ -823,7 +889,12 @@ impl NetworkService {
                 let mut freq_tick = interval(Duration::from_millis(100));
                 let mut spectrum_tick = interval(Duration::from_millis(50)); // 20 Hz check rate
                 let mut equipment_tick = interval(Duration::from_millis(200));
-                let mut spectrum_frame_count: u32 = 0;
+                // Loss-throttling telt per WERKELIJK gereed frame, per processor.
+                // Een tick-teller werkt hier niet: de tick loopt op 20 Hz en de
+                // frame-gate op 15 fps, waardoor ready-frames steeds dezelfde
+                // pariteit krijgen en de halve-cadans-regel altijd of nooit bijt.
+                let mut rx1_frame_count: u32 = 0;
+                let mut rx2_frame_count: u32 = 0;
                 // Per-tuner VFO-at-tune-complete tracking - each tuner has its
                 // own physical memory, so the "stale" check (VFO moved >25 kHz
                 // from the last tune) must be evaluated independently per slot.
@@ -898,130 +969,134 @@ impl NetworkService {
                             ptt.lock().await.check_safety().await;
                         }
                         _ = spectrum_tick.tick() => {
-                            // Collect client info + loss BEFORE locking spectrum
-                            // (avoids deadlock: main loop does session->spectrum)
-                            let client_info: Vec<(SocketAddr, f32, f32, u16, u8)> = {
+                            // Alle abonneelijsten in EEN session-lock, voor welke
+                            // spectrum-lock dan ook (deadlock-volgorde: de main loop
+                            // doet session->spectrum).
+                            let (client_info, rx2_client_info, vrx1_spec_addrs, vrx2_spec_addrs) = {
                                 let sess = session.lock().await;
-                                sess.spectrum_clients().into_iter().map(|(addr, zoom, pan, max_bins)| {
-                                    let loss = sess.client_loss(addr);
-                                    (addr, zoom, pan, max_bins, loss)
+                                let rx1: Vec<(SocketAddr, f32, f32, u16, u8)> = sess.spectrum_clients()
+                                    .into_iter()
+                                    .map(|(addr, zoom, pan, max_bins)| (addr, zoom, pan, max_bins, sess.client_loss(addr)))
+                                    .collect();
+                                let rx2: Vec<(SocketAddr, f32, f32, u16, u8)> = sess.rx2_spectrum_clients()
+                                    .into_iter()
+                                    .map(|(addr, zoom, pan, max_bins)| (addr, zoom, pan, max_bins, sess.client_loss(addr)))
+                                    .collect();
+                                let v1: Vec<(SocketAddr, u8)> = sess.vrx_spectrum_addrs(0)
+                                    .into_iter().map(|a| (a, sess.client_loss(a))).collect();
+                                let v2: Vec<(SocketAddr, u8)> = sess.vrx_spectrum_addrs(1)
+                                    .into_iter().map(|a| (a, sess.client_loss(a))).collect();
+                                (rx1, rx2, v1, v2)
+                            };
+                            // Per-client (PATCH-vrx-per-client): elke VRX-spectrumabonnee
+                            // krijgt een venster op ZIJN eigen luisterfrequentie + span.
+                            // Snapshot de jobs onder de manager-lock; de extractie gebeurt
+                            // daarna zonder die lock vast te houden.
+                            let jobs1: Vec<(SocketAddr, u64, u32, u8)> = if vrx1_spec_addrs.is_empty() {
+                                Vec::new()
+                            } else {
+                                let m = vrx_mgr.lock().unwrap();
+                                vrx1_spec_addrs.iter().filter_map(|(a, loss)| {
+                                    let span = m.spectrum_span(a, 0);
+                                    let freq = m.target_freq(a, 0);
+                                    (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000, *loss))
                                 }).collect()
                             };
-                            if client_info.is_empty() {
+                            let jobs2: Vec<(SocketAddr, u64, u32, u8)> = if vrx2_spec_addrs.is_empty() {
+                                Vec::new()
+                            } else {
+                                let m = vrx_mgr.lock().unwrap();
+                                vrx2_spec_addrs.iter().filter_map(|(a, loss)| {
+                                    let span = m.spectrum_span(a, 1);
+                                    let freq = m.target_freq(a, 1);
+                                    (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000, *loss))
+                                }).collect()
+                            };
+
+                            // Elke stroom heeft zijn EIGEN guard. Voorheen sprong de hele
+                            // tick eruit zodra er geen RX1-spectrumabonnees waren, waardoor
+                            // RX2- en VRX-spectrum stilvielen terwijl die hun eigen abonnees
+                            // hadden - het RX1-spectrum was daarmee de facto hoofdschakelaar.
+                            if client_info.is_empty() && rx2_client_info.is_empty()
+                                && jobs1.is_empty() && jobs2.is_empty()
+                            {
                                 continue;
                             }
-                            // Extract all spectrum data under the lock, then release before sending
                             let mut packets_to_send: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
-                            {
+
+                            // RX1-processor: voedt zowel het RX1-spectrum als VRX1-high-res.
+                            // Een frame-gate voor beide, zodat VRX niet sneller gaat lopen dan
+                            // de ingestelde fps.
+                            if !client_info.is_empty() || !jobs1.is_empty() {
                                 let mut sp = spectrum.lock().await;
-                                if !sp.is_frame_ready() {
-                                    continue;
-                                }
-                                spectrum_frame_count = spectrum_frame_count.wrapping_add(1);
-                                for (addr, zoom, pan, max_bins, loss) in &client_info {
-                                    if *loss > 15 { continue; }
-                                    if *loss > 5 && spectrum_frame_count % 2 != 0 { continue; }
-                                    let pkt = sp.extract_view(*zoom, *pan, *max_bins as usize);
-                                    let mut buf = Vec::with_capacity(*max_bins as usize + 20);
-                                    pkt.serialize(&mut buf);
-                                    packets_to_send.push((*addr, buf));
-                                    let full_bins = (*max_bins as usize).min(FULL_SPECTRUM_BINS);
-                                    let full_pkt = sp.get_full_row(full_bins);
-                                    if full_pkt.num_bins > 0 {
-                                        let mut full_buf = Vec::with_capacity(full_bins + 20);
-                                        full_pkt.serialize_as_type(&mut full_buf, PacketType::FullSpectrum);
-                                        packets_to_send.push((*addr, full_buf));
+                                if sp.is_frame_ready() {
+                                    rx1_frame_count = rx1_frame_count.wrapping_add(1);
+                                    for (addr, zoom, pan, max_bins, loss) in &client_info {
+                                        if *loss > 15 { continue; }
+                                        if *loss > 5 && rx1_frame_count % 2 != 0 { continue; }
+                                        let pkt = sp.extract_view(*zoom, *pan, *max_bins as usize);
+                                        let mut buf = Vec::with_capacity(*max_bins as usize + 20);
+                                        pkt.serialize(&mut buf);
+                                        packets_to_send.push((*addr, buf));
+                                        let full_bins = (*max_bins as usize).min(FULL_SPECTRUM_BINS);
+                                        let full_pkt = sp.get_full_row(full_bins);
+                                        if full_pkt.num_bins > 0 {
+                                            let mut full_buf = Vec::with_capacity(full_bins + 20);
+                                            full_pkt.serialize_as_type(&mut full_buf, PacketType::FullSpectrum);
+                                            packets_to_send.push((*addr, full_buf));
+                                        }
+                                    }
+                                    // VRX1 high-res: alleen clients die VrxSpectrumEnable aan
+                                    // hebben gezet krijgen dit packet-type (oude v2.1.x clients
+                                    // nooit).
+                                    for (a, freq, span_hz, loss) in &jobs1 {
+                                        // Zelfde loss-gate als RX: VRX high-res is met 4096 bins
+                                        // juist de grootste stroom, dus die moet op een slechte
+                                        // link net zo goed afgeknepen worden.
+                                        if *loss > 15 { continue; }
+                                        if *loss > 5 && rx1_frame_count % 2 != 0 { continue; }
+                                        let pkt = sp.extract_view_at(*freq, *span_hz, 4096);
+                                        if pkt.num_bins > 0 {
+                                            let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
+                                            pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx1);
+                                            packets_to_send.push((*a, buf));
+                                        }
                                     }
                                 }
                             } // spectrum lock released
 
-                            // RX2 spectrum: also extract under lock, then release
-                            {
-                                let rx2_client_info: Vec<(SocketAddr, f32, f32, u16, u8)> = {
-                                    let sess = session.lock().await;
-                                    sess.rx2_spectrum_clients().into_iter().map(|(addr, zoom, pan, max_bins)| {
-                                        let loss = sess.client_loss(addr);
-                                        (addr, zoom, pan, max_bins, loss)
-                                    }).collect()
-                                };
-                                if !rx2_client_info.is_empty() {
-                                    let mut rx2_sp = rx2_spectrum.lock().await;
-                                    if rx2_sp.is_frame_ready() {
-                                        for (addr, zoom, pan, max_bins, loss) in &rx2_client_info {
-                                            if *loss > 15 { continue; }
-                                            if *loss > 5 && spectrum_frame_count % 2 != 0 { continue; }
-                                            let pkt = rx2_sp.extract_view(*zoom, *pan, *max_bins as usize);
-                                            let mut buf = Vec::with_capacity(*max_bins as usize + 20);
-                                            pkt.serialize_as_type(&mut buf, PacketType::SpectrumRx2);
-                                            packets_to_send.push((*addr, buf));
-                                            let full_bins = (*max_bins as usize).min(FULL_SPECTRUM_BINS);
-                                            let full_pkt = rx2_sp.get_full_row(full_bins);
-                                            if full_pkt.num_bins > 0 {
-                                                let mut full_buf = Vec::with_capacity(full_bins + 20);
-                                                full_pkt.serialize_as_type(&mut full_buf, PacketType::FullSpectrumRx2);
-                                                packets_to_send.push((*addr, full_buf));
-                                            }
+                            // RX2-processor: idem voor het RX2-spectrum en VRX2-high-res.
+                            if !rx2_client_info.is_empty() || !jobs2.is_empty() {
+                                let mut rx2_sp = rx2_spectrum.lock().await;
+                                if rx2_sp.is_frame_ready() {
+                                    rx2_frame_count = rx2_frame_count.wrapping_add(1);
+                                    for (addr, zoom, pan, max_bins, loss) in &rx2_client_info {
+                                        if *loss > 15 { continue; }
+                                        if *loss > 5 && rx2_frame_count % 2 != 0 { continue; }
+                                        let pkt = rx2_sp.extract_view(*zoom, *pan, *max_bins as usize);
+                                        let mut buf = Vec::with_capacity(*max_bins as usize + 20);
+                                        pkt.serialize_as_type(&mut buf, PacketType::SpectrumRx2);
+                                        packets_to_send.push((*addr, buf));
+                                        let full_bins = (*max_bins as usize).min(FULL_SPECTRUM_BINS);
+                                        let full_pkt = rx2_sp.get_full_row(full_bins);
+                                        if full_pkt.num_bins > 0 {
+                                            let mut full_buf = Vec::with_capacity(full_bins + 20);
+                                            full_pkt.serialize_as_type(&mut full_buf, PacketType::FullSpectrumRx2);
+                                            packets_to_send.push((*addr, full_buf));
+                                        }
+                                    }
+                                    for (a, freq, span_hz, loss) in &jobs2 {
+                                        if *loss > 15 { continue; }
+                                        if *loss > 5 && rx2_frame_count % 2 != 0 { continue; }
+                                        let pkt = rx2_sp.extract_view_at(*freq, *span_hz, 4096);
+                                        if pkt.num_bins > 0 {
+                                            let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
+                                            pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx2);
+                                            packets_to_send.push((*a, buf));
                                         }
                                     }
                                 }
                             } // rx2 spectrum lock released
-
-                            // VRX1/VRX2 high-res spectrum: extract a window
-                            // centered on the VRX listen freq with the client-
-                            // requested span. Per-client gated (release hardening
-                            // fix): alleen clients die VrxSpectrum* aan hebben
-                            // gezet krijgen het SpectrumVrx packet-type - oude
-                            // v2.1.x clients nooit.
-                            // Per-client (PATCH-vrx-per-client): each spectrum subscriber
-                            // gets a window at ITS OWN listen freq + span. Snapshot the
-                            // (addr, freq, span) jobs under the manager lock, then extract
-                            // without holding it (lock the spectrum processor once).
-                            let (vrx1_spec_addrs, vrx2_spec_addrs) = {
-                                let s = session.lock().await;
-                                (s.vrx_spectrum_addrs(0), s.vrx_spectrum_addrs(1))
-                            };
-                            let jobs1: Vec<(std::net::SocketAddr, u64, u32)> = if vrx1_spec_addrs.is_empty() {
-                                Vec::new()
-                            } else {
-                                let m = vrx_mgr.lock().unwrap();
-                                vrx1_spec_addrs.iter().filter_map(|a| {
-                                    let span = m.spectrum_span(a, 0);
-                                    let freq = m.target_freq(a, 0);
-                                    (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000))
-                                }).collect()
-                            };
-                            if !jobs1.is_empty() {
-                                let sp = spectrum.lock().await;
-                                for (a, freq, span_hz) in jobs1 {
-                                    let pkt = sp.extract_view_at(freq, span_hz, 4096);
-                                    if pkt.num_bins > 0 {
-                                        let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
-                                        pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx1);
-                                        packets_to_send.push((a, buf));
-                                    }
-                                }
-                            }
-                            let jobs2: Vec<(std::net::SocketAddr, u64, u32)> = if vrx2_spec_addrs.is_empty() {
-                                Vec::new()
-                            } else {
-                                let m = vrx_mgr.lock().unwrap();
-                                vrx2_spec_addrs.iter().filter_map(|a| {
-                                    let span = m.spectrum_span(a, 1);
-                                    let freq = m.target_freq(a, 1);
-                                    (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000))
-                                }).collect()
-                            };
-                            if !jobs2.is_empty() {
-                                let rx2_sp = rx2_spectrum.lock().await;
-                                for (a, freq, span_hz) in jobs2 {
-                                    let pkt = rx2_sp.extract_view_at(freq, span_hz, 4096);
-                                    if pkt.num_bins > 0 {
-                                        let mut buf = Vec::with_capacity(pkt.num_bins as usize * 2 + 32);
-                                        pkt.serialize_as_type(&mut buf, PacketType::SpectrumVrx2);
-                                        packets_to_send.push((a, buf));
-                                    }
-                                }
-                            }
 
                             // Send all packets without holding any locks (non-blocking to avoid stalling select! loop)
                             for (addr, buf) in &packets_to_send {
@@ -1790,9 +1865,20 @@ impl NetworkService {
 
                             // smeter_addrs: clients that should receive S-meter (not Yaesu-only)
                             // all_addrs: all clients (receive freq, mode, controls, equipment)
-                            let (smeter_addrs, rx2_addrs, all_addrs) = {
+                            let (smeter_addrs, rx2_addrs, rx2_spectrum_addrs, all_addrs) = {
                                 let sess = session.lock().await;
-                                (sess.smeter_addrs(), sess.rx2_addrs(), sess.active_addrs())
+                                (sess.smeter_addrs(), sess.rx2_addrs(), sess.rx2_spectrum_addrs(), sess.active_addrs())
+                            };
+                            // RX2 freq/mode/smeter/controls zijn WEERGAVE-data die zowel de
+                            // RX2-audio- als de RX2-spectrum-abonnees nodig hebben. Een
+                            // spectrum-zonder-audio-client krijgt anders geen RX2-freq en
+                            // rendert het spectrum verkeerd gecentreerd (fase 3b/4-bug).
+                            let rx2_display_addrs: Vec<std::net::SocketAddr> = {
+                                let mut v = rx2_addrs.clone();
+                                for a in &rx2_spectrum_addrs {
+                                    if !v.contains(a) { v.push(*a); }
+                                }
+                                v
                             };
                             if all_addrs.is_empty() {
                                 prev_client_count = 0;
@@ -1971,21 +2057,25 @@ impl NetworkService {
 
                             // Yaesu state broadcast moved to separate task
 
-                            // RX2 broadcasts - only to clients that have RX2 enabled
-                            if !rx2_addrs.is_empty() {
-                                // Update RX2 spectrum processor with VFO-B freq + DDS in one lock
-                                {
-                                    let mut rx2_sp = rx2_spectrum.lock().await;
-                                    if vfo_b_freq != 0 { rx2_sp.set_vfo_freq(vfo_b_freq, ctun); }
-                                    if dds_rx2 != 0 { rx2_sp.set_ddc_center(dds_rx2); }
-                                }
+                            // RX2 spectrum-processor center/VFO: ALTIJD bijwerken, los van
+                            // RX2-AUDIO-abonnees. Anders blijft de DDC-center op 0 en toont het
+                            // RX2-spectrum onzin (wiebelende lijn) zolang niemand RX2-AUDIO aan
+                            // heeft — terwijl het RX2-spectrum een eigen abonnement is (fase 3b/4,
+                            // net als RX1 dat wél altijd doet).
+                            {
+                                let mut rx2_sp = rx2_spectrum.lock().await;
+                                if vfo_b_freq != 0 { rx2_sp.set_vfo_freq(vfo_b_freq, ctun); }
+                                if dds_rx2 != 0 { rx2_sp.set_ddc_center(dds_rx2); }
+                            }
 
+                            // RX2 weergave-broadcasts naar audio- EN spectrum-abonnees.
+                            if !rx2_display_addrs.is_empty() {
                                 if vfo_b_freq != 0 && vfo_b_freq != prev_vfo_b_freq {
                                     prev_vfo_b_freq = vfo_b_freq;
                                     let pkt = FrequencyPacket { frequency_hz: vfo_b_freq };
                                     let mut buf = [0u8; FrequencyPacket::SIZE];
                                     pkt.serialize_as_type(&mut buf, PacketType::FrequencyRx2);
-                                    for addr in &rx2_addrs {
+                                    for addr in &rx2_display_addrs {
                                         let _ = socket.try_send_to(&buf, *addr);
                                     }
                                 }
@@ -1995,7 +2085,7 @@ impl NetworkService {
                                     let pkt = ModePacket { mode: vfo_b_mode };
                                     let mut buf = [0u8; ModePacket::SIZE];
                                     pkt.serialize_as_type(&mut buf, PacketType::ModeRx2);
-                                    for addr in &rx2_addrs {
+                                    for addr in &rx2_display_addrs {
                                         let _ = socket.try_send_to(&buf, *addr);
                                     }
                                 }
@@ -2011,7 +2101,7 @@ impl NetworkService {
                                     let mut buf_pkb = [0u8; SmeterPacket::SIZE];
                                     SmeterPacket { level: smeter_rx2_peakbin, flags: Flags::NONE }.serialize_as_type(&mut buf_pkb, PacketType::SmeterRx2MaxBin);
                                     let sess = session.lock().await;
-                                    for addr in &rx2_addrs {
+                                    for addr in &rx2_display_addrs {
                                         let mask = sess.smeter_sources(*addr);
                                         if mask & 0x10 != 0 { let _ = socket.try_send_to(&buf_sig, *addr); }
                                         if mask & 0x20 != 0 { let _ = socket.try_send_to(&buf_avg, *addr); }
@@ -2040,7 +2130,7 @@ impl NetworkService {
                                     let pkt = ControlPacket { control_id: id, value };
                                     let mut buf = [0u8; ControlPacket::SIZE];
                                     pkt.serialize(&mut buf);
-                                    for addr in &rx2_addrs {
+                                    for addr in &rx2_display_addrs {
                                         let _ = socket.try_send_to(&buf, *addr);
                                     }
                                 }
@@ -2202,7 +2292,25 @@ impl NetworkService {
         loop {
             tokio::select! {
                 result = self.socket.recv_from(&mut recv_buf) => {
-                    let (len, addr) = result.context("recv_from")?;
+                    let (len, addr) = match result {
+                        Ok(v) => v,
+                        // Windows UDP quirk: when a client (peer) disappears, a prior
+                        // send to its now-closed port makes the NEXT recv_from return
+                        // WSAECONNRESET / WSAECONNABORTED (ErrorKind::ConnectionReset /
+                        // ConnectionAborted). It is a spurious per-datagram error, not a
+                        // real socket failure — skip it and keep serving the other
+                        // clients instead of tearing the whole server down (fixes the
+                        // "force-stop the app -> server crashes" report).
+                        Err(e) if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                        ) => {
+                            log::debug!("recv_from transient error (ignored): {}", e);
+                            continue;
+                        }
+                        Err(e) => return Err(e).context("recv_from"),
+                    };
                     let data = &recv_buf[..len];
 
                     // Protocol-version mismatch: detect BEFORE Packet::deserialize so we
@@ -2489,6 +2597,13 @@ impl NetworkService {
                             if thetis_starting {
                                 state_flags = state_flags
                                     .with(sdr_remote_core::protocol::ServerStateFlags::THETIS_STARTING);
+                            }
+                            // Single-receiver radio: advertise so clients hide RX2 + VRX2.
+                            // Inverted flag (absent = normal 2-RX default). Startup snapshot;
+                            // changing it in the server GUI applies on the next server start.
+                            if !self.config.rx2_present {
+                                state_flags = state_flags
+                                    .with(sdr_remote_core::protocol::ServerStateFlags::SINGLE_RECEIVER);
                             }
 
                             // PATCH-1 review finding (B3): advertise REPORTS_STATE_FLAGS
@@ -2874,11 +2989,12 @@ impl NetworkService {
                         }
                         Packet::FrequencyYaesu(freq_pkt) => {
                             if let Some(ref yaesu) = yaesu {
-                                // Don't send FA in memory mode - it forces the radio to VFO mode
-                                let status = yaesu.status();
-                                if status.vfo_select != 1 { // 1=Memory
-                                    yaesu.send_command(crate::yaesu::YaesuCmd::SetFreqA(freq_pkt.frequency_hz));
-                                }
+                                // Altijd doorsturen: SetFreqA beslist zelf. In memory-mode
+                                // glijdt hij via de memory-escape (MA;MD;FA) naar VFO, in
+                                // VFO stuurt hij kale FA. (Vroeger blokkeerde hier een guard
+                                // op vfo_select==1, wat de gewenste memory->VFO-escape juist
+                                // tegenhield - de escape zat dan als dode code in SetFreqA.)
+                                yaesu.send_command(crate::yaesu::YaesuCmd::SetFreqA(freq_pkt.frequency_hz));
                             }
                         }
                         Packet::FrequencyVrx(pkt) => {
@@ -2904,10 +3020,9 @@ impl NetworkService {
                         }
                         Packet::FrequencyYaesu2(freq_pkt) => {
                             if let Some(ref yaesu) = yaesu2 {
-                                let status = yaesu.status();
-                                if status.vfo_select != 1 { // 1=Memory
-                                    yaesu.send_command(crate::yaesu::YaesuCmd::SetFreqA(freq_pkt.frequency_hz));
-                                }
+                                // Altijd doorsturen: SetFreqA regelt memory-escape vs kale FA
+                                // zelf (zie FrequencyYaesu hierboven).
+                                yaesu.send_command(crate::yaesu::YaesuCmd::SetFreqA(freq_pkt.frequency_hz));
                             }
                         }
                         // Typed Yaesu DSP/function control (PATCH-yaesu-extra-controls).
@@ -3013,9 +3128,7 @@ impl NetworkService {
                                 ControlId::SpectrumEnable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_spectrum_enabled(addr, enabled);
-                                    // Enable processor if any client wants spectrum
-                                    let any_enabled = !self.session.lock().await.spectrum_addrs().is_empty();
-                                    self.spectrum.lock().await.set_enabled(any_enabled);
+                                    self.refresh_spectrum_processors().await;
                                     info!("Client {} spectrum: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::SpectrumFps => {
@@ -3073,6 +3186,11 @@ impl NetworkService {
                                     ptt.set_tx_filter_band(lo, hi).await;
                                 }
                                 ControlId::ThetisStarting => {} // server->client only
+                                ControlId::Rx1Enable => {
+                                    let enabled = ctrl.value != 0;
+                                    self.session.lock().await.set_rx1_enabled(addr, enabled);
+                                    log::info!("RX1 audio-abonnement {} voor {}", if enabled { "AAN" } else { "UIT" }, addr);
+                                }
                                 ControlId::Rx2Enable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_rx2_enabled(addr, enabled);
@@ -3100,9 +3218,26 @@ impl NetworkService {
                                 ControlId::Rx2SpectrumEnable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_rx2_spectrum_enabled(addr, enabled);
-                                    // Enable RX2 processor if any client wants RX2 spectrum
-                                    let any_rx2 = !self.session.lock().await.rx2_spectrum_clients().is_empty();
-                                    self.rx2_spectrum.lock().await.set_enabled(any_rx2);
+                                    self.refresh_spectrum_processors().await;
+                                    // Stuur de HUIDIGE VFO-B freq/mode direct mee (initiële
+                                    // snapshot, net als bij Rx2Enable): een spectrum-zonder-audio-
+                                    // client heeft de RX2-freq nodig om correct te centreren, en de
+                                    // change-gated broadcast stuurt 'm anders pas bij de volgende
+                                    // freq-wijziging.
+                                    if enabled {
+                                        let vfo_b = ptt.vfo_b_freq();
+                                        let mode_b = ptt.vfo_b_mode();
+                                        if vfo_b != 0 {
+                                            let pkt = FrequencyPacket { frequency_hz: vfo_b };
+                                            let mut buf = [0u8; FrequencyPacket::SIZE];
+                                            pkt.serialize_as_type(&mut buf, PacketType::FrequencyRx2);
+                                            let _ = self.socket.try_send_to(&buf, addr);
+                                        }
+                                        let pkt = ModePacket { mode: mode_b };
+                                        let mut buf = [0u8; ModePacket::SIZE];
+                                        pkt.serialize_as_type(&mut buf, PacketType::ModeRx2);
+                                        let _ = self.socket.try_send_to(&buf, addr);
+                                    }
                                     info!("Client {} RX2 spectrum: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::Rx2SpectrumFps => {
@@ -3438,7 +3573,29 @@ impl NetworkService {
                                 ControlId::YaesuEnable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_yaesu_enabled(addr, enabled);
-                                    info!("Client {} Yaesu: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    info!("Client {} Yaesu audio: {}", addr, if enabled { "ON" } else { "OFF" });
+                                }
+                                ControlId::YaesuStateEnable => {
+                                    let enabled = ctrl.value != 0;
+                                    self.session.lock().await.set_yaesu_state_enabled(addr, enabled);
+                                }
+                                ControlId::Yaesu2StateEnable => {
+                                    let enabled = ctrl.value != 0;
+                                    self.session.lock().await.set_yaesu2_state_enabled(addr, enabled);
+                                }
+                                ControlId::YaesuPowerOnOff => {
+                                    if let Some(ref yaesu) = yaesu {
+                                        let on = ctrl.value != 0;
+                                        yaesu.send_command(crate::yaesu::YaesuCmd::SetPower(on));
+                                        info!("Client {} Yaesu power: {}", addr, if on { "ON" } else { "OFF" });
+                                    }
+                                }
+                                ControlId::Yaesu2PowerOnOff => {
+                                    if let Some(ref yaesu2) = yaesu2 {
+                                        let on = ctrl.value != 0;
+                                        yaesu2.send_command(crate::yaesu::YaesuCmd::SetPower(on));
+                                        info!("Client {} Yaesu2 power: {}", addr, if on { "ON" } else { "OFF" });
+                                    }
                                 }
                                 ControlId::YaesuPtt => {
                                     if let Some(ref yaesu) = yaesu {
@@ -3697,6 +3854,9 @@ impl NetworkService {
                                         m.set_spectrum_span(addr, 0, if on { if cur == 0 { 24 } else { cur } } else { 0 });
                                     }
                                     self.session.lock().await.set_vrx_spectrum(addr, 0, on);
+                                    // VRX1 leest uit de RX1-processor: die moet aan, ook als
+                                    // niemand het gewone RX1-spectrum wil.
+                                    self.refresh_spectrum_processors().await;
                                     info!("Client {} VRX1 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxSpectrumEnable2 => {
@@ -3707,6 +3867,7 @@ impl NetworkService {
                                         m.set_spectrum_span(addr, 1, if on { if cur == 0 { 24 } else { cur } } else { 0 });
                                     }
                                     self.session.lock().await.set_vrx_spectrum(addr, 1, on);
+                                    self.refresh_spectrum_processors().await;
                                     info!("Client {} VRX2 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxSpectrumSpanKhz => {

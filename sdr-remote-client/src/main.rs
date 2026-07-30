@@ -9,6 +9,10 @@ mod midi;
 mod ui;
 mod websdr;
 
+// Desktop-UI translations (rust-i18n). Base = English (fallback); the user picks a
+// language in Settings (persisted as `language=`), applied via rust_i18n::set_locale.
+rust_i18n::i18n!("locales", fallback = "en");
+
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Write as IoWrite;
@@ -159,6 +163,8 @@ fn main() -> Result<()> {
     // client-relay-monitor met tunnel op (rol Client); de engine krijgt de tunnel als
     // ClientTransport::Relay, de UI krijgt de status-handle. Anders: direct-UDP (default).
     let relay_cfg_loaded = ui::config::load_config();
+    // Apply the persisted UI language before the egui app starts.
+    rust_i18n::set_locale(&relay_cfg_loaded.language);
     let mut _relay_monitor_keepalive: Option<sdr_remote_relay::RelayMonitor> = None;
     let (relay_tunnel, relay_status_handle): (
         Option<sdr_remote_logic::engine::ClientRelayTunnel>,

@@ -109,6 +109,15 @@ pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePack
     state.yaesu2_connected = p.slot1_present;
     state.yaesu_model = p.slot0_model;
     state.yaesu2_model = p.slot1_model;
+    // Een afwezige radio kan geen hoge SWR melden. Zonder dit blijft een oude
+    // hi_swr-vlag staan en houdt de andere radio het alarm met elke state-push
+    // opnieuw levend.
+    if !p.slot0_present {
+        state.yaesu_hi_swr = false;
+    }
+    if !p.slot1_present {
+        state.yaesu2_hi_swr = false;
+    }
     (c0, c1)
 }
 
@@ -615,6 +624,53 @@ impl ClientEngine {
         let mut audio_tick = interval(Duration::from_millis(20));
         let mut last_server_addr: Option<String> = None;
 
+        // Re-read the audio device sample rates and rebuild every resampler + reset the
+        // jitter buffers when the rate changed. Used by an explicit input/output device
+        // switch AND by the spontaneous audio-error recovery below: a Bluetooth route
+        // change (e.g. getting in the car) disconnects the AAudio stream, which reopens
+        // on the BT-SCO device at a different rate (8/16 kHz vs 48 kHz). Without this the
+        // resamplers keep targeting the old rate -> continuous rate mismatch -> choppy audio.
+        macro_rules! resync_audio_rates {
+            () => {{
+                let new_cap = audio.capture_sample_rate();
+                let new_play = audio.playback_sample_rate();
+                if new_cap != capture_rate || new_play != playback_rate {
+                    capture_rate = new_cap;
+                    playback_rate = new_play;
+                    capture_frame_samples = (capture_rate * 20 / 1000) as usize;
+                    let mksp = || rubato::SincInterpolationParameters {
+                        sinc_len: 32, f_cutoff: 0.90, oversampling_factor: 32,
+                        interpolation: rubato::SincInterpolationType::Cubic,
+                        window: rubato::WindowFunction::Blackman,
+                    };
+                    // Yaesu TX needs a sharper anti-alias filter than the RX resamplers.
+                    let mksp_aa = || rubato::SincInterpolationParameters {
+                        sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
+                        interpolation: rubato::SincInterpolationType::Cubic,
+                        window: rubato::WindowFunction::Blackman,
+                    };
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx1_out = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_bin_r_out = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx2_out = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu_res_nb = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu_res_wb = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu2_res_nb = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu2_res_wb = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { resampler_in = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { yaesu_tx_resampler = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx1_out_wb = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_bin_r_out_wb = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx2_out_wb = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { wav_res_out = r; }
+                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { wav_res_out_wb = r; }
+                    info!("Resamplers rebuilt: capture {}Hz, playback {}Hz", capture_rate, playback_rate);
+                }
+                // Reset the jitter buffers to prevent stale frame buildup across the switch.
+                jitter_buf.reset();
+                yaesu_jitter_buf.reset();
+            }};
+        }
+
         loop {
             // Process all pending commands (non-blocking).
             // SetFrequency / SetFrequencyRx2 are coalesced: under rapid MIDI-wheel
@@ -920,47 +976,7 @@ impl ClientEngine {
                                 Ok(new_audio) => {
                                     audio = new_audio;
                                     audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
-                                    // Rebuild resamplers with new sample rates
-                                    let new_cap = audio.capture_sample_rate();
-                                    let new_play = audio.playback_sample_rate();
-                                    if new_cap != capture_rate || new_play != playback_rate {
-                                        capture_rate = new_cap;
-                                        playback_rate = new_play;
-                                        capture_frame_samples = (capture_rate * 20 / 1000) as usize;
-                                        let mksp = || rubato::SincInterpolationParameters {
-                                            sinc_len: 32, f_cutoff: 0.90, oversampling_factor: 32,
-                                            interpolation: rubato::SincInterpolationType::Cubic,
-                                            window: rubato::WindowFunction::Blackman,
-                                        };
-                                        // Yaesu TX heeft een scherpere anti-alias filter nodig
-                                        // dan de RX-resamplers: brede USB-mics (NT-USB) hebben
-                                        // content tot 16 kHz die anders terug-alias in 0-8 kHz.
-                                        // Zie initial create van yaesu_tx_resampler boven.
-                                        let mksp_aa = || rubato::SincInterpolationParameters {
-                                            sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
-                                            interpolation: rubato::SincInterpolationType::Cubic,
-                                            window: rubato::WindowFunction::Blackman,
-                                        };
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx1_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_bin_r_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx2_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu_res_nb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu_res_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu2_res_nb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu2_res_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { resampler_in = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { yaesu_tx_resampler = r; }
-                                        // Rebuild WB Thetis-RX resamplers (opt-in pad).
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx1_out_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_bin_r_out_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx2_out_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { wav_res_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { wav_res_out_wb = r; }
-                                        info!("Resamplers rebuilt: capture {}Hz, playback {}Hz", capture_rate, playback_rate);
-                                    }
-                                    // Reset all jitter buffers to prevent stale frame buildup
-                                    jitter_buf.reset();
-                                    yaesu_jitter_buf.reset();
+                                    resync_audio_rates!();
                                     info!("Audio input device switched to {:?}", in_name.unwrap_or("(default)"));
                                     state.audio_error = false;
                                     audio_error_since = None;
@@ -980,42 +996,7 @@ impl ClientEngine {
                                 Ok(new_audio) => {
                                     audio = new_audio;
                                     audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
-                                    let new_cap = audio.capture_sample_rate();
-                                    let new_play = audio.playback_sample_rate();
-                                    if new_cap != capture_rate || new_play != playback_rate {
-                                        capture_rate = new_cap;
-                                        playback_rate = new_play;
-                                        capture_frame_samples = (capture_rate * 20 / 1000) as usize;
-                                        let mksp = || rubato::SincInterpolationParameters {
-                                            sinc_len: 32, f_cutoff: 0.90, oversampling_factor: 32,
-                                            interpolation: rubato::SincInterpolationType::Cubic,
-                                            window: rubato::WindowFunction::Blackman,
-                                        };
-                                        // Yaesu TX scherpere anti-alias (zie initial create).
-                                        let mksp_aa = || rubato::SincInterpolationParameters {
-                                            sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
-                                            interpolation: rubato::SincInterpolationType::Cubic,
-                                            window: rubato::WindowFunction::Blackman,
-                                        };
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx1_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_bin_r_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx2_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu_res_nb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu_res_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu2_res_nb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu2_res_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { resampler_in = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { yaesu_tx_resampler = r; }
-                                        // Rebuild WB Thetis-RX resamplers (opt-in pad).
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx1_out_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_bin_r_out_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx2_out_wb = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { wav_res_out = r; }
-                                        if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { wav_res_out_wb = r; }
-                                        info!("Resamplers rebuilt: capture {}Hz, playback {}Hz", capture_rate, playback_rate);
-                                    }
-                                    jitter_buf.reset();
-                                    yaesu_jitter_buf.reset();
+                                    resync_audio_rates!();
                                     info!("Audio output device switched to {:?}", out_name.unwrap_or("(default)"));
                                     state.audio_error = false;
                                     audio_error_since = None;
@@ -1642,6 +1623,16 @@ impl ClientEngine {
                             info!("Thetis wideband audio sent: {}", on);
                         }
                     }
+                    Command::SetRx1Enabled(enabled) => {
+                        state.rx1_enabled = enabled;
+                        if let Some(ref addr) = server_addr {
+                            let ctrl = ControlPacket { control_id: ControlId::Rx1Enable, value: enabled as u16 };
+                            let mut buf = [0u8; ControlPacket::SIZE];
+                            ctrl.serialize(&mut buf);
+                            let _ = send_tx!(&buf, addr.as_str());
+                            info!("RX1 enable sent: {}", enabled);
+                        }
+                    }
                     // RX2 / VFO-B commands
                     Command::SetRx2Enabled(enabled) => {
                         state.rx2_enabled = enabled;
@@ -1687,6 +1678,8 @@ impl ClientEngine {
                             let mut buf = [0u8; FrequencyPacket::SIZE];
                             pkt.serialize_as_type(&mut buf, PacketType::FrequencyYaesu);
                             let _ = send_tx!(&buf, addr.as_str());
+                        } else {
+                            warn!("Yaesu freq -> {} Hz DROPPED: not connected (server_addr=None)", hz);
                         }
                     }
                     Command::SetYaesuMenu(menu_num, p2_value) => {
@@ -2035,6 +2028,7 @@ impl ClientEngine {
                         vfo_b_volume = v;
                     }
                     Command::EnableRx2Spectrum(enabled) => {
+                        state.rx2_spectrum_enabled = enabled;
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::Rx2SpectrumEnable, value: enabled as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
@@ -2250,6 +2244,12 @@ impl ClientEngine {
                                     sdr_remote_core::protocol::ServerStateFlags::THETIS_STARTING,
                                 );
                                 state.thetis_configured = thetis_configured;
+                                // Single-receiver radios advertise SINGLE_RECEIVER;
+                                // absent = normal 2-RX default (also for old servers,
+                                // which never reach this branch anyway).
+                                state.rx2_present = !ack.state_flags.has(
+                                    sdr_remote_core::protocol::ServerStateFlags::SINGLE_RECEIVER,
+                                );
                                 if !thetis_configured {
                                     if matches!(
                                         state.connect_status,
@@ -2370,13 +2370,33 @@ impl ClientEngine {
                                         }
                                     }
 
-                                    // Re-send RX2 state on reconnect
+                                    // Re-send RX1 audio-abonnement on reconnect.
+                                    // Server default = AAN, dus alleen relevant als
+                                    // de client RX1 UIT wil — maar altijd sturen is
+                                    // idempotent en dekt beide gevallen.
+                                    {
+                                        let mut rx1_buf = [0u8; ControlPacket::SIZE];
+                                        let ctrl = ControlPacket {
+                                            control_id: ControlId::Rx1Enable,
+                                            value: state.rx1_enabled as u16,
+                                        };
+                                        ctrl.serialize(&mut rx1_buf);
+                                        let _ = send_tx!(&rx1_buf, addr.as_str());
+                                    }
+
+                                    // Re-send RX2 AUDIO-abonnement op reconnect (los van spectrum).
                                     if state.rx2_enabled {
                                         let mut rx2_buf = [0u8; ControlPacket::SIZE];
                                         let ctrl = ControlPacket { control_id: ControlId::Rx2Enable, value: 1 };
                                         ctrl.serialize(&mut rx2_buf);
                                         let _ = send_tx!(&rx2_buf, addr.as_str());
-
+                                        info!("RX2 audio re-sent on reconnect");
+                                    }
+                                    // Re-send RX2 SPECTRUM-abonnement op reconnect, LOS van het
+                                    // audio-abonnement (fase 3b/4) — anders krijgt een RX2-spectrum-
+                                    // zonder-audio-client na herverbinden geen spectrum meer.
+                                    if state.rx2_spectrum_enabled {
+                                        let mut rx2_buf = [0u8; ControlPacket::SIZE];
                                         let ctrl = ControlPacket { control_id: ControlId::Rx2SpectrumEnable, value: 1 };
                                         ctrl.serialize(&mut rx2_buf);
                                         let _ = send_tx!(&rx2_buf, addr.as_str());
@@ -2398,7 +2418,7 @@ impl ClientEngine {
                                             fft_ctrl.serialize(&mut rx2_buf);
                                             let _ = send_tx!(&rx2_buf, addr.as_str());
                                         }
-                                        info!("RX2 state re-sent on reconnect");
+                                        info!("RX2 spectrum re-sent on reconnect");
                                     }
                                     // Send AudioMode so server knows our channel requirements
                                     let ctrl = ControlPacket { control_id: ControlId::AudioMode, value: audio_mode };
@@ -2609,6 +2629,9 @@ impl ClientEngine {
                                 // Client->server only (WAV-playback TXEQ-bypass); de server
                                 // broadcast 'm nooit terug, dus hier no-op.
                                 ControlId::ThetisTxeq => {}
+                                // Client->server only (Yaesu STATE-abonnement + power on/off); no-op.
+                                ControlId::YaesuStateEnable | ControlId::Yaesu2StateEnable
+                                | ControlId::YaesuPowerOnOff | ControlId::Yaesu2PowerOnOff => {}
                                 ControlId::NoiseReduction => state.nr_level = ctrl.value.min(4) as u8,
                                 ControlId::AutoNotchFilter => state.anf_on = ctrl.value != 0,
                                 ControlId::DriveLevel => state.drive_level = ctrl.value.min(100) as u8,
@@ -2632,6 +2655,8 @@ impl ClientEngine {
                                 | ControlId::SpectrumZoom | ControlId::SpectrumPan
                                 | ControlId::SpectrumMaxBins | ControlId::SpectrumFftSize
                                 | ControlId::SpectrumBinDepth => {}
+                                // RX1/RX2 audio-abonnement (server-echo, indien gepusht)
+                                ControlId::Rx1Enable => state.rx1_enabled = ctrl.value != 0,
                                 // RX2 controls from server
                                 ControlId::Rx2Enable => state.rx2_enabled = ctrl.value != 0,
                                 ControlId::Rx2AfGain => {
@@ -2991,12 +3016,15 @@ impl ClientEngine {
                             state.yaesu_power_on = ys.power_on;
                             state.yaesu_af_gain = ys.af_gain;
                             state.yaesu_tx_power = ys.tx_power;
+                            state.yaesu_tx_power_max = ys.tx_power_max;
                             state.yaesu_squelch = ys.squelch;
                             state.yaesu_rf_gain = ys.rf_gain;
                             state.yaesu_mic_gain = ys.mic_gain;
                             state.yaesu_split = ys.split;
                             state.yaesu_scan = ys.scan;
                             state.yaesu_tuner_state = ys.tuner_state;
+                            state.yaesu_hi_swr = ys.hi_swr;
+                            audio.set_swr_alarm(state.yaesu_hi_swr || state.yaesu2_hi_swr);
                             state.yaesu_vfo_select = ys.vfo_select;
                             state.yaesu_memory_channel = ys.memory_channel;
                         }
@@ -3141,12 +3169,15 @@ impl ClientEngine {
                             state.yaesu2_power_on = ys.power_on;
                             state.yaesu2_af_gain = ys.af_gain;
                             state.yaesu2_tx_power = ys.tx_power;
+                            state.yaesu2_tx_power_max = ys.tx_power_max;
                             state.yaesu2_squelch = ys.squelch;
                             state.yaesu2_rf_gain = ys.rf_gain;
                             state.yaesu2_mic_gain = ys.mic_gain;
                             state.yaesu2_split = ys.split;
                             state.yaesu2_scan = ys.scan;
                             state.yaesu2_tuner_state = ys.tuner_state;
+                            state.yaesu2_hi_swr = ys.hi_swr;
+                            audio.set_swr_alarm(state.yaesu_hi_swr || state.yaesu2_hi_swr);
                             state.yaesu2_vfo_select = ys.vfo_select;
                             state.yaesu2_memory_channel = ys.memory_channel;
                         }
@@ -3191,6 +3222,9 @@ impl ClientEngine {
                             // clients), NIET uit de subscription-gated YaesuState. Pure
                             // toepassing in apply_yaesu_presence (unit-tested).
                             let (c0, c1) = apply_yaesu_presence(&mut state, &p);
+                            // Presence kan de hi_swr-vlag hebben gewist; het alarm
+                            // moet die daling meteen volgen.
+                            audio.set_swr_alarm(state.yaesu_hi_swr || state.yaesu2_hi_swr);
                             // Value-change-only logging (L4) — gedeeld, dus ook desktop.
                             if c0 { info!("[radio0] presence: {}", if p.slot0_present { "connected" } else { "disconnected" }); }
                             if c1 { info!("[radio1] presence: {}", if p.slot1_present { "connected" } else { "disconnected" }); }
@@ -3524,6 +3558,19 @@ impl ClientEngine {
                                         rx2_level_count += dev.len();
                                         Some(dev)
                                     } else { None };
+
+                                    // RX1-audio kan bewust uit staan (Rx1Enable, fase 3a):
+                                    // dan is left_dev leeg. RX2 wordt additief in L gemengd
+                                    // (Mono/BIN) en de output-gate schrijft alleen als L
+                                    // niet leeg is — dus zonder deze seed valt RX2-audio weg
+                                    // terwijl de level-bar (gemeten vóór de mix) wél uitslaat.
+                                    // Seed L met stilte op RX2-lengte zodat RX2 hoorbaar blijft
+                                    // zonder RX1-audio. VRX heeft een eigen mixpad (ongevoelig).
+                                    if left_dev.is_empty() {
+                                        if let Some(ref rx2) = rx2_dev {
+                                            left_dev = vec![0.0; rx2.len()];
+                                        }
+                                    }
 
                                     // In Mono and BIN: mix RX2 additively into L
                                     if (audio_mode == 0 || audio_mode == 1) && stereo_output {
@@ -4013,6 +4060,11 @@ impl ClientEngine {
                                 Ok(new_audio) => {
                                     audio = new_audio;
                                     audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
+                                    // The reopened stream may be on a different device at a
+                                    // different sample rate (a Bluetooth route change reopens
+                                    // on the BT-SCO device at 8/16 kHz) -> rebuild the resamplers
+                                    // for the new rate, otherwise the audio comes out choppy.
+                                    resync_audio_rates!();
                                     info!("Audio reconnected successfully");
                                     state.audio_error = false;
                                     audio_error_since = None;
@@ -4086,9 +4138,21 @@ impl ClientEngine {
                             current_loss_percent = smoothed_loss.round() as u8;
                             loss_prev_max_seq = Some(max);
                         } else if loss_prev_max_seq.is_some() {
-                            // Had packets before, now nothing - 100% loss
-                            smoothed_loss = smoothed_loss * 0.7 + 100.0 * 0.3;
-                            current_loss_percent = smoothed_loss.round() as u8;
+                            // Had packets before, now nothing. Dit is alleen ECHT
+                            // verlies als de client nog RX-audio verwacht. Bij een
+                            // alleen-VRX-client (RX1+RX2-audio bewust uit) stopt de
+                            // AudioMultiCh-stroom met opzet — afwezigheid is dan geen
+                            // verlies. Anders zou de loss naar 100% klimmen en zou de
+                            // server-loss-gate het VRX-spectrum wegfilteren (de VRX-
+                            // audio/spectrum-stromen voeden deze meter niet).
+                            if state.rx1_enabled || state.rx2_enabled {
+                                smoothed_loss = smoothed_loss * 0.7 + 100.0 * 0.3;
+                                current_loss_percent = smoothed_loss.round() as u8;
+                            } else {
+                                smoothed_loss = 0.0;
+                                current_loss_percent = 0;
+                                loss_prev_max_seq = None; // schone herstart bij RX-audio-herstart
+                            }
                         }
                         state.loss_percent = current_loss_percent;
                         loss_window_received = 0;
@@ -4635,5 +4699,31 @@ mod tests {
             slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1,
         });
         assert!(!c0 && !c1);
+    }
+
+    // Regression: een afwezige radio mag geen hi_swr-vlag laten staan. Anders
+    // blijft de andere radio het SWR-alarm bij elke state-push hernieuwen —
+    // het alarm dooft dan nooit meer.
+    #[test]
+    fn presence_absence_clears_hi_swr() {
+        let mut state = RadioState::default();
+        apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1,
+        });
+        state.yaesu_hi_swr = true;
+        state.yaesu2_hi_swr = true;
+
+        // Slot 1 verdwijnt → alleen diens vlag wordt gewist.
+        apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1,
+        });
+        assert!(state.yaesu_hi_swr, "aanwezige radio houdt zijn vlag");
+        assert!(!state.yaesu2_hi_swr, "afwezige radio verliest zijn vlag");
+
+        // Ook slot 0 verdwijnt → niets blijft over om het alarm te voeden.
+        apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1,
+        });
+        assert!(!state.yaesu_hi_swr && !state.yaesu2_hi_swr);
     }
 }

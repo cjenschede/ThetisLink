@@ -268,12 +268,16 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         } else _yaesuMemData.value,
                         yaesuModel = s.yaesuModel.toInt(),
                         yaesuTunerState = s.yaesuTunerState.toInt(),
+                        yaesuHiSwr = s.yaesuHiSwr,
+                        yaesuTxPowerMax = s.yaesuTxPowerMax.toInt(),
                         yaesuFeatureToggles = s.yaesuFeatureToggles,
                         yaesuFeatureLevels = s.yaesuFeatureLevels.map { it.toInt() },
                         yaesuFeatureFreqs = s.yaesuFeatureFreqs.map { it.toInt() },
                         yaesu2Connected = s.yaesu2Connected,
                         yaesu2Model = s.yaesu2Model.toInt(),
                         yaesu2TunerState = s.yaesu2TunerState.toInt(),
+                        yaesu2HiSwr = s.yaesu2HiSwr,
+                        yaesu2TxPowerMax = s.yaesu2TxPowerMax.toInt(),
                         yaesu2FreqA = s.yaesu2FreqA.toLong(),
                         yaesu2FreqB = s.yaesu2FreqB.toLong(),
                         yaesu2Mode = s.yaesu2Mode.toInt(),
@@ -586,6 +590,9 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun yaesuFreqSel(hz: Long) { if (sel() == 0) bridge?.yaesuFreq(hz.toULong()) else bridge?.yaesu2Freq(hz.toULong()) }
     fun yaesuModeSel(mode: Int) { if (sel() == 0) bridge?.yaesuMode(mode.toUByte()) else bridge?.yaesu2Mode(mode.toUByte()) }
     fun yaesuButtonSel(id: Int) { if (sel() == 0) bridge?.yaesuButton(id.toUShort()) else bridge?.yaesu2Button(id.toUShort()) }
+    /** Radio power on/off (CAT PS) voor de geselecteerde radio. UI biedt dit alleen
+     * klikbaar aan op de 991A (standby); de FTX-1 gaat echt uit -> daar label-only. */
+    fun yaesuPowerOnOffSel(on: Boolean) { if (sel() == 0) bridge?.yaesuPowerOnOff(on) else bridge?.yaesu2PowerOnOff(on) }
     fun yaesuSelectVfoSel(vfo: Int) { if (sel() == 0) bridge?.yaesuSelectVfo(vfo.toUByte()) else bridge?.yaesu2SelectVfo(vfo.toUByte()) }
     fun yaesuRecallMemorySel(ch: Int) { if (sel() == 0) bridge?.yaesuRecallMemory(ch.toUShort()) else bridge?.yaesu2RecallMemory(ch.toUShort()) }
     /** Getypte DSP/functie-control voor de geselecteerde radio (Fase 2/3). */

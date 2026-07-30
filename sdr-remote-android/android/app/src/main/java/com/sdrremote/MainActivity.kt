@@ -31,6 +31,10 @@ class MainActivity : ComponentActivity() {
     /** When true, volume-up is captured for PTT instead of system volume */
     var volumePttEnabled: Boolean = false
 
+    /** When true, the phone's OWN volume buttons act as PTT (never Bluetooth volume,
+     *  so a headset like the Jabra keeps its own volume control). */
+    var volumeKeysPttEnabled: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -47,20 +51,60 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** BT-remote PTT keys: page-turner / camera remotes (BLE HID). Volume keys are
+     *  handled separately (see volumeKeysPttEnabled) so the phone's own volume rocker
+     *  and a Bluetooth headset's volume keep working normally. */
     private fun isPttKey(keyCode: Int): Boolean =
         keyCode == KeyEvent.KEYCODE_CAMERA
             || keyCode == KeyEvent.KEYCODE_PAGE_UP
             || keyCode == KeyEvent.KEYCODE_PAGE_DOWN
 
+    private fun isVolumeKey(keyCode: Int): Boolean =
+        keyCode == KeyEvent.KEYCODE_VOLUME_UP
+            || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+
+    /** True when the key comes from an external (Bluetooth) input device, e.g. a
+     *  headset like the Jabra Evolve. Volume-key PTT must never steal these events. */
+    private fun isExternalKey(event: KeyEvent?): Boolean =
+        event?.device?.isExternal == true
+
+    /** Decide whether a key should act as PTT right now:
+     *   - BT page-turner / camera remote keys when the BT-remote-PTT toggle is on
+     *   - the phone's OWN volume keys when the volume-keys-PTT toggle is on
+     *     (but never volume events arriving over Bluetooth). */
+    private fun pttForKey(keyCode: Int, event: KeyEvent?): Boolean =
+        (volumePttEnabled && isPttKey(keyCode))
+            || (volumeKeysPttEnabled && isVolumeKey(keyCode) && !isExternalKey(event))
+
     /** Last key event info for debug display */
     private val _lastKeyEvent = MutableStateFlow("")
     val lastKeyEvent: StateFlow<String> = _lastKeyEvent.asStateFlow()
 
+    /** Intercept hardware keys at the earliest point, before the Compose view
+     *  hierarchy/focus-navigation can consume them. PAGE_UP/PAGE_DOWN are navigation
+     *  keys that never reach onKeyDown() (they get eaten by focus navigation), so a
+     *  BLE HID keyboard PTT only works from here. Consuming the event (return true)
+     *  also stops the screen from scrolling / the focus arrow from moving. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (pttForKey(event.keyCode, event)) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    _volumeUpHeld.value = true
+                    val name = KeyEvent.keyCodeToString(event.keyCode)
+                    _lastKeyEvent.value = "DOWN: $name (${event.keyCode})"
+                }
+                KeyEvent.ACTION_UP -> _volumeUpHeld.value = false
+            }
+            return true // consume before focus navigation / scrolling
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val name = KeyEvent.keyCodeToString(keyCode)
         _lastKeyEvent.value = "DOWN: $name ($keyCode)"
-        android.util.Log.i("ThetisLink", "KeyDown: $name ($keyCode) device=${event?.device?.name}")
-        if (volumePttEnabled && isPttKey(keyCode)) {
+        android.util.Log.i("ThetisLink", "KeyDown: $name ($keyCode) device=${event?.device?.name} external=${event?.device?.isExternal}")
+        if (pttForKey(keyCode, event)) {
             _volumeUpHeld.value = true
             return true // consume — don't change system volume / page
         }
@@ -68,7 +112,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        if (volumePttEnabled && isPttKey(keyCode)) {
+        if (pttForKey(keyCode, event)) {
             _volumeUpHeld.value = false
             return true
         }

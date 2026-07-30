@@ -162,6 +162,8 @@ data class SdrUiState(
     val yaesuMemoryData: String = "",
     val yaesuModel: Int = 0, // 0=991A, 1=FTX-1
     val yaesuTunerState: Int = 0, // interne ATU: 0=uit, 1=aan, 2=tunend
+    val yaesuHiSwr: Boolean = false, // radio meldt hoge SWR tijdens TX (zelf-wissend)
+    val yaesuTxPowerMax: Int = 0, // max TX-vermogen huidige band (EX max-power; 0=onbekend)
     // DSP/functie-feature-state radio 1 (typed control channel)
     val yaesuFeatureToggles: UInt = 0u,
     val yaesuFeatureLevels: List<Int> = emptyList(),
@@ -170,6 +172,7 @@ data class SdrUiState(
     val yaesu2Connected: Boolean = false,
     val yaesu2Model: Int = 1,
     val yaesu2TunerState: Int = 0,
+    val yaesu2HiSwr: Boolean = false,
     val yaesu2FreqA: Long = 0,
     val yaesu2FreqB: Long = 0,
     val yaesu2Mode: Int = 0,
@@ -178,6 +181,7 @@ data class SdrUiState(
     val yaesu2PowerOn: Boolean = false,
     val yaesu2AfGain: Int = 0,
     val yaesu2TxPower: Int = 0,
+    val yaesu2TxPowerMax: Int = 0, // max TX-vermogen huidige band (EX max-power; 0=onbekend)
     val yaesu2Squelch: Int = 0,
     val yaesu2RfGain: Int = 0,
     val yaesu2MicGain: Int = 0,

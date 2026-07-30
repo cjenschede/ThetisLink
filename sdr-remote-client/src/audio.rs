@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use sdr_remote_core::DEVICE_SAMPLE_RATE;
+use sdr_remote_logic::audio::{mix_swr_alarm, swr_alarm_hold_samples};
 
 /// Ring buffer capacity in samples (2s at device rate)
 const RING_CAPACITY: usize = DEVICE_SAMPLE_RATE as usize * 2;
@@ -58,6 +59,11 @@ pub struct ClientAudio {
     capture_gate: Arc<AtomicBool>,
     /// Mute: when true, playback callback outputs zeros (instant speaker silence for TX)
     playback_mute: Arc<AtomicBool>,
+    /// High-SWR alarm, as a watchdog rather than a latch: samples of beep left
+    /// to play. Refreshed by each radio state push; runs out by itself if those
+    /// stop (server or radio gone), so the alarm can never get stuck on.
+    /// The beep is mixed in even while muted for TX, which is when it matters.
+    swr_alarm: Arc<AtomicU32>,
     /// Samples of mic to discard right after the gate opens (keyup), so the
     /// speaker/chassis switch-on spike decays before mic audio is transmitted.
     /// 0 = disabled (no added latency - the default for isolated/headset audio).
@@ -85,6 +91,7 @@ impl ClientAudio {
         let audio_error = Arc::new(AtomicBool::new(false));
         let capture_gate = Arc::new(AtomicBool::new(false));
         let playback_mute = Arc::new(AtomicBool::new(false));
+        let swr_alarm = Arc::new(AtomicU32::new(0));
         let capture_gate_delay_samples = Arc::new(AtomicU32::new(0));
 
         let mut audio = Self {
@@ -98,6 +105,7 @@ impl ClientAudio {
             audio_error,
             capture_gate,
             playback_mute,
+            swr_alarm,
             capture_gate_delay_samples,
             capture_sample_rate: DEVICE_SAMPLE_RATE,
             playback_sample_rate: DEVICE_SAMPLE_RATE,
@@ -256,6 +264,10 @@ impl ClientAudio {
         let level = self.playback_level.clone();
         let err_flag = self.audio_error.clone();
         let mute = self.playback_mute.clone();
+        let alarm = self.swr_alarm.clone();
+        let alarm_rate = self.playback_sample_rate;
+        let mut alarm_pos: u32 = 0;
+        let mut alarm_phase: f32 = 0.0;
         // Pre-allocated scratches voor mute-drain en stereo-read. Capacity groeit
         // automatisch bij eerste call die meer nodig heeft; daarna geen alloc meer.
         let mut drain_scratch: Vec<f32> = Vec::with_capacity(8192);
@@ -272,6 +284,9 @@ impl ClientAudio {
                         playback_consumer.pop_slice(&mut drain_scratch[..data.len()]);
                         data.fill(0.0);
                         level.store(0u32, Ordering::Relaxed);
+                        // High SWR is a TX condition, so the alarm has to survive
+                        // the TX mute - it plays into the silenced buffer.
+                        mix_swr_alarm(data, out_channels, alarm_rate, &alarm, &mut alarm_pos, &mut alarm_phase);
                         return;
                     }
 
@@ -299,10 +314,13 @@ impl ClientAudio {
                         }
                     }
 
-                    // RMS level from L channel
+                    // RMS level from L channel (before the alarm is mixed in, so
+                    // the meter keeps showing received audio only)
                     let sum_sq: f32 = (0..read_frames).map(|i| { let s = stereo_buf[i * 2]; s * s }).sum();
                     let rms = (sum_sq / read_frames.max(1) as f32).sqrt();
                     level.store(rms.to_bits(), Ordering::Relaxed);
+
+                    mix_swr_alarm(data, out_channels, alarm_rate, &alarm, &mut alarm_pos, &mut alarm_phase);
                 },
                 move |err| {
                     log::error!("client playback error: {}", err);
@@ -439,5 +457,12 @@ impl sdr_remote_logic::audio::AudioBackend for ClientAudio {
 
     fn set_playback_mute(&mut self, mute: bool) {
         self.playback_mute.store(mute, Ordering::Relaxed);
+    }
+
+    fn set_swr_alarm(&mut self, on: bool) {
+        // Re-arm rather than latch: each call refreshes the hold window, so the
+        // beep stops on its own if the state pushes that drive it dry up.
+        let samples = if on { swr_alarm_hold_samples(self.playback_sample_rate) } else { 0 };
+        self.swr_alarm.store(samples, Ordering::Relaxed);
     }
 }

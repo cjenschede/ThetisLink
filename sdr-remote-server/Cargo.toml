@@ -18,6 +18,7 @@ rubato = { workspace = true }
 ringbuf = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+sdr-remote-theme = { path = "../sdr-remote-theme" }
 qrcode = "0.14"
 bytemuck = { workspace = true }
 log = { workspace = true }

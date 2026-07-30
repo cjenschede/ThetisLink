@@ -13,7 +13,7 @@ use oboe::{
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::HeapRb;
 
-use sdr_remote_logic::audio::AudioBackend;
+use sdr_remote_logic::audio::{mix_swr_alarm, swr_alarm_hold_samples, AudioBackend};
 
 /// Ring buffer capacity in samples (2 seconds at 48kHz)
 const RING_CAPACITY: usize = 48_000 * 2;
@@ -96,6 +96,14 @@ struct PlaybackCallback {
     level: Arc<AtomicU32>,
     error: Arc<AtomicBool>,
     mute: Arc<AtomicBool>,
+    /// High-SWR alarm watchdog: samples of beep left to play (see
+    /// `sdr_remote_logic::audio::mix_swr_alarm`).
+    swr_alarm: Arc<AtomicU32>,
+    /// Device rate, cached on the first callback: it is only known once the
+    /// stream is open, which is after this callback is built.
+    sample_rate: u32,
+    alarm_pos: u32,
+    alarm_phase: f32,
 }
 
 impl AudioOutputCallback for PlaybackCallback {
@@ -103,15 +111,23 @@ impl AudioOutputCallback for PlaybackCallback {
 
     fn on_audio_ready(
         &mut self,
-        _stream: &mut dyn oboe::AudioOutputStreamSafe,
+        stream: &mut dyn oboe::AudioOutputStreamSafe,
         data: &mut [f32],
     ) -> DataCallbackResult {
+        if self.sample_rate == 0 {
+            self.sample_rate = stream.get_sample_rate() as u32;
+        }
+
         // Instant mute during TX: output zeros and drain ring buffer
         // so no stale audio remains when unmuted.
         if self.mute.load(Ordering::Relaxed) {
             self.consumer.pop_slice(data);
             data.fill(0.0);
             self.level.store(0u32, Ordering::Relaxed);
+            // High SWR is a TX condition, so the alarm has to survive the TX
+            // mute - it plays into the silenced buffer.
+            mix_swr_alarm(data, 1, self.sample_rate, &self.swr_alarm,
+                &mut self.alarm_pos, &mut self.alarm_phase);
             return DataCallbackResult::Continue;
         }
 
@@ -122,7 +138,8 @@ impl AudioOutputCallback for PlaybackCallback {
             *sample = 0.0;
         }
 
-        // RMS level of played audio
+        // RMS level of played audio (before the alarm is mixed in, so the meter
+        // keeps showing received audio only)
         let rms = (data[..read]
             .iter()
             .map(|&s| s * s)
@@ -130,6 +147,9 @@ impl AudioOutputCallback for PlaybackCallback {
             / read.max(1) as f32)
             .sqrt();
         self.level.store(rms.to_bits(), Ordering::Relaxed);
+
+        mix_swr_alarm(data, 1, self.sample_rate, &self.swr_alarm,
+            &mut self.alarm_pos, &mut self.alarm_phase);
 
         DataCallbackResult::Continue
     }
@@ -165,6 +185,7 @@ pub struct OboeAudioBackend {
     capture_gate: Arc<AtomicBool>,
     capture_gate_delay_samples: Arc<AtomicU32>,
     playback_mute: Arc<AtomicBool>,
+    swr_alarm: Arc<AtomicU32>,
     capture_sample_rate: u32,
     playback_sample_rate: u32,
     // Keep streams alive — dropped when OboeAudioBackend is dropped
@@ -183,6 +204,7 @@ impl OboeAudioBackend {
         let capture_gate = Arc::new(AtomicBool::new(false));
         let capture_gate_delay_samples = Arc::new(AtomicU32::new(0));
         let playback_mute = Arc::new(AtomicBool::new(false));
+        let swr_alarm = Arc::new(AtomicU32::new(0));
 
         // Capture stream (microphone)
         let capture_cb = CaptureCallback {
@@ -214,6 +236,10 @@ impl OboeAudioBackend {
             level: playback_level.clone(),
             error: audio_error.clone(),
             mute: playback_mute.clone(),
+            swr_alarm: swr_alarm.clone(),
+            sample_rate: 0,
+            alarm_pos: 0,
+            alarm_phase: 0.0,
         };
 
         let mut playback_stream = AudioStreamBuilder::default()
@@ -251,6 +277,7 @@ impl OboeAudioBackend {
             capture_gate,
             capture_gate_delay_samples,
             playback_mute,
+            swr_alarm,
             capture_sample_rate,
             playback_sample_rate,
             _capture_stream: capture_stream,
@@ -307,5 +334,12 @@ impl AudioBackend for OboeAudioBackend {
 
     fn set_playback_mute(&mut self, mute: bool) {
         self.playback_mute.store(mute, Ordering::Relaxed);
+    }
+
+    fn set_swr_alarm(&mut self, on: bool) {
+        // Re-arm rather than latch: each call refreshes the hold window, so the
+        // beep stops on its own if the state pushes that drive it dry up.
+        let samples = if on { swr_alarm_hold_samples(self.playback_sample_rate) } else { 0 };
+        self.swr_alarm.store(samples, Ordering::Relaxed);
     }
 }

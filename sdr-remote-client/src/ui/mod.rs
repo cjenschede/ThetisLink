@@ -6,6 +6,7 @@ mod helpers;
 mod meters;
 mod window_placement;
 mod spectrum;
+mod channel_spectrum;
 pub(crate) mod theme;
 pub(crate) mod config;
 mod devices;
@@ -65,6 +66,8 @@ use std::collections::{HashMap, VecDeque};
 use sdr_remote_core::protocol::ControlId;
 use sdr_remote_logic::commands::Command;
 use sdr_remote_logic::state::RadioState;
+
+use channel_spectrum::{ChannelId, ChannelSpectrum, SpectrumSnapshot};
 
 use crate::LogBuffer;
 
@@ -348,6 +351,10 @@ pub struct SdrRemoteApp {
     last_tx_follow_sent: Option<(i32, i32)>,
     tx_follow_last_send_at: Option<Instant>,
     thetis_configured: bool,
+    /// Server-gerapporteerde radio-capability: heeft de Thetis-radio een tweede
+    /// ontvanger? Default true; false = server op single-receiver gezet -> RX2 +
+    /// VRX2 nergens tonen (VRX1 hangt aan RX1 en blijft).
+    rx2_present: bool,
     thetis_starting: bool,
     // Spectrum + waterfall
     spectrum_enabled: bool,
@@ -419,9 +426,20 @@ pub struct SdrRemoteApp {
     log_buffer: LogBuffer,
     show_log: bool,
     show_about: bool,
-    // VRX joint window - two channels (VRX1 on RX1+VFO-A, VRX2 on
-    // RX2+VFO-B), shown side-by-side in one popout viewport.
-    show_vrx: bool,
+    // VRX losse vensters - VRX1 (op RX1+VFO-A) en VRX2 (op RX2+VFO-B) elk in een
+    // eigen popout-viewport, onafhankelijk te plaatsen (zoals RX1/RX2).
+    vrx1_popout: bool,
+    vrx2_popout: bool,
+    // "Vensters schikken" sleepraster: open venster (show_layout_arranger) + de
+    // rijen-indeling die de gebruiker samenstelt (rij = naast elkaar, meer rijen
+    // = onder elkaar). Alleen sessie-state, niet persistent.
+    show_layout_arranger: bool,
+    /// Rijen-indeling PER monitor (index = monitor). Je kiest een scherm in de
+    /// dropdown en sleept daar kanalen in; "Toepassen" snapt elk scherm apart.
+    layout_rows_per_monitor: Vec<Vec<Vec<SnapWindow>>>,
+    /// Doelmonitor voor "Toepassen" (index in monitor_work_areas_px). Default =
+    /// de monitor waar het hoofdvenster staat; overrulebaar in het Schik-venster.
+    layout_target_monitor: usize,
     vrx1_enabled: bool,
     vrx1_freq_hz: u64,
     vrx1_mode: u8, // 0=USB, 1=LSB
@@ -443,9 +461,14 @@ pub struct SdrRemoteApp {
     /// fresh server pushes without re-snapping every frame.
     last_vrx1_autotune_hz: u64,
     last_vrx2_autotune_hz: u64,
+    // VRX1-vensterpositie (hergebruikt de bestaande vrx_popout_* config-sleutels).
     vrx_popout_pos: Option<egui::Pos2>,
     vrx_popout_size: Option<egui::Vec2>,
     vrx_popout_init_applied: bool,
+    // VRX2-vensterpositie (eigen config-sleutels vrx2_popout_*).
+    vrx2_popout_pos: Option<egui::Pos2>,
+    vrx2_popout_size: Option<egui::Vec2>,
+    vrx2_popout_init_applied: bool,
     playback_level_vrx1: f32,
     playback_level_vrx2: f32,
     /// Per-DDC-position remembered VRX freq. Key = DDC center in
@@ -480,25 +503,13 @@ pub struct SdrRemoteApp {
     /// packets with high-resolution extracted bins centered on
     /// VRX freq. Persisted.
     vrx1_high_res_spectrum: bool,
-    /// Latest received extracted-bins frame (mirrored from state).
-    vrx1_extracted_bins: Vec<u16>,
-    vrx1_extracted_center_hz: u32,
-    vrx1_extracted_span_hz: u32,
-    vrx1_extracted_sequence: u16,
     /// Last span (kHz) sent to server; resend on change to avoid spam.
     vrx1_high_res_last_span_khz: u16,
-    /// Dedicated waterfall ring for VRX1 high-res mode. Fed from
-    /// extracted-bin packets; rendered instead of the full-DDC RX1
-    /// waterfall when the high-res toggle is on.
-    vrx1_hr_waterfall: WaterfallRingBuffer,
-    // transient
-    vrx1_auto_ref_value: f32,
-    vrx1_auto_ref_frames: u32,
-    vrx1_auto_ref_initialized: bool,
-    vrx1_smeter_dbm: f32,
-    vrx1_smeter_initialized: bool,
-    vrx1_smeter_peak: f32,
-    vrx1_smeter_peak_time: Instant,
+    /// VRX1's zelfstandige kanaal-spectrum: eigen bins/center/span, waterfall,
+    /// s-meter en auto-ref-afleiding — alles uit de eigen datastroom. Vervangt
+    /// de losse `vrx1_extracted_*` / `vrx1_hr_waterfall` / `vrx1_smeter_*` /
+    /// `vrx1_auto_ref_*` velden (REFACTOR-audio-spectrum-per-channel §6.1).
+    vrx1_spectrum: ChannelSpectrum,
     vrx2_ref_db: f32,
     vrx2_range_db: f32,
     vrx2_wf_contrast: f32,
@@ -508,19 +519,9 @@ pub struct SdrRemoteApp {
     vrx2_filter_low_hz: i32,
     vrx2_filter_high_hz: i32,
     vrx2_high_res_spectrum: bool,
-    vrx2_extracted_bins: Vec<u16>,
-    vrx2_extracted_center_hz: u32,
-    vrx2_extracted_span_hz: u32,
-    vrx2_extracted_sequence: u16,
     vrx2_high_res_last_span_khz: u16,
-    vrx2_hr_waterfall: WaterfallRingBuffer,
-    vrx2_auto_ref_value: f32,
-    vrx2_auto_ref_frames: u32,
-    vrx2_auto_ref_initialized: bool,
-    vrx2_smeter_dbm: f32,
-    vrx2_smeter_initialized: bool,
-    vrx2_smeter_peak: f32,
-    vrx2_smeter_peak_time: Instant,
+    /// VRX2's zelfstandige kanaal-spectrum (zie `vrx1_spectrum`).
+    vrx2_spectrum: ChannelSpectrum,
     /// Texture handles for VRX waterfall rendering - one per VRX so
     /// zoom/pan stays independent. Rebuilt on each render from the
     /// shared RX1/RX2 waterfall ring buffers (no duplicate storage).
@@ -720,6 +721,7 @@ pub struct SdrRemoteApp {
     yaesu2_vfo_select: u8,      // 0=VFO, 1=Memory, 2=MemTune
     yaesu2_memory_channel: u16,
     yaesu2_tuner_state: u8, // interne ATU-stand van de radio (0=off,1=on,2=tuning) via AC;-poll
+    yaesu2_hi_swr: bool,    // radio meldt hoge SWR tijdens TX (zelf-wissend)
     yaesu2_feature_toggles: u32, // DSP/functie-toggles bitfield (PATCH-yaesu-extra-controls)
     yaesu2_feature_levels: [u8; 16], // multi-state/level-waarden (Fase B: AGC, IPO)
     yaesu2_squelch: u16,
@@ -781,6 +783,10 @@ pub struct SdrRemoteApp {
     yaesu_popout_init_applied: bool,
     yaesu_popout_first_frame: bool,
     yaesu_enable_sent: bool,
+    /// Laatst naar de server gestuurde Yaesu STATE-abonnement (venster open?), los
+    /// van de audio-vink. None = nog niet gestuurd / reset bij disconnect -> hersturen.
+    yaesu_state_sent: Option<bool>,
+    yaesu2_state_sent: Option<bool>,
     yaesu_mic_gain: f32, // internal multiplier for Yaesu USB TX audio
     // Client-side TX-compressor (0-100) + AGC-toggle per radio (net als de EQ).
     yaesu_compressor: u8,
@@ -796,9 +802,20 @@ pub struct SdrRemoteApp {
     yaesu_rf_gain: u16,       // 0-255
     yaesu_radio_mic_gain: u16, // 0-100 (radio's own mic gain)
     yaesu_rf_power: u16,      // 0-100 (TX power)
+    // Max TX-vermogen (watt) voor de huidige band (PATCH-yaesu-power-scaling). Drijft
+    // het sliderbereik 5..=max. 0 = oude server/onbekend -> val terug op 100.
+    yaesu_tx_power_max: u16,
+    yaesu2_tx_power_max: u16,
+    // Confirm-based PWR-sync: laatst-gestuurde waarde + tijd. De slider accepteert de
+    // radio-readback pas als die deze waarde bevestigt (of na timeout) -> geen bounce.
+    yaesu_power_pending: Option<u16>,
+    yaesu_power_pending_at: Option<Instant>,
+    yaesu2_power_pending: Option<u16>,
+    yaesu2_power_pending_at: Option<Instant>,
     yaesu_scan_active: bool,
     yaesu_split_active: bool,
     yaesu_tuner_state: u8, // interne ATU-stand van de radio (0=off,1=on,2=tuning) via AC;-poll
+    yaesu_hi_swr: bool,    // radio meldt hoge SWR tijdens TX (zelf-wissend)
     yaesu_feature_toggles: u32, // DSP/functie-toggles bitfield (PATCH-yaesu-extra-controls)
     yaesu_feature_levels: [u8; 16], // multi-state/level-waarden (Fase B: AGC, IPO)
     // Fase C level-sliders (gedebouncet), [slot][NB,DNR,Processor,AMC]. Gesynct uit
@@ -853,8 +870,14 @@ pub struct SdrRemoteApp {
     last_frame_time: Instant,
     // DX-cluster spot stream - data-saving toggle (Server-tab)
     dx_spots_enabled: bool,
+    /// RX1 audio-abonnement (default AAN). Uit = geen RX1-audiostroom van de
+    /// server (bandbreedte sparen bij alleen-VRX-gebruik).
+    rx1_enabled: bool,
     // RX2 / VFO-B
     rx2_enabled: bool,
+    /// RX2 spectrum-abonnement, LOS van rx2_enabled (audio). Uit = geen
+    /// RX2-spectrumstroom; aan = spectrum ook zonder RX2-audio (fase 3b/4).
+    rx2_spectrum_enabled: bool,
     /// Opt-in: Thetis RX1/RX2/BinR audio in wideband Opus (16 kHz)
     /// i.p.v. narrowband (8 kHz). Default false; gestuurd naar server
     /// via `ControlId::ThetisWidebandAudio`. Zie memory
@@ -863,7 +886,9 @@ pub struct SdrRemoteApp {
     thetis_wideband_audio: bool,
     rx2_popout: bool,
     popout_joined: bool,
-    popout_meter_analog: bool,
+    /// S-meter-type PER kanaal (analoog=true / balk=false). Index via M_RX1..M_YAESU2.
+    /// Klik op de meter wisselt het type; persistent per kanaal.
+    meter_analog: [bool; 6],
     ub_show_menu: bool,
     collapse_diversity: bool,
     collapse_yaesu_eq: bool,
@@ -1022,7 +1047,58 @@ impl VrxChannel {
     }
 }
 
+/// Een popout-venster dat door de "Vensters schikken"-sleepraster op het scherm
+/// gesnapt kan worden. DnD-payload (Copy, dus Send+Sync+'static).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SnapWindow {
+    Rx1,
+    Rx2,
+    Vrx1,
+    Vrx2,
+    Yaesu1,
+    Yaesu2,
+}
+impl SnapWindow {
+    const ALL: [SnapWindow; 6] = [
+        SnapWindow::Rx1, SnapWindow::Rx2, SnapWindow::Vrx1,
+        SnapWindow::Vrx2, SnapWindow::Yaesu1, SnapWindow::Yaesu2,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            SnapWindow::Rx1 => "RX1",
+            SnapWindow::Rx2 => "RX2",
+            SnapWindow::Vrx1 => "VRX1",
+            SnapWindow::Vrx2 => "VRX2",
+            SnapWindow::Yaesu1 => "Yaesu 1",
+            SnapWindow::Yaesu2 => "Yaesu 2",
+        }
+    }
+}
+
+// Indices in `meter_analog[..]` (s-meter-type per kanaal).
+const M_RX1: usize = 0;
+const M_RX2: usize = 1;
+const M_VRX1: usize = 2;
+const M_VRX2: usize = 3;
+const M_YAESU1: usize = 4;
+const M_YAESU2: usize = 5;
+
 impl SdrRemoteApp {
+    /// Klik op een s-meter wisselt het type (analoog <-> balk) van dat kanaal en
+    /// bewaart het. `rect` is het vlak dat de meter-helper teruggaf.
+    fn meter_click(&mut self, ui: &egui::Ui, rect: egui::Rect, ch: usize) {
+        if rect.width() < 4.0 { return; }
+        let resp = ui.interact(rect, egui::Id::new(("smeter_click", ch)), egui::Sense::click());
+        let clicked = resp
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(rust_i18n::t!("main_meter_click_hover").to_string())
+            .clicked();
+        if clicked {
+            self.meter_analog[ch] = !self.meter_analog[ch];
+            self.save_full_config();
+        }
+    }
+
 
     fn vrx_send_enabled(&self, ch: VrxChannel, on: bool) -> bool {
         self.cmd_tx.send(match ch {
@@ -1058,7 +1134,48 @@ impl SdrRemoteApp {
     /// verplichte hover. Dispatch-discipline (Besluit 8) gelijk aan RX: controls zijn
     /// alleen actief wanneer verbonden, en lokale state wordt pas gemuteerd nadat het
     /// commando daadwerkelijk is verstuurd.
+    /// Wrapper (zoals RX): in analoog-modus staat de s-meter rechtsboven met de
+    /// controls in een linkerkolom; in balk-modus rendert inner alles in-line.
     fn render_vrx_channel_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        ch: VrxChannel,
+        ddc_center: u64,
+        ddc_min: u64,
+        ddc_max: u64,
+    ) {
+        let meter_ch = match ch { VrxChannel::Vrx1 => M_VRX1, VrxChannel::Vrx2 => M_VRX2 };
+        if self.meter_analog[meter_ch] {
+            let smeter = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum.smeter_dbm(), VrxChannel::Vrx2 => self.vrx2_spectrum.smeter_dbm() };
+            let smeter_peak = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum.smeter_peak(), VrxChannel::Vrx2 => self.vrx2_spectrum.smeter_peak() };
+            let total_w = ui.available_width();
+            let start = ui.cursor().min;
+            // Meet de controls-hoogte op volle breedte.
+            let measure_rect = egui::Rect::from_min_size(start, egui::vec2(total_w, 500.0));
+            let mut measure = ui.new_child(egui::UiBuilder::new().max_rect(measure_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+            self.render_vrx_channel_controls_inner(&mut measure, ch, ddc_center, ddc_min, ddc_max);
+            let controls_h = measure.min_rect().height();
+            // Meter rechts, controls links; laat minstens ~260px voor de controls.
+            let meter_w = (total_w - 260.0).max(0.0).min(controls_h * 2.0);
+            let controls_w = total_w - meter_w - if meter_w > 0.0 { 8.0 } else { 0.0 };
+            let controls_rect = egui::Rect::from_min_size(start, egui::vec2(controls_w, 500.0));
+            let mut left = ui.new_child(egui::UiBuilder::new().max_rect(controls_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+            self.render_vrx_channel_controls_inner(&mut left, ch, ddc_center, ddc_min, ddc_max);
+            let mut mrect = egui::Rect::NOTHING;
+            if meter_w > 80.0 {
+                let meter_pos = egui::pos2(start.x + controls_w + 4.0, start.y);
+                let meter_rect = egui::Rect::from_min_size(meter_pos, egui::vec2(meter_w, controls_h));
+                let mut right = ui.new_child(egui::UiBuilder::new().max_rect(meter_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+                mrect = smeter_analog_sized(&mut right, smeter, smeter_peak, false, false, Some((meter_w, controls_h.min(140.0))));
+            }
+            ui.advance_cursor_after_rect(egui::Rect::from_min_size(start, egui::vec2(total_w, controls_h)));
+            self.meter_click(ui, mrect, meter_ch);
+        } else {
+            self.render_vrx_channel_controls_inner(ui, ch, ddc_center, ddc_min, ddc_max);
+        }
+    }
+
+    fn render_vrx_channel_controls_inner(
         &mut self,
         ui: &mut egui::Ui,
         ch: VrxChannel,
@@ -1075,30 +1192,32 @@ impl SdrRemoteApp {
         let filter_high = match ch { VrxChannel::Vrx1 => self.vrx1_filter_high_hz, VrxChannel::Vrx2 => self.vrx2_filter_high_hz };
         let mut volume = match ch { VrxChannel::Vrx1 => self.vrx1_volume, VrxChannel::Vrx2 => self.vrx2_volume };
         let high_res = match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum };
-        let smeter = match ch { VrxChannel::Vrx1 => self.vrx1_smeter_dbm, VrxChannel::Vrx2 => self.vrx2_smeter_dbm };
-        let smeter_peak = match ch { VrxChannel::Vrx1 => self.vrx1_smeter_peak, VrxChannel::Vrx2 => self.vrx2_smeter_peak };
+        let smeter = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum.smeter_dbm(), VrxChannel::Vrx2 => self.vrx2_spectrum.smeter_dbm() };
+        let smeter_peak = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum.smeter_peak(), VrxChannel::Vrx2 => self.vrx2_spectrum.smeter_peak() };
         let source_freq = match ch { VrxChannel::Vrx1 => self.frequency_hz, VrxChannel::Vrx2 => self.rx2_frequency_hz };
         let cur_bw = (filter_high - filter_low).abs();
-        let analog = self.popout_meter_analog;
+        let meter_ch = match ch { VrxChannel::Vrx1 => M_VRX1, VrxChannel::Vrx2 => M_VRX2 };
+        let analog = self.meter_analog[meter_ch];
         let (freq_prefix, en_hover, copy_hover, mode_hover, bw_hover, vol_hover) = match ch {
-            VrxChannel::Vrx1 => ("A:", "Enable/disable VRX1 audio and spectrum.", "Copy VFO-A to VRX1.", "Set VRX1 demodulation mode.", "Set VRX1 audio filter bandwidth.", "Set VRX1 mix volume."),
-            VrxChannel::Vrx2 => ("B:", "Enable/disable VRX2 audio and spectrum.", "Copy VFO-B to VRX2.", "Set VRX2 demodulation mode.", "Set VRX2 audio filter bandwidth.", "Set VRX2 mix volume."),
+            VrxChannel::Vrx1 => ("A:",
+                rust_i18n::t!("main_vrx_enable_hover", n = 1).to_string(),
+                rust_i18n::t!("main_vrx_copy_hover_a", n = 1).to_string(),
+                rust_i18n::t!("main_vrx_mode_hover", n = 1).to_string(),
+                rust_i18n::t!("main_vrx_bw_hover", n = 1).to_string(),
+                rust_i18n::t!("main_vrx_vol_hover", n = 1).to_string()),
+            VrxChannel::Vrx2 => ("B:",
+                rust_i18n::t!("main_vrx_enable_hover", n = 2).to_string(),
+                rust_i18n::t!("main_vrx_copy_hover_b", n = 2).to_string(),
+                rust_i18n::t!("main_vrx_mode_hover", n = 2).to_string(),
+                rust_i18n::t!("main_vrx_bw_hover", n = 2).to_string(),
+                rust_i18n::t!("main_vrx_vol_hover", n = 2).to_string()),
         };
 
         // Header: VRXn + enable toggle + DDC range (status, niet klikbaar)
         ui.horizontal(|ui| {
             ui.label(RichText::new(ch.label()).size(theme::TL_CHANNEL_HEADER_FONT).strong());
-            if theme::tl_toggle_button(ui, "Enable", enabled, connected, theme::TL_SEGMENT_FONT, en_hover).clicked() {
-                let now = !enabled;
-                if self.vrx_send_enabled(ch, now) {
-                    match ch { VrxChannel::Vrx1 => self.vrx1_enabled = now, VrxChannel::Vrx2 => self.vrx2_enabled = now };
-                    let last_span = match ch { VrxChannel::Vrx1 => self.vrx1_high_res_last_span_khz, VrxChannel::Vrx2 => self.vrx2_high_res_last_span_khz };
-                    let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(id, now && high_res, last_span.max(1)));
-                    if !now {
-                        match ch { VrxChannel::Vrx1 => self.vrx1_extracted_bins.clear(), VrxChannel::Vrx2 => self.vrx2_extracted_bins.clear() };
-                    }
-                    self.save_full_config();
-                }
+            if theme::tl_toggle_button(ui, &rust_i18n::t!("main_enable").to_string(), enabled, connected, theme::TL_SEGMENT_FONT, &en_hover).clicked() {
+                self.toggle_vrx_audio(ch);
             }
             ui.label(RichText::new(format!(
                 "{} | DDC {:.3} MHz | range {:.3}-{:.3} MHz",
@@ -1112,13 +1231,13 @@ impl SdrRemoteApp {
             // niet zinvol / zeer lage gevoeligheid. Amber = status (style guide).
             if freq_hz < ddc_min || freq_hz > ddc_max {
                 ui.label(
-                    RichText::new("OUT OF BAND")
+                    RichText::new(rust_i18n::t!("main_out_of_band").to_string())
                         .size(theme::TL_BW_STATUS_FONT)
                         .strong()
                         .color(theme::TL_AMBER_TEXT),
                 )
                 .on_hover_text(
-                    "VRX frequency is outside the current receiver window (RX is on another band). Very low sensitivity until the RX band matches the VRX frequency.",
+                    rust_i18n::t!("main_out_of_band_hover").to_string(),
                 );
             }
         });
@@ -1135,7 +1254,7 @@ impl SdrRemoteApp {
             }
             ui.label(RichText::new(vrx_mode_label(mode)).size(theme::TL_MODE_STATUS_FONT).color(theme::TL_AMBER_TEXT));
             ui.label(RichText::new(format_bandwidth(cur_bw, false)).size(theme::TL_BW_STATUS_FONT).weak());
-            if theme::tl_action_button(ui, "Copy VFO", connected, theme::TL_SEGMENT_FONT, copy_hover).clicked()
+            if theme::tl_action_button(ui, &rust_i18n::t!("main_copy_vfo").to_string(), connected, theme::TL_SEGMENT_FONT, &copy_hover).clicked()
                 && self.vrx_send_freq(ch, source_freq)
             {
                 match ch { VrxChannel::Vrx1 => self.vrx1_freq_hz = source_freq, VrxChannel::Vrx2 => self.vrx2_freq_hz = source_freq };
@@ -1143,16 +1262,16 @@ impl SdrRemoteApp {
             }
         });
 
-        // S-meter (default 392x120 conform style guide)
-        if analog {
-            smeter_analog_sized(ui, smeter, smeter_peak, false, false, Some((392.0, 120.0)));
-        } else {
-            smeter_bar_popout(ui, smeter, smeter_peak, false, false, 100);
+        // S-meter: in balk-modus in-line; in analoog-modus tekent de wrapper 'm
+        // rechtsboven (zoals RX). Klik op de meter wisselt het type.
+        if !analog {
+            let mrect = smeter_bar_popout(ui, smeter, smeter_peak, false, false, 100);
+            self.meter_click(ui, mrect, meter_ch);
         }
 
         // Volume
         ui.horizontal(|ui| {
-            ui.label("Volume:");
+            ui.label(rust_i18n::t!("main_volume_label").to_string());
             let resp = ui.add_enabled(connected, egui::Slider::new(&mut volume, 0.001..=1.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)))
@@ -1166,11 +1285,11 @@ impl SdrRemoteApp {
 
         // Mode (gedeelde segmented selector; enige bediening)
         ui.horizontal(|ui| {
-            ui.label("Mode:");
+            ui.label(rust_i18n::t!("main_mode_label").to_string());
             if let Some(mode_val) = theme::tl_segmented_selector(
                 ui,
                 VRX_MODES.iter().map(|&(m, l)| (m, l.to_string())),
-                mode, connected, theme::TL_SEGMENT_FONT, mode_hover,
+                mode, connected, theme::TL_SEGMENT_FONT, &mode_hover,
             ) {
                 if self.vrx_send_mode(ch, mode_val) {
                     match ch { VrxChannel::Vrx1 => self.vrx1_mode = mode_val, VrxChannel::Vrx2 => self.vrx2_mode = mode_val };
@@ -1193,8 +1312,8 @@ impl SdrRemoteApp {
         if mode == 3 {
             ui.horizontal(|ui| {
                 let mut at = match ch { VrxChannel::Vrx1 => self.vrx1_auto_tune, VrxChannel::Vrx2 => self.vrx2_auto_tune };
-                if ui.add_enabled(connected, egui::Checkbox::new(&mut at, "Auto-tune to carrier"))
-                    .on_hover_text("SAM: follow the AM carrier - the VFO snaps onto the carrier so the filter stays symmetric around it. Locks within ±3 kHz.")
+                if ui.add_enabled(connected, egui::Checkbox::new(&mut at, rust_i18n::t!("main_auto_tune_carrier").to_string()))
+                    .on_hover_text(rust_i18n::t!("main_auto_tune_carrier_hover").to_string())
                     .changed()
                     && self.cmd_tx.send(Command::SetVrxAutoTune(id, at)).is_ok()
                 {
@@ -1205,11 +1324,11 @@ impl SdrRemoteApp {
 
         // BW (gedeelde segmented selector; mode-afhankelijke presets)
         ui.horizontal(|ui| {
-            ui.label("BW:");
+            ui.label(rust_i18n::t!("main_bw_label").to_string());
             if let Some(p) = theme::tl_segmented_selector(
                 ui,
                 vrx_filter_presets(mode).iter().map(|&p| (p, format_bandwidth(p, false))),
-                cur_bw, connected, theme::TL_SEGMENT_FONT, bw_hover,
+                cur_bw, connected, theme::TL_SEGMENT_FONT, &bw_hover,
             ) {
                 let (lo, hi) = vrx_filter_from_preset(mode, p);
                 if self.cmd_tx.send(Command::SetVrxFilter(id, lo, hi)).is_ok() {
@@ -1225,27 +1344,259 @@ impl SdrRemoteApp {
         // High-res spectrum toggle (server-side extracted view)
         ui.horizontal(|ui| {
             let mut hr = high_res;
-            if ui.add_enabled(connected, egui::Checkbox::new(&mut hr, "High-res spectrum"))
-                .on_hover_text("Request a server-extracted high-resolution VRX spectrum. Uses extra bandwidth.")
+            if ui.add_enabled(connected, egui::Checkbox::new(&mut hr, rust_i18n::t!("main_high_res_spectrum").to_string()))
+                .on_hover_text(rust_i18n::t!("main_high_res_spectrum_hover").to_string())
                 .changed()
             {
-                let (source_span, zoom) = match ch {
-                    VrxChannel::Vrx1 => (self.full_spectrum_span_hz, self.vrx1_spectrum_zoom),
-                    VrxChannel::Vrx2 => (self.rx2_full_spectrum_span_hz, self.vrx2_spectrum_zoom),
-                };
-                let span_hz = (source_span as f32 / zoom.max(1.0)) as u32;
-                let span_khz = ((span_hz / 1000).max(1)) as u16;
-                if self.cmd_tx.send(Command::SetVrxHighResSpectrum(id, enabled && hr, span_khz)).is_ok() {
-                    match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum = hr, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum = hr };
-                    match ch { VrxChannel::Vrx1 => self.vrx1_high_res_last_span_khz = span_khz, VrxChannel::Vrx2 => self.vrx2_high_res_last_span_khz = span_khz };
-                    if !hr {
-                        match ch { VrxChannel::Vrx1 => self.vrx1_extracted_bins.clear(), VrxChannel::Vrx2 => self.vrx2_extracted_bins.clear() };
-                    }
-                    self.save_full_config();
-                }
+                self.toggle_vrx_spectrum(ch);
             }
         });
     }
+    /// VRX audio-vink (kanaal aan/uit). Stuurt ALLEEN het audio-abonnement; het
+    /// VRX-spectrum staat er los van (eigen toggle) — audio uit mag het spectrum
+    /// niet doden en andersom (vink-model, zelfde decouple als RX2).
+    fn toggle_vrx_audio(&mut self, ch: VrxChannel) {
+        let enabled = match ch { VrxChannel::Vrx1 => self.vrx1_enabled, VrxChannel::Vrx2 => self.vrx2_enabled };
+        let high_res = match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum };
+        let now = !enabled;
+        if self.vrx_send_enabled(ch, now) {
+            match ch { VrxChannel::Vrx1 => self.vrx1_enabled = now, VrxChannel::Vrx2 => self.vrx2_enabled = now };
+            match ch {
+                VrxChannel::Vrx1 => log::info!("{}", self.vrx1_spectrum.debug_line(now, high_res)),
+                VrxChannel::Vrx2 => log::info!("{}", self.vrx2_spectrum.debug_line(now, high_res)),
+            }
+            self.save_full_config();
+        }
+    }
+
+    /// VRX spectrum-toggle (high-res). Gedeelde logica (pop-out + rij).
+    fn toggle_vrx_spectrum(&mut self, ch: VrxChannel) {
+        let id: u8 = match ch { VrxChannel::Vrx1 => 0, VrxChannel::Vrx2 => 1 };
+        let hr = !match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum };
+        let zoom = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
+        let span_hz = (self.vrx_ddc_span_hz(ch) as f32 / zoom.max(1.0)) as u32;
+        let span_khz = ((span_hz / 1000).max(1)) as u16;
+        // Spectrum-abonnement staat LOS van de VRX-audio-vink (fase 4 / vink-model):
+        // stuur `hr`, niet `enabled && hr`. De server produceert VRX-spectrum zonder
+        // de audio-runtime (subscriber-lijst + manager-entry zijn onafhankelijk).
+        if self.cmd_tx.send(Command::SetVrxHighResSpectrum(id, hr, span_khz)).is_ok() {
+            match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum = hr, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum = hr };
+            match ch { VrxChannel::Vrx1 => self.vrx1_high_res_last_span_khz = span_khz, VrxChannel::Vrx2 => self.vrx2_high_res_last_span_khz = span_khz };
+            if hr {
+                // Spectrum aan → open het losse VRX-venster van DIT kanaal zodat het
+                // spectrum ook echt zichtbaar wordt (VRX-spectrum toont alleen daar).
+                match ch {
+                    VrxChannel::Vrx1 => { self.vrx1_popout = true; self.vrx_popout_init_applied = false; }
+                    VrxChannel::Vrx2 => { self.vrx2_popout = true; self.vrx2_popout_init_applied = false; }
+                }
+            } else {
+                // Spectrum uit -> ook het losse venster sluiten (venster <-> abonnement).
+                match ch {
+                    VrxChannel::Vrx1 => { self.vrx1_popout = false; self.vrx1_spectrum.clear(); }
+                    VrxChannel::Vrx2 => { self.vrx2_popout = false; self.vrx2_spectrum.clear(); }
+                }
+            }
+            self.save_full_config();
+        }
+    }
+
+    /// Uniforme abonnement-chips voor één RX-kanaal (parity by construction,
+    /// model §1b/§6.4): `[audio-vink Naam] [spectrum-toggle "spec"]`. Álle kanalen
+    /// tekenen hun audio-vink + spectrum-toggle via deze helper + de gedeelde
+    /// `theme::tl_toggle_button`, zodat ze niet meer per kanaal kunnen divergeren.
+    /// Returnt `(audio_geklikt, spectrum_geklikt)`; de aanroeper dispatcht het
+    /// kanaal-specifieke command (want RX1/RX2 hebben elk hun eigen ControlId).
+    /// Gedeelde blokje-toggle voor de hoofdscherm-kanaalchips: vaste breedte,
+    /// blauwe fill alleen bij toggled-ON (conform UI-conventie), zichtbare hover.
+    /// Gebruikt door rx_sub_chips én yaesu_sub_chips (parity by construction).
+    fn sized_toggle(ui: &mut egui::Ui, label: &str, on: bool, w: f32, hover: &str) -> bool {
+        let text = if on { RichText::new(label).size(12.0).strong() } else { RichText::new(label).size(12.0) };
+        let mut btn = egui::Button::new(text);
+        if on { btn = btn.fill(theme::TL_SELECTED_FILL); }
+        ui.add_sized([w, 20.0], btn).on_hover_text(hover.to_string()).clicked()
+    }
+
+    fn rx_sub_chips(
+        ui: &mut egui::Ui,
+        name: &str,
+        audio_on: bool,
+        spectrum_on: bool,
+    ) -> (bool, bool) {
+        // Verticaal gestapeld in één omkaderd groepje (audio boven, spec eronder):
+        // ze horen visueel bij hetzelfde kanaal. Gelijke breedte = strak blokje.
+        let mut audio = false;
+        let mut spectrum = false;
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let w = 48.0;
+                audio = Self::sized_toggle(ui, name, audio_on, w,
+                    &rust_i18n::t!("main_hover_chip_audio", name = name).to_string());
+                spectrum = Self::sized_toggle(ui, "spec", spectrum_on, w,
+                    &rust_i18n::t!("main_hover_chip_spectrum", name = name).to_string());
+            });
+        });
+        (audio, spectrum)
+    }
+
+    /// Hoofdscherm-chips voor een aanwezige Yaesu-slot: [type] (audio-enable) boven,
+    /// [win] (bedieningsvenster) eronder — zelfde blokjes-grammatica/breedte als
+    /// rx_sub_chips. `type_label` = kort type ("991A"/"FTX1", past in de chip);
+    /// `full_label` = "Yaesu 1: 991A" voor de hover. Retourneert (enable_click,
+    /// window_click). Alleen aanroepen als de radio aanwezig is (presence).
+    fn yaesu_sub_chips(
+        ui: &mut egui::Ui,
+        type_label: &str,
+        full_label: &str,
+        enabled: bool,
+        window_open: bool,
+    ) -> (bool, bool) {
+        let mut en = false;
+        let mut win = false;
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let w = 48.0;
+                en = Self::sized_toggle(ui, type_label, enabled, w,
+                    &rust_i18n::t!("main_hover_yaesu_audio", label = full_label).to_string());
+                let win_label = if window_open { rust_i18n::t!("main_chip_close").to_string() } else { rust_i18n::t!("main_chip_win").to_string() };
+                win = Self::sized_toggle(ui, &win_label, window_open, w,
+                    &rust_i18n::t!("main_hover_yaesu_window", label = full_label).to_string());
+            });
+        });
+        (en, win)
+    }
+
+    /// RX-onafhankelijke DDC-bandbreedte (Hz) van het kanaal waarop deze VRX
+    /// draait — de referentiebreedte voor de high-res-span-request. Komt uit de
+    /// DDC-sample-rate (altijd bekend zodra verbonden), NIET uit het
+    /// RX-spectrum. Zo werkt de VRX-zoom ook met het RX-spectrum uit (§6.2,
+    /// koppeling #4/#6). Fallback 384 kHz matcht de bestaande DDC-defaults.
+    fn vrx_ddc_span_hz(&self, ch: VrxChannel) -> u32 {
+        let sr_khz = match ch {
+            VrxChannel::Vrx1 => self.ddc_sample_rate_rx1,
+            VrxChannel::Vrx2 => self.ddc_sample_rate_rx2,
+        };
+        if sr_khz > 0 { sr_khz as u32 * 1000 } else { 384_000 }
+    }
+
+    /// Rendert EEN los VRX-venster (VRX1 of VRX2): controls boven, spectrum eronder.
+    /// Onafhankelijk te plaatsen. Geometrie per kanaal: VRX1 gebruikt vrx_popout_*,
+    /// VRX2 vrx2_popout_*. Gedeelde renderers (render_vrx_channel_controls +
+    /// render_vrx_spectrum_panel) -> parity by construction met het RX-model.
+    fn render_vrx_popout(&mut self, ctx: &egui::Context, ch: VrxChannel) {
+        let is_vrx1 = matches!(ch, VrxChannel::Vrx1);
+        // Seed absolute-freq op eerste open zodat de echte luisterfreq zichtbaar is.
+        if is_vrx1 {
+            if self.vrx1_freq_hz == 0 && self.frequency_hz > 0 {
+                self.vrx1_freq_hz = self.frequency_hz;
+                let _ = self.cmd_tx.send(Command::SetVrxFrequency(self.vrx1_freq_hz));
+            }
+        } else if self.vrx2_freq_hz == 0 && self.rx2_frequency_hz > 0 {
+            self.vrx2_freq_hz = self.rx2_frequency_hz;
+            let _ = self.cmd_tx.send(Command::SetVrx2Frequency(self.vrx2_freq_hz));
+        }
+        // Geometrie per kanaal (aparte config-velden), lokaal bijgehouden.
+        let mut pos = if is_vrx1 { self.vrx_popout_pos } else { self.vrx2_popout_pos };
+        let mut size = if is_vrx1 { self.vrx_popout_size } else { self.vrx2_popout_size };
+        let mut init = if is_vrx1 { self.vrx_popout_init_applied } else { self.vrx2_popout_init_applied };
+        let title = if is_vrx1 { "ThetisLink - VRX1" } else { "ThetisLink - VRX2" };
+        let vb = Self::apply_popout_geometry(
+            ViewportBuilder::default().with_title(title),
+            pos, size, [460.0, 480.0], Self::viewport_native_ppp(ctx), &mut init,
+        );
+        if is_vrx1 { self.vrx_popout_init_applied = init; } else { self.vrx2_popout_init_applied = init; }
+        let vp_id = if is_vrx1 { "vrx1_popout" } else { "vrx2_popout" };
+        ctx.show_viewport_immediate(
+            ViewportId::from_hash_of(vp_id),
+            vb,
+            |ctx, _class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    // Venster dicht = spectrum-abonnement van DIT kanaal uit (geen
+                    // bandbreedte voor een dicht venster; spec-chip volgt). VRX-audio
+                    // (vrx*_enabled) blijft ongemoeid.
+                    if is_vrx1 {
+                        self.vrx1_popout = false;
+                        self.vrx_popout_init_applied = false;
+                        self.vrx1_waterfall_texture = None;
+                        if self.vrx1_high_res_spectrum {
+                            self.vrx1_high_res_spectrum = false;
+                            let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, false, self.vrx1_high_res_last_span_khz));
+                            self.vrx1_spectrum.clear();
+                        }
+                    } else {
+                        self.vrx2_popout = false;
+                        self.vrx2_popout_init_applied = false;
+                        self.vrx2_waterfall_texture = None;
+                        if self.vrx2_high_res_spectrum {
+                            self.vrx2_high_res_spectrum = false;
+                            let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, false, self.vrx2_high_res_last_span_khz));
+                            self.vrx2_spectrum.clear();
+                        }
+                    }
+                    self.save_full_config();
+                    return;
+                }
+                if Self::track_popout_geometry(ctx, &mut pos, &mut size) {
+                    if is_vrx1 {
+                        self.vrx_popout_pos = pos;
+                        self.vrx_popout_size = size;
+                    } else {
+                        self.vrx2_popout_pos = pos;
+                        self.vrx2_popout_size = size;
+                    }
+                    self.save_full_config();
+                }
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    // DDC-range van dit kanaal: center+span uit de spectrum-packets,
+                    // val terug op VFO ± 192 kHz zolang er nog geen spectrum is.
+                    let (ddc_center, ddc_span) = if is_vrx1 {
+                        let c = if self.full_spectrum_center_hz > 0 { self.full_spectrum_center_hz as u64 } else { self.frequency_hz };
+                        let s = if self.full_spectrum_span_hz > 0 { self.full_spectrum_span_hz as u64 } else { 384_000 };
+                        (c, s)
+                    } else {
+                        let c = if self.rx2_full_spectrum_center_hz > 0 { self.rx2_full_spectrum_center_hz as u64 } else { self.rx2_frequency_hz };
+                        let s = if self.rx2_full_spectrum_span_hz > 0 { self.rx2_full_spectrum_span_hz as u64 } else { 384_000 };
+                        (c, s)
+                    };
+                    let vmin = ddc_center.saturating_sub(ddc_span / 2);
+                    let vmax = ddc_center + ddc_span / 2;
+                    self.render_vrx_channel_controls(ui, ch, ddc_center, vmin, vmax);
+                    ui.separator();
+                    let outer_w = ui.available_width();
+                    let avail_h = ui.available_height().max(120.0);
+                    ui.allocate_ui(egui::vec2(outer_w, avail_h), |ui| {
+                        self.render_vrx_spectrum_panel(ui, ctx, ch, vmin, vmax);
+                    });
+                });
+                // Filter-edge memory-dispatch voor dit kanaal (dispatch-return-discipline).
+                let (salt, vrx_id) = if is_vrx1 { ("vrx1", 0u8) } else { ("vrx2", 1u8) };
+                let lo_key = egui::Id::new(format!("{}_filter_low_hz", salt));
+                let hi_key = egui::Id::new(format!("{}_filter_high_hz", salt));
+                let new_lo: Option<i32> = ctx.memory(|m| m.data.get_temp(lo_key));
+                let new_hi: Option<i32> = ctx.memory(|m| m.data.get_temp(hi_key));
+                if new_lo.is_some() || new_hi.is_some() {
+                    let cur_lo = if vrx_id == 0 { self.vrx1_filter_low_hz } else { self.vrx2_filter_low_hz };
+                    let cur_hi = if vrx_id == 0 { self.vrx1_filter_high_hz } else { self.vrx2_filter_high_hz };
+                    let final_lo = new_lo.unwrap_or(cur_lo);
+                    let final_hi = new_hi.unwrap_or(cur_hi);
+                    if self.cmd_tx.send(Command::SetVrxFilter(vrx_id, final_lo, final_hi)).is_ok() {
+                        if vrx_id == 0 {
+                            self.vrx1_filter_low_hz = final_lo;
+                            self.vrx1_filter_high_hz = final_hi;
+                        } else {
+                            self.vrx2_filter_low_hz = final_lo;
+                            self.vrx2_filter_high_hz = final_hi;
+                        }
+                        ctx.memory_mut(|m| { m.data.remove::<i32>(lo_key); m.data.remove::<i32>(hi_key); });
+                        self.save_full_config();
+                    }
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            },
+        );
+    }
+
     /// Gedeelde renderer voor EEN VRX-spectrum-paneel (VRX1 of VRX2): de
     /// Ref/Auto/Range- en Zoom/Pan/WF-knoprijen + de spectrum/waterval-strip.
     /// Parity door constructie: VRX1 en VRX2 delen exact deze code (conform
@@ -1268,18 +1619,18 @@ impl SdrRemoteApp {
             // Row 1: Ref + Auto + Range
             ui.horizontal(|ui| {
                 ui.spacing_mut().slider_width = theme::TL_SLIDER_WIDTH;
-                ui.label("Ref:");
+                ui.label(rust_i18n::t!("main_ref_label").to_string());
                 let mut changed = false;
                 let auto = match ch { VrxChannel::Vrx1 => self.vrx1_auto_ref, VrxChannel::Vrx2 => self.vrx2_auto_ref };
                 if auto {
                     let mut disp = match ch { VrxChannel::Vrx1 => self.vrx1_ref_db, VrxChannel::Vrx2 => self.vrx2_ref_db };
                     ui.add_enabled(false, egui::Slider::new(&mut disp, -90.0..=0.0).suffix(" dB").step_by(5.0))
-                        .on_hover_text("Spectrum reference level in dB.");
+                        .on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
                 } else {
                     let resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_ref_db, VrxChannel::Vrx2 => &mut self.vrx2_ref_db },
                         -90.0..=0.0).suffix(" dB").step_by(5.0))
-                        .on_hover_text("Spectrum reference level in dB.");
+                        .on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
                     let scrolled = helpers::slider_wheel(ui, &resp,
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_ref_db, VrxChannel::Vrx2 => &mut self.vrx2_ref_db },
                         -90.0..=0.0, 5.0);
@@ -1289,28 +1640,28 @@ impl SdrRemoteApp {
                 }
                 if ui.checkbox(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_auto_ref, VrxChannel::Vrx2 => &mut self.vrx2_auto_ref },
-                        "Auto")
-                    .on_hover_text("Automatically track the reference level.")
+                        rust_i18n::t!("main_auto").to_string())
+                    .on_hover_text(rust_i18n::t!("main_hover_auto_ref").to_string())
                     .changed()
                 {
                     match ch {
-                        VrxChannel::Vrx1 => if self.vrx1_auto_ref { self.vrx1_auto_ref_frames = 0; self.vrx1_auto_ref_initialized = false; },
-                        VrxChannel::Vrx2 => if self.vrx2_auto_ref { self.vrx2_auto_ref_frames = 0; self.vrx2_auto_ref_initialized = false; },
+                        VrxChannel::Vrx1 => if self.vrx1_auto_ref { self.vrx1_spectrum.reset_auto_ref(); },
+                        VrxChannel::Vrx2 => if self.vrx2_auto_ref { self.vrx2_spectrum.reset_auto_ref(); },
                     }
                     self.save_full_config();
                 }
-                ui.label("Range:");
+                ui.label(rust_i18n::t!("main_range_label").to_string());
                 let resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_range_db, VrxChannel::Vrx2 => &mut self.vrx2_range_db },
                         20.0..=130.0).suffix(" dB").step_by(5.0))
-                    .on_hover_text("Spectrum vertical range in dB.");
+                    .on_hover_text(rust_i18n::t!("main_hover_range").to_string());
                 let scrolled = helpers::slider_wheel(ui, &resp,
                     match ch { VrxChannel::Vrx1 => &mut self.vrx1_range_db, VrxChannel::Vrx2 => &mut self.vrx2_range_db },
                     20.0..=130.0, 5.0);
                 if resp.changed() || scrolled {
                     match ch {
-                        VrxChannel::Vrx1 => if self.vrx1_auto_ref { self.vrx1_auto_ref_frames = 0; self.vrx1_auto_ref_initialized = false; },
-                        VrxChannel::Vrx2 => if self.vrx2_auto_ref { self.vrx2_auto_ref_frames = 0; self.vrx2_auto_ref_initialized = false; },
+                        VrxChannel::Vrx1 => if self.vrx1_auto_ref { self.vrx1_spectrum.reset_auto_ref(); },
+                        VrxChannel::Vrx2 => if self.vrx2_auto_ref { self.vrx2_spectrum.reset_auto_ref(); },
                     }
                     changed = true;
                 }
@@ -1320,7 +1671,7 @@ impl SdrRemoteApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().slider_width = theme::TL_SLIDER_WIDTH;
                 let mut changed = false;
-                ui.label("Zoom:");
+                ui.label(rust_i18n::t!("main_zoom_label").to_string());
                 let zoom_min: f32 = if allow_zoom_below_2x { 1.0 } else { 2.0 };
                 match ch {
                     VrxChannel::Vrx1 => if self.vrx1_spectrum_zoom < zoom_min { self.vrx1_spectrum_zoom = zoom_min; },
@@ -1329,7 +1680,7 @@ impl SdrRemoteApp {
                 let resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => &mut self.vrx2_spectrum_zoom },
                         zoom_min..=1024.0).logarithmic(true).custom_formatter(|v, _| format!("{:.0}x", v)))
-                    .on_hover_text("Spectrum zoom factor.");
+                    .on_hover_text(rust_i18n::t!("main_hover_zoom").to_string());
                 let zoom_cur = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
                 let scrolled = helpers::slider_wheel(ui, &resp,
                     match ch { VrxChannel::Vrx1 => &mut self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => &mut self.vrx2_spectrum_zoom },
@@ -1341,25 +1692,35 @@ impl SdrRemoteApp {
                     }
                     changed = true;
                 }
-                let mut allow_2x = allow_zoom_below_2x;
-                ui.add_enabled(false, egui::Checkbox::new(&mut allow_2x, "Allow zoom <2x"))
-                    .on_disabled_hover_text(format!("Server-wide setting - manage via {} spectrum panel.", rx_label));
-                ui.label("Pan:");
+                // Zelfde gedeelde client-flag als het RX-paneel (RX1/RX2/VRX delen
+                // 'm). Nu ook hier instelbaar zodat de VRX standalone bruikbaar is
+                // zonder het RX-spectrumpaneel erbij (§6, elk kanaal zelfstandig).
+                if ui.checkbox(&mut self.allow_zoom_below_2x, rust_i18n::t!("main_allow_zoom_2x").to_string())
+                    .on_hover_text(rust_i18n::t!("hover_zoom_below_2x").to_string())
+                    .changed()
+                {
+                    crate::ui::config::save_allow_zoom_below_2x(self.allow_zoom_below_2x);
+                    let _ = self.cmd_tx.send(Command::SetControl(
+                        sdr_remote_core::protocol::ControlId::AllowZoomBelow2x,
+                        if self.allow_zoom_below_2x { 1 } else { 0 },
+                    ));
+                }
+                ui.label(rust_i18n::t!("main_pan_label").to_string());
                 let zoom_now = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
                 let max_pan = if zoom_now > 1.01 { (0.5 - 0.5 / zoom_now) * 0.05 } else { 0.0 };
                 let pan_resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_pan, VrxChannel::Vrx2 => &mut self.vrx2_pan },
                         -max_pan..=max_pan).custom_formatter(|v, _| format!("{:+.2}", v)))
-                    .on_hover_text("Pan inside the zoomed spectrum view.");
+                    .on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
                 let pan_scrolled = helpers::slider_wheel(ui, &pan_resp,
                     match ch { VrxChannel::Vrx1 => &mut self.vrx1_pan, VrxChannel::Vrx2 => &mut self.vrx2_pan },
                     -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
                 changed |= pan_resp.changed() || pan_scrolled;
-                ui.label("WF:");
+                ui.label(rust_i18n::t!("main_wf_label").to_string());
                 let wf_resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_wf_contrast, VrxChannel::Vrx2 => &mut self.vrx2_wf_contrast },
                         0.3..=3.0).logarithmic(true).custom_formatter(|v, _| format!("{:.1}", v)))
-                    .on_hover_text("Waterfall contrast.");
+                    .on_hover_text(rust_i18n::t!("main_hover_wf").to_string());
                 let wf_scrolled = helpers::slider_wheel(ui, &wf_resp,
                     match ch { VrxChannel::Vrx1 => &mut self.vrx1_wf_contrast, VrxChannel::Vrx2 => &mut self.vrx2_wf_contrast },
                     0.3..=3.0, 0.1);
@@ -1369,7 +1730,7 @@ impl SdrRemoteApp {
                 let auto_k = sdr_remote_core::ddc_fft_size(ddc_rate) / 1024;
                 let fft_label = if fft_size_k == 0 { format!("FFT: Auto ({}K)", auto_k) } else { format!("FFT: {}K", fft_size_k) };
                 ui.add_enabled(false, egui::Button::new(&fft_label))
-                    .on_disabled_hover_text(format!("Server-wide setting - manage via {} spectrum panel.", rx_label));
+                    .on_disabled_hover_text(rust_i18n::t!("main_hover_server_wide_fft", rx = rx_label).to_string());
                 if changed { self.save_full_config(); }
             });
             ui.separator();
@@ -1380,40 +1741,41 @@ impl SdrRemoteApp {
             let wf_h = spec_h;
             let new_freq = match ch {
                 VrxChannel::Vrx1 => {
-                    let extracted = self.vrx1_high_res_spectrum && !self.vrx1_extracted_bins.is_empty() && self.vrx1_extracted_span_hz > 0;
-                    let (b, c, s): (&[u16], u32, u32) = if extracted {
-                        (&self.vrx1_extracted_bins, self.vrx1_extracted_center_hz, self.vrx1_extracted_span_hz)
-                    } else {
-                        (&self.full_spectrum_bins, self.full_spectrum_center_hz, self.full_spectrum_span_hz)
-                    };
+                    // VRX rendert UITSLUITEND zijn eigen extracted spectrum (§6.1
+                    // #1): geen RX-fallback meer. Lege bins → placeholder in de
+                    // renderer. extracted_mode = true: bins mappen 1:1 op de view.
+                    let (b, c, s) = (
+                        self.vrx1_spectrum.bins(),
+                        self.vrx1_spectrum.center_hz(),
+                        self.vrx1_spectrum.span_hz(),
+                    );
                     spectrum::render_vrx_strip(
                         ui, ctx, "vrx1",
                         self.vrx1_freq_hz, self.vrx1_spectrum_zoom, self.vrx1_pan,
                         self.vrx1_ref_db, self.vrx1_range_db, self.vrx1_wf_contrast,
                         spec_h, wf_h, self.vrx1_mode == 1,
                         self.vrx1_filter_low_hz, self.vrx1_filter_high_hz,
-                        self.vrx1_smeter_dbm, self.vrx1_enabled,
-                        b, c, s, self.full_spectrum_span_hz, extracted,
-                        if extracted { &self.vrx1_hr_waterfall } else { &self.waterfall },
+                        self.vrx1_spectrum.smeter_dbm(), self.vrx1_enabled,
+                        b, c, s, s, true,
+                        self.vrx1_spectrum.waterfall(),
                         &mut self.vrx1_waterfall_texture, vrx_min, vrx_max,
                     )
                 }
                 VrxChannel::Vrx2 => {
-                    let extracted = self.vrx2_high_res_spectrum && !self.vrx2_extracted_bins.is_empty() && self.vrx2_extracted_span_hz > 0;
-                    let (b, c, s): (&[u16], u32, u32) = if extracted {
-                        (&self.vrx2_extracted_bins, self.vrx2_extracted_center_hz, self.vrx2_extracted_span_hz)
-                    } else {
-                        (&self.rx2_full_spectrum_bins, self.rx2_full_spectrum_center_hz, self.rx2_full_spectrum_span_hz)
-                    };
+                    let (b, c, s) = (
+                        self.vrx2_spectrum.bins(),
+                        self.vrx2_spectrum.center_hz(),
+                        self.vrx2_spectrum.span_hz(),
+                    );
                     spectrum::render_vrx_strip(
                         ui, ctx, "vrx2",
                         self.vrx2_freq_hz, self.vrx2_spectrum_zoom, self.vrx2_pan,
                         self.vrx2_ref_db, self.vrx2_range_db, self.vrx2_wf_contrast,
                         spec_h, wf_h, self.vrx2_mode == 1,
                         self.vrx2_filter_low_hz, self.vrx2_filter_high_hz,
-                        self.vrx2_smeter_dbm, self.vrx2_enabled,
-                        b, c, s, self.rx2_full_spectrum_span_hz, extracted,
-                        if extracted { &self.vrx2_hr_waterfall } else { &self.rx2_waterfall },
+                        self.vrx2_spectrum.smeter_dbm(), self.vrx2_enabled,
+                        b, c, s, s, true,
+                        self.vrx2_spectrum.waterfall(),
                         &mut self.vrx2_waterfall_texture, vrx_min, vrx_max,
                     )
                 }
@@ -1594,8 +1956,16 @@ impl SdrRemoteApp {
             let _ = cmd_tx.send(Command::SetYaesu2TxGain(*mic_gain));
         }
         let _ = cmd_tx.send(Command::SetAgcEnabled(config.agc_enabled));
+        // RX1-audio default AAN op de server; alleen sturen als de client UIT wil.
+        if !config.rx1_enabled {
+            let _ = cmd_tx.send(Command::SetRx1Enabled(false));
+        }
         if config.rx2_enabled {
             let _ = cmd_tx.send(Command::SetRx2Enabled(true));
+        }
+        // RX2 spectrum-abonnement los van de audio (fase 4).
+        if config.rx2_spectrum_enabled {
+            let _ = cmd_tx.send(Command::EnableRx2Spectrum(true));
         }
         if config.spectrum_enabled {
             let _ = cmd_tx.send(Command::EnableSpectrum(true));
@@ -1757,6 +2127,7 @@ impl SdrRemoteApp {
             last_tx_follow_sent: None,
             tx_follow_last_send_at: None,
             thetis_configured: true,
+            rx2_present: true,
             thetis_starting: false,
             spectrum_enabled: config.spectrum_enabled,
             spectrum_bins: Vec::new(),
@@ -1810,7 +2181,11 @@ impl SdrRemoteApp {
             log_buffer,
             show_log: false,
             show_about: false,
-            show_vrx: false,
+            vrx1_popout: false,
+            vrx2_popout: false,
+            show_layout_arranger: false,
+            layout_rows_per_monitor: Vec::new(),
+            layout_target_monitor: 0,
             vrx1_enabled: config.vrx1_enabled.unwrap_or(false),
             vrx1_freq_hz: config.vrx1_freq_hz.unwrap_or(0),
             vrx1_mode: config.vrx1_mode.unwrap_or(0),
@@ -1828,6 +2203,9 @@ impl SdrRemoteApp {
             vrx_popout_pos: config.vrx_popout_pos.map(|(x, y)| egui::pos2(x, y)),
             vrx_popout_size: config.vrx_popout_size.map(|(w, h)| egui::vec2(w, h)),
             vrx_popout_init_applied: false,
+            vrx2_popout_pos: config.vrx2_popout_pos.map(|(x, y)| egui::pos2(x, y)),
+            vrx2_popout_size: config.vrx2_popout_size.map(|(w, h)| egui::vec2(w, h)),
+            vrx2_popout_init_applied: false,
             playback_level_vrx1: 0.0,
             playback_level_vrx2: 0.0,
             vrx1_freq_by_bucket: std::collections::HashMap::new(),
@@ -1851,19 +2229,8 @@ impl SdrRemoteApp {
                 if config.vrx1_mode.unwrap_or(0) == 1 { 0 } else { 3000 }
             }),
             vrx1_high_res_spectrum: config.vrx1_high_res_spectrum.unwrap_or(false),
-            vrx1_extracted_bins: Vec::new(),
-            vrx1_extracted_center_hz: 0,
-            vrx1_extracted_span_hz: 0,
-            vrx1_extracted_sequence: 0,
             vrx1_high_res_last_span_khz: 0,
-            vrx1_hr_waterfall: WaterfallRingBuffer::new(200),
-            vrx1_auto_ref_value: -20.0,
-            vrx1_auto_ref_frames: 0,
-            vrx1_auto_ref_initialized: false,
-            vrx1_smeter_dbm: -127.0,
-            vrx1_smeter_initialized: false,
-            vrx1_smeter_peak: -127.0,
-            vrx1_smeter_peak_time: Instant::now(),
+            vrx1_spectrum: ChannelSpectrum::new(ChannelId::Vrx1),
             vrx2_ref_db: config.vrx2_ref_db.unwrap_or(-20.0),
             vrx2_range_db: config.vrx2_range_db.unwrap_or(100.0),
             vrx2_wf_contrast: config.vrx2_wf_contrast.unwrap_or(1.0),
@@ -1877,19 +2244,8 @@ impl SdrRemoteApp {
                 if config.vrx2_mode.unwrap_or(0) == 1 { 0 } else { 3000 }
             }),
             vrx2_high_res_spectrum: config.vrx2_high_res_spectrum.unwrap_or(false),
-            vrx2_extracted_bins: Vec::new(),
-            vrx2_extracted_center_hz: 0,
-            vrx2_extracted_span_hz: 0,
-            vrx2_extracted_sequence: 0,
             vrx2_high_res_last_span_khz: 0,
-            vrx2_hr_waterfall: WaterfallRingBuffer::new(200),
-            vrx2_auto_ref_value: -20.0,
-            vrx2_auto_ref_frames: 0,
-            vrx2_auto_ref_initialized: false,
-            vrx2_smeter_dbm: -127.0,
-            vrx2_smeter_initialized: false,
-            vrx2_smeter_peak: -127.0,
-            vrx2_smeter_peak_time: Instant::now(),
+            vrx2_spectrum: ChannelSpectrum::new(ChannelId::Vrx2),
             vrx1_waterfall_texture: None,
             vrx2_waterfall_texture: None,
             vrx_state_sync_pending: true,
@@ -2062,6 +2418,7 @@ impl SdrRemoteApp {
             yaesu2_vfo_select: 0,
             yaesu2_memory_channel: 0,
             yaesu2_tuner_state: 0,
+            yaesu2_hi_swr: false,
             yaesu2_feature_toggles: 0,
             yaesu2_feature_levels: [0u8; 16],
             yaesu2_squelch: 0,
@@ -2108,6 +2465,8 @@ impl SdrRemoteApp {
             yaesu_popout_init_applied: false,
             yaesu_popout_first_frame: true,
             yaesu_enable_sent: false,
+            yaesu_state_sent: None,
+            yaesu2_state_sent: None,
             // Standalone persistente mic-gain (laatste schuif-waarde), los van
             // het EQ-profiel zodat de waarde altijd onthouden wordt.
             yaesu_mic_gain: config.yaesu_mic_gain,
@@ -2133,9 +2492,16 @@ impl SdrRemoteApp {
             yaesu_rf_gain: 255,
             yaesu_radio_mic_gain: 50,
             yaesu_rf_power: 50,
+            yaesu_tx_power_max: 100,
+            yaesu2_tx_power_max: 100,
+            yaesu_power_pending: None,
+            yaesu_power_pending_at: None,
+            yaesu2_power_pending: None,
+            yaesu2_power_pending_at: None,
             yaesu_scan_active: false,
             yaesu_split_active: false,
             yaesu_tuner_state: 0,
+            yaesu_hi_swr: false,
             yaesu_feature_toggles: 0,
             yaesu_feature_levels: [0u8; 16],
             yaesu_level_sliders: [[0i32; 4]; 2],
@@ -2182,11 +2548,15 @@ impl SdrRemoteApp {
             smooth_alpha: 1.0,
             last_frame_time: Instant::now(),
             dx_spots_enabled: true,
+            rx1_enabled: config.rx1_enabled,
             rx2_enabled: config.rx2_enabled,
+            rx2_spectrum_enabled: config.rx2_spectrum_enabled,
             thetis_wideband_audio: config.thetis_wideband_audio,
-            rx2_popout: config.rx2_popout,
+            // RX2-spectrum toont alleen in de pop-out; herstel het venster dus als
+            // het RX2-spectrum-abonnement aan stond (anders subscribe-zonder-beeld).
+            rx2_popout: config.rx2_spectrum_enabled,
             popout_joined: config.popout_joined,
-            popout_meter_analog: config.popout_meter_analog,
+            meter_analog: config.meter_analog,
             ub_show_menu: config.ub_show_menu,
             collapse_diversity: config.collapse_diversity,
             collapse_yaesu_eq: config.collapse_yaesu_eq,
@@ -2431,6 +2801,7 @@ impl SdrRemoteApp {
             *init = false;
         };
         place(&mut self.vrx_popout_pos, &mut self.vrx_popout_init_applied, 0.0, 0.0);
+        place(&mut self.vrx2_popout_pos, &mut self.vrx2_popout_init_applied, 120.0, 120.0);
         place(&mut self.spectrum_popout_pos, &mut self.spectrum_popout_init_applied, 24.0, 24.0);
         place(&mut self.rx2_popout_pos, &mut self.rx2_popout_init_applied, 48.0, 48.0);
         place(&mut self.yaesu_popout_pos, &mut self.yaesu_popout_init_applied, 72.0, 72.0);
@@ -2439,6 +2810,241 @@ impl SdrRemoteApp {
         place(&mut self.popout_joined_pos, &mut self.popout_joined_init_applied, 120.0, 120.0);
         self.save_full_config();
         log::info!("Pop-out windows recentered onto main monitor at {:?}", base);
+    }
+
+    /// Is dit popout-venster momenteel open (en dus snap-baar)?
+    fn snap_is_open(&self, w: SnapWindow) -> bool {
+        match w {
+            SnapWindow::Rx1 => self.spectrum_popout && self.thetis_configured,
+            SnapWindow::Rx2 => self.rx2_popout,
+            SnapWindow::Vrx1 => self.vrx1_popout,
+            SnapWindow::Vrx2 => self.vrx2_popout,
+            SnapWindow::Yaesu1 => self.yaesu_popout && (self.yaesu_enabled || self.yaesu_connected),
+            SnapWindow::Yaesu2 => self.yaesu2_popout && (self.yaesu2_enabled || self.yaesu2_connected),
+        }
+    }
+
+    /// Zet positie+afmeting van een venster en reset init_applied zodat
+    /// apply_popout_geometry het volgende frame de nieuwe geometrie toepast
+    /// (zelfde mechaniek als recenter_popouts). Slaat NIET op - de aanroeper
+    /// (apply_layout) doet één save aan het eind.
+    fn snap_set_geometry(&mut self, w: SnapWindow, pos: egui::Pos2, size: egui::Vec2) {
+        match w {
+            SnapWindow::Rx1 => { self.spectrum_popout_pos = Some(pos); self.spectrum_popout_size = Some(size); self.spectrum_popout_init_applied = false; }
+            SnapWindow::Rx2 => { self.rx2_popout_pos = Some(pos); self.rx2_popout_size = Some(size); self.rx2_popout_init_applied = false; }
+            SnapWindow::Vrx1 => { self.vrx_popout_pos = Some(pos); self.vrx_popout_size = Some(size); self.vrx_popout_init_applied = false; }
+            SnapWindow::Vrx2 => { self.vrx2_popout_pos = Some(pos); self.vrx2_popout_size = Some(size); self.vrx2_popout_init_applied = false; }
+            SnapWindow::Yaesu1 => { self.yaesu_popout_pos = Some(pos); self.yaesu_popout_size = Some(size); self.yaesu_popout_init_applied = false; }
+            SnapWindow::Yaesu2 => { self.yaesu2_popout_pos = Some(pos); self.yaesu2_popout_size = Some(size); self.yaesu2_popout_init_applied = false; }
+        }
+    }
+
+    /// Index (in monitor_work_areas_px) van de monitor waar het hoofdvenster staat.
+    /// Voor de default-scherm-keuze bij het openen van het Schik-venster.
+    fn detect_monitor_index(&self, ctx: &egui::Context) -> usize {
+        let ppp = Self::viewport_native_ppp(ctx).max(0.1);
+        if let (Some(areas), Some((mx, my))) = (
+            window_placement::monitor_work_areas_px(),
+            ctx.input(|i| i.viewport().outer_rect)
+                .map(|r| ((r.min.x * ppp) as i32, (r.min.y * ppp) as i32)),
+        ) {
+            if let Some(idx) = areas.iter().position(|a|
+                mx >= a.left && mx < a.right && my >= a.top && my < a.bottom)
+            {
+                return idx;
+            }
+        }
+        0
+    }
+
+    /// Snap de vensters uit layout_rows op het scherm: rijen even hoog, binnen
+    /// een rij de vensters even breed. Doelscherm = de gekozen monitor (Schik-
+    /// venster), default de monitor waar het hoofdvenster staat.
+    fn apply_layout(&mut self, ctx: &egui::Context) {
+        let ppp = Self::viewport_native_ppp(ctx).max(0.1);
+        let areas = window_placement::monitor_work_areas_px();
+        // Kloon de per-monitor rijen zodat we ondertussen self mutably mogen
+        // aanroepen (snap_set_geometry).
+        let per_mon: Vec<Vec<Vec<SnapWindow>>> = self.layout_rows_per_monitor.clone();
+        const TITLE_H: f32 = 36.0;
+        const GAP: f32 = 4.0;
+        let mut screens_done = 0usize;
+        for (m, mon_rows) in per_mon.iter().enumerate() {
+            let rows: Vec<&Vec<SnapWindow>> = mon_rows.iter().filter(|r| !r.is_empty()).collect();
+            if rows.is_empty() { continue; }
+            // Werkgebied van monitor m in punten; scherm 0 valt terug op het egui-scherm.
+            let (ax, ay, aw, ah) = match areas.as_ref().and_then(|list| list.get(m).copied()) {
+                Some(a) => (
+                    a.left as f32 / ppp,
+                    a.top as f32 / ppp,
+                    (a.right - a.left) as f32 / ppp,
+                    (a.bottom - a.top) as f32 / ppp,
+                ),
+                None if m == 0 => {
+                    let sr = ctx.screen_rect();
+                    (sr.min.x, sr.min.y, sr.width(), sr.height())
+                }
+                None => continue,
+            };
+            let n_rows = rows.len() as f32;
+            let row_h = ah / n_rows;
+            for (ri, row) in rows.iter().enumerate() {
+                let n_cols = row.len() as f32;
+                let col_w = aw / n_cols;
+                for (ci, w) in row.iter().enumerate() {
+                    let x = ax + col_w * ci as f32;
+                    let y = ay + row_h * ri as f32;
+                    let iw = (col_w - GAP).max(200.0);
+                    let ih = (row_h - TITLE_H).max(120.0);
+                    self.snap_set_geometry(*w, egui::pos2(x, y), egui::vec2(iw, ih));
+                }
+            }
+            screens_done += 1;
+        }
+        if screens_done > 0 {
+            self.save_full_config();
+            log::info!("Layout toegepast over {} scherm(en)", screens_done);
+        }
+    }
+
+    /// "Vensters schikken" - sleepraster. Voorraad (open, niet-geplaatste vensters)
+    /// + rijen; sleep een venster in een rij (naast elkaar), meer rijen = onder
+    /// elkaar. "Toepassen" snapt ze op het scherm.
+    fn render_layout_arranger(&mut self, ctx: &egui::Context) {
+        if !self.show_layout_arranger { return; }
+
+        // Eén rijen-set per monitor (index = monitor), minstens 1 rij per scherm.
+        let n_monitors = window_placement::monitor_work_areas_px()
+            .map(|a| a.len()).unwrap_or(1).max(1);
+        if self.layout_rows_per_monitor.len() < n_monitors {
+            self.layout_rows_per_monitor.resize(n_monitors, Vec::new());
+        }
+        for mon in self.layout_rows_per_monitor.iter_mut() {
+            if mon.is_empty() { mon.push(Vec::new()); }
+        }
+        if self.layout_target_monitor >= n_monitors { self.layout_target_monitor = 0; }
+
+        // Gesloten vensters uit ALLE schermen verwijderen (niet snap-baar).
+        let open: Vec<SnapWindow> =
+            SnapWindow::ALL.iter().copied().filter(|w| self.snap_is_open(*w)).collect();
+        for mon in self.layout_rows_per_monitor.iter_mut() {
+            for row in mon.iter_mut() { row.retain(|w| open.contains(w)); }
+        }
+        // Geplaatst = op WELK scherm dan ook; voorraad = de rest.
+        let placed: Vec<SnapWindow> =
+            self.layout_rows_per_monitor.iter().flatten().flatten().copied().collect();
+        let palette: Vec<SnapWindow> =
+            open.iter().copied().filter(|w| !placed.contains(w)).collect();
+
+        // Chip-tekenaar (framed label) - inhoud van een drag-source.
+        fn chip(ui: &mut egui::Ui, label: &str) {
+            egui::Frame::default()
+                .fill(theme::TL_SELECTED_FILL)
+                .inner_margin(egui::vec2(6.0, 3.0))
+                .rounding(egui::Rounding::same(4.0))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(label).size(12.0).color(Color32::WHITE));
+                });
+        }
+
+        let mut open_flag = self.show_layout_arranger;
+        // (venster, doel) waar doel = None (voorraad) of Some(rij-index).
+        let mut pending: Option<(SnapWindow, Option<usize>)> = None;
+        let mut add_row = false;
+        let mut clear = false;
+        let mut do_apply = false;
+
+        egui::Window::new(rust_i18n::t!("main_arrange_windows_title").to_string())
+            .open(&mut open_flag)
+            .resizable(true)
+            .default_size([380.0, 340.0])
+            .show(ctx, |ui| {
+                ui.label(RichText::new(
+                    rust_i18n::t!("main_arrange_windows_help").to_string()
+                ).size(11.0).weak());
+                ui.add_space(4.0);
+
+                // Scherm-keuze (alleen tonen bij meerdere monitoren).
+                if let Some(areas) = window_placement::monitor_work_areas_px() {
+                    if areas.len() > 1 {
+                        if self.layout_target_monitor >= areas.len() { self.layout_target_monitor = 0; }
+                        ui.horizontal(|ui| {
+                            ui.label(rust_i18n::t!("screen").to_string());
+                            egui::ComboBox::from_id_source("layout_monitor")
+                                .selected_text(rust_i18n::t!("main_screen_n", n = self.layout_target_monitor + 1).to_string())
+                                .show_ui(ui, |ui| {
+                                    for i in 0..areas.len() {
+                                        ui.selectable_value(&mut self.layout_target_monitor, i, rust_i18n::t!("main_screen_n", n = i + 1).to_string());
+                                    }
+                                });
+                        });
+                        ui.add_space(4.0);
+                    }
+                }
+
+                ui.label(rust_i18n::t!("main_stock_open_windows").to_string());
+                let (_, dropped) = ui.dnd_drop_zone::<SnapWindow, _>(
+                    egui::Frame::default().inner_margin(4.0), |ui| {
+                        ui.set_min_height(28.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if palette.is_empty() { ui.weak(rust_i18n::t!("main_all_placed").to_string()); }
+                            for w in &palette {
+                                ui.dnd_drag_source(egui::Id::new(("pal", w.label())), *w, |ui| chip(ui, w.label()));
+                            }
+                        });
+                    });
+                if let Some(w) = dropped { pending = Some((*w, None)); }
+
+                ui.add_space(6.0);
+                ui.separator();
+
+                let cur_mon = self.layout_target_monitor;
+                for (ri, row) in self.layout_rows_per_monitor[cur_mon].iter().enumerate() {
+                    let (_, dropped) = ui.dnd_drop_zone::<SnapWindow, _>(
+                        egui::Frame::group(ui.style()), |ui| {
+                            ui.set_min_height(30.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(rust_i18n::t!("main_row_n", n = ri + 1).to_string()).size(11.0).strong());
+                                if row.is_empty() { ui.weak(rust_i18n::t!("main_drag_here").to_string()); }
+                                for w in row {
+                                    ui.dnd_drag_source(egui::Id::new(("row", cur_mon, ri, w.label())), *w, |ui| chip(ui, w.label()));
+                                }
+                            });
+                        });
+                    if let Some(w) = dropped { pending = Some((*w, Some(ri))); }
+                }
+
+                if ui.button(rust_i18n::t!("main_add_row").to_string()).clicked() { add_row = true; }
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new(rust_i18n::t!("main_apply").to_string()).strong())
+                        .fill(theme::TL_SELECTED_FILL)).clicked() { do_apply = true; }
+                    if ui.button(rust_i18n::t!("main_empty").to_string()).clicked() { clear = true; }
+                });
+            });
+
+        self.show_layout_arranger = open_flag;
+        let mon = self.layout_target_monitor.min(self.layout_rows_per_monitor.len().saturating_sub(1));
+        if clear {
+            self.layout_rows_per_monitor[mon].clear();
+            self.layout_rows_per_monitor[mon].push(Vec::new());
+        }
+        if add_row { self.layout_rows_per_monitor[mon].push(Vec::new()); }
+        if let Some((w, target)) = pending {
+            // Verwijder van ALLE schermen (één plek per venster), plaats dan in het
+            // doel op het HUIDIGE scherm (None = terug naar de voorraad).
+            for m in self.layout_rows_per_monitor.iter_mut() {
+                for row in m.iter_mut() { row.retain(|x| *x != w); }
+            }
+            if let Some(ri) = target {
+                if ri < self.layout_rows_per_monitor[mon].len() {
+                    self.layout_rows_per_monitor[mon][ri].push(w);
+                }
+            }
+        }
+        if do_apply { self.apply_layout(ctx); }
     }
 
     fn render_split_join_button(
@@ -2458,7 +3064,7 @@ impl SdrRemoteApp {
         };
         btn = btn.rounding(rounding);
         if let Some(s) = size { btn = btn.min_size(s); }
-        if ui.add(btn).on_hover_text("Popouts split / joined.").clicked() && !active {
+        if ui.add(btn).on_hover_text(rust_i18n::t!("main_hover_popouts_split_joined").to_string()).clicked() && !active {
             self.popout_joined = target_state;
             self.save_full_config();
         }
@@ -2639,6 +3245,8 @@ impl SdrRemoteApp {
             self.yaesu2_popout_size.map(|v| (v.x, v.y)),
             self.vrx_popout_pos.map(|p| (p.x, p.y)),
             self.vrx_popout_size.map(|v| (v.x, v.y)),
+            self.vrx2_popout_pos.map(|p| (p.x, p.y)),
+            self.vrx2_popout_size.map(|v| (v.x, v.y)),
             Some(self.vrx1_volume),
             Some(self.vrx1_enabled),
             Some(self.vrx1_freq_hz),
@@ -2670,10 +3278,12 @@ impl SdrRemoteApp {
             self.rx2_spectrum_range_db,
             self.rx2_auto_ref_enabled,
             self.rx2_waterfall_contrast,
+            self.rx1_enabled,
             self.rx2_enabled,
+            self.rx2_spectrum_enabled,
             self.thetis_wideband_audio,
             self.popout_joined,
-            self.popout_meter_analog,
+            self.meter_analog,
             self.spectrum_popout,
             self.rx2_popout,
             self.main_window_pos.map(|p| (p.x, p.y)),
@@ -2707,6 +3317,7 @@ impl SdrRemoteApp {
             &self.mic_profile_map,
             self.theme_variant.as_str(),
             &self.theme_custom.to_config_string(),
+            &self.ui_language,
         );
     }
 
@@ -2917,6 +3528,24 @@ impl SdrRemoteApp {
 
     fn sync_state(&mut self) {
         let state = self.state_rx.borrow().clone();
+        // Yaesu STATE-abonnement (freq/s-meter/CAT) volgt het OPEN venster, los van
+        // de audio-vink -> een gemute venster blijft live. Reset bij disconnect zodat
+        // het na reconnect opnieuw gestuurd wordt (server-default is uit).
+        if !state.connected {
+            self.yaesu_state_sent = None;
+            self.yaesu2_state_sent = None;
+        } else {
+            if self.yaesu_state_sent != Some(self.yaesu_popout) {
+                let _ = self.cmd_tx.send(Command::SetControl(
+                    ControlId::YaesuStateEnable, self.yaesu_popout as u16));
+                self.yaesu_state_sent = Some(self.yaesu_popout);
+            }
+            if self.yaesu2_state_sent != Some(self.yaesu2_popout) {
+                let _ = self.cmd_tx.send(Command::SetControl(
+                    ControlId::Yaesu2StateEnable, self.yaesu2_popout as u16));
+                self.yaesu2_state_sent = Some(self.yaesu2_popout);
+            }
+        }
         // Send Yaesu enable on first connect if persisted as enabled
         if state.connected && self.yaesu_enabled && !self.yaesu_enable_sent {
             let _ = self.cmd_tx.send(Command::SetControl(
@@ -3014,16 +3643,16 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetVrxRateMode2(self.vrx_rate_mode2));
             let _ = self.cmd_tx.send(Command::SetVrxAutoTune(0, self.vrx1_auto_tune));
             let _ = self.cmd_tx.send(Command::SetVrxAutoTune(1, self.vrx2_auto_tune));
-            // Re-send effective high-res spectrum on (re)connect.
-            // Effective = VRX enabled AND high-res toggle on.
-            if self.vrx1_enabled && self.vrx1_high_res_spectrum {
-                let span_hz = (self.full_spectrum_span_hz as f32 / self.vrx1_spectrum_zoom.max(1.0)) as u32;
+            // Re-send high-res spectrum-abonnement op (re)connect — LOS van de
+            // VRX-audio-vink (vink-model): gegate op high_res, niet op vrx_enabled.
+            if self.vrx1_high_res_spectrum {
+                let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx1) as f32 / self.vrx1_spectrum_zoom.max(1.0)) as u32;
                 let span_khz = ((span_hz / 1000).max(1)) as u16;
                 self.vrx1_high_res_last_span_khz = span_khz;
                 let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, span_khz));
             }
-            if self.vrx2_enabled && self.vrx2_high_res_spectrum {
-                let span_hz = (self.rx2_full_spectrum_span_hz as f32 / self.vrx2_spectrum_zoom.max(1.0)) as u32;
+            if self.vrx2_high_res_spectrum {
+                let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx2) as f32 / self.vrx2_spectrum_zoom.max(1.0)) as u32;
                 let span_khz = ((span_hz / 1000).max(1)) as u16;
                 self.vrx2_high_res_last_span_khz = span_khz;
                 let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, span_khz));
@@ -3175,6 +3804,25 @@ impl SdrRemoteApp {
         }
         self.thetis_swr_x100 = state.thetis_swr_x100;
         self.thetis_configured = state.thetis_configured;
+        // Single-receiver radio (server op 1 gezet): RX2 + VRX2 nergens tonen. Op de
+        // true->false-overgang de subscriptions eenmalig uitzetten zodat de server
+        // niets meer stuurt en de server-tab-rijen leeglopen. VRX1 blijft (aan RX1).
+        let was_rx2_present = self.rx2_present;
+        self.rx2_present = state.rx2_present;
+        if was_rx2_present && !self.rx2_present {
+            if self.rx2_enabled {
+                self.rx2_enabled = false;
+                let _ = self.cmd_tx.send(Command::SetRx2Enabled(false));
+            }
+            if self.rx2_spectrum_enabled {
+                self.rx2_spectrum_enabled = false;
+                let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
+            }
+            self.rx2_popout = false;
+            if self.vrx2_enabled { self.toggle_vrx_audio(VrxChannel::Vrx2); }
+            if self.vrx2_high_res_spectrum { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
+            self.save_full_config();
+        }
         // Once user changes filter locally, client is authoritative until mode changes.
         // filter_changed_at is cleared on mode change (above), so new mode values are accepted.
         if self.filter_changed_at.is_none() {
@@ -3231,30 +3879,29 @@ impl SdrRemoteApp {
             self.spectrum_db_per_unit = state.spectrum_db_per_unit;
             self.last_spectrum_seq = state.spectrum_sequence;
         }
-        // Full DDC spectrum (for waterfall)
-        if state.vrx1_extracted_sequence != self.vrx1_extracted_sequence && !state.vrx1_extracted_bins.is_empty() {
-            self.vrx1_extracted_bins = state.vrx1_extracted_bins.clone();
-            self.vrx1_extracted_center_hz = state.vrx1_extracted_center_hz;
-            self.vrx1_extracted_span_hz = state.vrx1_extracted_span_hz;
-            self.vrx1_extracted_sequence = state.vrx1_extracted_sequence;
-            self.vrx1_hr_waterfall.push_full_only(
-                &self.vrx1_extracted_bins,
-                self.vrx1_extracted_center_hz,
-                self.vrx1_extracted_span_hz,
-                self.vrx1_extracted_sequence,
-            );
+        // VRX-eigen extracted spectrum → getypeerde ingang van het kanaal-type.
+        // De ChannelSpectrum pusht zelf in zijn eigen waterfall.
+        if state.vrx1_extracted_sequence != self.vrx1_spectrum.sequence()
+            && !state.vrx1_extracted_bins.is_empty()
+        {
+            self.vrx1_spectrum.ingest(SpectrumSnapshot {
+                channel: ChannelId::Vrx1,
+                bins: state.vrx1_extracted_bins.clone(),
+                center_hz: state.vrx1_extracted_center_hz,
+                span_hz: state.vrx1_extracted_span_hz,
+                sequence: state.vrx1_extracted_sequence,
+            });
         }
-        if state.vrx2_extracted_sequence != self.vrx2_extracted_sequence && !state.vrx2_extracted_bins.is_empty() {
-            self.vrx2_extracted_bins = state.vrx2_extracted_bins.clone();
-            self.vrx2_extracted_center_hz = state.vrx2_extracted_center_hz;
-            self.vrx2_extracted_span_hz = state.vrx2_extracted_span_hz;
-            self.vrx2_extracted_sequence = state.vrx2_extracted_sequence;
-            self.vrx2_hr_waterfall.push_full_only(
-                &self.vrx2_extracted_bins,
-                self.vrx2_extracted_center_hz,
-                self.vrx2_extracted_span_hz,
-                self.vrx2_extracted_sequence,
-            );
+        if state.vrx2_extracted_sequence != self.vrx2_spectrum.sequence()
+            && !state.vrx2_extracted_bins.is_empty()
+        {
+            self.vrx2_spectrum.ingest(SpectrumSnapshot {
+                channel: ChannelId::Vrx2,
+                bins: state.vrx2_extracted_bins.clone(),
+                center_hz: state.vrx2_extracted_center_hz,
+                span_hz: state.vrx2_extracted_span_hz,
+                sequence: state.vrx2_extracted_sequence,
+            });
         }
         // SAM auto-tune: mirror the server-followed carrier freq onto the VRX
         // VFO display (display-only; we do NOT echo it back as a tune command,
@@ -3318,173 +3965,56 @@ impl SdrRemoteApp {
             }
         }
 
-        // Per-VRX auto-ref (skip SSB passband ±3 kHz around VRX freq)
-        if self.vrx1_auto_ref && !self.full_spectrum_bins.is_empty() && self.full_spectrum_span_hz > 0 {
-            let nbins = self.full_spectrum_bins.len();
-            let hz_per_bin = self.full_spectrum_span_hz as f64 / nbins as f64;
-            let start_hz = self.full_spectrum_center_hz as f64 - self.full_spectrum_span_hz as f64 / 2.0;
-            let pass_lo = self.vrx1_freq_hz as f64 - 3_000.0;
-            let pass_hi = self.vrx1_freq_hz as f64 + 3_000.0;
-            let lo_bin = ((pass_lo - start_hz) / hz_per_bin) as i32;
-            let hi_bin = ((pass_hi - start_hz) / hz_per_bin) as i32;
-            let mut sum_db = 0.0f64;
-            let mut count = 0u32;
-            for (i, &val) in self.full_spectrum_bins.iter().enumerate() {
-                let idx = i as i32;
-                if idx >= lo_bin && idx <= hi_bin { continue; }
-                let db = -150.0 + (val as f64 / 65535.0) * 120.0;
-                sum_db += db;
-                count += 1;
-            }
-            if count > 0 {
-                let avg_db = sum_db / count as f64;
-                let target = avg_db as f32 + self.vrx1_range_db - 2.0;
-                if !self.vrx1_auto_ref_initialized {
-                    self.vrx1_auto_ref_value = target;
-                    self.vrx1_auto_ref_initialized = true;
-                } else {
-                    let alpha = if self.vrx1_auto_ref_frames < 45 { 0.10 } else { 0.002 };
-                    self.vrx1_auto_ref_value = alpha * target + (1.0 - alpha) * self.vrx1_auto_ref_value;
-                }
-                self.vrx1_ref_db = self.vrx1_auto_ref_value;
-                self.vrx1_auto_ref_frames += 1;
-            }
+        // Per-VRX auto-ref uit de EIGEN kanaal-bins (§6.1 #3), niet uit RX.
+        if let Some(ref_db) =
+            self.vrx1_spectrum
+                .update_auto_ref(self.vrx1_auto_ref, self.vrx1_freq_hz, self.vrx1_range_db)
+        {
+            self.vrx1_ref_db = ref_db;
         }
-        if self.vrx2_auto_ref && !self.rx2_full_spectrum_bins.is_empty() && self.rx2_full_spectrum_span_hz > 0 {
-            let nbins = self.rx2_full_spectrum_bins.len();
-            let hz_per_bin = self.rx2_full_spectrum_span_hz as f64 / nbins as f64;
-            let start_hz = self.rx2_full_spectrum_center_hz as f64 - self.rx2_full_spectrum_span_hz as f64 / 2.0;
-            let pass_lo = self.vrx2_freq_hz as f64 - 3_000.0;
-            let pass_hi = self.vrx2_freq_hz as f64 + 3_000.0;
-            let lo_bin = ((pass_lo - start_hz) / hz_per_bin) as i32;
-            let hi_bin = ((pass_hi - start_hz) / hz_per_bin) as i32;
-            let mut sum_db = 0.0f64;
-            let mut count = 0u32;
-            for (i, &val) in self.rx2_full_spectrum_bins.iter().enumerate() {
-                let idx = i as i32;
-                if idx >= lo_bin && idx <= hi_bin { continue; }
-                let db = -150.0 + (val as f64 / 65535.0) * 120.0;
-                sum_db += db;
-                count += 1;
-            }
-            if count > 0 {
-                let avg_db = sum_db / count as f64;
-                let target = avg_db as f32 + self.vrx2_range_db - 2.0;
-                if !self.vrx2_auto_ref_initialized {
-                    self.vrx2_auto_ref_value = target;
-                    self.vrx2_auto_ref_initialized = true;
-                } else {
-                    let alpha = if self.vrx2_auto_ref_frames < 45 { 0.10 } else { 0.002 };
-                    self.vrx2_auto_ref_value = alpha * target + (1.0 - alpha) * self.vrx2_auto_ref_value;
-                }
-                self.vrx2_ref_db = self.vrx2_auto_ref_value;
-                self.vrx2_auto_ref_frames += 1;
-            }
+        if let Some(ref_db) =
+            self.vrx2_spectrum
+                .update_auto_ref(self.vrx2_auto_ref, self.vrx2_freq_hz, self.vrx2_range_db)
+        {
+            self.vrx2_ref_db = ref_db;
         }
 
-        // ── Per-VRX S-meter: integrate spectrum power across SSB passband,
-        //    partial-bin weighting at edges, EMA ballistic. Uses the same
-        //    server calibration as render_vrx_strip (-150 .. -30 dBm scale).
-        let compute_vrx_smeter = |bins: &[u16], center_hz: u32, span_hz: u32,
-                                  vrx_freq_hz: u64, filt_low_hz: i32, filt_high_hz: i32,
-                                  cal_offset_db: f32| -> Option<f32> {
-            if bins.is_empty() || span_hz == 0 { return None; }
-            let hz_per_bin = span_hz as f64 / bins.len() as f64;
-            let start_hz = center_hz as f64 - span_hz as f64 / 2.0;
-            let lo_hz = vrx_freq_hz as f64 + filt_low_hz as f64;
-            let hi_hz = vrx_freq_hz as f64 + filt_high_hz as f64;
-            if hi_hz <= lo_hz { return None; }
-            let lo_bin_f = (lo_hz - start_hz) / hz_per_bin;
-            let hi_bin_f = (hi_hz - start_hz) / hz_per_bin;
-            let lo_bin = lo_bin_f.floor() as i32;
-            let hi_bin = hi_bin_f.ceil() as i32;
-            if hi_bin <= 0 || lo_bin >= bins.len() as i32 { return None; }
-            let mut power_mw = 0.0_f64;
-            for i in lo_bin.max(0)..hi_bin.min(bins.len() as i32) {
-                // Partial-bin weighting: full=1.0, edge=fraction inside passband
-                let bin_lo = i as f64;
-                let bin_hi = (i + 1) as f64;
-                let overlap_lo = bin_lo.max(lo_bin_f);
-                let overlap_hi = bin_hi.min(hi_bin_f);
-                let frac = (overlap_hi - overlap_lo).max(0.0).min(1.0);
-                if frac <= 0.0 { continue; }
-                let val = bins[i as usize];
-                let db = -150.0 + (val as f64 / 65535.0) * 120.0;
-                power_mw += frac * 10.0_f64.powf(db / 10.0);
-            }
-            if power_mw > 0.0 {
-                // Empirical calibration to match main RX1/RX2 S-meter.
-                // VRX1 needs more offset than VRX2 because RX1 spectrum
-                // bins are scaled slightly differently in Thetis.
-                Some(10.0 * power_mw.log10() as f32 + cal_offset_db)
-            } else {
-                None
-            }
-        };
-
-        // EMA ballistic constants (per-frame; spectrum runs at ~15 FPS so
-        // Δt ≈ 66 ms): fast attack (~15ms τ), slow decay (~400ms τ).
-        let smeter_alpha_attack = 1.0_f32 - (-0.066_f32 / 0.015).exp();
-        let smeter_alpha_decay = 1.0_f32 - (-0.066_f32 / 0.400).exp();
-        let apply_smeter_ema = |new_dbm: f32, cur: f32, initialized: bool| -> f32 {
-            if !initialized { return new_dbm; }
-            let alpha = if new_dbm > cur { smeter_alpha_attack } else { smeter_alpha_decay };
-            alpha * new_dbm + (1.0 - alpha) * cur
-        };
-
-        if !self.vrx1_enabled {
-            // VRX1 disabled -> freeze S-meter at -127 dBm (visual "no signal")
-            self.vrx1_smeter_dbm = -127.0;
-            self.vrx1_smeter_peak = -127.0;
-            self.vrx1_smeter_initialized = false;
-        } else if let Some(dbm) = compute_vrx_smeter(
-            &self.full_spectrum_bins, self.full_spectrum_center_hz, self.full_spectrum_span_hz,
-            self.vrx1_freq_hz, self.vrx1_filter_low_hz, self.vrx1_filter_high_hz,
+        // Per-VRX S-meter uit de EIGEN spectrum-bins (§6.1 #2). De s-meter hoort bij
+        // het SPECTRUM, niet bij de audio-vink: hij is actief zodra het spectrum aan
+        // staat (bins stromen), ook met VRX-audio uit. Cal-offset (VRX1=10, VRX2=5)
+        // matcht empirisch de hoofd-RX-meter.
+        self.vrx1_spectrum.update_smeter(
+            self.vrx1_high_res_spectrum,
+            self.vrx1_freq_hz,
+            self.vrx1_filter_low_hz,
+            self.vrx1_filter_high_hz,
             10.0,
-        ) {
-            self.vrx1_smeter_dbm = apply_smeter_ema(dbm, self.vrx1_smeter_dbm, self.vrx1_smeter_initialized);
-            self.vrx1_smeter_initialized = true;
-            if self.vrx1_smeter_dbm >= self.vrx1_smeter_peak {
-                self.vrx1_smeter_peak = self.vrx1_smeter_dbm;
-                self.vrx1_smeter_peak_time = Instant::now();
-            } else if self.vrx1_smeter_peak_time.elapsed().as_secs_f32() > 2.0 {
-                self.vrx1_smeter_peak = self.vrx1_smeter_dbm;
-                self.vrx1_smeter_peak_time = Instant::now();
-            }
-        }
-        if !self.vrx2_enabled {
-            self.vrx2_smeter_dbm = -127.0;
-            self.vrx2_smeter_peak = -127.0;
-            self.vrx2_smeter_initialized = false;
-        } else if let Some(dbm) = compute_vrx_smeter(
-            &self.rx2_full_spectrum_bins, self.rx2_full_spectrum_center_hz, self.rx2_full_spectrum_span_hz,
-            self.vrx2_freq_hz, self.vrx2_filter_low_hz, self.vrx2_filter_high_hz,
+        );
+        self.vrx2_spectrum.update_smeter(
+            self.vrx2_high_res_spectrum,
+            self.vrx2_freq_hz,
+            self.vrx2_filter_low_hz,
+            self.vrx2_filter_high_hz,
             5.0,
-        ) {
-            self.vrx2_smeter_dbm = apply_smeter_ema(dbm, self.vrx2_smeter_dbm, self.vrx2_smeter_initialized);
-            self.vrx2_smeter_initialized = true;
-            if self.vrx2_smeter_dbm >= self.vrx2_smeter_peak {
-                self.vrx2_smeter_peak = self.vrx2_smeter_dbm;
-                self.vrx2_smeter_peak_time = Instant::now();
-            } else if self.vrx2_smeter_peak_time.elapsed().as_secs_f32() > 2.0 {
-                self.vrx2_smeter_peak = self.vrx2_smeter_dbm;
-                self.vrx2_smeter_peak_time = Instant::now();
-            }
-        }
+        );
         // High-res VRX spectrum: when toggle on AND VRX enabled, re-send
         // the span to the server whenever the visible window changes
         // (driven by zoom). VRX Enable=OFF kills the high-res stream so
         // a disabled VRX channel costs zero bandwidth.
-        if self.vrx1_enabled && self.vrx1_high_res_spectrum && self.full_spectrum_span_hz > 0 {
-            let span_hz = (self.full_spectrum_span_hz as f32 / self.vrx1_spectrum_zoom.max(1.0)) as u32;
+        // Referentiebreedte is de RX-onafhankelijke DDC-span (§6.2, #6): niet
+        // langer gegate op `full_spectrum_span_hz > 0`, dus zoom werkt óók met het
+        // RX-spectrum uit. Alleen zenden als verbonden.
+        // Spectrum-zoom-resend LOS van de VRX-audio-vink (gegate op high_res).
+        if self.connected && self.vrx1_high_res_spectrum {
+            let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx1) as f32 / self.vrx1_spectrum_zoom.max(1.0)) as u32;
             let span_khz = ((span_hz / 1000).max(1)) as u16;
             if span_khz != self.vrx1_high_res_last_span_khz {
                 self.vrx1_high_res_last_span_khz = span_khz;
                 let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, span_khz));
             }
         }
-        if self.vrx2_enabled && self.vrx2_high_res_spectrum && self.rx2_full_spectrum_span_hz > 0 {
-            let span_hz = (self.rx2_full_spectrum_span_hz as f32 / self.vrx2_spectrum_zoom.max(1.0)) as u32;
+        if self.connected && self.vrx2_high_res_spectrum {
+            let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx2) as f32 / self.vrx2_spectrum_zoom.max(1.0)) as u32;
             let span_khz = ((span_hz / 1000).max(1)) as u16;
             if span_khz != self.vrx2_high_res_last_span_khz {
                 self.vrx2_high_res_last_span_khz = span_khz;
@@ -3796,6 +4326,7 @@ impl SdrRemoteApp {
         self.yaesu2_split = state.yaesu2_split;
         self.yaesu2_scan = state.yaesu2_scan;
         self.yaesu2_tuner_state = state.yaesu2_tuner_state;
+        self.yaesu2_hi_swr = state.yaesu2_hi_swr;
         self.yaesu2_feature_levels = state.yaesu2_feature_levels;
         self.yaesu2_clar_offset = state.yaesu2_feature_freqs[3] as i16; // clarifier-offset (§15)
         // yaesu2_feature_toggles wordt achter de debounce gesynct (optimistische toggles).
@@ -3808,7 +4339,16 @@ impl SdrRemoteApp {
             self.yaesu2_control_changed_at = None;
             self.yaesu2_squelch = state.yaesu2_squelch as u16;
             self.yaesu2_rf_gain = state.yaesu2_rf_gain as u16;
-            self.yaesu2_rf_power = state.yaesu2_tx_power as u16;
+            match self.yaesu2_power_pending {
+                Some(p) if state.yaesu2_tx_power as u16 == p => {
+                    self.yaesu2_rf_power = p; self.yaesu2_power_pending = None;
+                }
+                Some(_) if self.yaesu2_power_pending_at.map_or(true, |t| t.elapsed().as_millis() >= 3000) => {
+                    self.yaesu2_rf_power = state.yaesu2_tx_power as u16; self.yaesu2_power_pending = None;
+                }
+                Some(_) => {}
+                None => { self.yaesu2_rf_power = state.yaesu2_tx_power as u16; }
+            }
             for j in 0..4 { self.yaesu_level_sliders[1][j] = state.yaesu2_feature_levels[8 + j] as i32; }
             for j in 0..3 { self.yaesu_freq_sliders[1][j] = state.yaesu2_feature_freqs[j] as i32; }
             self.yaesu2_feature_toggles = state.yaesu2_feature_toggles;
@@ -3820,14 +4360,30 @@ impl SdrRemoteApp {
             self.yaesu_control_changed_at = None;
             self.yaesu_squelch = state.yaesu_squelch as u16;
             self.yaesu_rf_gain = state.yaesu_rf_gain as u16;
-            self.yaesu_rf_power = state.yaesu_tx_power as u16;
+            // Power: accepteer de readback pas als de radio ONZE laatst-gestuurde
+            // waarde bevestigt (of na 3s timeout) - anders bouncet de trage 991A-
+            // PC-readback de slider heen en weer.
+            match self.yaesu_power_pending {
+                Some(p) if state.yaesu_tx_power as u16 == p => {
+                    self.yaesu_rf_power = p; self.yaesu_power_pending = None;
+                }
+                Some(_) if self.yaesu_power_pending_at.map_or(true, |t| t.elapsed().as_millis() >= 3000) => {
+                    self.yaesu_rf_power = state.yaesu_tx_power as u16; self.yaesu_power_pending = None;
+                }
+                Some(_) => {} // wacht op bevestiging, houd de lokale sliderwaarde
+                None => { self.yaesu_rf_power = state.yaesu_tx_power as u16; }
+            }
             for j in 0..4 { self.yaesu_level_sliders[0][j] = state.yaesu_feature_levels[8 + j] as i32; }
             for j in 0..3 { self.yaesu_freq_sliders[0][j] = state.yaesu_feature_freqs[j] as i32; }
             self.yaesu_feature_toggles = state.yaesu_feature_toggles;
         }
+        // Max-power volgt de band direct (niet debounced; is geen sleep-waarde).
+        self.yaesu_tx_power_max = state.yaesu_tx_power_max as u16;
+        self.yaesu2_tx_power_max = state.yaesu2_tx_power_max as u16;
         self.yaesu_split_active = state.yaesu_split;
         self.yaesu_scan_active = state.yaesu_scan;
         self.yaesu_tuner_state = state.yaesu_tuner_state;
+        self.yaesu_hi_swr = state.yaesu_hi_swr;
         self.yaesu_feature_levels = state.yaesu_feature_levels;
         self.yaesu_clar_offset = state.yaesu_feature_freqs[3] as i16; // clarifier-offset (§15)
         // yaesu_feature_toggles wordt achter de debounce gesynct (optimistische toggles).
@@ -4074,7 +4630,7 @@ impl SdrRemoteApp {
         // Row 1: Ref + Auto checkbox + Range
         ui.horizontal(|ui| {
             ui.spacing_mut().slider_width = 80.0;
-            ui.label("Ref:");
+            ui.label(rust_i18n::t!("main_ref_label").to_string());
             if self.auto_ref_enabled {
                 // Show value but non-interactive
                 let mut display_val = self.spectrum_ref_db;
@@ -4086,24 +4642,24 @@ impl SdrRemoteApp {
                 let resp = ui.add(egui::Slider::new(&mut self.spectrum_ref_db, -90.0..=0.0)
                     .suffix(" dB")
                     .step_by(5.0)
-                ).on_hover_text("Spectrum reference level in dB.");
+                ).on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
                 let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_ref_db, -90.0..=0.0, 5.0);
                 if resp.changed() || scrolled {
                     self.save_full_config();
                 }
             }
-            if ui.checkbox(&mut self.auto_ref_enabled, "Auto").on_hover_text("Automatically track the reference level.").changed() {
+            if ui.checkbox(&mut self.auto_ref_enabled, rust_i18n::t!("main_auto").to_string()).on_hover_text(rust_i18n::t!("main_hover_auto_ref").to_string()).changed() {
                 if self.auto_ref_enabled {
                     self.auto_ref_frames = 0;
                     self.auto_ref_initialized = false;
                 }
                 self.save_full_config();
             }
-            ui.label("Range:");
+            ui.label(rust_i18n::t!("main_range_label").to_string());
             let resp = ui.add(egui::Slider::new(&mut self.spectrum_range_db, 20.0..=130.0)
                 .suffix(" dB")
                 .step_by(5.0)
-            ).on_hover_text("Spectrum vertical range in dB.");
+            ).on_hover_text(rust_i18n::t!("main_hover_range").to_string());
             let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_range_db, 20.0..=130.0, 5.0);
             if resp.changed() || scrolled {
                 if self.auto_ref_enabled {
@@ -4116,7 +4672,7 @@ impl SdrRemoteApp {
         // Row 2: Zoom + Pan + WF Contrast
         ui.horizontal(|ui| {
             ui.spacing_mut().slider_width = 80.0;
-            ui.label("Zoom:");
+            ui.label(rust_i18n::t!("main_zoom_label").to_string());
             // TL2-1 ctun-auto-recenter: zoom-min = 2.0 default (anti-smear feature werkbaar);
             // 1.0 toegestaan via setup-vink "Allow zoom <2x" (smear-trade-off).
             let zoom_min: f32 = if self.allow_zoom_below_2x { 1.0 } else { 2.0 };
@@ -4127,7 +4683,7 @@ impl SdrRemoteApp {
             let zoom_resp = ui.add(egui::Slider::new(&mut self.spectrum_zoom, zoom_min..=1024.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}x", v))
-            ).on_hover_text("Spectrum zoom factor.");
+            ).on_hover_text(rust_i18n::t!("main_hover_zoom").to_string());
             let zoom_step = (self.spectrum_zoom as f64 * 0.1).max(1.0);
             let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.spectrum_zoom, zoom_min..=1024.0, zoom_step);
             let zoom_changed = zoom_resp.changed() || zoom_scrolled;
@@ -4137,8 +4693,8 @@ impl SdrRemoteApp {
             }
             // TL2-1 ctun-auto-recenter setup-vink. Persist + push naar server bij toggle.
             // Server enforced strictest: zolang één client vink-uit, server klemt op 2x.
-            if ui.checkbox(&mut self.allow_zoom_below_2x, "Allow zoom <2x")
-                .on_hover_text("Toestaan om uit te zoomen onder 2× (waterval-smear bij tunen tussen 1× en 1.2×). Default uit voor smear-vrije ervaring.")
+            if ui.checkbox(&mut self.allow_zoom_below_2x, rust_i18n::t!("main_allow_zoom_2x").to_string())
+                .on_hover_text(rust_i18n::t!("hover_zoom_below_2x").to_string())
                 .changed()
             {
                 crate::ui::config::save_allow_zoom_below_2x(self.allow_zoom_below_2x);
@@ -4147,18 +4703,18 @@ impl SdrRemoteApp {
                     if self.allow_zoom_below_2x { 1 } else { 0 },
                 ));
             }
-            ui.label("Pan:");
+            ui.label(rust_i18n::t!("main_pan_label").to_string());
             let max_pan = if self.spectrum_zoom > 1.01 { (0.5 - 0.5 / self.spectrum_zoom) * 0.05 } else { 0.0 };
             let pan_resp = ui.add(egui::Slider::new(&mut self.spectrum_pan, -max_pan..=max_pan)
                 .custom_formatter(|v, _| format!("{:+.2}", v))
-            ).on_hover_text("Pan inside the zoomed spectrum view.");
+            ).on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
             let pan_scrolled = helpers::slider_wheel(ui, &pan_resp, &mut self.spectrum_pan, -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
             let pan_changed = pan_resp.changed() || pan_scrolled;
-            ui.label("WF:");
+            ui.label(rust_i18n::t!("main_wf_label").to_string());
             let wf_resp = ui.add(egui::Slider::new(&mut self.waterfall_contrast, 0.3..=3.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.1}", v))
-            ).on_hover_text("Waterfall contrast.");
+            ).on_hover_text(rust_i18n::t!("main_hover_wf").to_string());
             let wf_scrolled = helpers::slider_wheel(ui, &wf_resp, &mut self.waterfall_contrast, 0.3..=3.0, 0.1);
             if wf_resp.changed() || wf_scrolled {
                 // Update per-band storage
@@ -4210,7 +4766,7 @@ impl SdrRemoteApp {
                 ui.label("H:");
                 let resp = ui.add(egui::Slider::new(&mut self.spectrum_total_h, 300.0..=1200.0)
                     .custom_formatter(|v, _| format!("{:.0}", v))
-                ).on_hover_text("Total height of the spectrum + waterfall block in pixels. The page becomes scrollable when content overflows.");
+                ).on_hover_text(rust_i18n::t!("main_hover_spectrum_height").to_string());
                 let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_total_h, 300.0..=1200.0, 20.0);
                 if resp.changed() || scrolled {
                     self.save_full_config();
@@ -4381,7 +4937,7 @@ impl SdrRemoteApp {
     /// `surface` bepaalt welke UI-oppervlakte dit is (MainTab, PopoutSeparate,
     /// PopoutJoined) - meegegeven aan de controls-helpers voor coverage en events.
     fn render_rx1_controls(&mut self, ui: &mut egui::Ui, surface: controls::UiSurface) {
-        if self.popout_meter_analog {
+        if self.meter_analog[M_RX1] {
             let total_w = ui.available_width();
             let start = ui.cursor().min;
 
@@ -4412,6 +4968,9 @@ impl SdrRemoteApp {
         } else {
             self.render_rx1_controls_inner(ui, surface);
         }
+        // Klik op de RX1 s-meter wisselt analoog <-> balk.
+        let mrect = self.popout_rx1_smeter_rect;
+        self.meter_click(ui, mrect, M_RX1);
     }
 
     fn render_rx1_controls_inner(&mut self, ui: &mut egui::Ui, surface: controls::UiSurface) {
@@ -4466,26 +5025,20 @@ impl SdrRemoteApp {
         });
 
         // S-meter bar (only in bar mode)
-        if !self.popout_meter_analog {
+        if !self.meter_analog[M_RX1] {
             self.popout_rx1_smeter_rect = smeter_bar_popout(ui, self.smeter, self.smeter_peak, self.ptt, self.other_tx, self.thetis_swr_x100);
         }
 
-        // -- Controls row: VFO A Volume + meter toggle --
+        // -- Controls row: VFO A Volume (s-meter-type wissel je door op de meter te klikken) --
         ui.horizontal(|ui| {
             ui.label("VFO A:");
             let vol_slider = egui::Slider::new(&mut self.vfo_a_volume, 0.001..=1.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            let resp = ui.add(vol_slider).on_hover_text("Set mix volume.");
+            let resp = ui.add(vol_slider).on_hover_text(rust_i18n::t!("main_hover_set_mix_volume").to_string());
             let scrolled = helpers::slider_wheel(ui, &resp, &mut self.vfo_a_volume, 0.001..=1.0, 0.02);
             if resp.changed() || scrolled {
                 let _ = self.cmd_tx.send(Command::SetVfoAVolume(self.vfo_a_volume));
-                self.save_full_config();
-            }
-            ui.separator();
-            let meter_label = if self.popout_meter_analog { "S: Analog" } else { "S: Bar" };
-            if ui.small_button(meter_label).on_hover_text("Toggle S-meter style (bar / analog).").clicked() {
-                self.popout_meter_analog = !self.popout_meter_analog;
                 self.save_full_config();
             }
         });
@@ -4561,9 +5114,9 @@ impl SdrRemoteApp {
             let idx = closest_preset_index(presets, current_bw);
 
             ui.horizontal(|ui| {
-                ui.label("Filter:");
+                ui.label(rust_i18n::t!("main_filter_label").to_string());
                 let minus_btn = egui::Button::new(RichText::new(" - ").size(14.0));
-                if ui.add_enabled(idx > 0, minus_btn).on_hover_text("Narrow the filter one step.").clicked() {
+                if ui.add_enabled(idx > 0, minus_btn).on_hover_text(rust_i18n::t!("main_hover_narrow_filter").to_string()).clicked() {
                     let (low, high) = calc_filter_edges(
                         self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx - 1]);
                     let _ = self.cmd_tx.send(Command::SetControl(
@@ -4585,7 +5138,7 @@ impl SdrRemoteApp {
                 }
 
                 let plus_btn = egui::Button::new(RichText::new(" + ").size(14.0));
-                if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text("Widen the filter one step.").clicked() {
+                if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text(rust_i18n::t!("main_hover_widen_filter").to_string()).clicked() {
                     let (low, high) = calc_filter_edges(
                         self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx + 1]);
                     let _ = self.cmd_tx.send(Command::SetControl(
@@ -4607,7 +5160,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new(&nr_label)
                 };
-                if ui.add(nr_btn).on_hover_text("Noise Reduction (click to cycle level).").clicked() {
+                if ui.add(nr_btn).on_hover_text(rust_i18n::t!("main_hover_nr").to_string()).clicked() {
                     let new_val = if self.nr_level >= 4 { 0 } else { self.nr_level + 1 };
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::NoiseReduction, new_val as u16));
                     self.nr_level = new_val;
@@ -4621,7 +5174,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new(&nb_label)
                 };
-                if ui.add(nb_btn).on_hover_text("Noise Blanker (click to cycle).").clicked() {
+                if ui.add(nb_btn).on_hover_text(rust_i18n::t!("main_hover_nb").to_string()).clicked() {
                     let max_nb: u8 = if self.ddc_sample_rate_rx1 > 0 { 2 } else { 1 };
                     let new_val = if self.nb_level >= max_nb { 0 } else { self.nb_level + 1 };
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::NoiseBlanker, new_val as u16));
@@ -4635,7 +5188,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new("ANF")
                 };
-                if ui.add(anf_btn).on_hover_text("Auto Notch Filter.").clicked() {
+                if ui.add(anf_btn).on_hover_text(rust_i18n::t!("main_hover_anf").to_string()).clicked() {
                     let new_val = !self.anf_on;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::AutoNotchFilter, new_val as u16));
                     self.anf_on = new_val;
@@ -4648,7 +5201,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new("Mic AGC")
                 };
-                if ui.add(agc_btn).on_hover_text("Microphone AGC on/off.").clicked() {
+                if ui.add(agc_btn).on_hover_text(rust_i18n::t!("main_hover_mic_agc").to_string()).clicked() {
                     let new_val = !self.agc_enabled;
                     let _ = self.cmd_tx.send(Command::SetAgcEnabled(new_val));
                     self.agc_enabled = new_val;
@@ -4662,7 +5215,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new("MON")
                 };
-                if ui.add(mon_btn).on_hover_text("TX Monitor.").clicked() {
+                if ui.add(mon_btn).on_hover_text(rust_i18n::t!("main_hover_tx_monitor").to_string()).clicked() {
                     let new_val = !self.mon_on;
                     let _ = self.cmd_tx.send(Command::SetMonitor(new_val));
                     self.mon_on = new_val;
@@ -4679,7 +5232,7 @@ impl SdrRemoteApp {
             self.render_spectrum_content(ui, ctx, 0.0, true);
         } else {
             ui.centered_and_justified(|ui| {
-                ui.label(RichText::new("Waiting for RX1 spectrum data...").weak());
+                ui.label(RichText::new(rust_i18n::t!("main_waiting_rx1_spectrum").to_string()).weak());
             });
         }
     }
@@ -4687,7 +5240,7 @@ impl SdrRemoteApp {
     /// Render RX2 controls only (VFO, S-meter, band, mode, freq step, filter, NR, ANF)
     /// If `show_split_button` is true, a Split button is shown right-aligned on the S-meter row.
     fn render_rx2_controls_with_split(&mut self, ui: &mut egui::Ui, show_split_button: bool, is_popout: bool, surface: controls::UiSurface) {
-        if is_popout && self.popout_meter_analog {
+        if is_popout && self.meter_analog[M_RX2] {
             let total_w = ui.available_width();
             let start = ui.cursor().min;
 
@@ -4741,6 +5294,12 @@ impl SdrRemoteApp {
             ui.advance_cursor_after_rect(egui::Rect::from_min_size(start, egui::vec2(total_w, controls_h)));
         } else {
             self.render_rx2_controls_inner(ui, show_split_button, is_popout, surface);
+        }
+        // Klik op de RX2 s-meter wisselt analoog <-> balk (alleen in popout, waar de
+        // meter-rect wordt vastgelegd).
+        if is_popout {
+            let mrect = self.popout_rx2_smeter_rect;
+            self.meter_click(ui, mrect, M_RX2);
         }
     }
 
@@ -4802,7 +5361,7 @@ impl SdrRemoteApp {
         });
 
         // S-meter bar for RX2 (hidden when analog meter is shown in popout wrapper)
-        if !(is_popout && self.popout_meter_analog) {
+        if !(is_popout && self.meter_analog[M_RX2]) {
             if show_split_button {
                 ui.horizontal(|ui| {
                     self.popout_rx2_smeter_rect = if is_popout {
@@ -4831,7 +5390,7 @@ impl SdrRemoteApp {
             } else {
                 egui::Button::new(RichText::new("VFO Sync").size(12.0))
             };
-            if ui.add_enabled(self.connected, sync_btn).on_hover_text("VFO B follows VFO A.").clicked() {
+            if ui.add_enabled(self.connected, sync_btn).on_hover_text(rust_i18n::t!("main_hover_vfo_sync").to_string()).clicked() {
                 self.vfo_sync = !self.vfo_sync;
                 let _ = self.cmd_tx.send(Command::SetVfoSync(self.vfo_sync));
             }
@@ -4842,7 +5401,7 @@ impl SdrRemoteApp {
             let vol_slider = egui::Slider::new(&mut self.vfo_b_volume, 0.001..=1.0)
                 .logarithmic(true)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            let resp = ui.add(vol_slider).on_hover_text("Set mix volume.");
+            let resp = ui.add(vol_slider).on_hover_text(rust_i18n::t!("main_hover_set_mix_volume").to_string());
             let scrolled = helpers::slider_wheel(ui, &resp, &mut self.vfo_b_volume, 0.001..=1.0, 0.02);
             if resp.changed() || scrolled {
                 let _ = self.cmd_tx.send(Command::SetVfoBVolume(self.vfo_b_volume));
@@ -4931,9 +5490,9 @@ impl SdrRemoteApp {
             let idx = closest_preset_index(presets, current_bw);
 
             ui.horizontal(|ui| {
-                ui.label("Filter:");
+                ui.label(rust_i18n::t!("main_filter_label").to_string());
                 let minus_btn = egui::Button::new(RichText::new(" - ").size(14.0));
-                if ui.add_enabled(idx > 0, minus_btn).on_hover_text("Narrow the filter one step.").clicked() {
+                if ui.add_enabled(idx > 0, minus_btn).on_hover_text(rust_i18n::t!("main_hover_narrow_filter").to_string()).clicked() {
                     let (low, high) = calc_filter_edges(
                         self.rx2_mode, fl, fh, presets[idx - 1]);
                     let _ = self.cmd_tx.send(Command::SetControl(
@@ -4954,7 +5513,7 @@ impl SdrRemoteApp {
                 }
 
                 let plus_btn = egui::Button::new(RichText::new(" + ").size(14.0));
-                if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text("Widen the filter one step.").clicked() {
+                if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text(rust_i18n::t!("main_hover_widen_filter").to_string()).clicked() {
                     let (low, high) = calc_filter_edges(
                         self.rx2_mode, fl, fh, presets[idx + 1]);
                     let _ = self.cmd_tx.send(Command::SetControl(
@@ -4976,7 +5535,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new(&nr_label)
                 };
-                if ui.add(nr_btn).on_hover_text("Noise Reduction (click to cycle level).").clicked() {
+                if ui.add(nr_btn).on_hover_text(rust_i18n::t!("main_hover_nr").to_string()).clicked() {
                     let new_val = if self.rx2_nr_level >= 4 { 0 } else { self.rx2_nr_level + 1 };
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2NoiseReduction, new_val as u16));
                     self.rx2_nr_level = new_val;
@@ -4990,7 +5549,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new(&rx2_nb_label)
                 };
-                if ui.add(nb_btn).on_hover_text("Noise Blanker (click to cycle).").clicked() {
+                if ui.add(nb_btn).on_hover_text(rust_i18n::t!("main_hover_nb").to_string()).clicked() {
                     let max_nb: u8 = if self.ddc_sample_rate_rx1 > 0 { 2 } else { 1 };
                     let new_val = if self.rx2_nb_level >= max_nb { 0 } else { self.rx2_nb_level + 1 };
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2NoiseBlanker, new_val as u16));
@@ -5004,7 +5563,7 @@ impl SdrRemoteApp {
                 } else {
                     egui::Button::new("ANF")
                 };
-                if ui.add(anf_btn).on_hover_text("Auto Notch Filter.").clicked() {
+                if ui.add(anf_btn).on_hover_text(rust_i18n::t!("main_hover_anf").to_string()).clicked() {
                     let new_val = !self.rx2_anf_on;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2AutoNotchFilter, new_val as u16));
                     self.rx2_anf_on = new_val;
@@ -5134,7 +5693,7 @@ impl SdrRemoteApp {
             // Row 1: Ref + Auto checkbox + Range (same as RX1)
             ui.horizontal(|ui| {
                 ui.spacing_mut().slider_width = 80.0;
-                ui.label("Ref:");
+                ui.label(rust_i18n::t!("main_ref_label").to_string());
                 if self.rx2_auto_ref_enabled {
                     let mut display_val = self.rx2_spectrum_ref_db;
                     ui.add_enabled(false, egui::Slider::new(&mut display_val, -90.0..=0.0)
@@ -5145,24 +5704,24 @@ impl SdrRemoteApp {
                     let resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_ref_db, -90.0..=0.0)
                         .suffix(" dB")
                         .step_by(5.0)
-                    ).on_hover_text("Spectrum reference level in dB.");
+                    ).on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
                     let scrolled = helpers::slider_wheel(ui, &resp, &mut self.rx2_spectrum_ref_db, -90.0..=0.0, 5.0);
                     if resp.changed() || scrolled {
                         self.save_full_config();
                     }
                 }
-                if ui.checkbox(&mut self.rx2_auto_ref_enabled, "Auto").on_hover_text("Automatically track the reference level.").changed() {
+                if ui.checkbox(&mut self.rx2_auto_ref_enabled, rust_i18n::t!("main_auto").to_string()).on_hover_text(rust_i18n::t!("main_hover_auto_ref").to_string()).changed() {
                     if self.rx2_auto_ref_enabled {
                         self.rx2_auto_ref_frames = 0;
                         self.rx2_auto_ref_initialized = false;
                     }
                     self.save_full_config();
                 }
-                ui.label("Range:");
+                ui.label(rust_i18n::t!("main_range_label").to_string());
                 let resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_range_db, 20.0..=130.0)
                     .suffix(" dB")
                     .step_by(5.0)
-                ).on_hover_text("Spectrum vertical range in dB.");
+                ).on_hover_text(rust_i18n::t!("main_hover_range").to_string());
                 let scrolled = helpers::slider_wheel(ui, &resp, &mut self.rx2_spectrum_range_db, 20.0..=130.0, 5.0);
                 if resp.changed() || scrolled {
                     if self.rx2_auto_ref_enabled {
@@ -5175,7 +5734,7 @@ impl SdrRemoteApp {
             // Row 2: Zoom/Pan controls
             ui.horizontal(|ui| {
                 ui.spacing_mut().slider_width = 80.0;
-                ui.label("Zoom:");
+                ui.label(rust_i18n::t!("main_zoom_label").to_string());
                 // TL2-1 ctun-auto-recenter: same zoom-min logic als RX1 (per-RX onafhankelijk
                 // zoom maar zelfde vink-clamp policy).
                 let zoom_min_rx2: f32 = if self.allow_zoom_below_2x { 1.0 } else { 2.0 };
@@ -5185,7 +5744,7 @@ impl SdrRemoteApp {
                 let zoom_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0)
                     .logarithmic(true)
                     .custom_formatter(|v, _| format!("{:.0}x", v))
-                ).on_hover_text("Spectrum zoom factor.");
+                ).on_hover_text(rust_i18n::t!("main_hover_zoom").to_string());
                 let zoom_step = (self.rx2_spectrum_zoom as f64 * 0.1).max(1.0);
                 let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0, zoom_step);
                 let zoom_changed = zoom_resp.changed() || zoom_scrolled;
@@ -5193,18 +5752,18 @@ impl SdrRemoteApp {
                     let max_pan = (0.5 - 0.5 / self.rx2_spectrum_zoom) * 0.05;
                     self.rx2_spectrum_pan = self.rx2_spectrum_pan.clamp(-max_pan, max_pan);
                 }
-                ui.label("Pan:");
+                ui.label(rust_i18n::t!("main_pan_label").to_string());
                 let max_pan = if self.rx2_spectrum_zoom > 1.01 { (0.5 - 0.5 / self.rx2_spectrum_zoom) * 0.05 } else { 0.0 };
                 let pan_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_pan, -max_pan..=max_pan)
                     .custom_formatter(|v, _| format!("{:+.2}", v))
-                ).on_hover_text("Pan inside the zoomed spectrum view.");
+                ).on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
                 let pan_scrolled = helpers::slider_wheel(ui, &pan_resp, &mut self.rx2_spectrum_pan, -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
                 let pan_changed = pan_resp.changed() || pan_scrolled;
-                ui.label("WF:");
+                ui.label(rust_i18n::t!("main_wf_label").to_string());
                 let wf_resp = ui.add(egui::Slider::new(&mut self.rx2_waterfall_contrast, 0.3..=3.0)
                     .logarithmic(true)
                     .custom_formatter(|v, _| format!("{:.1}", v))
-                ).on_hover_text("Waterfall contrast.");
+                ).on_hover_text(rust_i18n::t!("main_hover_wf").to_string());
                 let wf_scrolled = helpers::slider_wheel(ui, &wf_resp, &mut self.rx2_waterfall_contrast, 0.3..=3.0, 0.1);
                 if wf_resp.changed() || wf_scrolled {
                     self.save_full_config();
@@ -5350,7 +5909,7 @@ impl SdrRemoteApp {
             );
         } else {
             ui.centered_and_justified(|ui| {
-                ui.label(RichText::new("Waiting for RX2 spectrum data...").weak());
+                ui.label(RichText::new(rust_i18n::t!("main_waiting_rx2_spectrum").to_string()).weak());
             });
         }
     }
@@ -5474,11 +6033,10 @@ impl eframe::App for SdrRemoteApp {
                 self.local_volume = 1.0;
                 let _ = self.cmd_tx.send(Command::SetLocalVolume(1.0));
             }
-            // VFO A popout without VFO B -> mute VFO B
-            if self.spectrum_popout && !self.rx2_popout && self.vfo_b_volume > 0.001 {
-                self.vfo_b_volume = 0.001;
-                let _ = self.cmd_tx.send(Command::SetVfoBVolume(0.001));
-            }
+            // (verwijderd) Voorheen werd VFO-B (RX2-audio) gemute zodra de RX1-popout
+            // open was maar de RX2-popout dicht — dat koppelde de RX2-audio-volume aan
+            // de RX2-spectrum-popout (volume viel op 0 zonder spectrum). RX2-audio hoort
+            // te spelen ongeacht de popout; het volume blijft nu behouden.
         }
 
         // Push new waterfall data (always, before rendering).
@@ -5517,15 +6075,15 @@ impl eframe::App for SdrRemoteApp {
                 let (ptt_color, ptt_text, ptt_locked) = if !self.thetis_configured {
                     // No Thetis configured -> this (Thetis) PTT keys nothing. Disable it
                     // so the spacebar/mouse cannot turn it red for a radio that is absent.
-                    (Color32::from_rgb(60, 60, 60), "PTT", true)
+                    (Color32::from_rgb(60, 60, 60), "PTT".to_string(), true)
                 } else if current_pos_rx_only {
-                    (Color32::from_rgb(120, 50, 50), "RX only", true)
+                    (Color32::from_rgb(120, 50, 50), rust_i18n::t!("main_rx_only").to_string(), true)
                 } else if self.other_tx {
-                    (Color32::from_rgb(200, 120, 0), "TX in use", true)
+                    (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true)
                 } else if self.ptt {
-                    (Color32::RED, "TX", false)
+                    (Color32::RED, "TX".to_string(), false)
                 } else {
-                    (Color32::from_rgb(60, 60, 60), "PTT", false)
+                    (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false)
                 };
 
                 let button = egui::Button::new(
@@ -5539,7 +6097,7 @@ impl eframe::App for SdrRemoteApp {
                 }).inner;
                 if current_pos_rx_only {
                     response.clone().on_hover_text(
-                        "Active Amplitec antenna is RX-only - transmit is blocked",
+                        rust_i18n::t!("main_hover_rx_only_antenna").to_string(),
                     );
                 }
 
@@ -5628,11 +6186,11 @@ impl eframe::App for SdrRemoteApp {
                 if self.tuner_can_tune && self.tuner_connected {
                     let olive_green = Color32::from_rgb(120, 160, 40);
                     let (tune_color, tune_text) = match self.tuner_state {
-                        1 => (Color32::from_rgb(60, 120, 220), "Tune..."),  // Tuning = blue
-                        2 => (Color32::from_rgb(50, 180, 50), "Tune OK"),  // Done OK = green
-                        5 => (olive_green, "Tune ~"),  // Done assumed = olive green
-                        3 | 4 => (Color32::from_rgb(220, 160, 40), "Tune X"),  // Timeout/Aborted = orange
-                        _ => (Color32::from_rgb(80, 80, 80), "Tune"),  // Idle = grey
+                        1 => (Color32::from_rgb(60, 120, 220), rust_i18n::t!("main_tune_tuning").to_string()),  // Tuning = blue
+                        2 => (Color32::from_rgb(50, 180, 50), rust_i18n::t!("main_tune_ok").to_string()),  // Done OK = green
+                        5 => (olive_green, rust_i18n::t!("main_tune_assumed").to_string()),  // Done assumed = olive green
+                        3 | 4 => (Color32::from_rgb(220, 160, 40), rust_i18n::t!("main_tune_failed").to_string()),  // Timeout/Aborted = orange
+                        _ => (Color32::from_rgb(80, 80, 80), rust_i18n::t!("main_tune").to_string()),  // Idle = grey
                     };
 
                     let tune_btn = egui::Button::new(
@@ -5694,7 +6252,7 @@ impl eframe::App for SdrRemoteApp {
                         } else {
                             self.rf2k_error_text.clone()
                         };
-                        let reset_btn = egui::Button::new(RichText::new("RF2K-S Reset").size(11.0).strong().color(Color32::WHITE))
+                        let reset_btn = egui::Button::new(RichText::new(rust_i18n::t!("main_rf2ks_reset").to_string()).size(11.0).strong().color(Color32::WHITE))
                             .fill(Color32::from_rgb(200, 40, 40))
                             .min_size(Vec2::new(80.0, 20.0));
                         if ui.add(reset_btn).clicked() {
@@ -5731,19 +6289,22 @@ impl eframe::App for SdrRemoteApp {
                 }
 
                 if self.ptt_denied {
-                    ui.colored_label(Color32::from_rgb(255, 165, 0), "PTT blocked");
+                    ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("main_ptt_blocked").to_string());
                 }
             });
         });
 
         // Thetis volume/RX2 controls + Connect row (between PTT bar and tabs).
         egui::TopBottomPanel::top("vol_rx2_panel").show(ctx, |ui| {
+          ui.vertical(|ui| {
+            // Rij 1: VFO A-volume. De kanaalchips staan op rij 2 (RX1 links, onder VFO A),
+            // zodat deze rij smal blijft en het venster kleiner gezet kan worden.
             ui.horizontal(|ui| {
                 if self.thetis_configured {
                     // Volume slider: role depends on popout state.
                     let both_popout = self.spectrum_popout && self.rx2_popout;
                     if both_popout {
-                        ui.label("Master:");
+                        ui.label(rust_i18n::t!("main_master_label").to_string());
                         let slider = egui::Slider::new(&mut self.local_volume, 0.001..=1.0)
                             .logarithmic(true)
                             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
@@ -5765,48 +6326,132 @@ impl eframe::App for SdrRemoteApp {
                             self.save_full_config();
                         }
                     }
+                } // einde thetis_configured (volume) - rij 1
+            }); // einde rij 1
+
+            // Rij 2: kanaalchips - RX1 begint links, onder VFO A. Yaesu + Connect volgen.
+            ui.horizontal(|ui| {
+                if self.thetis_configured {
+                    // Uniforme capaciteit-rijen (parity by construction, model §1b):
+                    // elk RX-kanaal = [audio-vink] [spectrum-toggle] via dezelfde helper.
+                    // RX1: audio = rx1_enabled, spectrum = spectrum_enabled (inline/pop-out).
+                    let (rx1_audio_click, rx1_spec_click) =
+                        Self::rx_sub_chips(ui, "RX1", self.rx1_enabled, self.spectrum_enabled);
+                    if rx1_audio_click {
+                        self.rx1_enabled = !self.rx1_enabled;
+                        let _ = self.cmd_tx.send(Command::SetRx1Enabled(self.rx1_enabled));
+                        self.save_full_config();
+                    }
+                    if rx1_spec_click {
+                        self.spectrum_enabled = !self.spectrum_enabled;
+                        let _ = self.cmd_tx.send(Command::EnableSpectrum(self.spectrum_enabled));
+                        self.save_full_config();
+                    }
 
                     ui.separator();
 
-                    // RX2 toggle.
-                    let rx2_btn = if self.rx2_enabled {
-                        egui::Button::new(RichText::new("RX2").size(12.0).strong())
-                            .fill(Color32::from_rgb(100, 160, 230))
-                    } else {
-                        egui::Button::new(RichText::new("RX2").size(12.0))
-                    };
-                    if ui.add(rx2_btn).on_hover_text("Enable/disable RX2.").clicked() {
+                    // RX2 + VRX2 alleen als de radio een tweede ontvanger heeft
+                    // (rx2_present; server op single-receiver = weg). VRX2 hangt aan
+                    // RX2, dus volgt dezelfde gate; VRX1 (aan RX1) blijft altijd staan.
+                    if self.rx2_present {
+                    // RX2: audio = rx2_enabled, spectrum = rx2_spectrum_enabled (pop-out).
+                    let (rx2_audio_click, rx2_spec_click) =
+                        Self::rx_sub_chips(ui, "RX2", self.rx2_enabled, self.rx2_spectrum_enabled);
+                    if rx2_audio_click {
                         self.rx2_enabled = !self.rx2_enabled;
                         let _ = self.cmd_tx.send(Command::SetRx2Enabled(self.rx2_enabled));
-                        if self.rx2_enabled {
-                            let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(true));
+                        self.save_full_config();
+                    }
+                    if rx2_spec_click {
+                        self.rx2_spectrum_enabled = !self.rx2_spectrum_enabled;
+                        let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(self.rx2_spectrum_enabled));
+                        // RX2-spectrum toont op de desktop alleen in de pop-out; venster
+                        // volgt de toggle direct (zie fase 4a).
+                        self.rx2_popout = self.rx2_spectrum_enabled;
+                        if self.rx2_spectrum_enabled {
                             self.rx2_last_sent_zoom = 0.0;
                             self.rx2_last_sent_pan = 0.0;
                             self.rx2_zoom_pan_changed_at = Some(Instant::now());
-                            if self.spectrum_popout {
-                                self.rx2_popout = true;
-                            }
-                        } else {
-                            let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
-                            self.rx2_popout = false;
                         }
                         self.save_full_config();
                     }
 
                     ui.separator();
+                    } // einde rx2_present-gate voor RX2 (VRX2 volgt hieronder)
+
+                    // VRX1/VRX2: zelfde uniforme [audio][spec]-chips als RX1/RX2,
+                    // nu óók op het hoofdscherm — audio-vink = kanaal aan, spectrum =
+                    // high-res. Zo is de VRX-staat zichtbaar + bedienbaar zonder de
+                    // pop-out te openen (voorheen: audio kon spelen zonder zichtbare
+                    // staat op het hoofdscherm). Gedeelde toggle-methodes.
+                    let (vrx1_audio_click, vrx1_spec_click) =
+                        Self::rx_sub_chips(ui, "VRX1", self.vrx1_enabled, self.vrx1_high_res_spectrum);
+                    if vrx1_audio_click { self.toggle_vrx_audio(VrxChannel::Vrx1); }
+                    if vrx1_spec_click { self.toggle_vrx_spectrum(VrxChannel::Vrx1); }
+
+                    ui.separator();
+
+                    if self.rx2_present {
+                        let (vrx2_audio_click, vrx2_spec_click) =
+                            Self::rx_sub_chips(ui, "VRX2", self.vrx2_enabled, self.vrx2_high_res_spectrum);
+                        if vrx2_audio_click { self.toggle_vrx_audio(VrxChannel::Vrx2); }
+                        if vrx2_spec_click { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
+
+                        ui.separator();
+                    }
                 } else {
                     self.rx2_popout = false;
-                    self.show_vrx = false;
+                    self.vrx1_popout = false;
+                    self.vrx2_popout = false;
+                }
+
+                // Yaesu 1/2 op het hoofdscherm - alleen als die radio aanwezig is
+                // (presence: yaesu_connected/yaesu2_connected). [type]=audio-enable,
+                // [win]=bedieningsvenster. Zo hoef je niet meer naar devices->Yaesu.
+                // Los van thetis_configured: werkt ook zonder Thetis. "0 of 1 Yaesu"
+                // volgt vanzelf uit de presence-gate.
+                if self.yaesu_connected {
+                    let full = self.yaesu_slot_label(0);
+                    let (en_click, win_click) = Self::yaesu_sub_chips(
+                        ui, self.yaesu_type_name(0), &full, self.yaesu_enabled, self.yaesu_popout);
+                    if en_click {
+                        // Audio-vink (mute) staat LOS van het venster - je kunt het
+                        // bedieningsvenster open laten met de audio uit.
+                        self.yaesu_enabled = !self.yaesu_enabled;
+                        let _ = self.cmd_tx.send(Command::SetControl(
+                            sdr_remote_core::protocol::ControlId::YaesuEnable, self.yaesu_enabled as u16));
+                    }
+                    if win_click {
+                        // Venster open/dicht, onafhankelijk van de audio.
+                        self.yaesu_popout = !self.yaesu_popout;
+                    }
+                    ui.separator();
+                }
+                if self.yaesu2_connected {
+                    let full = self.yaesu_slot_label(1);
+                    let (en_click, win_click) = Self::yaesu_sub_chips(
+                        ui, self.yaesu_type_name(1), &full, self.yaesu2_enabled, self.yaesu2_popout);
+                    if en_click {
+                        // Audio-vink (mute) los van het venster (zie slot 0).
+                        self.yaesu2_enabled = !self.yaesu2_enabled;
+                        let _ = self.cmd_tx.send(Command::SetYaesu2Enable(self.yaesu2_enabled));
+                        self.save_ptt_config();
+                    }
+                    if win_click {
+                        self.yaesu2_popout = !self.yaesu2_popout;
+                        self.save_ptt_config();
+                    }
+                    ui.separator();
                 }
 
                 // Connect/Disconnect button + status
                 if self.connected {
-                    if ui.button("Disconnect").clicked() {
+                    if ui.button(rust_i18n::t!("main_disconnect").to_string()).clicked() {
                         let _ = self.cmd_tx.send(Command::Disconnect);
                         self.connected = false;
                         self.catsync.force_unmute();
                     }
-                    ui.colored_label(Color32::GREEN, "Connected");
+                    ui.colored_label(Color32::GREEN, rust_i18n::t!("main_connected").to_string());
                 } else {
                     // PATCH-1 smoke-test fix (2026-05-12): when we are mid-auth in
                     // AwaitingTotp, Connect must not be clickable - the user should
@@ -5825,7 +6470,7 @@ impl eframe::App for SdrRemoteApp {
                     let can_connect = !self.password_input.is_empty()
                         && !in_awaiting_totp
                         && !in_connecting;
-                    if ui.add_enabled(can_connect, egui::Button::new("Connect")).clicked() {
+                    if ui.add_enabled(can_connect, egui::Button::new(rust_i18n::t!("main_connect").to_string())).clicked() {
                         // Reset span to 0 so first spectrum packet triggers zoom calculation
                         self.full_spectrum_span_hz = 0;
                         self.spectrum_pan = 0.0;
@@ -5848,10 +6493,10 @@ impl eframe::App for SdrRemoteApp {
                         let _ = self.cmd_tx.send(Command::Connect(connect_addr, pw));
                         self.save_full_config();
                     }
-                    ui.colored_label(Color32::RED, "Disconnected");
+                    ui.colored_label(Color32::RED, rust_i18n::t!("main_disconnected").to_string());
                 }
                 if self.audio_error {
-                    ui.colored_label(Color32::from_rgb(255, 165, 0), "Audio error");
+                    ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("main_audio_error").to_string());
                 }
                 // PATCH-1 smoke-test fix (2026-05-13): auto-switch to the
                 // Server tab when connect_status transitions into a state
@@ -5902,6 +6547,7 @@ impl eframe::App for SdrRemoteApp {
                     }
                 }
             });
+          }); // einde ui.vertical (rij 1 + rij 2)
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -5910,31 +6556,46 @@ impl eframe::App for SdrRemoteApp {
             }
             ui.horizontal(|ui| {
                 if self.thetis_configured {
-                    ui.selectable_value(&mut self.active_tab, Tab::Radio, "Radio");
+                    ui.selectable_value(&mut self.active_tab, Tab::Radio, rust_i18n::t!("main_tab_radio").to_string());
                     ui.selectable_value(&mut self.active_tab, Tab::Thetis, "Thetis");
                 }
-                ui.selectable_value(&mut self.active_tab, Tab::Server, "Server");
-                ui.selectable_value(&mut self.active_tab, Tab::Devices, "Devices");
+                ui.selectable_value(&mut self.active_tab, Tab::Server, rust_i18n::t!("main_tab_server").to_string());
+                ui.selectable_value(&mut self.active_tab, Tab::Devices, rust_i18n::t!("main_tab_devices").to_string());
                 ui.selectable_value(&mut self.active_tab, Tab::Midi, "MIDI");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button(RichText::new("About").size(11.0)).clicked() {
+                    if ui.small_button(RichText::new(rust_i18n::t!("main_about").to_string()).size(11.0)).clicked() {
                         self.show_about = !self.show_about;
                     }
-                    ui.toggle_value(&mut self.show_log, RichText::new("Log").size(11.0));
-                    if self.thetis_configured {
-                        let prev_show_vrx = self.show_vrx;
-                        ui.toggle_value(&mut self.show_vrx, RichText::new("VRX").size(11.0));
-                        if prev_show_vrx != self.show_vrx {
-                            log::info!("VRX popout toggle: {} -> {}", prev_show_vrx, self.show_vrx);
+                    ui.toggle_value(&mut self.show_log, RichText::new(rust_i18n::t!("main_log").to_string()).size(11.0));
+                    {
+                        // "Schik"-knop opent het sleepraster om open vensters te ordenen.
+                        let mut s = self.show_layout_arranger;
+                        if ui.toggle_value(&mut s, RichText::new(rust_i18n::t!("main_arrange_btn").to_string()).size(11.0))
+                            .on_hover_text(rust_i18n::t!("hover_arrange_windows").to_string())
+                            .changed()
+                        {
+                            self.show_layout_arranger = s;
+                            if s {
+                                // Start op de monitor waar het hoofdvenster staat;
+                                // render_layout_arranger zorgt voor de per-monitor rijen.
+                                self.layout_target_monitor = self.detect_monitor_index(ctx);
+                            }
                         }
-                        if prev_show_vrx && !self.show_vrx {
-                            // Toggle-driven close mirrors the X-button close path
-                            // so window geometry persists either way.
-                            self.vrx_popout_init_applied = false;
-                            self.save_full_config();
+                    }
+                    if self.thetis_configured {
+                        // "VRX"-knop schakelt BEIDE VRX-spectra (en dus hun vensters) in
+                        // één klik. Per kanaal blijft het los via de spec-chip. Venster
+                        // <-> abonnement lopen samen via toggle_vrx_spectrum.
+                        let any_on = self.vrx1_high_res_spectrum || self.vrx2_high_res_spectrum;
+                        let mut want = any_on;
+                        if ui.toggle_value(&mut want, RichText::new("VRX").size(11.0)).changed() {
+                            if self.vrx1_high_res_spectrum != want { self.toggle_vrx_spectrum(VrxChannel::Vrx1); }
+                            if self.vrx2_high_res_spectrum != want { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
+                            log::info!("VRX toggle (beide): {} -> {}", any_on, want);
                         }
                     } else {
-                        self.show_vrx = false;
+                        self.vrx1_popout = false;
+                        self.vrx2_popout = false;
                     }
                 });
             });
@@ -6030,35 +6691,19 @@ impl eframe::App for SdrRemoteApp {
                 // de Basic-density helper gate't zichzelf op !spectrum_enabled.
             }
 
-            // Spectrum toggle + display
+            // RX1-spectrum-weergave. De spectrum-TOGGLE (abonnement) zit nu in de
+            // uniforme capaciteit-rij bovenin (fase 4b); hier alleen nog de
+            // pop-out/pop-in-keuze (weergave) + het inline-spectrum.
             {
-                ui.horizontal(|ui| {
-                    let spectrum_btn = if self.spectrum_enabled {
-                        egui::Button::new(RichText::new("Spectrum").strong())
-                            .fill(Color32::from_rgb(100, 160, 230))
-                    } else {
-                        egui::Button::new("Spectrum")
-                    };
-                    if ui.add(spectrum_btn).clicked() {
-                        self.spectrum_enabled = !self.spectrum_enabled;
-                        let _ = self.cmd_tx.send(Command::EnableSpectrum(self.spectrum_enabled));
-                        self.save_full_config();
-                    }
-
-                    if self.spectrum_enabled {
-                        let popout_label = if self.spectrum_popout { "Pop-in" } else { "Pop-out" };
+                if self.spectrum_enabled {
+                    ui.horizontal(|ui| {
+                        let popout_label = if self.spectrum_popout { "Spectrum: Pop-in" } else { "Spectrum: Pop-out" };
                         if ui.button(popout_label).clicked() {
                             self.spectrum_popout = !self.spectrum_popout;
-                            // Also open/close RX2 popout when RX2 is enabled
-                            if self.rx2_enabled {
-                                self.rx2_popout = self.spectrum_popout;
-                                if self.rx2_popout {
-                                    let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(true));
-                                }
-                            }
+                            // RX2-spectrum heeft zijn eigen toggle + pop-out (fase 4).
                         }
-                    }
-                });
+                    });
+                }
 
                 if self.spectrum_enabled && !self.spectrum_bins.is_empty() && !self.spectrum_popout {
                     self.render_spectrum_content(ui, ctx, 300.0, false);
@@ -6098,9 +6743,9 @@ impl eframe::App for SdrRemoteApp {
                 let idx = closest_preset_index(presets, current_bw);
 
                 ui.horizontal(|ui| {
-                    ui.label("Filter:");
+                    ui.label(rust_i18n::t!("main_filter_label").to_string());
                     let minus_btn = egui::Button::new(RichText::new(" - ").size(14.0));
-                    if ui.add_enabled(idx > 0, minus_btn).on_hover_text("Narrow the filter one step.").clicked() {
+                    if ui.add_enabled(idx > 0, minus_btn).on_hover_text(rust_i18n::t!("main_hover_narrow_filter").to_string()).clicked() {
                         let (low, high) = calc_filter_edges(
                             self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx - 1]);
                         let _ = self.cmd_tx.send(Command::SetControl(
@@ -6115,7 +6760,7 @@ impl eframe::App for SdrRemoteApp {
                     ui.label(RichText::new(format_bandwidth(presets[idx], cw)).strong().size(14.0));
 
                     let plus_btn = egui::Button::new(RichText::new(" + ").size(14.0));
-                    if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text("Widen the filter one step.").clicked() {
+                    if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text(rust_i18n::t!("main_hover_widen_filter").to_string()).clicked() {
                         let (low, high) = calc_filter_edges(
                             self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx + 1]);
                         let _ = self.cmd_tx.send(Command::SetControl(
@@ -6185,10 +6830,10 @@ impl eframe::App for SdrRemoteApp {
                 }
 
                 let save_btn = if self.save_mode {
-                    egui::Button::new(RichText::new("Save").strong())
+                    egui::Button::new(RichText::new(rust_i18n::t!("main_save").to_string()).strong())
                         .fill(Color32::from_rgb(150, 60, 30))
                 } else {
-                    egui::Button::new("Save")
+                    egui::Button::new(rust_i18n::t!("main_save").to_string())
                 };
                 if ui.add(save_btn).clicked() {
                     self.save_mode = !self.save_mode;
@@ -6205,7 +6850,7 @@ impl eframe::App for SdrRemoteApp {
                 } else {
                     egui::Button::new(&nr_label)
                 };
-                if ui.add(nr_btn).on_hover_text("Noise Reduction (click to cycle level).").clicked() {
+                if ui.add(nr_btn).on_hover_text(rust_i18n::t!("main_hover_nr").to_string()).clicked() {
                     let new_val = if self.nr_level >= 4 { 0 } else { self.nr_level + 1 };
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::NoiseReduction, new_val as u16));
                     self.nr_level = new_val;
@@ -6218,7 +6863,7 @@ impl eframe::App for SdrRemoteApp {
                 } else {
                     egui::Button::new("ANF")
                 };
-                if ui.add(anf_btn).on_hover_text("Auto Notch Filter.").clicked() {
+                if ui.add(anf_btn).on_hover_text(rust_i18n::t!("main_hover_anf").to_string()).clicked() {
                     let new_val = !self.anf_on;
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::AutoNotchFilter, new_val as u16));
                     self.anf_on = new_val;
@@ -6231,7 +6876,7 @@ impl eframe::App for SdrRemoteApp {
                 } else {
                     egui::Button::new("Mic AGC")
                 };
-                if ui.add(agc_btn).on_hover_text("Microphone AGC on/off.").clicked() {
+                if ui.add(agc_btn).on_hover_text(rust_i18n::t!("main_hover_mic_agc").to_string()).clicked() {
                     let new_val = !self.agc_enabled;
                     let _ = self.cmd_tx.send(Command::SetAgcEnabled(new_val));
                     self.agc_enabled = new_val;
@@ -6241,7 +6886,7 @@ impl eframe::App for SdrRemoteApp {
                 ui.separator();
 
                 // Drive level slider (inline)
-                ui.label("Drive:");
+                ui.label(rust_i18n::t!("main_drive_label").to_string());
                 let mut drive_f32 = self.drive_level as f32;
                 let slider = egui::Slider::new(&mut drive_f32, 0.0..=100.0)
                     .custom_formatter(|v, _| format!("{:.0}%", v));
@@ -6261,7 +6906,7 @@ impl eframe::App for SdrRemoteApp {
             if helpers::chevron_label(
                 ui,
                 self.collapse_diversity,
-                RichText::new("Diversity").strong().size(14.0),
+                RichText::new(rust_i18n::t!("main_diversity").to_string()).strong().size(14.0),
             )
             .clicked()
             {
@@ -6284,7 +6929,12 @@ impl eframe::App for SdrRemoteApp {
         // The popout's content gates internally on bin-availability and
         // shows a "Waiting for ..." placeholder pre-connect.
         let show_rx1_popout = self.spectrum_popout && self.spectrum_enabled;
-        let show_rx2_popout = self.rx2_popout && self.rx2_enabled;
+        let show_rx2_popout = self.rx2_popout && self.rx2_spectrum_enabled;
+
+        // Reset init_applied zodra het venster dicht is, zodat heropenen (bv. na
+        // een snap) de bewaarde positie/afmeting opnieuw toepast - net als VRX/Yaesu.
+        if !show_rx1_popout { self.spectrum_popout_init_applied = false; }
+        if !show_rx2_popout { self.rx2_popout_init_applied = false; }
 
         if show_rx1_popout && show_rx2_popout && self.popout_joined {
             // Joined mode: single combined window with RX1 on top, RX2 below
@@ -6304,6 +6954,17 @@ impl eframe::App for SdrRemoteApp {
                         self.spectrum_popout = false;
                         self.rx2_popout = false;
                         self.popout_joined_init_applied = false;
+                        // Venster dicht = beide spectra helemaal uit (owner-keuze:
+                        // consistent met RX2/VRX, geen inline-terugval).
+                        if self.spectrum_enabled {
+                            self.spectrum_enabled = false;
+                            let _ = self.cmd_tx.send(Command::EnableSpectrum(false));
+                        }
+                        if self.rx2_spectrum_enabled {
+                            self.rx2_spectrum_enabled = false;
+                            let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
+                        }
+                        self.save_full_config();
                         return;
                     }
                     if Self::track_popout_geometry(ctx, &mut self.popout_joined_pos, &mut self.popout_joined_size) {
@@ -6334,7 +6995,7 @@ impl eframe::App for SdrRemoteApp {
                                 self.render_spectrum_content(ui, ctx, 0.0, true);
                             } else {
                                 ui.centered_and_justified(|ui| {
-                                    ui.label(RichText::new("Waiting for RX1 spectrum data...").weak());
+                                    ui.label(RichText::new(rust_i18n::t!("main_waiting_rx1_spectrum").to_string()).weak());
                                 });
                             }
                         });
@@ -6353,7 +7014,7 @@ impl eframe::App for SdrRemoteApp {
                     let r1 = self.popout_rx1_smeter_rect;
                     let r2 = self.popout_rx2_smeter_rect;
                     if r1.is_positive() && r2.is_positive() {
-                        if self.popout_meter_analog {
+                        if self.meter_analog[M_RX1] {
                             // Analog: 60×28 button just left of RX1 meter,
                             // top-aligned - mirrors the Split button on RX2.
                             // Default styling (no fill) - blue is reserved for
@@ -6376,7 +7037,7 @@ impl eframe::App for SdrRemoteApp {
                                     );
                                     let btn = egui::Button::new(RichText::new("A<>B").strong())
                                         .min_size(egui::vec2(btn_w, btn_h));
-                                    if btn_ui.add_enabled(self.connected, btn).on_hover_text("Swap VFO A and VFO B.").clicked() {
+                                    if btn_ui.add_enabled(self.connected, btn).on_hover_text(rust_i18n::t!("main_hover_swap_vfo").to_string()).clicked() {
                                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::VfoSwap, 2));
                                     }
                                 });
@@ -6396,7 +7057,7 @@ impl eframe::App for SdrRemoteApp {
                                 .show(ctx, |ui| {
                                     let btn = egui::Button::new(RichText::new("A<>B").size(10.0))
                                         .min_size(egui::vec2(40.0, 18.0));
-                                    if ui.add_enabled(self.connected, btn).on_hover_text("Swap VFO A and VFO B.").clicked() {
+                                    if ui.add_enabled(self.connected, btn).on_hover_text(rust_i18n::t!("main_hover_swap_vfo").to_string()).clicked() {
                                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::VfoSwap, 2));
                                     }
                                 });
@@ -6422,6 +7083,12 @@ impl eframe::App for SdrRemoteApp {
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.spectrum_popout = false;
                             self.spectrum_popout_init_applied = false;
+                            // Venster dicht = RX1-spectrum helemaal uit (owner-keuze).
+                            if self.spectrum_enabled {
+                                self.spectrum_enabled = false;
+                                let _ = self.cmd_tx.send(Command::EnableSpectrum(false));
+                            }
+                            self.save_full_config();
                             return;
                         }
                         if Self::track_popout_geometry(ctx, &mut self.spectrum_popout_pos, &mut self.spectrum_popout_size) {
@@ -6442,7 +7109,7 @@ impl eframe::App for SdrRemoteApp {
                             if show_rx2_popout {
                                 let r = self.popout_rx1_smeter_rect;
                                 if r.is_positive() {
-                                    let btn_pos = if self.popout_meter_analog {
+                                    let btn_pos = if self.meter_analog[M_RX1] {
                                         egui::pos2(r.left() + 27.0, r.max.y - 12.0)
                                     } else {
                                         let panel_right = ui.max_rect().right() - 4.0;
@@ -6454,7 +7121,7 @@ impl eframe::App for SdrRemoteApp {
                                     );
                                     let resp = ui.add_enabled_ui(self.connected, |ui| {
                                         ui.put(btn_rect, egui::Button::new(RichText::new("A<>B").size(10.0)))
-                                            .on_hover_text("Swap VFO A and VFO B.")
+                                            .on_hover_text(rust_i18n::t!("main_hover_swap_vfo").to_string())
                                     }).inner;
                                     if resp.clicked() {
                                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::VfoSwap, 2));
@@ -6482,6 +7149,12 @@ impl eframe::App for SdrRemoteApp {
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.rx2_popout = false;
                             self.rx2_popout_init_applied = false;
+                            // Venster dicht = RX2-spectrum helemaal uit (owner-keuze).
+                            if self.rx2_spectrum_enabled {
+                                self.rx2_spectrum_enabled = false;
+                                let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
+                            }
+                            self.save_full_config();
                             return;
                         }
                         if Self::track_popout_geometry(ctx, &mut self.rx2_popout_pos, &mut self.rx2_popout_size) {
@@ -6502,7 +7175,7 @@ impl eframe::App for SdrRemoteApp {
                             if show_rx1_popout {
                                 let r = self.popout_rx2_smeter_rect;
                                 if r.is_positive() {
-                                    let btn_pos = if self.popout_meter_analog {
+                                    let btn_pos = if self.meter_analog[M_RX2] {
                                         egui::pos2(r.left() + 27.0, r.max.y - 12.0)
                                     } else {
                                         let panel_right = ui.max_rect().right() - 4.0;
@@ -6514,7 +7187,7 @@ impl eframe::App for SdrRemoteApp {
                                     );
                                     let resp = ui.add_enabled_ui(self.connected, |ui| {
                                         ui.put(btn_rect, egui::Button::new(RichText::new("A<>B").size(10.0)))
-                                            .on_hover_text("Swap VFO A and VFO B.")
+                                            .on_hover_text(rust_i18n::t!("main_hover_swap_vfo").to_string())
                                     }).inner;
                                     if resp.clicked() {
                                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::VfoSwap, 2));
@@ -6527,8 +7200,13 @@ impl eframe::App for SdrRemoteApp {
             }
         }
 
-        // Yaesu popout window
-        if self.yaesu_popout && self.yaesu_enabled {
+        // Zodra het venster dicht is (via X, win-chip of enable-uit): reset
+        // init_applied zodat het bij heropenen de bewaarde positie/afmeting
+        // opnieuw toepast (anders opent egui op de laatste sessie-plek).
+        if !self.yaesu_popout { self.yaesu_popout_init_applied = false; }
+        // Yaesu popout window - onafhankelijk van de audio-vink (mute mag, venster
+        // blijft), mits de radio aanwezig is. Gelijk aan slot 1.
+        if self.yaesu_popout && (self.yaesu_enabled || self.yaesu_connected) {
             let title = self.yaesu_window_title(0);
             let vb = Self::apply_popout_geometry(
                 ViewportBuilder::default().with_title(title),
@@ -6556,11 +7234,11 @@ impl eframe::App for SdrRemoteApp {
                         ui.horizontal(|ui| {
                             // PTT button - locked when other client is transmitting
                             let (ptt_color, ptt_text, ptt_locked) = if self.other_tx {
-                                (Color32::from_rgb(200, 120, 0), "TX in use", true)
+                                (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true)
                             } else if self.yaesu_tx_active {
-                                (Color32::RED, "TX", false)
+                                (Color32::RED, "TX".to_string(), false)
                             } else {
-                                (Color32::from_rgb(60, 60, 60), "PTT", false)
+                                (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false)
                             };
                             let ptt_btn = egui::Button::new(
                                 RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
@@ -6593,7 +7271,7 @@ impl eframe::App for SdrRemoteApp {
 
                             ui.separator();
 
-                            ui.label("Volume:");
+                            ui.label(rust_i18n::t!("main_volume_label").to_string());
                             let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
                                 .logarithmic(true)
                                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
@@ -6620,6 +7298,7 @@ impl eframe::App for SdrRemoteApp {
         // Slot-1 (FTX-1) eigen popout-window - los van het 991A-window, geroute
         // naar slot 1. Verschijnt zodra slot 1 *enabled* is (config), net als het
         // 991A-window op yaesu_enabled - dus direct bij opstart, ook zonder connect.
+        if !self.yaesu2_popout { self.yaesu2_popout_init_applied = false; }
         if self.yaesu2_popout && (self.yaesu2_enabled || self.yaesu2_connected) {
             let title = self.yaesu_window_title(1);
             let vb = Self::apply_popout_geometry(
@@ -6646,11 +7325,11 @@ impl eframe::App for SdrRemoteApp {
                     egui::TopBottomPanel::bottom("yaesu2_ptt_panel").show(ctx, |ui| {
                         ui.horizontal(|ui| {
                             let (ptt_color, ptt_text, ptt_locked) = if self.other_tx {
-                                (Color32::from_rgb(200, 120, 0), "TX in use", true)
+                                (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true)
                             } else if self.yaesu2_tx_active {
-                                (Color32::RED, "TX", false)
+                                (Color32::RED, "TX".to_string(), false)
                             } else {
-                                (Color32::from_rgb(60, 60, 60), "PTT", false)
+                                (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false)
                             };
                             let ptt_btn = egui::Button::new(
                                 RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
@@ -6676,7 +7355,7 @@ impl eframe::App for SdrRemoteApp {
                                 let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(want_tx));
                             }
                             ui.separator();
-                            ui.label("Volume:");
+                            ui.label(rust_i18n::t!("main_volume_label").to_string());
                             let slider = egui::Slider::new(&mut self.yaesu2_volume, 0.001..=1.0)
                                 .logarithmic(true)
                                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
@@ -6768,129 +7447,20 @@ impl eframe::App for SdrRemoteApp {
             }
         }
 
-        // VRX joint popout window - VRX1 (left) listens on RX1 IQ +
-        // VFO-A, VRX2 (right) on RX2 IQ + VFO-B. Audio is mixed into
-        // the main playback alongside RX1 / RX2 / Yaesu.
-        if self.show_vrx {
-            // Seed absolute-freq fields with the current VFOs on first
-            // open so the user sees the actual listen frequency instead
-            // of "0.000000".
-            if self.vrx1_freq_hz == 0 && self.frequency_hz > 0 {
-                self.vrx1_freq_hz = self.frequency_hz;
-                let _ = self.cmd_tx.send(Command::SetVrxFrequency(self.vrx1_freq_hz));
-            }
-            if self.vrx2_freq_hz == 0 && self.rx2_frequency_hz > 0 {
-                self.vrx2_freq_hz = self.rx2_frequency_hz;
-                let _ = self.cmd_tx.send(Command::SetVrx2Frequency(self.vrx2_freq_hz));
-            }
-            let vb = Self::apply_popout_geometry(
-                ViewportBuilder::default().with_title("ThetisLink - VRX"),
-                self.vrx_popout_pos,
-                self.vrx_popout_size,
-                [680.0, 520.0],
-                Self::viewport_native_ppp(ctx),
-                &mut self.vrx_popout_init_applied,
-            );
-            ctx.show_viewport_immediate(
-                ViewportId::from_hash_of("vrx_popout"),
-                vb,
-                |ctx, _class| {
-                    if ctx.input(|i| i.viewport().close_requested()) {
-                        log::info!("VRX popout: close_requested fired -> show_vrx=false");
-                        self.show_vrx = false;
-                        self.vrx_popout_init_applied = false;
-                        self.vrx1_waterfall_texture = None;
-                        self.vrx2_waterfall_texture = None;
-                        self.save_full_config();
-                        return;
-                    }
-                    if Self::track_popout_geometry(ctx, &mut self.vrx_popout_pos, &mut self.vrx_popout_size) {
-                        self.save_full_config();
-                    }
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        {
-                            // Compute DDC ranges per channel. center+span
-                            // come from the spectrum packets - fall back
-                            // to VFO ± 192 kHz before any spectrum has
-                            // arrived so the input range is non-empty.
-                            let vrx1_ddc_center: u64 = if self.full_spectrum_center_hz > 0 {
-                                self.full_spectrum_center_hz as u64
-                            } else { self.frequency_hz };
-                            let vrx1_ddc_span: u64 = if self.full_spectrum_span_hz > 0 {
-                                self.full_spectrum_span_hz as u64
-                            } else { 384_000 };
-                            let vrx1_min = vrx1_ddc_center.saturating_sub(vrx1_ddc_span / 2);
-                            let vrx1_max = vrx1_ddc_center + vrx1_ddc_span / 2;
-                            let vrx2_ddc_center: u64 = if self.rx2_full_spectrum_center_hz > 0 {
-                                self.rx2_full_spectrum_center_hz as u64
-                            } else { self.rx2_frequency_hz };
-                            let vrx2_ddc_span: u64 = if self.rx2_full_spectrum_span_hz > 0 {
-                                self.rx2_full_spectrum_span_hz as u64
-                            } else { 384_000 };
-                            let vrx2_min = vrx2_ddc_center.saturating_sub(vrx2_ddc_span / 2);
-                            let vrx2_max = vrx2_ddc_center + vrx2_ddc_span / 2;
+        // Losse VRX-vensters: VRX1 (op RX1+VFO-A) en VRX2 (op RX2+VFO-B) elk in een
+        // eigen viewport, onafhankelijk te plaatsen. Sluiten (X/knop/spec-chip-uit)
+        // reset init_applied zodat de bewaarde positie bij heropenen weer toegepast wordt.
+        if !self.vrx1_popout { self.vrx_popout_init_applied = false; }
+        if !self.vrx2_popout { self.vrx2_popout_init_applied = false; }
+        if self.vrx1_popout { self.render_vrx_popout(ctx, VrxChannel::Vrx1); }
+        if self.vrx2_popout { self.render_vrx_popout(ctx, VrxChannel::Vrx2); }
 
-                            // ── Top: VRX1 + VRX2 controls naast elkaar (2 columns) ──
-                            ui.columns(2, |cols| {
-                                self.render_vrx_channel_controls(&mut cols[0], VrxChannel::Vrx1, vrx1_ddc_center, vrx1_min, vrx1_max);
-                                self.render_vrx_channel_controls(&mut cols[1], VrxChannel::Vrx2, vrx2_ddc_center, vrx2_min, vrx2_max);
-                            });
-
-                            ui.separator();
-
-                            // -- Bottom: VRX1 spectrum boven VRX2 spectrum (gedeelde renderer) --
-                            let outer_w = ui.available_width();
-                            let avail_h = ui.available_height();
-                            let panel_h = ((avail_h - theme::TL_PANEL_GAP_Y) / 2.0).max(120.0);
-                            ui.allocate_ui(egui::vec2(outer_w, panel_h), |ui| {
-                                self.render_vrx_spectrum_panel(ui, ctx, VrxChannel::Vrx1, vrx1_min, vrx1_max);
-                            });
-                            ui.add_space(theme::TL_PANEL_GAP_Y);
-                            ui.allocate_ui(egui::vec2(outer_w, panel_h), |ui| {
-                                self.render_vrx_spectrum_panel(ui, ctx, VrxChannel::Vrx2, vrx2_min, vrx2_max);
-                            });
-                        }
-                    });
-                    // Read filter-edge memory writes from render_vrx_strip and dispatch
-                    for (salt, vrx_id, lo_field, hi_field) in [
-                        ("vrx1", 0u8, false, false),
-                        ("vrx2", 1u8, false, false),
-                    ] {
-                        let _ = (lo_field, hi_field);
-                        let lo_key = egui::Id::new(format!("{}_filter_low_hz", salt));
-                        let hi_key = egui::Id::new(format!("{}_filter_high_hz", salt));
-                        let new_lo: Option<i32> = ctx.memory(|m| m.data.get_temp(lo_key));
-                        let new_hi: Option<i32> = ctx.memory(|m| m.data.get_temp(hi_key));
-                        if new_lo.is_some() || new_hi.is_some() {
-                            let cur_lo = if vrx_id == 0 { self.vrx1_filter_low_hz } else { self.vrx2_filter_low_hz };
-                            let cur_hi = if vrx_id == 0 { self.vrx1_filter_high_hz } else { self.vrx2_filter_high_hz };
-                            let final_lo = new_lo.unwrap_or(cur_lo);
-                            let final_hi = new_hi.unwrap_or(cur_hi);
-                            // Lokale filter-state + persist + het wissen van de pending
-                            // drag-waarde alleen na een bevestigde send (dispatch-return-
-                            // discipline). Faalt de send, dan blijft de drag-waarde staan
-                            // voor een nieuwe poging i.p.v. stille UI/server-drift.
-                            if self.cmd_tx.send(Command::SetVrxFilter(vrx_id, final_lo, final_hi)).is_ok() {
-                                if vrx_id == 0 {
-                                    self.vrx1_filter_low_hz = final_lo;
-                                    self.vrx1_filter_high_hz = final_hi;
-                                } else {
-                                    self.vrx2_filter_low_hz = final_lo;
-                                    self.vrx2_filter_high_hz = final_hi;
-                                }
-                                ctx.memory_mut(|m| { m.data.remove::<i32>(lo_key); m.data.remove::<i32>(hi_key); });
-                                self.save_full_config();
-                            }
-                        }
-                    }
-                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
-                },
-            );
-        }
+        // "Vensters schikken" sleepraster (normaal egui-venster in de hoofd-viewport).
+        self.render_layout_arranger(ctx);
 
         // About window
         if self.show_about {
-            egui::Window::new("About ThetisLink")
+            egui::Window::new(rust_i18n::t!("main_about_title").to_string())
                 .collapsible(false)
                 .resizable(true)
                 .default_size([420.0, 500.0])
@@ -6901,20 +7471,20 @@ impl eframe::App for SdrRemoteApp {
                             ui.label(RichText::new("ThetisLink").size(22.0).strong());
                             ui.label(RichText::new(format!("v{}", sdr_remote_core::version_string())).size(14.0));
                             ui.add_space(4.0);
-                            ui.label("Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
+                            ui.label(rust_i18n::t!("main_about_tagline").to_string());
                         });
                         ui.add_space(8.0);
                         ui.separator();
 
-                        ui.label(RichText::new("Author").size(13.0).strong());
+                        ui.label(RichText::new(rust_i18n::t!("main_about_author").to_string()).size(13.0).strong());
                         ui.label("Chiron van der Burgt - PA3GHM");
 
                         ui.add_space(6.0);
-                        ui.label(RichText::new("Special Thanks").size(13.0).strong());
+                        ui.label(RichText::new(rust_i18n::t!("main_about_special_thanks").to_string()).size(13.0).strong());
                         ui.label("Richie (ramdor) - Thetis SDR development, TCI protocol extensions");
 
                         ui.add_space(6.0);
-                        ui.label(RichText::new("Protocols & External Services").size(13.0).strong());
+                        ui.label(RichText::new(rust_i18n::t!("main_about_protocols").to_string()).size(13.0).strong());
                         ui.label("TCI - Expert Electronics / Thetis");
                         ui.label("DX Spider - DX cluster telnet protocol");
                         ui.label("HPSDR / OpenHPSDR Protocol 2");
@@ -6922,7 +7492,7 @@ impl eframe::App for SdrRemoteApp {
                         ui.label("ThetisLink Relay - self-hosted WebSocket + UDP relay (internet remote)");
 
                         ui.add_space(6.0);
-                        ui.label(RichText::new("Hardware Support").size(13.0).strong());
+                        ui.label(RichText::new(rust_i18n::t!("main_about_hardware").to_string()).size(13.0).strong());
                         egui::Grid::new("hw_grid").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
                             for (dev, iface) in [
                                 ("ANAN 7000DLE", "TCI (via Thetis)"),
@@ -6944,7 +7514,7 @@ impl eframe::App for SdrRemoteApp {
                         });
 
                         ui.add_space(6.0);
-                        ui.label(RichText::new("Open Source Libraries").size(13.0).strong());
+                        ui.label(RichText::new(rust_i18n::t!("main_about_libraries").to_string()).size(13.0).strong());
                         let libs = [
                             ("tokio", "Async runtime"),
                             ("eframe / egui", "Desktop GUI"),
@@ -6969,11 +7539,11 @@ impl eframe::App for SdrRemoteApp {
                         });
 
                         ui.add_space(6.0);
-                        ui.label(RichText::new("License").size(13.0).strong());
+                        ui.label(RichText::new(rust_i18n::t!("main_about_license").to_string()).size(13.0).strong());
                         ui.label("GPL-2.0-or-later (see LICENSE)");
                         ui.label("Copyright © 2025-2026 Chiron van der Burgt");
                         ui.horizontal(|ui| {
-                            ui.label("Source:");
+                            ui.label(rust_i18n::t!("main_source_label").to_string());
                             ui.hyperlink("https://github.com/cjenschede/ThetisLink");
                         });
                         ui.label("Based on the Thetis SDR lineage - see ATTRIBUTION.md");
@@ -6981,7 +7551,7 @@ impl eframe::App for SdrRemoteApp {
 
                         ui.add_space(12.0);
                         ui.vertical_centered(|ui| {
-                            if ui.button("Close").clicked() {
+                            if ui.button(rust_i18n::t!("main_close").to_string()).clicked() {
                                 self.show_about = false;
                             }
                         });
@@ -6993,8 +7563,8 @@ impl eframe::App for SdrRemoteApp {
         egui::TopBottomPanel::bottom("log_panel").show_animated(ctx, self.show_log, |ui| {
             ui.set_max_height(150.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Log").strong().size(11.0));
-                if ui.small_button("Clear").clicked() {
+                ui.label(RichText::new(rust_i18n::t!("main_log").to_string()).strong().size(11.0));
+                if ui.small_button(rust_i18n::t!("main_clear").to_string()).clicked() {
                     if let Ok(mut buf) = self.log_buffer.lock() {
                         buf.clear();
                     }

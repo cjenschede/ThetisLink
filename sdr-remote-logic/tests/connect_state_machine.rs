@@ -68,7 +68,7 @@ fn spawn_engine() -> (
 ) {
     let (engine, state_rx, cmd_tx) = ClientEngine::new();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let handle = tokio::spawn(async move { engine.run(mock_audio_factory, shutdown_rx).await });
+    let handle = tokio::spawn(async move { engine.run(mock_audio_factory, shutdown_rx, None).await });
     (state_rx, cmd_tx, shutdown_tx, handle)
 }
 
@@ -430,7 +430,9 @@ async fn tci_unreachable_via_state_flags() {
                             0,
                             0,
                             Capabilities::REPORTS_STATE_FLAGS,
-                            0, // TCI_CONNECTED clear
+                            // Thetis IS configured but its TCI server is down → TciUnreachable.
+                            // (THETIS_CONFIGURED clear would mean "no Thetis at all", which is not this case.)
+                            ServerStateFlags::THETIS_CONFIGURED,
                         );
                         let _ = fake_server.send_to(&ack, client_addr).await;
                     } else {
@@ -550,11 +552,13 @@ async fn tci_recovery_when_flag_returns() {
                     .await;
                 loop {
                     if let Ok((_n, _)) = fake_server.recv_from(&mut buf).await {
-                        let tci_bit = if tci_up_clone.load(std::sync::atomic::Ordering::Relaxed) {
-                            ServerStateFlags::TCI_CONNECTED
-                        } else {
-                            0
-                        };
+                        // Thetis is always configured here; only the TCI_CONNECTED bit flips.
+                        let tci_bit = ServerStateFlags::THETIS_CONFIGURED
+                            | if tci_up_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                                ServerStateFlags::TCI_CONNECTED
+                            } else {
+                                0
+                            };
                         let ack = build_heartbeat_ack_full(
                             0,
                             0,
