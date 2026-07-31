@@ -16,6 +16,58 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.6.0] — 2026-07-31 (Window-arranger matrix (client + server) · multilingual server GUI · analog s-meter rework · Yaesu memory & standby fixes)
+
+> **Feature release.** All changes are **client- or server-local** (UI, layout and CAT-timing
+> logic) — there is **no wire-protocol change**. The protocol stays **VERSION = 3** and is fully
+> backward-compatible with v2.5.x, so a v2.6.0 client and an older server (or vice versa) keep
+> working. Stock Thetis v2.10.3.x is sufficient (no Thetis-fork change required). The desktop
+> client, the Windows server and the Android client are all rebuilt; the Android change is the
+> peak-hold tick on the audio-level bars — no protocol impact.
+
+### Added
+- **"Arrange windows" is now a matrix placer (up to 12×12).** The *Schik* panel was rebuilt: pick a
+  grid size with a drag-picker, select a window and **paint it onto the cells** — a single window may
+  span several adjacent cells and is stretched over that block. **Drag from the first to the last
+  cell to fill a whole rectangle in one gesture** (with a live preview). The main window can now be
+  arranged too, and the palette lists every server-available window (a window that is off is opened
+  automatically when you apply). Per monitor its own grid.
+- **The window-arranger is now also in the server GUI.** A *Schik* button (Running mode) arranges the
+  server's own device windows — main window plus tuner, Amplitec, SPE, RF2K-S, UltraBeam and rotor —
+  over a grid (up to 12×12), with the same rectangle-drag selection and multi-monitor support. The
+  palette only lists backends that are actually running.
+- **The server GUI is now multilingual (English / Nederlands / Deutsch / Français).** A language
+  picker in *Settings* switches the interface live and remembers the choice. The whole Settings
+  screen and the device pop-outs (tuner, Amplitec, SPE, UltraBeam, rotor, macro editor) are
+  translated; product names, ham abbreviations and units stay as-is. Default is Dutch. *(The desktop
+  and Android clients were already multilingual since v2.5.0.)*
+
+### Changed
+- **Analog s-meter reworked for a constant, more readable shape.** The meter now keeps a **fixed
+  width/height ratio** regardless of window size (it scales uniformly instead of distorting), uses
+  only the arc zone (the empty bottom is dropped), sits tightly around the scale so **"1" and "+60"
+  are just fully visible**, and grows larger for RX/VRX when there is room — filling the full row
+  height instead of staying under-sized.
+- **Peak-hold on the audio-level bars.** Each audio-level bar (and the Android meters) now shows a
+  brief max-hold tick (~1.5 s) and the dB read-out follows the held peak.
+- **EQ on/off is shown next to the Equalizer chevron** (FT-991A + FTX-1), so the equaliser state is
+  visible without expanding the section — matching the Android layout.
+
+### Fixed
+- **Turning the FT-991A on from the client is no longer delayed ~30–40 s.** When the radio was in
+  standby, the memory auto-read on connect ground through all 117 channels (each timing out) and
+  blocked the CAT thread, so a *power-on* click only took effect after the read finished. The read
+  now aborts within ~1 s once the radio is detected as not responding, so power-on is processed
+  immediately; a non-responding read no longer clears the shown memory list either.
+- **FT-991A memory is read reliably and no longer shows a stale count.** The memory auto-read fires on
+  radio detection (independent of the audio-enable), so with audio off it shows the radio (23) rather
+  than the loaded file (24).
+- **FTX-1 memory reads reliably and auto-loads on USB detection**, matching the 991A.
+- **Collapsible sections remember their state across restart.** The RX-bandwidth, Amplitec power-cap
+  and FTX-1 memory/settings chevrons now persist open/closed, so startup matches how you left it.
+- **RX1 "Auto ref" now sticks.** A config save during a TX-spectrum override no longer writes the
+  temporary TX default, so the auto-reference toggle keeps the setting you chose.
+
 ## [2.5.0] — 2026-07-30 (Independent channels · VRX windows + window-arranger · per-channel s-meter · Yaesu power & per-band TX power · Yaesu mode-gating + memory→VFO · multilingual (EN/NL/DE/FR) · Android parity)
 
 > **Feature release.** Several **additive, backward-compatible** wire fields were added

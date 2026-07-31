@@ -1,10 +1,10 @@
-# ThetisLink v2.5.0 - Technical Reference
+# ThetisLink v2.6.0 - Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of an ANAN 7000DLE + Thetis SDR receiver and up to two Yaesu transceivers (FT-991A / FTX-1) over a network connection. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
 
-**Version:** v2.5.0 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.6.0 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
 **Target platform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Design priority:** latency > bandwidth > features
@@ -26,9 +26,13 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.5.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.6.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.6.0 highlights
+
+**UI / server-side only — no wire-protocol change (VERSION stays 3, backwards-compatible with v2.5.x).** The window-arranger was rebuilt as a **matrix placer** (grid-picker up to 12×12, cell painting with spanning, rectangle drag-select) and is now **also built into the server GUI** to arrange the server's own device windows (multi-monitor via the ported `window_placement`). The **server GUI is now multilingual** (rust-i18n, EN/NL/DE/FR, language picker in Settings; the Settings screen and device pop-outs are translated). The **analog S-meter** was reworked to a constant, uniformly-scaling shape (fixed aspect ratio, top-60% arc zone, tight around the scale, larger RX/VRX). Fixes: the **991A memory read aborts on a non-responding (standby) radio** so a power-on click is no longer blocked ~30–40 s, 991A/FTX-1 memory reads reliably and auto-loads, collapsible-section states persist, and RX1 "Auto ref" sticks across a TX-spectrum override. Android: APK rebuild (peak-hold tick on the audio-level bars).
 
 ### v2.5.0 highlights
 

@@ -32,6 +32,10 @@ mod ui;
 mod vrx_bridge;
 mod vrx_manager;
 
+// Server-GUI vertalingen (rust-i18n). Basis = Engels (fallback); de gebruiker
+// kiest een taal in Settings (persisted als `language=`), toegepast via set_locale.
+rust_i18n::i18n!("locales", fallback = "en");
+
 use std::collections::VecDeque;
 
 /// Load smart auto-null steps from diversity-smart.txt next to the server executable.
@@ -393,6 +397,7 @@ fn main() -> Result<()> {
             rotor_window_size: None,
             theme: defaults.theme,
             theme_custom: defaults.theme_custom,
+            language: defaults.language,
             autostart: false,
             active_pa: 0,
             rf2k_saved_drive: None,
@@ -492,6 +497,8 @@ fn main() -> Result<()> {
         hide_console();
 
         let config = config::load();
+        // Pas de opgeslagen UI-taal toe voordat de GUI opstart.
+        rust_i18n::set_locale(&config.language);
 
         let icon = egui::IconData {
             rgba: include_bytes!(concat!(env!("OUT_DIR"), "/icon_rgba.bin")).to_vec(),

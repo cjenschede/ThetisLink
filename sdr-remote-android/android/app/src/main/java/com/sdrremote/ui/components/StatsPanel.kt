@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -182,6 +183,20 @@ private fun VolumeSlider(label: String, initial: Float, maxValue: Float = 1f, lo
 
 @Composable
 private fun LevelMeter(label: String, level: Float) {
+    // Peak-hold: hold the recent maximum ~1.5 s, then snap down. Mirrors the desktop
+    // level bar - a white tick marks the held peak and the dB text follows it.
+    var peak by remember { mutableFloatStateOf(0f) }
+    var peakTimeMs by remember { mutableLongStateOf(0L) }
+    val clamped = level.coerceIn(0f, 1f)
+    val now = remember(level) { System.currentTimeMillis() }
+    if (clamped >= peak) {
+        peak = clamped
+        peakTimeMs = now
+    } else if (now - peakTimeMs > 1500L) {
+        peak = clamped
+        peakTimeMs = now
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -197,7 +212,6 @@ private fun LevelMeter(label: String, level: Float) {
                 .height(16.dp)
                 .background(Color(0xFF1E1E1E), RoundedCornerShape(2.dp)),
         ) {
-            val clamped = level.coerceIn(0f, 1f)
             val fillWidth = size.width * clamped
 
             val barColor = when {
@@ -207,10 +221,23 @@ private fun LevelMeter(label: String, level: Float) {
             }
 
             drawRect(barColor, size = Size(fillWidth, size.height))
+
+            // Peak-hold marker: thin white vertical tick at the held peak.
+            if (peak > 0.01f) {
+                val peakX = size.width * peak
+                drawLine(
+                    color = Color.White,
+                    start = Offset(peakX, 0f),
+                    end = Offset(peakX, size.height),
+                    strokeWidth = 2f,
+                )
+            }
         }
 
-        val db = if (level > 0.0001f) {
-            (20f * log10(level)).toInt()
+        // dB text shows the PEAK-HOLD value (the held maximum), not the flickering
+        // instantaneous level.
+        val db = if (peak > 0.0001f) {
+            (20f * log10(peak)).toInt()
         } else {
             -80
         }

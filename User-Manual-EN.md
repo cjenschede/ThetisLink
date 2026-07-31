@@ -1,4 +1,4 @@
-# ThetisLink v2.5.0 - User Manual
+# ThetisLink v2.6.0 - User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.5.0.apk` | Android client app |
+| `ThetisLink-2.6.0.apk` | Android client app |
 | `Installation.pdf` | Installation guide (English) |
 | `User-Manual-EN.pdf` | User manual (English, this document) |
 | `Technical-Reference.pdf` | Technical reference (English) |
@@ -352,7 +352,9 @@ In popout windows the following are available:
 
 ### Arrange windows (v2.5.0)
 
-An **Arrange windows** view lays out all your open channel windows onto a drag-grid so you can snap them into a tidy layout in one step instead of dragging each one by hand. On a **multi-monitor** setup you assign channels to different screens — e.g. RX1 + RX2 on the main monitor and the VRX / Yaesu windows on a second screen — and apply the layout; each window jumps to its assigned cell on the chosen monitor.
+**Arrange windows** lays out your open windows onto a grid on the screen instead of dragging each one by hand. *(A matrix placer since **v2.6.0**.)* Click **Schik**, pick a **grid size** (up to 12×12) with the drag-picker, select a window and **paint it onto the cells** — a single window may span several adjacent cells and is stretched over that block. **Drag from the first to the last cell to fill a whole rectangle in one gesture** (with a live preview); a single click places one cell, right-click (or click again) clears. The **main window** can be arranged too, and the palette lists every available window — a window that is off is opened automatically when you *Apply*. On a **multi-monitor** setup each screen has its own grid.
+
+Since **v2.6.0** the same matrix arranger is also built into the **server GUI** (the *Schik* button while running) to arrange the server's own device windows (tuner, Amplitec, SPE, RF2K-S, UltraBeam, rotor).
 
 ### VFO B / RX2
 
@@ -433,6 +435,8 @@ The choice is saved in `thetislink-client.conf` and restored on the next start. 
 ### Language (v2.5.0)
 
 ThetisLink is multilingual. The interface defaults to **English**, with translations to **Dutch, German and French**. On the **desktop** you pick the language with a **language picker in the Server tab** (below *Relay connection*, above *Theme*); the choice is saved in `thetislink-client.conf`. The **Android** app follows your phone's language automatically, falling back to English if it is set to another language. Ham terminology, mode names (LSB, CW-L, …) and product names are deliberately left untranslated.
+
+Since **v2.6.0** the **server GUI** is multilingual too (EN/NL/DE/FR): pick the language with the **language picker in the settings screen** (below *Theme*). The server defaults to **Dutch**. The settings screen and the device pop-outs (tuner, Amplitec, SPE, UltraBeam, rotor, macro editor) are translated.
 
 ---
 

@@ -25,18 +25,18 @@ pub(super) fn render_spe_panel(
     ui.horizontal(|ui| {
         ui.heading("SPE Expert 1.3K-FA");
         let mut active = is_active;
-        if ui.checkbox(&mut active, "Active").changed() {
+        if ui.checkbox(&mut active, rust_i18n::t!("srv_active").to_string()).changed() {
             let new_val = if active { 1 } else { 0 };
             active_pa.store(new_val, Ordering::Relaxed);
             crate::config::save_active_pa(new_val);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if status.connected {
-                ui.colored_label(Color32::GREEN, "Online");
+                ui.colored_label(Color32::GREEN, rust_i18n::t!("srv_online").to_string());
             } else {
-                ui.colored_label(Color32::RED, "Offline");
+                ui.colored_label(Color32::RED, rust_i18n::t!("srv_offline").to_string());
             }
-            ui.checkbox(show_log, "Log");
+            ui.checkbox(show_log, rust_i18n::t!("srv_log_cb").to_string());
         });
     });
     ui.separator();
@@ -47,7 +47,7 @@ pub(super) fn render_spe_panel(
             RichText::new(format!("ALARM: {}", status.alarm as char)).strong());
     } else if status.warning != b'N' && status.warning != 0 {
         ui.colored_label(amber,
-            RichText::new(format!("Warning: {}", status.warning as char)).strong());
+            RichText::new(format!("{}: {}", rust_i18n::t!("srv_warning_lbl"), status.warning as char)).strong());
     }
 
     ui.add_space(4.0);
@@ -56,13 +56,13 @@ pub(super) fn render_spe_panel(
     ui.horizontal(|ui| {
         // Power - shows current state
         if !status.connected || status.state == 0 {
-            let btn = egui::Button::new(RichText::new("Power Off").strong().color(Color32::WHITE))
+            let btn = egui::Button::new(RichText::new(rust_i18n::t!("srv_power_off").to_string()).strong().color(Color32::WHITE))
                 .fill(Color32::from_rgb(120, 120, 120));
             if ui.add(btn).clicked() {
                 spe.send_command(spe_expert::SpeCmd::PowerOn);
             }
         } else {
-            let btn = egui::Button::new(RichText::new("Power On").strong().color(Color32::WHITE))
+            let btn = egui::Button::new(RichText::new(rust_i18n::t!("srv_power_on").to_string()).strong().color(Color32::WHITE))
                 .fill(Color32::from_rgb(0, 150, 0));
             if ui.add(btn).clicked() {
                 spe.send_command(spe_expert::SpeCmd::PowerOff);
@@ -70,10 +70,10 @@ pub(super) fn render_spe_panel(
         }
 
         // Operate/Standby toggle - shows current state
-        let (op_text, op_color) = match status.state {
-            2 => ("Operate", Color32::from_rgb(50, 180, 50)),
-            1 => ("Standby", amber),
-            _ => ("Off", Color32::from_rgb(120, 120, 120)),
+        let (op_text, op_color): (String, Color32) = match status.state {
+            2 => (rust_i18n::t!("srv_operate").to_string(), Color32::from_rgb(50, 180, 50)),
+            1 => (rust_i18n::t!("srv_standby").to_string(), amber),
+            _ => (rust_i18n::t!("srv_off_state").to_string(), Color32::from_rgb(120, 120, 120)),
         };
         let btn = egui::Button::new(RichText::new(op_text).strong().color(Color32::WHITE))
             .fill(op_color);
@@ -83,7 +83,7 @@ pub(super) fn render_spe_panel(
 
         // Tune (ATU)
         if ui.add_enabled(status.connected && status.state == 2,
-            egui::Button::new("Tune")).clicked() {
+            egui::Button::new(rust_i18n::t!("srv_tune").to_string())).clicked() {
             spe.send_command(spe_expert::SpeCmd::Tune);
         }
     });

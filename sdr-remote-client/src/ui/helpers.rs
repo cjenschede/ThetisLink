@@ -416,16 +416,42 @@ pub(crate) fn default_zoom_for_span(span_hz: u32) -> f32 {
 }
 
 /// Draw a horizontal level meter bar
-pub(crate) fn level_bar(ui: &mut egui::Ui, level: f32) {
+/// Horizontal audio-level bar with a **peak-hold** marker: a thin white tick that
+/// holds the recent maximum for ~1.5 s before snapping down. `id_salt` must be
+/// unique per bar (e.g. "rx1", "vrx2") - the peak state lives in egui temp memory
+/// keyed by it, so no per-bar struct fields are needed.
+pub(crate) fn level_bar(ui: &mut egui::Ui, level: f32, id_salt: &str) {
+    const HOLD_SECS: f64 = 1.5;
     let desired_size = Vec2::new(200.0, 16.0);
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+
+    let level_clamped = level.clamp(0.0, 1.0);
+
+    // Peak-hold state (transient, per bar): (held_peak, held_since_seconds).
+    let id = egui::Id::new(("level_peak", id_salt));
+    let now = ui.input(|i| i.time);
+    let (mut peak, mut peak_t) =
+        ui.data(|d| d.get_temp::<(f32, f64)>(id)).unwrap_or((level_clamped, now));
+    if level_clamped >= peak {
+        peak = level_clamped;
+        peak_t = now;
+    } else if now - peak_t > HOLD_SECS {
+        peak = level_clamped; // hold elapsed -> drop to current
+        peak_t = now;
+    } else {
+        // still holding -> make sure we repaint when the hold is due to expire,
+        // so the tick snaps down on time even if audio went silent (no updates).
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
+            (HOLD_SECS - (now - peak_t)).max(0.0),
+        ));
+    }
+    ui.data_mut(|d| d.insert_temp(id, (peak, peak_t)));
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
 
         painter.rect_filled(rect, 2.0, Color32::from_rgb(30, 30, 30));
 
-        let level_clamped = level.clamp(0.0, 1.0);
         let fill_width = rect.width() * level_clamped;
         let fill_rect = egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, rect.height()));
 
@@ -439,8 +465,10 @@ pub(crate) fn level_bar(ui: &mut egui::Ui, level: f32) {
 
         painter.rect_filled(fill_rect, 2.0, color);
 
-        let db = if level_clamped > 0.0001 {
-            20.0 * level_clamped.log10()
+        // dB text shows the PEAK-HOLD value (the held maximum), not the flickering
+        // instantaneous level - easier to read off the actual peak.
+        let db = if peak > 0.0001 {
+            20.0 * peak.log10()
         } else {
             -80.0
         };
@@ -451,6 +479,15 @@ pub(crate) fn level_bar(ui: &mut egui::Ui, level: f32) {
             egui::FontId::proportional(10.0),
             Color32::WHITE,
         );
+
+        // Peak-hold marker: thin white vertical tick at the held peak.
+        if peak > 0.01 {
+            let peak_x = rect.left() + rect.width() * peak;
+            painter.line_segment(
+                [egui::pos2(peak_x, rect.top()), egui::pos2(peak_x, rect.bottom())],
+                egui::Stroke::new(1.5, Color32::WHITE),
+            );
+        }
     }
 }
 

@@ -310,6 +310,10 @@ pub struct ServerConfig {
     pub theme: String,
     /// Custom-palet als `bg,widget,text,accent` (elk rrggbb). Leeg = niet ingesteld.
     pub theme_custom: String,
+    /// UI-taal van de server-GUI: "en"/"nl"/"de"/"fr". Default "nl" (server was
+    /// altijd Nederlands). Gefaseerde migratie: nog-niet-gemigreerde teksten blijven
+    /// Nederlands ongeacht deze keuze.
+    pub language: String,
     /// Auto-start server on launch (skip settings screen)
     pub autostart: bool,
     /// Active PA: 0=none, 1=SPE, 2=RF2K
@@ -417,6 +421,7 @@ impl Default for ServerConfig {
             rotor_window_size: None,
             theme: "classic".to_string(),
             theme_custom: String::new(),
+            language: "nl".to_string(),
             autostart: false,
             active_pa: 0,
             rf2k_saved_drive: None,
@@ -986,6 +991,13 @@ fn load_unlocked() -> ServerConfig {
                     "theme_custom" => {
                         config.theme_custom = value.trim().to_string();
                     }
+                    "language" => {
+                        // Accepteer alleen talen met een locale (en/nl/de/fr); anders nl.
+                        config.language = match value.trim() {
+                            "en" | "nl" | "de" | "fr" => value.trim().to_string(),
+                            _ => "nl".to_string(),
+                        };
+                    }
                     "autostart" => {
                         config.autostart = value.trim() == "true";
                     }
@@ -1278,6 +1290,7 @@ fn save_unlocked(config: &ServerConfig) {
     if let Some(sz) = config.rotor_window_size {
         contents.push_str(&format!("rotor_size_w={}\nrotor_size_h={}\n", sz[0], sz[1]));
     }
+    contents.push_str(&format!("language={}\n", config.language));
     contents.push_str(&format!("theme={}\n", config.theme));
     if !config.theme_custom.is_empty() {
         contents.push_str(&format!("theme_custom={}\n", config.theme_custom));

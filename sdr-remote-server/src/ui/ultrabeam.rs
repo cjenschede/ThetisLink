@@ -55,16 +55,16 @@ pub(super) fn render_ultrabeam_panel(
         ui.heading("UltraBeam 2el 6-40");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if status.connected {
-                ui.colored_label(Color32::from_rgb(0, 200, 0), RichText::new("\u{25CF} Online").strong());
+                ui.colored_label(Color32::from_rgb(0, 200, 0), RichText::new(format!("\u{25CF} {}", rust_i18n::t!("srv_online"))).strong());
             } else {
-                ui.colored_label(Color32::from_rgb(200, 0, 0), RichText::new("\u{25CF} Offline").strong());
+                ui.colored_label(Color32::from_rgb(200, 0, 0), RichText::new(format!("\u{25CF} {}", rust_i18n::t!("srv_offline"))).strong());
             }
         });
     });
     ui.separator();
 
     if !status.connected {
-        ui.label("Geen verbinding met RCU-06");
+        ui.label(rust_i18n::t!("srv_ub_no_conn").to_string());
         return;
     }
 
@@ -93,14 +93,14 @@ pub(super) fn render_ultrabeam_panel(
         ui.label(format!("FW: {}.{:02}", status.fw_major, status.fw_minor));
         if status.off_state {
             ui.separator();
-            ui.colored_label(Color32::from_rgb(255, 170, 40), "Retracted");
+            ui.colored_label(Color32::from_rgb(255, 170, 40), rust_i18n::t!("srv_retracted").to_string());
         }
     });
     ui.add_space(6.0);
 
     // Direction buttons
     ui.horizontal(|ui| {
-        ui.label("Direction:");
+        ui.label(rust_i18n::t!("srv_direction").to_string());
         let dir_names = [("Normal", 0u8), ("180\u{00B0}", 1), ("Bi-Dir", 2)];
         for (label, dir_val) in &dir_names {
             let is_active = status.direction == *dir_val;
@@ -146,15 +146,15 @@ pub(super) fn render_ultrabeam_panel(
         let can_sync = status.connected && track_khz >= 1800 && track_khz <= 54000
             && track_khz != status.frequency_khz;
         if ui.add_enabled(can_sync, egui::Button::new(format!("Sync {}", track_label))).on_hover_text(
-            format!("Stel UltraBeam in op {}: {} kHz", track_label, track_khz)
+            rust_i18n::t!("srv_ub_sync_hover", label = track_label, khz = track_khz).to_string()
         ).clicked() {
             ub.send_command(ultrabeam::UltraBeamCmd::SetFrequency {
                 khz: track_khz,
                 direction: status.direction,
             });
         }
-        ui.checkbox(auto_track, "Auto")
-            .on_hover_text(format!("Auto-track {} frequency", track_label));
+        ui.checkbox(auto_track, rust_i18n::t!("srv_auto_cb").to_string())
+            .on_hover_text(rust_i18n::t!("srv_ub_autotrack", label = track_label).to_string());
     });
 
     // Auto-track: send SetFrequency when VFO changes by >= 25 kHz
@@ -203,7 +203,7 @@ pub(super) fn render_ultrabeam_panel(
     }
 
     // Band preset buttons
-    ui.label(RichText::new("Band presets:").strong());
+    ui.label(RichText::new(rust_i18n::t!("srv_band_presets").to_string()).strong());
     ui.horizontal_wrapped(|ui| {
         for &(_band_code, name, center_khz) in &ultrabeam::BAND_PRESETS {
             if ui.button(name).clicked() {
@@ -219,16 +219,16 @@ pub(super) fn render_ultrabeam_panel(
     // Retract + Menu buttons
     ui.horizontal(|ui| {
         if *confirm_retract {
-            ui.colored_label(Color32::from_rgb(255, 80, 80), "Retract elementen?");
-            if ui.button("Ja").clicked() {
+            ui.colored_label(Color32::from_rgb(255, 80, 80), rust_i18n::t!("srv_ub_retract_confirm").to_string());
+            if ui.button(rust_i18n::t!("srv_yes").to_string()).clicked() {
                 ub.send_command(ultrabeam::UltraBeamCmd::Retract);
                 *confirm_retract = false;
             }
-            if ui.button("Nee").clicked() {
+            if ui.button(rust_i18n::t!("srv_no").to_string()).clicked() {
                 *confirm_retract = false;
             }
         } else {
-            if ui.button("Retract").clicked() {
+            if ui.button(rust_i18n::t!("srv_retract").to_string()).clicked() {
                 *confirm_retract = true;
             }
         }
@@ -239,7 +239,7 @@ pub(super) fn render_ultrabeam_panel(
         // cell zelf wordt door de parent right-to-left layout netjes
         // helemaal rechts gezet.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if super::chevron_label(ui, *show_menu, egui::RichText::new("Menu").strong()).clicked() {
+            if super::chevron_label(ui, *show_menu, egui::RichText::new(rust_i18n::t!("srv_menu").to_string()).strong()).clicked() {
                 *show_menu = !*show_menu;
                 if *show_menu {
                     // Request element lengths when opening menu
@@ -253,11 +253,11 @@ pub(super) fn render_ultrabeam_panel(
     if *show_menu {
         ui.add_space(8.0);
         ui.separator();
-        ui.label(RichText::new("Menu").strong().size(16.0));
+        ui.label(RichText::new(rust_i18n::t!("srv_menu").to_string()).strong().size(16.0));
 
         // Elements display
         ui.add_space(4.0);
-        ui.label(RichText::new("Element Lengths").strong());
+        ui.label(RichText::new(rust_i18n::t!("srv_element_lengths").to_string()).strong());
         ui.indent("ub_elements", |ui| {
             for i in 0..6 {
                 let len = status.elements_mm[i];
@@ -286,24 +286,25 @@ pub(super) fn render_ultrabeam_panel(
                     ui.label(format!("E{}: --", i + 1));
                 }
             }
-            if ui.button("Refresh").clicked() {
+            if ui.button(rust_i18n::t!("srv_refresh").to_string()).clicked() {
                 ub.send_command(ultrabeam::UltraBeamCmd::ReadElements);
             }
         });
 
         // Controller info
         ui.add_space(8.0);
-        ui.label(RichText::new("Controller Info").strong());
+        ui.label(RichText::new(rust_i18n::t!("srv_controller_info").to_string()).strong());
         ui.indent("ub_info", |ui| {
             ui.label("Model: 2 elements 6-40");
             ui.label(format!("FW: v{}.{:02}", status.fw_major, status.fw_minor));
-            ui.label(format!("Freq range: {} - {} MHz", status.freq_min_mhz, status.freq_max_mhz));
-            ui.label(format!("Operation mode: {}", match status.operation {
-                0 => "Normal",
-                2 => "User Adjust",
-                3 => "Setup",
-                _ => "Unknown",
-            }));
+            ui.label(format!("{} {} - {} MHz", rust_i18n::t!("srv_freq_range"), status.freq_min_mhz, status.freq_max_mhz));
+            let op_mode = match status.operation {
+                0 => rust_i18n::t!("srv_ub_normal"),
+                2 => rust_i18n::t!("srv_ub_user_adjust"),
+                3 => rust_i18n::t!("srv_ub_setup"),
+                _ => rust_i18n::t!("srv_unknown"),
+            };
+            ui.label(format!("{} {}", rust_i18n::t!("srv_operation_mode"), op_mode));
         });
     }
 }

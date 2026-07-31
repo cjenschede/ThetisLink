@@ -243,6 +243,7 @@ impl SdrRemoteApp {
         .clicked()
         {
             self.amplitec_power_show = !self.amplitec_power_show;
+            self.save_full_config();
         }
         if self.amplitec_power_show {
             ui.indent("amplitec_power_table", |ui| {
@@ -2172,13 +2173,24 @@ impl SdrRemoteApp {
     /// per-slot commando's (SetYaesu*/SetYaesu2*).
     pub(super) fn render_yaesu_eq(&mut self, ui: &mut egui::Ui, slot: u8) {
         let mut collapse = if slot == 0 { self.collapse_yaesu_eq } else { self.collapse_yaesu2_eq };
-        if super::helpers::chevron_label(ui, collapse,
-            RichText::new(rust_i18n::t!("dev_equalizer").to_string()).strong().size(14.0)).clicked()
-        {
-            collapse = !collapse;
-            if slot == 0 { self.collapse_yaesu_eq = collapse; } else { self.collapse_yaesu2_eq = collapse; }
-            self.save_full_config();
-        }
+        // Header-rij: chevron + de EQ-aan/uit-checkbox ernaast, zodat de EQ-toestand
+        // zichtbaar (en schakelbaar) is ZONDER uitklappen - gelijk aan Android. Dit is
+        // de ENIGE EQ-aan/uit-bediening (de body-checkbox is verwijderd), conform de
+        // UI-stijlgids "geen dubbele bediening voor dezelfde scope".
+        ui.horizontal(|ui| {
+            if super::helpers::chevron_label(ui, collapse,
+                RichText::new(rust_i18n::t!("dev_equalizer").to_string()).strong().size(14.0)).clicked()
+            {
+                collapse = !collapse;
+                if slot == 0 { self.collapse_yaesu_eq = collapse; } else { self.collapse_yaesu2_eq = collapse; }
+                self.save_full_config();
+            }
+            let mut eq_on = if slot == 0 { self.yaesu_eq_enabled } else { self.yaesu2_eq_enabled };
+            if ui.checkbox(&mut eq_on, "EQ").changed() {
+                if slot == 0 { self.yaesu_eq_enabled = eq_on; } else { self.yaesu2_eq_enabled = eq_on; }
+                let _ = self.cmd_tx.send(if slot == 0 { Command::SetYaesuEqEnabled(eq_on) } else { Command::SetYaesu2EqEnabled(eq_on) });
+            }
+        });
         if !collapse { return; }
 
         // Snapshot per-slot state in locals (writeback onderaan).
@@ -2202,9 +2214,6 @@ impl SdrRemoteApp {
 
         ui.indent(("yaesu_eq_body", slot), |ui| {
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut enabled, "EQ").changed() {
-                    let _ = tx.send(mk_en(enabled));
-                }
                 let names: Vec<String> = profiles.iter().map(|(n, _, _, _)| n.clone()).collect();
                 egui::ComboBox::from_id_salt(("eq_profile", slot))
                     .selected_text(if active.is_empty() { "---" } else { active.as_str() })
@@ -2615,6 +2624,7 @@ impl SdrRemoteApp {
             RichText::new(rust_i18n::t!("dev_memory_channels").to_string()).strong().size(14.0)).clicked()
         {
             self.collapse_yaesu2_memories = !self.collapse_yaesu2_memories;
+            self.save_full_config();
         }
         if self.collapse_yaesu2_memories {
             // Schaal de lijst mee tot de onderkant van het window i.p.v. een
@@ -2638,6 +2648,7 @@ impl SdrRemoteApp {
             RichText::new(rust_i18n::t!("dev_radio_settings").to_string()).strong().size(14.0)).clicked()
         {
             self.collapse_yaesu2_menu = !self.collapse_yaesu2_menu;
+            self.save_full_config();
         }
         if self.collapse_yaesu2_menu {
             ui.indent("yaesu2_menu_body", |ui| self.render_yaesu2_ex_menu(ui));

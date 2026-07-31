@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.5.0 — Gebruikershandleiding
+﻿# ThetisLink v2.6.0 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.5.0.apk` | Android client app |
+| `ThetisLink-2.6.0.apk` | Android client app |
 | `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -352,7 +352,9 @@ In popout vensters zijn beschikbaar:
 
 ### Vensters schikken (v2.5.0)
 
-Een **Vensters schikken**-weergave legt al je open kanaalvensters op een sleepraster, zodat je ze in één stap netjes in een layout snapt in plaats van elk venster met de hand te verslepen. Bij **meerdere monitoren** wijs je kanalen aan verschillende schermen toe — bijv. RX1 + RX2 op de hoofdmonitor en de VRX-/Yaesu-vensters op een tweede scherm — en pas je de layout toe; elk venster springt naar zijn toegewezen cel op de gekozen monitor.
+Met **Vensters schikken** orden je je open vensters over een raster op het scherm, in plaats van elk venster met de hand te verslepen. *(Sinds **v2.6.0** een matrix-plaatser.)* Klik op **Schik**, kies een **rasterformaat** (tot 12×12) met de sleep-kiezer, selecteer een venster en **schilder** het in de cellen — één venster mag meerdere aangrenzende cellen beslaan en wordt dan over dat blok uitgerekt. **Sleep van de eerste naar de laatste cel om in één beweging een heel rechthoekig blok te vullen** (met live preview); een losse klik plaatst één cel, rechtsklik (of nogmaals klikken) wist. Ook het **hoofdvenster** kun je meeschikken, en het palet toont alle beschikbare vensters — een venster dat uit staat wordt bij *Toepassen* automatisch geopend. Bij **meerdere monitoren** heeft elk scherm zijn eigen raster.
+
+Sinds **v2.6.0** zit dezelfde matrix-schikker ook in de **server-GUI** (knop *Schik* tijdens draaien) om de eigen apparaat-vensters van de server (tuner, Amplitec, SPE, RF2K-S, UltraBeam, rotor) te ordenen.
 
 ### VFO B / RX2
 
@@ -433,6 +435,8 @@ De keuze wordt bewaard in `thetislink-client.conf` en hersteld bij de volgende s
 ### Taal (v2.5.0)
 
 ThetisLink is meertalig. De interface staat standaard op **Engels**, met vertalingen naar **Nederlands, Duits en Frans**. Op de **desktop** kies je de taal met een **taal-picker in het Server-tabblad** (onder *Relay connection*, boven *Theme*); de keuze wordt bewaard in `thetislink-client.conf`. De **Android**-app volgt automatisch de taal van je telefoon en valt terug op Engels als die op een andere taal staat. Ham-vaktermen, mode-namen (LSB, CW-L, …) en productnamen blijven bewust onvertaald.
+
+Sinds **v2.6.0** is ook de **server-GUI** meertalig (EN/NL/DE/FR): kies de taal met de **taal-picker in het instellingenscherm** (onder *Thema*). Standaard staat de server op **Nederlands**. Het instellingenscherm en de apparaat-vensters (tuner, Amplitec, SPE, UltraBeam, rotor, macro-editor) zijn vertaald.
 
 ---
 

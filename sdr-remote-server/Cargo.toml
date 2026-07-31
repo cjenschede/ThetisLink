@@ -43,6 +43,17 @@ mdns-sd = "=0.19.1"
 # Server only exposes a debug panel for now; full tuner integration is a
 # follow-up patch. See docs/internal/referentie/MCP2221A-JC4s-wiring.md.
 mcp2221-hal = "0.1"
+# UI-vertalingen (rust-i18n) - basis EN (fallback), keuze NL/DE/FR net als de client.
+rust-i18n = "3"
+
+# Monitor-enumeratie voor het "Vensters schikken"-raster (multi-monitor snap).
+# Alleen Gdi/HiDpi/Foundation nodig (EnumDisplayMonitors + GetDpiForSystem).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+] }
 
 [build-dependencies]
 winresource = "0.1"

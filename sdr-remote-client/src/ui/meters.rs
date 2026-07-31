@@ -274,31 +274,53 @@ pub(crate) fn yaesu_smeter_bar(ui: &mut egui::Ui, raw: u16, peak_raw: u16) -> eg
 /// Analog needle S-meter. Size from `override_size` or default 392x120.
 /// `value` and `peak_value` carry dBm in RX, watts in TX (same convention as
 /// `smeter_bar_sized` above).
+/// Analoge-s-meter vorm-constanten (module-niveau zodat callers de zichtbare
+/// verhouding kennen en de meter-breedte daarop kunnen cappen).
+const SM_ASPECT: f32 = 1.6;    // logische boog-box (breedte:hoogte) - strak om de schaal ("1".."+60")
+const SM_USED_FRAC: f32 = 0.6; // toon alleen de bovenste 60% (de boog-zone); de lege onderste 40% (naald-steel/pivot) valt weg
+const SM_REF_H: f32 = 120.0;   // referentie-hoogte voor de schaalfactor (fonts=11 @ 120px)
+/// Zichtbare breedte:hoogte-verhouding van de analoge s-meter (na de 60%-crop).
+/// Callers cappen de meter-breedte op `hoogte * SMETER_VIS_ASPECT` zodat de meter
+/// de volle beschikbare hoogte vult i.p.v. width-limited (en dus kleiner) te blijven.
+pub(crate) const SMETER_VIS_ASPECT: f32 = SM_ASPECT / SM_USED_FRAC; // = 2.667:1
+
 pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, transmitting: bool, other_tx: bool, override_size: Option<(f32, f32)>) -> egui::Rect {
-    let (width, height) = if let Some((w, h)) = override_size {
-        (w, h)
+    // Vaste vorm: pas altijd de grootste box met een CONSTANTE breedte/hoogte-
+    // verhouding in de beschikbare ruimte, en schaal alle interne geometrie mee
+    // (scale). Zo blijft de meter-vorm gelijk ongeacht de window-afmeting.
+    let vis_aspect = SMETER_VIS_ASPECT;
+    let (avail_w, avail_h) = override_size.unwrap_or((392.0, 120.0));
+    let (width, vis_h) = if avail_w / avail_h.max(1.0) > vis_aspect {
+        (avail_h * vis_aspect, avail_h)       // hoogte-begrensd
     } else {
-        (392.0, 120.0)
+        (avail_w, avail_w / vis_aspect)        // breedte-begrensd (breedte maximaal benut)
     };
-    let desired_size = Vec2::new(width, height);
+    let box_h = vis_h / SM_USED_FRAC;          // logische (volle) boog-hoogte
+    let scale = (box_h / SM_REF_H).max(0.1);
+    let desired_size = Vec2::new(width, vis_h);
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
     if !ui.is_rect_visible(rect) {
         return rect;
     }
-    let painter = ui.painter();
+    // Clip op de zichtbare rect: de naald-steel/pivot in de weggelaten onderste
+    // 40% (logisch onder deze rect) wordt zo netjes afgesneden.
+    let painter = ui.painter_at(rect);
 
     // Background: dark rounded rect
-    painter.rect_filled(rect, 6.0, Color32::from_rgb(25, 25, 30));
-    painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, Color32::from_rgb(60, 60, 70)));
+    let round = 6.0 * scale;
+    painter.rect_filled(rect, round, Color32::from_rgb(25, 25, 30));
+    painter.rect_stroke(rect, round, egui::Stroke::new(1.0, Color32::from_rgb(60, 60, 70)));
 
-    // Arc geometry - pivot at bottom, radius fits labels inside rect
+    // Arc geometry - pivot op de LOGISCHE bodem (onder de zichtbare rect), radius
+    // o.b.v. de volle box_h. Alle maten hieronder * scale (evenredig meeschalen).
     let center_x = rect.center().x;
-    let center_y = rect.max.y - 4.0;
+    let center_y = rect.min.y + box_h - 4.0 * scale;
     let center = egui::pos2(center_x, center_y);
-    let max_by_width = width * 0.42;
-    let max_by_height = height - 26.0;
-    let radius = max_by_width.min(max_by_height).max(30.0);
+    // Radius o.b.v. de hoogte (vult de zichtbare boog-zone); width*0.5 is alleen een
+    // veiligheidscap zodat de boog nooit horizontaal overloopt bij een afwijkende box.
+    let max_by_height = box_h - 26.0 * scale;
+    let radius = max_by_height.min(width * 0.5).max(20.0);
 
     // Needle sweep: -145° to -35° (left to right arc, 0° = right)
     let min_angle: f32 = -145.0_f32.to_radians();
@@ -313,7 +335,7 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
     };
 
     // Draw scale arc
-    let arc_inner = radius - 4.0;
+    let arc_inner = radius - 4.0 * scale;
     let n_segments = 60;
     for i in 0..n_segments {
         let t0 = i as f32 / n_segments as f32;
@@ -329,20 +351,20 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
         };
         let p0 = center + egui::vec2(a0.cos(), a0.sin()) * arc_inner;
         let p1 = center + egui::vec2(a1.cos(), a1.sin()) * arc_inner;
-        painter.line_segment([p0, p1], egui::Stroke::new(3.0, color));
+        painter.line_segment([p0, p1], egui::Stroke::new(3.0 * scale, color));
     }
 
     // Scale ticks and labels
-    let tick_font = egui::FontId::proportional(11.0);
+    let tick_font = egui::FontId::proportional(11.0 * scale);
     if is_tx {
         // TX: watt scale
         for &w in &[0, 25, 50, 75, 100] {
             let t = w as f32 / 100.0;
             let angle = min_angle + t * (max_angle - min_angle);
-            let outer = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0);
-            let inner = center + egui::vec2(angle.cos(), angle.sin()) * (radius - 10.0);
-            painter.line_segment([inner, outer], egui::Stroke::new(1.0, Color32::GRAY));
-            let text_pos = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 14.0);
+            let outer = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0 * scale);
+            let inner = center + egui::vec2(angle.cos(), angle.sin()) * (radius - 10.0 * scale);
+            painter.line_segment([inner, outer], egui::Stroke::new(1.0 * scale, Color32::GRAY));
+            let text_pos = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 14.0 * scale);
             painter.text(text_pos, egui::Align2::CENTER_CENTER,
                 format!("{}W", w), tick_font.clone(), Color32::GRAY);
         }
@@ -352,25 +374,25 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
             let raw = s as f32 * 12.0;
             let t = raw / 228.0;
             let angle = min_angle + t * (max_angle - min_angle);
-            let outer = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0);
-            let inner = center + egui::vec2(angle.cos(), angle.sin()) * (radius - 10.0);
-            let stroke_w = if s == 9 { 1.5 } else { 1.0 };
+            let outer = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0 * scale);
+            let inner = center + egui::vec2(angle.cos(), angle.sin()) * (radius - 10.0 * scale);
+            let stroke_w = if s == 9 { 1.5 * scale } else { 1.0 * scale };
             painter.line_segment([inner, outer], egui::Stroke::new(stroke_w, Color32::from_rgb(200, 200, 200)));
-            let text_pos = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 14.0);
+            let text_pos = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 14.0 * scale);
             let label = if s == 9 { "S9".to_string() } else { format!("{}", s) };
             painter.text(text_pos, egui::Align2::CENTER_CENTER,
                 label, tick_font.clone(), Color32::from_rgb(200, 200, 200));
         }
         // dB over S9 ticks
-        let db_font = egui::FontId::proportional(9.0);
+        let db_font = egui::FontId::proportional(9.0 * scale);
         for db_over in (10..=60).step_by(10) {
             let raw = 108.0 + db_over as f32 * 2.0;
             let t = raw / 228.0;
             let angle = min_angle + t * (max_angle - min_angle);
-            let outer = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0);
-            let inner = center + egui::vec2(angle.cos(), angle.sin()) * (radius - 8.0);
-            painter.line_segment([inner, outer], egui::Stroke::new(1.0, Color32::from_rgb(200, 100, 100)));
-            let text_pos = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 13.0);
+            let outer = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0 * scale);
+            let inner = center + egui::vec2(angle.cos(), angle.sin()) * (radius - 8.0 * scale);
+            painter.line_segment([inner, outer], egui::Stroke::new(1.0 * scale, Color32::from_rgb(200, 100, 100)));
+            let text_pos = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 13.0 * scale);
             painter.text(text_pos, egui::Align2::CENTER_CENTER,
                 format!("+{}", db_over), db_font.clone(), Color32::from_rgb(200, 100, 100));
         }
@@ -381,22 +403,22 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
         let peak_raw = sdr_remote_core::dbm_to_display(peak_value) as f32;
         let peak_frac = (peak_raw / 228.0).clamp(0.0, 1.0);
         let peak_angle = min_angle + peak_frac * (max_angle - min_angle);
-        let tip = center + egui::vec2(peak_angle.cos(), peak_angle.sin()) * (radius + 2.0);
-        let base = center + egui::vec2(peak_angle.cos(), peak_angle.sin()) * 15.0;
-        painter.line_segment([base, tip], egui::Stroke::new(1.5, Color32::from_rgb(255, 255, 0).gamma_multiply(0.6)));
+        let tip = center + egui::vec2(peak_angle.cos(), peak_angle.sin()) * (radius + 2.0 * scale);
+        let base = center + egui::vec2(peak_angle.cos(), peak_angle.sin()) * (15.0 * scale);
+        painter.line_segment([base, tip], egui::Stroke::new(1.5 * scale, Color32::from_rgb(255, 255, 0).gamma_multiply(0.6)));
     }
 
     // Main needle - extends through the scale arc
     let angle = min_angle + frac * (max_angle - min_angle);
-    let tip = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0);
+    let tip = center + egui::vec2(angle.cos(), angle.sin()) * (radius + 2.0 * scale);
     let needle_color = if is_tx {
         Color32::from_rgb(255, 60, 60)
     } else {
         Color32::WHITE
     };
-    painter.line_segment([center, tip], egui::Stroke::new(2.0, needle_color));
+    painter.line_segment([center, tip], egui::Stroke::new(2.0 * scale, needle_color));
     // Pivot dot
-    painter.circle_filled(center, 4.0, needle_color);
+    painter.circle_filled(center, 4.0 * scale, needle_color);
 
     rect
 }

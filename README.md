@@ -1,24 +1,22 @@
 # ThetisLink
 
-> **Current release: [v2.5.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.5.0)** —
-> **Independent audio + spectrum per channel:** RX1, RX2, VRX1 and VRX2 each get their own
-> audio and spectrum switches, **VRX1/VRX2 now open in separate windows**, and an
-> **"Arrange windows" drag-grid** snaps everything into a layout **per monitor**. Click any
-> **S-meter** to switch its style (remembered per channel). **Yaesu radios now sit on the
-> main screen** (enable + window button), with **FT-991A power/standby** (CAT `PS`) and a
-> **TX-power slider that matches the radio's real per-band maximum**. A **high-SWR alarm**
-> (warning tone + red indicator) fires on transmit. Yaesu controls **grey out per band/mode**
-> (FT-991A OM-verified) with **CW-L/CW-U** labels, and **changing frequency on a memory
-> channel now slides the radio to VFO** (FT-991A + FTX-1). The apps are now **multilingual** —
-> English base with **Dutch, German and French** (desktop language picker; Android follows the
-> phone). Plus a **single-receiver** server setting and full **Android parity**. Built on the
-> **virtual receivers (VRX1/VRX2)**, **dual-radio** and **Synchronous AM (SAM-PLL)** of
-> v2.2.0/v2.3.0.
+> **Current release: [v2.6.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.6.0)** —
+> **"Arrange windows" is now a matrix placer (up to 12×12):** pick a grid size, select a
+> window and **paint it onto the cells** — **drag a rectangle to place a window in one gesture**
+> — and it is now **also built into the server GUI** to arrange the server's own device windows
+> (tuner, Amplitec, SPE, RF2K-S, UltraBeam, rotor), per monitor. The **server GUI is now
+> multilingual** too — **English, Dutch, German and French** with a live language picker in
+> Settings. The **analog S-meter was reworked** for a constant, more readable shape that scales
+> uniformly and grows larger when there is room. Plus fixes: **turning the FT-991A on from a
+> standby state is no longer delayed ~30 s**, **FT-991A/FTX-1 memory reads reliably**,
+> collapsible sections **remember their state**, RX1 **"Auto ref" sticks**, and a **peak-hold
+> tick** on the audio-level bars. Built on the per-channel audio/spectrum, VRX windows, Yaesu
+> main-screen controls and multilingual clients of v2.5.0.
 > Illustrated explainers are online — see **Documentation** below.
-> **Backwards-compatible** — TL wire-protocol `VERSION` 3 unchanged (additive); interoperates
-> with v2.4.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for these
+> **Backwards-compatible** — TL wire-protocol `VERSION` 3 unchanged; interoperates
+> with v2.5.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for these
 > features (the PA3GHM fork adds the extended-IQ feature-set).
-> Download `ThetisLink-2.5.0.zip` from the
+> Download `ThetisLink-2.6.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are

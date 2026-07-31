@@ -9,6 +9,7 @@ mod spe;
 mod rf2k;
 mod ultrabeam;
 mod status_panel;
+mod window_placement;
 
 pub(crate) use utils::*;
 use rotor::*;
@@ -40,6 +41,115 @@ use crate::LogBuffer;
 enum Mode {
     Settings,
     Running,
+}
+
+/// Een venster dat door de "Vensters schikken"-matrix op het scherm gesnapt
+/// kan worden. `Main` = het hoofdvenster (root-viewport); de rest zijn de
+/// backend-popouts van de server.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SnapWindow {
+    Main,
+    Tuner,
+    Amplitec,
+    Spe,
+    Rf2k,
+    Ultrabeam,
+    Rotor,
+}
+impl SnapWindow {
+    const ALL: [SnapWindow; 7] = [
+        SnapWindow::Main, SnapWindow::Tuner, SnapWindow::Amplitec, SnapWindow::Spe,
+        SnapWindow::Rf2k, SnapWindow::Ultrabeam, SnapWindow::Rotor,
+    ];
+    fn label(self) -> String {
+        match self {
+            SnapWindow::Main => rust_i18n::t!("srv_win_main").to_string(),
+            SnapWindow::Tuner => "Tuner".to_string(),
+            SnapWindow::Amplitec => "Amplitec".to_string(),
+            SnapWindow::Spe => "SPE".to_string(),
+            SnapWindow::Rf2k => "RF2K".to_string(),
+            SnapWindow::Ultrabeam => "UltraBeam".to_string(),
+            SnapWindow::Rotor => "Rotor".to_string(),
+        }
+    }
+    /// Vulkleur in de plaatsings-matrix (onderscheidbaar per venster).
+    fn color(self) -> Color32 {
+        match self {
+            SnapWindow::Main => Color32::from_rgb(70, 110, 175),
+            SnapWindow::Tuner => Color32::from_rgb(60, 140, 95),
+            SnapWindow::Amplitec => Color32::from_rgb(95, 155, 70),
+            SnapWindow::Spe => Color32::from_rgb(160, 115, 55),
+            SnapWindow::Rf2k => Color32::from_rgb(175, 145, 60),
+            SnapWindow::Ultrabeam => Color32::from_rgb(145, 80, 140),
+            SnapWindow::Rotor => Color32::from_rgb(115, 90, 165),
+        }
+    }
+}
+
+/// Maximaal rasterformaat in de "Vensters schikken"-matrix (GRID_MAX x GRID_MAX).
+const GRID_MAX: usize = 12;
+/// Toggle-on-blauw (stijlgids): gebruikt voor de actieve knop/selectie-highlight.
+const SNAP_ACCENT: Color32 = Color32::from_rgb(100, 160, 230);
+
+/// Eén plaatsings-matrix (per monitor): raster van `rows` x `cols` cellen; elke
+/// cel bevat maximaal één venster. Een venster dat meerdere aangrenzende cellen
+/// beslaat wordt bij "Toepassen" over zijn omhullende rechthoek uitgerekt.
+#[derive(Clone)]
+pub(crate) struct LayoutGrid {
+    rows: u8, // 1..=GRID_MAX
+    cols: u8, // 1..=GRID_MAX
+    cells: Vec<Option<SnapWindow>>, // rows*cols, rij-voor-rij
+}
+impl LayoutGrid {
+    fn new() -> Self {
+        Self { rows: 2, cols: 2, cells: vec![None; 4] }
+    }
+    fn set_size(&mut self, rows: u8, cols: u8) {
+        let rows = rows.clamp(1, GRID_MAX as u8);
+        let cols = cols.clamp(1, GRID_MAX as u8);
+        if rows == self.rows && cols == self.cols { return; }
+        let mut cells = vec![None; rows as usize * cols as usize];
+        for r in 0..self.rows.min(rows) as usize {
+            for c in 0..self.cols.min(cols) as usize {
+                cells[r * cols as usize + c] = self.cells[r * self.cols as usize + c];
+            }
+        }
+        self.rows = rows;
+        self.cols = cols;
+        self.cells = cells;
+    }
+    fn cell(&self, r: usize, c: usize) -> Option<SnapWindow> {
+        self.cells.get(r * self.cols as usize + c).copied().flatten()
+    }
+    fn set(&mut self, r: usize, c: usize, w: Option<SnapWindow>) {
+        if let Some(slot) = self.cells.get_mut(r * self.cols as usize + c) {
+            *slot = w;
+        }
+    }
+    fn remove(&mut self, w: SnapWindow) {
+        for slot in self.cells.iter_mut() {
+            if *slot == Some(w) { *slot = None; }
+        }
+    }
+    fn bounds(&self, w: SnapWindow) -> Option<(usize, usize, usize, usize)> {
+        let (mut minr, mut minc, mut maxr, mut maxc) = (usize::MAX, usize::MAX, 0, 0);
+        let mut found = false;
+        for r in 0..self.rows as usize {
+            for c in 0..self.cols as usize {
+                if self.cell(r, c) == Some(w) {
+                    found = true;
+                    minr = minr.min(r); minc = minc.min(c);
+                    maxr = maxr.max(r); maxc = maxc.max(c);
+                }
+            }
+        }
+        if found { Some((minr, minc, maxr, maxc)) } else { None }
+    }
+    fn placed(&self) -> Vec<SnapWindow> {
+        SnapWindow::ALL.iter().copied()
+            .filter(|w| self.cells.contains(&Some(*w)))
+            .collect()
+    }
 }
 
 pub struct ServerApp {
@@ -209,6 +319,16 @@ pub struct ServerApp {
     status_bind_addr: String,
     /// PATCH-2: which Mode::Running view is active.
     status_view: StatusView,
+    // "Vensters schikken" matrix-plaatser (alleen sessie-state, niet persistent):
+    // een raster PER monitor waarin je de server-vensters over cellen "schildert".
+    show_layout_arranger: bool,
+    layout_grid_per_monitor: Vec<LayoutGrid>,
+    layout_active_item: Option<SnapWindow>,
+    /// Ankercel van een lopende rechthoek-sleep in het plaatsingsraster.
+    layout_drag_anchor: Option<(usize, usize)>,
+    layout_target_monitor: usize,
+    /// UI-taal ("en"/"nl"/"de"/"fr"); toegepast via rust_i18n::set_locale.
+    ui_language: String,
 }
 
 /// PATCH-2: top-level view in Mode::Running - Logs (existing) or
@@ -369,6 +489,12 @@ impl ServerApp {
             status_panel_state: None,
             status_bind_addr: format!("0.0.0.0:{}", sdr_remote_core::DEFAULT_PORT),
             status_view: StatusView::Status,
+            show_layout_arranger: false,
+            layout_grid_per_monitor: Vec::new(),
+            layout_active_item: None,
+            layout_drag_anchor: None,
+            layout_target_monitor: 0,
+            ui_language: config.language.clone(),
         }
     }
 
@@ -442,6 +568,7 @@ impl ServerApp {
             rotor_window_size: self.rotor_window_size,
             theme: self.theme_variant.as_str().to_string(),
             theme_custom: self.theme_custom.to_config_string(),
+            language: self.ui_language.clone(),
             autostart: self.autostart,
             active_pa: self.active_pa.load(Ordering::Relaxed),
             // Preserve the persisted per-PA pre-Operate snapshot values; the
@@ -748,8 +875,391 @@ impl ServerApp {
         config.rotor_window_size = self.rotor_window_size;
         config.theme = self.theme_variant.as_str().to_string();
         config.theme_custom = self.theme_custom.to_config_string();
+        config.language = self.ui_language.clone();
         config.active_pa = self.active_pa.load(Ordering::Relaxed);
         crate::config::save(&config);
+    }
+
+    // ===== "Vensters schikken" matrix-plaatser =====
+
+    fn viewport_native_ppp(ctx: &egui::Context) -> f32 {
+        ctx.input(|i| i.viewport().native_pixels_per_point)
+            .unwrap_or_else(|| ctx.pixels_per_point())
+    }
+
+    /// Is dit venster BESCHIKBAAR om te schikken? = die backend draait (Arc bestaat).
+    /// Het hoofdvenster is er altijd.
+    fn snap_is_available(&self, w: SnapWindow) -> bool {
+        match w {
+            SnapWindow::Main => true,
+            SnapWindow::Tuner => self.tuner.is_some(),
+            SnapWindow::Amplitec => self.amplitec.is_some(),
+            SnapWindow::Spe => self.spe.is_some(),
+            SnapWindow::Rf2k => self.rf2k.is_some(),
+            SnapWindow::Ultrabeam => self.ultrabeam.is_some(),
+            SnapWindow::Rotor => self.rotor.is_some(),
+        }
+    }
+
+    /// Open het bijbehorende popout-venster (indien nog dicht) + reset init zodat
+    /// de nieuwe geometrie wordt toegepast. Zo verschijnt een geplaatst-maar-dicht
+    /// venster na "Toepassen".
+    fn snap_open(&mut self, w: SnapWindow) {
+        match w {
+            SnapWindow::Main => {}
+            SnapWindow::Tuner => { self.show_tuner_window = true; self.tuner_window_init_applied = false; }
+            SnapWindow::Amplitec => { self.show_amplitec_window = true; self.amplitec_window_init_applied = false; }
+            SnapWindow::Spe => { self.show_spe_window = true; self.spe_window_init_applied = false; }
+            SnapWindow::Rf2k => { self.show_rf2k_window = true; self.rf2k_window_init_applied = false; }
+            SnapWindow::Ultrabeam => { self.show_ultrabeam_window = true; self.ultrabeam_window_init_applied = false; }
+            SnapWindow::Rotor => { self.show_rotor_window = true; self.rotor_window_init_applied = false; }
+        }
+    }
+
+    /// Zet pos+size van een popout (root-viewport via ViewportCommand in apply_layout).
+    fn snap_set_geometry(&mut self, w: SnapWindow, pos: [f32; 2], size: [f32; 2]) {
+        match w {
+            SnapWindow::Main => {}
+            SnapWindow::Tuner => { self.tuner_window_pos = Some(pos); self.tuner_window_size = Some(size); self.tuner_window_init_applied = false; }
+            SnapWindow::Amplitec => { self.amplitec_window_pos = Some(pos); self.amplitec_window_size = Some(size); self.amplitec_window_init_applied = false; }
+            SnapWindow::Spe => { self.spe_window_pos = Some(pos); self.spe_window_size = Some(size); self.spe_window_init_applied = false; }
+            SnapWindow::Rf2k => { self.rf2k_window_pos = Some(pos); self.rf2k_window_size = Some(size); self.rf2k_window_init_applied = false; }
+            SnapWindow::Ultrabeam => { self.ultrabeam_window_pos = Some(pos); self.ultrabeam_window_size = Some(size); self.ultrabeam_window_init_applied = false; }
+            SnapWindow::Rotor => { self.rotor_window_pos = Some(pos); self.rotor_window_size = Some(size); self.rotor_window_init_applied = false; }
+        }
+    }
+
+    /// Index van de monitor waar het hoofdvenster staat (default-scherm bij openen).
+    fn detect_monitor_index(&self, ctx: &egui::Context) -> usize {
+        let ppp = Self::viewport_native_ppp(ctx).max(0.1);
+        if let (Some(areas), Some((mx, my))) = (
+            window_placement::monitor_work_areas_px(),
+            ctx.input(|i| i.viewport().outer_rect)
+                .map(|r| ((r.min.x * ppp) as i32, (r.min.y * ppp) as i32)),
+        ) {
+            if let Some(idx) = areas.iter().position(|a|
+                mx >= a.left && mx < a.right && my >= a.top && my < a.bottom)
+            {
+                return idx;
+            }
+        }
+        0
+    }
+
+    /// Snap de vensters uit de matrices op het scherm: elk venster over zijn
+    /// omhullende cel-rechthoek. Hoofdvenster via ViewportCommand, popouts via
+    /// snap_set_geometry (+ eerst openen).
+    fn apply_layout(&mut self, ctx: &egui::Context) {
+        let ppp = Self::viewport_native_ppp(ctx).max(0.1);
+        let areas = window_placement::monitor_work_areas_px();
+        let per_mon: Vec<LayoutGrid> = self.layout_grid_per_monitor.clone();
+        const TITLE_H: f32 = 36.0;
+        const GAP: f32 = 4.0;
+        let mut placed_total = 0usize;
+        for (m, grid) in per_mon.iter().enumerate() {
+            let placed = grid.placed();
+            if placed.is_empty() { continue; }
+            let (ax, ay, aw, ah) = match areas.as_ref().and_then(|list| list.get(m).copied()) {
+                Some(a) => (
+                    a.left as f32 / ppp,
+                    a.top as f32 / ppp,
+                    (a.right - a.left) as f32 / ppp,
+                    (a.bottom - a.top) as f32 / ppp,
+                ),
+                None if m == 0 => {
+                    let sr = ctx.screen_rect();
+                    (sr.min.x, sr.min.y, sr.width(), sr.height())
+                }
+                None => continue,
+            };
+            let col_w = aw / grid.cols as f32;
+            let row_h = ah / grid.rows as f32;
+            for w in placed {
+                let Some((minr, minc, maxr, maxc)) = grid.bounds(w) else { continue };
+                self.snap_open(w);
+                let span_c = (maxc - minc + 1) as f32;
+                let span_r = (maxr - minr + 1) as f32;
+                let x = ax + col_w * minc as f32;
+                let y = ay + row_h * minr as f32;
+                let iw = (col_w * span_c - GAP).max(200.0);
+                let ih = (row_h * span_r - TITLE_H).max(120.0);
+                if w == SnapWindow::Main {
+                    self.main_window_pos = Some([x, y]);
+                    self.main_window_size = Some([iw, ih]);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(iw, ih)));
+                } else {
+                    self.snap_set_geometry(w, [x, y], [iw, ih]);
+                }
+                placed_total += 1;
+            }
+        }
+        if placed_total > 0 {
+            self.save_window_positions();
+            log::info!("Layout toegepast: {} venster(s) gesnapt", placed_total);
+        }
+    }
+
+    /// "Vensters schikken" - matrix-plaatser. Kies een rasterformaat (tot 8x8),
+    /// selecteer een venster en schilder het over de cellen (klik/sleep). Spanning
+    /// over meerdere cellen = venster uitgerekt. Per monitor een eigen raster.
+    fn render_layout_arranger(&mut self, ctx: &egui::Context) {
+        if !self.show_layout_arranger { return; }
+
+        let n_monitors = window_placement::monitor_work_areas_px()
+            .map(|a| a.len()).unwrap_or(1).max(1);
+        if self.layout_grid_per_monitor.len() < n_monitors {
+            self.layout_grid_per_monitor.resize_with(n_monitors, LayoutGrid::new);
+        }
+        if self.layout_target_monitor >= n_monitors { self.layout_target_monitor = 0; }
+
+        // Niet-beschikbare vensters (backend niet actief) uit alle rasters + selectie.
+        let avail: Vec<SnapWindow> =
+            SnapWindow::ALL.iter().copied().filter(|w| self.snap_is_available(*w)).collect();
+        for grid in self.layout_grid_per_monitor.iter_mut() {
+            for slot in grid.cells.iter_mut() {
+                if let Some(w) = *slot { if !avail.contains(&w) { *slot = None; } }
+            }
+        }
+        if let Some(a) = self.layout_active_item {
+            if !avail.contains(&a) { self.layout_active_item = None; }
+        }
+
+        let cur_mon = self.layout_target_monitor
+            .min(self.layout_grid_per_monitor.len().saturating_sub(1));
+        let gsnap = self.layout_grid_per_monitor[cur_mon].clone();
+        let active = self.layout_active_item;
+        let drag_anchor = self.layout_drag_anchor;
+
+        let mut open_flag = self.show_layout_arranger;
+        let mut sel_mon = cur_mon;
+        let mut resize_to: Option<(u8, u8)> = None;
+        let mut paint_cell: Option<(usize, usize)> = None;
+        let mut clear_cell: Option<(usize, usize)> = None;
+        let mut select: Option<Option<SnapWindow>> = None;
+        let mut set_anchor: Option<Option<(usize, usize)>> = None;
+        let mut fill_rect: Option<((usize, usize), (usize, usize))> = None;
+        let mut clear_all = false;
+        let mut do_apply = false;
+
+        egui::Window::new(rust_i18n::t!("srv_arrange_title").to_string())
+            .open(&mut open_flag)
+            .resizable(true)
+            .default_size([360.0, 560.0])
+            .show(ctx, |ui| {
+              egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+                ui.label(RichText::new(rust_i18n::t!("srv_arrange_help").to_string()).size(11.0).weak());
+                ui.add_space(6.0);
+
+                if let Some(areas) = window_placement::monitor_work_areas_px() {
+                    if areas.len() > 1 {
+                        ui.horizontal(|ui| {
+                            ui.label(rust_i18n::t!("srv_screen").to_string());
+                            egui::ComboBox::from_id_source("srv_layout_monitor")
+                                .selected_text(rust_i18n::t!("srv_screen_n", n = sel_mon + 1).to_string())
+                                .show_ui(ui, |ui| {
+                                    for i in 0..areas.len() {
+                                        ui.selectable_value(&mut sel_mon, i, rust_i18n::t!("srv_screen_n", n = i + 1).to_string());
+                                    }
+                                });
+                        });
+                        ui.add_space(6.0);
+                    }
+                }
+
+                // --- Rasterformaat-kiezer (tot GRID_MAX x GRID_MAX; hover/klik) ---
+                const MAXG: usize = GRID_MAX;
+                const PCELL: f32 = 15.0;
+                const PGAP: f32 = 2.0;
+                let dim = PCELL * MAXG as f32 + PGAP * (MAXG as f32 - 1.0);
+                ui.horizontal(|ui| {
+                    ui.label(rust_i18n::t!("srv_grid").to_string());
+                    let (prect, presp) =
+                        ui.allocate_exact_size(egui::vec2(dim, dim), egui::Sense::click());
+                    let hover = presp.hover_pos().map(|p| {
+                        let c = (((p.x - prect.min.x) / (PCELL + PGAP)) as i32).clamp(0, MAXG as i32 - 1) as usize;
+                        let r = (((p.y - prect.min.y) / (PCELL + PGAP)) as i32).clamp(0, MAXG as i32 - 1) as usize;
+                        (r, c)
+                    });
+                    let pnt = ui.painter_at(prect);
+                    for r in 0..MAXG {
+                        for c in 0..MAXG {
+                            let cr = egui::Rect::from_min_size(
+                                prect.min + egui::vec2(c as f32 * (PCELL + PGAP), r as f32 * (PCELL + PGAP)),
+                                egui::vec2(PCELL, PCELL),
+                            );
+                            let preview = hover.map_or(false, |(hr, hc)| r <= hr && c <= hc);
+                            let cur = r < gsnap.rows as usize && c < gsnap.cols as usize;
+                            let fill = if preview {
+                                SNAP_ACCENT
+                            } else if cur {
+                                Color32::from_gray(80)
+                            } else {
+                                Color32::from_gray(45)
+                            };
+                            pnt.rect_filled(cr, egui::Rounding::same(2.0), fill);
+                            pnt.rect_stroke(cr, egui::Rounding::same(2.0), egui::Stroke::new(1.0, Color32::from_gray(100)));
+                        }
+                    }
+                    if let Some((hr, hc)) = hover {
+                        if presp.clicked() { resize_to = Some((hr as u8 + 1, hc as u8 + 1)); }
+                    }
+                    let (lr, lc) = hover
+                        .map(|(r, c)| (r + 1, c + 1))
+                        .unwrap_or((gsnap.rows as usize, gsnap.cols as usize));
+                    ui.label(RichText::new(format!("{} x {}", lr, lc)).strong());
+                });
+
+                ui.add_space(6.0);
+                ui.separator();
+
+                ui.label(rust_i18n::t!("srv_arrange_pick").to_string());
+                ui.horizontal_wrapped(|ui| {
+                    for w in &avail {
+                        let is_active = active == Some(*w);
+                        let txt = RichText::new(w.label()).size(12.0).color(Color32::WHITE);
+                        let mut btn = egui::Button::new(txt)
+                            .fill(w.color())
+                            .rounding(egui::Rounding::same(4.0));
+                        if is_active {
+                            btn = btn.stroke(egui::Stroke::new(2.0, Color32::WHITE));
+                        }
+                        if ui.add(btn).clicked() {
+                            select = Some(if is_active { None } else { Some(*w) });
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.separator();
+
+                ui.label(rust_i18n::t!("srv_arrange_place").to_string());
+                let cols = gsnap.cols as usize;
+                let rows = gsnap.rows as usize;
+                let avail_w = ui.available_width().clamp(120.0, 380.0);
+                let cell = (avail_w / cols as f32).clamp(22.0, 88.0);
+                let gw = cell * cols as f32;
+                let gh = cell * rows as f32;
+                let (grect, gresp) =
+                    ui.allocate_exact_size(egui::vec2(gw, gh), egui::Sense::click_and_drag());
+                let gp = ui.painter_at(grect);
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let cr = egui::Rect::from_min_size(
+                            grect.min + egui::vec2(c as f32 * cell, r as f32 * cell),
+                            egui::vec2(cell, cell),
+                        ).shrink(1.5);
+                        let w = gsnap.cell(r, c);
+                        let fill = w.map(|w| w.color()).unwrap_or(Color32::from_gray(48));
+                        gp.rect_filled(cr, egui::Rounding::same(3.0), fill);
+                        gp.rect_stroke(cr, egui::Rounding::same(3.0), egui::Stroke::new(1.0, Color32::from_gray(100)));
+                        if let Some(w) = w {
+                            gp.text(
+                                cr.center(),
+                                egui::Align2::CENTER_CENTER,
+                                w.label(),
+                                egui::FontId::proportional((cell * 0.22).clamp(9.0, 13.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                    }
+                }
+                // Cel onder de aanwijzer: `inside` = strikt binnen het raster
+                // (klik/rechtsklik); `clamped` = op de rand geklemd (slepen).
+                let ptr = gresp.interact_pointer_pos();
+                let clamped = ptr.map(|p| {
+                    let c = (((p.x - grect.min.x) / cell) as i32).clamp(0, cols as i32 - 1) as usize;
+                    let r = (((p.y - grect.min.y) / cell) as i32).clamp(0, rows as i32 - 1) as usize;
+                    (r, c)
+                });
+                let inside = ptr.and_then(|p| {
+                    if !grect.contains(p) { return None; }
+                    let c = ((p.x - grect.min.x) / cell) as usize;
+                    let r = ((p.y - grect.min.y) / cell) as usize;
+                    if r < rows && c < cols { Some((r, c)) } else { None }
+                });
+                // Sleep-preview: rechthoek anker..huidig oplichten.
+                if gresp.dragged() {
+                    if let (Some(a), Some(cur), Some(w)) = (drag_anchor, clamped, active) {
+                        let (r0, r1) = (a.0.min(cur.0), a.0.max(cur.0));
+                        let (c0, c1) = (a.1.min(cur.1), a.1.max(cur.1));
+                        let pr = egui::Rect::from_min_max(
+                            grect.min + egui::vec2(c0 as f32 * cell, r0 as f32 * cell),
+                            grect.min + egui::vec2((c1 + 1) as f32 * cell, (r1 + 1) as f32 * cell),
+                        ).shrink(1.5);
+                        gp.rect_filled(pr, egui::Rounding::same(3.0), w.color().gamma_multiply(0.55));
+                        gp.rect_stroke(pr, egui::Rounding::same(3.0), egui::Stroke::new(2.0, Color32::WHITE));
+                    }
+                }
+                // Slepen = rechthoek vullen; losse klik = 1 cel; rechtsklik /
+                // klik-op-actief = wissen.
+                if gresp.secondary_clicked() {
+                    if let Some((r, c)) = inside { clear_cell = Some((r, c)); }
+                } else if gresp.drag_started() {
+                    if active.is_some() {
+                        if let Some(cell_rc) = inside.or(clamped) { set_anchor = Some(Some(cell_rc)); }
+                    }
+                } else if gresp.drag_stopped() {
+                    if active.is_some() {
+                        if let Some(cur) = clamped {
+                            fill_rect = Some((drag_anchor.unwrap_or(cur), cur));
+                        }
+                    }
+                    set_anchor = Some(None);
+                } else if gresp.clicked() {
+                    if let Some((r, c)) = inside {
+                        match active {
+                            Some(a) if gsnap.cell(r, c) == Some(a) => clear_cell = Some((r, c)),
+                            Some(_) => paint_cell = Some((r, c)),
+                            None => { if let Some(w) = gsnap.cell(r, c) { select = Some(Some(w)); } }
+                        }
+                    }
+                }
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new(rust_i18n::t!("srv_apply").to_string()).strong())
+                        .fill(SNAP_ACCENT)).clicked() { do_apply = true; }
+                    if ui.button(rust_i18n::t!("srv_empty").to_string()).clicked() { clear_all = true; }
+                });
+              }); // ScrollArea
+            });
+
+        self.show_layout_arranger = open_flag;
+        if sel_mon != cur_mon && sel_mon < self.layout_grid_per_monitor.len() {
+            self.layout_target_monitor = sel_mon;
+        }
+        if let Some(sel) = select { self.layout_active_item = sel; }
+        let mon = cur_mon;
+        if let Some((rr, cc)) = resize_to { self.layout_grid_per_monitor[mon].set_size(rr, cc); }
+        if clear_all {
+            for slot in self.layout_grid_per_monitor[mon].cells.iter_mut() { *slot = None; }
+        }
+        if let Some((r, c)) = clear_cell { self.layout_grid_per_monitor[mon].set(r, c, None); }
+        if let Some((r, c)) = paint_cell {
+            if let Some(w) = active {
+                // Verwijder dit venster eerst uit ALLE rasters (incl. de huidige
+                // monitor) zodat oude cellen niet blijven staan en bounds() het
+                // venster niet onbedoeld over een grotere rechthoek uitrekt.
+                for g in self.layout_grid_per_monitor.iter_mut() { g.remove(w); }
+                self.layout_grid_per_monitor[mon].set(r, c, Some(w));
+            }
+        }
+        if let Some(sa) = set_anchor { self.layout_drag_anchor = sa; }
+        if let Some((a, b)) = fill_rect {
+            if let Some(w) = active {
+                // Verwijder dit venster eerst uit ALLE rasters (incl. de huidige
+                // monitor) zodat oude cellen niet blijven staan en bounds() het
+                // venster niet onbedoeld over een grotere rechthoek uitrekt.
+                for g in self.layout_grid_per_monitor.iter_mut() { g.remove(w); }
+                let (r0, r1) = (a.0.min(b.0), a.0.max(b.0));
+                let (c0, c1) = (a.1.min(b.1), a.1.max(b.1));
+                let g = &mut self.layout_grid_per_monitor[mon];
+                for r in r0..=r1 { for c in c0..=c1 { g.set(r, c, Some(w)); } }
+            }
+        }
+        if do_apply { self.apply_layout(ctx); }
     }
 }
 
@@ -829,7 +1339,7 @@ impl eframe::App for ServerApp {
                     // Thema-keuze: zelfde varianten als de client. Direct zichtbaar,
                     // want apply_visuals draait elke frame vanuit self.theme_variant.
                     ui.horizontal(|ui| {
-                        ui.label("Thema:");
+                        ui.label(rust_i18n::t!("srv_theme").to_string());
                         egui::ComboBox::from_id_salt("server_theme")
                             .selected_text(self.theme_variant.label())
                             .width(140.0)
@@ -854,32 +1364,56 @@ impl eframe::App for ServerApp {
                         }
                     });
 
+                    // UI-taal: basis EN + keuze NL/DE/FR. Direct toegepast
+                    // (set_locale) en bewaard (language= in de server-conf).
+                    // Gefaseerde migratie: nog-niet-gemigreerde teksten blijven NL.
+                    ui.horizontal(|ui| {
+                        ui.label(rust_i18n::t!("language").to_string());
+                        let langs = [("en", "English"), ("nl", "Nederlands"), ("de", "Deutsch"), ("fr", "Francais")];
+                        let cur_name = langs.iter().find(|(c, _)| *c == self.ui_language).map(|(_, n)| *n).unwrap_or("Nederlands");
+                        let mut picked: Option<&str> = None;
+                        egui::ComboBox::from_id_salt("server_language")
+                            .selected_text(cur_name)
+                            .width(140.0)
+                            .show_ui(ui, |ui| {
+                                for (code, name) in langs {
+                                    if ui.selectable_label(self.ui_language == code, name).clicked() {
+                                        picked = Some(code);
+                                    }
+                                }
+                            });
+                        if let Some(code) = picked {
+                            self.ui_language = code.to_string();
+                            rust_i18n::set_locale(code);
+                            self.save_window_positions();
+                        }
+                    });
+
                     ui.add_space(8.0);
 
-                    ui.label("Thetis TCI adres (bijv. 127.0.0.1:40001):");
+                    ui.label(rust_i18n::t!("srv_tci_addr").to_string());
                     ui.text_edit_singleline(&mut self.tci_addr);
 
                     ui.add_space(8.0);
 
-                    ui.label("Thetis.exe pad (optioneel, voor auto-start):");
+                    ui.label(rust_i18n::t!("srv_thetis_path").to_string());
                     ui.text_edit_singleline(&mut self.thetis_path);
 
                     ui.add_space(8.0);
 
-                    ui.checkbox(&mut self.rx2_present, "Radio heeft tweede ontvanger (RX2)")
-                        .on_hover_text("Uit voor single-receiver radio's: clients tonen dan nergens \
-                                        RX2 of VRX2. Wijziging geldt vanaf de volgende serverstart.");
+                    ui.checkbox(&mut self.rx2_present, rust_i18n::t!("srv_rx2_present").to_string())
+                        .on_hover_text(rust_i18n::t!("srv_rx2_present_hover").to_string());
 
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.yaesu_enabled, "Yaesu radio 1");
+                        ui.checkbox(&mut self.yaesu_enabled, rust_i18n::t!("srv_yaesu_radio1").to_string());
                         ui.label("CAT:");
                         egui::ComboBox::from_id_salt("yaesu_port")
-                            .selected_text(if self.yaesu_port.is_empty() { "(Geen)" } else { &self.yaesu_port })
+                            .selected_text(if self.yaesu_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu_port.clone() })
                             .width(120.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.yaesu_port.is_empty(), "(Geen)").clicked() {
+                                if ui.selectable_label(self.yaesu_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.yaesu_port.clear();
                                 }
                                 for port in &self.serial_ports {
@@ -888,12 +1422,12 @@ impl eframe::App for ServerApp {
                                     }
                                 }
                             });
-                        ui.label("Audio in:");
+                        ui.label(rust_i18n::t!("srv_audio_in").to_string());
                         egui::ComboBox::from_id_salt("yaesu_audio")
-                            .selected_text(if self.yaesu_audio_device.is_empty() { "(Geen)" } else { &self.yaesu_audio_device })
+                            .selected_text(if self.yaesu_audio_device.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu_audio_device.clone() })
                             .width(200.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.yaesu_audio_device.is_empty(), "(Geen)").clicked() {
+                                if ui.selectable_label(self.yaesu_audio_device.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.yaesu_audio_device.clear();
                                 }
                                 for name in crate::yaesu::available_audio_inputs() {
@@ -907,12 +1441,12 @@ impl eframe::App for ServerApp {
                     // de juiste codec gaat (PATCH-yaesu-output-device). Leeg = zelfde als
                     // de input; kies dit als capture/render-endpoint anders heten.
                     ui.horizontal(|ui| {
-                        ui.label("Audio uit (TX):");
+                        ui.label(rust_i18n::t!("srv_audio_out_tx").to_string());
                         egui::ComboBox::from_id_salt("yaesu_audio_out")
-                            .selected_text(if self.yaesu_audio_output_device.is_empty() { "(zelfde als input)" } else { &self.yaesu_audio_output_device })
+                            .selected_text(if self.yaesu_audio_output_device.is_empty() { rust_i18n::t!("srv_same_as_input").to_string() } else { self.yaesu_audio_output_device.clone() })
                             .width(200.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.yaesu_audio_output_device.is_empty(), "(zelfde als input)").clicked() {
+                                if ui.selectable_label(self.yaesu_audio_output_device.is_empty(), rust_i18n::t!("srv_same_as_input").to_string()).clicked() {
                                     self.yaesu_audio_output_device.clear();
                                 }
                                 for name in crate::yaesu::available_audio_outputs() {
@@ -928,19 +1462,19 @@ impl eframe::App for ServerApp {
                     // 991A SSB/AM USB routing mode. Off (default): routing stays active while a client
                     // is connected, then restores ~2 s after disconnect. On: switch only during PTT.
                     // FTX-1 keeps its internal auto source selection either way.
-                    ui.checkbox(&mut self.yaesu_ssb_switch_on_ptt, "Switch 991A SSB/AM USB routing on PTT")
-                        .on_hover_text("Off (default): keep 991A USB routing active while a client is connected and restore about 2 s after disconnect (zero PTT delay).\nOn: switch 991A routing only during PTT; useful when you want the hand mic restored immediately outside TX. FTX-1 auto source selection is left unchanged.");
+                    ui.checkbox(&mut self.yaesu_ssb_switch_on_ptt, rust_i18n::t!("srv_991a_ptt_switch").to_string())
+                        .on_hover_text(rust_i18n::t!("srv_991a_ptt_switch_hover").to_string());
                     ui.add_space(4.0);
 
                     // Dual-radio slot 1 (radio 2) - zelfde opzet als radio 1.
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.yaesu2_enabled, "Yaesu radio 2");
+                        ui.checkbox(&mut self.yaesu2_enabled, rust_i18n::t!("srv_yaesu_radio2").to_string());
                         ui.label("CAT:");
                         egui::ComboBox::from_id_salt("yaesu2_port")
-                            .selected_text(if self.yaesu2_port.is_empty() { "(Geen)" } else { &self.yaesu2_port })
+                            .selected_text(if self.yaesu2_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu2_port.clone() })
                             .width(120.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.yaesu2_port.is_empty(), "(Geen)").clicked() {
+                                if ui.selectable_label(self.yaesu2_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.yaesu2_port.clear();
                                 }
                                 for port in &self.serial_ports {
@@ -949,12 +1483,12 @@ impl eframe::App for ServerApp {
                                     }
                                 }
                             });
-                        ui.label("Audio in:");
+                        ui.label(rust_i18n::t!("srv_audio_in").to_string());
                         egui::ComboBox::from_id_salt("yaesu2_audio")
-                            .selected_text(if self.yaesu2_audio_device.is_empty() { "(Geen)" } else { &self.yaesu2_audio_device })
+                            .selected_text(if self.yaesu2_audio_device.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu2_audio_device.clone() })
                             .width(200.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.yaesu2_audio_device.is_empty(), "(Geen)").clicked() {
+                                if ui.selectable_label(self.yaesu2_audio_device.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.yaesu2_audio_device.clear();
                                 }
                                 for name in crate::yaesu::available_audio_inputs() {
@@ -965,12 +1499,12 @@ impl eframe::App for ServerApp {
                             });
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Audio uit (TX):");
+                        ui.label(rust_i18n::t!("srv_audio_out_tx").to_string());
                         egui::ComboBox::from_id_salt("yaesu2_audio_out")
-                            .selected_text(if self.yaesu2_audio_output_device.is_empty() { "(zelfde als input)" } else { &self.yaesu2_audio_output_device })
+                            .selected_text(if self.yaesu2_audio_output_device.is_empty() { rust_i18n::t!("srv_same_as_input").to_string() } else { self.yaesu2_audio_output_device.clone() })
                             .width(200.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.yaesu2_audio_output_device.is_empty(), "(zelfde als input)").clicked() {
+                                if ui.selectable_label(self.yaesu2_audio_output_device.is_empty(), rust_i18n::t!("srv_same_as_input").to_string()).clicked() {
                                     self.yaesu2_audio_output_device.clear();
                                 }
                                 for name in crate::yaesu::available_audio_outputs() {
@@ -980,17 +1514,17 @@ impl eframe::App for ServerApp {
                                 }
                             });
                     });
-                    ui.label(egui::RichText::new("Radio 2 wijzigingen: opslaan + server herstarten.").size(10.0).color(Color32::GRAY));
+                    ui.label(egui::RichText::new(rust_i18n::t!("srv_radio2_note").to_string()).size(10.0).color(Color32::GRAY));
 
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.amplitec_enabled, "Amplitec 6/2");
                         egui::ComboBox::from_id_salt("amplitec_port")
-                            .selected_text(if self.amplitec_port.is_empty() { "(Geen)" } else { &self.amplitec_port })
+                            .selected_text(if self.amplitec_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.amplitec_port.clone() })
                             .width(200.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.amplitec_port.is_empty(), "(Geen)").clicked() {
+                                if ui.selectable_label(self.amplitec_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.amplitec_port.clear();
                                 }
                                 for port in &self.serial_ports {
@@ -1002,7 +1536,7 @@ impl eframe::App for ServerApp {
                     });
 
                     if !self.amplitec_port.is_empty() {
-                        ui.checkbox(&mut self.show_amplitec_window, "Amplitec venster openen bij starten");
+                        ui.checkbox(&mut self.show_amplitec_window, rust_i18n::t!("srv_open_at_start").to_string());
                     }
 
                     ui.add_space(8.0);
@@ -1018,23 +1552,21 @@ impl eframe::App for ServerApp {
                             .strong(),
                     );
                     ui.label(
-                        egui::RichText::new(
-                            "Configureer per slot via het MCP2221A blok onderaan het status-paneel.",
-                        )
+                        egui::RichText::new(rust_i18n::t!("srv_tuner_mcp_note").to_string())
                         .small()
                         .weak(),
                     );
-                    ui.checkbox(&mut self.show_tuner_window, "Tuner venster openen bij starten");
+                    ui.checkbox(&mut self.show_tuner_window, rust_i18n::t!("srv_open_at_start").to_string());
 
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.spe_enabled, "SPE Expert");
                         egui::ComboBox::from_id_salt("spe_port")
-                            .selected_text(if self.spe_port.is_empty() { "(Geen)" } else { &self.spe_port })
+                            .selected_text(if self.spe_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.spe_port.clone() })
                             .width(200.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.spe_port.is_empty(), "(Geen)").clicked() {
+                                if ui.selectable_label(self.spe_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.spe_port.clear();
                                 }
                                 for port in &self.serial_ports {
@@ -1046,18 +1578,18 @@ impl eframe::App for ServerApp {
                     });
 
                     if !self.spe_port.is_empty() {
-                        ui.checkbox(&mut self.show_spe_window, "SPE Expert venster openen bij starten");
+                        ui.checkbox(&mut self.show_spe_window, rust_i18n::t!("srv_open_at_start").to_string());
                     }
 
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.rf2k_enabled, "RF2K-S");
-                        ui.label("adres:");
+                        ui.label(rust_i18n::t!("srv_addr_label").to_string());
                         ui.text_edit_singleline(&mut self.rf2k_addr);
                     });
                     if !self.rf2k_addr.is_empty() {
-                        ui.checkbox(&mut self.show_rf2k_window, "RF2K-S venster openen bij starten");
+                        ui.checkbox(&mut self.show_rf2k_window, rust_i18n::t!("srv_open_at_start").to_string());
                     }
 
                     ui.add_space(8.0);
@@ -1067,11 +1599,11 @@ impl eframe::App for ServerApp {
                     // cluster stays offline until it is set.
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.dxcluster_enabled, "DX Cluster");
-                        ui.label("call:");
+                        ui.label(rust_i18n::t!("srv_call").to_string());
                         ui.text_edit_singleline(&mut self.dxcluster_callsign);
                     });
                     if self.dxcluster_enabled && self.dxcluster_callsign.trim().is_empty() {
-                        ui.label(RichText::new("Enter your callsign to enable the DX cluster")
+                        ui.label(RichText::new(rust_i18n::t!("srv_dxcluster_need_call").to_string())
                             .color(Color32::from_rgb(220, 160, 0)).size(11.0));
                     }
 
@@ -1080,10 +1612,10 @@ impl eframe::App for ServerApp {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.ultrabeam_enabled, "UltraBeam RCU-06");
                         egui::ComboBox::from_id_salt("ultrabeam_port")
-                            .selected_text(if self.ultrabeam_port.is_empty() { "(Geen)" } else { &self.ultrabeam_port })
+                            .selected_text(if self.ultrabeam_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.ultrabeam_port.clone() })
                             .width(200.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.ultrabeam_port.is_empty(), "(Geen)").clicked() {
+                                if ui.selectable_label(self.ultrabeam_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.ultrabeam_port.clear();
                                 }
                                 for port in &self.serial_ports {
@@ -1095,14 +1627,14 @@ impl eframe::App for ServerApp {
                     });
 
                     if !self.ultrabeam_port.is_empty() {
-                        ui.checkbox(&mut self.show_ultrabeam_window, "UltraBeam venster openen bij starten");
+                        ui.checkbox(&mut self.show_ultrabeam_window, rust_i18n::t!("srv_open_at_start").to_string());
                     }
 
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.rotor_enabled, "Rotor");
-                        ui.label("backend:");
+                        ui.label(rust_i18n::t!("srv_backend").to_string());
                         // Snapshot voor change-detect; bij wijziging direct
                         // naar disk persisteren (anders raakt de keuze
                         // weg wanneer operator de server niet via Start
@@ -1142,13 +1674,13 @@ impl eframe::App for ServerApp {
                     match self.rotor_backend.as_str() {
                         "pstrotator" => {
                             ui.horizontal(|ui| {
-                                ui.label("PstRotator host:");
+                                ui.label(rust_i18n::t!("srv_pstrotator_host").to_string());
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.pstrotator_host)
                                         .desired_width(180.0)
-                                        .hint_text("bv. 192.168.1.50"),
+                                        .hint_text(rust_i18n::t!("srv_host_example").to_string()),
                                 );
-                                ui.label("poort:");
+                                ui.label(rust_i18n::t!("srv_port").to_string());
                                 ui.add(
                                     egui::DragValue::new(&mut self.pstrotator_port)
                                         .range(1u16..=65535)
@@ -1156,7 +1688,7 @@ impl eframe::App for ServerApp {
                                 );
                             });
                             ui.horizontal(|ui| {
-                                ui.label("Feedback poort (lokaal):");
+                                ui.label(rust_i18n::t!("srv_feedback_port").to_string());
                                 ui.add(
                                     egui::DragValue::new(&mut self.pstrotator_feedback_port)
                                         .range(1u16..=65535)
@@ -1164,28 +1696,24 @@ impl eframe::App for ServerApp {
                                 );
                                 ui.checkbox(
                                     &mut self.pstrotator_has_elevation,
-                                    "Heeft elevation",
+                                    rust_i18n::t!("srv_has_elevation").to_string(),
                                 );
                             });
                             ui.label(
-                                egui::RichText::new(
-                                    "PstRotator: in 'Communication -> UDP Control Port' \
-                                     bovenstaande poort instellen + 'UDP Control' aanvinken. \
-                                     Lokale firewall: inbound UDP feedback-poort toestaan.",
-                                )
+                                egui::RichText::new(rust_i18n::t!("srv_pstrotator_hint").to_string())
                                 .size(10.0)
                                 .color(egui::Color32::from_rgb(160, 160, 160)),
                             );
                         }
                         _ => {
                             ui.horizontal(|ui| {
-                                ui.label("EA7HG adres:");
+                                ui.label(rust_i18n::t!("srv_ea7hg_addr").to_string());
                                 ui.text_edit_singleline(&mut self.rotor_addr);
                             });
                         }
                     }
                     if self.rotor_enabled {
-                        ui.checkbox(&mut self.show_rotor_window, "Rotor venster openen bij starten");
+                        ui.checkbox(&mut self.show_rotor_window, rust_i18n::t!("srv_open_at_start").to_string());
                     }
 
                     // PstRotator listener - parallel input source bovenop
@@ -1196,15 +1724,10 @@ impl eframe::App for ServerApp {
                     ui.horizontal(|ui| {
                         ui.checkbox(
                             &mut self.pstrotator_listen_enabled,
-                            "PstRotator listener (parallel)",
+                            rust_i18n::t!("srv_pstrotator_listener").to_string(),
                         )
-                        .on_hover_text(
-                            "Luistert op UDP-poort voor inkomende PstRotator azimuth-\n\
-                             broadcasts (text `AZ:nnn.n` of XML `<AZIMUTH>nnn.n</AZIMUTH>`).\n\
-                             Vertaalt ze naar GoTo-commando's op de actieve rotor-backend,\n\
-                             onafhankelijk van welke backend daarboven gekozen is."
-                        );
-                        ui.label("poort:");
+                        .on_hover_text(rust_i18n::t!("srv_pstrotator_listener_hover").to_string());
+                        ui.label(rust_i18n::t!("srv_port").to_string());
                         ui.add(
                             egui::DragValue::new(&mut self.pstrotator_listen_port)
                                 .range(1u16..=65535)
@@ -1213,11 +1736,7 @@ impl eframe::App for ServerApp {
                     });
                     if self.pstrotator_listen_enabled && self.rotor_backend == "pstrotator" {
                         ui.label(
-                            egui::RichText::new(
-                                "Let op: rotor_backend is ook 'pstrotator' \u{2014} \
-                                 PstRotator's eigen replies kunnen via deze listener \
-                                 weer binnenkomen (loop-risico).",
-                            )
+                            egui::RichText::new(rust_i18n::t!("srv_pstrotator_loop_warn").to_string())
                             .size(10.0)
                             .color(egui::Color32::from_rgb(220, 160, 40)),
                         );
@@ -1227,15 +1746,11 @@ impl eframe::App for ServerApp {
 
                     ui.add_space(8.0);
                     ui.heading("Relay");
-                    ui.checkbox(&mut self.relay_enabled, "Enable outbound relay monitor");
-                    ui.checkbox(&mut self.relay_udp_enabled, "Audio over UDP (low latency)")
-                        .on_hover_text(
-                            "Route audio + PTT over plain UDP (port 443) instead of the wss tunnel: \
-                             no retransmit, lower latency. Both server and client must have it on. \
-                             Applies on restart.",
-                        );
+                    ui.checkbox(&mut self.relay_enabled, rust_i18n::t!("srv_relay_enable").to_string());
+                    ui.checkbox(&mut self.relay_udp_enabled, rust_i18n::t!("srv_relay_udp").to_string())
+                        .on_hover_text(rust_i18n::t!("srv_relay_udp_hover").to_string());
                     ui.horizontal(|ui| {
-                        ui.label("Relay URL:");
+                        ui.label(rust_i18n::t!("srv_relay_url").to_string());
                         ui.add(
                             egui::TextEdit::singleline(&mut self.relay_url)
                                 .desired_width(260.0)
@@ -1243,7 +1758,7 @@ impl eframe::App for ServerApp {
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Station name:");
+                        ui.label(rust_i18n::t!("srv_station_name").to_string());
                         ui.add(
                             egui::TextEdit::singleline(&mut self.relay_station)
                                 .desired_width(180.0)
@@ -1251,7 +1766,7 @@ impl eframe::App for ServerApp {
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Relay token:");
+                        ui.label(rust_i18n::t!("srv_relay_token").to_string());
                         ui.add(
                             egui::TextEdit::singleline(&mut self.relay_token)
                                 .desired_width(180.0)
@@ -1259,23 +1774,21 @@ impl eframe::App for ServerApp {
                         );
                     });
                     ui.label(
-                        egui::RichText::new(
-                            "Relay routes the full connection: audio + PTT over UDP with automatic wss (TCP) fallback, control + spectrum over wss. Both server and client must use the same relay, station name and token.",
-                        )
+                        egui::RichText::new(rust_i18n::t!("srv_relay_desc").to_string())
                         .size(10.0)
                         .color(egui::Color32::from_rgb(160, 160, 160)),
                     );
 
                     ui.add_space(8.0);
-                    ui.heading("Security");
+                    ui.heading(rust_i18n::t!("srv_security").to_string());
                     ui.horizontal(|ui| {
-                        ui.label("Password:");
+                        ui.label(rust_i18n::t!("srv_password").to_string());
                         ui.add(egui::TextEdit::singleline(&mut self.password)
                             .desired_width(150.0).password(true)
-                            .hint_text("(required)"));
+                            .hint_text(rust_i18n::t!("srv_required_hint").to_string()));
                     });
                     if self.password.is_empty() {
-                        ui.colored_label(egui::Color32::RED, "Password is required");
+                        ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_password_required").to_string());
                     } else if let Err(msg) = sdr_remote_core::auth::validate_password_strength(&self.password) {
                         ui.colored_label(egui::Color32::from_rgb(255, 165, 0), msg);
                     }
@@ -1284,11 +1797,11 @@ impl eframe::App for ServerApp {
                     ui.checkbox(&mut self.totp_enabled, "2FA (TOTP)");
                     if self.totp_enabled {
                         ui.horizontal(|ui| {
-                            ui.label("Secret:");
+                            ui.label(rust_i18n::t!("srv_secret").to_string());
                             ui.add(egui::TextEdit::singleline(&mut self.totp_secret)
                                 .desired_width(220.0).font(egui::TextStyle::Monospace));
                         });
-                        if ui.small_button("Generate new secret").clicked() {
+                        if ui.small_button(rust_i18n::t!("srv_generate_secret").to_string()).clicked() {
                             self.totp_secret = sdr_remote_core::auth::generate_totp_secret();
                         }
                         // QR code for authenticator app
@@ -1319,17 +1832,17 @@ impl eframe::App for ServerApp {
                                 }
                             }
                         }
-                        ui.label(egui::RichText::new("Scan with Google Authenticator or similar app").small().weak());
+                        ui.label(egui::RichText::new(rust_i18n::t!("srv_scan_qr").to_string()).small().weak());
                     }
 
                     ui.add_space(8.0);
-                    ui.checkbox(&mut self.autostart, "Auto-start on launch");
+                    ui.checkbox(&mut self.autostart, rust_i18n::t!("srv_autostart").to_string());
 
                     ui.add_space(8.0);
 
                     let pw_valid = !self.password.is_empty()
                         && sdr_remote_core::auth::validate_password_strength(&self.password).is_ok();
-                    if ui.add_enabled(pw_valid, egui::Button::new("Save & Start")).clicked() {
+                    if ui.add_enabled(pw_valid, egui::Button::new(rust_i18n::t!("srv_save_start").to_string())).clicked() {
                         self.start_server();
                     }
                     }); // <- end ScrollArea wrap voor Mode::Settings
@@ -1338,15 +1851,25 @@ impl eframe::App for ServerApp {
                     ui.horizontal(|ui| {
                         ui.heading(format!("ThetisLink Server v{}", sdr_remote_core::VERSION));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("About").clicked() {
+                            if ui.small_button(rust_i18n::t!("srv_about").to_string()).clicked() {
                                 self.show_about = !self.show_about;
                             }
                         });
                     });
-                    // PATCH-2: Status / Logs tabs.
+                    // PATCH-2: Status / Logs tabs + "Schik"-knop (vensters ordenen).
                     ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.status_view, StatusView::Status, "Status");
-                        ui.selectable_value(&mut self.status_view, StatusView::Logs, "Logs");
+                        ui.selectable_value(&mut self.status_view, StatusView::Status, rust_i18n::t!("srv_status").to_string());
+                        ui.selectable_value(&mut self.status_view, StatusView::Logs, rust_i18n::t!("srv_logs").to_string());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let mut s = self.show_layout_arranger;
+                            if ui.toggle_value(&mut s, rust_i18n::t!("srv_arrange").to_string())
+                                .on_hover_text(rust_i18n::t!("srv_arrange_hover").to_string())
+                                .changed()
+                            {
+                                self.show_layout_arranger = s;
+                                if s { self.layout_target_monitor = self.detect_monitor_index(ctx); }
+                            }
+                        });
                     });
                     ui.separator();
 
@@ -1414,7 +1937,7 @@ impl eframe::App for ServerApp {
                     }
 
                     ui.separator();
-                    if ui.button("Exit").clicked() {
+                    if ui.button(rust_i18n::t!("srv_exit").to_string()).clicked() {
                         // Nette afsluiting (PE1FMC-wens): sein de server-shutdown zodat de
                         // Yaesu SSB-routing wordt hersteld (connect-set-modus; in per-PTT-modus
                         // staat de radio al normaal), drop de radio-Arc zodat de cmd-channel
@@ -1429,7 +1952,7 @@ impl eframe::App for ServerApp {
                         std::process::exit(0);
                     }
                     ui.separator();
-                    if ui.button("Settings").clicked() {
+                    if ui.button(rust_i18n::t!("srv_settings").to_string()).clicked() {
                         // Stop server (thread finishes in background)
                         if let Some(tx) = self.shutdown_tx.take() {
                             let _ = tx.send(true);
@@ -1538,7 +2061,7 @@ impl eframe::App for ServerApp {
 
                             // Macro button grid
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Macros").strong());
+                                ui.label(RichText::new(rust_i18n::t!("srv_macros_heading").to_string()).strong());
                                 if macro_status.running {
                                     ui.colored_label(
                                         Color32::from_rgb(255, 170, 40),
@@ -1547,7 +2070,7 @@ impl eframe::App for ServerApp {
                                             macro_status.step,
                                             macro_status.total_steps),
                                     );
-                                    if ui.button("Abort macro").clicked() {
+                                    if ui.button(rust_i18n::t!("srv_abort_macro").to_string()).clicked() {
                                         self.macro_runner.abort();
                                     }
                                 }
@@ -1576,7 +2099,7 @@ impl eframe::App for ServerApp {
                             });
 
                             ui.add_space(4.0);
-                            if ui.button("Bewerk macros...").clicked() {
+                            if ui.button(rust_i18n::t!("srv_edit_macros").to_string()).clicked() {
                                 self.show_macro_editor = true;
                                 // Load current slot into editor
                                 load_slot_into_editor(
@@ -2026,6 +2549,14 @@ impl eframe::App for ServerApp {
                         });
                     });
                 });
+        }
+
+        // "Vensters schikken"-matrix. Alleen in Running mode zinvol (de popouts
+        // bestaan alleen dan); bij terugkeer naar Settings sluit het venster.
+        if matches!(self.mode, Mode::Running) {
+            self.render_layout_arranger(ctx);
+        } else {
+            self.show_layout_arranger = false;
         }
     }
 }

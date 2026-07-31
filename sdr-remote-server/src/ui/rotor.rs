@@ -12,9 +12,9 @@ pub(super) fn render_rotor_panel(
         ui.heading("Rotor");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if status.connected {
-                ui.colored_label(Color32::GREEN, "Online");
+                ui.colored_label(Color32::GREEN, rust_i18n::t!("srv_online").to_string());
             } else {
-                ui.colored_label(Color32::RED, "Offline");
+                ui.colored_label(Color32::RED, rust_i18n::t!("srv_offline").to_string());
             }
         });
     });
@@ -37,9 +37,9 @@ pub(super) fn render_rotor_panel(
         }
 
         // GoTo text input
-        ui.label("GoTo:");
+        ui.label(rust_i18n::t!("srv_goto").to_string());
         let resp = ui.add(egui::TextEdit::singleline(goto_input).desired_width(60.0));
-        if (ui.add_enabled(status.connected, egui::Button::new("Go")).clicked()
+        if (ui.add_enabled(status.connected, egui::Button::new(rust_i18n::t!("srv_go").to_string())).clicked()
             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
             && status.connected
         {

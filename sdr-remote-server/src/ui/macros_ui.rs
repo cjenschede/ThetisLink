@@ -74,7 +74,7 @@ pub(super) fn render_macro_editor(
     editor_actions: &mut Vec<MacroAction>,
     show: &mut bool,
 ) {
-    ui.heading("Macro Editor");
+    ui.heading(rust_i18n::t!("srv_macro_editor").to_string());
     ui.separator();
 
     ui.columns(2, |cols| {
@@ -113,14 +113,14 @@ pub(super) fn render_macro_editor(
 
         // Right column: editor for selected slot
         let slot_name = macros::slot_name(*editor_slot);
-        cols[1].label(RichText::new(format!("Slot: {}", slot_name)).strong());
+        cols[1].label(RichText::new(format!("{} {}", rust_i18n::t!("srv_slot"), slot_name)).strong());
         cols[1].add_space(4.0);
 
         cols[1].label("Label:");
         cols[1].text_edit_singleline(editor_label);
         cols[1].add_space(8.0);
 
-        cols[1].label(RichText::new("Acties:").strong());
+        cols[1].label(RichText::new(rust_i18n::t!("srv_actions").to_string()).strong());
 
         let mut remove_idx = None;
         for (i, action) in editor_actions.iter_mut().enumerate() {
@@ -143,8 +143,8 @@ pub(super) fn render_macro_editor(
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut action_type, 0, "CAT");
-                        ui.selectable_value(&mut action_type, 1, "Delay");
-                        ui.selectable_value(&mut action_type, 2, "Tune");
+                        ui.selectable_value(&mut action_type, 1, rust_i18n::t!("srv_delay").to_string());
+                        ui.selectable_value(&mut action_type, 2, rust_i18n::t!("srv_tune").to_string());
                     });
 
                 if action_type != prev_type {
@@ -197,12 +197,12 @@ pub(super) fn render_macro_editor(
 
     ui.separator();
     ui.horizontal(|ui| {
-        if ui.button("Save").clicked() {
+        if ui.button(rust_i18n::t!("srv_save").to_string()).clicked() {
             save_editor_to_slot(slots, *editor_slot, editor_label, editor_actions);
             macros::save(slots);
             *show = false;
         }
-        if ui.button("Cancel").clicked() {
+        if ui.button(rust_i18n::t!("srv_cancel").to_string()).clicked() {
             *show = false;
         }
     });

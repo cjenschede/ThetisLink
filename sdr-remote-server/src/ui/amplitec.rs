@@ -161,11 +161,11 @@ fn render_rename_dialog(ctx: &egui::Context) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label("Nieuwe naam:");
+            ui.label(rust_i18n::t!("srv_new_name").to_string());
             let resp = ui.add(
                 egui::TextEdit::singleline(buffer)
                     .desired_width(220.0)
-                    .hint_text("bijv. JC-4s loop"),
+                    .hint_text(rust_i18n::t!("srv_new_name_hint").to_string()),
             );
             // Enter in het tekstvak commit ook
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -176,7 +176,7 @@ fn render_rename_dialog(ctx: &egui::Context) {
                 if ui.button("OK").clicked() {
                     save = true;
                 }
-                if ui.button("Annuleer").clicked() {
+                if ui.button(rust_i18n::t!("srv_cancel").to_string()).clicked() {
                     close = true;
                 }
             });
@@ -216,11 +216,11 @@ pub(super) fn render_amplitec_panel(
         ui.heading("Amplitec 6/2 Antenna Switch");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if status.connected {
-                ui.colored_label(Color32::GREEN, "Online");
+                ui.colored_label(Color32::GREEN, rust_i18n::t!("srv_online").to_string());
             } else {
-                ui.colored_label(Color32::RED, "Offline");
+                ui.colored_label(Color32::RED, rust_i18n::t!("srv_offline").to_string());
             }
-            ui.checkbox(show_log, "Log");
+            ui.checkbox(show_log, rust_i18n::t!("srv_log_cb").to_string());
         });
     });
     ui.separator();
@@ -228,10 +228,10 @@ pub(super) fn render_amplitec_panel(
     // Poort A (TX+RX)
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Poort A \u{2014} TX+RX").strong());
+        ui.label(RichText::new(rust_i18n::t!("srv_port_a_txrx").to_string()).strong());
         if status.switch_a > 0 {
             let label = &labels[(status.switch_a - 1).min(5) as usize];
-            ui.label(format!("  Huidige: {}", label));
+            ui.label(format!("  {} {}", rust_i18n::t!("srv_current"), label));
         }
     });
     ui.horizontal(|ui| {
@@ -254,12 +254,12 @@ pub(super) fn render_amplitec_panel(
                 amplitec.send_command(crate::amplitec::AmplitecCmd::SetSwitchA(pos));
             }
             let resp = if is_blocked {
-                resp.on_hover_text(format!("Ant{} ({}) - bezet door Poort B", pos, label))
+                resp.on_hover_text(rust_i18n::t!("srv_ant_busy_b", pos = pos, label = label).to_string())
             } else {
                 resp
             };
             resp.context_menu(|ui| {
-                if ui.button("Hernoem...").clicked() {
+                if ui.button(rust_i18n::t!("srv_rename").to_string()).clicked() {
                     open_rename_dialog(pos, label);
                     ui.close_menu();
                 }
@@ -271,10 +271,10 @@ pub(super) fn render_amplitec_panel(
 
     // Poort B (RX only)
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Poort B \u{2014} RX").strong());
+        ui.label(RichText::new(rust_i18n::t!("srv_port_b_rx").to_string()).strong());
         if status.switch_b > 0 {
             let label = &labels[(status.switch_b - 1).min(5) as usize];
-            ui.label(format!("  Huidige: {}", label));
+            ui.label(format!("  {} {}", rust_i18n::t!("srv_current"), label));
         }
     });
     ui.horizontal(|ui| {
@@ -297,12 +297,12 @@ pub(super) fn render_amplitec_panel(
                 amplitec.send_command(crate::amplitec::AmplitecCmd::SetSwitchB(pos));
             }
             let resp = if is_blocked {
-                resp.on_hover_text(format!("Ant{} ({}) - bezet door Poort A", pos, label))
+                resp.on_hover_text(rust_i18n::t!("srv_ant_busy_a", pos = pos, label = label).to_string())
             } else {
                 resp
             };
             resp.context_menu(|ui| {
-                if ui.button("Hernoem...").clicked() {
+                if ui.button(rust_i18n::t!("srv_rename").to_string()).clicked() {
                     open_rename_dialog(pos, label);
                     ui.close_menu();
                 }

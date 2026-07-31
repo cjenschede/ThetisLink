@@ -1,10 +1,10 @@
-# ThetisLink v2.5.0 — Technische Documentatie
+# ThetisLink v2.6.0 — Technische Documentatie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een ANAN 7000DLE + Thetis SDR-ontvanger en maximaal twee Yaesu transceivers (FT-991A / FTX-1) via een netwerkverbinding. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
 
-**Versie:** v2.5.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.6.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -26,9 +26,13 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.5.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.6.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.6.0 highlights
+
+**Alleen UI / server-side — geen wire-protocol-wijziging (VERSION blijft 3, backwards-compatible met v2.5.x).** De vensterschikker is omgebouwd tot een **matrix-plaatser** (rasterkiezer tot 12×12, cel-schilderen met spanning, rechthoek-sleepselectie) en zit nu **óók in de server-GUI** om de eigen apparaat-vensters van de server te ordenen (multi-monitor via de geporte `window_placement`). De **server-GUI is nu meertalig** (rust-i18n, EN/NL/DE/FR, taal-picker in Settings; het Settings-scherm en de device-popouts zijn vertaald). De **analoge S-meter** is herzien naar een constante, uniform meeschalende vorm (vaste verhouding, bovenste-60%-boogzone, strak om de schaal, grotere RX/VRX). Fixes: de **991A geheugen-read breekt af bij een niet-reagerende (standby) radio** zodat een power-on-klik niet meer ~30–40 s geblokkeerd wordt, 991A/FTX-1 geheugen betrouwbaar lezen + auto-load, uitklap-secties onthouden hun stand, en RX1 "Auto ref" blijft staan over een TX-spectrum-override. Android: APK-rebuild (peak-hold-streepje op de audioniveau-bars).
 
 ### v2.5.0 highlights
 

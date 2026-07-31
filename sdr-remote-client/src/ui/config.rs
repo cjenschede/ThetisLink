@@ -153,6 +153,10 @@ pub(crate) struct ClientConfig {
     pub(crate) collapse_yaesu_eq: bool,
     pub(crate) collapse_yaesu_memories: bool,
     pub(crate) collapse_yaesu_menu: bool,
+    pub(crate) collapse_yaesu2_memories: bool,
+    pub(crate) collapse_yaesu2_menu: bool,
+    pub(crate) amplitec_power_show: bool,
+    pub(crate) bw_breakdown_expanded: bool,
     pub(crate) yaesu_memories_h: f32,
     pub(crate) device_tab: u8,
     pub(crate) yaesu_enabled: bool,
@@ -341,6 +345,10 @@ impl Default for ClientConfig {
             collapse_yaesu_eq: false,
             collapse_yaesu_memories: false,
             collapse_yaesu_menu: false,
+            collapse_yaesu2_memories: false,
+            collapse_yaesu2_menu: false,
+            amplitec_power_show: false,
+            bw_breakdown_expanded: false,
             yaesu_memories_h: 250.0,
             band_mem: HashMap::new(),
             window_w: 400.0,
@@ -797,6 +805,14 @@ pub(crate) fn load_config() -> ClientConfig {
             config.collapse_yaesu_memories = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("collapse_yaesu_menu=") {
             config.collapse_yaesu_menu = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("collapse_yaesu2_memories=") {
+            config.collapse_yaesu2_memories = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("collapse_yaesu2_menu=") {
+            config.collapse_yaesu2_menu = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("amplitec_power_show=") {
+            config.amplitec_power_show = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("bw_breakdown_expanded=") {
+            config.bw_breakdown_expanded = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu_memories_h=") {
             if let Ok(v) = val.trim().parse::<f32>() {
                 config.yaesu_memories_h = v.clamp(100.0, 800.0);
@@ -1161,6 +1177,10 @@ pub(crate) fn save_config(
     collapse_yaesu_eq: bool,
     collapse_yaesu_memories: bool,
     collapse_yaesu_menu: bool,
+    collapse_yaesu2_memories: bool,
+    collapse_yaesu2_menu: bool,
+    amplitec_power_show: bool,
+    bw_breakdown_expanded: bool,
     yaesu_memories_h: f32,
     device_tab: u8,
     yaesu_enabled: bool,
@@ -1363,6 +1383,10 @@ pub(crate) fn save_config(
         content.push_str(&format!("collapse_yaesu_eq={}\n", collapse_yaesu_eq));
         content.push_str(&format!("collapse_yaesu_memories={}\n", collapse_yaesu_memories));
         content.push_str(&format!("collapse_yaesu_menu={}\n", collapse_yaesu_menu));
+        content.push_str(&format!("collapse_yaesu2_memories={}\n", collapse_yaesu2_memories));
+        content.push_str(&format!("collapse_yaesu2_menu={}\n", collapse_yaesu2_menu));
+        content.push_str(&format!("amplitec_power_show={}\n", amplitec_power_show));
+        content.push_str(&format!("bw_breakdown_expanded={}\n", bw_breakdown_expanded));
         content.push_str(&format!("yaesu_memories_h={:.0}\n", yaesu_memories_h));
         content.push_str(&format!("device_tab={}\n", device_tab));
         content.push_str(&format!("yaesu_enabled={}\n", yaesu_enabled));

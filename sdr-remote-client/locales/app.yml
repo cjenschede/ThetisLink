@@ -1065,10 +1065,10 @@ main_arrange_windows_title:
   de: "Fenster anordnen"
   fr: "Organiser les fenêtres"
 main_arrange_windows_help:
-  en: "Drag windows into a row. Same row = side by side, more rows = stacked. Choose a screen to assign channels to it; each screen has its own layout."
-  nl: "Sleep vensters in een rij. Zelfde rij = naast elkaar, meer rijen = gestapeld. Kies een scherm om er kanalen aan toe te wijzen; elk scherm heeft zijn eigen lay-out."
-  de: "Fenster in eine Reihe ziehen. Gleiche Reihe = nebeneinander, mehr Reihen = übereinander. Einen Bildschirm wählen, um ihm Kanäle zuzuweisen; jeder Bildschirm hat sein eigenes Layout."
-  fr: "Glissez les fenêtres dans une rangée. Même rangée = côte à côte, plus de rangées = empilées. Choisissez un écran pour lui affecter des canaux ; chaque écran a sa propre disposition."
+  en: "Pick a grid size, select a window and paint it onto the cells (click or drag). A window may cover several adjacent cells - it is stretched over that block. Each screen has its own grid."
+  nl: "Kies een rasterformaat, selecteer een venster en schilder het in de cellen (klik of sleep). Een venster mag meerdere aangrenzende cellen beslaan - het wordt over dat blok uitgerekt. Elk scherm heeft zijn eigen raster."
+  de: "Rastergröße wählen, ein Fenster auswählen und in die Zellen malen (klicken oder ziehen). Ein Fenster darf mehrere benachbarte Zellen belegen - es wird über diesen Block gestreckt. Jeder Bildschirm hat sein eigenes Raster."
+  fr: "Choisissez une taille de grille, sélectionnez une fenêtre et peignez-la sur les cellules (clic ou glisser). Une fenêtre peut couvrir plusieurs cellules adjacentes - elle est étirée sur ce bloc. Chaque écran a sa propre grille."
 main_screen_n:
   en: "Screen %{n}"
   nl: "Scherm %{n}"
@@ -1109,6 +1109,26 @@ main_empty:
   nl: "Leeg"
   de: "Leer"
   fr: "Vide"
+main_grid_size:
+  en: "Grid:"
+  nl: "Raster:"
+  de: "Raster:"
+  fr: "Grille :"
+main_pick_window:
+  en: "Window (click to select, then paint into the grid):"
+  nl: "Venster (klik om te kiezen, schilder dan in het raster):"
+  de: "Fenster (zum Auswählen klicken, dann ins Raster malen):"
+  fr: "Fenêtre (cliquez pour choisir, puis peignez dans la grille) :"
+main_place_hint:
+  en: "Click a cell, or drag to fill a rectangle. Right-click or click again to clear."
+  nl: "Klik een cel, of sleep om een rechthoek te vullen. Rechtsklik of nogmaals klikken wist."
+  de: "Zelle anklicken oder ziehen, um ein Rechteck zu füllen. Rechtsklick oder erneut klicken löscht."
+  fr: "Cliquez une cellule, ou glissez pour remplir un rectangle. Clic droit ou nouveau clic pour effacer."
+main_window_label:
+  en: "Main"
+  nl: "Hoofd"
+  de: "Haupt"
+  fr: "Principal"
 main_hover_popouts_split_joined:
   en: "Popouts split / joined."
   nl: "Pop-outs gesplitst / samengevoegd."

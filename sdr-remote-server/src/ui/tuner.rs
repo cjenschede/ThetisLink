@@ -29,13 +29,13 @@ pub(super) fn render_tuner_panel(
         let can_start = status.connected
             && (status.state == tuner::TUNER_IDLE
                 || status.state == tuner::TUNER_DONE_OK);
-        let (tune_color, tune_text) = match status.state {
-            tuner::TUNER_TUNING => (Color32::from_rgb(60, 120, 220), "Tune..."),
-            tuner::TUNER_DONE_OK if !status.stale => (Color32::from_rgb(50, 180, 50), "Tune OK"),
-            tuner::TUNER_DONE_OK => (Color32::from_rgb(80, 80, 80), "Tune"), // stale: VFO moved
-            tuner::TUNER_TIMEOUT => (amber, "Tune X"),
-            tuner::TUNER_ABORTED => (amber, "Tune X"),
-            _ => (Color32::from_rgb(80, 80, 80), "Tune"),
+        let (tune_color, tune_text): (Color32, String) = match status.state {
+            tuner::TUNER_TUNING => (Color32::from_rgb(60, 120, 220), rust_i18n::t!("srv_tune_ing").to_string()),
+            tuner::TUNER_DONE_OK if !status.stale => (Color32::from_rgb(50, 180, 50), rust_i18n::t!("srv_tune_ok").to_string()),
+            tuner::TUNER_DONE_OK => (Color32::from_rgb(80, 80, 80), rust_i18n::t!("srv_tune").to_string()), // stale: VFO moved
+            tuner::TUNER_TIMEOUT => (amber, rust_i18n::t!("srv_tune_x").to_string()),
+            tuner::TUNER_ABORTED => (amber, rust_i18n::t!("srv_tune_x").to_string()),
+            _ => (Color32::from_rgb(80, 80, 80), rust_i18n::t!("srv_tune").to_string()),
         };
         let btn = egui::Button::new(RichText::new(tune_text).color(Color32::WHITE).strong())
             .fill(tune_color);
@@ -46,30 +46,30 @@ pub(super) fn render_tuner_panel(
 
         // Abort button
         let abort_enabled = status.state == tuner::TUNER_TUNING;
-        if ui.add_enabled(abort_enabled, egui::Button::new("Abort")).clicked() {
+        if ui.add_enabled(abort_enabled, egui::Button::new(rust_i18n::t!("srv_abort").to_string())).clicked() {
             tuner.send_command(crate::tuner::TunerCmd::AbortTune);
         }
 
         // Status text
         match status.state {
             tuner::TUNER_TUNING => {
-                ui.colored_label(Color32::from_rgb(60, 120, 220), "Tuning...");
+                ui.colored_label(Color32::from_rgb(60, 120, 220), rust_i18n::t!("srv_tuning").to_string());
             }
             tuner::TUNER_DONE_OK => {
-                ui.colored_label(Color32::GREEN, "Done");
+                ui.colored_label(Color32::GREEN, rust_i18n::t!("srv_done").to_string());
             }
             tuner::TUNER_TIMEOUT => {
-                ui.colored_label(Color32::from_rgb(255, 80, 80), "Timeout");
+                ui.colored_label(Color32::from_rgb(255, 80, 80), rust_i18n::t!("srv_timeout").to_string());
             }
             tuner::TUNER_ABORTED => {
-                ui.colored_label(amber, "Aborted");
+                ui.colored_label(amber, rust_i18n::t!("srv_aborted").to_string());
             }
             _ => {}
         }
 
         // Log checkbox at right
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.checkbox(show_log, "Log");
+            ui.checkbox(show_log, rust_i18n::t!("srv_log_cb").to_string());
         });
     });
 }

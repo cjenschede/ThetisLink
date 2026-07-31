@@ -430,13 +430,21 @@ pub struct SdrRemoteApp {
     // eigen popout-viewport, onafhankelijk te plaatsen (zoals RX1/RX2).
     vrx1_popout: bool,
     vrx2_popout: bool,
-    // "Vensters schikken" sleepraster: open venster (show_layout_arranger) + de
-    // rijen-indeling die de gebruiker samenstelt (rij = naast elkaar, meer rijen
-    // = onder elkaar). Alleen sessie-state, niet persistent.
+    // "Vensters schikken" matrix-plaatser: open venster (show_layout_arranger) +
+    // een raster PER monitor waarin je vensters over cellen "schildert". Alleen
+    // sessie-state, niet persistent.
     show_layout_arranger: bool,
-    /// Rijen-indeling PER monitor (index = monitor). Je kiest een scherm in de
-    /// dropdown en sleept daar kanalen in; "Toepassen" snapt elk scherm apart.
-    layout_rows_per_monitor: Vec<Vec<Vec<SnapWindow>>>,
+    /// Plaatsings-matrix PER monitor (index = monitor). Je kiest een scherm, een
+    /// rasterformaat (bv. 2x3) en schildert de open vensters in de cellen;
+    /// "Toepassen" snapt elk venster over zijn omhullende cel-rechthoek.
+    layout_grid_per_monitor: Vec<LayoutGrid>,
+    /// Het momenteel geselecteerde venster in het palet (wordt geschilderd bij
+    /// klikken/slepen in het raster). None = niets geselecteerd (alleen wissen).
+    layout_active_item: Option<SnapWindow>,
+    /// Ankercel van een lopende rechthoek-sleep in het plaatsingsraster (eerste
+    /// cel waar de sleep begon); bij loslaten wordt het hele blok anker..huidig
+    /// gevuld met het actieve venster. None = geen sleep bezig.
+    layout_drag_anchor: Option<(usize, usize)>,
     /// Doelmonitor voor "Toepassen" (index in monitor_work_areas_px). Default =
     /// de monitor waar het hoofdvenster staat; overrulebaar in het Schik-venster.
     layout_target_monitor: usize,
@@ -1047,10 +1055,11 @@ impl VrxChannel {
     }
 }
 
-/// Een popout-venster dat door de "Vensters schikken"-sleepraster op het scherm
-/// gesnapt kan worden. DnD-payload (Copy, dus Send+Sync+'static).
+/// Een venster dat door de "Vensters schikken"-matrix op het scherm gesnapt
+/// kan worden. `Main` = het hoofdvenster (root-viewport); de rest zijn popouts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SnapWindow {
+    Main,
     Rx1,
     Rx2,
     Vrx1,
@@ -1059,19 +1068,114 @@ pub(crate) enum SnapWindow {
     Yaesu2,
 }
 impl SnapWindow {
-    const ALL: [SnapWindow; 6] = [
-        SnapWindow::Rx1, SnapWindow::Rx2, SnapWindow::Vrx1,
+    const ALL: [SnapWindow; 7] = [
+        SnapWindow::Main, SnapWindow::Rx1, SnapWindow::Rx2, SnapWindow::Vrx1,
         SnapWindow::Vrx2, SnapWindow::Yaesu1, SnapWindow::Yaesu2,
     ];
-    fn label(self) -> &'static str {
+    /// Korte cel-label. `Main` heeft een i18n-tekst; de rest zijn productnamen.
+    fn label(self) -> String {
         match self {
-            SnapWindow::Rx1 => "RX1",
-            SnapWindow::Rx2 => "RX2",
-            SnapWindow::Vrx1 => "VRX1",
-            SnapWindow::Vrx2 => "VRX2",
-            SnapWindow::Yaesu1 => "Yaesu 1",
-            SnapWindow::Yaesu2 => "Yaesu 2",
+            SnapWindow::Main => rust_i18n::t!("main_window_label").to_string(),
+            SnapWindow::Rx1 => "RX1".to_string(),
+            SnapWindow::Rx2 => "RX2".to_string(),
+            SnapWindow::Vrx1 => "VRX1".to_string(),
+            SnapWindow::Vrx2 => "VRX2".to_string(),
+            SnapWindow::Yaesu1 => "Yaesu 1".to_string(),
+            SnapWindow::Yaesu2 => "Yaesu 2".to_string(),
         }
+    }
+    /// Stabiele ASCII-sleutel voor egui-Id's (label() is vertaald/instabiel).
+    fn key(self) -> &'static str {
+        match self {
+            SnapWindow::Main => "main",
+            SnapWindow::Rx1 => "rx1",
+            SnapWindow::Rx2 => "rx2",
+            SnapWindow::Vrx1 => "vrx1",
+            SnapWindow::Vrx2 => "vrx2",
+            SnapWindow::Yaesu1 => "yaesu1",
+            SnapWindow::Yaesu2 => "yaesu2",
+        }
+    }
+    /// Vulkleur van dit venster in de plaatsings-matrix (onderscheidbaar per venster).
+    fn color(self) -> Color32 {
+        match self {
+            SnapWindow::Main => Color32::from_rgb(70, 110, 175),
+            SnapWindow::Rx1 => Color32::from_rgb(60, 140, 95),
+            SnapWindow::Rx2 => Color32::from_rgb(95, 155, 70),
+            SnapWindow::Vrx1 => Color32::from_rgb(160, 115, 55),
+            SnapWindow::Vrx2 => Color32::from_rgb(175, 145, 60),
+            SnapWindow::Yaesu1 => Color32::from_rgb(145, 80, 140),
+            SnapWindow::Yaesu2 => Color32::from_rgb(115, 90, 165),
+        }
+    }
+}
+
+/// Maximaal rasterformaat in de "Vensters schikken"-matrix (GRID_MAX x GRID_MAX).
+const GRID_MAX: usize = 12;
+
+/// Eén plaatsings-matrix (per monitor): raster van `rows` x `cols` cellen; elke
+/// cel bevat maximaal één venster. Een venster dat meerdere aangrenzende cellen
+/// beslaat wordt bij "Toepassen" over zijn omhullende rechthoek uitgerekt.
+#[derive(Clone)]
+pub(crate) struct LayoutGrid {
+    rows: u8, // 1..=GRID_MAX
+    cols: u8, // 1..=GRID_MAX
+    cells: Vec<Option<SnapWindow>>, // rows*cols, rij-voor-rij
+}
+impl LayoutGrid {
+    fn new() -> Self {
+        Self { rows: 2, cols: 2, cells: vec![None; 4] }
+    }
+    /// Herformatteer naar rows x cols; behoud toewijzingen die nog binnen het
+    /// nieuwe raster vallen.
+    fn set_size(&mut self, rows: u8, cols: u8) {
+        let rows = rows.clamp(1, GRID_MAX as u8);
+        let cols = cols.clamp(1, GRID_MAX as u8);
+        if rows == self.rows && cols == self.cols { return; }
+        let mut cells = vec![None; rows as usize * cols as usize];
+        for r in 0..self.rows.min(rows) as usize {
+            for c in 0..self.cols.min(cols) as usize {
+                cells[r * cols as usize + c] = self.cells[r * self.cols as usize + c];
+            }
+        }
+        self.rows = rows;
+        self.cols = cols;
+        self.cells = cells;
+    }
+    fn cell(&self, r: usize, c: usize) -> Option<SnapWindow> {
+        self.cells.get(r * self.cols as usize + c).copied().flatten()
+    }
+    fn set(&mut self, r: usize, c: usize, w: Option<SnapWindow>) {
+        if let Some(slot) = self.cells.get_mut(r * self.cols as usize + c) {
+            *slot = w;
+        }
+    }
+    /// Verwijder een venster uit alle cellen van dit raster.
+    fn remove(&mut self, w: SnapWindow) {
+        for slot in self.cells.iter_mut() {
+            if *slot == Some(w) { *slot = None; }
+        }
+    }
+    /// Omhullende rechthoek (min_r, min_c, max_r, max_c) van een venster, of None.
+    fn bounds(&self, w: SnapWindow) -> Option<(usize, usize, usize, usize)> {
+        let (mut minr, mut minc, mut maxr, mut maxc) = (usize::MAX, usize::MAX, 0, 0);
+        let mut found = false;
+        for r in 0..self.rows as usize {
+            for c in 0..self.cols as usize {
+                if self.cell(r, c) == Some(w) {
+                    found = true;
+                    minr = minr.min(r); minc = minc.min(c);
+                    maxr = maxr.max(r); maxc = maxc.max(c);
+                }
+            }
+        }
+        if found { Some((minr, minc, maxr, maxc)) } else { None }
+    }
+    /// Alle verschillende vensters in dit raster (in ALL-volgorde).
+    fn placed(&self) -> Vec<SnapWindow> {
+        SnapWindow::ALL.iter().copied()
+            .filter(|w| self.cells.contains(&Some(*w)))
+            .collect()
     }
 }
 
@@ -1156,7 +1260,7 @@ impl SdrRemoteApp {
             self.render_vrx_channel_controls_inner(&mut measure, ch, ddc_center, ddc_min, ddc_max);
             let controls_h = measure.min_rect().height();
             // Meter rechts, controls links; laat minstens ~260px voor de controls.
-            let meter_w = (total_w - 260.0).max(0.0).min(controls_h * 2.0);
+            let meter_w = (total_w - 260.0).max(0.0).min(controls_h * SMETER_VIS_ASPECT);
             let controls_w = total_w - meter_w - if meter_w > 0.0 { 8.0 } else { 0.0 };
             let controls_rect = egui::Rect::from_min_size(start, egui::vec2(controls_w, 500.0));
             let mut left = ui.new_child(egui::UiBuilder::new().max_rect(controls_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
@@ -1166,7 +1270,7 @@ impl SdrRemoteApp {
                 let meter_pos = egui::pos2(start.x + controls_w + 4.0, start.y);
                 let meter_rect = egui::Rect::from_min_size(meter_pos, egui::vec2(meter_w, controls_h));
                 let mut right = ui.new_child(egui::UiBuilder::new().max_rect(meter_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
-                mrect = smeter_analog_sized(&mut right, smeter, smeter_peak, false, false, Some((meter_w, controls_h.min(140.0))));
+                mrect = smeter_analog_sized(&mut right, smeter, smeter_peak, false, false, Some((meter_w, controls_h.min(180.0))));
             }
             ui.advance_cursor_after_rect(egui::Rect::from_min_size(start, egui::vec2(total_w, controls_h)));
             self.meter_click(ui, mrect, meter_ch);
@@ -2087,7 +2191,7 @@ impl SdrRemoteApp {
             down_kbps: 0,
             up_kbps: 0,
             bw_breakdown: Vec::new(),
-            bw_breakdown_expanded: false,
+            bw_breakdown_expanded: config.bw_breakdown_expanded,
             loss_percent: 0,
             capture_level: 0.0,
             playback_level: 0.0,
@@ -2184,7 +2288,9 @@ impl SdrRemoteApp {
             vrx1_popout: false,
             vrx2_popout: false,
             show_layout_arranger: false,
-            layout_rows_per_monitor: Vec::new(),
+            layout_grid_per_monitor: Vec::new(),
+            layout_active_item: None,
+            layout_drag_anchor: None,
             layout_target_monitor: 0,
             vrx1_enabled: config.vrx1_enabled.unwrap_or(false),
             vrx1_freq_hz: config.vrx1_freq_hz.unwrap_or(0),
@@ -2289,7 +2395,7 @@ impl SdrRemoteApp {
             amplitec_power_loaded: false,
             amplitec_power_edit_max_w: [0; 6],
             amplitec_power_edit_tx_blocked: [false; 6],
-            amplitec_power_show: false,
+            amplitec_power_show: config.amplitec_power_show,
             websdr_favorite_editing: None,
             tuner_available: false,
             tuner_connected: false,
@@ -2437,7 +2543,7 @@ impl SdrRemoteApp {
             yaesu2_eq_active_profile: config.yaesu2_eq_active.clone(),
             yaesu2_eq_new_name: String::new(),
             collapse_yaesu2_eq: false,
-            collapse_yaesu2_memories: false,
+            collapse_yaesu2_memories: config.collapse_yaesu2_memories,
             yaesu2_control_changed_at: None,
             yaesu2_volume: config.yaesu2_volume,
             yaesu2_enabled: config.yaesu2_enabled,
@@ -2538,7 +2644,7 @@ impl SdrRemoteApp {
             yaesu_menu_received: false,
             yaesu2_menu_entries: Vec::new(),
             yaesu2_menu_received: false,
-            collapse_yaesu2_menu: false,
+            collapse_yaesu2_menu: config.collapse_yaesu2_menu,
             yaesu2_menu_edits: std::collections::HashMap::new(),
             yaesu2_menu_filter: String::new(),
             rotor_goto_input: String::new(),
@@ -2812,15 +2918,57 @@ impl SdrRemoteApp {
         log::info!("Pop-out windows recentered onto main monitor at {:?}", base);
     }
 
-    /// Is dit popout-venster momenteel open (en dus snap-baar)?
-    fn snap_is_open(&self, w: SnapWindow) -> bool {
+    /// Is dit venster BESCHIKBAAR om te schikken (server-configuratie), los van
+    /// of het momenteel open/actief is? Dezelfde gates als de werkbalk: RX/VRX
+    /// vereisen Thetis, RX2/VRX2 een tweede ontvanger, Yaesu de presence van die
+    /// radio. Zo kun je ook een nog-uitgeschakeld venster in de matrix plaatsen.
+    fn snap_is_available(&self, w: SnapWindow) -> bool {
         match w {
-            SnapWindow::Rx1 => self.spectrum_popout && self.thetis_configured,
-            SnapWindow::Rx2 => self.rx2_popout,
-            SnapWindow::Vrx1 => self.vrx1_popout,
-            SnapWindow::Vrx2 => self.vrx2_popout,
-            SnapWindow::Yaesu1 => self.yaesu_popout && (self.yaesu_enabled || self.yaesu_connected),
-            SnapWindow::Yaesu2 => self.yaesu2_popout && (self.yaesu2_enabled || self.yaesu2_connected),
+            SnapWindow::Main => true,
+            SnapWindow::Rx1 => self.thetis_configured,
+            SnapWindow::Rx2 => self.thetis_configured && self.rx2_present,
+            SnapWindow::Vrx1 => self.thetis_configured,
+            SnapWindow::Vrx2 => self.thetis_configured && self.rx2_present,
+            SnapWindow::Yaesu1 => self.yaesu_connected,
+            SnapWindow::Yaesu2 => self.yaesu2_connected,
+        }
+    }
+
+    /// Zorg dat dit venster daadwerkelijk open/zichtbaar is - mirror van de
+    /// werkbalk-toggles - zodat een via de matrix geplaatst maar nog-dicht
+    /// venster na "Toepassen" ook echt verschijnt. Guards zorgen dat een reeds
+    /// actief abonnement niet opnieuw wordt aangezet.
+    fn snap_open(&mut self, w: SnapWindow) {
+        match w {
+            SnapWindow::Main => {} // altijd open
+            SnapWindow::Rx1 => {
+                if !self.spectrum_enabled {
+                    self.spectrum_enabled = true;
+                    let _ = self.cmd_tx.send(Command::EnableSpectrum(true));
+                }
+                self.spectrum_popout = true;
+                self.spectrum_popout_init_applied = false;
+            }
+            SnapWindow::Rx2 => {
+                if !self.rx2_spectrum_enabled {
+                    self.rx2_spectrum_enabled = true;
+                    let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(true));
+                    self.rx2_last_sent_zoom = 0.0;
+                    self.rx2_last_sent_pan = 0.0;
+                    self.rx2_zoom_pan_changed_at = Some(Instant::now());
+                }
+                self.rx2_popout = true;
+                self.rx2_popout_init_applied = false;
+            }
+            // toggle_vrx_spectrum zet zelf popout + init + abonnement goed.
+            SnapWindow::Vrx1 => {
+                if !self.vrx1_high_res_spectrum { self.toggle_vrx_spectrum(VrxChannel::Vrx1); }
+            }
+            SnapWindow::Vrx2 => {
+                if !self.vrx2_high_res_spectrum { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
+            }
+            SnapWindow::Yaesu1 => { self.yaesu_popout = true; self.yaesu_popout_init_applied = false; }
+            SnapWindow::Yaesu2 => { self.yaesu2_popout = true; self.yaesu2_popout_init_applied = false; }
         }
     }
 
@@ -2830,6 +2978,9 @@ impl SdrRemoteApp {
     /// (apply_layout) doet één save aan het eind.
     fn snap_set_geometry(&mut self, w: SnapWindow, pos: egui::Pos2, size: egui::Vec2) {
         match w {
+            // Het hoofdvenster (root-viewport) wordt niet via popout-pos-velden
+            // gezet maar via ViewportCommand in apply_layout (heeft ctx nodig).
+            SnapWindow::Main => {}
             SnapWindow::Rx1 => { self.spectrum_popout_pos = Some(pos); self.spectrum_popout_size = Some(size); self.spectrum_popout_init_applied = false; }
             SnapWindow::Rx2 => { self.rx2_popout_pos = Some(pos); self.rx2_popout_size = Some(size); self.rx2_popout_init_applied = false; }
             SnapWindow::Vrx1 => { self.vrx_popout_pos = Some(pos); self.vrx_popout_size = Some(size); self.vrx_popout_init_applied = false; }
@@ -2857,21 +3008,20 @@ impl SdrRemoteApp {
         0
     }
 
-    /// Snap de vensters uit layout_rows op het scherm: rijen even hoog, binnen
-    /// een rij de vensters even breed. Doelscherm = de gekozen monitor (Schik-
-    /// venster), default de monitor waar het hoofdvenster staat.
+    /// Snap de vensters uit de plaatsings-matrices op het scherm. Elk venster
+    /// wordt over zijn omhullende cel-rechthoek uitgerekt (rows x cols raster
+    /// per monitor). Het hoofdvenster wordt via ViewportCommand verplaatst; de
+    /// popouts via snap_set_geometry.
     fn apply_layout(&mut self, ctx: &egui::Context) {
         let ppp = Self::viewport_native_ppp(ctx).max(0.1);
         let areas = window_placement::monitor_work_areas_px();
-        // Kloon de per-monitor rijen zodat we ondertussen self mutably mogen
-        // aanroepen (snap_set_geometry).
-        let per_mon: Vec<Vec<Vec<SnapWindow>>> = self.layout_rows_per_monitor.clone();
+        let per_mon: Vec<LayoutGrid> = self.layout_grid_per_monitor.clone();
         const TITLE_H: f32 = 36.0;
         const GAP: f32 = 4.0;
-        let mut screens_done = 0usize;
-        for (m, mon_rows) in per_mon.iter().enumerate() {
-            let rows: Vec<&Vec<SnapWindow>> = mon_rows.iter().filter(|r| !r.is_empty()).collect();
-            if rows.is_empty() { continue; }
+        let mut placed_total = 0usize;
+        for (m, grid) in per_mon.iter().enumerate() {
+            let placed = grid.placed();
+            if placed.is_empty() { continue; }
             // Werkgebied van monitor m in punten; scherm 0 valt terug op het egui-scherm.
             let (ax, ay, aw, ah) = match areas.as_ref().and_then(|list| list.get(m).copied()) {
                 Some(a) => (
@@ -2886,162 +3036,311 @@ impl SdrRemoteApp {
                 }
                 None => continue,
             };
-            let n_rows = rows.len() as f32;
-            let row_h = ah / n_rows;
-            for (ri, row) in rows.iter().enumerate() {
-                let n_cols = row.len() as f32;
-                let col_w = aw / n_cols;
-                for (ci, w) in row.iter().enumerate() {
-                    let x = ax + col_w * ci as f32;
-                    let y = ay + row_h * ri as f32;
-                    let iw = (col_w - GAP).max(200.0);
-                    let ih = (row_h - TITLE_H).max(120.0);
-                    self.snap_set_geometry(*w, egui::pos2(x, y), egui::vec2(iw, ih));
+            let col_w = aw / grid.cols as f32;
+            let row_h = ah / grid.rows as f32;
+            for w in placed {
+                let Some((minr, minc, maxr, maxc)) = grid.bounds(w) else { continue };
+                // Open het venster eerst (indien nog dicht) zodat de snap zichtbaar
+                // wordt - je kunt ook uitgeschakelde vensters in de matrix plaatsen.
+                self.snap_open(w);
+                let span_c = (maxc - minc + 1) as f32;
+                let span_r = (maxr - minr + 1) as f32;
+                let x = ax + col_w * minc as f32;
+                let y = ay + row_h * minr as f32;
+                let iw = (col_w * span_c - GAP).max(200.0);
+                let ih = (row_h * span_r - TITLE_H).max(120.0);
+                if w == SnapWindow::Main {
+                    // Root-viewport: direct verplaatsen + herbewaren. window_h
+                    // is de client-hoogte (excl. titelbalk), net als de popouts.
+                    self.main_window_pos = Some(egui::pos2(x, y));
+                    self.window_w = iw;
+                    self.window_h = ih;
+                    self.main_geom_dirty = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(iw, ih)));
+                } else {
+                    self.snap_set_geometry(w, egui::pos2(x, y), egui::vec2(iw, ih));
                 }
+                placed_total += 1;
             }
-            screens_done += 1;
         }
-        if screens_done > 0 {
+        if placed_total > 0 {
             self.save_full_config();
-            log::info!("Layout toegepast over {} scherm(en)", screens_done);
+            log::info!("Layout toegepast: {} venster(s) gesnapt", placed_total);
         }
     }
 
-    /// "Vensters schikken" - sleepraster. Voorraad (open, niet-geplaatste vensters)
-    /// + rijen; sleep een venster in een rij (naast elkaar), meer rijen = onder
-    /// elkaar. "Toepassen" snapt ze op het scherm.
+    /// "Vensters schikken" - matrix-plaatser. Kies een rasterformaat (bv. 2x3),
+    /// selecteer een venster uit het palet en schilder het over de cellen (klik
+    /// of sleep). Een venster mag meerdere aangrenzende cellen beslaan; het wordt
+    /// bij "Toepassen" over zijn omhullende rechthoek uitgerekt. Per monitor een
+    /// eigen raster.
     fn render_layout_arranger(&mut self, ctx: &egui::Context) {
         if !self.show_layout_arranger { return; }
 
-        // Eén rijen-set per monitor (index = monitor), minstens 1 rij per scherm.
+        // Eén raster per monitor (index = monitor).
         let n_monitors = window_placement::monitor_work_areas_px()
             .map(|a| a.len()).unwrap_or(1).max(1);
-        if self.layout_rows_per_monitor.len() < n_monitors {
-            self.layout_rows_per_monitor.resize(n_monitors, Vec::new());
-        }
-        for mon in self.layout_rows_per_monitor.iter_mut() {
-            if mon.is_empty() { mon.push(Vec::new()); }
+        if self.layout_grid_per_monitor.len() < n_monitors {
+            self.layout_grid_per_monitor.resize_with(n_monitors, LayoutGrid::new);
         }
         if self.layout_target_monitor >= n_monitors { self.layout_target_monitor = 0; }
 
-        // Gesloten vensters uit ALLE schermen verwijderen (niet snap-baar).
-        let open: Vec<SnapWindow> =
-            SnapWindow::ALL.iter().copied().filter(|w| self.snap_is_open(*w)).collect();
-        for mon in self.layout_rows_per_monitor.iter_mut() {
-            for row in mon.iter_mut() { row.retain(|w| open.contains(w)); }
+        // Niet-beschikbare vensters (bv. Yaesu 2 afwezig) uit ALLE rasters + de
+        // actieve selectie verwijderen.
+        let avail: Vec<SnapWindow> =
+            SnapWindow::ALL.iter().copied().filter(|w| self.snap_is_available(*w)).collect();
+        for grid in self.layout_grid_per_monitor.iter_mut() {
+            for slot in grid.cells.iter_mut() {
+                if let Some(w) = *slot { if !avail.contains(&w) { *slot = None; } }
+            }
         }
-        // Geplaatst = op WELK scherm dan ook; voorraad = de rest.
-        let placed: Vec<SnapWindow> =
-            self.layout_rows_per_monitor.iter().flatten().flatten().copied().collect();
-        let palette: Vec<SnapWindow> =
-            open.iter().copied().filter(|w| !placed.contains(w)).collect();
+        if let Some(a) = self.layout_active_item {
+            if !avail.contains(&a) { self.layout_active_item = None; }
+        }
 
-        // Chip-tekenaar (framed label) - inhoud van een drag-source.
-        fn chip(ui: &mut egui::Ui, label: &str) {
-            egui::Frame::default()
-                .fill(theme::TL_SELECTED_FILL)
-                .inner_margin(egui::vec2(6.0, 3.0))
-                .rounding(egui::Rounding::same(4.0))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(label).size(12.0).color(Color32::WHITE));
-                });
-        }
+        let cur_mon = self.layout_target_monitor
+            .min(self.layout_grid_per_monitor.len().saturating_sub(1));
+        // Momentopname voor het tekenen; alle mutaties worden na de closure gedaan.
+        let gsnap = self.layout_grid_per_monitor[cur_mon].clone();
+        let active = self.layout_active_item;
+        let drag_anchor = self.layout_drag_anchor;
 
         let mut open_flag = self.show_layout_arranger;
-        // (venster, doel) waar doel = None (voorraad) of Some(rij-index).
-        let mut pending: Option<(SnapWindow, Option<usize>)> = None;
-        let mut add_row = false;
-        let mut clear = false;
+        let mut sel_mon = cur_mon;
+        let mut resize_to: Option<(u8, u8)> = None;
+        let mut paint_cell: Option<(usize, usize)> = None; // schilder `active` in cel
+        let mut clear_cell: Option<(usize, usize)> = None; // maak cel leeg
+        let mut select: Option<Option<SnapWindow>> = None; // palet-selectie wijzigen
+        let mut set_anchor: Option<Option<(usize, usize)>> = None; // sleep-anker zetten/wissen
+        let mut fill_rect: Option<((usize, usize), (usize, usize))> = None; // rechthoek vullen
+        let mut clear_all = false;
         let mut do_apply = false;
 
         egui::Window::new(rust_i18n::t!("main_arrange_windows_title").to_string())
             .open(&mut open_flag)
             .resizable(true)
-            .default_size([380.0, 340.0])
+            .default_size([360.0, 560.0])
             .show(ctx, |ui| {
+              egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                 ui.label(RichText::new(
                     rust_i18n::t!("main_arrange_windows_help").to_string()
                 ).size(11.0).weak());
-                ui.add_space(4.0);
+                ui.add_space(6.0);
 
-                // Scherm-keuze (alleen tonen bij meerdere monitoren).
+                // Scherm-keuze (alleen bij meerdere monitoren).
                 if let Some(areas) = window_placement::monitor_work_areas_px() {
                     if areas.len() > 1 {
-                        if self.layout_target_monitor >= areas.len() { self.layout_target_monitor = 0; }
                         ui.horizontal(|ui| {
                             ui.label(rust_i18n::t!("screen").to_string());
                             egui::ComboBox::from_id_source("layout_monitor")
-                                .selected_text(rust_i18n::t!("main_screen_n", n = self.layout_target_monitor + 1).to_string())
+                                .selected_text(rust_i18n::t!("main_screen_n", n = sel_mon + 1).to_string())
                                 .show_ui(ui, |ui| {
                                     for i in 0..areas.len() {
-                                        ui.selectable_value(&mut self.layout_target_monitor, i, rust_i18n::t!("main_screen_n", n = i + 1).to_string());
+                                        ui.selectable_value(&mut sel_mon, i, rust_i18n::t!("main_screen_n", n = i + 1).to_string());
                                     }
                                 });
                         });
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
                     }
                 }
 
-                ui.label(rust_i18n::t!("main_stock_open_windows").to_string());
-                let (_, dropped) = ui.dnd_drop_zone::<SnapWindow, _>(
-                    egui::Frame::default().inner_margin(4.0), |ui| {
-                        ui.set_min_height(28.0);
-                        ui.horizontal_wrapped(|ui| {
-                            if palette.is_empty() { ui.weak(rust_i18n::t!("main_all_placed").to_string()); }
-                            for w in &palette {
-                                ui.dnd_drag_source(egui::Id::new(("pal", w.label())), *w, |ui| chip(ui, w.label()));
-                            }
-                        });
+                // --- Rasterformaat-kiezer (tot GRID_MAX x GRID_MAX; hover/klik) ---
+                const MAXG: usize = GRID_MAX;
+                const PCELL: f32 = 15.0;
+                const PGAP: f32 = 2.0;
+                let dim = PCELL * MAXG as f32 + PGAP * (MAXG as f32 - 1.0);
+                ui.horizontal(|ui| {
+                    ui.label(rust_i18n::t!("main_grid_size").to_string());
+                    let (prect, presp) =
+                        ui.allocate_exact_size(egui::vec2(dim, dim), egui::Sense::click());
+                    let hover = presp.hover_pos().map(|p| {
+                        let c = (((p.x - prect.min.x) / (PCELL + PGAP)) as i32).clamp(0, MAXG as i32 - 1) as usize;
+                        let r = (((p.y - prect.min.y) / (PCELL + PGAP)) as i32).clamp(0, MAXG as i32 - 1) as usize;
+                        (r, c)
                     });
-                if let Some(w) = dropped { pending = Some((*w, None)); }
+                    let pnt = ui.painter_at(prect);
+                    for r in 0..MAXG {
+                        for c in 0..MAXG {
+                            let cr = egui::Rect::from_min_size(
+                                prect.min + egui::vec2(c as f32 * (PCELL + PGAP), r as f32 * (PCELL + PGAP)),
+                                egui::vec2(PCELL, PCELL),
+                            );
+                            let preview = hover.map_or(false, |(hr, hc)| r <= hr && c <= hc);
+                            let cur = r < gsnap.rows as usize && c < gsnap.cols as usize;
+                            let fill = if preview {
+                                theme::TL_SELECTED_FILL
+                            } else if cur {
+                                Color32::from_gray(80)
+                            } else {
+                                Color32::from_gray(45)
+                            };
+                            pnt.rect_filled(cr, egui::Rounding::same(2.0), fill);
+                            pnt.rect_stroke(cr, egui::Rounding::same(2.0), egui::Stroke::new(1.0, Color32::from_gray(100)));
+                        }
+                    }
+                    if let Some((hr, hc)) = hover {
+                        if presp.clicked() { resize_to = Some((hr as u8 + 1, hc as u8 + 1)); }
+                    }
+                    let (lr, lc) = hover
+                        .map(|(r, c)| (r + 1, c + 1))
+                        .unwrap_or((gsnap.rows as usize, gsnap.cols as usize));
+                    ui.label(RichText::new(format!("{} x {}", lr, lc)).strong());
+                });
 
                 ui.add_space(6.0);
                 ui.separator();
 
-                let cur_mon = self.layout_target_monitor;
-                for (ri, row) in self.layout_rows_per_monitor[cur_mon].iter().enumerate() {
-                    let (_, dropped) = ui.dnd_drop_zone::<SnapWindow, _>(
-                        egui::Frame::group(ui.style()), |ui| {
-                            ui.set_min_height(30.0);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(rust_i18n::t!("main_row_n", n = ri + 1).to_string()).size(11.0).strong());
-                                if row.is_empty() { ui.weak(rust_i18n::t!("main_drag_here").to_string()); }
-                                for w in row {
-                                    ui.dnd_drag_source(egui::Id::new(("row", cur_mon, ri, w.label())), *w, |ui| chip(ui, w.label()));
-                                }
-                            });
-                        });
-                    if let Some(w) = dropped { pending = Some((*w, Some(ri))); }
-                }
-
-                if ui.button(rust_i18n::t!("main_add_row").to_string()).clicked() { add_row = true; }
+                // --- Palet: open vensters als gekleurde knoppen (klik = selecteren) ---
+                ui.label(rust_i18n::t!("main_pick_window").to_string());
+                ui.horizontal_wrapped(|ui| {
+                    for w in &avail {
+                        let is_active = active == Some(*w);
+                        let txt = RichText::new(w.label()).size(12.0).color(Color32::WHITE);
+                        let mut btn = egui::Button::new(txt)
+                            .fill(w.color())
+                            .rounding(egui::Rounding::same(4.0));
+                        if is_active {
+                            btn = btn.stroke(egui::Stroke::new(2.0, Color32::WHITE));
+                        }
+                        if ui.add(btn).clicked() {
+                            select = Some(if is_active { None } else { Some(*w) });
+                        }
+                    }
+                });
 
                 ui.add_space(6.0);
+                ui.separator();
+
+                // --- Plaatsings-raster: klik/sleep om `active` te schilderen ---
+                ui.label(rust_i18n::t!("main_place_hint").to_string());
+                let cols = gsnap.cols as usize;
+                let rows = gsnap.rows as usize;
+                let avail = ui.available_width().clamp(120.0, 380.0);
+                let cell = (avail / cols as f32).clamp(22.0, 88.0);
+                let gw = cell * cols as f32;
+                let gh = cell * rows as f32;
+                let (grect, gresp) =
+                    ui.allocate_exact_size(egui::vec2(gw, gh), egui::Sense::click_and_drag());
+                let gp = ui.painter_at(grect);
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let cr = egui::Rect::from_min_size(
+                            grect.min + egui::vec2(c as f32 * cell, r as f32 * cell),
+                            egui::vec2(cell, cell),
+                        ).shrink(1.5);
+                        let w = gsnap.cell(r, c);
+                        let fill = w.map(|w| w.color()).unwrap_or(Color32::from_gray(48));
+                        gp.rect_filled(cr, egui::Rounding::same(3.0), fill);
+                        gp.rect_stroke(cr, egui::Rounding::same(3.0), egui::Stroke::new(1.0, Color32::from_gray(100)));
+                        if let Some(w) = w {
+                            gp.text(
+                                cr.center(),
+                                egui::Align2::CENTER_CENTER,
+                                w.label(),
+                                egui::FontId::proportional((cell * 0.22).clamp(9.0, 13.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                    }
+                }
+                // Cel onder de aanwijzer: `inside` = strikt binnen het raster
+                // (voor klik/rechtsklik); `clamped` = op de rand geklemd (voor
+                // slepen, zodat je voorbij de rand toch de randcel raakt).
+                let ptr = gresp.interact_pointer_pos();
+                let clamped = ptr.map(|p| {
+                    let c = (((p.x - grect.min.x) / cell) as i32).clamp(0, cols as i32 - 1) as usize;
+                    let r = (((p.y - grect.min.y) / cell) as i32).clamp(0, rows as i32 - 1) as usize;
+                    (r, c)
+                });
+                let inside = ptr.and_then(|p| {
+                    if !grect.contains(p) { return None; }
+                    let c = ((p.x - grect.min.x) / cell) as usize;
+                    let r = ((p.y - grect.min.y) / cell) as usize;
+                    if r < rows && c < cols { Some((r, c)) } else { None }
+                });
+                // Sleep-preview: rechthoek anker..huidig oplichten (translucent + rand).
+                if gresp.dragged() {
+                    if let (Some(a), Some(cur), Some(w)) = (drag_anchor, clamped, active) {
+                        let (r0, r1) = (a.0.min(cur.0), a.0.max(cur.0));
+                        let (c0, c1) = (a.1.min(cur.1), a.1.max(cur.1));
+                        let pr = egui::Rect::from_min_max(
+                            grect.min + egui::vec2(c0 as f32 * cell, r0 as f32 * cell),
+                            grect.min + egui::vec2((c1 + 1) as f32 * cell, (r1 + 1) as f32 * cell),
+                        ).shrink(1.5);
+                        gp.rect_filled(pr, egui::Rounding::same(3.0), w.color().gamma_multiply(0.55));
+                        gp.rect_stroke(pr, egui::Rounding::same(3.0), egui::Stroke::new(2.0, Color32::WHITE));
+                    }
+                }
+                // Interactie. Slepen = rechthoek vullen (anker -> loslaten); losse
+                // klik = 1 cel; rechtsklik / klik-op-actief = wissen.
+                if gresp.secondary_clicked() {
+                    if let Some((r, c)) = inside { clear_cell = Some((r, c)); }
+                } else if gresp.drag_started() {
+                    if active.is_some() {
+                        if let Some(cell_rc) = inside.or(clamped) { set_anchor = Some(Some(cell_rc)); }
+                    }
+                } else if gresp.drag_stopped() {
+                    if active.is_some() {
+                        if let Some(cur) = clamped {
+                            fill_rect = Some((drag_anchor.unwrap_or(cur), cur));
+                        }
+                    }
+                    set_anchor = Some(None);
+                } else if gresp.clicked() {
+                    if let Some((r, c)) = inside {
+                        match active {
+                            // klik op reeds-actief venster = die cel wissen (toggle)
+                            Some(a) if gsnap.cell(r, c) == Some(a) => clear_cell = Some((r, c)),
+                            Some(_) => paint_cell = Some((r, c)),
+                            // niets geselecteerd: klik op gevulde cel selecteert dat venster
+                            None => { if let Some(w) = gsnap.cell(r, c) { select = Some(Some(w)); } }
+                        }
+                    }
+                }
+
+                ui.add_space(8.0);
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(RichText::new(rust_i18n::t!("main_apply").to_string()).strong())
                         .fill(theme::TL_SELECTED_FILL)).clicked() { do_apply = true; }
-                    if ui.button(rust_i18n::t!("main_empty").to_string()).clicked() { clear = true; }
+                    if ui.button(rust_i18n::t!("main_empty").to_string()).clicked() { clear_all = true; }
                 });
+              }); // ScrollArea
             });
 
+        // --- Intenties toepassen op de state (na de closure) ---
         self.show_layout_arranger = open_flag;
-        let mon = self.layout_target_monitor.min(self.layout_rows_per_monitor.len().saturating_sub(1));
-        if clear {
-            self.layout_rows_per_monitor[mon].clear();
-            self.layout_rows_per_monitor[mon].push(Vec::new());
+        if sel_mon != cur_mon && sel_mon < self.layout_grid_per_monitor.len() {
+            self.layout_target_monitor = sel_mon;
         }
-        if add_row { self.layout_rows_per_monitor[mon].push(Vec::new()); }
-        if let Some((w, target)) = pending {
-            // Verwijder van ALLE schermen (één plek per venster), plaats dan in het
-            // doel op het HUIDIGE scherm (None = terug naar de voorraad).
-            for m in self.layout_rows_per_monitor.iter_mut() {
-                for row in m.iter_mut() { row.retain(|x| *x != w); }
+        if let Some(sel) = select { self.layout_active_item = sel; }
+        let mon = cur_mon;
+        if let Some((rr, cc)) = resize_to { self.layout_grid_per_monitor[mon].set_size(rr, cc); }
+        if clear_all {
+            for slot in self.layout_grid_per_monitor[mon].cells.iter_mut() { *slot = None; }
+        }
+        if let Some((r, c)) = clear_cell { self.layout_grid_per_monitor[mon].set(r, c, None); }
+        if let Some((r, c)) = paint_cell {
+            if let Some(w) = active {
+                // Verwijder dit venster eerst uit ALLE rasters (incl. de huidige
+                // monitor) zodat oude cellen niet blijven staan en bounds() het
+                // venster niet onbedoeld over een grotere rechthoek uitrekt.
+                for g in self.layout_grid_per_monitor.iter_mut() { g.remove(w); }
+                self.layout_grid_per_monitor[mon].set(r, c, Some(w));
             }
-            if let Some(ri) = target {
-                if ri < self.layout_rows_per_monitor[mon].len() {
-                    self.layout_rows_per_monitor[mon][ri].push(w);
-                }
+        }
+        if let Some(sa) = set_anchor { self.layout_drag_anchor = sa; }
+        if let Some((a, b)) = fill_rect {
+            if let Some(w) = active {
+                // Verwijder dit venster eerst uit ALLE rasters (incl. de huidige
+                // monitor) zodat oude cellen niet blijven staan en bounds() het
+                // venster niet onbedoeld over een grotere rechthoek uitrekt.
+                for g in self.layout_grid_per_monitor.iter_mut() { g.remove(w); }
+                let (r0, r1) = (a.0.min(b.0), a.0.max(b.0));
+                let (c0, c1) = (a.1.min(b.1), a.1.max(b.1));
+                let g = &mut self.layout_grid_per_monitor[mon];
+                for r in r0..=r1 { for c in c0..=c1 { g.set(r, c, Some(w)); } }
             }
         }
         if do_apply { self.apply_layout(ctx); }
@@ -3225,9 +3524,13 @@ impl SdrRemoteApp {
             &self.selected_output,
             self.agc_enabled,
             self.spectrum_enabled,
-            self.spectrum_ref_db,
-            self.spectrum_range_db,
-            self.auto_ref_enabled,
+            // Tijdens een TX-spectrum-override staan ref/range/auto tijdelijk op
+            // TX-defaults (auto=false); schrijf dan de BEWAARDE pre-TX-waarden weg,
+            // zodat een save in dat venster (of afsluiten tijdens/vlak-na TX) de
+            // gebruikersinstelling niet overschrijft (auto-ref "onthield niet altijd").
+            self.tx_spectrum_saved_ref_db.unwrap_or(self.spectrum_ref_db),
+            self.tx_spectrum_saved_range.unwrap_or(self.spectrum_range_db),
+            self.tx_spectrum_saved_auto_ref.unwrap_or(self.auto_ref_enabled),
             self.waterfall_contrast,
             self.spectrum_max_bins,
             self.spectrum_fft_size_k,
@@ -3292,6 +3595,10 @@ impl SdrRemoteApp {
             self.collapse_yaesu_eq,
             self.collapse_yaesu_memories,
             self.collapse_yaesu_menu,
+            self.collapse_yaesu2_memories,
+            self.collapse_yaesu2_menu,
+            self.amplitec_power_show,
+            self.bw_breakdown_expanded,
             self.yaesu_memories_h,
             self.device_tab,
             self.yaesu_enabled,
@@ -3556,11 +3863,17 @@ impl SdrRemoteApp {
             // Sync client-side TX-keten (compressor + AGC) radio 1.
             let _ = self.cmd_tx.send(Command::SetYaesuCompressor(self.yaesu_compressor));
             let _ = self.cmd_tx.send(Command::SetYaesuTxAgc(self.yaesu_tx_agc));
-            // Auto-read memory channels for channel name info
-            self.yaesu_mem_radio_received = false;
-            let _ = self.cmd_tx.send(Command::SetControl(
-                ControlId::YaesuReadMemories, 0));
             self.yaesu_enable_sent = true;
+        }
+        // 991A geheugen-auto-read op radio-DETECTIE (yaesu_connected stijgende flank),
+        // ONAFHANKELIJK van audio-enable - net als de FTX-1. De enable-block hierboven
+        // is gegate op yaesu_enabled; met audio uit vuurde de auto-read niet en toonde
+        // de client het geladen bestand (bv. 24) i.p.v. de radio (23).
+        // `self.yaesu_connected` = vorige-frame-waarde (verderop pas bijgewerkt).
+        if state.yaesu_connected && !self.yaesu_connected {
+            self.yaesu_mem_radio_received = false;
+            let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuReadMemories, 0));
+            log::info!("[radio0] 991A detected (yaesu_connected rising) - memory auto-read fired");
         }
         // Dual-radio slot 1: dezelfde Yaesu-enable schakelt ook de 2e radio in.
         // De client is dual-radio-bewust -> stuurt Yaesu2Enable=1 (komt op
@@ -3576,19 +3889,22 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetYaesu2TxAgc(self.yaesu2_tx_agc));
             // FT0 = MAIN als actieve RX/TX -> audio volgt A/MAIN (springt niet naar SUB).
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 11));
-            // Auto-read geheugens NIET direct: radio+server zijn vlak na connect te
-            // druk -> MR-scan mist kanalen. Uitstellen ~1,5s (vuurt hieronder).
-            self.yaesu2_autoread_at = Some(Instant::now() + std::time::Duration::from_millis(1500));
             self.yaesu2_enable_sent = true;
         }
-        // Uitgestelde geheugen-auto-read: pas als de FTX-1 echt verbonden is én de
-        // settle-tijd verstreken is. Eén keer; daarna gewist.
-        if let Some(t) = self.yaesu2_autoread_at {
-            if state.yaesu2_connected && Instant::now() >= t {
-                self.yaesu2_mem_radio_received = false;
-                let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2ReadMemories, 0));
-                self.yaesu2_autoread_at = None;
-            }
+        // FTX-1 geheugen-auto-read op CAT-DETECTIE (yaesu2_connected stijgende flank),
+        // ONAFHANKELIJK van audio-enable: het geheugen laadt zodra de radio wordt
+        // gedetecteerd. De enable-block hierboven is gegate op yaesu2_enabled (audio)
+        // en draaide daarom niet als de FTX-1-audio uit staat - vandaar dat de
+        // auto-read nooit firede. `self.yaesu2_connected` = vorige-frame-waarde
+        // (verderop pas bijgewerkt), dus dit is een echte rising edge. Uitgesteld
+        // ~1,5s zodat radio+server settelen.
+        if state.yaesu2_connected && !self.yaesu2_connected {
+            // FTX-1 gedetecteerd -> lees het geheugen NU. Geen client-side timer:
+            // die vuurt niet terwijl de client idle is (geen repaint, audio uit +
+            // vensters dicht). De server doet een whole-scan retry voor de cold radio.
+            self.yaesu2_mem_radio_received = false;
+            let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2ReadMemories, 0));
+            log::info!("[radio1] FTX-1 detected (yaesu2_connected rising) - memory auto-read fired");
         }
         if !state.connected {
             self.yaesu_enable_sent = false;
@@ -4455,16 +4771,24 @@ impl SdrRemoteApp {
                 match crate::ui::yaesu_memory::parse_tab_string(text) {
                     Ok(mut radio_channels) => {
                         let existing = std::mem::take(&mut self.yaesu2_mem_channels);
-                        for rch in &mut radio_channels {
-                            if rch.name.is_empty() || rch.name.starts_with("CH ") {
-                                if let Some(match_ch) = existing.iter().find(|e| e.rx_freq_hz == rch.rx_freq_hz) {
-                                    rch.name = match_ch.name.clone();
+                        if radio_channels.is_empty() {
+                            // A failed / empty radio read must NEVER wipe a good list
+                            // (the FTX-1 sometimes answers nothing on the first read,
+                            // then the full list on a retry). Keep what we had.
+                            log::info!("[radio1] memory read returned 0 channels - keeping existing {}", existing.len());
+                            self.yaesu2_mem_channels = existing;
+                        } else {
+                            for rch in &mut radio_channels {
+                                if rch.name.is_empty() || rch.name.starts_with("CH ") {
+                                    if let Some(match_ch) = existing.iter().find(|e| e.rx_freq_hz == rch.rx_freq_hz) {
+                                        rch.name = match_ch.name.clone();
+                                    }
                                 }
                             }
+                            log::info!("[radio1] received {} memory channels", radio_channels.len());
+                            self.yaesu2_mem_channels = radio_channels;
+                            self.yaesu2_mem_dirty = true;
                         }
-                        log::info!("[radio1] received {} memory channels", radio_channels.len());
-                        self.yaesu2_mem_channels = radio_channels;
-                        self.yaesu2_mem_dirty = true;
                     }
                     Err(e) => log::warn!("[radio1] parse memory data: {}", e),
                 }
@@ -4948,7 +5272,7 @@ impl SdrRemoteApp {
             let controls_h = measure.min_rect().height();
 
             // Meter width: max 2x height, and leave at least 480px for controls
-            let meter_w = (controls_h * 2.0).min(total_w - 480.0).max(0.0);
+            let meter_w = (controls_h * SMETER_VIS_ASPECT).min(total_w - 480.0).max(0.0);
             let controls_w = total_w - meter_w - if meter_w > 0.0 { 8.0 } else { 0.0 };
 
             // Left: actual controls render
@@ -5253,7 +5577,7 @@ impl SdrRemoteApp {
             // Reserve a slim column for the Split button so the analog meter
             // can render at its natural size (matching RX1's meter).
             let split_w: f32 = if show_split_button { 60.0 } else { 0.0 };
-            let meter_w = (controls_h * 2.0).min(total_w - 480.0).max(0.0);
+            let meter_w = (controls_h * SMETER_VIS_ASPECT).min(total_w - 480.0).max(0.0);
             let gap_left = if meter_w > 0.0 { 8.0 } else { 0.0 };
             let split_gap = if split_w > 0.0 { 4.0 } else { 0.0 };
             let controls_w = (total_w - meter_w - split_w - split_gap - gap_left).max(0.0);

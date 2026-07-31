@@ -953,6 +953,9 @@ fn yaesu_poll_loop(
                         status.lock().unwrap().filled_memory_channels = filled;
                         *memory_data.lock().unwrap() = Some(tab_text);
                     }
+                    // Bij "radio not responding" (standby/uit) NIET clobberen: we
+                    // returnen Err -> memory_data blijft ongewijzigd, dus de client
+                    // houdt zijn geladen lijst i.p.v. een lege lijst te krijgen.
                     Err(e) => warn!("{} memory read failed: {}", prefix, e),
                 }
                 last_response = Instant::now();
@@ -1996,7 +1999,7 @@ fn restore_991a_usb_routing_snapshot(
 /// List available serial ports (reuse for UI combo box).
 /// Send a CAT command and read response until `;` or timeout.
 fn cat_query(port: &mut Box<dyn serialport::SerialPort>, cmd: &str) -> String {
-    cat_query_with_timeout(port, cmd, Duration::from_millis(300))
+    cat_query_impl(port, cmd, Duration::from_millis(300), false)
 }
 
 fn cat_query_with_timeout(
@@ -2004,12 +2007,47 @@ fn cat_query_with_timeout(
     cmd: &str,
     timeout: Duration,
 ) -> String {
+    cat_query_impl(port, cmd, timeout, false)
+}
+
+/// Like `cat_query_with_timeout` but logs WHY an empty response happened
+/// (write error / read error kind / timeout). Used by the FTX-1 memory scan to
+/// diagnose the "first read returns nothing" case.
+fn cat_query_diag(
+    port: &mut Box<dyn serialport::SerialPort>,
+    cmd: &str,
+    timeout: Duration,
+) -> String {
+    cat_query_impl(port, cmd, timeout, true)
+}
+
+fn cat_query_impl(
+    port: &mut Box<dyn serialport::SerialPort>,
+    cmd: &str,
+    timeout: Duration,
+    diag: bool,
+) -> String {
+    // NB: do NOT flush the input buffer here. An input flush discards responses
+    // that are slow (cold radio) or still in-flight, which broke BOTH radios'
+    // memory reads (991A returned a partial list, FTX-1 returned nothing).
+    // Misalignment on the FTX-1 is instead handled where it matters, by
+    // echo-validating the response against the queried channel (read_all_memories_ftx1):
+    // a leftover/wrong-channel response is rejected and re-read, so a lagged
+    // response is captured on the retry instead of being thrown away.
     let mut raw_buf = [0u8; 512];
-    if port.write_all(cmd.as_bytes()).is_err() { return String::new(); }
+    if let Err(e) = port.write_all(cmd.as_bytes()) {
+        if diag { warn!("cat_query {}: write error: {:?} ({})", cmd.trim_end_matches(';'), e.kind(), e); }
+        return String::new();
+    }
     let mut response = String::new();
     let deadline = Instant::now() + timeout;
     loop {
-        if Instant::now() > deadline { break; }
+        if Instant::now() > deadline {
+            if diag && response.is_empty() {
+                warn!("cat_query {}: TIMEOUT after {:?} - radio sent no bytes", cmd.trim_end_matches(';'), timeout);
+            }
+            break;
+        }
         match port.read(&mut raw_buf) {
             Ok(n) if n > 0 => {
                 if let Ok(s) = std::str::from_utf8(&raw_buf[..n]) {
@@ -2019,7 +2057,10 @@ fn cat_query_with_timeout(
             }
             Ok(_) => {}
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(_) => break,
+            Err(e) => {
+                if diag { warn!("cat_query {}: read error: {:?} ({}) - aborting query", cmd.trim_end_matches(';'), e.kind(), e); }
+                break;
+            }
         }
     }
     response
@@ -2067,8 +2108,27 @@ fn resp_payload(cmd: &str, resp: &str) -> String {
 fn read_all_memories(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, String> {
     let mut channels = Vec::new();
 
+    // Een levende radio antwoordt op ELK kanaal snel (geprogrammeerd of leeg -
+    // de volle 117-kanaal-read duurt <1s). Een radio in standby/uit antwoordt
+    // niet op MT: elke query timeout't (~300ms). Zonder abort grindt de read
+    // ~35s door EN blokkeert al die tijd de andere CAT-commando's op de
+    // single-threaded poll-lus (bv. een net-ingedrukte power-ON). Breek daarom
+    // af na een paar OPEENVOLGENDE timeouts (trage lege reacties); een enkele
+    // trage-maar-geldige reactie reset de teller, en lege beginkanalen (die
+    // snel antwoorden) triggeren dit niet.
+    let mut consec_timeouts = 0u16;
     for ch in 1..=117u16 {
+        let t0 = Instant::now();
         let response = cat_query(port, &format!("MT{:03};", ch));
+        let timed_out = response.trim().is_empty() && t0.elapsed() >= Duration::from_millis(250);
+        if timed_out {
+            consec_timeouts += 1;
+            if consec_timeouts >= 4 {
+                return Err("radio not responding (powered off?)".to_string());
+            }
+            continue;
+        }
+        consec_timeouts = 0;
 
         if response.trim().is_empty() || response.contains("?;") {
             continue;
@@ -2359,15 +2419,43 @@ fn ftx1_mode_to_code(label: &str) -> char {
 fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, String> {
     let mut channels = Vec::new();
 
+    // The FTX-1 CAT sometimes ignores the ENTIRE first MR-scan after connect/idle
+    // (every query times out / errors -> empty list); a repeat scan then succeeds.
+    // Retry the whole scan up to 3x so the first read (and the auto-read on connect)
+    // already returns the list instead of needing a manual 2nd/3rd click.
+    for scan_attempt in 0..3u8 {
+    channels.clear();
+    // Warm-up: de FTX-1 slikt de EERSTE MR-query('s) na een pauze in (connect of
+    // de inter-attempt-sleep) -> kanaal 1 miste daardoor ("22 i.p.v. 23"). Prime de
+    // poort met een paar weggegooide queries zodat de echte scan (hieronder) kanaal
+    // 1 wél mee-pakt. Bij een echt-cold radio blijven ze leeg (attempt faalt -> retry).
+    let _ = cat_query(port, "MR00001;");
+    let _ = cat_query(port, "MR00001;");
     for ch in 1..=99u16 {
-        let mut mr = cat_query(port, &format!("MR{:05};", ch));
-        // Transient timeout (lege respons) tijdens drukke client-connect -> tot 2
-        // retries. `?;` = leeg kanaal (terecht overslaan, GEEN retry). Dit voorkomt
-        // dat de auto-read bij opstarten kanalen mist (manueel idle lukt wel).
-        let mut tries = 0;
-        while mr.trim().is_empty() && tries < 2 {
-            mr = cat_query(port, &format!("MR{:05};", ch));
-            tries += 1;
+        // Echo-validated read: accept a response ONLY if it echoes THIS channel
+        // ("MR{ch:05}..."). A late / in-flight response for another channel is then
+        // rejected and re-queried (cat_query flushes input first), so the list can
+        // no longer shift or renumber - the exact symptom of "starts at 20/30,
+        // correct order but wrong numbers". An empty channel answers "?;" and is
+        // skipped without retrying.
+        // 800ms timeout (i.p.v. de 300ms default): de FTX-1 antwoordt de eerste
+        // keer na connect/idle traag (cold). Met 300ms timeoutte de query, en de
+        // buffer-flush van de retry gooide de nét-binnenkomende trage respons weg
+        // -> de HELE eerste read kwam leeg terug (2e klik werkte pas). 800ms vangt
+        // de cold-respons binnen één query op.
+        let mr_expect = format!("MR{:05}", ch);
+        let mut mr = String::new();
+        for _t in 0..4 {
+            // ch<=3: diagnostic query so the log shows WHY an empty read happened
+            // (write error / read error kind / timeout).
+            let r = if ch <= 3 {
+                cat_query_diag(port, &format!("MR{:05};", ch), Duration::from_millis(800))
+            } else {
+                cat_query_with_timeout(port, &format!("MR{:05};", ch), Duration::from_millis(800))
+            };
+            if let Some(p) = r.find(&mr_expect) { mr = r[p..].to_string(); break; } // aligned
+            if r.contains("?;") { break; } // empty channel - definitive, no retry
+            // else: timeout or a response echoing another channel -> retry
         }
 
         // Ruwe-respons probe (eerste 3 kanalen) zodat de hardware het
@@ -2376,14 +2464,12 @@ fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<
             info!("MR{:05} RAW probe: [{}] ({}B)", ch, mr.escape_debug(), mr.len());
         }
 
-        if mr.trim().is_empty() || mr.contains("?;") {
+        if mr.is_empty() {
             continue;
         }
-        let (start, end) = match (mr.find("MR"), mr.find(';')) {
-            (Some(s), Some(e)) if e > s + 2 => (s, e),
-            _ => continue,
-        };
-        let d = &mr[start + 2..end]; // skip "MR"
+        // `mr` now starts with "MR{ch:05}"; take the payload up to the terminator.
+        let end = match mr.find(';') { Some(e) => e, None => continue };
+        let d = &mr[2..end]; // skip "MR"; d[0..5] = echoed channel (== ch)
         if d.len() < 27 {
             continue;
         }
@@ -2397,8 +2483,18 @@ fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<
         let ctcss_char = b[23] as char; // P8
         let shift_char = b[26] as char; // P10
 
-        // Naam via aparte MT-query.
-        let mt = cat_query(port, &format!("MT{:05};", ch));
+        // Naam via aparte MT-query, ook echo-gevalideerd op dit kanaal.
+        let mt_expect = format!("MT{:05}", ch);
+        let mut mt = String::new();
+        for _t in 0..3 {
+            let r = if ch <= 3 {
+                cat_query_diag(port, &format!("MT{:05};", ch), Duration::from_millis(800))
+            } else {
+                cat_query_with_timeout(port, &format!("MT{:05};", ch), Duration::from_millis(800))
+            };
+            if let Some(p) = r.find(&mt_expect) { mt = r[p..].to_string(); break; }
+            if r.contains("?;") { break; }
+        }
         if ch <= 3 {
             info!("MT{:05} RAW probe: [{}] ({}B)", ch, mt.escape_debug(), mt.len());
         }
@@ -2436,6 +2532,12 @@ fn read_all_memories_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<
             ch, freq_str, tx_freq_str, offset_freq_str, offset_dir, mode, mode, display_name, tone_mode, ctcss_freq
         ));
         info!("MR{:05}: {} {} {} {} {}", ch, display_name, freq_str, mode, tone_mode, offset_dir);
+    }
+    if !channels.is_empty() { break; }
+    if scan_attempt + 1 < 3 {
+        warn!("FTX-1: memory scan attempt {}/3 returned 0 channels - retrying after settle", scan_attempt + 1);
+        std::thread::sleep(Duration::from_millis(500));
+    }
     }
 
     let mut out = String::new();

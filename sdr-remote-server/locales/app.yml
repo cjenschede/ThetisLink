@@ -1,0 +1,636 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# ThetisLink server-GUI translations (rust-i18n v2).
+# Base = English (fallback). Add a language = add its key under each entry.
+# Product names / protocol names stay identical across languages.
+# NB: gefaseerde migratie - nog-niet-gemigreerde strings staan hardcoded (NL) in de code.
+_version: 2
+
+language:
+  en: "Language:"
+  nl: "Taal:"
+  de: "Sprache:"
+  fr: "Langue :"
+srv_theme:
+  en: "Theme:"
+  nl: "Thema:"
+  de: "Thema:"
+  fr: "Thème :"
+srv_status:
+  en: "Status"
+  nl: "Status"
+  de: "Status"
+  fr: "Statut"
+srv_logs:
+  en: "Logs"
+  nl: "Logs"
+  de: "Protokolle"
+  fr: "Journaux"
+srv_arrange:
+  en: "Arrange"
+  nl: "Schik"
+  de: "Anordnen"
+  fr: "Organiser"
+srv_arrange_hover:
+  en: "Arrange windows on the screen using a grid"
+  nl: "Vensters over een raster op het scherm ordenen"
+  de: "Fenster über ein Raster auf dem Bildschirm anordnen"
+  fr: "Organiser les fenêtres sur l'écran à l'aide d'une grille"
+srv_about:
+  en: "About"
+  nl: "Over"
+  de: "Über"
+  fr: "À propos"
+srv_exit:
+  en: "Exit"
+  nl: "Afsluiten"
+  de: "Beenden"
+  fr: "Quitter"
+srv_settings:
+  en: "Settings"
+  nl: "Instellingen"
+  de: "Einstellungen"
+  fr: "Paramètres"
+
+# --- Settings-scherm velden (batch 2) ---
+srv_none:
+  en: "(None)"
+  nl: "(Geen)"
+  de: "(Keine)"
+  fr: "(Aucun)"
+srv_tci_addr:
+  en: "Thetis TCI address (e.g. 127.0.0.1:40001):"
+  nl: "Thetis TCI adres (bijv. 127.0.0.1:40001):"
+  de: "Thetis-TCI-Adresse (z. B. 127.0.0.1:40001):"
+  fr: "Adresse TCI Thetis (p. ex. 127.0.0.1:40001) :"
+srv_thetis_path:
+  en: "Thetis.exe path (optional, for auto-start):"
+  nl: "Thetis.exe pad (optioneel, voor auto-start):"
+  de: "Thetis.exe-Pfad (optional, für Auto-Start):"
+  fr: "Chemin Thetis.exe (facultatif, pour démarrage auto) :"
+srv_rx2_present:
+  en: "Radio has a second receiver (RX2)"
+  nl: "Radio heeft tweede ontvanger (RX2)"
+  de: "Funkgerät hat zweiten Empfänger (RX2)"
+  fr: "La radio a un second récepteur (RX2)"
+srv_rx2_present_hover:
+  en: "Off for single-receiver radios: clients then never show RX2 or VRX2. Change takes effect from the next server start."
+  nl: "Uit voor single-receiver radio's: clients tonen dan nergens RX2 of VRX2. Wijziging geldt vanaf de volgende serverstart."
+  de: "Aus für Einzelempfänger-Funkgeräte: Clients zeigen dann nirgends RX2 oder VRX2. Änderung gilt ab dem nächsten Serverstart."
+  fr: "Désactivé pour les radios à récepteur unique : les clients n'affichent alors jamais RX2 ni VRX2. Le changement prend effet au prochain démarrage du serveur."
+srv_yaesu_radio1:
+  en: "Yaesu radio 1"
+  nl: "Yaesu radio 1"
+  de: "Yaesu Radio 1"
+  fr: "Yaesu radio 1"
+srv_yaesu_radio2:
+  en: "Yaesu radio 2"
+  nl: "Yaesu radio 2"
+  de: "Yaesu Radio 2"
+  fr: "Yaesu radio 2"
+srv_audio_in:
+  en: "Audio in:"
+  nl: "Audio in:"
+  de: "Audio-Eingang:"
+  fr: "Audio entrée :"
+srv_audio_out_tx:
+  en: "Audio out (TX):"
+  nl: "Audio uit (TX):"
+  de: "Audio-Ausgang (TX):"
+  fr: "Audio sortie (TX) :"
+srv_same_as_input:
+  en: "(same as input)"
+  nl: "(zelfde als input)"
+  de: "(wie Eingang)"
+  fr: "(comme l'entrée)"
+srv_991a_ptt_switch:
+  en: "Switch 991A SSB/AM USB routing on PTT"
+  nl: "991A SSB/AM USB-routing schakelen op PTT"
+  de: "991A SSB/AM USB-Routing bei PTT umschalten"
+  fr: "Commuter le routage USB SSB/AM du 991A au PTT"
+srv_991a_ptt_switch_hover:
+  en: "Off (default): keep 991A USB routing active while a client is connected and restore about 2 s after disconnect (zero PTT delay).\nOn: switch 991A routing only during PTT; useful when you want the hand mic restored immediately outside TX. FTX-1 auto source selection is left unchanged."
+  nl: "Uit (standaard): houd 991A USB-routing actief zolang een client verbonden is en herstel ca. 2 s na verbreken (geen PTT-vertraging).\nAan: schakel 991A-routing alleen tijdens PTT; handig als je de handmicrofoon buiten TX meteen terug wilt. FTX-1 auto bronkeuze blijft ongewijzigd."
+  de: "Aus (Standard): 991A-USB-Routing aktiv halten, solange ein Client verbunden ist, und ca. 2 s nach dem Trennen wiederherstellen (keine PTT-Verzögerung).\nEin: 991A-Routing nur während PTT umschalten; nützlich, wenn das Handmikrofon außerhalb TX sofort wieder aktiv sein soll. FTX-1 Auto-Quellenwahl bleibt unverändert."
+  fr: "Désactivé (par défaut) : garder le routage USB du 991A actif tant qu'un client est connecté et le restaurer environ 2 s après la déconnexion (aucun délai PTT).\nActivé : commuter le routage du 991A uniquement pendant le PTT ; utile pour retrouver aussitôt le micro à main hors TX. La sélection auto de source du FTX-1 reste inchangée."
+srv_radio2_note:
+  en: "Radio 2 changes: save + restart the server."
+  nl: "Radio 2 wijzigingen: opslaan + server herstarten."
+  de: "Radio-2-Änderungen: speichern + Server neu starten."
+  fr: "Modifications radio 2 : enregistrer + redémarrer le serveur."
+srv_open_at_start:
+  en: "Open window at startup"
+  nl: "Venster openen bij starten"
+  de: "Fenster beim Start öffnen"
+  fr: "Ouvrir la fenêtre au démarrage"
+srv_tuner_mcp_note:
+  en: "Configure per slot via the MCP2221A block at the bottom of the status panel."
+  nl: "Configureer per slot via het MCP2221A blok onderaan het status-paneel."
+  de: "Pro Slot über den MCP2221A-Block unten im Statusfeld konfigurieren."
+  fr: "Configurer par slot via le bloc MCP2221A en bas du panneau d'état."
+srv_addr_label:
+  en: "address:"
+  nl: "adres:"
+  de: "Adresse:"
+  fr: "adresse :"
+srv_call:
+  en: "call:"
+  nl: "call:"
+  de: "Rufzeichen:"
+  fr: "indicatif :"
+srv_dxcluster_need_call:
+  en: "Enter your callsign to enable the DX cluster"
+  nl: "Voer je roepnaam in om de DX-cluster in te schakelen"
+  de: "Rufzeichen eingeben, um den DX-Cluster zu aktivieren"
+  fr: "Saisissez votre indicatif pour activer le cluster DX"
+srv_backend:
+  en: "backend:"
+  nl: "backend:"
+  de: "Backend:"
+  fr: "backend :"
+srv_pstrotator_host:
+  en: "PstRotator host:"
+  nl: "PstRotator host:"
+  de: "PstRotator-Host:"
+  fr: "Hôte PstRotator :"
+srv_port:
+  en: "port:"
+  nl: "poort:"
+  de: "Port:"
+  fr: "port :"
+srv_host_example:
+  en: "e.g. 192.168.1.50"
+  nl: "bv. 192.168.1.50"
+  de: "z. B. 192.168.1.50"
+  fr: "p. ex. 192.168.1.50"
+srv_feedback_port:
+  en: "Feedback port (local):"
+  nl: "Feedback poort (lokaal):"
+  de: "Feedback-Port (lokal):"
+  fr: "Port de retour (local) :"
+srv_has_elevation:
+  en: "Has elevation"
+  nl: "Heeft elevation"
+  de: "Hat Elevation"
+  fr: "A une élévation"
+srv_pstrotator_hint:
+  en: "PstRotator: in 'Communication -> UDP Control Port' set the port above + tick 'UDP Control'. Local firewall: allow inbound UDP on the feedback port."
+  nl: "PstRotator: in 'Communication -> UDP Control Port' bovenstaande poort instellen + 'UDP Control' aanvinken. Lokale firewall: inbound UDP feedback-poort toestaan."
+  de: "PstRotator: in 'Communication -> UDP Control Port' den obigen Port einstellen + 'UDP Control' aktivieren. Lokale Firewall: eingehendes UDP auf dem Feedback-Port erlauben."
+  fr: "PstRotator : dans 'Communication -> UDP Control Port', réglez le port ci-dessus + cochez 'UDP Control'. Pare-feu local : autoriser l'UDP entrant sur le port de retour."
+srv_ea7hg_addr:
+  en: "EA7HG address:"
+  nl: "EA7HG adres:"
+  de: "EA7HG-Adresse:"
+  fr: "Adresse EA7HG :"
+srv_pstrotator_listener:
+  en: "PstRotator listener (parallel)"
+  nl: "PstRotator listener (parallel)"
+  de: "PstRotator-Listener (parallel)"
+  fr: "Écouteur PstRotator (parallèle)"
+srv_pstrotator_listener_hover:
+  en: "Listens on a UDP port for incoming PstRotator azimuth broadcasts (text `AZ:nnn.n` or XML `<AZIMUTH>nnn.n</AZIMUTH>`). Translates them to GoTo commands on the active rotor backend, regardless of which backend is selected above."
+  nl: "Luistert op UDP-poort voor inkomende PstRotator azimuth-broadcasts (text `AZ:nnn.n` of XML `<AZIMUTH>nnn.n</AZIMUTH>`). Vertaalt ze naar GoTo-commando's op de actieve rotor-backend, onafhankelijk van welke backend daarboven gekozen is."
+  de: "Lauscht an einem UDP-Port auf eingehende PstRotator-Azimut-Broadcasts (Text `AZ:nnn.n` oder XML `<AZIMUTH>nnn.n</AZIMUTH>`). Übersetzt sie in GoTo-Befehle für das aktive Rotor-Backend, unabhängig davon, welches Backend oben gewählt ist."
+  fr: "Écoute sur un port UDP les diffusions d'azimut PstRotator (texte `AZ:nnn.n` ou XML `<AZIMUTH>nnn.n</AZIMUTH>`). Les traduit en commandes GoTo sur le backend rotor actif, quel que soit le backend choisi ci-dessus."
+srv_pstrotator_loop_warn:
+  en: "Note: rotor_backend is also 'pstrotator' - PstRotator's own replies can re-enter via this listener (loop risk)."
+  nl: "Let op: rotor_backend is ook 'pstrotator' - PstRotator's eigen replies kunnen via deze listener weer binnenkomen (loop-risico)."
+  de: "Hinweis: rotor_backend ist ebenfalls 'pstrotator' - PstRotators eigene Antworten können über diesen Listener zurückkommen (Schleifengefahr)."
+  fr: "Note : rotor_backend est aussi 'pstrotator' - les propres réponses de PstRotator peuvent revenir via cet écouteur (risque de boucle)."
+srv_relay_enable:
+  en: "Enable outbound relay monitor"
+  nl: "Uitgaande relay-monitor inschakelen"
+  de: "Ausgehenden Relay-Monitor aktivieren"
+  fr: "Activer le moniteur de relais sortant"
+srv_relay_udp:
+  en: "Audio over UDP (low latency)"
+  nl: "Audio over UDP (lage latency)"
+  de: "Audio über UDP (niedrige Latenz)"
+  fr: "Audio sur UDP (faible latence)"
+srv_relay_udp_hover:
+  en: "Route audio + PTT over plain UDP (port 443) instead of the wss tunnel: no retransmit, lower latency. Both server and client must have it on. Applies on restart."
+  nl: "Route audio + PTT over kale UDP (poort 443) i.p.v. de wss-tunnel: geen retransmit, lagere latency. Server en client moeten het beide aan hebben. Geldt na herstart."
+  de: "Audio + PTT über reines UDP (Port 443) statt des wss-Tunnels leiten: keine erneute Übertragung, niedrigere Latenz. Server und Client müssen es beide aktiviert haben. Gilt nach Neustart."
+  fr: "Router l'audio + PTT sur UDP simple (port 443) au lieu du tunnel wss : pas de retransmission, latence plus faible. Le serveur et le client doivent l'activer. Effectif au redémarrage."
+srv_relay_url:
+  en: "Relay URL:"
+  nl: "Relay URL:"
+  de: "Relay-URL:"
+  fr: "URL du relais :"
+srv_station_name:
+  en: "Station name:"
+  nl: "Stationsnaam:"
+  de: "Stationsname:"
+  fr: "Nom de station :"
+srv_relay_token:
+  en: "Relay token:"
+  nl: "Relay-token:"
+  de: "Relay-Token:"
+  fr: "Jeton de relais :"
+srv_relay_desc:
+  en: "Relay routes the full connection: audio + PTT over UDP with automatic wss (TCP) fallback, control + spectrum over wss. Both server and client must use the same relay, station name and token."
+  nl: "Relay routeert de volledige verbinding: audio + PTT over UDP met automatische wss (TCP) fallback, controle + spectrum over wss. Server en client moeten dezelfde relay, stationsnaam en token gebruiken."
+  de: "Relay leitet die gesamte Verbindung: Audio + PTT über UDP mit automatischem wss-(TCP)-Fallback, Steuerung + Spektrum über wss. Server und Client müssen denselben Relay, Stationsnamen und Token verwenden."
+  fr: "Le relais achemine toute la connexion : audio + PTT sur UDP avec repli wss (TCP) automatique, contrôle + spectre sur wss. Le serveur et le client doivent utiliser le même relais, nom de station et jeton."
+srv_security:
+  en: "Security"
+  nl: "Beveiliging"
+  de: "Sicherheit"
+  fr: "Sécurité"
+srv_password:
+  en: "Password:"
+  nl: "Wachtwoord:"
+  de: "Passwort:"
+  fr: "Mot de passe :"
+srv_required_hint:
+  en: "(required)"
+  nl: "(verplicht)"
+  de: "(erforderlich)"
+  fr: "(requis)"
+srv_password_required:
+  en: "Password is required"
+  nl: "Wachtwoord is verplicht"
+  de: "Passwort ist erforderlich"
+  fr: "Le mot de passe est requis"
+srv_secret:
+  en: "Secret:"
+  nl: "Geheim:"
+  de: "Geheimnis:"
+  fr: "Secret :"
+srv_generate_secret:
+  en: "Generate new secret"
+  nl: "Nieuw geheim genereren"
+  de: "Neues Geheimnis erzeugen"
+  fr: "Générer un nouveau secret"
+srv_scan_qr:
+  en: "Scan with Google Authenticator or similar app"
+  nl: "Scan met Google Authenticator of vergelijkbare app"
+  de: "Mit Google Authenticator o. Ä. scannen"
+  fr: "Scanner avec Google Authenticator ou une app similaire"
+srv_autostart:
+  en: "Auto-start on launch"
+  nl: "Automatisch starten bij opstarten"
+  de: "Beim Start automatisch starten"
+  fr: "Démarrage automatique au lancement"
+srv_save_start:
+  en: "Save & Start"
+  nl: "Opslaan & starten"
+  de: "Speichern & starten"
+  fr: "Enregistrer et démarrer"
+
+# --- Device-popouts (batch 3: rotor, tuner, amplitec, spe) ---
+srv_online:
+  en: "Online"
+  nl: "Online"
+  de: "Online"
+  fr: "En ligne"
+srv_offline:
+  en: "Offline"
+  nl: "Offline"
+  de: "Offline"
+  fr: "Hors ligne"
+srv_cancel:
+  en: "Cancel"
+  nl: "Annuleer"
+  de: "Abbrechen"
+  fr: "Annuler"
+srv_current:
+  en: "Current:"
+  nl: "Huidige:"
+  de: "Aktuell:"
+  fr: "Actuel :"
+# rotor
+srv_goto:
+  en: "GoTo:"
+  nl: "Ga naar:"
+  de: "Gehe zu:"
+  fr: "Aller à :"
+srv_go:
+  en: "Go"
+  nl: "Ga"
+  de: "Los"
+  fr: "Aller"
+# tuner
+srv_tune:
+  en: "Tune"
+  nl: "Tune"
+  de: "Tune"
+  fr: "Accord"
+srv_tune_ing:
+  en: "Tune..."
+  nl: "Tune..."
+  de: "Tune..."
+  fr: "Accord..."
+srv_tune_ok:
+  en: "Tune OK"
+  nl: "Tune OK"
+  de: "Tune OK"
+  fr: "Accord OK"
+srv_tune_x:
+  en: "Tune X"
+  nl: "Tune X"
+  de: "Tune X"
+  fr: "Accord X"
+srv_abort:
+  en: "Abort"
+  nl: "Afbreken"
+  de: "Abbrechen"
+  fr: "Abandonner"
+srv_tuning:
+  en: "Tuning..."
+  nl: "Afstemmen..."
+  de: "Abstimmen..."
+  fr: "Accord en cours..."
+srv_done:
+  en: "Done"
+  nl: "Klaar"
+  de: "Fertig"
+  fr: "Terminé"
+srv_timeout:
+  en: "Timeout"
+  nl: "Timeout"
+  de: "Zeitüberschreitung"
+  fr: "Délai dépassé"
+srv_aborted:
+  en: "Aborted"
+  nl: "Afgebroken"
+  de: "Abgebrochen"
+  fr: "Abandonné"
+srv_log_cb:
+  en: "Log"
+  nl: "Log"
+  de: "Log"
+  fr: "Journal"
+# amplitec
+srv_new_name:
+  en: "New name:"
+  nl: "Nieuwe naam:"
+  de: "Neuer Name:"
+  fr: "Nouveau nom :"
+srv_new_name_hint:
+  en: "e.g. JC-4s loop"
+  nl: "bijv. JC-4s loop"
+  de: "z. B. JC-4s loop"
+  fr: "p. ex. JC-4s loop"
+srv_port_a_txrx:
+  en: "Port A — TX+RX"
+  nl: "Poort A — TX+RX"
+  de: "Port A — TX+RX"
+  fr: "Port A — TX+RX"
+srv_port_b_rx:
+  en: "Port B — RX"
+  nl: "Poort B — RX"
+  de: "Port B — RX"
+  fr: "Port B — RX"
+srv_rename:
+  en: "Rename..."
+  nl: "Hernoem..."
+  de: "Umbenennen..."
+  fr: "Renommer..."
+srv_ant_busy_a:
+  en: "Ant%{pos} (%{label}) - busy on Port A"
+  nl: "Ant%{pos} (%{label}) - bezet door Poort A"
+  de: "Ant%{pos} (%{label}) - belegt durch Port A"
+  fr: "Ant%{pos} (%{label}) - occupé par le port A"
+srv_ant_busy_b:
+  en: "Ant%{pos} (%{label}) - busy on Port B"
+  nl: "Ant%{pos} (%{label}) - bezet door Poort B"
+  de: "Ant%{pos} (%{label}) - belegt durch Port B"
+  fr: "Ant%{pos} (%{label}) - occupé par le port B"
+# spe
+srv_warning_lbl:
+  en: "Warning"
+  nl: "Waarschuwing"
+  de: "Warnung"
+  fr: "Avertissement"
+srv_power_off:
+  en: "Power Off"
+  nl: "Uitschakelen"
+  de: "Ausschalten"
+  fr: "Éteindre"
+srv_power_on:
+  en: "Power On"
+  nl: "Inschakelen"
+  de: "Einschalten"
+  fr: "Allumer"
+srv_active:
+  en: "Active"
+  nl: "Actief"
+  de: "Aktiv"
+  fr: "Actif"
+srv_operate:
+  en: "Operate"
+  nl: "Operate"
+  de: "Betrieb"
+  fr: "Marche"
+srv_standby:
+  en: "Standby"
+  nl: "Standby"
+  de: "Standby"
+  fr: "Veille"
+srv_off_state:
+  en: "Off"
+  nl: "Uit"
+  de: "Aus"
+  fr: "Éteint"
+
+# --- Device-popouts (batch 4: ultrabeam, macro-editor) ---
+srv_yes:
+  en: "Yes"
+  nl: "Ja"
+  de: "Ja"
+  fr: "Oui"
+srv_no:
+  en: "No"
+  nl: "Nee"
+  de: "Nein"
+  fr: "Non"
+srv_menu:
+  en: "Menu"
+  nl: "Menu"
+  de: "Menü"
+  fr: "Menu"
+srv_refresh:
+  en: "Refresh"
+  nl: "Vernieuwen"
+  de: "Aktualisieren"
+  fr: "Actualiser"
+srv_unknown:
+  en: "Unknown"
+  nl: "Onbekend"
+  de: "Unbekannt"
+  fr: "Inconnu"
+srv_auto_cb:
+  en: "Auto"
+  nl: "Auto"
+  de: "Auto"
+  fr: "Auto"
+# ultrabeam
+srv_ub_no_conn:
+  en: "No connection to RCU-06"
+  nl: "Geen verbinding met RCU-06"
+  de: "Keine Verbindung zum RCU-06"
+  fr: "Pas de connexion au RCU-06"
+srv_retracted:
+  en: "Retracted"
+  nl: "Ingetrokken"
+  de: "Eingefahren"
+  fr: "Rétracté"
+srv_direction:
+  en: "Direction:"
+  nl: "Richting:"
+  de: "Richtung:"
+  fr: "Direction :"
+srv_ub_sync_hover:
+  en: "Set UltraBeam to %{label}: %{khz} kHz"
+  nl: "Stel UltraBeam in op %{label}: %{khz} kHz"
+  de: "UltraBeam auf %{label} einstellen: %{khz} kHz"
+  fr: "Régler UltraBeam sur %{label} : %{khz} kHz"
+srv_ub_autotrack:
+  en: "Auto-track %{label} frequency"
+  nl: "Auto-track %{label}-frequentie"
+  de: "%{label}-Frequenz automatisch folgen"
+  fr: "Suivi auto de la fréquence %{label}"
+srv_band_presets:
+  en: "Band presets:"
+  nl: "Band-presets:"
+  de: "Band-Presets:"
+  fr: "Préréglages de bande :"
+srv_ub_retract_confirm:
+  en: "Retract elements?"
+  nl: "Elementen intrekken?"
+  de: "Elemente einfahren?"
+  fr: "Rétracter les éléments ?"
+srv_retract:
+  en: "Retract"
+  nl: "Intrekken"
+  de: "Einfahren"
+  fr: "Rétracter"
+srv_element_lengths:
+  en: "Element Lengths"
+  nl: "Elementlengtes"
+  de: "Elementlängen"
+  fr: "Longueurs des éléments"
+srv_controller_info:
+  en: "Controller Info"
+  nl: "Controller-info"
+  de: "Controller-Info"
+  fr: "Infos contrôleur"
+srv_freq_range:
+  en: "Freq range:"
+  nl: "Freq-bereik:"
+  de: "Freq-Bereich:"
+  fr: "Plage de fréq. :"
+srv_operation_mode:
+  en: "Operation mode:"
+  nl: "Bedrijfsmodus:"
+  de: "Betriebsmodus:"
+  fr: "Mode de fonctionnement :"
+srv_ub_normal:
+  en: "Normal"
+  nl: "Normaal"
+  de: "Normal"
+  fr: "Normal"
+srv_ub_user_adjust:
+  en: "User Adjust"
+  nl: "Gebruiker-aanpassing"
+  de: "Benutzeranpassung"
+  fr: "Réglage utilisateur"
+srv_ub_setup:
+  en: "Setup"
+  nl: "Setup"
+  de: "Setup"
+  fr: "Configuration"
+# macro-editor
+srv_macro_editor:
+  en: "Macro Editor"
+  nl: "Macro-editor"
+  de: "Makro-Editor"
+  fr: "Éditeur de macros"
+srv_slot:
+  en: "Slot:"
+  nl: "Slot:"
+  de: "Slot:"
+  fr: "Slot :"
+srv_actions:
+  en: "Actions:"
+  nl: "Acties:"
+  de: "Aktionen:"
+  fr: "Actions :"
+srv_delay:
+  en: "Delay"
+  nl: "Vertraging"
+  de: "Verzögerung"
+  fr: "Délai"
+srv_save:
+  en: "Save"
+  nl: "Opslaan"
+  de: "Speichern"
+  fr: "Enregistrer"
+srv_macros_heading:
+  en: "Macros"
+  nl: "Macro's"
+  de: "Makros"
+  fr: "Macros"
+srv_edit_macros:
+  en: "Edit macros..."
+  nl: "Bewerk macro's..."
+  de: "Makros bearbeiten..."
+  fr: "Modifier les macros..."
+srv_abort_macro:
+  en: "Abort macro"
+  nl: "Macro afbreken"
+  de: "Makro abbrechen"
+  fr: "Abandonner la macro"
+
+# --- Vensters-schikken matrix-plaatser (server) ---
+srv_win_main:
+  en: "Main"
+  nl: "Hoofd"
+  de: "Haupt"
+  fr: "Principal"
+srv_arrange_title:
+  en: "Arrange windows"
+  nl: "Vensters schikken"
+  de: "Fenster anordnen"
+  fr: "Organiser les fenêtres"
+srv_arrange_help:
+  en: "Pick a grid size, select a window and paint it onto the cells (click or drag). A window may cover several adjacent cells - it is stretched over that block. Each screen has its own grid."
+  nl: "Kies een rasterformaat, selecteer een venster en schilder het in de cellen (klik of sleep). Een venster mag meerdere aangrenzende cellen beslaan - het wordt over dat blok uitgerekt. Elk scherm heeft zijn eigen raster."
+  de: "Rastergröße wählen, ein Fenster auswählen und in die Zellen malen (klicken oder ziehen). Ein Fenster darf mehrere benachbarte Zellen belegen - es wird über diesen Block gestreckt. Jeder Bildschirm hat sein eigenes Raster."
+  fr: "Choisissez une taille de grille, sélectionnez une fenêtre et peignez-la sur les cellules (clic ou glisser). Une fenêtre peut couvrir plusieurs cellules adjacentes - elle est étirée sur ce bloc. Chaque écran a sa propre grille."
+srv_screen:
+  en: "Screen:"
+  nl: "Scherm:"
+  de: "Bildschirm:"
+  fr: "Écran :"
+srv_screen_n:
+  en: "Screen %{n}"
+  nl: "Scherm %{n}"
+  de: "Bildschirm %{n}"
+  fr: "Écran %{n}"
+srv_grid:
+  en: "Grid:"
+  nl: "Raster:"
+  de: "Raster:"
+  fr: "Grille :"
+srv_arrange_pick:
+  en: "Window (click to select, then paint into the grid):"
+  nl: "Venster (klik om te kiezen, schilder dan in het raster):"
+  de: "Fenster (zum Auswählen klicken, dann ins Raster malen):"
+  fr: "Fenêtre (cliquez pour choisir, puis peignez dans la grille) :"
+srv_arrange_place:
+  en: "Click a cell, or drag to fill a rectangle. Right-click or click again to clear."
+  nl: "Klik een cel, of sleep om een rechthoek te vullen. Rechtsklik of nogmaals klikken wist."
+  de: "Zelle anklicken oder ziehen, um ein Rechteck zu füllen. Rechtsklick oder erneut klicken löscht."
+  fr: "Cliquez une cellule, ou glissez pour remplir un rectangle. Clic droit ou nouveau clic pour effacer."
+srv_apply:
+  en: "Apply"
+  nl: "Toepassen"
+  de: "Anwenden"
+  fr: "Appliquer"
+srv_empty:
+  en: "Empty"
+  nl: "Leeg"
+  de: "Leer"
+  fr: "Vide"

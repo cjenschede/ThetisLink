@@ -2196,7 +2196,7 @@ impl SdrRemoteApp {
                 ("Mic:       ", self.capture_level)
             };
             ui.label(mic_label);
-            level_bar(ui, mic_level);
+            level_bar(ui, mic_level, "mic");
         });
         if self.thetis_configured {
             // Alleen tonen als RX1-audio geabonneerd is (rx1_enabled). NIET op
@@ -2205,23 +2205,23 @@ impl SdrRemoteApp {
                 if self.binaural && self.playback_level_bin_r > 0.0 {
                     ui.horizontal(|ui| {
                         ui.label("RX1 L:     ");
-                        level_bar(ui, self.playback_level);
+                        level_bar(ui, self.playback_level, "rx1");
                     });
                     ui.horizontal(|ui| {
                         ui.label("RX1 R:     ");
-                        level_bar(ui, self.playback_level_bin_r);
+                        level_bar(ui, self.playback_level_bin_r, "rx1r");
                     });
                 } else {
                     ui.horizontal(|ui| {
                         ui.label("RX1:       ");
-                        level_bar(ui, self.playback_level);
+                        level_bar(ui, self.playback_level, "rx1");
                     });
                 }
             }
             if self.rx2_enabled {
                 ui.horizontal(|ui| {
                     ui.label("RX2:       ");
-                    level_bar(ui, self.playback_level_rx2);
+                    level_bar(ui, self.playback_level_rx2, "rx2");
                 });
             }
         }
@@ -2231,26 +2231,26 @@ impl SdrRemoteApp {
         if self.yaesu_enabled {
             ui.horizontal(|ui| {
                 ui.label(self.yaesu_slot_label(0));
-                level_bar(ui, self.playback_level_yaesu);
+                level_bar(ui, self.playback_level_yaesu, "yaesu1");
             });
         }
         if self.yaesu2_enabled {
             ui.horizontal(|ui| {
                 ui.label(self.yaesu_slot_label(1));
-                level_bar(ui, self.playback_level_yaesu2);
+                level_bar(ui, self.playback_level_yaesu2, "yaesu2");
             });
         }
         if self.thetis_configured {
             if self.vrx1_enabled {
                 ui.horizontal(|ui| {
                     ui.label("VRX1:      ");
-                    level_bar(ui, self.playback_level_vrx1);
+                    level_bar(ui, self.playback_level_vrx1, "vrx1");
                 });
             }
             if self.vrx2_enabled {
                 ui.horizontal(|ui| {
                     ui.label("VRX2:      ");
-                    level_bar(ui, self.playback_level_vrx2);
+                    level_bar(ui, self.playback_level_vrx2, "vrx2");
                 });
             }
         }
@@ -2363,6 +2363,7 @@ impl SdrRemoteApp {
                 // Down (RX) is clickable for per-PacketType breakdown of the last 5 s.
                 if super::helpers::chevron_label(ui, self.bw_breakdown_expanded, rust_i18n::t!("screen_down_rx").to_string()).clicked() {
                     self.bw_breakdown_expanded = !self.bw_breakdown_expanded;
+                    self.save_full_config();
                 }
                 ui.label(format!("{} Kbit/s", self.down_kbps));
                 ui.end_row();
