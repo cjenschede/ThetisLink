@@ -1,33 +1,30 @@
 # ThetisLink
 
 > **Current release: [v2.7.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.7.0)** —
-> **"Arrange windows" is now a matrix placer (up to 12×12):** pick a grid size, select a
-> window and **paint it onto the cells** — **drag a rectangle to place a window in one gesture**
-> — and it is now **also built into the server GUI** to arrange the server's own device windows
-> (tuner, Amplitec, SPE, RF2K-S, UltraBeam, rotor), per monitor. The **server GUI is now
-> multilingual** too — **English, Dutch, German and French** with a live language picker in
-> Settings. The **analog S-meter was reworked** for a constant, more readable shape that scales
-> uniformly and grows larger when there is room. Plus fixes: **turning the FT-991A on from a
-> standby state is no longer delayed ~30 s**, **FT-991A/FTX-1 memory reads reliably**,
-> collapsible sections **remember their state**, RX1 **"Auto ref" sticks**, and a **peak-hold
-> tick** on the audio-level bars. Built on the per-channel audio/spectrum, VRX windows, Yaesu
-> main-screen controls and multilingual clients of v2.5.0.
+> **Virtual receivers now start reliably and stay clean after retuning**: three separate faults
+> sat under one symptom, and a VRX also stays inside the DDC band with the spectrum drawing the
+> band edge honestly instead of silently rescaling. **CTCSS and DCS can be set from the client**
+> on the FT-991A — per memory channel, all 104 DCS codes, with a *Read tones* action that walks
+> the channels and puts the radio back where it was. The **audio-level bars were rebuilt**: they
+> measure the link rather than your volume slider, fall back to zero when a stream stops, and the
+> **Yaesu receive path is now calibrated per radio model** — the FT-991A plays about 16 dB
+> quieter than before, so set its volume higher than you are used to. The **full-band spectrum
+> row is shared** between an RX and the VRX on the same receiver, which fills the waterfall
+> history after tuning; a checkbox turns it off and roughly halves the spectrum data. The
+> **channel buttons say what they do** now (channel name as a heading, `audio` and `window`),
+> the audio switch also sits inside every channel window, and the **master volume really is a
+> master** — it applies to all six channels. Plus **Thetis autostart** from client and Android,
+> **several clients on one PC** via named profiles, and fixes for a MIDI wheel running a Yaesu
+> away and a relay that mistook a dead UDP path for a recovered one.
 > Illustrated explainers are online — see **Documentation** below.
 > **Backwards-compatible** — TL wire-protocol `VERSION` 3 unchanged; interoperates
-> with v2.5.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for these
+> with v2.6.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for these
 > features (the PA3GHM fork adds the extended-IQ feature-set).
 > Download `ThetisLink-2.7.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are
 > attached to the same release as separate download assets.
->
-> **Want to try the relay without hosting your own?** For the first users who would
-> like to try it, PA3GHM can — on request and while slots last — temporarily add you
-> to a test relay. Note this is a **temporary server with a limited number of slots**,
-> so there is no guarantee of availability or continuity. Contact **PA3GHM via
-> [QRZ.com](https://www.qrz.com/db/PA3GHM)** (callsign PA3GHM). Otherwise you can
-> self-host your own relay — see the manual.
 
 Remote control for ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full
 radio control over the network via TCI WebSocket.
@@ -53,6 +50,36 @@ radio control over the network via TCI WebSocket.
 - DX Cluster with spectrum overlay
 - Mandatory password authentication (HMAC-SHA256) with optional TOTP 2FA
 - Smart and Ultra diversity auto-null algorithms
+
+## Try it over the internet — the PA3GHM test relay
+
+ThetisLink can be used over the internet in two ways: **directly**, if you can forward a port
+on your router, or **through a relay**, where the station and the client each make an outgoing
+connection to a rendezvous server that pairs them. The relay path needs no port-forward and no
+fixed IP address.
+
+You can host a relay yourself — the source is attached to every release and the manual walks
+through it. But to lower the threshold, **PA3GHM runs a relay you can be added to on request.**
+
+**This is likely for you if:**
+
+- your internet connection sits behind CGNAT, or you use mobile data, and an incoming
+  connection simply is not possible;
+- you cannot or would rather not open a port on your router;
+- you would like to see whether remote operation suits you before setting up a VPS of your own.
+
+**Please read this first.** It is an **experimental setup with a limited number of places**,
+run as a hobby alongside the project. There is no guarantee of availability, capacity or
+continuity, and a place may be reclaimed if the load calls for it. It is meant for trying
+things out and for operators who have no alternative — not as permanent infrastructure for a
+station you depend on. If ThetisLink becomes part of your regular operating, hosting your own
+relay is the better answer, and the project supports that fully.
+
+**Requesting access:** send an email to **PA3GHM@gmail.com** with your callsign and a short
+note about your setup (which radio, and why a direct connection is not an option for you).
+You will receive the connection details and a station key.
+
+73, PA3GHM
 
 ## Documentation
 
