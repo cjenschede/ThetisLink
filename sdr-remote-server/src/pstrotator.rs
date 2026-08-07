@@ -168,11 +168,11 @@ fn handle_command(
 ) {
     match cmd {
         RotorCmd::GoTo(angle_x10) => {
-            // Stuur altijd integer graden in de XML (zelfde gedrag als de
-            // EA7HG/Prosistel-backend). Decimalen veroorzaakten bij
-            // sommige rotor-drivers in PstRotator een verkeerde
-            // short-path keuze omdat ze het verschil met de huidige
-            // positie (incl. de decimaal) gebruiken voor CW/CCW.
+            // Always send integer degrees in the XML (same behaviour as the
+            // EA7HG/Prosistel backend). Decimals caused some rotor drivers
+            // in PstRotator to make a wrong short-path choice because they
+            // use the difference with the current position (incl. the
+            // decimal) for CW/CCW.
             status.lock().unwrap().target_x10 = *angle_x10;
             let deg = *angle_x10 / 10;
             info!("Rotor (PstRotator) GoTo {}°", deg);

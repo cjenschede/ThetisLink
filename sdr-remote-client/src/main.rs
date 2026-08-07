@@ -45,8 +45,19 @@ impl log::Log for GuiLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
+        // Wall-clock time first, matching the server log. Without it a client line
+        // cannot be placed next to a server line, which is exactly what is needed
+        // to tell which hop is holding a frame.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = now.as_secs() % 86_400;
         let line = format!(
-            "[{}] {} - {}",
+            "[{:02}:{:02}:{:02}.{:03} {}] {} - {}",
+            secs / 3600,
+            (secs % 3600) / 60,
+            secs % 60,
+            now.subsec_millis(),
             record.level(),
             record.target(),
             record.args()
@@ -70,11 +81,80 @@ impl log::Log for GuiLogger {
 }
 
 fn main() -> Result<()> {
+    // Instance profile (multi-instance): `--profile <name>` / `-p <name>` runs a
+    // SECOND ThetisLink alongside the first on one PC, each with its OWN config
+    // file, log files and single-instance identity (config seeded as a copy of the
+    // default on first use). No arg = the default profile, byte-for-byte unchanged.
+    // Parsed FIRST: the config name, log names and the guard mutex all key off it.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let mut prof: Option<String> = None;
+        let mut positional: Option<String> = None;
+        let mut i = 1;
+        while i < args.len() {
+            let a = &args[i];
+            if a == "--profile" || a == "-p" {
+                prof = args.get(i + 1).cloned();
+                i += 2;
+            } else if let Some(v) = a.strip_prefix("--profile=") {
+                prof = Some(v.to_string());
+                i += 1;
+            } else {
+                // A bare (non-flag) token is also accepted as the profile name, so
+                // `ThetisLink-Client.exe B` works, AND a mistyped flag like
+                // `--provile B` still picks up the intended name from the bare `B`
+                // instead of silently falling back to the default profile.
+                if positional.is_none() && !a.starts_with('-') {
+                    positional = Some(a.clone());
+                }
+                i += 1;
+            }
+        }
+        ui::config::set_profile(prof.or(positional));
+    }
+
+    // Single-instance guard: a second ThetisLink client of the SAME profile fights
+    // the first over the server connection / audio / spectrum subscription and looks
+    // like a broad regression (spectrum/s-meter/Yaesu chaos). Refuse a second one of
+    // the same profile. A named mutex: CreateMutexW sets ERROR_ALREADY_EXISTS when
+    // one already runs. The mutex name is per profile, so DIFFERENT profiles run side
+    // by side; the default profile keeps the original name (unchanged behaviour). The
+    // handle is left open (not closed) so the mutex is held until this process exits;
+    // no leak in the Rust sense (HANDLE is Copy, closed only via CloseHandle).
+    #[cfg(windows)]
+    unsafe {
+        use windows::core::{w, HSTRING, PCWSTR};
+        use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+        use windows::Win32::System::Threading::CreateMutexW;
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+        let mutex_name = match ui::config::profile() {
+            Some(p) => format!("ThetisLink-Client-SingleInstance-{p}"),
+            None => "ThetisLink-Client-SingleInstance".to_string(),
+        };
+        let mutex_name_w = HSTRING::from(mutex_name.as_str());
+        if CreateMutexW(None, true, PCWSTR(mutex_name_w.as_ptr())).is_ok()
+            && GetLastError() == ERROR_ALREADY_EXISTS
+        {
+            let msg = match ui::config::profile() {
+                Some(p) => format!("ThetisLink (profiel {p}) draait al. Sluit eerst die client."),
+                None => "ThetisLink draait al. Sluit eerst de bestaande client.".to_string(),
+            };
+            let msg_w = HSTRING::from(msg.as_str());
+            MessageBoxW(
+                None,
+                PCWSTR(msg_w.as_ptr()),
+                w!("ThetisLink"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+            std::process::exit(0);
+        }
+    }
+
     let log_buffer: LogBuffer = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES)));
 
-    // Crash-safe coverage dump: bij panic is de UI-coverage matrix juist waardevol
-    // (welke controls waren gerendered tot aan crash?). Wrap zonder default-hook
-    // weg te gooien - we bellen die daarna alsnog.
+    // Crash-safe coverage dump: on panic the UI-coverage matrix is especially valuable
+    // (which controls had been rendered up to the crash?). Wrap without throwing away
+    // the default hook - we still call it afterwards.
     {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
@@ -89,8 +169,9 @@ fn main() -> Result<()> {
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let log_path = exe_dir.join("thetislink-client.log");
-        let cwd_path = std::path::PathBuf::from("thetislink-client.log");
+        let log_name = ui::config::per_profile_file("thetislink-client", "log");
+        let log_path = exe_dir.join(&log_name);
+        let cwd_path = std::path::PathBuf::from(&log_name);
         // Try exe dir first, then current working directory
         match OpenOptions::new().create(true).write(true).truncate(true).open(&log_path) {
             Ok(f) => {
@@ -111,24 +192,31 @@ fn main() -> Result<()> {
     log::set_boxed_logger(Box::new(logger)).unwrap();
     log::set_max_level(log::LevelFilter::Info);
 
-    // Tracing subscriber voor UI-observability (controls/events.rs -> TracingSink).
+    // Seed this profile's config from the default (copy) on first use, so
+    // `--profile B` starts as a copy of the current settings. No-op for default.
+    ui::config::seed_profile_config_if_absent();
+    if let Some(p) = ui::config::profile() {
+        info!("Instance profile: {}", p);
+    }
+
+    // Tracing subscriber for UI-observability (controls/events.rs -> TracingSink).
     //
-    // Schrijft naar `ui-events.jsonl` naast de exe (NIET naar stderr):
-    // windows_subsystem = "windows" detacht stderr in GUI-builds; writes naar
-    // een dead fd hingen de UI-thread op onder spectrum+click-belasting.
+    // Writes to `ui-events.jsonl` next to the exe (NOT to stderr):
+    // windows_subsystem = "windows" detaches stderr in GUI-builds; writes to
+    // a dead fd hung the UI-thread under spectrum+click load.
     //
-    // Non-blocking writer (tracing-appender) zet de I/O op een background
-    // thread - UI-thread kan NIET blokkeren op een write-syscall. Guard moet
-    // in scope blijven tot einde main anders gaan events verloren.
+    // Non-blocking writer (tracing-appender) puts the I/O on a background
+    // thread - UI-thread can NOT block on a write-syscall. Guard must
+    // stay in scope until the end of main otherwise events are lost.
     //
-    // Gated door `RUST_LOG` via EnvFilter; default (leeg) filtert alles uit
+    // Gated by `RUST_LOG` via EnvFilter; default (empty) filters everything out
     // -> zero-cost in prod.
     let _tracing_guard = {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let ui_log_path = exe_dir.join("ui-events.jsonl");
+        let ui_log_path = exe_dir.join(ui::config::per_profile_file("ui-events", "jsonl"));
         match std::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -159,9 +247,9 @@ fn main() -> Result<()> {
     // Shutdown signal
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Phase C: relay als transport. Is de relay-config compleet, dan zetten we een
-    // client-relay-monitor met tunnel op (rol Client); de engine krijgt de tunnel als
-    // ClientTransport::Relay, de UI krijgt de status-handle. Anders: direct-UDP (default).
+    // Phase C: relay as transport. If the relay-config is complete, we set up a
+    // client-relay-monitor with tunnel (role Client); the engine gets the tunnel as
+    // ClientTransport::Relay, the UI gets the status-handle. Otherwise: direct-UDP (default).
     let relay_cfg_loaded = ui::config::load_config();
     // Apply the persisted UI language before the egui app starts.
     rust_i18n::set_locale(&relay_cfg_loaded.language);
@@ -176,7 +264,7 @@ fn main() -> Result<()> {
     {
         let (uplink_tx, uplink_rx) = tokio::sync::mpsc::unbounded_channel();
         let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
-        // Placeholder server-adres: display-label, genegeerd door de Relay-transport.
+        // Placeholder server address: display-label, ignored by the Relay-transport.
         let server_placeholder: std::net::SocketAddr = "203.0.113.1:4580".parse().unwrap();
         let relay_cfg = sdr_remote_relay::RelayConfig {
             enabled: true,
@@ -240,9 +328,11 @@ fn main() -> Result<()> {
     };
     let window_size = ui::load_window_size();
     let window_pos = ui::load_window_pos();
+    // Base title, tagged with the profile ("  [B]") for named instances.
+    let app_title = ui::config::window_title(&format!("ThetisLink v{}", sdr_remote_core::version_string()));
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(window_size)
-        .with_title(format!("ThetisLink v{}", sdr_remote_core::version_string()))
+        .with_title(app_title.clone())
         .with_icon(std::sync::Arc::new(icon));
     if let Some(pos) = window_pos {
         // Only restore the saved position when a usable part of the window would land on a
@@ -261,16 +351,16 @@ fn main() -> Result<()> {
     }
     let native_options = eframe::NativeOptions {
         viewport,
-        // eframe's eigen window-state-restore overschrijft anders onze
-        // with_inner_size/with_position uit de conf -> window-geometrie werd niet
-        // onthouden. Wij beheren de geometrie zelf (load_window_size/pos +
-        // save_full_config), dus eframe's persist uit.
+        // eframe's own window-state-restore would otherwise overwrite our
+        // with_inner_size/with_position from the conf -> window geometry was not
+        // remembered. We manage the geometry ourselves (load_window_size/pos +
+        // save_full_config), so eframe's persist off.
         persist_window: false,
         ..Default::default()
     };
 
     let _ = eframe::run_native(
-        &format!("ThetisLink v{}", sdr_remote_core::version_string()),
+        &app_title,
         native_options,
         Box::new(move |_cc| {
             Ok(Box::new(ui::SdrRemoteApp::new(state_rx, cmd_tx, log_buffer, relay_status_handle)))
@@ -281,8 +371,8 @@ fn main() -> Result<()> {
     let _ = shutdown_tx.send(true);
     let _ = network_thread.join();
 
-    // Dump coverage-matrix voor CI-gate (debug builds of feature ui-coverage).
-    // No-op in release zonder feature. Schrijft naar `target/ui-coverage.json`.
+    // Dump coverage-matrix for CI-gate (debug builds or feature ui-coverage).
+    // No-op in release without feature. Writes to `target/ui-coverage.json`.
     ui::controls::coverage::dump_if_enabled();
 
     info!("Client stopped.");

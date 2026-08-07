@@ -1811,19 +1811,59 @@ private fun YaesuTab(
     // Parse memory data (tab-separated, header: Ch, RxFreq, TxFreq, Offset, Dir, Mode, TxMode, Name, Tone, CTCSS, ...)
     val memData = state.yaesuMemoryData
     val isMenuData = memData.startsWith("MENU:")
-    data class YaesuMem(val ch: String, val name: String, val rxFreq: String, val mode: String, val dir: String, val tone: String)
+    data class YaesuMem(
+        val ch: String, val name: String, val rxFreq: String, val mode: String,
+        val dir: String, val tone: String,
+        /// Everything beyond frequency/mode/name that the source actually
+        /// reported, pre-formatted as one line. Empty columns are left out:
+        /// the radio reports only part of these over CAT, and "not reported"
+        /// must not read as "Off".
+        val details: String,
+    )
     val memChannels = remember(memData) {
         if (memData.isNotEmpty() && !isMenuData) {
-            memData.lines().drop(1).mapNotNull { line -> // drop header
-                val p = line.split("\t")
+            val rows = memData.lines()
+            // Column positions come from the header line, so the server can add
+            // or reorder columns without silently shifting what is shown here.
+            val colIndex = rows.firstOrNull()
+                ?.split("	")
+                ?.withIndex()
+                ?.associate { (i, n) -> n.trim().lowercase() to i }
+                ?: emptyMap()
+            rows.drop(1).mapNotNull { line -> // drop header
+                val p = line.split("	")
                 if (p.size >= 8) {
-                    val ch = p[0].trim()
-                    val rxFreq = p[1].trim()
-                    val mode = p[5].trim()
-                    val name = p[7].trim()
-                    val dir = p.getOrElse(4) { "" }.trim()
-                    val tone = p.getOrElse(8) { "" }.trim()
-                    if (ch.isNotEmpty() && rxFreq.isNotEmpty()) YaesuMem(ch, name, rxFreq, mode, dir, tone) else null
+                    fun col(header: String) =
+                        colIndex[header.lowercase()]?.let { p.getOrElse(it) { "" }.trim() } ?: ""
+                    val ch = col("Channel Number")
+                    val rxFreq = col("Receive Frequency")
+                    val mode = col("Operating Mode")
+                    val name = col("Name")
+                    val dir = col("Offset Direction")
+                    val tone = col("Tone Mode")
+                    // Repeater shift and CTCSS/DCS only apply in the FM-ish
+                    // modes; elsewhere the stored tone mode does nothing.
+                    val usesTone = mode in setOf("FM", "FM-N", "DATA-FM", "C4FM")
+                    val details = buildList {
+                        if (usesTone && tone.isNotEmpty() && tone != "None") {
+                            val toneValue = when {
+                                tone.startsWith("Tone") || tone == "T SQL" -> col("CTCSS")
+                                tone.startsWith("DCS") || tone == "D Code" -> col("DCS")
+                                else -> ""
+                            }
+                            add(if (toneValue.isNotEmpty()) "$tone $toneValue" else tone)
+                        }
+                        if (usesTone && dir.isNotEmpty() && dir != "Simplex") {
+                            add("Shift $dir ${col("Offset Frequency")}".trim())
+                        }
+                        for ((label, header) in EXTRA_MEM_COLUMNS) {
+                            val v = col(header)
+                            if (v.isNotEmpty()) add("$label $v")
+                        }
+                    }.joinToString("  ·  ")
+                    if (ch.isNotEmpty() && rxFreq.isNotEmpty()) {
+                        YaesuMem(ch, name, rxFreq, mode, dir, tone, details)
+                    } else null
                 } else null
             }
         } else emptyList()
@@ -2161,7 +2201,9 @@ private fun YaesuTab(
         var localMicGain by remember(micRadio) {
             mutableFloatStateOf(micEngineToDisplay(micEqPrefs.getFloat("yaesu_mic_gain_$micRadio", 0.2f)))
         }
-        LaunchedEffect(micRadio) { onTxGain(micDisplayToEngine(localMicGain)) }
+        // No push on radio switch here: this tab is not always composed, so the
+        // engine would keep the previous radio's gain. SdrViewModel.syncTxChainForRadio
+        // does it from the state stream; the slider below still pushes on change.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Mic:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
             Slider(value = localMicGain, onValueChange = {
@@ -2183,7 +2225,7 @@ private fun YaesuTab(
         var compLevel by remember(compRadio) {
             mutableFloatStateOf(micEqPrefs.getFloat("yaesu_comp_$compRadio", micEqPrefs.getFloat("yaesu_comp", 0f)))
         }
-        LaunchedEffect(compRadio) { onCompressor(compLevel.toInt()) }
+        // Radio-switch push lives in SdrViewModel.syncTxChainForRadio - see above.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Comp:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
             Slider(value = compLevel, onValueChange = {
@@ -2578,7 +2620,7 @@ private fun YaesuTab(
                     val chNum = mem.ch.toIntOrNull()
                     val isActive = chNum != null &&
                         chNum == state.yaesuMemoryChannel && state.yaesuVfoSelect == 1
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .then(
@@ -2587,12 +2629,23 @@ private fun YaesuTab(
                             )
                             .background(if (isActive) Color(0xFF1A3A5A) else Color.Transparent)
                             .padding(vertical = 5.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text(mem.ch, fontSize = 12.sp, modifier = Modifier.width(22.dp), color = Color.Gray)
-                        Text(mem.name, fontSize = 12.sp, modifier = Modifier.width(80.dp), fontWeight = FontWeight.Bold, maxLines = 1)
-                        Text(mem.rxFreq, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 1)
-                        Text(mem.mode, fontSize = 11.sp, color = Color.Gray, maxLines = 1)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(mem.ch, fontSize = 12.sp, modifier = Modifier.width(22.dp), color = Color.Gray)
+                            Text(mem.name, fontSize = 12.sp, modifier = Modifier.width(80.dp), fontWeight = FontWeight.Bold, maxLines = 1)
+                            Text(mem.rxFreq, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 1)
+                            Text(mem.mode, fontSize = 11.sp, color = Color.Gray, maxLines = 1)
+                        }
+                        // Second line with the settings the radio did report -
+                        // absent when it reported none, so no empty row appears.
+                        if (mem.details.isNotEmpty()) {
+                            Text(
+                                mem.details,
+                                fontSize = 10.sp,
+                                color = Color(0xFF9A9A9A),
+                                modifier = Modifier.padding(start = 28.dp, top = 1.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -2628,6 +2681,19 @@ private fun YaesuTab(
         }
     }
 }
+
+/// Memory-list columns beyond frequency/mode/name, as (label, header name) in
+/// the tab-separated memory blob the server sends, looked up BY NAME.
+/// Ham abbreviations for the label, untranslated like the rest of the radio
+/// jargon; the second entry must match the server's column header exactly.
+///
+/// Never by position: the blob has three readers (server writes, desktop
+/// parses, this parses), and a column added in the middle used to shift every
+/// label here onto the wrong value, silently.
+private val EXTRA_MEM_COLUMNS = listOf(
+    "Narrow" to "Narrow", "Skip" to "Skip", "ATT" to "Attenuator", "Tuner" to "Tuner",
+    "AGC" to "AGC", "NB" to "Noise Blanker", "IPO" to "IPO", "DNR" to "DNR", "Step" to "Step",
+)
 
 private val YAESU_MENU_NAMES = mapOf(
     1 to "AGC FAST DELAY", 2 to "AGC MID DELAY", 3 to "AGC SLOW DELAY", 4 to "HOME FUNCTION",

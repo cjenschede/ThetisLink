@@ -87,15 +87,15 @@ impl AmplitecSwitch {
     }
 }
 
-/// Reconnect-interval bij offline device. 5 sec is een redelijke balans
-/// tussen "merken dat hij weer aan staat" en "geen log-spam tijdens
-/// langere uitval". De wachttijd wordt afgebroken zodra het
-/// command-channel sluit (server-stop), zodat de thread netjes exit.
+/// Reconnect interval when the device is offline. 5 sec is a reasonable balance
+/// between "noticing that it is back on" and "no log spam during
+/// longer outages". The wait is aborted as soon as the
+/// command channel closes (server stop), so the thread exits cleanly.
 const AMPLITEC_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
-/// Polling-interval tijdens een actieve sessie. Iedere 2 sec een SCAN
-/// command voor positie-updates + heartbeat zodat een stille USB-fout
-/// snel gedetecteerd wordt.
+/// Polling interval during an active session. A SCAN command every 2 sec
+/// for position updates + heartbeat so a silent USB fault
+/// is detected quickly.
 const AMPLITEC_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 fn amplitec_thread(
@@ -104,11 +104,11 @@ fn amplitec_thread(
     port_name: String,
 ) {
     info!("Amplitec serial thread started for {}", port_name);
-    // Log-state per outage zodat we maar één warn per disconnect-event
-    // krijgen i.p.v. één per retry-poging (5 sec).
+    // Log state per outage so we get only one warn per disconnect event
+    // instead of one per retry attempt (5 sec).
     let mut have_logged_offline = false;
     loop {
-        // ── Probeer (her)openen ─────────────────────────────────────
+        // ── Try to (re)open ─────────────────────────────────────────
         let port = serialport::new(&port_name, 19200)
             .data_bits(serialport::DataBits::Eight)
             .parity(serialport::Parity::None)
@@ -135,31 +135,31 @@ fn amplitec_thread(
                     debug!("Amplitec {} still offline: {}", port_name, e);
                 }
                 mark_disconnected(&status);
-                // Pending commands droppen - verzending na power-cycle
-                // van een stale switch-cmd zou ongewenst zijn.
+                // Drop pending commands - sending a stale switch cmd after a
+                // power-cycle would be undesirable.
                 while cmd_rx.try_recv().is_ok() {}
-                // Wachten op retry óf op shutdown.
+                // Wait for retry or for shutdown.
                 match cmd_rx.recv_timeout(AMPLITEC_RECONNECT_DELAY) {
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         info!("Amplitec command channel closed during reconnect-wait, stopping");
                         return;
                     }
-                    // Bij Timeout én bij een eventueel binnengekomen cmd
-                    // (drainen na retry) -> opnieuw proberen te openen.
+                    // On Timeout and on any cmd that came in
+                    // (drain after retry) -> try to open again.
                     _ => continue,
                 }
             }
         };
 
-        // ── Initial scan na succesvolle open ───────────────────────
+        // ── Initial scan after successful open ──────────────────────
         if let Err(e) = send_and_scan(&mut port, &CMD_SCAN, &status) {
             warn!("Amplitec initial scan on {} failed: {}", port_name, e);
             mark_disconnected(&status);
             drop(port);
-            continue; // terug naar (her)open
+            continue; // back to (re)open
         }
 
-        // ── Command/poll loop totdat een fout optreedt ─────────────
+        // ── Command/poll loop until a fault occurs ─────────────────
         let session_outcome = run_amplitec_session(&mut port, &cmd_rx, &status);
         drop(port);
         mark_disconnected(&status);
@@ -167,7 +167,7 @@ fn amplitec_thread(
             SessionOutcome::Reconnect => {
                 warn!("Amplitec {} disconnected, retrying", port_name);
                 have_logged_offline = false;
-                // continue loop: opnieuw openen
+                // continue loop: open again
             }
             SessionOutcome::Shutdown => {
                 info!("Amplitec serial thread stopping ({})", port_name);
@@ -178,9 +178,9 @@ fn amplitec_thread(
 }
 
 enum SessionOutcome {
-    /// Serial-fout opgetreden - port sluiten en opnieuw openen.
+    /// Serial fault occurred - close the port and open it again.
     Reconnect,
-    /// Command-channel gesloten (server-stop). Thread mag eindigen.
+    /// Command channel closed (server stop). Thread may end.
     Shutdown,
 }
 

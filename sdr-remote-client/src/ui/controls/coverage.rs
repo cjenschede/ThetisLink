@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Coverage-registratie voor render-path vergelijking tegen de CI-gate
+//! Coverage registration for comparing the render path against the CI-gate
 //! expected set.
 //!
-//! Elke render-helper registreert bij zijn eerste aanroep de combinatie
-//! `(control, surface, channel, density, guarded)` die hij rendert. Na opstart
-//! dumpt de app optioneel `target/ui-coverage.json` voor vergelijking tegen
-//! `scripts/ui-coverage-expected.json` via CI-gate (`scripts/check-ui-coverage.sh`).
+//! On its first call, each render helper registers the combination
+//! `(control, surface, channel, density, guarded)` that it renders. After startup
+//! the app optionally dumps `target/ui-coverage.json` for comparison against
+//! `scripts/ui-coverage-expected.json` via the CI gate (`scripts/check-ui-coverage.sh`).
 //!
-//! **Kosten per call:** `register()` pakt een `Mutex`-lock en doet
-//! `BTreeSet::insert` (O(log n) met dedup). Bij typische render-cadens
-//! (60 fps × ~10 helpers) is dit in praktijk verwaarloosbaar, maar wel
-//! géén zero-cost - profileer als het hot-path zichtbaar gaat kosten.
+//! **Cost per call:** `register()` takes a `Mutex` lock and does a
+//! `BTreeSet::insert` (O(log n) with dedup). At a typical render cadence
+//! (60 fps × ~10 helpers) this is negligible in practice, but it is
+//! not zero-cost - profile if it starts to show up on the hot path.
 
 use std::collections::BTreeSet;
 use std::sync::Mutex;
@@ -24,20 +24,20 @@ pub(crate) struct CoverageEntry {
     pub(crate) surface: &'static str,
     pub(crate) channel: &'static str,
     pub(crate) density: &'static str,
-    /// `true` als deze control-site een `add_enabled` / `dispatch`-guard op
-    /// `connected` heeft; `false` voor by-design ongeguarded controls (bv.
-    /// step-size selectie die offline werkt).
+    /// `true` if this control site has an `add_enabled` / `dispatch` guard on
+    /// `connected`; `false` for by-design unguarded controls (e.g.
+    /// step-size selection that works offline).
     pub(crate) guarded: bool,
 }
 
 static REGISTRY: Mutex<Option<BTreeSet<CoverageEntry>>> = Mutex::new(None);
 
-/// Registreer dat `control` gerenderd is in de gegeven context.
+/// Register that `control` was rendered in the given context.
 ///
-/// Idempotent: dezelfde combinatie wordt maar één keer vastgelegd. Een site
-/// die zowel `guarded=true` als `guarded=false` registreert produceert twee
-/// rijen - dat is opzettelijk (anders zou een inconsistente helper onzichtbaar
-/// blijven).
+/// Idempotent: the same combination is recorded only once. A site
+/// that registers both `guarded=true` and `guarded=false` produces two
+/// rows - that is intentional (otherwise an inconsistent helper would remain
+/// invisible).
 pub(crate) fn register(
     control: &'static str,
     surface: UiSurface,
@@ -57,9 +57,9 @@ pub(crate) fn register(
     set.insert(entry);
 }
 
-/// Exporteer de huidige coverage als JSON-array. `BTreeSet`-iteratie levert
-/// deterministische volgorde zodat `jq -S . ui-coverage.json | diff ...`
-/// stabiele output geeft.
+/// Export the current coverage as a JSON array. `BTreeSet` iteration yields
+/// deterministic ordering so that `jq -S . ui-coverage.json | diff ...`
+/// gives stable output.
 pub(crate) fn export_json() -> String {
     let guard = REGISTRY.lock().unwrap();
     let empty = BTreeSet::new();
@@ -80,8 +80,8 @@ pub(crate) fn export_json() -> String {
     out
 }
 
-/// In debug of onder `feature = "ui-coverage"`: schrijf coverage naar
-/// `target/ui-coverage.json`. In release zonder feature: no-op.
+/// In debug or under `feature = "ui-coverage"`: write coverage to
+/// `target/ui-coverage.json`. In release without the feature: no-op.
 pub(crate) fn dump_if_enabled() {
     #[cfg(any(debug_assertions, feature = "ui-coverage"))]
     {

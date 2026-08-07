@@ -214,7 +214,7 @@ pub fn connect_error_text(
         ),
 
         // --- TciUnreachable ---
-        // Branch the hint on what the server reports about Thetis.exe:
+        // Branch headline + hint on what the server reports about Thetis.exe:
         //   Some(true)  → Thetis runs, TCI is down → check TCI settings
         //   Some(false) → Thetis is not running   → use the client's
         //                 Power control to launch it; phrasing depends
@@ -236,28 +236,41 @@ pub fn connect_error_text(
                 Platform::Desktop => "Open the Thetis tab in this client and press Start",
                 Platform::Mobile => "Tap the Power button on the Radio screen",
             };
-            let action = match (thetis_process_running, server_reported_detail) {
-                (Some(true), _) => {
+            // Headline names Thetis explicitly, never "radio": a station with
+            // one or two Yaesu radios attached reads "radio not reachable" as
+            // "my Yaesu is down", while this error is only ever about Thetis.
+            let (headline, action) = match (thetis_process_running, server_reported_detail) {
+                (Some(true), _) => (
+                    "Thetis TCI not connected",
                     "Thetis is running on the server PC, but its TCI server is not connected. \
                      In Thetis: open Setup → Network → TCI and make sure the TCI server is enabled."
-                        .to_string()
-                }
-                (Some(false), _) => format!(
-                    "Thetis is not running on the server PC. {} to launch Thetis.",
-                    launch_hint
+                        .to_string(),
                 ),
-                (None, Some(d)) => format!(
-                    "Server reports: {}. {} to launch Thetis on the server PC, \
-                     or check Thetis directly on the server PC.",
-                    d, launch_hint
+                (Some(false), _) => (
+                    "Thetis is not running",
+                    format!(
+                        "Thetis is not running on the server PC. {} to launch Thetis.",
+                        launch_hint
+                    ),
                 ),
-                (None, None) => format!(
-                    "{} to launch Thetis on the server PC. \
-                     If Thetis is already running, check that its TCI server is enabled.",
-                    launch_hint
+                (None, Some(d)) => (
+                    "Thetis not reachable",
+                    format!(
+                        "Server reports: {}. {} to launch Thetis on the server PC, \
+                         or check Thetis directly on the server PC.",
+                        d, launch_hint
+                    ),
+                ),
+                (None, None) => (
+                    "Thetis not reachable",
+                    format!(
+                        "{} to launch Thetis on the server PC. \
+                         If Thetis is already running, check that its TCI server is enabled.",
+                        launch_hint
+                    ),
                 ),
             };
-            ("Radio not reachable".to_string(), Some(action))
+            (headline.to_string(), Some(action))
         }
         (
             ConnectError::TciUnreachable {
@@ -271,28 +284,38 @@ pub fn connect_error_text(
                 Platform::Desktop => "Open de Thetis-tab in deze client en druk op Start",
                 Platform::Mobile => "Tik op de Power-knop in het Radio-scherm",
             };
-            let action = match (thetis_process_running, server_reported_detail) {
-                (Some(true), _) => {
+            let (headline, action) = match (thetis_process_running, server_reported_detail) {
+                (Some(true), _) => (
+                    "Thetis TCI niet verbonden",
                     "Thetis draait op de server-PC, maar de TCI-server is niet verbonden. \
                      In Thetis: open Setup → Network → TCI en zorg dat de TCI-server aan staat."
-                        .to_string()
-                }
-                (Some(false), _) => format!(
-                    "Thetis draait niet op de server-PC. {} om Thetis te starten.",
-                    launch_hint
+                        .to_string(),
                 ),
-                (None, Some(d)) => format!(
-                    "Server meldt: {}. {} om Thetis op de server-PC te starten, \
-                     of controleer Thetis rechtstreeks op de server-PC.",
-                    d, launch_hint
+                (Some(false), _) => (
+                    "Thetis is niet opgestart",
+                    format!(
+                        "Thetis draait niet op de server-PC. {} om Thetis te starten.",
+                        launch_hint
+                    ),
                 ),
-                (None, None) => format!(
-                    "{} om Thetis op de server-PC te starten. \
-                     Als Thetis al draait, controleer dan of de TCI-server is ingeschakeld.",
-                    launch_hint
+                (None, Some(d)) => (
+                    "Thetis niet bereikbaar",
+                    format!(
+                        "Server meldt: {}. {} om Thetis op de server-PC te starten, \
+                         of controleer Thetis rechtstreeks op de server-PC.",
+                        d, launch_hint
+                    ),
+                ),
+                (None, None) => (
+                    "Thetis niet bereikbaar",
+                    format!(
+                        "{} om Thetis op de server-PC te starten. \
+                         Als Thetis al draait, controleer dan of de TCI-server is ingeschakeld.",
+                        launch_hint
+                    ),
                 ),
             };
-            ("Radio niet bereikbaar".to_string(), Some(action))
+            (headline.to_string(), Some(action))
         }
 
         // --- Other ---
@@ -406,6 +429,35 @@ mod tests {
         assert!(!action_mobile_nl.as_ref().unwrap().contains("Thetis-tab"));
         assert!(action_mobile_en.as_ref().unwrap().contains("Power"));
         assert!(action_mobile_nl.as_ref().unwrap().contains("Power"));
+    }
+
+    #[test]
+    fn tci_unreachable_headline_names_thetis_not_the_radio() {
+        // A station with one or two Yaesu radios attached must not read this
+        // as "my Yaesu is down" - the headline says Thetis, and it says which
+        // of the two failure modes applies.
+        let mk = |running: Option<bool>| ConnectError::TciUnreachable {
+            server_addr: "192.168.1.79:4580".to_string(),
+            server_reported_detail: None,
+            thetis_process_running: running,
+        };
+        for lang in [Lang::En, Lang::Nl] {
+            for running in [None, Some(true), Some(false)] {
+                let (h, _) = connect_error_text(&mk(running), lang, Platform::Desktop);
+                assert!(h.contains("Thetis"), "headline must name Thetis: {:?}", h);
+                assert!(
+                    !h.to_lowercase().contains("radio"),
+                    "headline must not blame the radio: {:?}",
+                    h
+                );
+            }
+            // Not-running vs TCI-down are distinct headlines.
+            let (h_off, _) = connect_error_text(&mk(Some(false)), lang, Platform::Desktop);
+            let (h_tci, _) = connect_error_text(&mk(Some(true)), lang, Platform::Desktop);
+            assert_ne!(h_off, h_tci);
+        }
+        let (h_nl, _) = connect_error_text(&mk(Some(false)), Lang::Nl, Platform::Desktop);
+        assert_eq!(h_nl, "Thetis is niet opgestart");
     }
 
     #[test]

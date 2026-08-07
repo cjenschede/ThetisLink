@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! ThetisLink adapter rond de generieke `vrx-rs` crate.
+//! ThetisLink adapter around the generic `vrx-rs` crate.
 //!
 //! Maps the standalone runtime's outputs to ThetisLink-specific
 //! transport (VrxAudioPacket via UDP) and provides a process-wide
@@ -129,11 +129,11 @@ impl VrxFeedTimer {
     }
 }
 
-/// `VrxAudioCallback` implementatie die per Opus-frame een
-/// `VrxAudioPacket` opbouwt en naar elk actief client-adres stuurt
-/// via `socket.try_send_to()`. `addrs` is een snapshot dat de caller
-/// vóór elke `feed()` aanroep ververst onder de session lock (sync
-/// `try_send_to` heeft geen async runtime nodig).
+/// `VrxAudioCallback` implementation that builds a `VrxAudioPacket`
+/// per Opus frame and sends it to every active client address
+/// via `socket.try_send_to()`. `addrs` is a snapshot that the caller
+/// refreshes before each `feed()` call under the session lock (sync
+/// `try_send_to` needs no async runtime).
 pub struct ThetisVrxSink {
     pub socket: Arc<TrackedSocket>,
     pub addrs: Vec<SocketAddr>,
@@ -146,6 +146,10 @@ pub struct ThetisVrxSink {
     /// narrowband (8 kHz). Operator sets this before each feed() based on
     /// per-session toggle state.
     pub wideband: bool,
+    /// Audio frames handed to the socket. Only used to spot the first frame of
+    /// a freshly created runtime, so the wait after switching a channel on can
+    /// be logged as a number.
+    pub frames_sent: u64,
 }
 
 impl ThetisVrxSink {
@@ -157,6 +161,7 @@ impl ThetisVrxSink {
             timestamp_ms: 0,
             buf: Vec::with_capacity(MAX_PACKET_SIZE),
             wideband: false,
+            frames_sent: 0,
         }
     }
 }
@@ -177,6 +182,7 @@ impl VrxAudioCallback for ThetisVrxSink {
         packet.serialize(&mut self.buf);
         for addr in &self.addrs {
             let _ = self.socket.try_send_to(&self.buf, *addr);
+            self.frames_sent = self.frames_sent.wrapping_add(1);
         }
     }
 

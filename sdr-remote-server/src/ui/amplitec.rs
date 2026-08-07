@@ -4,32 +4,32 @@ use egui::{Color32, RichText};
 
 use crate::amplitec::AmplitecSwitch;
 
-/// Visuele toestand voor `antenna_button`.
+/// Visual state for `antenna_button`.
 #[derive(Clone, Copy)]
 enum AntennaState {
-    /// Deze positie is de actief geselecteerde - blauwe vulling
-    /// (ThetisLink-conventie voor toggled-on, zie memory
+    /// This position is the actively selected one - blue fill
+    /// (ThetisLink convention for toggled-on, see memory
     /// `feedback_ui_button_color_convention`).
     Active,
-    /// Deze positie is bezet door de andere poort - disabled-ish look.
+    /// This position is occupied by the other port - disabled-ish look.
     Blocked,
-    /// Normale klikbare staat.
+    /// Normal clickable state.
     Inactive,
 }
 
-/// Twee-regelige antenne-knop:
-///   - bovenste regel: `Ant<N>` (positie-id, klein/gedempt)
-///   - onderste regel: optionele alias (groter, prominent)
+/// Two-line antenna button:
+///   - top line: `Ant<N>` (position id, small/muted)
+///   - bottom line: optional alias (larger, prominent)
 ///
-/// Operator-keuze: de alias-tekst krijgt het visuele primaat omdat dat
-/// de functionele naam is; het positie-nummer dient slechts als
-/// identifier op een rij van 6 knoppen.
+/// Operator choice: the alias text gets the visual primacy because that
+/// is the functional name; the position number only serves as an
+/// identifier in a row of 6 buttons.
 ///
-/// Knopvulling: blauw bij `Active`, gedempt grijs bij `Blocked`,
-/// default bij `Inactive`. Op hover: lichtere fill voor visuele
-/// feedback (per `feedback_ui_hover_always`). De `max_width`-cap
-/// zorgt dat een rij van 6 knoppen meeschaalt met de window-breedte:
-/// nooit groter dan natuurlijk, wel kleiner.
+/// Button fill: blue for `Active`, muted grey for `Blocked`,
+/// default for `Inactive`. On hover: lighter fill for visual
+/// feedback (per `feedback_ui_hover_always`). The `max_width` cap
+/// ensures a row of 6 buttons scales with the window width:
+/// never larger than natural, but smaller is allowed.
 fn antenna_button(
     ui: &mut egui::Ui,
     enabled: bool,
@@ -43,15 +43,15 @@ fn antenna_button(
     let pos_text = format!("Ant{}", pos);
     let alias_text = alias.trim();
 
-    // Font-resolutie: bovenste regel (positie-id) is de kleine
-    // identifier, onderste regel (alias) is de prominent leesbare
-    // functionele naam. Operator-keuze: alias-tekst krijgt zo het
-    // visuele primaat.
+    // Font resolution: top line (position id) is the small
+    // identifier, bottom line (alias) is the prominently readable
+    // functional name. Operator choice: alias text thus gets the
+    // visual primacy.
     let style = ui.style().clone();
     let pos_font: FontId = egui::TextStyle::Small.resolve(&style);
     let alias_font: FontId = egui::TextStyle::Button.resolve(&style);
 
-    // Layout galleys om de knop-grootte te berekenen
+    // Layout galleys to compute the button size
     let pos_galley = ui.painter().layout_no_wrap(
         pos_text.clone(),
         pos_font.clone(),
@@ -66,9 +66,9 @@ fn antenna_button(
     let pad_x = 10.0_f32;
     let pad_y = 4.0_f32;
     let gap = 1.0_f32;
-    // Natuurlijke breedte op basis van de bredere tekst-regel. Wordt
-    // afgekapt door `max_width` zodat 6 knoppen op een rij meeschalen
-    // met de window-breedte - nooit groter dan natuurlijk, wel kleiner.
+    // Natural width based on the wider text line. Gets clamped
+    // by `max_width` so that 6 buttons in a row scale with
+    // the window width - never larger than natural, but smaller is allowed.
     let natural_w = pos_galley.size().x.max(alias_galley.size().x) + pad_x * 2.0;
     let width = natural_w.min(max_width).max(24.0);
     let height = pos_galley.size().y + alias_galley.size().y + pad_y * 2.0 + gap;
@@ -76,7 +76,7 @@ fn antenna_button(
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), sense);
 
-    // Fill-color per state, met hover-bump
+    // Fill color per state, with hover bump
     let visuals = ui.visuals();
     let (mut fill, stroke_color) = match state {
         AntennaState::Active => (Color32::from_rgb(100, 160, 230), visuals.widgets.active.fg_stroke.color),
@@ -90,7 +90,7 @@ fn antenna_button(
         ),
     };
     if enabled && response.hovered() {
-        // Hover-bump: licht oplichten t.o.v. base-fill.
+        // Hover bump: lighten slightly relative to base fill.
         fill = fill.linear_multiply(1.15);
     }
 
@@ -98,16 +98,16 @@ fn antenna_button(
     painter.rect_filled(rect, 4.0, fill);
     painter.rect_stroke(rect, 4.0, Stroke::new(1.0, stroke_color));
 
-    // Tekst-kleur per regel: positie-nummer altijd contrastrijk,
-    // alias iets gedempter. Bij Active (blauwe achtergrond) wit zodat
-    // tekst leesbaar blijft.
+    // Text color per line: position number always high-contrast,
+    // alias slightly more muted. For Active (blue background) white so
+    // the text stays readable.
     let (pos_color, alias_color) = match state {
         AntennaState::Active => (Color32::WHITE, Color32::from_rgb(220, 230, 245)),
         AntennaState::Blocked => (Color32::from_rgb(120, 120, 120), Color32::from_rgb(160, 160, 160)),
         AntennaState::Inactive => (Color32::from_rgb(20, 20, 30), Color32::from_rgb(90, 90, 100)),
     };
 
-    // Render boven-regel en onder-regel gecentreerd
+    // Render top line and bottom line centered
     let center_x = rect.center().x;
     let top_y = rect.top() + pad_y + pos_galley.size().y * 0.5;
     let bottom_y = rect.bottom() - pad_y - alias_galley.size().y * 0.5;
@@ -131,10 +131,10 @@ fn antenna_button(
     response
 }
 
-/// Pending rename-state voor het Amplitec-paneel: (positie 1..=6,
-/// edit-buffer). `None` betekent: geen dialog open. Het dialog wordt
-/// gerenderd door `render_amplitec_panel` aan het einde wanneer de
-/// state Some is - context-menu op een antenne-knop zet de state via
+/// Pending rename state for the Amplitec panel: (position 1..=6,
+/// edit buffer). `None` means: no dialog open. The dialog is
+/// rendered by `render_amplitec_panel` at the end when the
+/// state is Some - the context menu on an antenna button sets the state via
 /// `open_rename_dialog`.
 fn rename_state() -> &'static std::sync::Mutex<Option<(u8, String)>> {
     use std::sync::{Mutex, OnceLock};
@@ -146,10 +146,10 @@ fn open_rename_dialog(pos: u8, current: &str) {
     *rename_state().lock().unwrap() = Some((pos, current.to_string()));
 }
 
-/// Render de rename-modal als de state Some is. Operator kan een nieuw
-/// label invoeren of cancelen. Bij OK wordt `config.amplitec_labels`
-/// via `modify_config` bijgewerkt - een auto-restart is niet nodig
-/// omdat labels live geinjecteerd worden in elke render-call.
+/// Render the rename modal when the state is Some. The operator can enter a new
+/// label or cancel. On OK, `config.amplitec_labels` is updated
+/// via `modify_config` - an auto-restart is not needed
+/// because labels are injected live in every render call.
 fn render_rename_dialog(ctx: &egui::Context) {
     let state = rename_state();
     let mut current = state.lock().unwrap().clone();
@@ -167,7 +167,7 @@ fn render_rename_dialog(ctx: &egui::Context) {
                     .desired_width(220.0)
                     .hint_text(rust_i18n::t!("srv_new_name_hint").to_string()),
             );
-            // Enter in het tekstvak commit ook
+            // Enter in the text field also commits
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 save = true;
             }
@@ -198,19 +198,25 @@ fn render_rename_dialog(ctx: &egui::Context) {
     if close {
         *state.lock().unwrap() = None;
     } else {
-        // Update buffer-state na user-typing
+        // Update buffer state after user typing
         *state.lock().unwrap() = current;
     }
 }
 
+/// Renders the Amplitec panel. Returns `true` when the user has changed the
+/// power-limit table (`max_w`/`tx_blocked`), so the caller
+/// persists it in the server conf (modify_config) + the network loop picks it up.
 pub(super) fn render_amplitec_panel(
     ui: &mut egui::Ui,
     amplitec: &AmplitecSwitch,
     status: &crate::amplitec::AmplitecStatus,
     labels: &[String; 6],
+    max_w: &mut [Option<u16>; 6],
+    tx_blocked: &mut [bool; 6],
     log_entries: &[(String, String)],
     show_log: &mut bool,
-) {
+) -> bool {
+    let mut power_changed = false;
     // Header
     ui.horizontal(|ui| {
         ui.heading("Amplitec 6/2 Antenna Switch");
@@ -225,7 +231,7 @@ pub(super) fn render_amplitec_panel(
     });
     ui.separator();
 
-    // Poort A (TX+RX)
+    // Port A (TX+RX)
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new(rust_i18n::t!("srv_port_a_txrx").to_string()).strong());
@@ -269,7 +275,7 @@ pub(super) fn render_amplitec_panel(
 
     ui.add_space(8.0);
 
-    // Poort B (RX only)
+    // Port B (RX only)
     ui.horizontal(|ui| {
         ui.label(RichText::new(rust_i18n::t!("srv_port_b_rx").to_string()).strong());
         if status.switch_b > 0 {
@@ -310,9 +316,49 @@ pub(super) fn render_amplitec_panel(
         }
     });
 
-    // Rename-dialog (modal) - verschijnt boven het paneel zolang
-    // `rename_state()` Some is. Open via rechtermuisknop op een
-    // antenne-knop -> "Hernoem...".
+    // Power-limit table (below Port B, just like in the client - but here
+    // EDITABLE, because the config belongs to the Amplitec hardware on the server).
+    ui.add_space(6.0);
+    egui::CollapsingHeader::new(
+        RichText::new(rust_i18n::t!("srv_power_cap_table").to_string()).strong(),
+    )
+    .default_open(false)
+    .show(ui, |ui| {
+        egui::Grid::new("srv_amplitec_power_grid")
+            .striped(true)
+            .min_col_width(40.0)
+            .show(ui, |ui| {
+                ui.label(RichText::new("Pos").strong());
+                ui.label(RichText::new(rust_i18n::t!("srv_label").to_string()).strong());
+                ui.label(RichText::new(rust_i18n::t!("srv_max_w").to_string()).strong());
+                ui.label(RichText::new(rust_i18n::t!("srv_rx_only").to_string()).strong());
+                ui.end_row();
+                for i in 0..6 {
+                    let pos = (i as u8) + 1;
+                    ui.label(format!("A-{}", pos));
+                    ui.label(&labels[i]);
+                    // 0 W = no cap (None). Directly persistent on change.
+                    let mut val = max_w[i].unwrap_or(0) as i32;
+                    if ui.add(egui::DragValue::new(&mut val).range(0..=3000).suffix(" W").speed(1.0)).changed() {
+                        max_w[i] = if val <= 0 { None } else { Some(val.clamp(0, 3000) as u16) };
+                        power_changed = true;
+                    }
+                    if ui.checkbox(&mut tx_blocked[i], "").changed() {
+                        power_changed = true;
+                    }
+                    ui.end_row();
+                }
+            });
+        ui.label(
+            RichText::new(rust_i18n::t!("srv_no_cap").to_string())
+                .size(10.0)
+                .color(Color32::from_rgb(160, 160, 160)),
+        );
+    });
+
+    // Rename dialog (modal) - appears above the panel as long as
+    // `rename_state()` is Some. Open via right-click on an
+    // antenna button -> "Hernoem...".
     render_rename_dialog(ui.ctx());
 
     // Log (collapsible, toggled via header checkbox)
@@ -333,4 +379,6 @@ pub(super) fn render_amplitec_panel(
                 }
             });
     }
+
+    power_changed
 }

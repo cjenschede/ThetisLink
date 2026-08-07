@@ -3707,6 +3707,7 @@ data class BridgeRadioState (
     var `filterHighHz`: kotlin.Int,
     var `thetisConfigured`: kotlin.Boolean,
     var `thetisStarting`: kotlin.Boolean,
+    var `thetisNotRunning`: kotlin.Boolean,
     var `txProfileNames`: List<kotlin.String>,
     var `spectrumBins`: List<kotlin.UByte>,
     var `spectrumCenterHz`: kotlin.UInt,
@@ -3903,6 +3904,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterSequenceUByte.read(buf),
             FfiConverterUInt.read(buf),
@@ -4092,6 +4094,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterInt.allocationSize(value.`filterHighHz`) +
             FfiConverterBoolean.allocationSize(value.`thetisConfigured`) +
             FfiConverterBoolean.allocationSize(value.`thetisStarting`) +
+            FfiConverterBoolean.allocationSize(value.`thetisNotRunning`) +
             FfiConverterSequenceString.allocationSize(value.`txProfileNames`) +
             FfiConverterSequenceUByte.allocationSize(value.`spectrumBins`) +
             FfiConverterUInt.allocationSize(value.`spectrumCenterHz`) +
@@ -4280,6 +4283,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterInt.write(value.`filterHighHz`, buf)
             FfiConverterBoolean.write(value.`thetisConfigured`, buf)
             FfiConverterBoolean.write(value.`thetisStarting`, buf)
+            FfiConverterBoolean.write(value.`thetisNotRunning`, buf)
             FfiConverterSequenceString.write(value.`txProfileNames`, buf)
             FfiConverterSequenceUByte.write(value.`spectrumBins`, buf)
             FfiConverterUInt.write(value.`spectrumCenterHz`, buf)

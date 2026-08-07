@@ -11,7 +11,7 @@ use log::{debug, info, warn};
 /// Communicates via 115200 baud 8N1, binary command protocol.
 ///
 /// Protocol reference: SPE Application Programmer's Guide Rev. 1.1 (15.10.2015)
-/// - zie `docs/referentie/SPE_Application_Programmers_Guide.pdf`.
+/// - see `docs/referentie/SPE_Application_Programmers_Guide.pdf`.
 ///
 ///   Command (host -> PA):  [0x55 0x55 0x55] [CNT] [DATA...] [CHK]
 ///                           CHK = sum(DATA) mod 256
@@ -376,14 +376,14 @@ pub(crate) fn next_state(
 }
 
 /// Whether a given failure kind counts toward the threshold-counter in the
-/// given state. Matches the tel-beleid table in brief §1.4.
+/// given state. Matches the counting-policy table in brief §1.4.
 ///
 /// - `IoError` and `CatPortMismatch` never count - they trigger immediate
 ///   transitions in `next_state` and do not accumulate.
 /// - In `WarmingUp`, only true protocol errors count. UART-startup noise
 ///   (`TimeoutNoData`/`NullOnly`/`Partial`) is ignored so a successful
 ///   `state=N` initial query cannot be undone by driver/UART warm-up.
-/// - In `Online`, any non-directe kind counts normally.
+/// - In `Online`, any non-immediate kind counts normally.
 /// - `Offline`/`CatMisconfigured`/`Unknown` do not accumulate - polling
 ///   stays silent until a success event.
 pub(crate) fn counts_toward_threshold(state: SpeConnState, kind: PollFailureKind) -> bool {
@@ -403,7 +403,7 @@ pub(crate) fn counts_toward_threshold(state: SpeConnState, kind: PollFailureKind
 }
 
 /// Adaptive polling interval. Fast during TX (real-time SWR/power meters),
-/// slow in RX idle, slower in offline/CAT states (CPU + log zuinig).
+/// slow in RX idle, slower in offline/CAT states (sparing on CPU + log).
 pub(crate) fn poll_interval(state: SpeConnState, tx_active: bool) -> Duration {
     match state {
         SpeConnState::Unknown | SpeConnState::WarmingUp => Duration::from_millis(500),
@@ -669,7 +669,7 @@ fn run_poll_cycle(
             let (new_state, log_line) =
                 next_state(old_state, SpeEvent::PollFail(kind), &ctx);
             // Only increment when we stayed in the same state AND this kind
-            // counts per brief §1.4 tel-beleid. Any actual transition resets.
+            // counts per brief §1.4 counting-policy. Any actual transition resets.
             if old_state != new_state {
                 *consecutive_fails = 0;
             } else if counts_toward_threshold(old_state, kind) {
@@ -810,16 +810,16 @@ fn read_status_response(port: &mut Box<dyn serialport::SerialPort>) -> Result<Ve
 
                 // Preamble-aware overflow check.
                 //
-                // Valid SPE STATUS frames zijn ~77 bytes incl. CR/LF terminator.
-                // Serial reads kunnen in chunks arriveren: read 1 kan 65+ bytes
-                // opleveren zonder CR/LF terwijl de rest nog komt. Rauwe cutoff
-                // op 64 bytes zou valide frames afbreken.
+                // Valid SPE STATUS frames are ~77 bytes incl. CR/LF terminator.
+                // Serial reads may arrive in chunks: read 1 can yield 65+ bytes
+                // without CR/LF while the rest is still coming. A raw cutoff
+                // at 64 bytes would truncate valid frames.
                 //
-                // Strategie: check of de collected-buffer start met SPE preamble
-                // `0xAA 0xAA 0xAA`. Met preamble: ruime threshold (128 bytes) om
-                // chunked reads op te vangen. Zonder preamble: fast-fail op 64
-                // bytes - we hebben geen SPE-connectie en kunnen diagnostiek
-                // loggen (hint naar verkeerde COM-poort).
+                // Strategy: check whether the collected buffer starts with the SPE
+                // preamble `0xAA 0xAA 0xAA`. With preamble: generous threshold
+                // (128 bytes) to absorb chunked reads. Without preamble: fast-fail
+                // at 64 bytes - we have no SPE connection and can log diagnostics
+                // (hint about the wrong COM port).
                 let has_preamble = collected.len() >= 3
                     && collected[0] == RESP_PREAMBLE
                     && collected[1] == RESP_PREAMBLE
@@ -847,15 +847,15 @@ fn read_status_response(port: &mut Box<dyn serialport::SerialPort>) -> Result<Ve
     }
 }
 
-/// Bouw een error-message met ASCII-preview en pattern-sniff voor overflow in
-/// `read_status_response`. Gedraagt zich anders afhankelijk van of de data
-/// met SPE preamble `0xAA 0xAA 0xAA` start (valid frame dat geen CRLF vond
-/// binnen budget) of niet (vreemd verkeer op poort - typisch CAT-data).
+/// Build an error message with ASCII preview and pattern-sniff for overflow in
+/// `read_status_response`. Behaves differently depending on whether the data
+/// starts with the SPE preamble `0xAA 0xAA 0xAA` (valid frame that found no CRLF
+/// within budget) or not (strange traffic on the port - typically CAT data).
 fn format_unexpected_data_error(collected: &[u8]) -> String {
     let preview_len = collected.len().min(64);
     let preview = &collected[..preview_len];
 
-    // ASCII-preview (vervang non-printable door '.').
+    // ASCII preview (replace non-printable with '.').
     let ascii: String = preview
         .iter()
         .map(|&b| if (0x20..0x7F).contains(&b) { b as char } else { '.' })
@@ -877,7 +877,7 @@ fn format_unexpected_data_error(collected: &[u8]) -> String {
         );
     }
 
-    // Geen preamble -> vermoedelijk verkeerde COM-poort.
+    // No preamble -> probably the wrong COM port.
     let printable_count = preview
         .iter()
         .filter(|&&b| (0x20..0x7F).contains(&b))
@@ -891,7 +891,7 @@ fn format_unexpected_data_error(collected: &[u8]) -> String {
             .to_string();
     }
 
-    // Onbekend verkeer - diagnostiek behouden zodat we het later kunnen analyseren.
+    // Unknown traffic - keep diagnostics so we can analyze it later.
     format!(
         "response overflow ({} bytes, no SPE preamble 0xAA 0xAA 0xAA seen). \
          ASCII preview: {:?}. Raw first 64 bytes: {:02X?}",
@@ -1370,7 +1370,7 @@ mod tests {
 
     #[test]
     fn replay_session_1_warmup_noise_then_online() {
-        // sessie-1: state=1, 2× timeout 0 bytes, 1× null-only, then Ok.
+        // session-1: state=1, 2× timeout 0 bytes, 1× null-only, then Ok.
         // Expected: WarmingUp -> Online, no false disconnect, 2 transitions total
         // (Unknown->WarmingUp, WarmingUp->Online), both logged.
         let events = vec![
@@ -1401,7 +1401,7 @@ mod tests {
 
     #[test]
     fn replay_session_3_cat_port_once_then_silent() {
-        // sessie-3: CAT on COM6, first poll triggers CatPortMismatch.
+        // session-3: CAT on COM6, first poll triggers CatPortMismatch.
         // Expected: one transition to CatMisconfigured (logged), subsequent
         // repeats stay silent.
         let events = vec![
@@ -1445,7 +1445,7 @@ mod tests {
         assert!(!counts_toward_threshold(WarmingUp, IoError));
         assert!(!counts_toward_threshold(WarmingUp, CatPortMismatch));
 
-        // Online: all non-directe count
+        // Online: all non-immediate count
         assert!(counts_toward_threshold(Online, TimeoutNoData));
         assert!(counts_toward_threshold(Online, TimeoutNullOnly));
         assert!(counts_toward_threshold(Online, OverflowWithPreamble));
@@ -1573,7 +1573,7 @@ mod tests {
 
     #[test]
     fn replay_spe_stays_off_silent_after_threshold() {
-        // SPE uit scenario: initial fail -> Offline (silent), poll fails forever
+        // SPE off scenario: initial fail -> Offline (silent), poll fails forever
         // -> stay Offline with no further logs.
         let mut events = vec![SpeEvent::InitialFail];
         for _ in 0..30 {

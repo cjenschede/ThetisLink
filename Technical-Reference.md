@@ -1,10 +1,10 @@
-# ThetisLink v2.6.0 - Technical Reference
+# ThetisLink v2.7.0 - Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of an ANAN 7000DLE + Thetis SDR receiver and up to two Yaesu transceivers (FT-991A / FTX-1) over a network connection. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
 
-**Version:** v2.6.0 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.7.0 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
 **Target platform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Design priority:** latency > bandwidth > features
@@ -26,9 +26,13 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.6.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.7.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.7.0 highlights
+
+**VRX audio reliability, CTCSS/DCS from the client, rebuilt audio-level meters, and a full-band spectrum row shared between an RX and the VRX on the same DDC.** Backwards-compatible with v2.6.x — wire `VERSION` stays 3; the additions are three client→server-only `ControlId` values (`YaesuCatMonitor 0x96` reserved/no-op, `YaesuReadMemoryTones 0x97`, `FullSpectrumEnabled 0x98`, see [Protocol additions (v2.7.0)](#control-ids)). **VRX audio now starts reliably and stays clean after retuning**: three independent causes sat under one symptom — a stale DDC centre after a missed push, a relay duplicate-filter that ignored the channel id so VRX1 and VRX2 ate each other's frames, and a restarted stream taken for its own duplicate (the wait before audio appeared equalled the length of the previous listening session). A VRX also **stays inside the DDC band** and the spectrum draws the edge honestly instead of silently rescaling. **CTCSS and DCS can be read and written per memory channel on the FT-991A** (all 104 DCS codes; *Read tones* walks the channels that have a tone mode, pausing and resuming a running scan, and returns to the channel the radio was on) — the FTX-1 can read but not write, because no safe CAT route exists there. The **audio-level bars measure the link rather than the volume slider** (taken before the volume), fall back to zero within about half a second once a stream stops, and the **Yaesu receive path is calibrated per radio model** for both the meter and the playback gain (the FT-991A used to run ~16 dB hot). The **full-DDC spectrum row is shared** by the RX window and the VRX riding the same DDC — one row per client per chain, with a checkbox to switch it off (roughly halving spectrum bandwidth). Fixes: a MIDI wheel no longer runs a Yaesu away (frequency commands are coalesced, as the Thetis VFO already did), VRX tuning stays on the step grid including at the band edge, and the relay no longer reads a dead UDP path as recovered. Stock Thetis v2.10.3.15 suffices; no fork change required. From this release `Cargo.lock` is tracked and the release builds run with `--locked`, so the published binaries, the SBOM and the third-party licence report all describe the same dependency set.
 
 ### v2.6.0 highlights
 
@@ -157,6 +161,48 @@ flowchart LR
 
 Audio, IQ and all commands flow over the single TCI WebSocket (RX_AUDIO_STREAM / TX_AUDIO_STREAM plus text TCI commands). ThetisLink no longer maintains a separate CAT connection.
 
+### Direct or via the relay
+
+The diagram above is the **direct** path: the client sends UDP straight to the
+server. That works on a LAN, or from outside with a port-forward.
+
+When neither end can accept an inbound connection — a client on mobile data, a
+station behind CGNAT, a network that blocks inbound traffic — both sides make an
+**outbound** TLS connection to a relay instead, and the relay pairs them:
+
+```mermaid
+flowchart LR
+    subgraph C["Client (laptop/phone)"]
+        CE["ClientEngine"]
+    end
+    subgraph R["Relay (VPS)"]
+        Room["Room 'station-name'<br>1 station + up to 8 clients"]
+    end
+    subgraph S["Server (PC next to Thetis)"]
+        SS["Session manager"]
+    end
+    CE -->|"outbound TLS :443<br>TLU1 = audio over bare UDP"| Room
+    CE -->|"outbound TLS :443<br>TLT1 = control/spectrum over wss"| Room
+    Room --> SS
+    SS --> Thetis["Thetis (TCI)"]
+```
+
+Two properties matter for reading the rest of this document:
+
+**The radio protocol does not change.** The relay tunnels the same frames; nothing
+in sections 5 (UDP protocol) onwards behaves differently because a connection is
+relayed.
+
+**The server does not know it is relayed.** A relayed client is addressed by a
+synthetic `203.0.113.x` sentinel address, so the session manager, the subscription
+sets and every send-site treat it as an ordinary UDP peer. Only the socket wrapper
+knows the difference.
+
+Audio takes a bare-UDP path for latency and everything else travels over the TLS
+connection; if UDP is blocked or stalls, audio falls back to wss automatically. See
+[section 30](#30-relay-remote-operation-over-the-internet) for the framing, the
+fallback rules and the deduplication that comes with carrying a frame on two paths.
+
 ### Client Architecture
 
 ```mermaid
@@ -218,6 +264,12 @@ sdr-remote/
 │       ├── eq.rs               # TX EQ / compressor / AGC processing
 │       ├── i18n.rs             # NL/EN string tables
 │       └── wav.rs              # WAV record/playback helpers
+│   └── tests/
+│       ├── channel_level_parity.rs # Hardware-free audio harness: pins the six level
+│       │                           # measurement points (before volume, VRX parity,
+│       │                           # per-model Yaesu meter AND playback gain, TX peak
+│       │                           # after gain, and every channel falling back to zero)
+│       └── connect_state_machine.rs # Scripted server on loopback: connect/auth states
 ├── sdr-remote-theme/           # Shared UI colour palette / theme constants
 ├── vrx-rs/                     # VRX engine: FFT channelizer + per-VRX Opus/runtime
 │   └── src/                    # channelizer.rs, opus.rs, runtime.rs, config.rs, wav.rs
@@ -229,7 +281,7 @@ sdr-remote/
 │       ├── main.rs             # Startup, argument parsing, shutdown
 │       ├── network.rs          # UDP send/receive, resampling, playout timer, per-client routing
 │       ├── session.rs          # Client session management (multi-client, subscription sets)
-│       ├── tracked_socket.rs   # UDP socket wrapper with per-stream byte/packet counters
+│       ├── tracked_socket.rs   # UDP socket wrapper with per-stream counters + relay parity tests
 │       ├── mdns.rs             # mDNS service advertisement (local discovery)
 │       ├── tci.rs              # TciConnection: TCI WebSocket client + state + streams
 │       ├── tci_commands.rs     # TCI command sender (audio/IQ/_ex commands)
@@ -243,7 +295,14 @@ sdr-remote/
 │       ├── power_cap.rs        # Per-position RF power cap (SPE/RF2K DriveDown)
 │       ├── dxcluster.rs        # DX Cluster telnet client
 │       ├── macros.rs           # CW keyer macros
-│       ├── yaesu.rs            # Yaesu FT-991A / FTX-1 CAT serial controller (dual-radio, auto-DFM, SSB-over-USB, power/standby, per-band TX power, SWR)
+│       ├── yaesu/              # Yaesu FT-991A / FTX-1 CAT (split out of yaesu.rs in v2.7.0)
+│       │   ├── mod.rs          # YaesuController, YaesuState, command enum, slot plumbing
+│       │   ├── poll.rs         # Connection runtime: poll cadence, command drain, watchdogs
+│       │   ├── cat.rs          # Serial helpers: CatPort trait, cat_query timeouts, drain
+│       │   ├── parse.rs        # CAT response parser (IF/SC/AC/RI/... -> YaesuState)
+│       │   ├── memory.rs       # Memory channels + CTCSS/DCS read/write, tone walk, scan pause
+│       │   ├── ex_menu.rs      # FT-991A EX-menu read/write helpers
+│       │   └── audio.rs        # Yaesu USB audio stream builders (capture + TX output)
 │       ├── amplitec.rs         # Amplitec antenna switch
 │       ├── rf2k.rs             # RF2K-S PA HTTP controller
 │       ├── spe_expert.rs       # SPE Expert 1.3K-FA serial controller
@@ -257,28 +316,51 @@ sdr-remote/
 │       ├── mcp2221_scan.rs     # USB-HID board scan + serial programming
 │       ├── audio_stats.rs      # Per-stream bandwidth/jitter/loss statistics
 │       ├── config.rs           # Server configuration (persistent)
-│       └── ui/                 # Server GUI (egui)
+│       └── ui/                 # Server GUI (egui), split out of a single file in v2.7.0
+│           ├── mod.rs          # ServerApp type + module wiring
+│           ├── app_state.rs    # ServerApp::new (construction, config load)
+│           ├── startup.rs      # ServerApp::start_server (backend spin-up)
+│           ├── update.rs       # eframe update loop + screen dispatch
+│           ├── status_panel.rs # Running-mode status/device panels
+│           ├── arranger.rs     # Window-arranger matrix (server device windows)
+│           ├── window_placement.rs # Monitor geometry helpers
+│           ├── utils.rs        # Shared GUI helpers (with_timeout, formatting)
+│           └── amplitec.rs / rf2k.rs / spe.rs / tuner.rs / ultrabeam.rs / rotor.rs / macros_ui.rs
 ├── sdr-remote-client/          # Desktop client (egui)
-│   ├── locales/               # rust-i18n UI translations (app.yml: EN/NL/DE/FR)
+│   ├── locales/                # rust-i18n UI translations (app.yml: EN/NL/DE/FR)
 │   └── src/
-│       ├── main.rs             # Startup, engine + UI threading
+│       ├── main.rs             # Startup, engine + UI threading, profiles, single-instance guard
 │       ├── audio.rs            # cpal AudioBackend impl + device listing
 │       ├── mdns.rs             # mDNS server discovery (local network)
 │       ├── midi.rs             # MIDI controller input
 │       ├── websdr.rs           # Win32 window + wry WebView (embedded WebSDR/KiwiSDR)
 │       ├── catsync.rs          # WebSDR channel communication, favorites, debounced freq sync
-│       └── ui/                 # egui UI (split by area)
-│           ├── mod.rs          # Main app, windows, arranger, per-channel state
-│           ├── devices.rs      # Device panels (Yaesu, PA, tuner, rotor, antenna)
-│           ├── screens.rs      # Main-screen layout + chips
-│           ├── spectrum.rs     # Main spectrum/waterfall plot
-│           ├── channel_spectrum.rs # Per-channel spectrum/waterfall
+│       └── ui/                 # egui UI (split by area; ui/mod.rs was decomposed in v2.7.0)
+│           ├── mod.rs          # SdrRemoteApp state + shared widgets (channel blocks, waterfall ring)
+│           ├── app_state.rs    # App construction, config -> state, startup commands
+│           ├── update.rs       # Per-frame update: panels, tab dispatch, Radio-tab body
+│           ├── sync_state.rs   # RadioState -> UI state ingest (typed spectrum snapshots)
+│           ├── persistence.rs  # Config save/load plumbing
+│           ├── popouts.rs      # Shared pop-out lifecycle (show_popout: geometry, focus, close)
+│           ├── rx_controls.rs  # RX1/RX2 control panels + RX2 spectrum
+│           ├── vrx.rs          # VRX channels: send helpers, controls, spectrum panel
+│           ├── spectrum.rs     # Spectrum/waterfall plot + VRX strip renderer
+│           ├── spectrum_content.rs # Shared spectrum control rows (ref/zoom/FFT/height)
+│           ├── channel_spectrum.rs # Per-channel spectrum + s-meter + auto-ref (typed boundary)
+│           ├── tuning.rs       # Tuning helpers
+│           ├── controls/       # Reusable control widgets with coverage instrumentation
+│           │   ├── mod.rs / context.rs / state.rs / events.rs / coverage.rs
+│           │   └── band.rs / mode.rs / frequency.rs
 │           ├── meters.rs       # S-meter (bar + analog) rendering
 │           ├── theme.rs        # Client-local theme helpers
 │           ├── config.rs       # Config storage
 │           ├── helpers.rs      # Shared widget helpers (sliders, hover)
+│           ├── arranger.rs     # Window-arranger matrix (client windows, per monitor)
 │           ├── window_placement.rs # Monitor geometry + pop-out placement
 │           ├── wizard.rs       # First-run connect wizard
+│           ├── screens.rs      # Packet-type labels + remaining screen helpers
+│           ├── server_screen.rs / thetis_screen.rs / devices.rs / diversity_screen.rs / midi_screen.rs
+│           ├── yaesu_panel.rs  # Yaesu control window (both slots)
 │           ├── yaesu_memory.rs # Yaesu memory-channel table
 │           ├── yaesu_menu.rs   # Yaesu EX-menu editor
 │           └── ftx1_ex_chart.rs# FTX-1 EX-menu reference chart
@@ -821,6 +903,22 @@ Wire protocol `VERSION` stays **3** in v2.5.0. The additions are (a) two trailin
 | 0x93 | Yaesu2StateEnable | 0/1 | Slot-1 mirror of `YaesuStateEnable`. |
 | 0x94 | YaesuPowerOnOff | 0/1 | Slot-0 power/standby. 1 → CAT `PS1;` (on), 0 → `PS0;` (standby). FT-991A only; the FTX-1 drops its USB link on power-off, so the client exposes this for the 991A only. |
 | 0x95 | Yaesu2PowerOnOff | 0/1 | Slot-1 mirror of `YaesuPowerOnOff`. |
+| 0x96 | YaesuCatMonitor | — | **Reserved, no-op.** Added and withdrawn within the v2.7.0 cycle: the CAT monitor is a diagnostic (it turns Auto Information on and multiplies the server log), reached with `THETISLINK_CAT_MONITOR=1` on the server instead. The server accepts and ignores the id. **Do not reuse this byte** — a v2.7.0-era client may still send it. |
+| 0x97 | YaesuReadMemoryTones | slot | Read the CTCSS/DCS tone of every memory channel that has a tone mode. A tone is a current-channel setting, so the radio steps through those channels and returns; an explicit action, never part of the ordinary memory read. Value = slot (0 = radio 1, 1 = radio 2). |
+| 0x98 | FullSpectrumEnabled | 0/1 | Send the full-DDC spectrum row alongside the extracted view. **Default on** on the server, so a v2.6.x server that does not know the id keeps its previous behaviour and an older client keeps receiving the row. Off roughly halves the spectrum bandwidth per receiver chain. See [Shared full-band row](#shared-full-band-row-v270). |
+
+#### Shared full-band row (v2.7.0)
+
+Each receiver chain produces one full-DDC spectrum row next to the zoomed view. Until v2.7.0 that row was addressed to the **RX spectrum subscribers only**, even though VRX1 rides the RX1 DDC and VRX2 the RX2 DDC — the row a VRX window needs is the very row the RX window already receives, produced by the same processor in the same frame tick.
+
+`SessionManager::full_row_clients(chain)` now returns the **union** of the RX and VRX subscribers on that chain, filtered on `full_spectrum_enabled`. Consequences:
+
+- **One row per client per chain**, never one per window. A client with both the RX and the VRX window open receives the same bytes once and routes them to both.
+- The case where the row was **absent entirely** — VRX on, RX spectrum off — is covered.
+- The existing loss gates still apply to the shared row: skip above 15 % loss, every second frame above 5 %.
+- With `FullSpectrumEnabled = 0`, no row is sent on that chain and every waterfall is built from its own extracted view.
+
+This is the only change in v2.7.0 that alters **bandwidth per client**: with the row on, a receiver chain costs the extracted view plus a full row (the row is sized at the client's `spectrum_max_bins`, capped at `FULL_SPECTRUM_BINS`).
 
 #### Split audio vs. state subscription
 
@@ -2093,6 +2191,32 @@ On power loss of the 991A:
 
 ---
 
+### CTCSS / DCS per memory channel (v2.7.0)
+
+The tone *frequency* is not part of the memory record: `MT`/`MR` carry the tone
+**mode** but their P9 field is fixed `00`. The tone itself is a property of the
+channel the radio is currently sitting on, read and written with `CN`
+(`CN0` = CTCSS number, `CN1` = DCS code) plus `CT` for the mode.
+
+That is why reading the tones of a whole memory list is a deliberate action
+rather than part of the ordinary read (`ControlId::YaesuReadMemoryTones 0x97`):
+the server has to walk the channels that have a tone mode, recalling each one and
+confirming the radio actually moved before reading its tone. The walk
+
+- **pauses a running scan** (`SC;` -> `SC0;`) and resumes it in the mode it was in;
+- **confirms each channel** with the model's own `MC` read form - `MC;` on the
+  FT-991A, `MC0;` on the FTX-1, which carries the side digit (FTX-1 CAT OM
+  2508-C p.19). Sending the wrong form asks a malformed question that the radio
+  does not answer, and every channel is then skipped;
+- **drains the serial input first**, because a backlog from a preceding bulk read
+  would be mistaken for these confirmations;
+- **aborts on TX** and returns to the channel the radio was on.
+
+**FTX-1 limitation:** reading works, writing does not. No safe CAT route exists
+for storing a tone on that radio - the route that appeared to work re-stored the
+channel from VFO-A and destroyed its contents - so the write path is disabled
+there and a regression test keeps it that way.
+
 ## 27. Network Authentication (HMAC-SHA256 + TOTP 2FA)
 
 ### Challenge-Response
@@ -2246,7 +2370,143 @@ The FTX-1 **WIRES-X** EX-menu fields are added to the EX editor (§26).
 
 ---
 
-## 30. Known Limitations
+## 30. Relay (remote operation over the internet)
+
+Direct UDP between client and server works on a LAN or behind a port-forward. The
+relay exists for everything else: a client on mobile data, a station behind CGNAT,
+a network that blocks inbound connections. Both sides make an **outbound** TLS
+connection to a rendezvous server; the relay pairs them and forwards frames.
+
+Two crates:
+
+| Crate | Role |
+|---|---|
+| `sdr-remote-relay` | Relay **client library**, linked into both the desktop/Android client and the server. Contains the transport logic described below. |
+| `thetislink-relay` | The **rendezvous binary** that runs on a VPS: forwarder, station registry (SQLite), admin dashboard. |
+
+### 30.1 Rooms, roles and pairing
+
+A relay connection carries a **station name** and a **role** (`station` or
+`client`). Peers with the same station name share a *room*: the server connects as
+the station, every client of that station as a client.
+
+- One station slot per room; a new station connection **evicts** the previous one.
+- Up to `MAX_CLIENTS = 8` clients per room. The sentinel scheme below would allow
+  254, but a smaller cap keeps per-station load low so one VPS can host many
+  stations.
+- A client may present a **per-install id**; reconnecting with the same id
+  reclaims its existing slot instead of allocating a second one. Without this a
+  flapping connection fills the room and the next attempt is refused ("room full").
+- The relay pings each peer every `KEEPALIVE_INTERVAL` (5 s) and reaps it after
+  `PEER_DEAD_TIMEOUT` (15 s) without a frame or pong, so a half-open TCP
+  connection cannot occupy a slot forever.
+
+### 30.2 Sentinel addresses: why the server needs no relay awareness
+
+The server addresses clients by `SocketAddr`. Rather than teach every send-site
+about relays, a relayed client is given a **synthetic address** derived from its
+relay `client_id`:
+
+```
+sentinel_for_client_id(id) -> 203.0.113.{1 + id % 254} : 1
+client_id_from_sentinel(addr) -> addr.octets()[3] - 1
+```
+
+`203.0.113.0/24` is TEST-NET-3 (RFC 5737) and is never routable, so a sentinel can
+never collide with a real peer. The session manager, the subscription sets and the
+spectrum send-sites all treat a relayed client as an ordinary UDP peer; only the
+socket wrapper (`tracked_socket.rs`) knows the difference and routes the frame into
+the tunnel instead of onto the wire.
+
+### 30.3 Two transports: bare UDP for audio, wss for the rest
+
+Everything travels inside the TLS connection except audio, which gets its own
+low-latency path.
+
+**TLT1 — tunnelled TL frames over wss.** `magic(4) | version(1) | client_id(1) |
+length(2 LE) | payload`. Carries control, spectrum, meters and anything else. A
+dedicated magic rather than a bare prefix, because real payloads are binary too; a
+binary frame with an unknown magic is dropped non-fatally.
+
+**TLU1 — audio over bare UDP.** `magic(4) | version(1) | flags(1) | client_id(1) |
+seq(4 LE) | token(32) | AudioPacket`, header 43 bytes. Only the packet types in
+`AUDIO_TYPE_BYTES` take this path — a deliberate mirror of
+`sdr_remote_core::protocol::AUDIO_PACKET_TYPES`, kept honest by a parity test in
+the server crate, which is the one crate that links both (the relay stays
+dependency-light and does not link `core`, which would pull in Opus).
+
+The UDP session **token rotates over wss** before it expires, so the audio path
+never has to re-authenticate itself in-band.
+
+### 30.4 Fallback: make-before-break, and what "recovered" means
+
+Networks that block or throttle UDP are common (guest wifi, some mobile carriers).
+The client watches its own UDP audio and asks the station to switch:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `FALLBACK_STALL` | 500 ms | no UDP audio for this long = stalled |
+| `FALLBACK_CONNECT_TIMEOUT` | 2 s | no UDP audio at all since connect |
+| `FALLBACK_RECOVER` | 3 s | a healthy UDP run must last this long |
+| `FALLBACK_DWELL` | 3 s | minimum time between transport flips |
+| `FALLBACK_HEARTBEAT` | 5 s | fallback state is re-asserted this often |
+| `FALLBACK_LEASE` | 15 s | station forgets a fallback state not refreshed |
+
+Two properties are worth stating because both were learned the hard way:
+
+**Silence is not a stall.** The stall test only fires while audio is demonstrably
+being carried (over wss, or over UDP until it went quiet). With every channel
+switched off there is nothing to carry, and flipping then costs seconds of audio on
+the next enable.
+
+**Recovery requires a run that is still running.** `udp_recovered()` demands both
+that the healthy run started at least `FALLBACK_RECOVER` ago *and* that UDP audio
+is arriving now. Without the second half the "healthy since" timestamp freezes when
+the path dies and satisfies "old enough" forever — which produced a transport flip
+every dwell period indefinitely (observed at 1829 flips, 96 minutes after the last
+UDP frame).
+
+During TX, PTT-carrying audio frames are sent on **both** paths (TX-always-both),
+so a transport switch cannot swallow the frame that keys the transmitter.
+
+### 30.5 Deduplication
+
+Because a frame can arrive over both paths during an overlap, the receiving side
+keeps a sliding window of what it has already delivered. This sits in the transport
+layer, before the jitter buffer, so the jitter estimator never sees a duplicate.
+
+The window keys on **(client_id, packet type, sequence)** — including the VRX
+channel id, because VRX1 and VRX2 share packet type `0x21` with independent
+counters and would otherwise consume each other's frames.
+
+A stream that restarts begins at sequence 0 while the window still holds the
+previous run's numbers. `RESTART_BACKJUMP` (64) recognises that jump and forgets
+the stream, because otherwise every frame of the new run is taken for a repeat of
+the old one — a wait exactly as long as the previous listening session.
+
+Dropped duplicates are **counted per stream** and reported on the existing 5 s
+status tick, silent when nothing was dropped. Without that counter "no audio
+arriving" and "audio being thrown away" are the same silence.
+
+### 30.6 The VPS binary
+
+`thetislink-relay` runs behind a TLS proxy and provides:
+
+- the **forwarder** (`main.rs`): rooms, slots, keepalive, per-peer byte totals
+  accumulated lock-free and flushed once on disconnect — never a per-frame write;
+- a **station registry** in SQLite (`store.rs`): `stations`, `devices`, `admin`,
+  `station_usage`. Station secrets are hashed; admin passwords use Argon2id;
+- an **admin dashboard** (`admin_api.rs`) for stations, devices, per-device usage
+  and quotas, and a one-click backup (`VACUUM INTO`). Login is session-based with
+  CSRF protection and a per-IP rate limit, reachable only from behind the proxy.
+
+A **binary probe** (`TLB1`, 1 Hz, 256-byte payload representative of an audio
+frame) measures round-trip time over the real data path, with a 30-sample rolling
+window for min/avg/max. That is what the connection indicator reports.
+
+---
+
+## 31. Known Limitations
 
 1. **HPSDR protocol coverage:** ThetisLink talks to Thetis (via TCI), not to the SDR hardware directly. Both HPSDR Protocol 1 (Hermes, Angelia, Orion) and Protocol 2 (ANAN 7000DLE, 8000DLE, G2, Hermes-Lite 2, etc.) are therefore supported as long as Thetis itself supports the device.
 
@@ -2255,3 +2515,8 @@ The FTX-1 **WIRES-X** EX-menu fields are added to the EX editor (§26).
 3. **Yaesu EX menu items 031-033:** Changing CAT RATE/TOT/RTS via ThetisLink may break the serial connection to the radio.
 
 4. **macOS:** Experimental support. cpal works with CoreAudio but some USB audio devices are not correctly detected.
+
+5. **FTX-1 CTCSS/DCS write:** the tone of a memory channel can be *read* from an
+   FTX-1 but not written to it. The radio exposes no safe CAT route for storing a
+   tone; the apparent route re-stores the channel from VFO-A and overwrites its
+   contents. Set the tone on the radio itself. The FT-991A supports both.

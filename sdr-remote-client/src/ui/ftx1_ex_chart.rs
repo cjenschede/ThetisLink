@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! FTX-1 EX-menu chart (labels) - afgeleid uit de officiele FTX-1 CAT
-//! Operation Reference Manual, Table 3 (MENU Chart). Adres = p1p2p3 (6 cijfers).
-//! Alleen labels/omschrijving (cosmetisch); adressen + waarden komen van de live
-//! radio-scan, dus een onjuist label kan nooit een fout adres schrijven.
+//! FTX-1 EX-menu chart (labels) - derived from the official FTX-1 CAT
+//! Operation Reference Manual, Table 3 (MENU Chart). Address = p1p2p3 (6 digits).
+//! Labels/descriptions only (cosmetic); addresses + values come from the live
+//! radio scan, so an incorrect label can never write a wrong address.
 //! Tuple = (addr6, group, subgroup, description).
 
 pub const EX_CHART: &[(&str, &str, &str, &str)] = &[
@@ -114,10 +114,10 @@ pub const EX_CHART: &[(&str, &str, &str, &str)] = &[
     ("010603", "RADIO SETTING", "DIGITAL", "STANDBY BEEP 0: OFF 1: ON"),
     ("010604", "RADIO SETTING", "DIGITAL", "DP-ID LIST -"),
     ("010605", "RADIO SETTING", "DIGITAL", "RADIO ID -"),
-    // WIRES-X (RADIO SETTING sub-07): nieuwe firmware-feature, staat NIET in de
-    // 2506-CAT-Table-3. Veldnamen + volgorde afgelezen van het FTX-1-display
-    // (operator, build 120). Adressen sequentieel 010701-010706; 02/03 (freq-presets)
-    // kwamen niet in de live-scan terug wanneer niet ingesteld.
+    // WIRES-X (RADIO SETTING sub-07): new firmware feature, does NOT appear in
+    // 2506-CAT-Table-3. Field names + order read off the FTX-1 display
+    // (operator, build 120). Addresses sequential 010701-010706; 02/03 (freq-presets)
+    // did not come back in the live scan when not configured.
     ("010701", "RADIO SETTING", "WIRES-X", "PRESET SEARCH MANUAL / PRESET"),
     ("010702", "RADIO SETTING", "WIRES-X", "VFO PRESET FREQ (preset-frequentie, bv. 145.780 MHz)"),
     ("010703", "RADIO SETTING", "WIRES-X", "UHF PRESET FREQ (preset-frequentie, bv. 438.980 MHz)"),
@@ -452,7 +452,7 @@ pub const EX_CHART: &[(&str, &str, &str, &str)] = &[
     ("090516", "PRESET", "PRESET5", "RPTT SELECT 0: OFF 1: RTS 2:DTR 3:DAKY (RTTY/DATA Jack) 01 Bluetooth 0: OFF 1: ON 1 02 Device Name : Status - 1 03 DEVICE LIST - - 04 AUDIO 0: AUTO 1: FIX 1"),
 ];
 
-/// Zoek de chart-entry voor een 6-cijferig EX-adres: (group, sub, desc).
+/// Look up the chart entry for a 6-digit EX address: (group, sub, desc).
 pub fn lookup(addr: &str) -> Option<(&'static str, &'static str, &'static str)> {
     EX_CHART.iter().find(|e| e.0 == addr).map(|e| (e.1, e.2, e.3))
 }

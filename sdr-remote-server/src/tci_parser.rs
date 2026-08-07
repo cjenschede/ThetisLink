@@ -109,10 +109,10 @@ pub enum TciNotification {
     VfoSyncEx { enabled: bool },
     FmDeviationEx { receiver: u32, hz: u32 },
     // Stock Thetis v2.10.3.14 native sample rate / IF limits (global, not per-RX)
-    /// `iq_samplerate:<rate>;` - primary bron voor DDC sample rate (Hz)
+    /// `iq_samplerate:<rate>;` - primary source for DDC sample rate (Hz)
     IqSamplerate { rate: u32 },
     /// `if_limits:<low>,<high>;` - IF range in Hz; sample rate = high - low
-    /// (fallback wanneer iq_samplerate niet binnenkomt)
+    /// (fallback when iq_samplerate does not arrive)
     IfLimits { low: i32, high: i32 },
     // Stock Thetis v2.10.3.14 native attenuator/preamp commands
     RxStepAttEx { receiver: u32, db: u32 },

@@ -1069,6 +1069,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     RadioControls(
                         powerOn = state.powerOn,
                         thetisStarting = state.thetisStarting,
+                        thetisNotRunning = state.thetisNotRunning,
                         connected = state.connected,
                         nrLevel = state.nrLevel,
                         anfOn = state.anfOn,

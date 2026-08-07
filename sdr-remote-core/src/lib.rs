@@ -6,7 +6,7 @@ pub mod jitter;
 pub mod protocol;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.6.0";
+pub const VERSION: &str = "2.7.0";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).
@@ -19,6 +19,15 @@ pub fn version_string() -> String {
         None => VERSION.to_string(),
     }
 }
+
+/// Column header of the Yaesu memory blob (tab-separated, one line per channel).
+///
+/// Single source of truth for a format with three readers: the server writes it,
+/// the desktop client parses it, and the Android client parses it. All three
+/// look columns up BY NAME - never by position - so adding a column here cannot
+/// silently shift what another reader shows. Matches the .tab export of the
+/// Yaesu programmer, which is why the names are what they are.
+pub const YAESU_MEMORY_TAB_HEADER: &str = "Channel Number	Receive Frequency	Transmit Frequency	Offset Frequency	Offset Direction	Operating Mode	Tx Operating Mode	Name	Tone Mode	CTCSS	DCS	Narrow	Skip	Attenuator	Tuner	AGC	Noise Blanker	IPO	DNR	Step	Comment	";
 
 /// Audio sample rate used over the network (Opus narrowband)
 pub const NETWORK_SAMPLE_RATE: u32 = 8_000;
@@ -81,6 +90,33 @@ pub const FULL_SPECTRUM_BINS: usize = 8192;
 /// Default spectrum frame rate
 pub const DEFAULT_SPECTRUM_FPS: u8 = 15;
 
+// ── DDC spectrum dB↔u16 packing (wire contract, server pack ↔ client unpack) ──
+//
+// A packed bin value `v` encodes `dB = FLOOR + (v / MAX) * RANGE`. The server
+// packs bins with these constants and every client MUST unpack with the same
+// ones, or every bin mis-scales. These are the single source of truth; both
+// sides reference them instead of copying the literals -150 / 120 / 65535.
+// NOTE: the server's *wideband* FFT path deliberately uses a different scale
+// (see `sdr-remote-server/src/spectrum.rs`) and is intentionally not unified.
+
+/// dB value that packs to bin 0 (noise floor of the DDC pack scale).
+pub const SPECTRUM_PACK_FLOOR_DB: f32 = -150.0;
+/// dB span covered by the full u16 range.
+pub const SPECTRUM_PACK_RANGE_DB: f32 = 120.0;
+/// Full-scale packed bin value (u16::MAX as f32).
+pub const SPECTRUM_PACK_MAX: f32 = 65535.0;
+
+/// Pack a dB value into the u16 wire bin (inverse of [`unpack_spectrum_db`]).
+pub fn pack_spectrum_db(db: f32) -> u16 {
+    (((db - SPECTRUM_PACK_FLOOR_DB) / SPECTRUM_PACK_RANGE_DB) * SPECTRUM_PACK_MAX)
+        .clamp(0.0, SPECTRUM_PACK_MAX) as u16
+}
+
+/// Recover the dB value from a packed u16 bin (inverse of [`pack_spectrum_db`]).
+pub fn unpack_spectrum_db(v: u16) -> f32 {
+    SPECTRUM_PACK_FLOOR_DB + (v as f32 / SPECTRUM_PACK_MAX) * SPECTRUM_PACK_RANGE_DB
+}
+
 // Shared DSP utilities
 
 /// Client-side helper: map dBm to a 0-228 display unit for arc-position math.
@@ -93,5 +129,25 @@ pub fn dbm_to_display(dbm: f32) -> u16 {
         ((dbm + 127.0) * 2.0).clamp(0.0, 108.0) as u16
     } else {
         (108.0 + (dbm + 73.0) * 2.0).clamp(108.0, 228.0) as u16
+    }
+}
+
+#[cfg(test)]
+mod spectrum_pack_tests {
+    use super::*;
+
+    #[test]
+    fn spectrum_db_pack_roundtrip() {
+        // The pack scale is the client/server wire contract. Assert the
+        // documented anchors and that pack∘unpack is stable within one bin.
+        assert_eq!(pack_spectrum_db(SPECTRUM_PACK_FLOOR_DB), 0);
+        assert_eq!(pack_spectrum_db(SPECTRUM_PACK_FLOOR_DB + SPECTRUM_PACK_RANGE_DB), 65535);
+        // -30 dB is the documented full-scale reference (-150 + 120).
+        assert_eq!(pack_spectrum_db(-30.0), 65535);
+        for &db in &[-150.0f32, -120.0, -93.0, -73.0, -50.0, -30.0] {
+            let back = unpack_spectrum_db(pack_spectrum_db(db));
+            assert!((back - db).abs() <= SPECTRUM_PACK_RANGE_DB / SPECTRUM_PACK_MAX + 0.01,
+                "roundtrip drift at {db} dB: got {back}");
+        }
     }
 }

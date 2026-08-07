@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 use super::*;
+use crate::ui::controls::frequency::step_on_grid;
+
+/// Scroll-wheel tuning step for a VRX, in Hz.
+///
+/// Deliberately fixed, exactly like the RX spectrum/waterfall scroll: the step
+/// used to be derived from the zoom factor, so zooming in silently changed how
+/// far one notch tuned. Fine tuning stays available on the frequency digits,
+/// which step by the digit under the pointer.
+pub(crate) const VRX_SCROLL_STEP_HZ: u64 = 1_000;
 
 /// Draw spectrum plot: line graph of power vs frequency.
 /// Bins are pre-extracted by the server for the client's zoom/pan view.
@@ -9,9 +18,9 @@ pub(crate) struct SpectrumPlotConfig {
     pub(crate) scroll_key: &'static str,
     pub(crate) drag_key: &'static str,
     pub(crate) click_key: &'static str,
-    /// Per-channel memory-keys voor filter-edge drag. Zonder per-channel
-    /// onderscheid (vorige situatie: globale hardcoded keys) pakte de
-    /// RX1-reader een RX2-spectrum-drag op als RX1-filter-update.
+    /// Per-channel memory keys for filter-edge drag. Without per-channel
+    /// distinction (previous situation: global hardcoded keys) the
+    /// RX1 reader would pick up an RX2 spectrum drag as an RX1 filter update.
     pub(crate) filter_low_key: &'static str,
     pub(crate) filter_high_key: &'static str,
     pub(crate) show_band_markers: bool,
@@ -207,8 +216,8 @@ pub(crate) fn spectrum_plot(
     }
 
     // ── Spectrum line (frequency-mapped, max-per-pixel aggregation) ────
-    let server_floor_db = -150.0f32;
-    let server_range_db = 120.0f32;
+    let server_floor_db = sdr_remote_core::SPECTRUM_PACK_FLOOR_DB;
+    let server_range_db = sdr_remote_core::SPECTRUM_PACK_RANGE_DB;
     let pixel_count = plot_rect.width().max(1.0) as usize;
     let bins_f = num_bins as f64;
     let hz_per_bin = if bins_f > 0.0 { visible_span / bins_f } else { 1.0 };
@@ -593,10 +602,10 @@ pub(crate) fn spectrum_plot(
                 // Persist which edge we're dragging
                 ui.memory_mut(|mem| mem.data.insert_temp(drag_state_id.with("is_low"), is_low));
 
-                // Per-channel filter-edge memory key (zie SpectrumPlotConfig).
-                // RX1 schrijft naar "spectrum_filter_low/high", RX2 naar
-                // "rx2_spectrum_filter_low/high"; readers in mod.rs pakken
-                // ze als RX1 resp. RX2 filter-update op.
+                // Per-channel filter-edge memory key (see SpectrumPlotConfig).
+                // RX1 writes to "spectrum_filter_low/high", RX2 to
+                // "rx2_spectrum_filter_low/high"; readers in mod.rs pick
+                // them up as RX1 resp. RX2 filter updates.
                 let key = if is_low { config.filter_low_key } else { config.filter_high_key };
                 ui.memory_mut(|mem| {
                     mem.data.insert_temp(egui::Id::new(key), offset_hz);
@@ -689,7 +698,17 @@ pub(crate) fn render_waterfall(
     let newest_idx = (wf.write_idx + wf.height - 1) % wf.height;
     let view_span_from_packet = wf.view_spans[newest_idx] as f64;
     let display_center_hz = display_center as f64;
-    let display_span_hz = if view_span_from_packet > 0.0 { view_span_from_packet } else { ddc_span_f / (zoom as f64).max(1.0) };
+    // Without the full-band row there is no separate view row: the wide row IS
+    // the extracted view, so its own span is the display width. Dividing by zoom
+    // there would narrow an already-zoomed span a second time.
+    let newest_full_span = wf.full_spans[newest_idx] as f64;
+    let display_span_hz = if view_span_from_packet > 0.0 {
+        view_span_from_packet
+    } else if newest_full_span > 0.0 {
+        newest_full_span
+    } else {
+        ddc_span_f / (zoom as f64).max(1.0)
+    };
     let display_start_hz = display_center_hz - display_span_hz / 2.0;
 
     let out_width = (width.max(1.0) as usize).min(1024);
@@ -709,10 +728,15 @@ pub(crate) fn render_waterfall(
 
         if row_full.is_empty() || row_full_center == 0.0 { continue; }
 
-        // Precompute full DDC bin mapping for this row
+        // Precompute bin mapping for the wide row. Its width is the one stored
+        // with the row, not the current DDC width: with the full-band row
+        // switched off the wide row IS the extracted view, and mapping it over
+        // the whole DDC would stretch the waterfall away from the spectrum.
         let full_len = row_full.len() as f64;
-        let full_hz_per_bin = ddc_span_f / full_len;
-        let full_start_hz = row_full_center - ddc_span_f / 2.0;
+        let row_full_span = wf.full_spans[src_row_idx] as f64;
+        let row_span_hz = if row_full_span > 0.0 { row_full_span } else { ddc_span_f };
+        let full_hz_per_bin = row_span_hz / full_len;
+        let full_start_hz = row_full_center - row_span_hz / 2.0;
 
         // Precompute extracted view bin mapping (if available)
         let has_view = !row_view.is_empty() && row_view_span > 0.0;
@@ -752,8 +776,8 @@ pub(crate) fn render_waterfall(
             };
 
             // Same normalization as spectrum plot: raw->dB->frac->color
-            let server_floor_db = -150.0f32;
-            let server_range_db = 120.0f32;
+            let server_floor_db = sdr_remote_core::SPECTRUM_PACK_FLOOR_DB;
+            let server_range_db = sdr_remote_core::SPECTRUM_PACK_RANGE_DB;
             let db = server_floor_db + (max_val as f32 / 65535.0) * server_range_db;
             let frac = ((ref_db - db) / range_db).clamp(0.0, 1.0); // 0=top(strong), 1=bottom(weak)
             let level = (1.0 - frac).powf(1.0 / contrast).clamp(0.0, 1.0); // contrast as gamma
@@ -891,8 +915,8 @@ pub(crate) fn render_vrx_strip(
 
     // Server-side fixed dB scale used to pack bins into u16 (matches
     // main spectrum). Client-side ref/range are a remap onto y-axis.
-    let server_floor_db = -150.0f32;
-    let server_range_db = 120.0f32;
+    let server_floor_db = sdr_remote_core::SPECTRUM_PACK_FLOOR_DB;
+    let server_range_db = sdr_remote_core::SPECTRUM_PACK_RANGE_DB;
 
     // ── Compute view bounds (centered on VRX freq + pan offset) ──
     // Extracted view: server already extracted the current visible window,
@@ -915,7 +939,7 @@ pub(crate) fn render_vrx_strip(
         Vec2::new(ui.available_width(), plot_h + label_h),
         egui::Sense::click_and_drag(),
     );
-    // Besluit 9: custom Painter-helper bouwt hover zelf in.
+    // Decision 9: custom Painter helper builds in hover itself.
     let resp = resp.on_hover_text(rust_i18n::t!("spec_vrx_hover").to_string());
     let plot_rect = egui::Rect::from_min_max(rect.min, P2::new(rect.max.x, rect.max.y - label_h));
     let label_strip = egui::Rect::from_min_max(P2::new(rect.min.x, plot_rect.max.y), rect.max);
@@ -927,11 +951,11 @@ pub(crate) fn render_vrx_strip(
         painter.rect_filled(plot_rect, 2.0, Color32::from_rgb(10, 15, 30));
         painter.rect_filled(label_strip, 0.0, Color32::from_rgb(18, 22, 40));
 
-        // NB: audio (`enabled`) en spectrum zijn onafhankelijke abonnementen
-        // (vink-model). Het spectrum wordt getekend zodra er bins zijn, óók met de
-        // VRX-audio uit — voorheen verborg een `if !enabled`-"DISABLED"-overlay het
-        // spectrum op basis van de audio-vink (koppeling verwijderd). De s-meter
-        // valt vanzelf terug op NoData wanneer de audio uit staat.
+        // NB: audio (`enabled`) and spectrum are independent subscriptions
+        // (checkbox model). The spectrum is drawn as soon as there are bins, even with
+        // the VRX audio off — previously an `if !enabled` "DISABLED" overlay hid the
+        // spectrum based on the audio checkbox (coupling removed). The s-meter
+        // falls back to NoData by itself when the audio is off.
         let _ = enabled;
 
         // ── Nice tick spacing for freq and dB ──
@@ -1107,7 +1131,7 @@ pub(crate) fn render_vrx_strip(
                 let db_over = (smeter_dbm + 73.0).round() as i32;
                 format!("S9+{}dB", db_over.max(0))
             };
-            let meter_font = egui::FontId::proportional(42.0); // parity met RX-popout-spectrum
+            let meter_font = egui::FontId::proportional(42.0); // parity with RX popout spectrum
             let meter_color = Color32::from_rgb(0, 220, 0);
             let galley = painter.layout_no_wrap(meter_text, meter_font, meter_color);
             let text_pos = egui::Align2::RIGHT_TOP.anchor_size(
@@ -1132,7 +1156,7 @@ pub(crate) fn render_vrx_strip(
             let span_font = egui::FontId::proportional(11.0);
             let span_color = Color32::from_rgb(220, 220, 80);
             let galley = painter.layout_no_wrap(label, span_font, span_color);
-            let text_pos = egui::Align2::LEFT_TOP.anchor_size(P2::new(plot_rect.min.x + 2.0, plot_rect.min.y + 14.0), galley.size()); // +14 parity met RX (onder VFO-label)
+            let text_pos = egui::Align2::LEFT_TOP.anchor_size(P2::new(plot_rect.min.x + 2.0, plot_rect.min.y + 14.0), galley.size()); // +14 parity with RX (below VFO label)
             painter.rect_filled(text_pos.expand(2.0), 2.0, bg_color);
             painter.galley(text_pos.min, galley, span_color);
         }
@@ -1280,32 +1304,28 @@ pub(crate) fn render_vrx_strip(
         if let Some(pos) = resp.interact_pointer_pos() {
             let frac = ((pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
             let freq = (view_min_hz + frac as f64 * view_span_hz) as u64;
-            let clamped = freq.clamp(ddc_min_hz, ddc_max_hz);
-            new_freq = Some((clamped / 1000) * 1000); // round to 1 kHz, parity met RX
+            // Round to 1 kHz (parity with RX) *and* keep the result inside the
+            // limits: rounding after a raw clamp could drop below the low edge.
+            new_freq = Some(step_on_grid(freq, 0, VRX_SCROLL_STEP_HZ, ddc_min_hz, ddc_max_hz));
         }
     }
     // Scroll -> step VRX freq (skip when filter-edge scroll consumed it)
     if resp.hovered() && !filter_scroll_consumed && !(near_lo || near_hi) {
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll.abs() > 0.1 {
-            let step_hz: i64 = if zoom >= 256.0 { 10 }
-                else if zoom >= 64.0 { 50 }
-                else if zoom >= 16.0 { 100 }
-                else if zoom >= 4.0 { 500 }
-                else { 1000 };
-            let delta = if scroll > 0.0 { step_hz } else { -step_hz };
-            let cur = vrx_freq_hz as i64;
-            let next = (cur + delta).clamp(ddc_min_hz as i64, ddc_max_hz as i64) as u64;
-            new_freq = Some(next);
+            let delta = if scroll > 0.0 { VRX_SCROLL_STEP_HZ as i64 } else { -(VRX_SCROLL_STEP_HZ as i64) };
+            new_freq = Some(step_on_grid(
+                vrx_freq_hz, delta, VRX_SCROLL_STEP_HZ, ddc_min_hz, ddc_max_hz,
+            ));
         }
     }
 
     // ── Waterfall (texture-based) ──
     let wf_h_px = (wf_h.max(40.0) as usize).max(1);
     let wf_w_px = (ui.available_width().max(1.0) as usize).min(1024);
-    // Textuur-hoogte = ringbuffer-capaciteit (niet de paneel-pixelhoogte); painter.image
-    // rekt 'm uit naar de rect - parity met RX-waterval. Voorkomt een permanente zwarte
-    // rand onder als het paneel hoger is dan de ring.
+    // Texture height = ring buffer capacity (not the panel pixel height); painter.image
+    // stretches it to the rect - parity with RX waterfall. Prevents a permanent black
+    // border at the bottom when the panel is taller than the ring.
     let wf_tex_rows = wf.height.max(1);
     let mut pixels = vec![Color32::from_rgb(8, 10, 20); wf_w_px * wf_tex_rows];
     if wf.count > 0 {
@@ -1328,18 +1348,37 @@ pub(crate) fn render_vrx_strip(
             };
             let row_min_hz = row_center - wf_span_for_row / 2.0;
             let row_bin_hz = wf_span_for_row / row.len() as f64;
+            // Detail layer, when this row has one: the channel's own extracted
+            // view sits on top of the wide DDC row underneath. Same hybrid the
+            // RX waterfall uses - the wide row only shows through where the view
+            // does not reach, which is what fills the history after tuning.
+            let detail = &wf.view_rows[src_idx];
+            let detail_center = wf.view_centers[src_idx] as f64;
+            let detail_span = wf.view_spans[src_idx] as f64;
+            let has_detail = !detail.is_empty() && detail_span > 0.0;
+            let detail_min_hz = detail_center - detail_span / 2.0;
+            let detail_max_hz = detail_center + detail_span / 2.0;
+            let detail_bin_hz = if has_detail { detail_span / detail.len() as f64 } else { 1.0 };
             for x in 0..wf_w_px {
                 let px_start_hz = view_min_hz + x as f64 * view_span_hz / wf_w_px as f64;
                 let px_end_hz = view_min_hz + (x as f64 + 1.0) * view_span_hz / wf_w_px as f64;
-                let b0 = ((px_start_hz - row_min_hz) / row_bin_hz) as isize;
-                let b1 = (((px_end_hz - row_min_hz) / row_bin_hz).ceil() as isize).max(b0 + 1);
-                if b1 <= 0 || b0 >= row.len() as isize { continue; }
-                let b0c = b0.max(0) as usize;
-                let b1c = (b1 as usize).min(row.len());
-                // Max over alle bins die op deze pixel vallen - parity met RX-waterval.
-                // Single-bin sampling miste de piek waardoor VRX donkerder oogde.
+                let px_mid_hz = (px_start_hz + px_end_hz) / 2.0;
                 let mut val = 0u16;
-                for j in b0c..b1c { val = val.max(row[j]); }
+                if has_detail && px_mid_hz >= detail_min_hz && px_mid_hz < detail_max_hz {
+                    let d0 = (((px_start_hz - detail_min_hz) / detail_bin_hz) as isize).max(0) as usize;
+                    let d1 = ((((px_end_hz - detail_min_hz) / detail_bin_hz).ceil() as usize).max(d0 + 1))
+                        .min(detail.len());
+                    for j in d0..d1 { val = val.max(detail[j]); }
+                } else {
+                    let b0 = ((px_start_hz - row_min_hz) / row_bin_hz) as isize;
+                    let b1 = (((px_end_hz - row_min_hz) / row_bin_hz).ceil() as isize).max(b0 + 1);
+                    if b1 <= 0 || b0 >= row.len() as isize { continue; }
+                    let b0c = b0.max(0) as usize;
+                    let b1c = (b1 as usize).min(row.len());
+                    // Max over all bins that fall on this pixel - parity with RX waterfall.
+                    // Single-bin sampling missed the peak, making VRX look darker.
+                    for j in b0c..b1c { val = val.max(row[j]); }
+                }
                 let db = server_floor_db + (val as f32 / 65535.0) * server_range_db;
                 let frac = ((ref_db - db) / range_db).clamp(0.0, 1.0);
                 let level = (1.0 - frac).powf(1.0 / wf_contrast.max(0.1)).clamp(0.0, 1.0);
@@ -1364,7 +1403,7 @@ pub(crate) fn render_vrx_strip(
         Vec2::new(ui.available_width(), wf_h_px as f32),
         egui::Sense::click(),
     );
-    // Besluit 9: custom Painter-helper bouwt hover zelf in.
+    // Decision 9: custom Painter helper builds in hover itself.
     let wf_resp = wf_resp.on_hover_text(rust_i18n::t!("spec_wf_hover").to_string());
     if ui.is_rect_visible(wf_rect) {
         let painter = ui.painter_at(wf_rect);
@@ -1381,24 +1420,20 @@ pub(crate) fn render_vrx_strip(
         if let Some(pos) = wf_resp.interact_pointer_pos() {
             let frac = ((pos.x - wf_rect.min.x) / wf_rect.width()).clamp(0.0, 1.0);
             let freq = (view_min_hz + frac as f64 * view_span_hz) as u64;
-            let clamped = freq.clamp(ddc_min_hz, ddc_max_hz);
-            new_freq = Some((clamped / 1000) * 1000); // round to 1 kHz, parity met RX
+            // Round to 1 kHz (parity with RX) *and* keep the result inside the
+            // limits: rounding after a raw clamp could drop below the low edge.
+            new_freq = Some(step_on_grid(freq, 0, VRX_SCROLL_STEP_HZ, ddc_min_hz, ddc_max_hz));
         }
     }
-    // Scroll over de waterval -> stem VRX (parity met RX-waterval; zelfde
-    // zoom-adaptieve stap als de spectrum-scroll hierboven).
+    // Scroll over the waterfall -> tune VRX (parity with RX waterfall; same
+    // fixed step as the spectrum scroll above).
     if new_freq.is_none() && wf_resp.hovered() {
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll.abs() > 0.1 {
-            let step_hz: i64 = if zoom >= 256.0 { 10 }
-                else if zoom >= 64.0 { 50 }
-                else if zoom >= 16.0 { 100 }
-                else if zoom >= 4.0 { 500 }
-                else { 1000 };
-            let delta = if scroll > 0.0 { step_hz } else { -step_hz };
-            let cur = vrx_freq_hz as i64;
-            let next = (cur + delta).clamp(ddc_min_hz as i64, ddc_max_hz as i64) as u64;
-            new_freq = Some(next);
+            let delta = if scroll > 0.0 { VRX_SCROLL_STEP_HZ as i64 } else { -(VRX_SCROLL_STEP_HZ as i64) };
+            new_freq = Some(step_on_grid(
+                vrx_freq_hz, delta, VRX_SCROLL_STEP_HZ, ddc_min_hz, ddc_max_hz,
+            ));
         }
     }
     new_freq

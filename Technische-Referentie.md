@@ -1,10 +1,10 @@
-# ThetisLink v2.6.0 — Technische Documentatie
+# ThetisLink v2.7.0 — Technische Documentatie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een ANAN 7000DLE + Thetis SDR-ontvanger en maximaal twee Yaesu transceivers (FT-991A / FTX-1) via een netwerkverbinding. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
 
-**Versie:** v2.6.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.7.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -26,9 +26,13 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.6.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.7.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.7.0 hoogtepunten
+
+**Betrouwbare VRX-audio, CTCSS/DCS vanuit de client, herbouwde audioniveaubalken, en een volbandspectrumrij die gedeeld wordt door een RX en de VRX op dezelfde DDC.** Backwards-compatible met v2.6.x — wire `VERSION` blijft 3; de toevoegingen zijn drie client→server-only `ControlId`-waarden (`YaesuCatMonitor 0x96` gereserveerd/no-op, `YaesuReadMemoryTones 0x97`, `FullSpectrumEnabled 0x98`, zie [Protocol-toevoegingen (v2.7.0)](#control-ids)). **VRX-audio start nu betrouwbaar en blijft schoon na afstemmen**: drie losse oorzaken lagen onder één symptoom — een vastgelopen DDC-midden na een gemiste push, een relay-dedupfilter dat het kanaal-id negeerde waardoor VRX1 en VRX2 elkaars frames opaten, en een herstarte stroom die voor zijn eigen duplicaat werd aangezien (de wachttijd vóór er audio kwam was precies zo lang als de vorige luistersessie). Een VRX **blijft ook binnen de DDC-band** en het spectrum tekent de rand eerlijk in plaats van stilzwijgend te herschalen. **CTCSS en DCS zijn per geheugenkanaal te lezen en te schrijven op de FT-991A** (alle 104 DCS-codes; *Tonen uitlezen* loopt de kanalen met een tone-mode langs, pauzeert en hervat een lopende scan, en keert terug naar het kanaal waar de radio stond) — de FTX-1 kan lezen maar niet schrijven, want daar bestaat geen veilige CAT-route voor. De **audioniveaubalken meten de verbinding in plaats van de volumeschuif** (gemeten vóór het volume), vallen binnen een halve seconde terug naar nul als een stroom stopt, en het **Yaesu-ontvangstpad is per radiomodel geijkt** voor zowel de meter als de weergavegain (de FT-991A stond ~16 dB te hard). De **volledige DDC-spectrumrij wordt gedeeld** door het RX-venster en de VRX op dezelfde DDC — één rij per client per keten, met een vinkje om hem uit te zetten (ruwweg de helft van de spectrumbandbreedte). Fixes: een MIDI-wiel laat een Yaesu niet meer weglopen (frequentiecommando's worden samengevoegd, zoals de Thetis-VFO al deed), VRX-afstemming blijft op het stapraster tot en met de bandgrens, en de relay ziet een dood UDP-pad niet meer als hersteld. Stock Thetis v2.10.3.15 volstaat; geen fork-wijziging nodig. Vanaf deze release wordt `Cargo.lock` meegecommit en bouwen de release-builds met `--locked`, zodat de gepubliceerde binaries, de SBOM en het derde-partij-licentierapport allemaal dezelfde dependency-set beschrijven.
 
 ### v2.6.0 highlights
 
@@ -157,6 +161,49 @@ flowchart LR
 
 Audio, IQ en alle commando's lopen via die ene TCI WebSocket (RX_AUDIO_STREAM / TX_AUDIO_STREAM plus tekst-TCI commando's). ThetisLink onderhoudt geen aparte CAT-verbinding meer.
 
+### Rechtstreeks of via de relay
+
+Het schema hierboven is het **rechtstreekse** pad: de client stuurt UDP direct naar
+de server. Dat werkt op een LAN, of van buitenaf met een port-forward.
+
+Kan geen van beide kanten een inkomende verbinding aannemen — een client op mobiele
+data, een station achter CGNAT, een netwerk dat inkomend verkeer blokkeert — dan
+maken beide kanten in plaats daarvan een **uitgaande** TLS-verbinding met een relay,
+die ze aan elkaar koppelt:
+
+```mermaid
+flowchart LR
+    subgraph C["Client (laptop/telefoon)"]
+        CE["ClientEngine"]
+    end
+    subgraph R["Relay (VPS)"]
+        Room["Kamer 'stationsnaam'<br>1 station + max. 8 clients"]
+    end
+    subgraph S["Server (pc naast Thetis)"]
+        SS["Sessiebeheer"]
+    end
+    CE -->|"uitgaand TLS :443<br>TLU1 = audio over kaal UDP"| Room
+    CE -->|"uitgaand TLS :443<br>TLT1 = besturing/spectrum over wss"| Room
+    Room --> SS
+    SS --> Thetis["Thetis (TCI)"]
+```
+
+Twee eigenschappen zijn van belang voor de rest van dit document:
+
+**Het radioprotocol verandert niet.** De relay tunnelt dezelfde frames; niets vanaf
+hoofdstuk 5 (UDP-protocol) gedraagt zich anders omdat een verbinding gerelayd is.
+
+**De server weet niet dat hij gerelayd is.** Een gerelayde client wordt geadresseerd
+met een synthetisch `203.0.113.x`-sentineladres, zodat het sessiebeheer, de
+abonnementsverzamelingen en elke verzendplek hem als gewone UDP-peer behandelen.
+Alleen de socketwrapper kent het verschil.
+
+Audio neemt een kaal-UDP-pad vanwege de vertraging en al het overige gaat door de
+TLS-verbinding; wordt UDP geblokkeerd of loopt het vast, dan valt de audio
+automatisch terug op wss. Zie [hoofdstuk 30](#30-relay-afstandsbediening-over-internet)
+voor de framing, de terugvalregels en de ontdubbeling die hoort bij een frame dat
+over twee paden kan komen.
+
 ### Client Architectuur
 
 ```mermaid
@@ -226,62 +273,92 @@ sdr-remote/
 │   └── src/                    # main.rs (forwarder), admin_api.rs, store.rs (SQLite)
 ├── sdr-remote-server/          # Windows server (draait naast Thetis)
 │   └── src/
-│       ├── main.rs             # Opstart, argument parsing, shutdown
-│       ├── network.rs          # UDP send/receive, resampling, playout timer, per-client routing
-│       ├── session.rs          # Client sessie management (multi-client, abonnement-sets)
-│       ├── tracked_socket.rs   # UDP-socket-wrapper met per-stream byte/packet-tellers
-│       ├── mdns.rs             # mDNS service-advertentie (lokale discovery)
-│       ├── tci.rs              # TciConnection: TCI WebSocket client + state + streams
-│       ├── tci_commands.rs     # TCI command sender (audio/IQ/_ex commando's)
-│       ├── tci_parser.rs       # TCI tekst/binair parser
-│       ├── ctun_recenter.rs    # CTUN auto-recenter (auto_recenter_ex cap)
-│       ├── audio_loops.rs      # Audio bundling + IQ consumer loops
-│       ├── spectrum.rs         # SpectrumProcessor: DDC FFT pipeline + test generator
-│       ├── vrx_manager.rs      # Per-client VRX abonnement/runtime-bookkeeping
-│       ├── vrx_bridge.rs       # Brug tussen de IQ-stroom en de vrx-rs engine
-│       ├── ptt.rs              # PttController: PTT safety (bevat TciConnection)
-│       ├── power_cap.rs        # Per-positie RF-power-cap (SPE/RF2K DriveDown)
-│       ├── dxcluster.rs        # DX Cluster telnet client
-│       ├── macros.rs           # CW keyer macro's
-│       ├── yaesu.rs            # Yaesu FT-991A / FTX-1 CAT serieel controller (dual-radio, auto-DFM, SSB-over-USB, aan/stand-by, TX-vermogen per band, SWR)
-│       ├── amplitec.rs         # Amplitec antenne-switch
-│       ├── rf2k.rs             # RF2K-S PA HTTP controller
-│       ├── spe_expert.rs       # SPE Expert 1.3K-FA serieel controller
-│       ├── ultrabeam.rs        # UltraBeam RCU-06 serieel controller
-│       ├── rotor.rs            # Rotor-besturing (EA7HG UDP-backend + dispatch)
-│       ├── pstrotator.rs       # PstRotator UDP/XML rotor-backend (verzenden)
-│       ├── pstrotator_listen.rs# PstRotator/Log4OM inkomende listener
-│       ├── mcp2221_yaesu_rotor.rs # G-1000DXC rotor via MCP2221A (ADC + soft-start)
-│       ├── tuner.rs            # JC-4s/JC-3s tuner controllers (MCP2221A USB-HID)
-│       ├── mcp2221_debug.rs    # MCP2221A USB-HID bridge (GP2 + GP1 ADC)
-│       ├── mcp2221_scan.rs     # USB-HID board scan + serial programming
-│       ├── audio_stats.rs      # Per-stream bandbreedte/jitter/loss-statistieken
-│       ├── config.rs           # Server configuratie (persistent)
-│       └── ui/                 # Server GUI (egui)
-├── sdr-remote-client/          # Desktop client (egui)
-│   ├── locales/               # rust-i18n UI-vertalingen (app.yml: EN/NL/DE/FR)
+│       ├── main.rs             # Opstarten, argumenten, afsluiten
+│       ├── network.rs          # UDP zenden/ontvangen, resampling, playout-timer, routering per client
+│       ├── session.rs          # Clientsessies (multi-client, abonnementsverzamelingen)
+│       ├── tracked_socket.rs   # UDP-socket met tellers per stroom + pariteitstests met de relay
+│       ├── mdns.rs             # mDNS-dienstaankondiging (lokale ontdekking)
+│       ├── tci.rs              # TciConnection: TCI-WebSocketclient + status + stromen
+│       ├── tci_commands.rs     # TCI-commandozender (audio/IQ/_ex-commando's)
+│       ├── tci_parser.rs       # TCI tekst-/binaire parser
+│       ├── ctun_recenter.rs    # CTUN auto-hercentrering (auto_recenter_ex)
+│       ├── audio_loops.rs      # Audiobundeling + IQ-consumerlussen
+│       ├── spectrum.rs         # SpectrumProcessor: DDC-FFT-pijplijn + testgenerator
+│       ├── vrx_manager.rs      # VRX-abonnementen/runtimes per client
+│       ├── vrx_bridge.rs       # Brug tussen de IQ-stroom en de vrx-rs-engine
+│       ├── ptt.rs              # PttController: PTT-veiligheid (bevat TciConnection)
+│       ├── power_cap.rs        # RF-vermogensbegrenzing per positie (SPE/RF2K DriveDown)
+│       ├── dxcluster.rs        # DX-Cluster telnetclient
+│       ├── macros.rs           # CW-keyer-macro's
+│       ├── yaesu/              # Yaesu FT-991A / FTX-1 CAT (in v2.7.0 uit yaesu.rs gesplitst)
+│       │   ├── mod.rs          # YaesuController, YaesuState, commando-enum, slot-plumbing
+│       │   ├── poll.rs         # Verbindingsruntime: poll-cadans, commandoafhandeling, watchdogs
+│       │   ├── cat.rs          # Seriële helpers: CatPort-trait, cat_query-timeouts, buffer legen
+│       │   ├── parse.rs        # CAT-antwoordparser (IF/SC/AC/RI/... -> YaesuState)
+│       │   ├── memory.rs       # Geheugenkanalen + CTCSS/DCS lezen/schrijven, tonenwandeling, scanpauze
+│       │   ├── ex_menu.rs      # FT-991A EX-menu lezen/schrijven
+│       │   └── audio.rs        # Yaesu USB-audiostromen (opname + TX-uitgang)
+│       ├── amplitec.rs         # Amplitec antenneschakelaar
+│       ├── rf2k.rs             # RF2K-S PA HTTP-controller
+│       ├── spe_expert.rs       # SPE Expert 1.3K-FA seriële controller
+│       ├── ultrabeam.rs        # UltraBeam RCU-06 seriële controller
+│       ├── rotor.rs            # Rotorbesturing (EA7HG UDP-backend + dispatch)
+│       ├── pstrotator.rs       # PstRotator UDP/XML rotorbackend (zenden)
+│       ├── pstrotator_listen.rs# PstRotator/Log4OM inkomende luisteraar
+│       ├── mcp2221_yaesu_rotor.rs # G-1000DXC-rotor via MCP2221A (ADC + zachte start)
+│       ├── tuner.rs            # JC-4s/JC-3s tunercontrollers (MCP2221A USB-HID)
+│       ├── mcp2221_debug.rs    # MCP2221A USB-HID-brug (GP2 + GP1 ADC)
+│       ├── mcp2221_scan.rs     # USB-HID-bordscan + serieprogrammering
+│       ├── audio_stats.rs      # Bandbreedte-/jitter-/verliesstatistiek per stroom
+│       ├── config.rs           # Serverconfiguratie (persistent)
+│       └── ui/                 # Server-GUI (egui), in v2.7.0 uit één bestand gesplitst
+│           ├── mod.rs          # ServerApp-type + modulekoppeling
+│           ├── app_state.rs    # ServerApp::new (constructie, config laden)
+│           ├── startup.rs      # ServerApp::start_server (backends opstarten)
+│           ├── update.rs       # eframe-updatelus + schermdispatch
+│           ├── status_panel.rs # Status- en apparaatpanelen tijdens draaien
+│           ├── arranger.rs     # Vensterschikker-matrix (apparaatvensters van de server)
+│           ├── window_placement.rs # Monitorgeometrie
+│           ├── utils.rs        # Gedeelde GUI-helpers (with_timeout, opmaak)
+│           └── amplitec.rs / rf2k.rs / spe.rs / tuner.rs / ultrabeam.rs / rotor.rs / macros_ui.rs
+├── sdr-remote-client/          # Desktopclient (egui)
+│   ├── locales/                # rust-i18n UI-vertalingen (app.yml: EN/NL/DE/FR)
 │   └── src/
-│       ├── main.rs             # Opstart, engine + UI threading
-│       ├── audio.rs            # cpal AudioBackend impl + device listing
-│       ├── mdns.rs             # mDNS server-discovery (lokaal netwerk)
-│       ├── midi.rs             # MIDI-controller-invoer
-│       ├── websdr.rs           # Win32 venster + wry WebView (embedded WebSDR/KiwiSDR)
-│       ├── catsync.rs          # WebSDR kanaalcommunicatie, favorites, debounced freq sync
-│       └── ui/                 # egui UI (per gebied opgesplitst)
-│           ├── mod.rs          # Hoofd-app, vensters, schikker, per-kanaal state
-│           ├── devices.rs      # Apparaat-panelen (Yaesu, PA, tuner, rotor, antenne)
-│           ├── screens.rs      # Hoofdscherm-layout + chips
-│           ├── spectrum.rs     # Hoofd-spectrum/waterval-plot
-│           ├── channel_spectrum.rs # Per-kanaal spectrum/waterval
-│           ├── meters.rs       # S-meter (balk + analoog) rendering
-│           ├── theme.rs        # Client-lokale theme-helpers
-│           ├── config.rs       # Config-opslag
-│           ├── helpers.rs      # Gedeelde widget-helpers (sliders, hover)
-│           ├── window_placement.rs # Monitor-geometrie + pop-out-plaatsing
-│           ├── wizard.rs       # First-run connect-wizard
-│           ├── yaesu_memory.rs # Yaesu geheugenkanaal-tabel
+│       ├── main.rs             # Opstarten, engine- + UI-threading, profielen, single-instance-guard
+│       ├── audio.rs            # cpal AudioBackend-implementatie + apparatenlijst
+│       ├── mdns.rs             # mDNS-serverontdekking (lokaal netwerk)
+│       ├── midi.rs             # MIDI-controllerinvoer
+│       ├── websdr.rs           # Win32-venster + wry WebView (ingebedde WebSDR/KiwiSDR)
+│       ├── catsync.rs          # WebSDR-kanaalcommunicatie, favorieten, ontdenderde freq-sync
+│       └── ui/                 # egui-UI (per gebied gesplitst; ui/mod.rs opgedeeld in v2.7.0)
+│           ├── mod.rs          # SdrRemoteApp-state + gedeelde widgets (kanaalblokken, watervalring)
+│           ├── app_state.rs    # App-constructie, config -> state, opstartcommando's
+│           ├── update.rs       # Per-frame-update: panelen, tabdispatch, Radio-tabinhoud
+│           ├── sync_state.rs   # RadioState -> UI-state (getypeerde spectrum-snapshots)
+│           ├── persistence.rs  # Config opslaan/laden
+│           ├── popouts.rs      # Gedeelde pop-outlevenscyclus (show_popout: geometrie, focus, sluiten)
+│           ├── rx_controls.rs  # RX1/RX2-bedieningspanelen + RX2-spectrum
+│           ├── vrx.rs          # VRX-kanalen: verzendhelpers, bediening, spectrumpaneel
+│           ├── spectrum.rs     # Spectrum-/watervalplot + VRX-strookrenderer
+│           ├── spectrum_content.rs # Gedeelde spectrumknoppenrijen (ref/zoom/FFT/hoogte)
+│           ├── channel_spectrum.rs # Spectrum + s-meter + auto-ref per kanaal (getypeerde grens)
+│           ├── tuning.rs       # Afstemhelpers
+│           ├── controls/       # Herbruikbare bedieningswidgets met dekkingsinstrumentatie
+│           │   ├── mod.rs / context.rs / state.rs / events.rs / coverage.rs
+│           │   └── band.rs / mode.rs / frequency.rs
+│           ├── meters.rs       # S-meter (balk + analoog)
+│           ├── theme.rs        # Client-eigen themahelpers
+│           ├── config.rs       # Configuratieopslag
+│           ├── helpers.rs      # Gedeelde widgethelpers (sliders, hover)
+│           ├── arranger.rs     # Vensterschikker-matrix (clientvensters, per monitor)
+│           ├── window_placement.rs # Monitorgeometrie + pop-outplaatsing
+│           ├── wizard.rs       # Verbindingswizard bij eerste start
+│           ├── screens.rs      # Pakkettype-labels + resterende schermhelpers
+│           ├── server_screen.rs / thetis_screen.rs / devices.rs / diversity_screen.rs / midi_screen.rs
+│           ├── yaesu_panel.rs  # Yaesu-bedieningsvenster (beide slots)
+│           ├── yaesu_memory.rs # Yaesu-geheugenkanaaltabel
 │           ├── yaesu_menu.rs   # Yaesu EX-menu-editor
-│           └── ftx1_ex_chart.rs# FTX-1 EX-menu-referentiekaart
+│           └── ftx1_ex_chart.rs# FTX-1 EX-menu-referentietabel
 └── sdr-remote-android/         # Android client (Kotlin/Compose + Rust via UniFFI)
     ├── src/
     │   ├── lib.rs              # JNI entrypoint, Android logging
@@ -821,6 +898,22 @@ Wire-protocol `VERSION` blijft **3** in v2.5.0. De toevoegingen zijn (a) twee tr
 | 0x93 | Yaesu2StateEnable | 0/1 | Slot-1 spiegel van `YaesuStateEnable`. |
 | 0x94 | YaesuPowerOnOff | 0/1 | Slot-0 aan/stand-by. 1 → CAT `PS1;` (aan), 0 → `PS0;` (stand-by). Alleen FT-991A; de FTX-1 verliest zijn USB-verbinding bij power-off, dus de client toont dit alleen voor de 991A. |
 | 0x95 | Yaesu2PowerOnOff | 0/1 | Slot-1 spiegel van `YaesuPowerOnOff`. |
+| 0x96 | YaesuCatMonitor | — | **Gereserveerd, no-op.** Binnen de v2.7.0-cyclus toegevoegd en weer teruggetrokken: de CAT-monitor is een diagnose-hulpmiddel (hij zet Auto Information aan en vermenigvuldigt de serverlog) en is bereikbaar met `THETISLINK_CAT_MONITOR=1` op de server. De server accepteert het id en negeert het. **Hergebruik deze byte niet** — een client uit de v2.7.0-periode kan hem nog sturen. |
+| 0x97 | YaesuReadMemoryTones | slot | Lees de CTCSS/DCS-toon van elk geheugenkanaal dat een tone-mode heeft. Een toon is een instelling van het *actieve* kanaal, dus de radio loopt die kanalen langs en keert terug; een expliciete actie, nooit onderdeel van de gewone geheugenuitlezing. Waarde = slot (0 = radio 1, 1 = radio 2). |
+| 0x98 | FullSpectrumEnabled | 0/1 | Stuur de volledige DDC-spectrumrij naast de uitgesneden weergave. **Standaard aan** op de server, zodat een v2.6.x-server die het id niet kent zijn oude gedrag houdt en een oudere client de rij blijft ontvangen. Uit halveert de spectrumbandbreedte per ontvangerketen ruwweg. Zie [Gedeelde volbandrij](#gedeelde-volbandrij-v270). |
+
+#### Gedeelde volbandrij (v2.7.0)
+
+Elke ontvangerketen produceert één volledige DDC-spectrumrij naast de uitgesneden weergave. Tot v2.7.0 ging die rij **alleen naar de RX-spectrumabonnees**, terwijl VRX1 op de RX1-DDC meelift en VRX2 op die van RX2 — de rij die een VRX-venster nodig heeft is precies de rij die het RX-venster al ontvangt, geproduceerd door dezelfde processor in dezelfde frame-tick.
+
+`SessionManager::full_row_clients(keten)` geeft nu de **vereniging** van de RX- en VRX-abonnees op die keten, gefilterd op `full_spectrum_enabled`. Gevolgen:
+
+- **Eén rij per client per keten**, nooit één per venster. Een client met zowel het RX- als het VRX-venster open ontvangt dezelfde bytes één keer en routeert ze naar beide.
+- Het geval waarin de rij **helemaal ontbrak** — VRX aan, RX-spectrum uit — is gedekt.
+- De bestaande loss-gates gelden nog voor de gedeelde rij: overslaan boven 15 % verlies, elk tweede frame boven 5 %.
+- Met `FullSpectrumEnabled = 0` wordt er op die keten geen rij gestuurd en bouwt elke waterval zich op uit zijn eigen uitsnede.
+
+Dit is de enige wijziging in v2.7.0 die de **bandbreedte per client** verandert: met de rij aan kost een ontvangerketen de uitsnede plus een volledige rij (die rij wordt gedimensioneerd op de `spectrum_max_bins` van de client, afgetopt op `FULL_SPECTRUM_BINS`).
 
 #### Gesplitste audio- vs. status-abonnement
 
@@ -2093,6 +2186,35 @@ Bij stroomverlies van de 991A:
 
 ---
 
+### CTCSS / DCS per geheugenkanaal (v2.7.0)
+
+De toon*frequentie* zit niet in het geheugenrecord: `MT`/`MR` dragen wel de
+tone-**mode**, maar hun P9-veld staat vast op `00`. De toon zelf is een
+eigenschap van het kanaal waar de radio op dát moment op staat, en wordt gelezen
+en geschreven met `CN` (`CN0` = CTCSS-nummer, `CN1` = DCS-code) plus `CT` voor de
+mode.
+
+Daarom is het uitlezen van de tonen van een hele geheugenlijst een expliciete
+actie en geen onderdeel van de gewone uitlezing (`ControlId::YaesuReadMemoryTones
+0x97`): de server moet de kanalen met een tone-mode langslopen, elk kanaal
+terugroepen en bevestigen dat de radio er werkelijk naartoe is gesprongen vóór
+hij de toon leest. Die wandeling
+
+- **pauzeert een lopende scan** (`SC;` -> `SC0;`) en hervat hem in de stand waarin
+  hij stond;
+- **bevestigt elk kanaal** met de leesvorm van het model - `MC;` op de FT-991A,
+  `MC0;` op de FTX-1, die het side-cijfer draagt (FTX-1 CAT OM 2508-C p.19). De
+  verkeerde vorm sturen is een ongeldige vraag die de radio niet beantwoordt, en
+  dan wordt elk kanaal overgeslagen;
+- **maakt eerst de seriële invoerbuffer leeg**, omdat een restant van een
+  voorafgaande bulk-uitlezing voor deze bevestigingen zou worden aangezien;
+- **breekt af bij TX** en keert terug naar het kanaal waar de radio stond.
+
+**Beperking FTX-1:** lezen werkt, schrijven niet. Er bestaat geen veilige
+CAT-route om een toon op die radio op te slaan - de route die leek te werken
+schreef het kanaal opnieuw vanuit VFO-A en vernietigde de inhoud - dus het
+schrijfpad is daar uitgeschakeld en een regressietest houdt dat zo.
+
 ## 27. Netwerk Authenticatie (HMAC-SHA256 + TOTP 2FA)
 
 ### Challenge-Response
@@ -2246,7 +2368,150 @@ De FTX-1 **WIRES-X** EX-menu-velden zijn toegevoegd aan de EX-editor (§26).
 
 ---
 
-## 30. Bekende Beperkingen
+## 30. Relay (afstandsbediening over internet)
+
+Rechtstreeks UDP tussen client en server werkt op een LAN of achter een
+port-forward. De relay bestaat voor al het andere: een client op mobiele data, een
+station achter CGNAT, een netwerk dat inkomende verbindingen blokkeert. Beide
+kanten maken een **uitgaande** TLS-verbinding met een rendez-vousserver; de relay
+koppelt ze en stuurt frames door.
+
+Twee crates:
+
+| Crate | Rol |
+|---|---|
+| `sdr-remote-relay` | Relay-**clientbibliotheek**, meegelinkt in zowel de desktop-/Android-client als de server. Bevat de transportlogica die hieronder beschreven staat. |
+| `thetislink-relay` | De **rendez-vousbinary** op een VPS: forwarder, stationsregister (SQLite), beheerdersdashboard. |
+
+### 30.1 Kamers, rollen en koppeling
+
+Een relay-verbinding draagt een **stationsnaam** en een **rol** (`station` of
+`client`). Peers met dezelfde stationsnaam delen een *kamer*: de server verbindt
+als station, elke client van dat station als client.
+
+- Eén stationsplek per kamer; een nieuwe stationsverbinding **verdringt** de vorige.
+- Maximaal `MAX_CLIENTS = 8` clients per kamer. Het sentinel-schema hieronder zou er
+  254 toelaten, maar een kleinere grens houdt de belasting per station laag zodat
+  één VPS veel stations kan bedienen.
+- Een client mag een **id per installatie** meesturen; opnieuw verbinden met
+  hetzelfde id herneemt de bestaande plek in plaats van een tweede te bezetten.
+  Zonder dat vult een haperende verbinding de kamer en wordt de volgende poging
+  geweigerd ("room full").
+- De relay pingt elke peer elke `KEEPALIVE_INTERVAL` (5 s) en ruimt hem op na
+  `PEER_DEAD_TIMEOUT` (15 s) zonder frame of pong, zodat een half-open
+  TCP-verbinding niet eeuwig een plek bezet houdt.
+
+### 30.2 Sentinel-adressen: waarom de server niets van de relay hoeft te weten
+
+De server adresseert clients met een `SocketAddr`. In plaats van elke verzendplek
+iets over relays te leren, krijgt een gerelayde client een **synthetisch adres**,
+afgeleid van zijn relay-`client_id`:
+
+```
+sentinel_for_client_id(id) -> 203.0.113.{1 + id % 254} : 1
+client_id_from_sentinel(addr) -> addr.octets()[3] - 1
+```
+
+`203.0.113.0/24` is TEST-NET-3 (RFC 5737) en is nooit routeerbaar, dus een sentinel
+kan nooit botsen met een echte peer. De sessiebeheerder, de abonnementsverzamelingen
+en de spectrum-verzendplekken behandelen een gerelayde client als een gewone
+UDP-peer; alleen de socketwrapper (`tracked_socket.rs`) kent het verschil en stuurt
+het frame de tunnel in in plaats van de draad op.
+
+### 30.3 Twee transporten: kaal UDP voor audio, wss voor de rest
+
+Alles gaat door de TLS-verbinding behalve audio, die een eigen pad met lage
+vertraging krijgt.
+
+**TLT1 — getunnelde TL-frames over wss.** `magic(4) | versie(1) | client_id(1) |
+lengte(2 LE) | payload`. Draagt besturing, spectrum, meters en al het overige. Een
+eigen magic in plaats van een kale prefix, omdat echte payloads ook binair zijn; een
+binair frame met een onbekende magic wordt zonder fout weggegooid.
+
+**TLU1 — audio over kaal UDP.** `magic(4) | versie(1) | vlaggen(1) | client_id(1) |
+seq(4 LE) | token(32) | AudioPacket`, header 43 bytes. Alleen de pakkettypen in
+`AUDIO_TYPE_BYTES` nemen dit pad — een bewuste spiegel van
+`sdr_remote_core::protocol::AUDIO_PACKET_TYPES`, eerlijk gehouden door een
+pariteitstest in de server-crate, de enige crate die beide linkt (de relay blijft
+licht en linkt `core` niet, want dat zou Opus meetrekken).
+
+Het UDP-sessietoken **roteert over wss** vóór het verloopt, zodat het audiopad zich
+nooit in-band opnieuw hoeft te legitimeren.
+
+### 30.4 Terugval: make-before-break, en wat "hersteld" betekent
+
+Netwerken die UDP blokkeren of knijpen komen veel voor (gastenwifi, sommige mobiele
+providers). De client bewaakt zijn eigen UDP-audio en vraagt het station om te
+schakelen:
+
+| Constante | Waarde | Betekenis |
+|---|---|---|
+| `FALLBACK_STALL` | 500 ms | zolang geen UDP-audio = vastgelopen |
+| `FALLBACK_CONNECT_TIMEOUT` | 2 s | sinds verbinden helemaal geen UDP-audio |
+| `FALLBACK_RECOVER` | 3 s | een gezonde UDP-reeks moet zo lang duren |
+| `FALLBACK_DWELL` | 3 s | minimale tijd tussen twee transportwissels |
+| `FALLBACK_HEARTBEAT` | 5 s | de terugvalstand wordt zo vaak herbevestigd |
+| `FALLBACK_LEASE` | 15 s | station vergeet een niet-ververste terugvalstand |
+
+Twee eigenschappen verdienen vermelding, want beide zijn duur geleerd:
+
+**Stilte is geen storing.** De vastloop-test slaat alleen aan zolang er aantoonbaar
+audio vervoerd wordt (over wss, of over UDP tot het stil werd). Met alle kanalen uit
+valt er niets te vervoeren, en dan kost een wissel seconden audio bij het volgende
+inschakelen.
+
+**Herstel eist een reeks die nog lóópt.** `udp_recovered()` verlangt zowel dat de
+gezonde reeks minstens `FALLBACK_RECOVER` geleden begon, *als* dat er nu UDP-audio
+binnenkomt. Zonder die tweede helft bevriest de "gezond sinds"-tijdstempel wanneer
+het pad wegvalt en voldoet hij eeuwig aan "oud genoeg" — wat een transportwissel per
+wachttijd opleverde, eindeloos (waargenomen bij 1829 wissels, 96 minuten na het
+laatste UDP-frame).
+
+Tijdens TX gaan audioframes met een PTT-vlag over **beide** paden (TX-always-both),
+zodat een transportwissel niet het frame kan opslokken dat de zender sleutelt.
+
+### 30.5 Ontdubbeling
+
+Omdat een frame tijdens een overlap over beide paden kan aankomen, houdt de
+ontvangende kant een schuivend venster bij van wat al bezorgd is. Dat zit in de
+transportlaag, vóór de jitterbuffer, zodat de jitterschatter nooit een duplicaat
+ziet.
+
+Het venster sleutelt op **(client_id, pakkettype, volgnummer)** — inclusief het
+VRX-kanaal-id, want VRX1 en VRX2 delen pakkettype `0x21` met eigen tellers en zouden
+elkaars frames anders opeten.
+
+Een stroom die herstart begint bij volgnummer 0 terwijl het venster de nummers van
+de vorige reeks nog kent. `RESTART_BACKJUMP` (64) herkent die sprong en vergeet de
+stroom, want anders geldt elk frame van de nieuwe reeks als herhaling van de oude —
+een wachttijd precies zo lang als de vorige luistersessie.
+
+Weggegooide duplicaten worden **per stroom geteld** en gemeld op de bestaande
+statustick van 5 s, stil als er niets weggegooid is. Zonder die teller zijn "er komt
+geen audio" en "de audio wordt weggegooid" dezelfde stilte.
+
+### 30.6 De VPS-binary
+
+`thetislink-relay` draait achter een TLS-proxy en levert:
+
+- de **forwarder** (`main.rs`): kamers, plekken, keepalive, byte-totalen per peer
+  die lock-vrij worden opgeteld en één keer bij verbreken worden weggeschreven —
+  nooit een schrijfactie per frame;
+- een **stationsregister** in SQLite (`store.rs`): `stations`, `devices`, `admin`,
+  `station_usage`. Stationssleutels worden gehasht; beheerderswachtwoorden met
+  Argon2id;
+- een **beheerdersdashboard** (`admin_api.rs`) voor stations, apparaten, verbruik en
+  quota per apparaat, en een back-up met één klik (`VACUUM INTO`). Inloggen gaat via
+  sessies met CSRF-bescherming en een snelheidsbegrenzing per IP, alleen bereikbaar
+  van achter de proxy.
+
+Een **binaire sonde** (`TLB1`, 1 Hz, 256 bytes payload die representatief is voor een
+audioframe) meet de rondgangstijd over het werkelijke datapad, met een schuivend
+venster van 30 metingen voor min/gem/max. Dat is wat de verbindingsindicator toont.
+
+---
+
+## 31. Bekende Beperkingen
 
 1. **HPSDR protocol-dekking:** ThetisLink praat met Thetis (via TCI), niet rechtstreeks met de SDR-hardware. Zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als Protocol 2 (ANAN 7000DLE, 8000DLE, G2, Hermes-Lite 2, etc.) worden daarom ondersteund zolang Thetis zelf het apparaat ondersteunt.
 
@@ -2255,3 +2520,9 @@ De FTX-1 **WIRES-X** EX-menu-velden zijn toegevoegd aan de EX-editor (§26).
 3. **Yaesu EX menu items 031-033:** CAT RATE/TOT/RTS wijzigen via ThetisLink kan de seriele verbinding met de radio verbreken.
 
 4. **macOS:** Experimentele ondersteuning. cpal werkt met CoreAudio maar sommige USB audio devices worden niet correct gedetecteerd.
+
+5. **FTX-1 CTCSS/DCS schrijven:** de toon van een geheugenkanaal is bij een FTX-1
+   wel te *lezen* maar niet te schrijven. De radio biedt geen veilige CAT-route om
+   een toon op te slaan; de route die ernaar uitziet schrijft het kanaal opnieuw
+   vanuit VFO-A en overschrijft de inhoud. Stel de toon op de set zelf in. De
+   FT-991A kan beide.

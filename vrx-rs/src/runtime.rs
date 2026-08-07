@@ -19,6 +19,11 @@ use log::{info, warn};
 use crate::channelizer::{fft_n_for_rates, VrxChannelizer, NB_OUTPUT_RATE_HZ, WB_OUTPUT_RATE_HZ};
 use crate::config::AUDIO_BIN_HZ;
 
+/// Fraction of the DDC band a VRX may use. The outer part is the DDC's own
+/// filter roll-off: a channel window reaching into it comes out attenuated on
+/// one side, which the demodulator turns into audible distortion.
+const DDC_USABLE_FRACTION: f32 = 0.9;
+
 /// Convert signed-Hz filter edges (UI convention, like main spectrum)
 /// to non-negative audio-bin offsets the channelizer wants. For USB
 /// both Hz values are typically positive; for LSB both negative. The
@@ -96,6 +101,12 @@ pub struct VrxRuntime {
     sequence: u32,
     wav: Option<RollingWavWriter>,
     last_logged_offset_hz: i32,
+    /// True while the requested listen frequency sits so close to the DDC band
+    /// edge that the channel window had to be pulled back inside it. Drives the
+    /// log transition below; the client derives the same boundary itself, so
+    /// there is deliberately no accessor promising more than that.
+    edge_clamped: bool,
+    last_logged_clamp: bool,
     // SAM auto-tune AFC (PATCH-vrx-wide-sam-ux). `afc_offset_hz` is the
     // accumulated correction added to the user's tuned frequency to follow
     // the carrier; reset when the user retunes or auto-tune is inactive.
@@ -136,6 +147,8 @@ impl VrxRuntime {
             sequence: 0,
             wav,
             last_logged_offset_hz: i32::MIN,
+            edge_clamped: false,
+            last_logged_clamp: false,
             afc_offset_hz: 0.0,
             afc_last_base_hz: 0,
             afc_last_reported_hz: 0,
@@ -216,6 +229,11 @@ impl VrxRuntime {
                 self.output_rate_hz,
             ));
             self.current_mode = mode;
+            // Drop whatever the previous configuration left in the accumulator.
+            // It holds samples produced at the old mode/rate; keeping them makes
+            // the first frames after a rebuild a mix of old and new audio, heard
+            // as distortion right after a retune or mode change.
+            self.opus_input_buf.clear();
             let ifft_n = self.channelizer.as_ref().map(|c| c.ifft_size()).unwrap_or(0);
             let bin_hz = iq_sample_rate_hz as f32 / fft_n.max(1) as f32;
             info!(
@@ -247,8 +265,31 @@ impl VrxRuntime {
         }
         let absolute_listen_hz =
             (base_listen_hz as i128 + self.afc_offset_hz.round() as i128).max(0) as u64;
-        let effective_offset_hz =
+        let requested_offset_hz =
             (absolute_listen_hz as i128 - ddc_center_hz as i128) as f32;
+        // Keep the whole channel window inside the usable part of the DDC band.
+        // Past that point the DDC's own roll-off cuts into the passband and the
+        // demodulated audio distorts asymmetrically - while the spectrum view,
+        // which comes from the DDC FFT rather than this channelizer, still looks
+        // healthy. A VRX is a passive listener inside RX1/RX2's window and must
+        // never ask the radio to move, so it stops at the edge instead.
+        let usable_half_hz = iq_sample_rate_hz as f32 * 0.5 * DDC_USABLE_FRACTION;
+        let filter_edge_hz = filter_low_hz.abs().max(filter_high_hz.abs()) as f32;
+        let max_offset_hz = (usable_half_hz - filter_edge_hz).max(0.0);
+        let effective_offset_hz = requested_offset_hz.clamp(-max_offset_hz, max_offset_hz);
+        self.edge_clamped = effective_offset_hz != requested_offset_hz;
+        if self.edge_clamped != self.last_logged_clamp {
+            self.last_logged_clamp = self.edge_clamped;
+            if self.edge_clamped {
+                warn!(
+                    "VRX{} at DDC band edge: requested offset {:.0} Hz held at {:.0} Hz                      (usable half-band {:.0} Hz, filter edge {:.0} Hz) - retune RX or re-centre CTUN",
+                    self.opts_vrx_id + 1, requested_offset_hz, effective_offset_hz,
+                    usable_half_hz, filter_edge_hz,
+                );
+            } else {
+                info!("VRX{} back inside the DDC band", self.opts_vrx_id + 1);
+            }
+        }
         if let Some(ch) = self.channelizer.as_mut() {
             ch.set_carrier_offset(effective_offset_hz);
         }

@@ -100,9 +100,9 @@ async fn cluster_task(
     let mut consecutive_failures = 0u32;
 
     loop {
-        // Log "connecting" alleen bij de eerste poging of na een eerdere
-        // succesvolle verbinding - niet bij elke retry tijdens een
-        // langdurige outage (anders krijg je 3 regels per backoff-cycle).
+        // Log "connecting" only on the first attempt or after a previous
+        // successful connection - not on every retry during a
+        // prolonged outage (otherwise you get 3 lines per backoff cycle).
         if consecutive_failures == 0 {
             info!("DX Cluster: connecting to {}...", server);
         }
@@ -141,9 +141,9 @@ async fn cluster_task(
             }
         }
 
-        // Backoff zonder per-cycle log (de retry-status werd al gemeld
-        // op failure 1; volgende successtate komt vanzelf terug in het
-        // log via de "reconnected after N attempts"-regel).
+        // Backoff without a per-cycle log (the retry status was already
+        // reported on failure 1; the next success state returns to the
+        // log on its own via the "reconnected after N attempts" line).
         tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
         backoff_secs = (backoff_secs * 2).min(60);
     }

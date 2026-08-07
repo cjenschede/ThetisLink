@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#![allow(dead_code)] // gedeelde util met de client; niet elk item wordt server-zijdig gebruikt
+#![allow(dead_code)] // shared util with the client; not every item is used server-side
 //! Validate a restored pop-out position against the *live* monitor layout.
 //!
 //! egui/eframe restore a saved pop-out position via

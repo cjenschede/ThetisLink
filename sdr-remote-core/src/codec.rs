@@ -68,17 +68,17 @@ impl OpusEncoder {
         })
     }
 
-    /// Encoder voor live radio-RX audio (Yaesu USB CODEC → client).
+    /// Encoder for live radio-RX audio (Yaesu USB CODEC → client).
     ///
-    /// In tegenstelling tot de default voice-encoder staat hier **DTX uit**
-    /// en gebruiken we **Application::Audio + Signal::Auto**. Een aangesloten
-    /// radio levert *continue* audio (bandruis, FM-hiss, CW/SSB) die GEEN
-    /// spraak is. De default Voip+Voice+DTX-config laat de SILK voice-activity-    /// detector constante ruis als "stilte" classificeren; DTX-uit geeft
-    /// daarom een getrouwe, continue weergave. Zelfde aanpak als VRX
-    /// (`new_with_dtx(false)`), maar met FEC aan voor packet-loss-resilience.
+    /// Unlike the default voice-encoder, **DTX is off** here
+    /// and we use **Application::Audio + Signal::Auto**. A connected
+    /// radio delivers *continuous* audio (band noise, FM-hiss, CW/SSB) that is NOT
+    /// speech. The default Voip+Voice+DTX config lets the SILK voice-activity-    /// detector classify constant noise as "silence"; DTX-off gives
+    /// therefore a faithful, continuous rendition. Same approach as VRX
+    /// (`new_with_dtx(false)`), but with FEC on for packet-loss-resilience.
     ///
-    /// Bandbreedte/latency identiek aan het voice-pad (NB 8kHz, 12.8 kbps,
-    /// 20ms frames) — alleen de signaal-model-keuze verandert.
+    /// Bandwidth/latency identical to the voice path (NB 8kHz, 12.8 kbps,
+    /// 20ms frames) — only the signal-model choice changes.
     pub fn new_radio_rx() -> Result<Self> {
         let mut encoder = Encoder::new(SampleRate::Hz8000, Channels::Mono, Application::Audio)
             .context("failed to create radio-RX Opus encoder")?;

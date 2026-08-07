@@ -3,12 +3,12 @@
 #![allow(dead_code, unused_imports)]
 //! Unified control rendering module.
 //!
-//! Houdt één bron van waarheid per control-groep (band, mode, frequency, VFO).
-//! Alle render-paden (Tab::Radio, RX1/RX2 popout, joined popout) roepen dezelfde
-//! helpers aan met verschillende `ControlContext`-velden.
+//! Keeps a single source of truth per control group (band, mode, frequency, VFO).
+//! All render paths (Tab::Radio, RX1/RX2 popout, joined popout) call the same
+//! helpers with different `ControlContext` fields.
 //!
-//! Status: infrastructuur (stap 1 van PATCH-client-controls-refactor). Nog geen
-//! render-helpers geïmplementeerd.
+//! Status: infrastructure (step 1 of PATCH-client-controls-refactor). No
+//! render helpers implemented yet.
 
 pub(crate) mod band;
 pub(crate) mod context;
@@ -34,7 +34,7 @@ pub(crate) use events::{
 pub(crate) use events::RecordingSink;
 pub(crate) use state::{RxChannelState, SharedUiState};
 
-/// Welk RX-kanaal een control aanspreekt.
+/// Which RX channel a control addresses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RxChannel {
     Rx1,
@@ -50,8 +50,8 @@ impl RxChannel {
     }
 }
 
-/// Feature-niveau: basisscherm (minimale controls, minimaal dataverbruik) vs
-/// popout (superset met extended controls).
+/// Feature level: main screen (minimal controls, minimal data usage) vs
+/// popout (superset with extended controls).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum UiDensity {
     Basic,
@@ -67,9 +67,9 @@ impl UiDensity {
     }
 }
 
-/// Layout-oppervlak waarop een control gerenderd wordt. Orthogonaal op
-/// `UiDensity` - dezelfde densiteit kan op verschillende surfaces voorkomen
-/// (bv. een popout-overlay boven het basisscherm).
+/// Layout surface on which a control is rendered. Orthogonal to
+/// `UiDensity` - the same density can occur on different surfaces
+/// (e.g. a popout overlay above the main screen).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum UiSurface {
     MainTab,

@@ -165,15 +165,15 @@ pub struct PttController {
     thetis_path: Option<String>,
     pending_power_on: bool,
     thetis_launch_time: Option<Instant>,
-    /// Hard TX-gate. `true` = de huidige Amplitec-A positie is in
-    /// `config.amplitec_tx_blocked` als RX-only gemarkeerd; alle
-    /// server-initiated TX-paden weigeren in dat geval een TX-commando
-    /// naar Thetis te sturen. Updated vanuit de broadcast-loop in
-    /// `network.rs` op elke positie-status iteratie (en direct bij
-    /// positie-wissel via `update_tx_blocked()`).
+    /// Hard TX-gate. `true` = the current Amplitec-A position is
+    /// marked as RX-only in `config.amplitec_tx_blocked`; in that case all
+    /// server-initiated TX paths refuse to send a TX command
+    /// to Thetis. Updated from the broadcast loop in
+    /// `network.rs` on every position-status iteration (and immediately on a
+    /// position change via `update_tx_blocked()`).
     tx_blocked: Arc<AtomicBool>,
-    /// Throttle voor de WARN-log wanneer een PTT-request wordt
-    /// geweigerd - anders krijgt iedere audio-frame (50/sec) een log.
+    /// Throttle for the WARN log when a PTT request is
+    /// refused - otherwise every audio frame (50/sec) generates a log.
     last_blocked_log: Option<Instant>,
     // --- Latency metrics ---
     ptt_prefill_start: Option<Instant>,
@@ -204,20 +204,20 @@ impl PttController {
             ptt_prefill_latencies: Vec::new(),
             ptt_tail_latencies: Vec::new(),
         };
-        // Share dezelfde tx_blocked Arc met de TCI-connection, zodat de
-        // tci-notification handler óók Thetis-direct PTT kan blokkeren.
-        // (Zonder dit: server-initiated paden zijn dicht, maar spatiebalk
-        // op Thetis-PC wordt pas via de 200 ms broadcast catch-all
-        // afgevangen - te laat voor RX-amp bescherming.)
+        // Share the same tx_blocked Arc with the TCI connection, so that the
+        // tci-notification handler can also block Thetis-direct PTT.
+        // (Without this: server-initiated paths are closed, but the space bar
+        // on the Thetis PC is only caught via the 200 ms broadcast catch-all
+        // - too late for RX-amp protection.)
         let blocked_clone = ctl.tx_blocked.clone();
         ctl.tci.set_tx_blocked_handle(blocked_clone);
         ctl
     }
 
-    /// Handle naar de TX-blocked flag. Gebruikt door `network.rs` om
-    /// vanuit de broadcast-loop de actuele Amplitec-status door te
-    /// pushen. Lock-vrije atomic; alle TX-paden in `PttController`
-    /// lezen 'm uit op de hot-path.
+    /// Handle to the TX-blocked flag. Used by `network.rs` to
+    /// push the current Amplitec status from the broadcast loop.
+    /// Lock-free atomic; all TX paths in `PttController`
+    /// read it on the hot path.
     pub fn tx_blocked_handle(&self) -> Arc<AtomicBool> {
         self.tx_blocked.clone()
     }
@@ -241,11 +241,11 @@ impl PttController {
     }
 
     pub fn activate_from_playout(&mut self) {
-        // Hard gate: bij een RX-only Amplitec-positie mag er onder
-        // geen enkele omstandigheid een TX-commando naar Thetis gaan.
-        // Drop de PTT-request volledig (geen prefill, geen TRX:0,true;)
-        // en log throttled (max 1× per 2 sec) zodat de audio-frame
-        // stream (50/sec) geen log-spam veroorzaakt.
+        // Hard gate: on an RX-only Amplitec position no TX command may
+        // go to Thetis under any circumstances.
+        // Drop the PTT request entirely (no prefill, no TRX:0,true;)
+        // and log throttled (max 1× per 2 sec) so the audio-frame
+        // stream (50/sec) does not cause log spam.
         if self.tx_blocked.load(Ordering::Relaxed) {
             let should_log = self
                 .last_blocked_log
@@ -373,14 +373,14 @@ impl PttController {
     }
 
     async fn set_state(&mut self, new_state: PttState) {
-        // Hard gate: laatste defensieve check vóór TRX:0,true,tci de
-        // tci-link op gaat. `activate_from_playout` blokkeert al
-        // preventief, maar een toekomstige direct-naar-Tx caller komt
-        // hier ook door. Bij blocked: blijf op Rx en stuur niets.
+        // Hard gate: last defensive check before TRX:0,true,tci goes
+        // out over the tci-link. `activate_from_playout` already blocks
+        // preventively, but a future direct-to-Tx caller passes
+        // through here too. When blocked: stay on Rx and send nothing.
         if new_state == PttState::Tx && self.tx_blocked.load(Ordering::Relaxed) {
             warn!("set_state(Tx) blocked: current Amplitec position is RX-only");
-            // Zorg dat we Rx zijn (was vermoedelijk al, want
-            // activate_from_playout zou ons hebben tegengehouden).
+            // Make sure we are Rx (was probably already, since
+            // activate_from_playout would have stopped us).
             if self.state == PttState::Tx {
                 self.state = PttState::Rx;
                 self.ptt_active.store(false, Ordering::Relaxed);
@@ -456,11 +456,11 @@ impl PttController {
     // --- Delegated accessors ---
 
     pub async fn send_cat(&mut self, cmd: &str) {
-        // Hard gate voor TX-startende CAT-commando's wanneer de actuele
-        // Amplitec-A positie als RX-only is gemarkeerd. ZZTX1 schakelt
-        // direct de zender, ZZTU1 start de tune-carrier - beide gaan
-        // niet naar Thetis. ZZTX0/ZZTU0 (uitschakelen) blijven uiteraard
-        // wel werken zodat we een lopende TX kunnen afsluiten.
+        // Hard gate for TX-starting CAT commands when the current
+        // Amplitec-A position is marked as RX-only. ZZTX1 keys
+        // the transmitter directly, ZZTU1 starts the tune carrier - neither
+        // goes to Thetis. ZZTX0/ZZTU0 (switch off) of course keep
+        // working so we can end an ongoing TX.
         let trimmed = cmd.trim_end_matches(';');
         if (trimmed.eq_ignore_ascii_case("ZZTX1") || trimmed.eq_ignore_ascii_case("ZZTU1"))
             && self.tx_blocked.load(Ordering::Relaxed)
@@ -468,37 +468,37 @@ impl PttController {
             warn!("CAT {} blocked: current Amplitec position is RX-only", trimmed);
             return;
         }
-        // ZZ* commando's hebben drie niveaus van bediening:
-        //   1. Native TCI mapping via `cat_to_tci` (snelste pad voor de
-        //      meest-gebruikte ZZ-commando's zoals ZZFA/ZZMD/ZZTX).
-        //   2. TCI `run_cat_ex:ZZxxx;` passthrough - Thetis voert het ZZ
-        //      commando uit op zijn eigen interne CAT-parser zonder dat
-        //      we een aparte CAT-verbinding nodig hebben. Werkt voor elk
-        //      ZZ-commando dat Thetis kent (ZZPC, ZZCN, ZZCO, ZZFI, ...).
-        //   3. Vroeger ook: auxiliary CAT TCP-socket. Vanaf v2.0.0 is dat
-        //      pad verwijderd (TCI-only architectuur), dus niveau 3 is
-        //      een no-op.
+        // ZZ* commands have three levels of handling:
+        //   1. Native TCI mapping via `cat_to_tci` (fastest path for the
+        //      most-used ZZ commands such as ZZFA/ZZMD/ZZTX).
+        //   2. TCI `run_cat_ex:ZZxxx;` passthrough - Thetis runs the ZZ
+        //      command on its own internal CAT parser without us
+        //      needing a separate CAT connection. Works for any
+        //      ZZ command Thetis knows (ZZPC, ZZCN, ZZCO, ZZFI, ...).
+        //   3. Formerly also: auxiliary CAT TCP socket. As of v2.0.0 that
+        //      path has been removed (TCI-only architecture), so level 3 is
+        //      a no-op.
         //
-        // Voorheen werd niveau 2 alleen direct vanuit specifieke call
-        // sites (CTUN-recenter, filter-preset polls) gebruikt, en hier
-        // werden onbekende ZZ-commando's gedropt met een WARN. Dat
-        // maakte features die ZZ-commando's zonder `cat_to_tci`-mapping
-        // gebruiken stilzwijgend no-op. Nu vallen onbekende ZZ-cmds
-        // terug op `tci.run_cat()` zodat álle ZZ-commando's via dezelfde
-        // single-TCI link hun pad vinden.
+        // Previously level 2 was used only directly from specific call
+        // sites (CTUN-recenter, filter-preset polls), and here
+        // unknown ZZ commands were dropped with a WARN. That
+        // made features using ZZ commands without a `cat_to_tci` mapping
+        // silently no-op. Now unknown ZZ commands fall
+        // back on `tci.run_cat()` so that all ZZ commands find their path via the same
+        // single-TCI link.
         if cmd.starts_with("ZZ") {
             if let Some(tci_cmd) = Self::cat_to_tci(cmd) {
                 log::debug!("CAT->TCI: {} -> {}", cmd.trim_end_matches(';'), tci_cmd.trim_end_matches(';'));
                 self.radio_send(&tci_cmd).await;
             } else {
-                // Fallback: TCI run_cat_ex passthrough. Vraagt Thetis om
-                // het ZZ-commando op zijn eigen CAT-parser uit te voeren.
+                // Fallback: TCI run_cat_ex passthrough. Asks Thetis to
+                // run the ZZ command on its own CAT parser.
                 let zz = cmd.trim_end_matches(';');
                 log::debug!("CAT->TCI run_cat_ex: {}", zz);
                 self.tci.run_cat(zz).await;
             }
         } else {
-            // TCI command (bv. TUNE:0,true;) -> direct via WebSocket
+            // TCI command (e.g. TUNE:0,true;) -> directly via WebSocket
             self.radio_send(cmd).await;
         }
     }
@@ -728,7 +728,7 @@ impl PttController {
         self.tci.set_filter(low_hz, high_hz).await
     }
 
-    /// Set the TX modulation filter band (tx_filter_band_ex). Hoofdradio-TX.
+    /// Set the TX modulation filter band (tx_filter_band_ex). Main-radio TX.
     pub async fn set_tx_filter_band(&mut self, low_hz: i32, high_hz: i32) {
         self.tci.set_tx_filter_band(low_hz, high_hz).await
     }
@@ -948,9 +948,9 @@ impl PttController {
 
     pub async fn set_vfo_sync_thetis(&mut self, on: bool) {
         // Stock .14/.15 supports vfo_sync_ex without advertising the cap (cap-check is
-        // a TL-26 erfgoed). Use the optimistic _ex setter directly - operator-keuze 1a:
-        // "Plus vfo_sync_ex _ex pad uitlijnen". Compat-statement (alpha-4 ≥ Thetis
-        // v2.10.3.14) maakt de oude run_cat(ZZSY) fallback overbodig.
+        // a TL-26 legacy). Use the optimistic _ex setter directly - operator choice 1a:
+        // "Plus align the vfo_sync_ex _ex path". Compat statement (alpha-4 ≥ Thetis
+        // v2.10.3.14) makes the old run_cat(ZZSY) fallback unnecessary.
         self.tci.set_vfo_sync(on).await;
     }
 
@@ -1201,9 +1201,9 @@ impl PttController {
         }
     }
 
-    /// DDC sample rate per receiver in Hz. In stock-mode beide RX1 en RX2 dezelfde
-    /// waarde (TCI exposes één globale `iq_samplerate`); per-RX divergence komt
-    /// terug via TL2-x fork extensions (Phase 3).
+    /// DDC sample rate per receiver in Hz. In stock mode both RX1 and RX2 have the same
+    /// value (TCI exposes one global `iq_samplerate`); per-RX divergence comes
+    /// back via TL2-x fork extensions (Phase 3).
     pub fn ddc_sample_rate(&self, rx: usize) -> u32 {
         if rx == 0 { self.tci.ddc_sample_rate_rx1 } else { self.tci.ddc_sample_rate_rx2 }
     }

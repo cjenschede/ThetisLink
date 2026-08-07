@@ -38,33 +38,33 @@ impl BoardInfo {
         }
     }
 
-    /// Classificeer een board op basis van zijn (geprogrammeerde) USB
-    /// serial. ThetisLink-conventie: `tun_<name>` = tuner-board,
-    /// `rot_<name>` = rotor-board, anders ongeprogrammeerd.
+    /// Classify a board based on its (programmed) USB
+    /// serial. ThetisLink convention: `tun_<name>` = tuner board,
+    /// `rot_<name>` = rotor board, otherwise unprogrammed.
     pub fn kind(&self) -> BoardKind {
         BoardKind::from_serial(&self.serial_number)
     }
 }
 
-/// Functionele classificatie van een MCP2221A board.
+/// Functional classification of an MCP2221A board.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoardKind {
-    /// Board geprogrammeerd voor tuner-bediening (`tun_*` prefix).
+    /// Board programmed for tuner control (`tun_*` prefix).
     Tuner,
-    /// Board geprogrammeerd voor rotor-bediening (`rot_*` prefix).
-    /// Runtime-support volgt in fase 4 - wizard accepteert de keuze
-    /// al maar Add is geblokkeerd in v2.0.5.
+    /// Board programmed for rotor control (`rot_*` prefix).
+    /// Runtime support arrives in phase 4 - the wizard already accepts
+    /// the choice but Add is blocked in v2.0.5.
     Rotor,
-    /// Geen `tun_`/`rot_` prefix gevonden. Een fresh-from-factory
-    /// Adafruit board of een board waarvan de serial nog handmatig
-    /// is gezet zonder ThetisLink-conventie.
+    /// No `tun_`/`rot_` prefix found. A fresh-from-factory
+    /// Adafruit board or a board whose serial was set manually
+    /// without following the ThetisLink convention.
     Unprogrammed,
 }
 
 impl BoardKind {
-    /// Prefix-marker voor tuners.
+    /// Prefix marker for tuners.
     pub const TUNER_PREFIX: &'static str = "tun_";
-    /// Prefix-marker voor rotors.
+    /// Prefix marker for rotors.
     pub const ROTOR_PREFIX: &'static str = "rot_";
 
     pub fn from_serial(serial: &str) -> Self {

@@ -65,6 +65,7 @@ dictionary BridgeRadioState {
     i32 filter_high_hz;
     boolean thetis_configured;
     boolean thetis_starting;
+    boolean thetis_not_running;
     sequence<string> tx_profile_names;
     sequence<u8> spectrum_bins;
     u32 spectrum_center_hz;

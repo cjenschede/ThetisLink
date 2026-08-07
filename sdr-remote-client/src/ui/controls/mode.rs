@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Mode-selector render-helper (sub-stap 2b).
+//! Mode-selector render-helper (sub-step 2b).
 //!
-//! Vervangt drie render-paden met één helper:
+//! Replaces three render paths with a single helper:
 //! - `render_rx1_controls_inner` (RX1 popouts, ~mod.rs:2275) - 8 modes, Extended
 //! - `render_rx2_controls_inner` (RX2 popouts, ~mod.rs:2636) - 8 modes, Extended
-//! - Tab::Radio hoofdvenster (~mod.rs:3594) - 4 modes, Basic - was **ongegeguard**
-//!   (connected-guard ontbrak).
+//! - Tab::Radio main window (~mod.rs:3594) - 4 modes, Basic - was **unguarded**
+//!   (connected-guard was missing).
 //!
-//! `UiDensity` bepaalt welke mode-set zichtbaar is: Basic toont alleen de
-//! meest gebruikte voice-modes, Extended toont ook CW + digital-modes.
+//! `UiDensity` determines which mode-set is visible: Basic shows only the
+//! most-used voice-modes, Extended also shows CW + digital-modes.
 
 use egui::{Color32, RichText};
 
 use super::coverage;
 use super::{ControlContext, UiDensity, UiEvent};
 
-/// Volledige mode-set (popouts). (mode_val, label) - mode_val komt uit het
+/// Full mode-set (popouts). (mode_val, label) - mode_val comes from the
 /// TCI-protocol: 0=LSB, 1=USB, 3=CW-L, 4=CW-U, 5=FM, 6=AM, 7=DIGU, 9=DIGL,
 /// 10=SAM (synchronous AM, AM-variant).
 pub(crate) const MODES_EXTENDED: &[(u8, &str)] = &[
@@ -24,7 +24,7 @@ pub(crate) const MODES_EXTENDED: &[(u8, &str)] = &[
     (6, "AM"), (10, "SAM"), (5, "FM"), (7, "DIGU"), (9, "DIGL"),
 ];
 
-/// Basisscherm mode-set (Tab::Radio): alleen de meestgebruikte voice-modes.
+/// Basic-screen mode-set (Tab::Radio): only the most-used voice-modes.
 pub(crate) const MODES_BASIC: &[(u8, &str)] = &[
     (0, "LSB"), (1, "USB"), (6, "AM"), (10, "SAM"), (5, "FM"),
 ];
@@ -33,13 +33,13 @@ pub(crate) struct ModeClick {
     pub(crate) mode: u8,
 }
 
-/// Rendert de mode-selector row. Guards intern op `ctx.connected` via
-/// `add_enabled`, emit `ClickReceived` bij klik, registreert coverage met
+/// Renders the mode-selector row. Guards internally on `ctx.connected` via
+/// `add_enabled`, emits `ClickReceived` on click, registers coverage with
 /// `guarded=true`.
 ///
-/// Leest actuele mode uit `ctx.rx_state.mode`; selecteert mode-set op basis
-/// van `ctx.density`. Retourneert `Some(ModeClick)` wanneer een knop is
-/// aangeklikt en door `add_enabled` is gekomen (dus connected==true).
+/// Reads the current mode from `ctx.rx_state.mode`; selects the mode-set based
+/// on `ctx.density`. Returns `Some(ModeClick)` when a button has been
+/// clicked and passed through `add_enabled` (i.e. connected==true).
 pub(crate) fn render_mode_selector(
     ui: &mut egui::Ui,
     ctx: &ControlContext,
@@ -56,7 +56,7 @@ pub(crate) fn render_mode_selector(
         UiDensity::Basic => MODES_BASIC,
         UiDensity::Extended => MODES_EXTENDED,
     };
-    // Popouts (Extended) gebruiken kleinere tekst voor compacte row.
+    // Popouts (Extended) use smaller text for a compact row.
     let label_size = match ctx.density {
         UiDensity::Basic => 14.0,
         UiDensity::Extended => 11.0,

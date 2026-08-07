@@ -1,4 +1,4 @@
-# ThetisLink v2.6.0 - User Manual
+# ThetisLink v2.7.0 - User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.6.0.apk` | Android client app |
+| `ThetisLink-2.7.0.apk` | Android client app |
 | `Installation.pdf` | Installation guide (English) |
 | `User-Manual-EN.pdf` | User manual (English, this document) |
 | `Technical-Reference.pdf` | Technical reference (English) |
@@ -301,6 +301,16 @@ During TX the S-meter switches to a TX meter showing:
 - **SWR** colour-coded — below 1:2 green, 1:2-1:3 orange, above 1:3 red (e.g. `SWR 1.50`)
 
 The SWR value is broadcast by Thetis over TCI during every TX burst and is visible in real time on every connected client.
+
+### Starting Thetis from the client
+
+The **Thetis tab** opens with the power button: a short press switches Thetis on or off, holding it for 2 seconds shuts Thetis down on the server PC. If Thetis is not running yet, the server launches it (set the path to `Thetis.exe` in the server GUI).
+
+Next to it sits **Start Thetis automatically**. With that box ticked the client sends that launch itself, **once per client start**, and only when the server reports Thetis is not running. If you deliberately power Thetis off afterwards it stays off — also when the connection drops and returns. The box is off by default.
+
+**Android** has the same: the power button sits on the Radio screen with the **Start Thetis automatically** checkbox directly below it, under the same once-per-app-start rule.
+
+> When Thetis is not running the client says **"Thetis is not running"**. When Thetis does run but its TCI server is off you get **"Thetis TCI not connected"** — fix that in Thetis under Setup → Network → TCI. An attached Yaesu radio is independent of this and stays operable.
 
 ### TX modulation bandwidth (v2.3.0)
 
@@ -671,10 +681,40 @@ ThetisLink can control a Yaesu FT-991A transceiver as a second radio alongside t
 - **Frequency:** read and set the current frequency
 - **Mode:** read and set (LSB, USB, CW, AM, FM, DATA-FM, DIG)
 - **VFO A/B:** switch between VFO A and VFO B
-- **Memory channels:** automatically loaded when the Yaesu is enabled in the server. Channels with a name are displayed in the UI. Edit + "Write radio" updates frequency, name, mode, shift and tone-mode (on/off) per channel. **Note (v2.1.1+):** the specific CTCSS tone *frequency* is not written by TL2 — only the tone-mode flag (on/off) propagates. Set the per-channel CTCSS frequency on the FT-991A itself. **If you change frequency while on a memory channel (v2.5.0), ThetisLink copies the channel to VFO-A (keeping its mode) and follows your new frequency — you slide seamlessly from memory to VFO (991A + FTX-1).**
+- **Memory channels:** automatically loaded when the Yaesu is enabled in the server. Channels with a name are displayed in the UI. Edit + "Write radio" updates frequency, name, mode, shift and tone-mode (on/off) per channel. **Tones (v2.7.0):** on the FT-991A, ThetisLink now writes the CTCSS tone and the DCS code per channel as well, not just the tone-mode flag. **Read tones** fetches the tones of the channels that have a tone mode; the radio briefly steps through those channels and returns to the one it was on (a running scan is paused and resumed). **The FTX-1 keeps the old limitation:** reading works, writing does not — that radio offers no safe CAT route for it, so set the tone on the radio itself. **If you change frequency while on a memory channel (v2.5.0), ThetisLink copies the channel to VFO-A (keeping its mode) and follows your new frequency — you slide seamlessly from memory to VFO (991A + FTX-1).**
 - **Menu editor:** read and modify Yaesu menu settings via the server UI
 - **Audio:** the Yaesu USB audio is captured by the server and sent via the AudioRx2 channel to the client, where it is mixed with the ANAN RX signal
 - **Auto-DFM during TX (v2.0.0):** see subsection below
+
+### Channel buttons and volume in the main window (v2.7.0)
+
+The buttons at the top of the main window are named after what they do. Every
+channel is a block with the **channel name as a heading** and two buttons under it:
+
+- **audio** — that channel's sound on or off. Off saves bandwidth.
+- **venster** (window) — open or close that channel's window.
+
+This applies to all six channels: RX1, RX2, VRX1, VRX2 and both Yaesu radios.
+Previously the channel name itself was the audio switch, with `spec` below it for
+RX/VRX and `win` for a Yaesu — two names for one and the same thing.
+
+Two things moved or disappeared with it:
+
+- The separate **VRX** button next to *Arrange*, which toggled both VRX windows at
+  once, is gone. Use the `venster` button of VRX1 and VRX2.
+- The **audio button now also sits inside every channel window**, next to the
+  volume. It is the same switch: toggling it in the window or in the main window
+  makes no difference.
+
+**The master volume now applies to every channel** — RX1, RX2, both VRX channels
+and both Yaesu slots — on top of each channel's own volume. Up to v2.6.x it only
+affected RX. With a single audio channel the slider is simply labelled *Volume*.
+
+RX1 also gained its own slider in the **Radio tab**, under the S-meter, labelled
+**`VFO A:`** — which is what lets the master slider stop changing meaning depending
+on which windows are open. Note this is a *different* control from **`RX1 Vol:`** on
+the *Thetis* tab: that one drives the volume inside Thetis, while `VFO A:` is your
+share of the mix.
 
 ### Auto-DFM PTT toggle (FM ↔ DATA-FM)
 

@@ -173,8 +173,8 @@ pub(super) fn render_ultrabeam_panel(
 
     ui.add_space(6.0);
 
-    // Per-motor moving + progress bar (alleen tonen bij beweging).
-    // motors_moving is een bitfield: bit 0 = motor 1, bit 1 = motor 2.
+    // Per-motor moving + progress bar (only shown while moving).
+    // motors_moving is a bitfield: bit 0 = motor 1, bit 1 = motor 2.
     if status.motors_moving != 0 {
         let m1_active = (status.motors_moving & 0x01) != 0;
         let m2_active = (status.motors_moving & 0x02) != 0;
@@ -233,11 +233,11 @@ pub(super) fn render_ultrabeam_panel(
             }
         }
 
-        // Menu toggle blijft rechts uitgelijnd in de header-rij -
-        // `chevron_label` plaatst de gevulde driehoek links van het
-        // label binnen zijn eigen left-to-right horizontal, dus de
-        // cell zelf wordt door de parent right-to-left layout netjes
-        // helemaal rechts gezet.
+        // Menu toggle stays right-aligned in the header row -
+        // `chevron_label` places the filled triangle to the left of the
+        // label within its own left-to-right horizontal, so the
+        // cell itself is neatly pushed all the way to the right by the
+        // parent right-to-left layout.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if super::chevron_label(ui, *show_menu, egui::RichText::new(rust_i18n::t!("srv_menu").to_string()).strong()).clicked() {
                 *show_menu = !*show_menu;

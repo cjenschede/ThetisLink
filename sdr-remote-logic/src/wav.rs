@@ -10,26 +10,26 @@ use std::path::Path;
 pub struct WavWriter {
     file: File,
     data_bytes: u32,
-    /// 0 = nog onbekend; gezet bij de eerste `write_samples` zodat de WAV-rate
-    /// automatisch de werkelijke decode-rate volgt (8k NB / 16k WB / toekomstig).
+    /// 0 = not yet known; set on the first `write_samples` so the WAV rate
+    /// automatically follows the actual decode rate (8k NB / 16k WB / future).
     sample_rate: u32,
 }
 
 impl WavWriter {
-    /// Create a new WAV file at the given path (16-bit, mono). De sample-rate
-    /// wordt dynamisch bepaald door de eerste `write_samples`-aanroep — niet
-    /// vooraf vastgelegd, zodat een toekomstige rate-wijziging vanzelf meeschaalt.
+    /// Create a new WAV file at the given path (16-bit, mono). The sample rate
+    /// is determined dynamically by the first `write_samples` call — not
+    /// fixed up front, so a future rate change scales along automatically.
     pub fn new(path: &Path) -> io::Result<Self> {
         let mut file = File::create(path)?;
-        // Placeholder header (rate 8000) — bij finalize herschreven met de echte rate.
+        // Placeholder header (rate 8000) — rewritten with the real rate at finalize.
         let header = wav_header(0, 8000);
         file.write_all(&header)?;
         Ok(Self { file, data_bytes: 0, sample_rate: 0 })
     }
 
-    /// Write decoded i16 PCM samples at `sample_rate` Hz. De rate van de eerste
-    /// write bepaalt de WAV-header — de aanroeper geeft de rate van de gebruikte
-    /// decoder mee, dus de opname klopt ongeacht NB/WB of toekomstige rates.
+    /// Write decoded i16 PCM samples at `sample_rate` Hz. The rate of the first
+    /// write determines the WAV header — the caller passes the rate of the
+    /// decoder in use, so the recording is correct regardless of NB/WB or future rates.
     pub fn write_samples(&mut self, samples: &[i16], sample_rate: u32) -> io::Result<()> {
         if self.sample_rate == 0 {
             self.sample_rate = sample_rate;
@@ -51,7 +51,7 @@ impl WavWriter {
         Ok(())
     }
 
-    /// Finalize: rewrite header with correct sizes + de bepaalde sample-rate.
+    /// Finalize: rewrite header with correct sizes + the determined sample rate.
     pub fn finalize(mut self) -> io::Result<()> {
         let rate = if self.sample_rate == 0 { 8000 } else { self.sample_rate };
         let header = wav_header(self.data_bytes, rate);

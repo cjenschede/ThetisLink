@@ -76,14 +76,14 @@ fn render_rf2k_header(
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| {
-                ui.label("Hiermee wordt de RF2K-S controller afgesloten.");
-                ui.label("Weet je het zeker?");
+                ui.label(rust_i18n::t!("srv_rf2k_shutdown_warn").to_string());
+                ui.label(rust_i18n::t!("srv_are_you_sure").to_string());
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("Ja, afsluiten").color(Color32::from_rgb(255, 80, 80))).clicked() {
                         rf2k_dev.send_command(rf2k::Rf2kCmd::Close);
                         *confirm_fw_close = false;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(rust_i18n::t!("srv_cancel").to_string()).clicked() {
                         *confirm_fw_close = false;
                     }
                 });
@@ -113,7 +113,7 @@ fn render_rf2k_error_bar(
                 ui.colored_label(Color32::from_rgb(255, 80, 80),
                     RichText::new(format!("\u{26A0} {}", status.error_text)).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui: &mut egui::Ui| {
-                    if ui.button("Reset").clicked() {
+                    if ui.button(rust_i18n::t!("srv_reset").to_string()).clicked() {
                         rf2k.send_command(rf2k::Rf2kCmd::ErrorReset);
                     }
                 });
@@ -162,8 +162,8 @@ fn render_rf2k_power_display(
         Some(peak_frac), fwd_divs, max_fwd);
 
     // SWR + Reflected: collapsible. Open/closed state in egui's
-    // transient per-id store - niet persistent in config maar
-    // overleeft frames binnen één sessie.
+    // transient per-id store - not persistent in config but
+    // survives frames within a single session.
     let swr = status.swr_x100 as f32 / 100.0;
     let swr_summary = format!("SWR {:.2}  |  Reflected {} W", swr, status.reflected_w);
     let id = ui.make_persistent_id("rf2k_swr_section");
@@ -847,14 +847,14 @@ pub(super) fn render_rf2k_debug_section(
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| {
-                ui.label("Setting HIGH power can damage equipment.");
-                ui.label("Are you sure?");
+                ui.label(rust_i18n::t!("srv_high_power_warn").to_string());
+                ui.label(rust_i18n::t!("srv_are_you_sure").to_string());
                 ui.horizontal(|ui| {
-                    if ui.button("Yes, set HIGH").clicked() {
+                    if ui.button(rust_i18n::t!("srv_yes_set_high").to_string()).clicked() {
                         rf2k.send_command(rf2k::Rf2kCmd::SetHighPower(true));
                         *confirm_high_power = false;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(rust_i18n::t!("srv_cancel").to_string()).clicked() {
                         *confirm_high_power = false;
                     }
                 });
@@ -867,14 +867,14 @@ pub(super) fn render_rf2k_debug_section(
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| {
-                ui.label("All tuner memories will be erased.");
-                ui.label("This cannot be undone!");
+                ui.label(rust_i18n::t!("srv_tuner_erase_warn").to_string());
+                ui.label(rust_i18n::t!("srv_cannot_be_undone").to_string());
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("Yes, Zero FRAM").color(Color32::from_rgb(255, 80, 80))).clicked() {
                         rf2k.send_command(rf2k::Rf2kCmd::ZeroFRAM);
                         *confirm_zero_fram = false;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(rust_i18n::t!("srv_cancel").to_string()).clicked() {
                         *confirm_zero_fram = false;
                     }
                 });

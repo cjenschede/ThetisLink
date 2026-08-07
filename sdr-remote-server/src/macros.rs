@@ -252,14 +252,14 @@ impl MacroRunner {
         }
 
         let label = def.label.clone();
-        info!("Macro [{}] gestart ({} acties)", label, def.actions.len());
+        info!("Macro [{}] started ({} actions)", label, def.actions.len());
 
         std::thread::Builder::new()
             .name("macro-runner".to_string())
             .spawn(move || {
                 for (i, action) in def.actions.iter().enumerate() {
                     if abort.load(Ordering::SeqCst) {
-                        info!("Macro [{}] afgebroken bij stap {}/{}", label, i + 1, def.actions.len());
+                        info!("Macro [{}] aborted at step {}/{}", label, i + 1, def.actions.len());
                         // If aborting during a tune action, also abort the tuner
                         if matches!(action, MacroAction::Tune) {
                             if let Some(ref t) = tuner {
@@ -277,14 +277,14 @@ impl MacroRunner {
 
                     match action {
                         MacroAction::Cat(cmd) => {
-                            info!("Macro [{}] stap {}: CAT {}", label, i + 1, cmd);
+                            info!("Macro [{}] step {}: CAT {}", label, i + 1, cmd);
                             if let Err(e) = cat_tx.blocking_send(cmd.clone()) {
                                 warn!("Macro CAT send failed: {}", e);
                                 break;
                             }
                         }
                         MacroAction::Delay(ms) => {
-                            info!("Macro [{}] stap {}: delay {}ms", label, i + 1, ms);
+                            info!("Macro [{}] step {}: delay {}ms", label, i + 1, ms);
                             // Sleep in small increments to check abort
                             let total = std::time::Duration::from_millis(*ms as u64);
                             let start = std::time::Instant::now();
@@ -297,7 +297,7 @@ impl MacroRunner {
                         }
                         MacroAction::Tune => {
                             if let Some(ref t) = tuner {
-                                info!("Macro [{}] stap {}: tune", label, i + 1);
+                                info!("Macro [{}] step {}: tune", label, i + 1);
                                 t.send_command(tuner::TunerCmd::StartTune);
 
                                 // Wait for tune to complete (max 35s)
@@ -324,14 +324,14 @@ impl MacroRunner {
                                     std::thread::sleep(std::time::Duration::from_millis(100));
                                 }
                             } else {
-                                warn!("Macro [{}]: tune actie maar geen tuner geconfigureerd", label);
+                                warn!("Macro [{}]: tune action but no tuner configured", label);
                             }
                         }
                     }
                 }
 
                 // Done
-                info!("Macro [{}] afgerond", label);
+                info!("Macro [{}] completed", label);
                 let mut s = status.lock().unwrap();
                 s.running = false;
             })

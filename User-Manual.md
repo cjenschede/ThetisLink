@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.6.0 — Gebruikershandleiding
+﻿# ThetisLink v2.7.0 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.6.0.apk` | Android client app |
+| `ThetisLink-2.7.0.apk` | Android client app |
 | `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -301,6 +301,16 @@ Tijdens TX toont de S-meter een TX-meter met:
 - **SWR** kleur-coded — onder 1:2 groen, 1:2-1:3 oranje, boven 1:3 rood (bijv. `SWR 1.50`)
 
 De SWR-waarde wordt door Thetis broadcast via TCI tijdens elke TX-burst en is realtime zichtbaar voor alle verbonden clients.
+
+### Thetis starten vanaf de client
+
+Bovenaan het **Thetis-tabblad** staat de power-knop: kort drukken schakelt Thetis aan of uit, 2 seconden vasthouden sluit Thetis op de server-PC af. Draait Thetis nog niet, dan start de server hem op (het pad naar `Thetis.exe` stel je in de server-GUI in).
+
+Daarnaast staat **Thetis automatisch starten**. Staat dat vinkje aan, dan doet de client dat startsein zelf, **één keer per keer dat je de client opstart**, en alleen als de server meldt dat Thetis niet draait. Schakel je Thetis daarna bewust uit, dan blijft die uit — ook als de verbinding tussendoor wegvalt en terugkomt. Standaard staat het vinkje uit.
+
+Op **Android** zit hetzelfde: de power-knop staat op het Radio-scherm en het vinkje **Thetis automatisch starten** staat er direct onder, met dezelfde regel van één keer per app-start.
+
+> Draait Thetis niet, dan meldt de client dat als **"Thetis is niet opgestart"**. Draait Thetis wél maar staat zijn TCI-server uit, dan lees je **"Thetis TCI niet verbonden"** — dat los je in Thetis op via Setup → Network → TCI. Een aangesloten Yaesu-radio staat hier los van en blijft gewoon bedienbaar.
 
 ### TX-modulatiebandbreedte (v2.3.0)
 
@@ -671,10 +681,40 @@ ThetisLink kan een Yaesu FT-991A transceiver aansturen als tweede radio naast de
 - **Frequentie:** uitlezen en instellen van de huidige frequentie
 - **Mode:** uitlezen en instellen (LSB, USB, CW, AM, FM, DATA-FM, DIG)
 - **VFO A/B:** schakelen tussen VFO A en VFO B
-- **Geheugenkanalen:** worden automatisch ingeladen bij het inschakelen van de Yaesu in de server. Kanalen met naam worden weergegeven in de UI. Edit + "Write radio" past frequentie, naam, mode, shift en tone-mode (aan/uit) per kanaal aan. **Let op (v2.1.1+):** de specifieke CTCSS-tone-frequentie wordt niet door TL2 geschreven — alleen "tone aan/uit" gaat mee. Tone-frequentie per kanaal stel je in op de FT-991A zelf. **Verzet je de frequentie terwijl je op een geheugenkanaal staat (v2.5.0), dan kopieert ThetisLink het kanaal naar VFO-A (mode behouden) en volgt je nieuwe frequentie — je glijdt naadloos van geheugen naar VFO (991A + FTX-1).**
+- **Geheugenkanalen:** worden automatisch ingeladen bij het inschakelen van de Yaesu in de server. Kanalen met naam worden weergegeven in de UI. Edit + "Write radio" past frequentie, naam, mode, shift en tone-mode (aan/uit) per kanaal aan. **Tonen (v2.7.0):** op de FT-991A schrijft ThetisLink nu ook de CTCSS-toon én de DCS-code per kanaal, niet alleen "tone aan/uit". Met **Tonen uitlezen** haalt de server de tonen op van de kanalen die een tone-mode hebben; de radio loopt die kanalen daarvoor kort langs en keert daarna terug naar het kanaal waar hij stond (een lopende scan wordt gepauzeerd en hervat). **Voor de FTX-1 geldt de oude beperking nog:** tonen uitlezen kan wel, schrijven niet — die radio biedt daar geen veilige CAT-route voor, dus stel je de toon daar op de set zelf in. **Verzet je de frequentie terwijl je op een geheugenkanaal staat (v2.5.0), dan kopieert ThetisLink het kanaal naar VFO-A (mode behouden) en volgt je nieuwe frequentie — je glijdt naadloos van geheugen naar VFO (991A + FTX-1).**
 - **Menu editor:** Yaesu menu-instellingen uitlezen en wijzigen via de server UI
 - **Audio:** de Yaesu USB audio wordt door de server gecaptured en via het AudioRx2 kanaal naar de client gestuurd, waar het gemixt wordt met het ANAN RX-signaal
 - **Auto-DFM tijdens TX (v2.0.0):** zie subsectie hieronder
+
+### Kanaalknoppen en volume in het hoofdvenster (v2.7.0)
+
+De knoppen boven in het hoofdvenster zijn hernoemd naar wat ze doen. Elk kanaal is
+een blokje met de **kanaalnaam als kopje** en daaronder twee knoppen:
+
+- **audio** — het geluid van dat kanaal aan of uit. Uit bespaart bandbreedte.
+- **venster** — het venster van dat kanaal openen of sluiten.
+
+Dat geldt voor alle zes kanalen: RX1, RX2, VRX1, VRX2 en beide Yaesu-radio's.
+Voorheen was de kanaalnaam zélf de audioschakelaar, met daaronder `spec` bij RX/VRX
+en `win` bij een Yaesu — twee namen voor hetzelfde ding.
+
+Twee dingen zijn daarmee verdwenen of verplaatst:
+
+- De aparte **VRX**-knop naast *Schik*, die beide VRX-vensters tegelijk omzette, is
+  weg. Gebruik de `venster`-knop van VRX1 en VRX2.
+- De **audioknop staat nu ook in elk kanaalvenster** zelf, naast het volume. Het is
+  dezelfde schakelaar: omzetten in het venster of in het hoofdvenster maakt geen
+  verschil.
+
+**Het mastervolume regelt nu álle kanalen** — RX1, RX2, beide VRX'en en beide
+Yaesu's — bovenop het eigen volume van elk kanaal. Tot v2.6.x werkte het alleen op
+RX. Heb je één audiokanaal, dan heet de schuif gewoon *Volume*.
+
+RX1 heeft daarnaast zijn eigen schuif gekregen in het **Radio-tabblad**, onder de
+S-meter, met het opschrift **`VFO A:`** — de masterschuif verandert daardoor niet
+meer van betekenis als je vensters open- of dichtklapt. Let op dat dit een ándere
+regelaar is dan **`RX1 Vol:`** op het *Thetis*-tabblad: die stuurt het volume in
+Thetis zelf aan, `VFO A:` is jouw aandeel in de mix.
 
 ### Auto-DFM PTT-toggle (FM ↔ DATA-FM)
 

@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! `ControlContext` bundelt alles wat een control-helper nodig heeft: flags,
-//! state, command-sender, event sink. Zo heeft elke helper één parameter en
-//! is enabled/observability/state-toegang uniform.
+//! `ControlContext` bundles everything a control helper needs: flags,
+//! state, command-sender, event sink. This way every helper has a single
+//! parameter and enabled/observability/state access is uniform.
 //!
-//! Bewust géén `&mut ThetisLinkApp` - dat zou de hele app-state exposen en
-//! tests onmogelijk maken zonder volledige app-constructie.
+//! Deliberately no `&mut ThetisLinkApp` - that would expose the whole app-state
+//! and make tests impossible without full app construction.
 //!
-//! `cmd_tx` is privé: helpers buiten deze module kunnen
-//! NIET direct `ctx.cmd_tx.send(...)` aanroepen. De enige route is
-//! `dispatch()`, wat afdwingt dat elke command een voorafgaande `IntentEmitted`
-//! heeft en de connected-guard respecteert.
+//! `cmd_tx` is private: helpers outside this module can
+//! NOT call `ctx.cmd_tx.send(...)` directly. The only route is
+//! `dispatch()`, which enforces that every command has a preceding
+//! `IntentEmitted` and respects the connected-guard.
 
 use sdr_remote_logic::commands::Command;
 use tokio::sync::mpsc;
@@ -30,8 +30,8 @@ pub(crate) struct ControlContext<'a> {
 }
 
 impl<'a> ControlContext<'a> {
-    /// Constructeur: `cmd_tx` wordt hier privé gezet, helpers kunnen hem niet
-    /// direct bereiken buiten `dispatch()`.
+    /// Constructor: `cmd_tx` is made private here, helpers cannot reach it
+    /// directly outside `dispatch()`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         connected: bool,
@@ -55,28 +55,28 @@ impl<'a> ControlContext<'a> {
         }
     }
 
-    /// Emit een `UiEvent` via de geconfigureerde sink.
+    /// Emit a `UiEvent` via the configured sink.
     pub(crate) fn emit(&self, event: UiEvent) {
         self.events.emit(event);
     }
 
-    /// Canonieke route om een command te versturen vanuit een control-helper.
+    /// Canonical route to send a command from a control helper.
     ///
-    /// Garanties:
-    /// - elke `cmd_tx.send` wordt voorafgegaan door een `IntentEmitted` met
-    ///   bijhorende `intent_id`;
-    /// - bij `connected == false` wordt het command NIET verstuurd; in plaats
-    ///   daarvan emit een `CommandBlocked { reason: Disconnected }`;
-    /// - bij send-falen (kanaal gesloten) emit een `CommandSendFailed` i.p.v.
-    ///   een vals-positieve `CommandSent`.
+    /// Guarantees:
+    /// - every `cmd_tx.send` is preceded by an `IntentEmitted` with
+    ///   its associated `intent_id`;
+    /// - when `connected == false` the command is NOT sent; instead
+    ///   it emits a `CommandBlocked { reason: Disconnected }`;
+    /// - on send failure (channel closed) it emits a `CommandSendFailed` instead
+    ///   of a false-positive `CommandSent`.
     ///
-    /// Retourneert `true` alleen als het command daadwerkelijk is afgeleverd.
+    /// Returns `true` only if the command was actually delivered.
     ///
-    /// `#[must_use]`: callers MOETEN de return-waarde checken voordat ze
-    /// lokale UI-state muteren. Als ze dat niet doen, kan state-drift ontstaan
-    /// tussen client en server - exact de bug-klasse uit
-    /// PATCH-client-band-switch-guard finding #3 die deze refactor moest
-    /// wegnemen. Compiler dwingt het contract af.
+    /// `#[must_use]`: callers MUST check the return value before they
+    /// mutate local UI-state. If they don't, state-drift can arise
+    /// between client and server - exactly the bug class from
+    /// PATCH-client-band-switch-guard finding #3 that this refactor was meant
+    /// to eliminate. The compiler enforces the contract.
     #[must_use]
     pub(crate) fn dispatch(&self, intent: UiIntent, command: Command) -> bool {
         let kind = intent.kind();

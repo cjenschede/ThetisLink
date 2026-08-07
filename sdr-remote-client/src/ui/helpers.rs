@@ -37,13 +37,13 @@ pub(crate) fn slider_wheel<N: egui::emath::Numeric>(
     }
 }
 
-/// Collapsible-section header met handmatig getekende gevulde
-/// driehoek-chevron. Gespiegeld van `sdr-remote-server/src/ui/utils.rs`
-/// zodat client en server dezelfde visuele stijl gebruiken - geen
-/// font-glyph dependency (egui's default font heeft geen ▼/▶).
+/// Collapsible-section header with a manually drawn filled
+/// triangle-chevron. Mirrored from `sdr-remote-server/src/ui/utils.rs`
+/// so client and server use the same visual style - no
+/// font-glyph dependency (egui's default font has no ▼/▶).
 ///
-/// - `open == false`: rechts-wijzende gevulde driehoek (▶), collapsed
-/// - `open == true`:  omlaag-wijzende gevulde driehoek (▼), expanded
+/// - `open == false`: right-pointing filled triangle (▶), collapsed
+/// - `open == true`:  down-pointing filled triangle (▼), expanded
 pub(super) fn chevron_label(
     ui: &mut egui::Ui,
     open: bool,
@@ -286,9 +286,9 @@ pub(crate) fn format_frequency(hz: u64) -> String {
     result.chars().rev().collect()
 }
 
-/// Render VFO frequency with per-digit tuning: scroll wheel (desktop) én tik
-/// (touch/muis) - tik op de bovenkant van een cijfer = omhoog, onderkant = omlaag.
-/// Returns Some(step) als er getuned is (positief = omhoog, negatief = omlaag).
+/// Render VFO frequency with per-digit tuning: scroll wheel (desktop) and tap
+/// (touch/mouse) - tap on the top of a digit = up, bottom = down.
+/// Returns Some(step) if tuning occurred (positive = up, negative = down).
 pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
     let formatted = format_frequency(hz);
     let num_digits = formatted.chars().filter(|c| c.is_ascii_digit()).count();
@@ -318,9 +318,9 @@ pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
             // digit_idx 0 = highest digit, num_digits-1 = ones
             let power = (num_digits - 1 - digit_idx) as u32;
             let step = 10i64.pow(power);
-            // Hover-cue (desktop): licht alléén de helft op waar de muis staat
-            // (boven = omhoog, onder = omlaag). Dit geeft directionele terugkoppeling -
-            // het duwt de gebruiker naar wat een klik dáár gaat doen.
+            // Hover-cue (desktop): highlight only the half where the mouse is
+            // (top = up, bottom = down). This gives directional feedback -
+            // it nudges the user toward what a click there will do.
             if label.hovered() {
                 if let Some(p) = pointer_pos {
                     let rect = label.rect;
@@ -334,7 +334,7 @@ pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
                         Color32::from_rgba_unmultiplied(80, 160, 255, 60));
                 }
             }
-            // Tik-tunen (touch + muis): bovenste helft = omhoog, onderste = omlaag.
+            // Tap-tuning (touch + mouse): top half = up, bottom half = down.
             if label.clicked() {
                 let up = label.interact_pointer_pos()
                     .map_or(true, |p| p.y < label.rect.center().y);
@@ -360,9 +360,9 @@ pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
     if scroll_step.is_some() {
         ui.ctx().memory_mut(|mem| mem.data.insert_temp(egui::Id::new("freq_scroll_consumed"), true));
     }
-    // Wanneer de muis exact boven een digit hangt, scroll-input op nul
-    // zetten zodat een parent ScrollArea (Yaesu-tab, popout, etc.) niet
-    // meescrollt terwijl de gebruiker de digit aan het tunen is.
+    // When the mouse is hovering exactly over a digit, zero out the scroll
+    // input so a parent ScrollArea (Yaesu-tab, popout, etc.) does not
+    // scroll along while the user is tuning the digit.
     if pointer_over_digit {
         ui.ctx().input_mut(|i| {
             i.raw_scroll_delta = egui::Vec2::ZERO;
@@ -372,9 +372,9 @@ pub(crate) fn render_freq_scroll(ui: &mut egui::Ui, hz: u64) -> Option<i64> {
     scroll_step
 }
 
-/// Touch-vriendelijke frequentie-stapper: grote −/+ knoppen met een instelbare
-/// stapgrootte-kiezer (10 Hz ... 1 MHz). `step_hz` is de gekozen stap (de caller
-/// bewaart 'm). Returns Some(delta_hz) als er ◄◄/►► is ingedrukt.
+/// Touch-friendly frequency stepper: large −/+ buttons with an adjustable
+/// step-size picker (10 Hz ... 1 MHz). `step_hz` is the chosen step (the caller
+/// keeps it). Returns Some(delta_hz) if ◄◄/►► was pressed.
 pub(crate) fn render_freq_stepper(ui: &mut egui::Ui, step_hz: &mut i64) -> Option<i64> {
     const STEPS: [(&str, i64); 6] = [
         ("10", 10), ("100", 100), ("1k", 1_000),

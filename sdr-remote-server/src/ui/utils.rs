@@ -3,43 +3,43 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// Globale request-flag voor server auto-restart. UI-knoppen die
-/// een herstart triggeren (tuner config wijzigingen, slot delete, etc.)
-/// zetten deze op `true` via `request_auto_restart()`. De event-loop
-/// in `ServerApp::update()` checkt de flag elke frame, voert daar
-/// gracieuze cleanup uit (`shutdown_tx.send(true)` + alle hardware-
-/// Arcs droppen zodat Drop-handlers runnen + ~600 ms sleep zodat cpal
-/// audio devices vrijgegeven worden) en pas dan spawn + `exit(0)`.
+/// Global request flag for server auto-restart. UI buttons that
+/// trigger a restart (tuner config changes, slot delete, etc.)
+/// set this to `true` via `request_auto_restart()`. The event loop
+/// in `ServerApp::update()` checks the flag every frame, performs
+/// graceful cleanup there (`shutdown_tx.send(true)` + dropping all
+/// hardware Arcs so Drop handlers run + ~600 ms sleep so cpal
+/// audio devices are released) and only then spawns + `exit(0)`.
 ///
-/// Voorheen riepen UI-knoppen direct `process::exit(0)` aan na spawn -
-/// Drop-handlers werden overgeslagen, audio cpal-streams + TCI-connect
-/// bleven open tot het OS de proces opruimde. De nieuwe child kreeg
-/// "device in use" en audio werkte vaak niet meer.
+/// Previously UI buttons called `process::exit(0)` directly after spawn -
+/// Drop handlers were skipped, audio cpal streams + TCI connect
+/// stayed open until the OS cleaned up the process. The new child got
+/// "device in use" and audio often no longer worked.
 static AUTO_RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// Vraag een server auto-restart aan. Niet-blokkerend: zet alleen de
-/// flag. De daadwerkelijke restart loopt in `ServerApp::update()`
-/// zodra die de flag detecteert, zodat hij Drop-handlers correct kan
-/// runnen voor hij `process::exit` doet.
+/// Request a server auto-restart. Non-blocking: only sets the
+/// flag. The actual restart runs in `ServerApp::update()`
+/// as soon as it detects the flag, so it can run Drop handlers
+/// correctly before it calls `process::exit`.
 pub(crate) fn request_auto_restart() {
     log::info!("Auto-restart requested - cleanup in event-loop");
     AUTO_RESTART_REQUESTED.store(true, Ordering::Relaxed);
 }
 
-/// True als er een auto-restart pending is. Event-loop reset de flag
-/// niet - er wordt na cleanup direct `process::exit(0)` gedaan.
+/// True if an auto-restart is pending. The event loop does not reset
+/// the flag - after cleanup `process::exit(0)` is called directly.
 pub(crate) fn auto_restart_requested() -> bool {
     AUTO_RESTART_REQUESTED.load(Ordering::Relaxed)
 }
 
-/// Kleine "verwijder"-knop met een handmatig getekend kruis (×).
-/// Wordt geometrisch via `Painter::line_segment` getekend in plaats van
-/// een Unicode-glyph (`\u{2715}` / `\u{2716}` etc.) omdat egui's default
-/// font die karakters niet rendert (zie memory `egui-font-tofu`).
+/// Small "delete" button with a manually drawn cross (×).
+/// Drawn geometrically via `Painter::line_segment` instead of
+/// a Unicode glyph (`\u{2715}` / `\u{2716}` etc.) because egui's default
+/// font does not render those characters (see memory `egui-font-tofu`).
 ///
-/// Visueel: vierkant op text-button-hoogte, twee diagonale lijnen die
-/// elkaar in het midden kruisen. Op hover wisselt de kleur naar
-/// `visuals.widgets.hovered.fg_stroke.color` voor visuele feedback.
+/// Visually: a square at text-button height, two diagonal lines that
+/// cross each other in the middle. On hover the color switches to
+/// `visuals.widgets.hovered.fg_stroke.color` for visual feedback.
 pub(crate) fn delete_button(ui: &mut egui::Ui) -> egui::Response {
     let size = ui.text_style_height(&egui::TextStyle::Button);
     let (rect, response) = ui.allocate_exact_size(
@@ -71,24 +71,24 @@ pub(crate) fn delete_button(ui: &mut egui::Ui) -> egui::Response {
     response
 }
 
-/// Collapsible-section header met een handmatig getekende, volledig
-/// gevulde driehoek-chevron. Gebruikt op plekken waar we niet zonder
-/// layout-shift naar egui's native `CollapsingHeader` kunnen - de
-/// chevron wordt geometrisch via `Shape::convex_polygon` getekend,
-/// niet als font-glyph, zodat we niet afhankelijk zijn van de
-/// `\u{25BC}` / `\u{25B6}` glyphs die in egui's default font tofu-
-/// vierkanten opleveren.
+/// Collapsible-section header with a manually drawn, fully
+/// filled triangle chevron. Used in places where we cannot switch
+/// to egui's native `CollapsingHeader` without layout shift - the
+/// chevron is drawn geometrically via `Shape::convex_polygon`,
+/// not as a font glyph, so we are not dependent on the
+/// `\u{25BC}` / `\u{25B6}` glyphs that render as tofu squares
+/// in egui's default font.
 ///
-/// - `open == false`: rechts-wijzende gevulde driehoek (▶) - collapsed
-/// - `open == true`:  omlaag-wijzende gevulde driehoek (▼) - expanded
+/// - `open == false`: right-pointing filled triangle (▶) - collapsed
+/// - `open == true`:  down-pointing filled triangle (▼) - expanded
 ///
-/// Het label staat altijd *rechts* van het driehoekje, ongeacht de
-/// parent-layout-richting (helper rekent zelf het row-rect uit en
-/// schildert manueel, dus een `right_to_left` parent verandert hier
-/// niets aan - alleen de cell-positie binnen die parent verschuift).
+/// The label is always *to the right* of the triangle, regardless of
+/// the parent layout direction (the helper computes the row rect itself
+/// and paints manually, so a `right_to_left` parent changes nothing
+/// here - only the cell position within that parent shifts).
 ///
-/// Mouse-over op chevron én label highlight't beide naar de
-/// `visuals.widgets.hovered.fg_stroke.color` van de actieve theme.
+/// Mouse-over on both chevron and label highlights both to the
+/// `visuals.widgets.hovered.fg_stroke.color` of the active theme.
 pub(crate) fn chevron_label(
     ui: &mut egui::Ui,
     open: bool,
@@ -98,7 +98,7 @@ pub(crate) fn chevron_label(
     let chevron_size = ui.text_style_height(&egui::TextStyle::Button);
     let spacing = ui.spacing().item_spacing.x;
 
-    // Layout het tekst-galley om de row-size te berekenen
+    // Lay out the text galley to compute the row size
     let galley = text.into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -112,35 +112,35 @@ pub(crate) fn chevron_label(
     );
     let (rect, response) = ui.allocate_exact_size(row_size, egui::Sense::click());
 
-    // Hover-state bepaalt de kleur voor zowel chevron als label
+    // Hover state determines the color for both chevron and label
     let color = if response.hovered() {
         ui.visuals().widgets.hovered.fg_stroke.color
     } else {
         ui.visuals().text_color()
     };
 
-    // Chevron links - handmatig geplaatst zodat parent-layout
-    // (left_to_right of right_to_left) het niet kan omdraaien.
+    // Chevron on the left - manually placed so the parent layout
+    // (left_to_right or right_to_left) cannot flip it.
     //
-    // Vorm matcht egui's native CollapsingHeader chevron: een
-    // isoceles driehoek met één duidelijk kortere achterkant en
-    // twee langere benen die naar een scherpe punt lopen. Op
-    // hover groeit het driehoek 35% - kleinere base met meer
-    // grow geeft een duidelijker hover-feedback.
+    // Shape matches egui's native CollapsingHeader chevron: an
+    // isosceles triangle with one clearly shorter back and
+    // two longer legs that run to a sharp point. On
+    // hover the triangle grows 35% - a smaller base with more
+    // grow gives clearer hover feedback.
     let chev_center = egui::pos2(rect.left() + chevron_size / 2.0, rect.center().y);
     let scale = if response.hovered() { 1.35 } else { 1.0 };
     let r = chevron_size * 0.28 * scale;
     let points = if open {
-        // Down-pointing: korte achterkant boven (0.7r breed van center),
-        // scherpe punt 1.0r naar onder. Benen ≈ 1.66r, achterkant 1.4r.
+        // Down-pointing: short back on top (0.7r wide from center),
+        // sharp point 1.0r downward. Legs ≈ 1.66r, back 1.4r.
         vec![
             egui::pos2(chev_center.x - r * 0.7, chev_center.y - r * 0.5),
             egui::pos2(chev_center.x + r * 0.7, chev_center.y - r * 0.5),
             egui::pos2(chev_center.x, chev_center.y + r * 1.0),
         ]
     } else {
-        // Right-pointing: korte achterkant links (0.7r hoog van center),
-        // scherpe punt 1.0r naar rechts.
+        // Right-pointing: short back on the left (0.7r tall from center),
+        // sharp point 1.0r to the right.
         vec![
             egui::pos2(chev_center.x - r * 0.5, chev_center.y - r * 0.7),
             egui::pos2(chev_center.x - r * 0.5, chev_center.y + r * 0.7),
@@ -150,7 +150,7 @@ pub(crate) fn chevron_label(
     ui.painter()
         .add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
 
-    // Label rechts van chevron, vertically centered
+    // Label to the right of the chevron, vertically centered
     let label_pos = egui::pos2(
         rect.left() + chevron_size + spacing,
         rect.center().y - galley.size().y / 2.0,

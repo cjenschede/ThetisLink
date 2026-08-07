@@ -84,15 +84,15 @@ impl TciConnection {
 
     pub async fn vfo_swap(&mut self) {
         // Stock .14/.15 supports vfo_swap_ex without advertising the cap (consistent
-        // patroon met andere stock-supported _ex commands). Native swap doet freq +
-        // mode + filter; eerdere fallback ("swap freq alleen") was incompleet.
-        // Bij smoke-test FAIL: revert naar manual freq-swap fallback.
+        // pattern with other stock-supported _ex commands). Native swap does freq +
+        // mode + filter; the earlier fallback ("swap freq only") was incomplete.
+        // On smoke-test FAIL: revert to manual freq-swap fallback.
         self.send("vfo_swap_ex;").await;
     }
 
     pub async fn set_rx2_af_gain(&mut self, level: u8) {
         // rx_volume supported since Thetis v2.10.3.13.
-        // Schaal: 0..100 % -> −60..0 dB (matches RxVolume parser/handler in tci.rs).
+        // Scale: 0..100 % -> −60..0 dB (matches RxVolume parser/handler in tci.rs).
         let level = level.min(100);
         let db = ((level as i32 - 100) * 60) / 100;
         let cmd = format!("rx_volume:1,0,{};", db);
@@ -190,9 +190,9 @@ impl TciConnection {
     /// Set NB level: 0=off, 1=NB1, 2=NB2
     pub async fn set_nb(&mut self, level: u8) {
         // Stock .14/.15 supports rx_nb_enable_ex without advertising the cap.
-        // Het `level`-argument bepaalt de uiteindelijke NB-stand bij de server;
-        // bij disable sturen we `level=0` (niet `.max(1)`), anders blijft NB1
-        // actief en werkt de cycle->off transitie niet.
+        // The `level` argument determines the final NB state at the server;
+        // on disable we send `level=0` (not `.max(1)`), otherwise NB1 stays
+        // active and the cycle->off transition does not work.
         let enabled = level > 0;
         let cmd = format!("rx_nb_enable_ex:0,{},{};", if enabled { "true" } else { "false" }, level);
         self.send(&cmd).await;
@@ -285,7 +285,7 @@ impl TciConnection {
 
     pub async fn set_rx2_nb(&mut self, level: u8) {
         // Stock .14/.15 supports rx_nb_enable_ex without advertising the cap.
-        // Zie set_nb() - zelfde Thetis-gotcha, stuur echte level i.p.v. .max(1).
+        // See set_nb() - same Thetis gotcha, send the real level instead of .max(1).
         let enabled = level > 0;
         let cmd = format!("rx_nb_enable_ex:1,{},{};", if enabled { "true" } else { "false" }, level);
         self.send(&cmd).await;

@@ -201,9 +201,9 @@ impl CatSync {
     }
 
     /// Reload the embedded WebSDR page (re-navigates to the current tune URL).
-    /// De WebSDR.org/KiwiSDR-audiostream herstelt niet vanzelf na een netwerk-hik;
-    /// herladen bouwt de pagina + audiostream opnieuw op, mét de actuele freq/mode -
-    /// scheelt het venster sluiten en heropenen.
+    /// The WebSDR.org/KiwiSDR audio stream does not recover on its own after a network hiccup;
+    /// reloading rebuilds the page + audio stream, with the current freq/mode -
+    /// saves having to close and reopen the window.
     pub fn reload_websdr_window(&mut self, freq_hz: u64, mode: u8) {
         if self.websdr_tx.is_none() {
             return;
@@ -213,9 +213,9 @@ impl CatSync {
         if tx.send(crate::websdr::WebSdrCmd::Navigate(url)).is_ok() {
             self.last_synced_freq = freq_hz;
             self.last_synced_mode = mode;
-            self.webview_muted = false; // verse pagina start unmuted
+            self.webview_muted = false; // fresh page starts unmuted
         } else {
-            self.websdr_tx = None; // venster was al gesloten
+            self.websdr_tx = None; // window was already closed
         }
     }
 

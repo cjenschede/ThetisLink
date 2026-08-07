@@ -106,10 +106,10 @@ impl VrxDumpState {
     }
 }
 
-// VRX live channelizer + Opus encode + UDP send is volledig
-// gedelegeerd aan de `vrx-rs` crate + `vrx_bridge::ThetisVrxSink`.
-// `tci_iq_consumer` instantieert per VRX-channel een `VrxRuntime`
-// en geeft elke IQ-batch door via `feed()`.
+// VRX live channelizer + Opus encode + UDP send is fully
+// delegated to the `vrx-rs` crate + `vrx_bridge::ThetisVrxSink`.
+// `tci_iq_consumer` instantiates a `VrxRuntime` per VRX channel
+// and passes each IQ batch on via `feed()`.
 
 // â"€â"€ Resampling helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
@@ -179,10 +179,10 @@ pub async fn tci_multichannel_audio_loop(
     let mut res_bin_r = mk_resampler().context("BinR resampler")?;
     let mut res_rx2 = mk_resampler().context("RX2 resampler")?;
 
-    // Wideband (16 kHz) parallel-encoders - alleen actief gevoed wanneer
-    // ten minste één client de Thetis-wideband-audio opt-in heeft staan.
-    // De resamplers blijven idle (geen `process()` call) zolang geen
-    // client wideband wil - geen merkbare CPU-impact.
+    // Wideband (16 kHz) parallel-encoders - only actively fed when
+    // at least one client has the Thetis-wideband-audio opt-in enabled.
+    // The resamplers stay idle (no `process()` call) as long as no
+    // client wants wideband - no noticeable CPU impact.
     let mut enc_rx1_wb = OpusEncoderWideband::new()?;
     let mut enc_bin_r_wb = OpusEncoderWideband::new()?;
     let mut enc_rx2_wb = OpusEncoderWideband::new()?;
@@ -254,8 +254,8 @@ pub async fn tci_multichannel_audio_loop(
 
                 let addrs = {
                     let sess = session.lock().await;
-                    // Yaesu-only clients (Android Yaesu-mode) krijgen geen Thetis-RX-audio
-                    // -> databesparing. Herstelt zodra Yaesu-mode uit gaat (spectrum aan).
+                    // Yaesu-only clients (Android Yaesu-mode) get no Thetis-RX-audio
+                    // -> data savings. Restores as soon as Yaesu-mode turns off (spectrum on).
                     sess.thetis_audio_addrs()
                 };
                 let has_clients = !addrs.is_empty();
@@ -281,16 +281,16 @@ pub async fn tci_multichannel_audio_loop(
                 }
 
                 // Encode each available channel as mono Opus and bundle.
-                // Sinds wideband-opt-in: ook een tweede payload-set per
-                // channel (16 kHz Opus) wanneer ten minste één actieve
-                // client de optie aan heeft staan. NB-pad blijft de
-                // default voor alle huidige clients.
+                // Since wideband-opt-in: also a second payload-set per
+                // channel (16 kHz Opus) when at least one active
+                // client has the option enabled. NB path remains the
+                // default for all current clients.
                 let any_wb = session.lock().await.any_client_wants_thetis_wideband();
                 let mut channels_nb: Vec<(u8, Vec<u8>)> = Vec::with_capacity(3);
                 let mut channels_wb: Vec<(u8, Vec<u8>)> = Vec::with_capacity(3);
 
-                // Helper: encodeer een 48-kHz frame in beide kanalen
-                // (NB altijd, WB conditioneel).
+                // Helper: encode a 48-kHz frame in both channels
+                // (NB always, WB conditional).
                 fn pcm_to_i16(samples: &[f32]) -> Vec<i16> {
                     samples.iter()
                         .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
@@ -401,9 +401,9 @@ pub async fn tci_multichannel_audio_loop(
                         // mode 0 (Mono): CH0 + CH2  (gated by rx2_enabled)
                         // mode 1 (BIN): CH0 + CH1 + CH2  (CH2 gated)
                         // mode 2 (Split): CH0 + CH2  (CH2 gated)
-                        // Kies juiste payload-set: WB als client opt-in heeft
-                        // én er een WB-payload beschikbaar is voor dit frame;
-                        // anders narrowband (default voor alle huidige clients).
+                        // Pick the right payload-set: WB if the client has opt-in
+                        // and a WB-payload is available for this frame;
+                        // otherwise narrowband (default for all current clients).
                         let use_wb = *want_wb && !channels_wb.is_empty();
                         let src: &Vec<(u8, Vec<u8>)> = if use_wb { &channels_wb } else { &channels_nb };
                         let client_chs: Vec<(u8, Vec<u8>)> = src.iter()
@@ -416,8 +416,8 @@ pub async fn tci_multichannel_audio_loop(
                                     _ => *ch_id == 0,
                                 };
                                 if !allowed { return false; }
-                                // RX1-audio-abonnement: CH0 (RX1) + CH1 (RX1 imag/BIN)
-                                // vervallen als de client RX1-audio uit heeft (alleen-VRX).
+                                // RX1-audio-subscription: CH0 (RX1) + CH1 (RX1 imag/BIN)
+                                // are dropped if the client has RX1-audio off (VRX-only).
                                 if (*ch_id == 0 || *ch_id == 1) && !rx1_enabled { return false; }
                                 if *ch_id == 2 && !rx2_enabled { return false; }
                                 true
@@ -460,24 +460,24 @@ pub async fn yaesu_audio_loop(
     start: Instant,
     audio_stats: Arc<crate::audio_stats::AudioActivityStats>,
     server_start: Instant,
-    // Dual-radio (Optie B-prime): slot 0 -> yaesu_addrs + AudioYaesu (byte-identiek
-    // aan het bestaande pad); slot 1 -> yaesu2_addrs + AudioYaesu2.
+    // Dual-radio (Option B-prime): slot 0 -> yaesu_addrs + AudioYaesu (byte-identical
+    // to the existing path); slot 1 -> yaesu2_addrs + AudioYaesu2.
     slot: u8,
-    // Live radio-status (voor de software-squelch). FTX-1: squelch_open uit de
-    // RI-poll gate't de USB-audio. 991A: squelch_open blijft true -> geen effect.
-    // std::sync::Mutex (matcht YaesuRadio.status; audio_loops' `Mutex` = tokio).
+    // Live radio-status (for the software-squelch). FTX-1: squelch_open from the
+    // RI-poll gates the USB-audio. 991A: squelch_open stays true -> no effect.
+    // std::sync::Mutex (matches YaesuRadio.status; audio_loops' `Mutex` = tokio).
     status: Arc<std::sync::Mutex<crate::yaesu::YaesuState>>,
 ) -> Result<()> {
     let audio_ptype = if slot == 0 { PacketType::AudioYaesu } else { PacketType::AudioYaesu2 };
     let frame_samples = (sample_rate * 20 / 1000) as usize;
 
-    // Radio-RX bandbreedte volgt de Thetis-wideband-toggle (build 122):
-    // de client kiest in de Server-tab NB (laag dataverbruik) of WB (helder,
-    // CELT i.p.v. SILK -> getrouwe ruis). Eén globale knop voor Thetis + beide
-    // radio's. We houden daarom beide encoders/resamplers aan en sturen per
-    // abonnee het formaat dat die client wil (`client_thetis_wideband`), met
-    // de `AUDIO_WIDEBAND`-flag op WB-packets. Mirror van het Thetis-multi-ch-pad.
-    let mut enc_nb = OpusEncoder::new_radio_rx()?;      // 8 kHz, DTX-uit
+    // Radio-RX bandwidth follows the Thetis-wideband-toggle (build 122):
+    // the client picks NB (low data usage) or WB (clear, CELT instead of
+    // SILK -> faithful noise) in the Server-tab. One global button for Thetis
+    // + both radios. We therefore keep both encoders/resamplers running and
+    // send each subscriber the format that client wants (`client_thetis_wideband`),
+    // with the `AUDIO_WIDEBAND`-flag on WB-packets. Mirror of the Thetis-multi-ch-path.
+    let mut enc_nb = OpusEncoder::new_radio_rx()?;      // 8 kHz, DTX-off
     let mut enc_wb = OpusEncoderWideband::new()?;       // 16 kHz
     let mut res_nb = rubato::SincFixedIn::<f32>::new(
         NETWORK_SAMPLE_RATE as f64 / sample_rate as f64,
@@ -493,14 +493,14 @@ pub async fn yaesu_audio_loop(
     let mut tick = interval(Duration::from_millis(20));
     let mut had_clients = false;
 
-    // Software-squelch gate-envelope (FTX-1: dichte squelch -> fade naar stilte;
-    // de squelch-knop op de radio is de drempel). 991A: squelch_open=true -> no-op.
+    // Software-squelch gate-envelope (FTX-1: closed squelch -> fade to silence;
+    // the squelch-knob on the radio is the threshold). 991A: squelch_open=true -> no-op.
     let mut gate_gain: f32 = 1.0;
     let mut sql_closed_frames: u32 = 0;
-    const SQL_HANG_FRAMES: u32 = 8;   // ~160 ms hang vóór de gate sluit (anti-flutter)
-    const SQL_FADE_STEP: f32 = 0.10;  // ~10 frames ≈ 200 ms volledige fade
+    const SQL_HANG_FRAMES: u32 = 8;   // ~160 ms hang before the gate closes (anti-flutter)
+    const SQL_FADE_STEP: f32 = 0.10;  // ~10 frames ≈ 200 ms full fade
 
-    info!("Yaesu audio RX loop started ({}Hz capture, NB+WB op aanvraag)", sample_rate);
+    info!("Yaesu audio RX loop started ({}Hz capture, NB+WB on demand)", sample_rate);
 
     loop {
         tokio::select! {
@@ -520,8 +520,8 @@ pub async fn yaesu_audio_loop(
                 }
             }
             _ = tick.tick() => {
-                // Abonnees + hun WB-voorkeur. RX-bandbreedte volgt de Thetis-toggle
-                // per client; TX blijft altijd wideband (zie network.rs).
+                // Subscribers + their WB-preference. RX-bandwidth follows the Thetis-toggle
+                // per client; TX always stays wideband (see network.rs).
                 let subs: Vec<(std::net::SocketAddr, bool)> = {
                     let s = session.lock().await;
                     let addrs = if slot == 0 { s.yaesu_addrs() } else { s.yaesu2_addrs() };
@@ -544,7 +544,7 @@ pub async fn yaesu_audio_loop(
                             info!("Yaesu audio: client(s) enabled, encoders reset");
                         }
                         _ => {
-                            log::error!("Yaesu encoder reset failed - Yaesu audio RX skipped this tick (server blijft draaien)");
+                            log::error!("Yaesu encoder reset failed - Yaesu audio RX skipped this tick (server keeps running)");
                             // had_clients stays false -> retry next tick if clients still present.
                         }
                     }
@@ -556,21 +556,21 @@ pub async fn yaesu_audio_loop(
                 }
                 let mut frame: Vec<f32> = accumulator.drain(..frame_samples).collect();
 
-                // Software-squelch: fade naar stilte bij dichte squelch (alleen FTX-1
-                // zet squelch_open=false; 991A blijft open -> start_g/end_g==1.0 -> no-op).
-                // ALLEEN in FM-familie (internal mode 5: FM/FM-N/DATA-FM): op SSB/CW/AM/
-                // RTTY/data heeft de radio-BUSY (RI P8) geen zinvolle betekenis en meldt
-                // hij 'dicht' terwijl er wél audio is -> daar audio altijd doorlaten
+                // Software-squelch: fade to silence on closed squelch (only FTX-1
+                // sets squelch_open=false; 991A stays open -> start_g/end_g==1.0 -> no-op).
+                // ONLY in the FM-family (internal mode 5: FM/FM-N/DATA-FM): on SSB/CW/AM/
+                // RTTY/data the radio-BUSY (RI P8) has no meaningful value and reports
+                // 'closed' while there IS audio -> always pass audio through there.
                 // This prevents LSB from being muted by the USB-side squelch gate.
                 let (sql_open, mode, tx_active) = {
                     let s = status.lock().unwrap();
                     (s.squelch_open, s.mode, s.tx_active)
                 };
-                // TX-mute: tijdens zenden mag RX-audio nooit terugkomen. De 991A dempt
-                // zijn USB-RX in hardware tijdens TX; de FTX-1 niet -> daar liep RX-geluid
-                // door tijdens PTT (operator-test 2026-07-04). Model-onafhankelijk in software:
-                // bij TX direct naar stilte (geen squelch-hang), voor de 991A een no-op
-                // omdat er dan toch al (bijna) stilte binnenkomt.
+                // TX-mute: during transmit RX-audio must never come back. The 991A mutes
+                // its USB-RX in hardware during TX; the FTX-1 does not -> there RX-sound
+                // continued during PTT (operator-test 2026-07-04). Model-independent in software:
+                // on TX go straight to silence (no squelch-hang), for the 991A a no-op
+                // because (almost) silence is coming in there anyway.
                 let effective_open = !tx_active && (mode != 5 || sql_open);
                 let target: f32 = if tx_active {
                     sql_closed_frames = 0;
@@ -596,18 +596,18 @@ pub async fn yaesu_audio_loop(
                     }
                 }
                 gate_gain = end_g;
-                // Observability: log alleen de fade-randen (geen per-frame spam).
+                // Observability: log only the fade-edges (no per-frame spam).
                 if start_g > 0.0 && end_g == 0.0 {
-                    log::info!("Yaesu squelch: gate dicht - audio gedempt");
+                    log::info!("Yaesu squelch: gate closed - audio muted");
                 } else if start_g == 0.0 && end_g > 0.0 {
-                    log::info!("Yaesu squelch: gate open - audio hervat");
+                    log::info!("Yaesu squelch: gate open - audio resumed");
                 }
 
                 let need_wb = subs.iter().any(|(_, wb)| *wb);
                 let need_nb = subs.iter().any(|(_, wb)| !*wb);
                 let timestamp = start.elapsed().as_millis() as u32;
 
-                // Encodeer alléén de gevraagde formaten (meestal maar één).
+                // Encode only the requested formats (usually just one).
                 let nb_buf: Option<Vec<u8>> = if need_nb {
                     let pcm = resample_to_network(&mut res_nb, &frame);
                     let i16s: Vec<i16> = pcm.iter()
@@ -672,6 +672,9 @@ struct ClientRt {
     runtime: vrx_rs::VrxRuntime,
     control: Arc<std::sync::Mutex<vrx_rs::VrxControlState>>,
     current_wb: bool,
+    /// When this runtime was built, for the first-frame timing line.
+    created: std::time::Instant,
+    first_frame_logged: bool,
 }
 
 /// Resolve the per-VRX wideband flag from the client's NB/WB/Auto mode + filter
@@ -723,12 +726,24 @@ fn service_vrx_channel(
     for &addr in audio_addrs {
         if !rts.contains_key(&addr) {
             let control = mgr.lock().unwrap().control(addr, ch);
+            // Start at the rate this channel's filter actually calls for. Creating
+            // narrowband unconditionally meant every enable of a wideband channel
+            // built a runtime, ran a few frames through it, and then tore it down
+            // again for the NB->WB switch below - audible as a late, distorted
+            // start right after switching the audio on.
+            let rate_mode = mgr.lock().unwrap().rate_mode(&addr, ch);
+            let (lo, hi) = {
+                let s = control.lock().unwrap();
+                (s.filter_low_hz, s.filter_high_hz)
+            };
+            let wb = vrx_desired_wb(rate_mode, lo, hi, false);
             let runtime = vrx_rs::VrxRuntime::new(
-                vrx_rs::VrxRuntimeOptions { vrx_id: ch, wav_dir: None, wav_segment_sec: 10, wideband: false },
+                vrx_rs::VrxRuntimeOptions { vrx_id: ch, wav_dir: None, wav_segment_sec: 10, wideband: wb },
                 control.clone(),
             );
-            rts.insert(addr, ClientRt { runtime, control, current_wb: false });
-            log::info!("VRX create client={} ch={} - active_runtimes(ch)={}", addr, ch + 1, rts.len());
+            rts.insert(addr, ClientRt { runtime, control, current_wb: wb, created: std::time::Instant::now(), first_frame_logged: false });
+            log::info!("VRX create client={} ch={} wideband={} - active_runtimes(ch)={}",
+                addr, ch + 1, wb, rts.len());
         }
         let rate_mode = mgr.lock().unwrap().rate_mode(&addr, ch);
         let rt = rts.get_mut(&addr).unwrap();
@@ -761,8 +776,20 @@ fn service_vrx_channel(
         sink.wideband = rt.current_wb;
         sink.timestamp_ms = timestamp_ms;
         let t0 = std::time::Instant::now();
+        let sent_before = sink.frames_sent;
         rt.runtime.feed(frame_rate, iq_pairs, vfo_hz, ddc_center_hz, sink);
         total_feed += t0.elapsed();
+        // How long the client waited between switching this channel on and the
+        // first audio frame leaving the server - the half of the delay that is
+        // ours. Anything beyond this is transport or client side.
+        if !rt.first_frame_logged && sink.frames_sent > sent_before {
+            rt.first_frame_logged = true;
+            log::info!(
+                "VRX ch={} first frame sent {} ms after create",
+                ch + 1,
+                rt.created.elapsed().as_millis()
+            );
+        }
     }
     timer.record(total_feed, iq_pairs.len(), frame_rate, rts.len());
 }

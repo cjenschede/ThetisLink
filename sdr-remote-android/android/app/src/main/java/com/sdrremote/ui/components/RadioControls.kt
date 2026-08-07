@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import android.content.Context
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Slider
@@ -36,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.sdrremote.R
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +73,7 @@ private const val CONTROL_DIVERSITY = 0x40
 fun RadioControls(
     powerOn: Boolean,
     thetisStarting: Boolean,
+    thetisNotRunning: Boolean,
     connected: Boolean,
     nrLevel: Int,
     anfOn: Boolean,
@@ -223,6 +227,28 @@ fun RadioControls(
             ) {
                 Text("AGC", color = Color.White, fontWeight = if (agcEnabled) FontWeight.Bold else FontWeight.Normal)
             }
+        }
+
+        // Thetis autostart: opt-in for what a short press on the power button
+        // above does. This is the setting only - the launch itself is driven by
+        // SdrViewModel.maybeAutostartThetis(), because these controls live in a
+        // LazyColumn item and a UI-side effect would only run while that item
+        // happens to be composed.
+        val context = LocalContext.current
+        val prefs = remember { context.getSharedPreferences("thetislink", Context.MODE_PRIVATE) }
+        var autostart by remember { mutableStateOf(prefs.getBoolean("thetis_autostart", false)) }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Checkbox(
+                checked = autostart,
+                onCheckedChange = {
+                    autostart = it
+                    prefs.edit().putBoolean("thetis_autostart", it).apply()
+                },
+            )
+            Text(stringResource(R.string.radio_thetis_autostart), fontSize = 13.sp)
         }
 
         // Row 2: NB cycle (OFF → NB1 → NB2 → OFF)

@@ -11,10 +11,10 @@ pub struct BufferedFrame {
     pub timestamp: u32,
     pub opus_data: Vec<u8>,
     pub ptt: bool,
-    /// True wanneer de packet-header `Flags::AUDIO_WIDEBAND` had — bij
-    /// pop wordt op basis hiervan het juiste Opus-decoder pad gekozen
-    /// (wideband 16 kHz vs narrowband 8 kHz). Default false zodat
-    /// bestaande callers die geen WB ondersteunen unchanged blijven.
+    /// True when the packet header had `Flags::AUDIO_WIDEBAND` — on
+    /// pop this selects the correct Opus decoder path
+    /// (wideband 16 kHz vs narrowband 8 kHz). Default false so that
+    /// existing callers that do not support WB remain unchanged.
     pub wideband: bool,
 }
 
@@ -120,14 +120,26 @@ impl JitterBuffer {
         self.last_arrival_ms = Some(arrival_ms);
         self.last_packet_ts = Some(frame.timestamp);
 
-        // Drop packets that arrived too late — UNLESS they are so far behind that
-        // the sender must have restarted its sequence (e.g. server restart). A
-        // genuinely late/reordered packet is at most a handful behind next_seq; a
-        // stream restart is thousands behind. Without this, a fresh low-sequence
-        // stream is discarded as "too late" against a stale high next_seq and the
-        // audio stays silent for minutes (until the sender's sequence climbs back).
-        // Re-baseline the buffer on such a backward jump so playout resumes at once.
-        const STREAM_RESTART_BACKJUMP: u32 = 1000;
+        // Drop packets that arrived too late - UNLESS they are so far behind that
+        // the sender must have restarted its sequence. Without this, a fresh
+        // low-sequence stream is discarded as "too late" against a stale high
+        // next_seq and stays silent until the sender's sequence climbs back.
+        //
+        // The threshold is a REORDER window, not a restart size. It used to be
+        // 1000 frames, on the assumption that "a restart is thousands behind".
+        // That holds for a server restart but not for a subscription: a VRX
+        // channel switched off and on starts at 0 again, so it is only as far
+        // behind as the previous session was long. Listening for four seconds
+        // meant the next enable discarded exactly four seconds of audio, while
+        // listening past twenty seconds crossed the old threshold and felt
+        // instant - the whole difference between "sometimes direct, sometimes
+        // three seconds".
+        //
+        // 64 frames is 1.3 s at 20 ms: orders of magnitude beyond real
+        // reordering on any link this runs on, and anything further behind is a
+        // restart by definition. Being wrong here is cheap - a re-baseline
+        // clears the buffer and playout resumes.
+        const STREAM_RESTART_BACKJUMP: u32 = 64;
         if let Some(next) = self.next_seq {
             if is_seq_before(frame.sequence, next) {
                 if next.wrapping_sub(frame.sequence) > STREAM_RESTART_BACKJUMP {
@@ -398,6 +410,33 @@ mod tests {
 
         // seq 3 should be available
         assert!(matches!(jb.pull(), JitterResult::Frame(_)));
+    }
+
+    #[test]
+    fn resubscribe_restart_is_not_treated_as_late() {
+        // A VRX channel switched off and on starts its sequence at 0 again, only
+        // as far behind as the previous session was long - not "thousands", which
+        // is what the old threshold assumed. Four seconds of listening used to
+        // cost four seconds of silence on the next enable.
+        let mut jb = JitterBuffer::new(3, 40);
+        for seq in 0..200u32 {
+            jb.push(make_frame(seq), seq as u64 * 20);
+        }
+        while !matches!(jb.pull(), JitterResult::NotReady) {}
+
+        // Sender restarts at 0 after a re-subscribe.
+        jb.push(make_frame(0), 5_000);
+        jb.push(make_frame(1), 5_020);
+        jb.push(make_frame(2), 5_040);
+        jb.push(make_frame(3), 5_060);
+
+        let mut got = 0;
+        for _ in 0..8 {
+            if let JitterResult::Frame(_) = jb.pull() {
+                got += 1;
+            }
+        }
+        assert!(got > 0, "a restarted stream must play, not wait for the old sequence");
     }
 
     #[test]

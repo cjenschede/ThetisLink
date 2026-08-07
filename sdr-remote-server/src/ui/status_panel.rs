@@ -22,13 +22,13 @@ use egui::{Color32, RichText};
 use crate::audio_stats::StatusPanelShared;
 use crate::session::{ClientSnapshot, ConnectAttempt};
 
-/// Snapshot-cache: bij contentie op de SessionManager-lock (try_lock
-/// faalt) renderden we eerder een 1-regel "(snapshot busy...)" placeholder.
-/// Dat liet de paneel-hoogte periodiek krimpen waardoor de omringende
-/// ScrollArea de scroll-positie clampte en de gebruiker visueel zag dat
-/// content omhoog sprong terwijl hij naar de uitgeklapte MCP2221A-sectie
-/// keek. Cache laat ons in plaats daarvan de laatst-succesvolle snapshot
-/// blijven tonen - stale text is acceptabel; layout-jitter niet.
+/// Snapshot cache: on contention for the SessionManager lock (try_lock
+/// fails) we previously rendered a 1-line "(snapshot busy...)" placeholder.
+/// That periodically shrank the panel height, causing the surrounding
+/// ScrollArea to clamp the scroll position so the user visually saw
+/// content jump upward while looking at the expanded MCP2221A section.
+/// Instead the cache lets us keep showing the last-successful snapshot -
+/// stale text is acceptable; layout jitter is not.
 fn clients_cache() -> &'static std::sync::Mutex<Option<Vec<ClientSnapshot>>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<ClientSnapshot>>>> =
         std::sync::OnceLock::new();
@@ -41,10 +41,10 @@ fn attempts_cache() -> &'static std::sync::Mutex<Option<Vec<ConnectAttempt>>> {
     CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-/// Per-client bandbreedte in kbps, uitgesplitst: (audio, spectrum, overig, up).
-/// Afgeleid uit de cumulatieve byte-tellers van de tracked-socket: vorige sample +
-/// tijdstip bewaard, snelheid over het interval (≥250 ms, tegen ruis). Prunet
-/// tegelijk stale adres-tellers (elke herverbinding = nieuwe bron-poort).
+/// Per-client bandwidth in kbps, broken out: (audio, spectrum, other, up).
+/// Derived from the tracked-socket's cumulative byte counters: previous sample +
+/// timestamp kept, rate over the interval (≥250 ms, against noise). Also prunes
+/// stale address counters at the same time (each reconnect = new source port).
 /// bits/ms == kbps.
 type ClientRate = (u32, u32, u32, u32); // (audio, spectrum, other, up)
 fn client_bandwidth_rates(
@@ -174,8 +174,8 @@ pub fn render_status_panel(
     });
 
     // ── 3. Active clients (snapshot via SessionManager.try_lock) ─────────
-    // Bij lock-contentie pakken we de laatst gecachte snapshot zodat de
-    // sectie-hoogte stabiel blijft (zie `clients_cache` doc voor reden).
+    // On lock contention we take the last cached snapshot so the
+    // section height stays stable (see `clients_cache` doc for the reason).
     let clients_snapshot: Option<Vec<ClientSnapshot>> =
         if let Some(session_arc) = shared.session_slot.get() {
             match session_arc.try_lock() {
@@ -309,8 +309,8 @@ pub fn render_status_panel(
     });
 
     // ── 5. Recent connect attempts ───────────────────────────────────────
-    // Idem: bij lock-contentie val terug op de laatst gecachte snapshot
-    // zodat de sectie-hoogte stabiel blijft.
+    // Same: on lock contention fall back to the last cached snapshot
+    // so the section height stays stable.
     let attempts: Option<Vec<ConnectAttempt>> =
         if let Some(session_arc) = shared.session_slot.get() {
             match session_arc.try_lock() {
@@ -399,13 +399,13 @@ pub fn render_status_panel(
     }
     if current_expanded {
         ui.indent("mcp2221_section", |ui| {
-            // 7a - per-tuner rows. Aantal slots is gelijk aan het aantal
-            // entries in `config.tuners` (1..=`MAX_TUNERS`). Lege Vec =
-            // geen tuner-rijen; fase 3 voegt de "Add tuner"-wizard toe
-            // die nieuwe entries op basis van een board-scan aanmaakt.
-            // Voor een slot dat in config staat maar nog geen running
-            // TunerInstance heeft (bv. uitgeschakeld of opstart-failure)
-            // tonen we de lichtere "disabled config row" met dezelfde
+            // 7a - per-tuner rows. The number of slots equals the number of
+            // entries in `config.tuners` (1..=`MAX_TUNERS`). Empty Vec =
+            // no tuner rows; phase 3 adds the "Add tuner" wizard
+            // that creates new entries based on a board scan.
+            // For a slot that is in config but has no running
+            // TunerInstance yet (e.g. disabled or startup failure)
+            // we show the lighter "disabled config row" with the same
             // MCP serial / Amplitec-pos dropdowns.
             let active = shared.tuners_slot.get();
             let slot_count = crate::config::load().tuners.len();
@@ -418,18 +418,18 @@ pub fn render_status_panel(
                     None => render_tuner_disabled_row(ui, slot),
                 }
             }
-            // 7b - Yaesu rotor (PATCH-yaesu-rotor-mcp2221 fase 3): live
-            // ADC-positie + handmatige CW/CCW/Stop + DAC speed-slider voor
-            // hardware-verificatie. Alleen zichtbaar zodra een rot_*
-            // instance is opgestart.
+            // 7b - Yaesu rotor (PATCH-yaesu-rotor-mcp2221 phase 3): live
+            // ADC position + manual CW/CCW/Stop + DAC speed slider for
+            // hardware verification. Only visible once a rot_*
+            // instance has started.
             if let Some(rotor) = shared.rotor_slot.get() {
                 ui.separator();
                 render_rotor_row(ui, rotor);
             } else {
-                // Rotor (MCP2221A) niet gebonden. Toon een koppel-rij zodat een
-                // al-geprogrammeerd rot_-bord vanuit een schone .conf alsnog aan
-                // config.rotors gekoppeld kan worden - dit koppel-scherm ontbrak
-                // t.o.v. de tuners (render_tuner_disabled_row).
+                // Rotor (MCP2221A) not bound. Show a link row so an
+                // already-programmed rot_ board from a clean .conf can still be
+                // linked to config.rotors - this link screen was missing
+                // compared to the tuners (render_tuner_disabled_row).
                 let backend_is_mcp =
                     crate::config::load().rotor_backend == "mcp2221_yaesu";
                 let rot_board_detected = cached_scan_serials().iter().any(|s| {
@@ -458,7 +458,7 @@ fn render_tuner_detector_row(
     let snap = bridge.snapshot();
     let slot_idx = inst.slot_index();
     egui::Frame::group(ui.style()).show(ui, |ui| {
-        // Header: tuner label + connection status + delete-knop rechts
+        // Header: tuner label + connection status + delete button on the right
         ui.horizontal(|ui| {
             ui.label(RichText::new(inst.label()).strong());
             match &snap.status {
@@ -477,7 +477,7 @@ fn render_tuner_detector_row(
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if super::delete_button(ui)
-                    .on_hover_text("Verwijder dit tuner-slot uit config (auto-restart)")
+                    .on_hover_text(rust_i18n::t!("srv_remove_tuner_slot").to_string())
                     .clicked()
                 {
                     remove_tuner_slot(slot_idx);
@@ -683,12 +683,12 @@ fn render_tuner_detector_row(
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
 }
 
-/// Lichte config-row voor een tuner-slot dat nog niet enabled is. Toont
-/// alleen de MCP-serial en Amplitec-pos dropdowns; de voltage/threshold
-/// sliders zijn weggelaten omdat er geen actieve bridge is om uit te
-/// lezen of te configureren. Zodra de operator een MCP serial selecteert
-/// wordt de tuner enabled gezet en de server geherstart (zelfde
-/// auto-restart pad als de full row).
+/// Light config row for a tuner slot that is not yet enabled. Shows
+/// only the MCP-serial and Amplitec-pos dropdowns; the voltage/threshold
+/// sliders are omitted because there is no active bridge to read
+/// from or configure. Once the operator selects an MCP serial
+/// the tuner is set enabled and the server is restarted (same
+/// auto-restart path as the full row).
 fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -699,14 +699,14 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if super::delete_button(ui)
-                    .on_hover_text("Verwijder dit tuner-slot uit config (auto-restart)")
+                    .on_hover_text(rust_i18n::t!("srv_remove_tuner_slot").to_string())
                     .clicked()
                 {
                     remove_tuner_slot(slot);
                 }
             });
         });
-        // MCP serial dropdown - selecteren enabled het slot + auto-restart.
+        // MCP serial dropdown - selecting enables the slot + auto-restart.
         ui.horizontal(|ui| {
             ui.label("MCP serial:");
             let current_serial: String = crate::config::load()
@@ -767,9 +767,9 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
                 }
             }
         });
-        // Amplitec pos dropdown - kan al gezet worden vóór het slot enabled
-        // is, maar levert weinig op zonder een actieve tuner; we tonen 'm
-        // toch zodat de operator alles in één veld-sessie kan instellen.
+        // Amplitec pos dropdown - can already be set before the slot is
+        // enabled, but yields little without an active tuner; we show it
+        // anyway so the operator can set everything in one field session.
         ui.horizontal(|ui| {
             ui.label("Amplitec pos:");
             let live_config = crate::config::load();
@@ -839,9 +839,9 @@ fn board_serial_edit_state(path: &str) -> std::sync::Arc<std::sync::Mutex<String
         .clone()
 }
 
-/// Per-board scratch state voor de "Add new board"-wizard. Bevat de
-/// gekozen functie (Tuner/Rotor) voor een ongeprogrammeerd board.
-/// Default = Tuner zodat operator vaak direct kan klikken.
+/// Per-board scratch state for the "Add new board" wizard. Holds the
+/// chosen function (Tuner/Rotor) for an unprogrammed board.
+/// Default = Tuner so the operator can often click straight through.
 fn board_function_state(
     path: &str,
 ) -> std::sync::Arc<std::sync::Mutex<crate::mcp2221_scan::BoardKind>> {
@@ -906,11 +906,11 @@ fn infer_model_from_serial(serial: &str) -> crate::config::TunerModel {
     }
 }
 
-/// Verwijder de TunerConfig op slot-index `slot` uit `config.tuners` en
-/// trigger auto-restart zodat de runtime de geneerde TunerInstance niet
-/// meer probeert te benaderen. Operator gebruikt dit om een tuner-slot
-/// definitief uit de config te halen (bv. fysiek board afwezig of
-/// vervangen door een rename).
+/// Remove the TunerConfig at slot index `slot` from `config.tuners` and
+/// trigger auto-restart so the runtime no longer tries to reach the
+/// removed TunerInstance. The operator uses this to take a tuner slot
+/// out of the config for good (e.g. physical board absent or
+/// replaced via a rename).
 fn remove_tuner_slot(slot: usize) {
     let mut removed_label: Option<String> = None;
     crate::config::modify_config(|c| {
@@ -931,12 +931,12 @@ fn remove_tuner_slot(slot: usize) {
     }
 }
 
-/// Self-restart the server. Vraagt een auto-restart aan via de globale
-/// `request_auto_restart()` flag in `ui/utils.rs`. De daadwerkelijke
-/// cleanup + child-spawn + `process::exit(0)` loopt in `ServerApp::
-/// update()` zodra die de flag detecteert; daar worden Drop-handlers
-/// correct gerund (audio cpal-streams + TCI-connect afsluiten) voor
-/// de nieuwe child de devices probeert te claimen.
+/// Self-restart the server. Requests an auto-restart via the global
+/// `request_auto_restart()` flag in `ui/utils.rs`. The actual
+/// cleanup + child-spawn + `process::exit(0)` runs in `ServerApp::
+/// update()` as soon as it detects the flag; there the Drop handlers
+/// run correctly (closing audio cpal-streams + TCI-connect) before
+/// the new child tries to claim the devices.
 fn restart_server() {
     super::request_auto_restart();
 }
@@ -968,11 +968,11 @@ fn cached_scan_serials() -> Vec<String> {
     }
 }
 
-/// PATCH-yaesu-rotor-mcp2221 fase 3 - Yaesu G-1000DXC rotor live-status.
-/// Toont ADC-positie (raw counts + omgerekende Yaesu-pin spanning),
-/// CW/CCW/Stop knoppen, DAC speed-slider. Bedoeld voor hardware-
-/// verificatie en latere kalibratie (fase 4). Geen lokale state - alle
-/// commando's gaan direct naar de driver, snapshot leest live state.
+/// PATCH-yaesu-rotor-mcp2221 phase 3 - Yaesu G-1000DXC rotor live status.
+/// Shows ADC position (raw counts + converted Yaesu-pin voltage),
+/// CW/CCW/Stop buttons, DAC speed slider. Intended for hardware
+/// verification and later calibration (phase 4). No local state - all
+/// commands go straight to the driver, snapshot reads live state.
 fn render_rotor_row(
     ui: &mut egui::Ui,
     rotor: &std::sync::Arc<crate::mcp2221_yaesu_rotor::RotorInstance>,
@@ -996,10 +996,10 @@ fn render_rotor_row(
             }
         });
 
-        // Primaire positie-display: graden (na kalibratie) als hoofdwaarde,
-        // pin-4 mediaan-spanning als secundair voor diagnose.
+        // Primary position display: degrees (after calibration) as the main value,
+        // pin-4 median voltage as secondary for diagnosis.
         ui.horizontal(|ui| {
-            ui.label("Positie:");
+            ui.label(rust_i18n::t!("srv_position").to_string());
             match (snap.position_deg, snap.median_yaesu_volts) {
                 (Some(deg), Some(v)) => {
                     ui.label(
@@ -1012,7 +1012,7 @@ fn render_rotor_row(
                 }
                 (None, Some(v)) => {
                     ui.label(
-                        RichText::new("- niet gekalibreerd -")
+                        RichText::new(rust_i18n::t!("srv_not_calibrated").to_string())
                             .weak(),
                     );
                     ui.separator();
@@ -1023,7 +1023,7 @@ fn render_rotor_row(
                 }
             }
         });
-        // Spread + laatste raw sample voor ruis-diagnose.
+        // Spread + last raw sample for noise diagnosis.
         if let Some(raw) = snap.last_adc_raw {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("  laatste raw:").weak());
@@ -1031,17 +1031,17 @@ fn render_rotor_row(
                 if let Some(p2p) = snap.adc_p2p_raw {
                     ui.separator();
                     ui.label(RichText::new(format!("spread d={} raw", p2p)).weak());
-                    // Omgerekend naar Yaesu pin-spanning voor leesbare diagnose.
-                    // 1,8 k + 10 k spanningsdeler-correctie matcht operator's hardware.
+                    // Converted to Yaesu pin voltage for readable diagnosis.
+                    // 1.8 k + 10 k voltage-divider correction matches the operator's hardware.
                     let p2p_v = (p2p as f32) * 4.096 / 1023.0 * (11_800.0 / 10_000.0);
                     ui.label(RichText::new(format!("≈ {:.3} V p2p", p2p_v)).weak());
                 }
             });
         }
 
-        // Direction-knoppen voor handmatige test.
+        // Direction buttons for manual test.
         ui.horizontal(|ui| {
-            ui.label("Test richting:");
+            ui.label(rust_i18n::t!("srv_test_direction").to_string());
             let cw_fill = if snap.gp0_cw_high {
                 Some(Color32::from_rgb(100, 160, 230))
             } else {
@@ -1068,7 +1068,7 @@ fn render_rotor_row(
                 rotor.set_direction(false, !snap.gp1_ccw_high);
             }
 
-            if ui.button("Stop").clicked() {
+            if ui.button(rust_i18n::t!("srv_stop").to_string()).clicked() {
                 rotor.set_direction(false, false);
             }
         });
@@ -1090,14 +1090,14 @@ fn render_rotor_row(
             }
         });
 
-        // Kalibratie (PATCH-yaesu-rotor-mcp2221 fase 4): operator draait
-        // de rotor naar CCW-eindpark, klikt "Park CCW (0°)" om de
-        // huidige mediaan-spanning vast te leggen; vervolgens naar CW-
-        // eindpark en "Park CW". De max_deg-spinner zet de fullscale
-        // (default 450° voor G-1000DXC). Alle waarden persisteren naar
-        // `config.rotors[N]` zodat de mapping na restart blijft staan.
+        // Calibration (PATCH-yaesu-rotor-mcp2221 phase 4): the operator turns
+        // the rotor to the CCW end stop, clicks "Park CCW (0°)" to
+        // capture the current median voltage; then to the CW
+        // end stop and "Park CW". The max_deg spinner sets the fullscale
+        // (default 450° for G-1000DXC). All values persist to
+        // `config.rotors[N]` so the mapping survives a restart.
         ui.horizontal(|ui| {
-            ui.label("Kalibratie:");
+            ui.label(rust_i18n::t!("srv_calibration").to_string());
             if ui
                 .button("Park CCW (0°)")
                 .on_hover_text(format!(
@@ -1130,12 +1130,12 @@ fn render_rotor_row(
                 rotor.set_max_deg(max_deg);
             }
             ui.separator();
-            // Ramp-rate slider: hoe snel de DAC van 0 -> max ramp-t (en
-            // omgekeerd) tijdens een GoTo of start/stop. Lage waarde =
-            // langzame, antenne-vriendelijke acceleratie (zware
-            // mast/grote antenne); hoge waarde = snel reactief.
+            // Ramp-rate slider: how fast the DAC ramps from 0 -> max (and
+            // back) during a GoTo or start/stop. Low value =
+            // slow, antenna-friendly acceleration (heavy
+            // mast/large antenna); high value = quickly responsive.
             ui.label("ramp:")
-                .on_hover_text("Soft-start/stop snelheid (%/sec). Lager = traagheidsvriendelijker voor zware antennes.");
+                .on_hover_text(rust_i18n::t!("srv_ramp_hover").to_string());
             let mut ramp = snap.calibration.ramp_pct_per_sec;
             if ui
                 .add(
@@ -1148,9 +1148,9 @@ fn render_rotor_row(
             {
                 rotor.set_ramp_pct_per_sec(ramp);
             }
-            // Shortest-route optie alleen tonen bij rotors met
-            // overlap-zone (max_deg > 360); voor standaard 360°
-            // rotors is de keuze betekenisloos.
+            // Shortest-route option only shown for rotors with an
+            // overlap zone (max_deg > 360); for standard 360°
+            // rotors the choice is meaningless.
             if snap.calibration.max_deg > 360 {
                 ui.separator();
                 let mut shortest = snap.calibration.shortest_route_in_overlap;
@@ -1169,13 +1169,13 @@ fn render_rotor_row(
     });
 }
 
-/// Rotor niet gebonden terwijl de MCP2221A-backend is gekozen (of er een
-/// rot_-bord op de bus staat): laat de operator een gedetecteerd rot_-bord
-/// koppelen aan `config.rotors[0]`. Analoog aan [`render_tuner_disabled_row`].
-/// Dit fixt het gat dat een al-geprogrammeerd rot_-bord vanuit een schone
-/// `.conf` niet via de GUI gekoppeld kon worden (bij tuners kan dat wel via de
-/// MCP-serial dropdown; bij de rotor ontbrak dat scherm). Het koppelen zet
-/// meteen `enabled`, de serial én de rotor-backend goed en herstart de server.
+/// Rotor not bound while the MCP2221A backend is chosen (or a
+/// rot_ board is on the bus): let the operator link a detected rot_ board
+/// to `config.rotors[0]`. Analogous to [`render_tuner_disabled_row`].
+/// This fixes the gap that an already-programmed rot_ board from a clean
+/// `.conf` could not be linked via the GUI (for tuners that is possible via the
+/// MCP-serial dropdown; for the rotor that screen was missing). Linking sets
+/// `enabled`, the serial and the rotor backend correctly and restarts the server.
 fn render_rotor_disabled_row(ui: &mut egui::Ui) {
     use crate::mcp2221_scan::BoardKind;
     egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -1239,8 +1239,8 @@ fn render_rotor_disabled_row(ui: &mut egui::Ui) {
                     if c.rotors[0].name.is_empty() {
                         c.rotors[0].name = name;
                     }
-                    // Koppelen impliceert de MCP-rotor-backend; zonder deze zou
-                    // de server na restart de EA7HG-backend maken en niet binden.
+                    // Linking implies the MCP-rotor backend; without it the
+                    // server would create the EA7HG backend after restart and not bind.
                     c.rotor_backend = "mcp2221_yaesu".to_string();
                 });
                 log::info!(
@@ -1265,7 +1265,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
 
     ui.horizontal(|ui| {
         ui.label(RichText::new("Detected MCP2221A boards:").strong());
-        if ui.button("Scan").clicked() {
+        if ui.button(rust_i18n::t!("srv_scan").to_string()).clicked() {
             let result = crate::mcp2221_scan::list_boards().map_err(|e| format!("{:?}", e));
             *cache.lock().unwrap() = Some(result);
         }
@@ -1285,11 +1285,11 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
             );
         }
         Some(Ok(list)) => {
-            // Tel ongeprogrammeerde boards - bij >1 disable de Add-knop
-            // zodat de operator zeker weet welk fysiek board hij in
-            // gebruik gaat nemen (anders kan een toegevoegd `tun_<naam>`
-            // naar de verkeerde Adafruit gaan). Operator-conventie:
-            // configureer altijd met max 1 onbenoemd board aangesloten.
+            // Count unprogrammed boards - at >1 disable the Add button
+            // so the operator knows for sure which physical board they
+            // are about to use (otherwise an added `tun_<name>`
+            // could go to the wrong Adafruit). Operator convention:
+            // always configure with at most 1 unnamed board connected.
             use crate::mcp2221_scan::BoardKind;
             let unprogrammed_count = list
                 .iter()
@@ -1307,7 +1307,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
             for b in list {
                 let kind = b.kind();
                 egui::Frame::group(ui.style()).show(ui, |ui| {
-                    // Header met functie-classificatie tag + serial-label.
+                    // Header with function-classification tag + serial label.
                     ui.horizontal(|ui| {
                         let tag_color = match kind {
                             BoardKind::Tuner => Color32::from_rgb(80, 180, 220),
@@ -1328,13 +1328,13 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                     );
 
                     if kind == BoardKind::Unprogrammed {
-                        // Wizard voor nieuwe boards: kies functie + geef naam
-                        // + Add. Server schrijft `tun_<naam>` of `rot_<naam>`
-                        // naar EEPROM en voegt de nieuwe entry toe aan
-                        // `config.tuners` (alleen Tuner in v2.0.5; Rotor
-                        // is voorzien voor fase 4).
+                        // Wizard for new boards: pick function + give name
+                        // + Add. Server writes `tun_<name>` or `rot_<name>`
+                        // to EEPROM and adds the new entry to
+                        // `config.tuners` (only Tuner in v2.0.5; Rotor
+                        // is planned for phase 4).
                         ui.horizontal(|ui| {
-                            ui.label("Functie:");
+                            ui.label(rust_i18n::t!("srv_function").to_string());
                             let func = board_function_state(&b.path);
                             let mut sel = *func.lock().unwrap();
                             egui::ComboBox::from_id_salt(format!("kind_{}", b.path))
@@ -1345,7 +1345,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                 });
                             *func.lock().unwrap() = sel;
 
-                            ui.label("Naam:");
+                            ui.label(rust_i18n::t!("srv_name").to_string());
                             let text = board_serial_edit_state(&b.path);
                             let mut guard = text.lock().unwrap();
                             ui.add(
@@ -1371,8 +1371,8 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                     "Add board: path=\"{}\" function={} new_serial=\"{}\"",
                                     path, sel.label(), new_serial
                                 );
-                                // Uniciteit-check op config.tuners EN config.rotors
-                                // (één serial mag in geen van beide al staan).
+                                // Uniqueness check on config.tuners AND config.rotors
+                                // (one serial must not already be in either).
                                 let cfg_snap = crate::config::load();
                                 let conflict = cfg_snap.tuners.iter().any(|t| t.mcp_serial == new_serial)
                                     || cfg_snap.rotors.iter().any(|r| r.mcp_serial == new_serial);
@@ -1384,8 +1384,8 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                         &new_serial,
                                     )
                                     .map(|()| {
-                                        // Voeg nieuwe TunerConfig entry toe
-                                        // aan config en save.
+                                        // Add new TunerConfig entry
+                                        // to config and save.
                                         crate::config::modify_config(|c| {
                                             if c.tuners.len() < crate::config::MAX_TUNERS {
                                                 let mut t =
@@ -1398,10 +1398,10 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                     })
                                     .map_err(|e| format!("{:?}", e))
                                 } else if sel == BoardKind::Rotor {
-                                    // PATCH-yaesu-rotor-mcp2221 fase 1: claim Adafruit
-                                    // bord als rotor-slot. Runtime-binding (driver-
-                                    // module + actuele aansturing van GP0/1 + DAC/
-                                    // ADC) komt in fase 3.
+                                    // PATCH-yaesu-rotor-mcp2221 phase 1: claim Adafruit
+                                    // board as rotor slot. Runtime binding (driver
+                                    // module + actual control of GP0/1 + DAC/
+                                    // ADC) comes in phase 3.
                                     crate::mcp2221_scan::program_serial_at_path(
                                         &path,
                                         &new_serial,
@@ -1416,10 +1416,10 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                                 r.mcp_serial = new_serial.clone();
                                                 c.rotors.push(r);
                                             }
-                                            // Een rotor-bord claimen impliceert de
-                                            // MCP-rotor-backend; anders bindt de
-                                            // server 'm na restart niet (blijft op
-                                            // de default ea7hg staan).
+                                            // Claiming a rotor board implies the
+                                            // MCP-rotor backend; otherwise the
+                                            // server won't bind it after restart (stays on
+                                            // the default ea7hg).
                                             c.rotor_backend = "mcp2221_yaesu".to_string();
                                         });
                                     })
@@ -1431,13 +1431,13 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                 *board_program_result_state(&b.path).lock().unwrap() =
                                     Some(res);
                                 if ok {
-                                    // Restart zodat de TunerInstance de
-                                    // nieuwe config-entry direct binds.
+                                    // Restart so the TunerInstance binds the
+                                    // new config entry immediately.
                                     restart_server();
                                 }
                             }
                         });
-                        // Hint over uniciteit + max-1-board-regel
+                        // Hint about uniqueness + max-1-board rule
                         ui.label(
                             RichText::new(
                                 "  Tip: configureer met max 1 onbenoemd board aangesloten.",
@@ -1446,14 +1446,14 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                             .weak(),
                         );
                     } else {
-                        // Tuner of Rotor - rename-flow blijft beschikbaar,
-                        // prefix wordt afgedwongen via een read-only label.
-                        // Voor een Tuner-board zonder bijbehorende config-
-                        // entry tonen we óók een "Koppel aan config"-knop;
-                        // dat dekt het scenario "operator heeft tuner1_*/2_*
-                        // config-regels verwijderd maar het board heeft al
-                        // een geprogrammeerd tun_-serial" - de nieuwe entry
-                        // wordt zonder herprogrammering toegevoegd.
+                        // Tuner or Rotor - rename flow stays available,
+                        // prefix is enforced via a read-only label.
+                        // For a Tuner board without a matching config
+                        // entry we also show a "Koppel aan config" button;
+                        // that covers the scenario "operator removed tuner1_*/2_*
+                        // config lines but the board already has
+                        // a programmed tun_ serial" - the new entry
+                        // is added without reprogramming.
                         let prefix = match kind {
                             BoardKind::Tuner => BoardKind::TUNER_PREFIX,
                             BoardKind::Rotor => BoardKind::ROTOR_PREFIX,
@@ -1464,12 +1464,12 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                             .iter()
                             .any(|t| t.mcp_serial == b.serial_number);
                         ui.horizontal(|ui| {
-                            ui.label("Rename:");
+                            ui.label(rust_i18n::t!("srv_rename_label").to_string());
                             ui.label(RichText::new(prefix).monospace().weak());
                             let text = board_serial_edit_state(&b.path);
                             let mut guard = text.lock().unwrap();
                             if guard.is_empty() {
-                                // Pre-fill met huidige naam (zonder prefix)
+                                // Pre-fill with current name (without prefix)
                                 *guard = b
                                     .serial_number
                                     .strip_prefix(prefix)
@@ -1481,7 +1481,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                     .desired_width(160.0)
                                     .hint_text("naam"),
                             );
-                            if ui.button("Rename").clicked() {
+                            if ui.button(rust_i18n::t!("srv_rename").to_string()).clicked() {
                                 let name = guard.trim().to_string();
                                 drop(guard);
                                 let new_serial = format!("{}{}", prefix, name);
@@ -1492,15 +1492,15 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                     path, old_serial, new_serial
                                 );
                                 let res = if name.is_empty() {
-                                    Err("naam mag niet leeg zijn".to_string())
+                                    Err(rust_i18n::t!("srv_name_empty").to_string().to_string())
                                 } else {
                                     crate::mcp2221_scan::program_serial_at_path(
                                         &path,
                                         &new_serial,
                                     )
                                     .map(|()| {
-                                        // Update referenties in config.tuners
-                                        // (mcp_serial-veld matched op oude naam).
+                                        // Update references in config.tuners
+                                        // (mcp_serial field matched on old name).
                                         crate::config::modify_config(|c| {
                                             for t in &mut c.tuners {
                                                 if t.mcp_serial == old_serial {
@@ -1515,9 +1515,9 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                 *board_program_result_state(&b.path).lock().unwrap() =
                                     Some(res);
                                 if ok {
-                                    // Restart zodat de TunerInstance de
-                                    // nieuwe serial bindt; zonder dit blijft
-                                    // de oude slot "niet verbonden" tonen.
+                                    // Restart so the TunerInstance binds the
+                                    // new serial; without this the old slot
+                                    // keeps showing "not connected".
                                     restart_server();
                                 }
                             }
@@ -1556,7 +1556,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                             });
                         }
                     }
-                    // Resultaat van laatste Add/Rename-poging.
+                    // Result of the last Add/Rename attempt.
                     if let Some(res) = board_program_result_state(&b.path)
                         .lock()
                         .unwrap()

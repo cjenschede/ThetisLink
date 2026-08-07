@@ -1,92 +1,92 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Reactieve RF-vermogen cap per Amplitec-A antenne-positie.
+//! Reactive RF-power cap per Amplitec-A antenna position.
 //!
-//! Generieke variant van wat ooit begon als een JC-3s-specifieke
-//! beveiliging: per Amplitec-A positie (1..6) kan een max FWD-watt
-//! worden ingesteld via `config.amplitec_max_w`. Wanneer de actieve PA
-//! tijdens TX boven die max komt, stuurt de controller de PA-eigen
-//! `DriveDown` knop (dezelfde "−" knop als in het SPE/RF2K tabblad van
-//! de client) totdat de FWD-meter onder de cap zit.
+//! Generic variant of what once started as a JC-3s-specific
+//! protection: per Amplitec-A position (1..6) a max FWD-watt can
+//! be set via `config.amplitec_max_w`. When the active PA
+//! exceeds that max during TX, the controller drives the PA's own
+//! `DriveDown` button (the same "−" button as in the SPE/RF2K tab of
+//! the client) until the FWD-meter is below the cap.
 //!
-//! Mode-multipliers (universeel toegepast op de positie-max):
+//! Mode-multipliers (universally applied to the position-max):
 //! - SSB/CW (LSB/USB/DSB/CWL/CWU): factor 1.0
 //! - AM:                            factor 0.5
 //! - FM / digital (DIGU/DIGL/SPEC/SAM/DRM/FM): factor 0.4
 //!
-//! Voorbeeld: positie A-2 met max 250 W -> SSB-cap 250 W, AM-cap 125 W,
-//! FM/DIG-cap 100 W (de oude JC-3s waardes komen netjes uit deze
-//! formule). Positie A-3 met max 1000 W -> 1000 / 500 / 400 W. Een
-//! positie zonder ingestelde max (`None`) krijgt **geen** cap (PA loopt
-//! vrij).
+//! Example: position A-2 with max 250 W -> SSB-cap 250 W, AM-cap 125 W,
+//! FM/DIG-cap 100 W (the old JC-3s values come out neatly from this
+//! formula). Position A-3 with max 1000 W -> 1000 / 500 / 400 W. A
+//! position without a configured max (`None`) gets **no** cap (PA runs
+//! free).
 //!
-//! **Niet** via Thetis ZZPC: de Thetis-drive is een TCI-loop tussen PA
-//! en Thetis. Een ZZPC-verlaging vanuit de server wordt door de PA
-//! direct teruggepushed. De PA-eigen DriveDown zit buiten die loop.
+//! **Not** via Thetis ZZPC: the Thetis-drive is a TCI-loop between PA
+//! and Thetis. A ZZPC-reduction from the server is pushed back by the PA
+//! immediately. The PA's own DriveDown sits outside that loop.
 //!
-//! Activatievoorwaarden - alle vier moeten waar zijn:
-//! 1. Actieve Amplitec-A positie heeft `Some(max_w)` in de config.
-//! 2. `config.active_pa` is 1 (SPE) of 2 (RF2K-S) - operator heeft één
-//!    PA expliciet als de actieve gemarkeerd in de client.
-//! 3. Die PA staat fysiek in Operate.
-//! 4. De huidige Thetis-mode heeft een geldige factor (alle
-//!    standaard-modes hebben een factor; modes zonder factor geven
-//!    geen cap).
+//! Activation conditions - all four must be true:
+//! 1. Active Amplitec-A position has `Some(max_w)` in the config.
+//! 2. `config.active_pa` is 1 (SPE) or 2 (RF2K-S) - operator has
+//!    explicitly marked one PA as the active one in the client.
+//! 3. That PA is physically in Operate.
+//! 4. The current Thetis-mode has a valid factor (all
+//!    standard modes have a factor; modes without a factor give
+//!    no cap).
 //!
-//! Per cap-overschrijding gaat de PA-drive één stap omlaag (één
-//! `DriveDown` commando). Rate-limit `MIN_ACTION_INTERVAL_MS` tussen
-//! opeenvolgende stappen zodat de PA-meter kan settelen.
+//! Per cap-overshoot the PA-drive goes one step down (one
+//! `DriveDown` command). Rate-limit `MIN_ACTION_INTERVAL_MS` between
+//! successive steps so the PA-meter can settle.
 //!
 //! Snapshot/restore lifecycle:
-//! - Bij Amplitec-A switch NAAR een positie met max_w: per-PA
-//!   stap-counter staat op 0.
-//! - Tijdens cap-cycli: stap-counter loopt op met elke `DriveDown`.
-//! - Bij Amplitec-A switch WEG (naar een andere positie, met of zonder
-//!   max_w): per-PA evenveel `DriveUp` commando's gestuurd om de
-//!   pre-cap drive-positie te herstellen. Counter wordt naar 0 gereset.
+//! - On Amplitec-A switch TO a position with max_w: per-PA
+//!   step-counter is at 0.
+//! - During cap-cycles: step-counter increases with each `DriveDown`.
+//! - On Amplitec-A switch AWAY (to another position, with or without
+//!   max_w): per-PA as many `DriveUp` commands are sent to restore the
+//!   pre-cap drive-position. Counter is reset to 0.
 //!
-//! De controller-state is een simpele `PowerCapState` die de tick-loop
-//! tussen iteraties bewaart. Eén instantie per server-runtime, lokaal in
-//! de `network.rs` broadcast-task.
+//! The controller-state is a simple `PowerCapState` that the tick-loop
+//! preserves between iterations. One instance per server-runtime, local in
+//! the `network.rs` broadcast-task.
 
 use std::time::{Duration, Instant};
 
 use log::info;
 
-/// Minimaal interval tussen opeenvolgende drive-stappen. Moet langer
-/// zijn dan de PA-meter settle-tijd zodat we niet meerdere `DriveDown`
-/// commando's sturen voordat de FWD-meter merkbaar reageert. Empirisch
-/// bevonden met SPE + RF2K-S: 1000 ms geeft één duidelijke stap per
-/// seconde zonder overshoot.
+/// Minimum interval between successive drive-steps. Must be longer
+/// than the PA-meter settle-time so we don't send multiple `DriveDown`
+/// commands before the FWD-meter reacts noticeably. Empirically
+/// found with SPE + RF2K-S: 1000 ms gives one clear step per
+/// second without overshoot.
 pub const MIN_ACTION_INTERVAL_MS: u64 = 1000;
 
-/// Welke PA wordt aangestuurd door de cap voor één tick.
+/// Which PA is driven by the cap for one tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerCapAction {
-    /// Stuur `SpeCmd::DriveDown` naar de SPE Expert.
+    /// Send `SpeCmd::DriveDown` to the SPE Expert.
     SpeDriveDown,
-    /// Stuur `Rf2kCmd::DriveDown` naar de RF2K-S.
+    /// Send `Rf2kCmd::DriveDown` to the RF2K-S.
     Rf2kDriveDown,
 }
 
-/// State van de power-cap controller. Eén instantie per server-runtime.
+/// State of the power-cap controller. One instance per server-runtime.
 pub struct PowerCapState {
-    /// Aantal `SpeCmd::DriveDown` commando's gestuurd terwijl een
-    /// position-cap actief is en SPE de actieve PA was. Bij switch weg
-    /// van die positie stuurt de caller evenveel `SpeCmd::DriveUp` om
-    /// te herstellen.
+    /// Number of `SpeCmd::DriveDown` commands sent while a
+    /// position-cap is active and SPE was the active PA. On switch away
+    /// from that position the caller sends as many `SpeCmd::DriveUp` to
+    /// restore.
     pub spe_drive_down_count: u32,
-    /// Idem voor RF2K-S.
+    /// Same for RF2K-S.
     pub rf2k_drive_down_count: u32,
-    /// Tijdstip van de laatste cap-actie (DriveDown of restore-DriveUp).
-    /// Gebruikt voor rate-limiting via `MIN_ACTION_INTERVAL_MS`.
+    /// Timestamp of the last cap-action (DriveDown or restore-DriveUp).
+    /// Used for rate-limiting via `MIN_ACTION_INTERVAL_MS`.
     pub last_action_at: Option<Instant>,
-    /// Vorige Amplitec-A positie; nodig om switch-transities te
-    /// detecteren zonder een tweede shared state.
+    /// Previous Amplitec-A position; needed to detect switch-transitions
+    /// without a second shared state.
     pub prev_amplitec_pos: Option<u8>,
-    /// Laatst gelogde state-snapshot (pos, mode, pa_in_operate, cap).
-    /// Alleen loggen bij verandering - voorkomt periodieke "alles oké"
-    /// spam in het server-log; transities blijven zichtbaar.
+    /// Last logged state-snapshot (pos, mode, pa_in_operate, cap).
+    /// Only log on change - prevents periodic "all OK"
+    /// spam in the server-log; transitions stay visible.
     pub last_logged_snapshot: Option<(Option<u8>, u8, bool, Option<u16>)>,
 }
 
@@ -108,16 +108,16 @@ impl Default for PowerCapState {
     }
 }
 
-/// Mode-multiplier op de positie-max-W.
+/// Mode-multiplier on the position-max-W.
 ///
-/// Returns `None` voor modes zonder gedefinieerde factor (controller
-/// doet dan niets in die modes). De standaard Thetis-modes (LSB..DRM)
-/// hebben allemaal een factor.
+/// Returns `None` for modes without a defined factor (controller
+/// then does nothing in those modes). The standard Thetis-modes (LSB..DRM)
+/// all have a factor.
 pub fn mode_factor(mode: u8) -> Option<f32> {
     match mode {
         // LSB (0), USB (1), DSB (2), CWL (3), CWU (4) - SSB + CW: 1.0
         0 | 1 | 2 | 3 | 4 => Some(1.0),
-        // AM (6): 0.5 (carrier ~ half van PEP)
+        // AM (6): 0.5 (carrier ~ half of PEP)
         6 => Some(0.5),
         // FM (5), DIGU (7), SPEC (8), DIGL (9), SAM (10), DRM (11): 0.4
         5 | 7 | 8 | 9 | 10 | 11 => Some(0.4),
@@ -125,10 +125,10 @@ pub fn mode_factor(mode: u8) -> Option<f32> {
     }
 }
 
-/// Actuele cap voor een gegeven Amplitec-A positie + Thetis-mode.
+/// Current cap for a given Amplitec-A position + Thetis-mode.
 ///
-/// Returns `Some(watts)` als de positie een max heeft EN de mode een
-/// factor heeft; anders `None` (geen cap).
+/// Returns `Some(watts)` if the position has a max AND the mode has a
+/// factor; otherwise `None` (no cap).
 pub fn cap_for(amplitec_pos: u8, max_w_table: &[Option<u16>; 6], mode: u8) -> Option<u16> {
     if !(1..=6).contains(&amplitec_pos) {
         return None;
@@ -138,20 +138,20 @@ pub fn cap_for(amplitec_pos: u8, max_w_table: &[Option<u16>; 6], mode: u8) -> Op
     Some(((max_w as f32) * factor).round() as u16)
 }
 
-/// Per-tick cap-check. Roep aan vanuit de broadcast-loop bij elke
-/// iteratie waarin de PA + Amplitec status verse waardes hebben.
-/// Returnt `Some(PowerCapAction)` als de PA-drive omlaag moet (caller
-/// stuurt dan het juiste `SpeCmd::DriveDown` of `Rf2kCmd::DriveDown`
-/// commando); `None` betekent "geen actie".
+/// Per-tick cap-check. Call from the broadcast-loop on every
+/// iteration where the PA + Amplitec status have fresh values.
+/// Returns `Some(PowerCapAction)` if the PA-drive must go down (caller
+/// then sends the correct `SpeCmd::DriveDown` or `Rf2kCmd::DriveDown`
+/// command); `None` means "no action".
 ///
-/// Argumenten:
-/// - `state` - gedeelde controller-state.
-/// - `active_pos` - actuele Amplitec-A positie (1..6) of None.
-/// - `max_w_table` - `config.amplitec_max_w` (6 Option<u16> waardes).
+/// Arguments:
+/// - `state` - shared controller-state.
+/// - `active_pos` - current Amplitec-A position (1..6) or None.
+/// - `max_w_table` - `config.amplitec_max_w` (6 Option<u16> values).
 /// - `active_pa` - `config.active_pa` (0=none, 1=SPE, 2=RF2K).
-/// - `pa_in_operate` - actieve PA staat in Operate.
-/// - `pa_fwd_watts` - PA-meter waarde (None = sensor onbekend).
-/// - `mode` - actuele Thetis `vfo_a_mode`.
+/// - `pa_in_operate` - active PA is in Operate.
+/// - `pa_fwd_watts` - PA-meter value (None = sensor unknown).
+/// - `mode` - current Thetis `vfo_a_mode`.
 pub fn tick(
     state: &mut PowerCapState,
     active_pos: Option<u8>,
@@ -163,11 +163,11 @@ pub fn tick(
 ) -> Option<PowerCapAction> {
     let cap = active_pos.and_then(|p| cap_for(p, max_w_table, mode));
 
-    // State-change-log: alleen wanneer (pos, mode, pa_in_operate, cap)
-    // is veranderd t.o.v. vorige tick. Operator wil status/geschiedenis
-    // zien - transities, niet periodieke "alles nog steeds zo" rust-
-    // spam. Bij rust = geen log; bij elke wijziging = één regel met
-    // de relevante velden zodat de timeline reconstrueerbaar blijft.
+    // State-change-log: only when (pos, mode, pa_in_operate, cap)
+    // has changed relative to the previous tick. Operator wants to see
+    // status/history - transitions, not periodic "still the same" idle
+    // spam. When idle = no log; on every change = one line with
+    // the relevant fields so the timeline stays reconstructable.
     let snapshot = (active_pos, mode, pa_in_operate, cap);
     if state.last_logged_snapshot != Some(snapshot) {
         if cap.is_some() || state.last_logged_snapshot.is_some() {
@@ -194,8 +194,8 @@ pub fn tick(
     if fwd <= cap {
         return None;
     }
-    // Rate-limit: niet vaker dan eens per MIN_ACTION_INTERVAL_MS, zodat
-    // de PA-meter en het DriveDown commando kunnen settelen.
+    // Rate-limit: no more than once per MIN_ACTION_INTERVAL_MS, so
+    // the PA-meter and the DriveDown command can settle.
     if let Some(last) = state.last_action_at {
         if last.elapsed() < Duration::from_millis(MIN_ACTION_INTERVAL_MS) {
             return None;
@@ -211,7 +211,7 @@ pub fn tick(
             PowerCapAction::Rf2kDriveDown
         }
         _ => {
-            // active_pa=0 (none) - cap kan niets doen
+            // active_pa=0 (none) - cap can't do anything
             return None;
         }
     };
@@ -229,21 +229,21 @@ pub fn tick(
     Some(action)
 }
 
-/// Restore-directive bij Amplitec-A switch. Bevat het aantal `DriveUp`
-/// commando's dat de caller naar elke PA moet sturen om de pre-cap
-/// drive-positie te herstellen.
+/// Restore-directive on Amplitec-A switch. Contains the number of `DriveUp`
+/// commands that the caller must send to each PA to restore the pre-cap
+/// drive-position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PowerCapRestore {
     pub spe_drive_up: u32,
     pub rf2k_drive_up: u32,
 }
 
-/// Amplitec-A switch detector. Roep aan op elke broadcast-tick met de
-/// actuele Amplitec-A positie. Returnt `Some(PowerCapRestore)` met
-/// counters wanneer we wegschakelen van een positie waar tijdens deze
-/// sessie DriveDown commando's zijn gestuurd. Bij switch (in elke
-/// richting): de actieve cap-cyclus wordt afgesloten en herstart vers
-/// op de nieuwe positie.
+/// Amplitec-A switch detector. Call on every broadcast-tick with the
+/// current Amplitec-A position. Returns `Some(PowerCapRestore)` with
+/// counters when we switch away from a position where DriveDown commands
+/// were sent during this session. On switch (in either
+/// direction): the active cap-cycle is closed and restarted fresh
+/// on the new position.
 pub fn on_position_change(
     state: &mut PowerCapState,
     new_pos: Option<u8>,
@@ -253,8 +253,8 @@ pub fn on_position_change(
     if prev_pos == new_pos {
         return None;
     }
-    // Iedere positie-wissel sluit de huidige cap-cyclus af. Restore
-    // alle DriveDowns die voor de OUDE positie gestuurd waren.
+    // Every position-change closes the current cap-cycle. Restore
+    // all DriveDowns that were sent for the OLD position.
     let spe_up = state.spe_drive_down_count;
     let rf2k_up = state.rf2k_drive_down_count;
     state.spe_drive_down_count = 0;
@@ -293,7 +293,7 @@ mod tests {
         for m in [5u8, 7, 8, 9, 10, 11] {
             assert_eq!(mode_factor(m), Some(0.4), "mode {} expected 0.4", m);
         }
-        // Onbekend -> None
+        // Unknown -> None
         assert_eq!(mode_factor(12), None);
         assert_eq!(mode_factor(255), None);
     }
@@ -301,25 +301,25 @@ mod tests {
     #[test]
     fn cap_for_handles_invalid_pos_and_no_cap() {
         let table: [Option<u16>; 6] = [Some(1000), None, Some(250), None, None, None];
-        // Pos 0 en >6: geen panic, None
+        // Pos 0 and >6: no panic, None
         assert_eq!(cap_for(0, &table, 0), None);
         assert_eq!(cap_for(7, &table, 0), None);
-        // Pos zonder max_w
+        // Pos without max_w
         assert_eq!(cap_for(2, &table, 0), None);
-        // Pos met max, SSB
+        // Pos with max, SSB
         assert_eq!(cap_for(1, &table, 0), Some(1000));
-        // Pos met max, AM (factor 0.5)
+        // Pos with max, AM (factor 0.5)
         assert_eq!(cap_for(1, &table, 6), Some(500));
-        // Pos met max, FM (factor 0.4)
+        // Pos with max, FM (factor 0.4)
         assert_eq!(cap_for(1, &table, 5), Some(400));
-        // Mode zonder factor -> None
+        // Mode without factor -> None
         assert_eq!(cap_for(1, &table, 12), None);
     }
 
     #[test]
     fn on_position_change_no_counters_returns_some_zero_restore() {
-        // Switch zonder voorafgaande DriveDowns: returnt None
-        // (counter-blok logt "no DriveDowns to restore"-pad).
+        // Switch without preceding DriveDowns: returns None
+        // (counter-block logs the "no DriveDowns to restore" path).
         let mut state = PowerCapState::new();
         state.prev_amplitec_pos = Some(1);
         let result = on_position_change(&mut state, Some(2));
@@ -329,8 +329,8 @@ mod tests {
 
     #[test]
     fn on_position_change_returns_counters_and_resets() {
-        // Counters opgebouwd op pos 1; switch naar pos 2 returnt restore
-        // met identieke counts en reset de state.
+        // Counters built up on pos 1; switch to pos 2 returns restore
+        // with identical counts and resets the state.
         let mut state = PowerCapState::new();
         state.prev_amplitec_pos = Some(1);
         state.spe_drive_down_count = 3;
@@ -350,7 +350,7 @@ mod tests {
         state.prev_amplitec_pos = Some(1);
         state.spe_drive_down_count = 2;
         assert!(on_position_change(&mut state, Some(1)).is_none());
-        // Counters intact gebleven
+        // Counters stayed intact
         assert_eq!(state.spe_drive_down_count, 2);
     }
 }

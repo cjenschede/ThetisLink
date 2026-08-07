@@ -16,6 +16,127 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.7.0] — 2026-08-07 (VRX audio reliability · Yaesu CTCSS/DCS from the client · rebuilt audio-level meters · shared full-band spectrum row)
+
+> **Feature release.** The wire protocol stays **VERSION = 3**: everything added here is
+> **additive** (three new control ids), so a v2.7.0 client keeps working with a v2.6.x server
+> and vice versa — the new options simply stay inactive on an older peer. Stock Thetis
+> v2.10.3.x remains sufficient; no Thetis-fork change is required. Desktop client, Windows
+> server and Android client are all rebuilt.
+
+### Added
+- **CTCSS and DCS can be set from the client.** A memory channel's tone can now be read from
+  the radio and written back to it, for the FT-991A. *Read tones* walks the memory channels that
+  actually have a tone mode and fills the list; a scan is paused for the walk and resumed
+  afterwards, and the radio returns to the channel it was on. DCS codes work the same way as
+  CTCSS tones (all 104 codes).
+  **FTX-1 limitation:** that radio exposes no safe CAT route for storing a tone — the write path
+  is deliberately disabled there rather than left to corrupt a memory channel. Reading works.
+- **Optional full-band spectrum row, shared by RX and VRX.** A checkbox in the *Server* tab
+  ("Full-band spectrum row per (V)RX chain") controls the extra full-DDC row that sits underneath
+  the zoomed view. It is what keeps a waterfall's history filled after tuning or zooming. One row
+  per receiver chain now serves both the RX window and the VRX riding that same DDC, instead of
+  only the RX window — so a VRX waterfall no longer shows gaps after retuning, and the case where
+  the row was missing entirely (VRX on, RX spectrum off) is covered. Switching it off roughly
+  halves the spectrum bandwidth per chain; every waterfall then follows its own view.
+- **Thetis can be started automatically when the client launches** (desktop and Android). If
+  Thetis is not running yet, the server starts it on request rather than leaving the client on a
+  connect error.
+- **Several ThetisLink clients on one PC.** Named profiles keep settings, window positions and
+  audio devices apart; a bare profile name is accepted as well as `--profile`. A single-instance
+  guard stops a second client from silently fighting the first over the connection, audio and
+  spectrum — it now reports "already running" and exits.
+- **The client log carries timestamps.** Anyone who sends a log in for support notices it at once,
+  and it makes a client log comparable with the server log line by line.
+- **The Amplitec power-limit table now lives on the server**, editable in the Amplitec window
+  under port B — configuration belongs with the hardware. The client shows it read-only.
+
+### Changed
+- **The audio-level bars measure the link, not the volume slider.** They are taken *before* the
+  volume is applied, so a channel that is simply turned down no longer reads as a dead stream.
+  Every bar also falls back to zero within about half a second once its stream stops, instead of
+  freezing on its last value — which is what makes the bar usable for spotting a stream that is
+  not arriving at all.
+- **The Yaesu receive path is calibrated per radio model.** The two USB CODECs deliver line
+  levels about 14 dB apart; both the meter and the playback gain now use the same per-model
+  constant. **After the upgrade the FT-991A sounds about 16 dB quieter — set its volume higher than
+  you are used to.** It used to run that much hot, which was audible at the very bottom of the
+  volume slider where every other channel had already gone quiet.
+- **The channel controls say what they do.** Each channel is a block with the channel name as a
+  heading and two buttons under it, *audio* and *venster* (window) — previously the channel name
+  itself was the audio switch, above two different words ("spec", "win") for the same window
+  toggle. The audio switch also appears inside every channel window, so a channel can be muted
+  from either place.
+- **The "VRX" button next to *Arrange* is gone.** It toggled both VRX windows at once from a
+  third place; every channel now has its own *venster* button in its own block, so the shortcut
+  was a second way to do the same thing — and the one that said least about what it would do.
+- **The master volume is really a master.** It applies to every playback channel (RX1, RX2, both
+  VRX channels and both Yaesu slots) instead of RX only, and it no longer changes identity into
+  the VFO A volume depending on which windows are open. RX1 gained its own `VFO A:` slider in the
+  Radio tab for that (not to be confused with `RX1 Vol:` on the Thetis tab, which drives Thetis's
+  own volume). With a single audio channel the slider is simply labelled *Volume*.
+  **On upgrade:** the master used to affect RX only. If it was not at maximum, VRX and Yaesu audio
+  is now quieter than you are used to — on the FT-991A that lands on top of the recalibration
+  above, so check that channel first.
+- **VRX tuning follows the configured step.** The band edge is derived from hardware widths and
+  therefore lands on an arbitrary frequency; stepping into it now stops on the last point that is
+  still on the step grid, instead of parking the readout on a stray remainder. The scroll step is
+  a fixed 1 kHz like RX, where it used to shrink with the zoom factor.
+- **The connect error names Thetis**, not "the radio" — with a Yaesu attached, "radio not
+  connected" pointed at the wrong thing.
+- **The server GUI is translated** (English / Nederlands / Deutsch / Français). A handful of
+  status and error strings are still Dutch.
+
+### Fixed
+- **VRX audio now starts reliably and stays clean after retuning.** Three independent causes sat
+  under one symptom: a stale DDC centre could keep a channel permanently distorted after a missed
+  push (the centre is re-read periodically now); the relay's duplicate filter ignored the channel
+  id, so VRX1 and VRX2 ate each other's frames; and a channel that was switched off and on again
+  restarted its sequence, which the same filter read as already-delivered — the wait before audio
+  appeared was exactly as long as the previous listening session.
+- **A VRX stays inside the DDC band, and the spectrum shows the edge honestly.** Tuning stops
+  where the audio stops, and the spectrum draws the requested window with empty bins outside the
+  DDC instead of silently rescaling — so the display no longer suggests signal beyond what can be
+  heard.
+- **Silence is no longer mistaken for a broken UDP path**, and a resumed audio stream plays
+  immediately instead of waiting out its old sequence.
+- **Yaesu memory handling.** The client shows what the radio actually reports instead of
+  inventing fields; irrelevant fields for the current mode are shown as dashes; clicking a memory
+  recalls it on the radio whose list was clicked (the FTX-1 needs a different recall form);
+  writing while a scan is running now works; and an FTX-1 channel is no longer re-stored after
+  setting its tone, which used to overwrite the channel with the current VFO.
+- **A MIDI wheel no longer runs a Yaesu away.** Every tick used to become its own CAT write over
+  the serial link, with a round trip each; turning faster than the radio could keep up filled a
+  queue that went on stepping for minutes after the knob had stopped — and blocked other CAT
+  traffic while it drained. Only the last frequency of each pass is sent now, the same
+  coalescing the Thetis VFO already had. Requires the new client: the coalescing sits there, so a
+  v2.6.x client against a v2.7.0 server keeps the old behaviour.
+- **A VRX runtime is created at the rate its filter calls for**, instead of being built narrowband
+  and immediately torn down again on the first frame.
+- **Windows and layout.** Yaesu pop-outs reopen at their saved position after a reconnect and are
+  gated on radio presence rather than on the audio flag; the RX1 inline/pop-out choice and the
+  Yaesu chip toggles survive a restart; split geometry returns correctly after a join.
+- **No more empty RX1 spectrum window in a Yaesu-only setup.** The window is gated on Thetis
+  being configured, so a setup without it no longer opens a window with nothing in it.
+- **The VRX window choice survives a restart.** It is derived from the high-resolution-spectrum
+  setting instead of starting closed every time.
+- **RX2 spectrum peak-hold decays at the same rate as RX1** (shared constant).
+
+### Internal
+- The refactor track continued: the per-channel spectrum model now carries RX1 and RX2 as well as
+  the VRX channels, with one shared auto-reference derivation for all four; the Yaesu memory blob
+  has a single owner; the server's control dispatch has no catch-all left, so the compiler forces
+  every control to be handled; the Yaesu server code and the server GUI were split out of their
+  god-files; and every pop-out goes through one shared lifecycle helper.
+- A hardware-free audio harness pins six measurement properties (levels before volume, VRX
+  parity, per-model Yaesu meter *and* playback calibration, TX peak after gain, and every channel
+  falling back to zero when its stream stops), so a future unification cannot silently undo an
+  operator-measured correction.
+- The design rule for where a control belongs is written down: the core is a task — RX1 receiving
+  and transmitting — not a device class.
+
+---
+
 ## [2.6.0] — 2026-07-31 (Window-arranger matrix (client + server) · multilingual server GUI · analog s-meter rework · Yaesu memory & standby fixes)
 
 > **Feature release.** All changes are **client- or server-local** (UI, layout and CAT-timing

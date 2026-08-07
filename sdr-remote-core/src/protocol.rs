@@ -115,36 +115,36 @@ pub enum PacketType {
     /// VRX2 high-res extracted spectrum view (server → client).
     SpectrumVrx2 = 0x24,
 
-    // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Optie B-prime) ──
-    // Slot 0 = bestaande Yaesu-packets (0x16-0x19), byte-identiek/ongewijzigd.
-    // Slot 1 = tweede radio, eigen packet-varianten op het vrije gat 0x25-0x28.
-    // Back-compat by construction: oude clients kennen deze types niet, parsen
-    // ze als "unknown packet type" (geen crash) en abonneren nooit op slot 1.
-    /// Slot-1 radio audio (server → client, zelfde layout als AudioYaesu).
+    // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime) ──
+    // Slot 0 = existing Yaesu packets (0x16-0x19), byte-identical/unchanged.
+    // Slot 1 = second radio, own packet variants in the free gap 0x25-0x28.
+    // Back-compat by construction: old clients don't know these types, parse
+    // them as "unknown packet type" (no crash) and never subscribe to slot 1.
+    /// Slot-1 radio audio (server → client, same layout as AudioYaesu).
     AudioYaesu2 = 0x25,
-    /// Slot-1 radio state (server → client, zelfde layout als YaesuState).
+    /// Slot-1 radio state (server → client, same layout as YaesuState).
     YaesuState2 = 0x26,
-    /// Slot-1 frequentie set (client → server, zelfde layout als FrequencyYaesu).
+    /// Slot-1 frequency set (client → server, same layout as FrequencyYaesu).
     FrequencyYaesu2 = 0x27,
-    /// Slot-1 memory data (server → client, tab-separated text, zelfde layout als YaesuMemoryData).
+    /// Slot-1 memory data (server → client, tab-separated text, same layout as YaesuMemoryData).
     YaesuMemoryData2 = 0x28,
-    /// Per-radio model info (server → client): laat de client het gedetecteerde
-    /// model per slot weten voor de paneel-naamgeving ("991A 1"/"FTX1" etc.).
-    /// Apart packet zodat de byte-identieke slot-0 YaesuState ongemoeid blijft
-    /// (B-prime); oude clients negeren dit onbekende type.
+    /// Per-radio model info (server → client): tells the client the detected
+    /// model per slot for panel naming ("991A 1"/"FTX1" etc.).
+    /// Separate packet so the byte-identical slot-0 YaesuState is left untouched
+    /// (B-prime); old clients ignore this unknown type.
     RadioInfo = 0x29,
-    /// VRX gevolgde draaggolf-frequentie (server → client) — SAM auto-tune.
-    /// Layout als VrxFrequencyPacket: header(4) + vrx_id(1) + frequency_hz(8)
-    /// = 13 bytes. Gestuurd (throttled, ≥~10 Hz delta) wanneer auto-tune aan
-    /// staat en de PLL de draaggolf volgt, zodat de client-VFO meeloopt.
-    /// Per-client gated op VrxSamAutoTune(2); oude clients abonneren nooit.
+    /// VRX tracked carrier frequency (server → client) — SAM auto-tune.
+    /// Layout like VrxFrequencyPacket: header(4) + vrx_id(1) + frequency_hz(8)
+    /// = 13 bytes. Sent (throttled, ≥~10 Hz delta) when auto-tune is
+    /// on and the PLL tracks the carrier, so the client VFO follows along.
+    /// Per-client gated on VrxSamAutoTune(2); old clients never subscribe.
     FrequencyVrxActual = 0x2A,
-    /// Huidige TX-modulatiefilterband (server → client) — PATCH-tx-modulation-
+    /// Current TX modulation filter band (server → client) — PATCH-tx-modulation-
     /// bandwidth. Layout: header(4) + low_hz(i32) + high_hz(i32) = 12 bytes.
-    /// Gestuurd zodra Thetis een tx_filter_band_ex meldt; de client toont de
-    /// actuele waarde en weet daardoor dat instellen wordt ondersteund. Oude
-    /// clients verwerken dit type niet — een onbekend packet-type is nonfatal
-    /// (ze loggen het hooguit als "unknown packet type" en lopen door).
+    /// Sent as soon as Thetis reports a tx_filter_band_ex; the client shows the
+    /// current value and thereby knows that setting it is supported. Old
+    /// clients don't process this type — an unknown packet type is nonfatal
+    /// (they log it at most as "unknown packet type" and carry on).
     TxFilterBand = 0x2B,
     /// Typed Yaesu DSP/function control (client→server): {slot, control, value}.
     /// Replaces YaesuButton magic-values (PATCH-yaesu-extra-controls). Additive.
@@ -152,11 +152,11 @@ pub enum PacketType {
     /// Yaesu feature-state feedback (server→client): per-slot toggles bitfield +
     /// levels. Value-change-only, opt-in send. Additive.
     YaesuFeature = 0x2D,
-    /// Yaesu radio-presence (server→client, broadcast naar álle clients): welke
-    /// slots een verbonden radio hebben + hun model. Ontkoppelt de selector/
-    /// connected-status van de audio+state-subscription — dynamisch (wegvallen/
-    /// bijkomen) i.p.v. sticky. Push-on-change + eenmalig bij (her)connect.
-    /// Oude clients negeren dit onbekende type (back-compat by construction).
+    /// Yaesu radio presence (server→client, broadcast to all clients): which
+    /// slots have a connected radio + their model. Decouples the selector/
+    /// connected-status from the audio+state subscription — dynamic (dropping/
+    /// appearing) instead of sticky. Push-on-change + once on (re)connect.
+    /// Old clients ignore this unknown type (back-compat by construction).
     YaesuPresence = 0x2E,
 }
 
@@ -164,7 +164,66 @@ impl PacketType {
     pub fn from_u8(v: u8) -> Option<Self> {
         Self::try_from(v).ok()
     }
+
+    /// True for every audio-carrying packet type. Transport routing and the
+    /// bandwidth classifier key on this: audio takes the low-latency path
+    /// (relay UDP), everything else the reliable path (wss). The match is
+    /// EXHAUSTIVE on purpose — adding a new `Audio*` variant forces a
+    /// compile-time decision here instead of silently mis-routing over the
+    /// slow path (the drift that previously lived as literal byte-sets in the
+    /// relay and the server classifier).
+    pub fn is_audio(self) -> bool {
+        matches!(
+            self,
+            PacketType::Audio
+                | PacketType::AudioRx2
+                | PacketType::AudioYaesu
+                | PacketType::AudioBinR
+                | PacketType::AudioMultiCh
+                | PacketType::AudioVrx
+                | PacketType::AudioYaesu2
+        )
+    }
+
+    /// True for every spectrum/waterfall packet type (used by the bandwidth
+    /// classifier). Exhaustive like [`is_audio`](Self::is_audio).
+    pub fn is_spectrum(self) -> bool {
+        matches!(
+            self,
+            PacketType::Spectrum
+                | PacketType::FullSpectrum
+                | PacketType::SpectrumRx2
+                | PacketType::FullSpectrumRx2
+                | PacketType::SpectrumVrx1
+                | PacketType::SpectrumVrx2
+        )
+    }
 }
+
+/// Audio-carrying packet type discriminants, as raw wire bytes. Single source
+/// of truth for consumers that classify on the raw type byte without decoding
+/// the whole packet (transport routing, bandwidth metering). Kept in lockstep
+/// with [`PacketType::is_audio`] by a test (all 256 byte values must agree).
+pub const AUDIO_PACKET_TYPES: &[u8] = &[
+    PacketType::Audio as u8,
+    PacketType::AudioRx2 as u8,
+    PacketType::AudioYaesu as u8,
+    PacketType::AudioBinR as u8,
+    PacketType::AudioMultiCh as u8,
+    PacketType::AudioVrx as u8,
+    PacketType::AudioYaesu2 as u8,
+];
+
+/// Spectrum/waterfall packet type discriminants, as raw wire bytes. Kept in
+/// lockstep with [`PacketType::is_spectrum`] by a test.
+pub const SPECTRUM_PACKET_TYPES: &[u8] = &[
+    PacketType::Spectrum as u8,
+    PacketType::FullSpectrum as u8,
+    PacketType::SpectrumRx2 as u8,
+    PacketType::FullSpectrumRx2 as u8,
+    PacketType::SpectrumVrx1 as u8,
+    PacketType::SpectrumVrx2 as u8,
+];
 
 /// Control command identifiers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
@@ -234,8 +293,8 @@ pub enum ControlId {
     MonitorOn = 0x1E,
     /// Thetis TUNE on/off (value 0/1, CAT: ZZTU)
     ThetisTune = 0x1F,
-    /// Yaesu AUDIO-abonnement (value 0/1). State (freq/s-meter/CAT) loopt sinds de
-    /// audio/state-split via YaesuStateEnable; deze control zet alleen de audiostroom.
+    /// Yaesu AUDIO subscription (value 0/1). State (freq/s-meter/CAT) has run since the
+    /// audio/state split via YaesuStateEnable; this control only sets the audio stream.
     YaesuEnable = 0x20,
     /// Yaesu PTT (value 0/1: TX0/TX1 via Yaesu CAT)
     YaesuPtt = 0x21,
@@ -323,12 +382,12 @@ pub enum ControlId {
     AgcAutoRx2 = 0x49,
 
     /// DDC sample rate RX1 (value: rate in kHz, e.g. 384 = 384000 Hz).
-    /// Bron: stock TCI `iq_samplerate` (primary) of `if_limits` (fallback) — zie
-    /// `PATCH-tl2-server-if-limits` (alpha-3). Beide RX1 en RX2 krijgen dezelfde
-    /// waarde in stock-mode (TCI exposes één globale rate). Per-RX divergence
-    /// komt terug via TL2-x fork extensions in Phase 3.
+    /// Source: stock TCI `iq_samplerate` (primary) or `if_limits` (fallback) — see
+    /// `PATCH-tl2-server-if-limits` (alpha-3). Both RX1 and RX2 get the same
+    /// value in stock mode (TCI exposes one global rate). Per-RX divergence
+    /// returns via TL2-x fork extensions in Phase 3.
     DdcSampleRateRx1 = 0x3D,
-    /// DDC sample rate RX2 (zelfde encoding als DdcSampleRateRx1).
+    /// DDC sample rate RX2 (same encoding as DdcSampleRateRx1).
     DdcSampleRateRx2 = 0x3E,
 
     /// Diversity enable (value: 0=off, 1=on)
@@ -370,10 +429,10 @@ pub enum ControlId {
     /// Audio routing mode (0=Mono RX1→L+R, 1=Binaural RX1L+RX1R, 2=Split RX1→L RX2→R)
     AudioMode = 0x62,
 
-    /// Per-client setup-vink "Allow zoom below 2× (waterfall smear during tune)".
-    /// Value: 0=vink-uit (default, smear-vrij gegarandeerd), 1=vink-aan (zoom 1× toegestaan, smear-trade-off).
+    /// Per-client setup checkbox "Allow zoom below 2× (waterfall smear during tune)".
+    /// Value: 0=unchecked (default, smear-free guaranteed), 1=checked (zoom 1× allowed, smear trade-off).
     /// TL2-1 server enforces strictest setting over all connected clients (zoom-min 2×
-    /// zolang één client vink-uit heeft). Used by `auto_recenter_ex` feature.
+    /// as long as one client has it unchecked). Used by `auto_recenter_ex` feature.
     AllowZoomBelow2x = 0x63,
 
     /// Per-client S-meter source-subscription bitmap. Each bit toggles emission
@@ -389,14 +448,14 @@ pub enum ControlId {
     ///   bit 6  = RX2 MaxBin → PacketType::SmeterRx2MaxBin
     /// All other bits reserved.
     SmeterSources = 0x64,
-    /// DX-spot stream opt-out (value 0=off, 1=on). Default ON. Wanneer OFF
-    /// stuurt de server geen `PacketType::Spot`-frames meer naar deze client
-    /// — bandbreedte-besparing op metered links.
+    /// DX-spot stream opt-out (value 0=off, 1=on). Default ON. When OFF
+    /// the server sends no more `PacketType::Spot` frames to this client
+    /// — bandwidth saving on metered links.
     DxSpotsEnabled = 0x65,
     /// Thetis wideband-audio opt-in (value 0=narrowband 8 kHz default,
-    /// 1=wideband 16 kHz). Wanneer 1 stuurt de server RX1/RX2/BinR via
-    /// wideband Opus en accepteert TX-audio met `Flags::AUDIO_WIDEBAND`.
-    /// Vereist `Capabilities::WIDEBAND_AUDIO` op zowel server als client.
+    /// 1=wideband 16 kHz). When 1 the server sends RX1/RX2/BinR via
+    /// wideband Opus and accepts TX audio with `Flags::AUDIO_WIDEBAND`.
+    /// Requires `Capabilities::WIDEBAND_AUDIO` on both server and client.
     ThetisWidebandAudio = 0x66,
 
     /// VRX enable (client → server, value 0/1, vrx_id implicit = 0 for single-VRX
@@ -443,88 +502,106 @@ pub enum ControlId {
 
     // ── Wide / synchronous-AM VRX-UX (PATCH-vrx-wide-sam-ux) ──
     /// VRX audio-rate mode (client → server, 0=NB/8k, 1=WB/16k, 2=Auto).
-    /// Eén control voor VRX1+VRX2. In Auto kiest de server per VRX de rate
-    /// op basis van de filterbreedte (≥4 kHz audio-BW → 16k). De client
-    /// leest de werkelijke rate uit de AUDIO_WIDEBAND-flag per pakket.
+    /// One control for VRX1+VRX2. In Auto the server picks the rate per VRX
+    /// based on the filter width (≥4 kHz audio-BW → 16k). The client
+    /// reads the actual rate from the AUDIO_WIDEBAND flag per packet.
     VrxAudioRate = 0x75,
-    /// VRX1 SAM auto-tune-to-carrier enable (client → server, 0/1). Alleen
-    /// actief in SAM: bij lock volgt de luisterfrequentie de draaggolf.
+    /// VRX1 SAM auto-tune-to-carrier enable (client → server, 0/1). Only
+    /// active in SAM: on lock the listen frequency follows the carrier.
     VrxSamAutoTune = 0x76,
     /// VRX2 SAM auto-tune-to-carrier enable (client → server, 0/1).
     VrxSamAutoTune2 = 0x77,
 
-    // ── TX-modulatiebandbreedte (PATCH-tx-modulation-bandwidth) ──
-    /// TX-filter laagrand (client → server, signed Hz als u16). Server zet het
-    /// via tx_filter_band_ex (stock v2.10.3.14+ / fork). Hoofdradio-TX, niet VRX.
+    // ── TX modulation bandwidth (PATCH-tx-modulation-bandwidth) ──
+    /// TX filter low edge (client → server, signed Hz as u16). Server sets it
+    /// via tx_filter_band_ex (stock v2.10.3.14+ / fork). Main-radio TX, not VRX.
     TxFilterLow = 0x78,
-    /// TX-filter hoogrand (client → server, signed Hz als u16).
+    /// TX filter high edge (client → server, signed Hz as u16).
     TxFilterHigh = 0x79,
 
-    /// VRX2 audio-rate NB/WB/Auto (client → server). Additief bij
-    /// `VrxAudioRate` (=VRX1) zodat per-client onafhankelijke VRX elk zijn eigen
-    /// rate kan zetten (PATCH-vrx-per-client, Optie B). Back-compat: oude clients
-    /// sturen 'm niet (VRX1+2 delen dan `VrxAudioRate`); oude servers droppen dit
-    /// onbekende control-packet nonfatal. Client stuurt alleen on-change (geen hot-loop-spam).
+    /// VRX2 audio-rate NB/WB/Auto (client → server). Additive to
+    /// `VrxAudioRate` (=VRX1) so each per-client independent VRX can set its own
+    /// rate (PATCH-vrx-per-client, Option B). Back-compat: old clients
+    /// don't send it (VRX1+2 then share `VrxAudioRate`); old servers drop this
+    /// unknown control packet nonfatal. Client sends only on-change (no hot-loop spam).
     VrxAudioRate2 = 0x7A,
 
-    // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Optie B-prime) ──
-    // 1:1 spiegel van de slot-0 Yaesu-controls (0x20-0x2F) op de vrije range
-    // 0x80-0x8F. NIET 0x30-0x3F (bezet door AGC/RIT/DDC/Rx2-controls).
-    // Yaesu2Enable is tevens de slot-1 subscription-gate: een sessie krijgt pas
-    // slot-1 state/audio/memory nadat ze deze control met value=1 stuurt.
-    /// Slot-1 stream enable + subscription-gate (value 0/1). Spiegel van YaesuEnable.
+    // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime) ──
+    // 1:1 mirror of the slot-0 Yaesu controls (0x20-0x2F) on the free range
+    // 0x80-0x8F. NOT 0x30-0x3F (occupied by AGC/RIT/DDC/Rx2 controls).
+    // Yaesu2Enable is also the slot-1 subscription gate: a session only gets
+    // slot-1 state/audio/memory after it sends this control with value=1.
+    /// Slot-1 stream enable + subscription gate (value 0/1). Mirror of YaesuEnable.
     Yaesu2Enable = 0x80,
-    /// Slot-1 PTT (value 0/1). Spiegel van YaesuPtt.
+    /// Slot-1 PTT (value 0/1). Mirror of YaesuPtt.
     Yaesu2Ptt = 0x81,
-    /// Slot-1 frequentie set (uses FrequencyYaesu2 packet). Spiegel van YaesuFreq.
+    /// Slot-1 frequency set (uses FrequencyYaesu2 packet). Mirror of YaesuFreq.
     Yaesu2Freq = 0x82,
-    /// Slot-1 ThetisLink mic gain (value × 10). Spiegel van YaesuMicGain.
+    /// Slot-1 ThetisLink mic gain (value × 10). Mirror of YaesuMicGain.
     Yaesu2MicGain = 0x83,
-    /// Slot-1 operating mode (value: internal mode number). Spiegel van YaesuMode.
+    /// Slot-1 operating mode (value: internal mode number). Mirror of YaesuMode.
     Yaesu2Mode = 0x84,
-    /// Slot-1 read all memories. Spiegel van YaesuReadMemories.
+    /// Slot-1 read all memories. Mirror of YaesuReadMemories.
     Yaesu2ReadMemories = 0x85,
-    /// Slot-1 recall memory channel (1-99). Spiegel van YaesuRecallMemory.
+    /// Slot-1 recall memory channel (1-99). Mirror of YaesuRecallMemory.
     Yaesu2RecallMemory = 0x86,
-    /// Slot-1 write all memories. Spiegel van YaesuWriteMemories.
+    /// Slot-1 write all memories. Mirror of YaesuWriteMemories.
     Yaesu2WriteMemories = 0x87,
-    /// Slot-1 select VFO (0=A, 1=B, 2=swap). Spiegel van YaesuSelectVfo.
+    /// Slot-1 select VFO (0=A, 1=B, 2=swap). Mirror of YaesuSelectVfo.
     Yaesu2SelectVfo = 0x88,
-    /// Slot-1 squelch (0-255). Spiegel van YaesuSquelch.
+    /// Slot-1 squelch (0-255). Mirror of YaesuSquelch.
     Yaesu2Squelch = 0x89,
-    /// Slot-1 RF gain (0-255). Spiegel van YaesuRfGain.
+    /// Slot-1 RF gain (0-255). Mirror of YaesuRfGain.
     Yaesu2RfGain = 0x8A,
-    /// Slot-1 radio mic gain (0-100). Spiegel van YaesuRadioMicGain.
+    /// Slot-1 radio mic gain (0-100). Mirror of YaesuRadioMicGain.
     Yaesu2RadioMicGain = 0x8B,
-    /// Slot-1 RF power (0-100). Spiegel van YaesuRfPower.
+    /// Slot-1 RF power (0-100). Mirror of YaesuRfPower.
     Yaesu2RfPower = 0x8C,
-    /// Slot-1 raw CAT button. Spiegel van YaesuButton.
+    /// Slot-1 raw CAT button. Mirror of YaesuButton.
     Yaesu2Button = 0x8D,
-    /// Slot-1 read all EX menus. Spiegel van YaesuReadMenus.
+    /// Slot-1 read all EX menus. Mirror of YaesuReadMenus.
     Yaesu2ReadMenus = 0x8E,
-    /// Slot-1 set EX menu item. Spiegel van YaesuSetMenu.
+    /// Slot-1 set EX menu item. Mirror of YaesuSetMenu.
     Yaesu2SetMenu = 0x8F,
     /// Thetis TX-EQ on/off (client→server; CAT `ZZET` via TCI `run_cat_ex`).
     /// value 0 = TXEQ off, 1 = on. Used to bypass the mic-profile TX-EQ during
     /// WAV-playback to the main radio (off on Play-start, restore on stop),
     /// mirroring Thetis' own record/playback behaviour.
     ThetisTxeq = 0x90,
-    /// RX1 audio-abonnement (value 0/1). Default AAN op de server, zodat oude
-    /// clients die dit nooit sturen RX1-audio blijven krijgen. Een client die
-    /// alleen VRX gebruikt zet dit op 0 om de RX1-audiostroom te stoppen
-    /// (bandbreedte sparen). REFACTOR-audio-spectrum-per-channel fase 3.
+    /// RX1 audio subscription (value 0/1). Default ON at the server, so old
+    /// clients that never send this keep getting RX1 audio. A client that
+    /// uses only VRX sets this to 0 to stop the RX1 audio stream
+    /// (save bandwidth). REFACTOR-audio-spectrum-per-channel phase 3.
     Rx1Enable = 0x91,
-    /// Yaesu slot-0 STATE-abonnement (value 0/1), LOS van de audio. Client zet dit
-    /// aan als het bedieningsvenster open is: dan lopen freq/s-meter/CAT/feature door
-    /// ook met de audio (YaesuEnable) uit = mute met live venster. Default UIT; audio-
-    /// abonnees krijgen state sowieso (state_addrs = state_enabled || yaesu_enabled).
+    /// Yaesu slot-0 STATE subscription (value 0/1), SEPARATE from the audio. Client sets this
+    /// on when the control window is open: then freq/s-meter/CAT/feature keep running
+    /// even with the audio (YaesuEnable) off = mute with a live window. Default OFF; audio
+    /// subscribers get state anyway (state_addrs = state_enabled || yaesu_enabled).
     YaesuStateEnable = 0x92,
-    /// Slot-1 spiegel van YaesuStateEnable.
+    /// Slot-1 mirror of YaesuStateEnable.
     Yaesu2StateEnable = 0x93,
-    /// Yaesu radio power on/off (value 0/1 -> CAT `PS1`/`PS0`). Zet de radio
-    /// volledig aan of uit (geen aparte standby bij Yaesu).
+    /// Yaesu radio power on/off (value 0/1 -> CAT `PS1`/`PS0`). Turns the radio
+    /// fully on or off (no separate standby on Yaesu).
     YaesuPowerOnOff = 0x94,
     Yaesu2PowerOnOff = 0x95,
+    /// Diagnostic: log every CAT frame from the Yaesu radios verbatim and ask
+    /// them to report changes they make themselves (Auto Information). Value
+    /// 1 = on, 0 = off; applies to both radio slots. For finding out what a
+    /// radio actually sends when a control is used on its front panel.
+    YaesuCatMonitor = 0x96,
+    /// Read the CTCSS/DCS tone of every memory channel that has a tone mode.
+    /// The tone is a current-channel setting, so the radio has to step through
+    /// those channels - explicit action, never part of the ordinary read.
+    /// Value = slot (0 = radio 1, 1 = radio 2).
+    YaesuReadMemoryTones = 0x97,
+    /// Send the full-DDC spectrum row alongside the extracted view (1 = on,
+    /// 0 = off). One such row per receiver chain, shared by the RX window and
+    /// the VRX riding that same DDC: it is what keeps a waterfall history filled
+    /// after tuning or zooming, and what holds the RX plot steady during fast
+    /// tuning. Off, every waterfall follows its own view at roughly half the
+    /// spectrum bandwidth. Default on (server-side default too, so an old client
+    /// keeps what it had).
+    FullSpectrumEnabled = 0x98,
 }
 
 impl ControlId {
@@ -573,10 +650,10 @@ impl Capabilities {
 /// Flags byte
 ///   bit 0 = PTT active
 ///   bit 1 = AUDIO_WIDEBAND — Audio/AudioTx/AudioRx2 payload is wideband
-///           Opus (16 kHz), clear = narrowband (8 kHz). Geldt alleen voor
-///           Thetis-audio packets; AudioYaesu is altijd wideband en negeert
-///           de flag. Backwards-compat: oude implementaties (zonder
-///           wideband-cap) zien deze bit als 0 en blijven NB sturen.
+///           Opus (16 kHz), clear = narrowband (8 kHz). Applies only to
+///           Thetis-audio packets; AudioYaesu is always wideband and ignores
+///           the flag. Backwards-compat: old implementations (without
+///           wideband-cap) see this bit as 0 and keep sending NB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Flags(pub u8);
 
@@ -862,9 +939,9 @@ pub struct MultiChannelAudioPacket {
     pub sequence: u32,
     pub timestamp: u32,
     pub channels: Vec<(u8, Vec<u8>)>, // (channel_id, opus_data)
-    /// Flags-byte van de packet-header. Belangrijkste vlag voor dit
-    /// type is `Flags::AUDIO_WIDEBAND` (alle channels in deze packet
-    /// zijn wideband Opus 16 kHz); afwezigheid = narrowband 8 kHz.
+    /// Flags byte of the packet header. The most important flag for this
+    /// type is `Flags::AUDIO_WIDEBAND` (all channels in this packet
+    /// are wideband Opus 16 kHz); absence = narrowband 8 kHz.
     pub flags: Flags,
 }
 
@@ -1507,9 +1584,9 @@ pub const CMD_SERVER_REBOOT: u8 = 0x01;
 pub const CMD_SERVER_SHUTDOWN: u8 = 0x02;
 
 /// Amplitec 6/2 command IDs (client → server via EquipmentCommand).
-/// Switch-positie schakelen heeft geen const — daarvoor zijn
+/// Switching the switch position has no const — for that there are
 /// `EquipmentCommandPacket::CMD_SET_SWITCH_A/_B` (pre-existing).
-/// Voor de power-cap tabel: 18 bytes data
+/// For the power-cap table: 18 bytes data
 /// (6 × { u16 max_w BE, u8 tx_blocked }).
 pub const CMD_AMPLITEC_SET_POWER_TABLE: u8 = 0x10;
 
@@ -1540,7 +1617,7 @@ pub const CMD_RF2K_ANT4: u8 = 0x06;
 pub const CMD_RF2K_ANT_EXT: u8 = 0x07;
 pub const CMD_RF2K_ERROR_RESET: u8 = 0x08;
 pub const CMD_RF2K_CLOSE: u8 = 0x09;
-// Tuner controls (Fase B)
+// Tuner controls (Phase B)
 pub const CMD_RF2K_TUNER_MODE: u8 = 0x10;
 pub const CMD_RF2K_TUNER_BYPASS: u8 = 0x11;
 pub const CMD_RF2K_TUNER_RESET: u8 = 0x12;
@@ -1550,10 +1627,10 @@ pub const CMD_RF2K_TUNER_L_DOWN: u8 = 0x15;
 pub const CMD_RF2K_TUNER_C_UP: u8 = 0x16;
 pub const CMD_RF2K_TUNER_C_DOWN: u8 = 0x17;
 pub const CMD_RF2K_TUNER_K: u8 = 0x18;
-// Drive controls (Fase C)
+// Drive controls (Phase C)
 pub const CMD_RF2K_DRIVE_UP: u8 = 0x20;
 pub const CMD_RF2K_DRIVE_DOWN: u8 = 0x21;
-// Debug controls (Fase D)
+// Debug controls (Phase D)
 pub const CMD_RF2K_SET_HIGH_POWER: u8 = 0x30;   // data[0]: 0/1
 pub const CMD_RF2K_SET_TUNER_6M: u8 = 0x31;     // data[0]: 0/1
 pub const CMD_RF2K_SET_BAND_GAP: u8 = 0x32;     // data[0]: 0/1
@@ -1564,7 +1641,7 @@ pub const CMD_RF2K_AUTOTUNE_THRESH_DOWN: u8 = 0x36;
 pub const CMD_RF2K_DAC_ALC_UP: u8 = 0x37;
 pub const CMD_RF2K_DAC_ALC_DOWN: u8 = 0x38;
 pub const CMD_RF2K_ZERO_FRAM: u8 = 0x39;
-// Drive config (Fase D)
+// Drive config (Phase D)
 pub const CMD_RF2K_SET_DRIVE_SSB: u8 = 0x40;    // data[0]=band, data[1]=watts
 pub const CMD_RF2K_SET_DRIVE_AM: u8 = 0x41;
 pub const CMD_RF2K_SET_DRIVE_CONT: u8 = 0x42;
@@ -1578,8 +1655,8 @@ pub const CMD_UB_MODIFY_ELEMENT: u8 = 0x04;  // data[0]=index, data[1..2]=length
 /// Rotor command IDs (client → server via EquipmentCommand)
 pub const CMD_ROTOR_GOTO: u8 = 0x01;    // data[0..1] = angle_x10 LE (0-3600)
 pub const CMD_ROTOR_STOP: u8 = 0x02;
-pub const CMD_ROTOR_CW: u8 = 0x03;      // handmatig rechtsom
-pub const CMD_ROTOR_CCW: u8 = 0x04;     // handmatig linksom
+pub const CMD_ROTOR_CW: u8 = 0x03;      // manual clockwise
+pub const CMD_ROTOR_CCW: u8 = 0x04;     // manual counter-clockwise
 
 /// Equipment status flags
 const EQUIPMENT_FLAG_HAS_LABELS: u8 = 0x01;
@@ -1653,17 +1730,17 @@ impl EquipmentStatusPacket {
     }
 }
 
-/// Amplitec power-cap tabel. Server stuurt de huidige tabel bij
-/// client-connect en bij elke wijziging. Client stuurt dezelfde
-/// struct terug wanneer de operator op "Save" drukt in de Amplitec-tab.
+/// Amplitec power-cap table. Server sends the current table on
+/// client-connect and on every change. Client sends the same
+/// struct back when the operator presses "Save" in the Amplitec tab.
 ///
 /// Wire: header(4) + 6 × { u16 max_w BE, u8 tx_blocked } = 22 bytes.
-/// Index 0 = Amplitec-A positie 1, index 5 = positie 6.
+/// Index 0 = Amplitec-A position 1, index 5 = position 6.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmplitecPowerTablePacket {
-    /// Max forward watts per positie. `0` = geen cap (none).
+    /// Max forward watts per position. `0` = no cap (none).
     pub max_w: [u16; 6],
-    /// TX-block per positie. `true` = RX-only, server staat geen TX toe.
+    /// TX-block per position. `true` = RX-only, server allows no TX.
     pub tx_blocked: [bool; 6],
 }
 
@@ -1766,9 +1843,9 @@ pub struct YaesuStatePacket {
     /// High-SWR alarm (PATCH-swr-alarm): FTX-1 from RI P2 (0/1), 991A from RM6 >=
     /// threshold. Additive trailing field — false on old servers/packets.
     pub hi_swr: bool,
-    /// Max TX-vermogen (watt) voor de HUIDIGE zendband (PATCH-yaesu-power-scaling).
-    /// Additief trailing veld; **0 = nog onbekend** (oude server / vóór de eerste
-    /// EX-uitlezing), NIET 0 watt. De client schaalt de slider naar `5..=max`.
+    /// Max TX power (watts) for the CURRENT transmit band (PATCH-yaesu-power-scaling).
+    /// Additive trailing field; **0 = still unknown** (old server / before the first
+    /// EX readout), NOT 0 watts. The client scales the slider to `5..=max`.
     pub tx_power_max: u8,
 }
 
@@ -1780,7 +1857,7 @@ impl YaesuStatePacket {
     }
 
     /// Serialize under a caller-chosen packet type so slot 1 can emit the same
-    /// state layout under `PacketType::YaesuState2` (dual-radio Optie B-prime).
+    /// state layout under `PacketType::YaesuState2` (dual-radio Option B-prime).
     pub fn serialize_as_type(&self, buf: &mut [u8; Self::SIZE], ptype: PacketType) {
         let header = Header::new(ptype, Flags::NONE);
         header.serialize(buf);
@@ -1898,7 +1975,7 @@ impl TxProfilesPacket {
 
 /// Yaesu DSP/function control id (the `control` field of `YaesuControlPacket` and
 /// the bit index in `YaesuFeaturePacket.toggles`). PATCH-yaesu-extra-controls.
-/// Fase A1 wires RfAtt + BreakIn; the rest are reserved for later phases.
+/// Phase A1 wires RfAtt + BreakIn; the rest are reserved for later phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
 #[repr(u8)]
 pub enum YaesuCtrl {
@@ -1915,23 +1992,23 @@ pub enum YaesuCtrl {
     Processor = 10,
     Amc = 11,
     Monitor = 12,
-    /// 991A-only: Noise Blanker on/off (`NB`), apart van het NB-niveau (`NL`=Nb).
+    /// 991A-only: Noise Blanker on/off (`NB`), separate from the NB level (`NL`=Nb).
     NbOn = 13,
-    /// 991A-only: Noise Reduction on/off (`NR`), apart van het DNR-niveau (`RL`=Dnr).
+    /// 991A-only: Noise Reduction on/off (`NR`), separate from the DNR level (`RL`=Dnr).
     NrOn = 14,
-    // Fase D — samengestelde controls: aan/uit (toggle-bit) + frequentie (freqs-array).
+    // Phase D — composite controls: on/off (toggle-bit) + frequency (freqs-array).
     ContourOn = 15,
     ApfOn = 16,
     NotchOn = 17,
     ContourFreq = 18, // → freqs[0]
     ApfFreq = 19,     // → freqs[1]
     NotchFreq = 20,   // → freqs[2]
-    // Clarifier (RIT/XIT). Toggles delen op Yaesu één offset. Per-model: 991A `RT`/`XT`/
-    // `RC`/`RU`/`RD` (relatief), FTX-1 `CF` (P3=0 RX/TX on/off, P3=1 absolute freq).
+    // Clarifier (RIT/XIT). Toggles share one offset on Yaesu. Per-model: 991A `RT`/`XT`/
+    // `RC`/`RU`/`RD` (relative), FTX-1 `CF` (P3=0 RX/TX on/off, P3=1 absolute freq).
     RitOn = 21,     // toggle-bit 21 (RX-clarifier)
     XitOn = 22,     // toggle-bit 22 (TX-clarifier)
-    ClarClear = 23, // momentaan: offset → 0
-    ClarStep = 24,  // value = i16-as-u16 signed stap in Hz; huidige offset → freqs[3]
+    ClarClear = 23, // momentary: offset → 0
+    ClarStep = 24,  // value = i16-as-u16 signed step in Hz; current offset → freqs[3]
 }
 
 /// Typed Yaesu control (client→server): set `control` (a `YaesuCtrl`) on `slot`
@@ -1974,7 +2051,7 @@ pub struct YaesuFeaturePacket {
     pub slot: u8,
     pub toggles: u32,
     pub levels: [u8; Self::N_LEVELS],
-    /// Frequency-type feature values (u16, tot 3200 Hz): [0]=Contour, [1]=APF, [2]=Notch.
+    /// Frequency-type feature values (u16, up to 3200 Hz): [0]=Contour, [1]=APF, [2]=Notch.
     pub freqs: [u16; Self::N_FREQS],
 }
 
@@ -2023,11 +2100,11 @@ impl YaesuFeaturePacket {
     }
 }
 
-/// Canonieke korte weergavenaam voor een Yaesu radio-modelcode (het `model`-byte
-/// uit `RadioInfo`/`YaesuPresence`). **Single source of truth**: dit is de enige
-/// plek waar een modelcode aan een naam wordt gekoppeld. Server (log-prefixes) én
-/// client (alle "Yaesu N: <type>"-labels) lezen hier — een nieuw radiotype voeg je
-/// hier één keer toe en de naam volgt overal automatisch. 0 = FT-991A, 1 = FTX-1.
+/// Canonical short display name for a Yaesu radio model code (the `model` byte
+/// from `RadioInfo`/`YaesuPresence`). **Single source of truth**: this is the only
+/// place where a model code is mapped to a name. Server (log prefixes) and
+/// client (all "Yaesu N: <type>" labels) read here — a new radio type you add
+/// here once and the name follows everywhere automatically. 0 = FT-991A, 1 = FTX-1.
 pub fn radio_model_name(code: u8) -> &'static str {
     match code {
         0 => "991A",
@@ -2036,9 +2113,9 @@ pub fn radio_model_name(code: u8) -> &'static str {
     }
 }
 
-/// Yaesu radio-presence (server→client, broadcast naar álle clients): per slot of
-/// er een verbonden radio is + het model. Ontkoppelt de connected-status/selector
-/// van de audio+state-subscription zodat wegvallen/bijkomen dynamisch is (niet
+/// Yaesu radio presence (server→client, broadcast to all clients): per slot whether
+/// there is a connected radio + the model. Decouples the connected-status/selector
+/// from the audio+state subscription so dropping/appearing is dynamic (not
 /// sticky). PATCH-android-yaesu-presence-datasaver.
 pub struct YaesuPresencePacket {
     pub slot0_present: bool,
@@ -2111,13 +2188,13 @@ pub enum Packet {
     YaesuState(YaesuStatePacket),
     FrequencyYaesu(FrequencyPacket),
     YaesuMemoryData(String),
-    // Dual-radio slot 1 (Optie B-prime): zelfde payload-structs, eigen packet-types.
+    // Dual-radio slot 1 (Option B-prime): same payload structs, own packet types.
     AudioYaesu2(AudioPacket),
     YaesuState2(YaesuStatePacket),
     FrequencyYaesu2(FrequencyPacket),
     YaesuMemoryData2(String),
     /// Per-radio model info (server → client): (slot, model_code). model_code:
-    /// 0 = FT-991A, 1 = FTX-1. Voor paneel-naamgeving in de client.
+    /// 0 = FT-991A, 1 = FTX-1. For panel naming in the client.
     RadioInfo { slot: u8, model: u8 },
     AuthChallenge([u8; 16]),    // nonce
     AuthResponse([u8; 32]),     // HMAC
@@ -2238,6 +2315,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn audio_spectrum_classification_is_consistent_for_all_bytes() {
+        // The raw-byte consts and the typed predicates must agree for every
+        // possible byte value, so a consumer that classifies on buf[2] (relay
+        // routing, bw metering) can never disagree with the enum. Also asserts
+        // audio and spectrum are disjoint.
+        for b in 0u8..=255 {
+            let is_audio_const = AUDIO_PACKET_TYPES.contains(&b);
+            let is_spectrum_const = SPECTRUM_PACKET_TYPES.contains(&b);
+            match PacketType::from_u8(b) {
+                Some(pt) => {
+                    assert_eq!(pt.is_audio(), is_audio_const, "audio mismatch for 0x{b:02X}");
+                    assert_eq!(pt.is_spectrum(), is_spectrum_const, "spectrum mismatch for 0x{b:02X}");
+                    assert!(!(pt.is_audio() && pt.is_spectrum()), "0x{b:02X} both audio+spectrum");
+                }
+                None => {
+                    // Unknown byte: must not appear in either const set.
+                    assert!(!is_audio_const && !is_spectrum_const, "unknown 0x{b:02X} in a type set");
+                }
+            }
+        }
+        assert_eq!(AUDIO_PACKET_TYPES.len(), 7);
+        assert_eq!(SPECTRUM_PACKET_TYPES.len(), 6);
+    }
+
+    #[test]
     fn header_roundtrip() {
         let header = Header::new(PacketType::Audio, Flags::PTT);
         let mut buf = [0u8; 4];
@@ -2269,7 +2371,7 @@ mod tests {
         };
         let mut buf = [0u8; YaesuPresencePacket::SIZE];
         pkt.serialize(&mut buf);
-        // Parse via de generieke weg zoals de client 'm binnenkrijgt.
+        // Parse via the generic path as the client receives it.
         match Packet::deserialize(&buf).unwrap() {
             Packet::YaesuPresence(p) => {
                 assert!(p.slot0_present);

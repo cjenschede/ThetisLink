@@ -3,15 +3,15 @@
 // TL2-1 ctun-auto-recenter feature: server-side trigger evaluation + recenter action.
 //
 // Per PATCH-tl2-server-ctun-auto-recenter (A'-revised, operator: PA3GHM, 2026-05-07):
-// - Operator-eigen formule: threshold = 0.6 × visible_span; trigger when VFO comes within
-//   threshold of DDC-edge. Garandeert visible-window altijd vol (geen zwarte randen).
-// - Per-RX onafhankelijke state-machines (RX1, RX2)
-// - Multi-client zoom-aggregatie via MIN-zoom (server-side; clients pushen zoom via
+// - Operator-specific formula: threshold = 0.6 × visible_span; trigger when VFO comes within
+//   threshold of DDC-edge. Guarantees the visible-window is always full (no black edges).
+// - Per-RX independent state-machines (RX1, RX2)
+// - Multi-client zoom-aggregation via MIN-zoom (server-side; clients push zoom via
 //   ControlId::SpectrumZoom 0x09 / Rx2SpectrumZoom 0x10)
-// - Vink-strictest enforcement: zoom-min 2× zolang één client vink-uit heeft
-// - PTT-defer (skip trigger tijdens TX; bij PTT-off transition: forceer eval)
-// - Globaal CAT-mutex serializes RX1+RX2 recenter-actions (geen interleave)
-// - Cap-gated: feature alleen actief wanneer Thetis adverteert `auto_recenter_ex`
+// - Checkbox-strictest enforcement: zoom-min 2× as long as one client has the checkbox off
+// - PTT-defer (skip trigger during TX; on PTT-off transition: force eval)
+// - Global CAT-mutex serializes RX1+RX2 recenter-actions (no interleave)
+// - Cap-gated: feature only active when Thetis advertises `auto_recenter_ex`
 //
 // Implements observability requirements + edge-case-resilience.
 
@@ -20,11 +20,11 @@ use std::time::Instant;
 /// Per-RX trigger state-machine.
 #[derive(Debug)]
 pub struct PerRxState {
-    /// Recentering-burst is in-flight; trigger-eval skip tot flag clears.
+    /// Recentering-burst is in-flight; trigger-eval is skipped until the flag clears.
     pub recentering: bool,
-    /// Wanneer de flag automatisch geclear wordt (200 ms na recenter-start).
+    /// When the flag is automatically cleared (200 ms after recenter-start).
     pub flag_clear_at: Option<Instant>,
-    /// Laatste trigger-eval result voor test-hook + debugging.
+    /// Last trigger-eval result for test-hook + debugging.
     pub last_eval: Option<TriggerEvalResult>,
 }
 
@@ -43,7 +43,7 @@ impl Default for PerRxState {
 pub struct CtunRecenterState {
     pub rx1: PerRxState,
     pub rx2: PerRxState,
-    /// Set wanneer fork-extensions cap eerst gezien is. Eenmalig log-event.
+    /// Set when the fork-extensions cap is first seen. One-off log-event.
     pub fork_active_logged: bool,
 }
 
@@ -74,7 +74,7 @@ impl CtunRecenterState {
     }
 }
 
-/// Trigger-evaluatie resultaat voor logging + test-hook.
+/// Trigger-evaluation result for logging + test-hook.
 #[derive(Debug, Clone, Copy)]
 pub struct TriggerEvalResult {
     pub decision: TriggerDecision,
@@ -91,31 +91,31 @@ pub struct TriggerEvalResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerDecision {
     Trigger,
-    SkipNoCap,         // fork-extensions cap niet geadverteerd -> feature uit
-    SkipZoomLow,       // effective_zoom <= 1.2 (formule onbruikbaar bij low-zoom)
-    SkipPtt,           // state.ptt = true -> defer (per operator-keuze 2026-05-07 = B)
-    SkipFlagged,       // recentering-burst nog actief
-    SkipWithinZone,    // VFO veilig binnen 60% headroom
+    SkipNoCap,         // fork-extensions cap not advertised -> feature off
+    SkipZoomLow,       // effective_zoom <= 1.2 (formula unusable at low-zoom)
+    SkipPtt,           // state.ptt = true -> defer (per operator-choice 2026-05-07 = B)
+    SkipFlagged,       // recentering-burst still active
+    SkipWithinZone,    // VFO safely within 60% headroom
     SkipHwInit,        // ddc_bandwidth == 0 (band-switch transient)
-    SkipNoClients,     // 0 clients met spectrum_enabled -> trigger overbodig
+    SkipNoClients,     // 0 clients with spectrum_enabled -> trigger unnecessary
 }
 
-/// Trigger-formule (operator-eigen, per PATCH-tl2-server-ctun-auto-recenter §1.3):
+/// Trigger-formula (operator-specific, per PATCH-tl2-server-ctun-auto-recenter §1.3):
 ///
 /// ```text
-/// effective_zoom = min(zoom_rx) over alle verbonden clients      // multi-client aggregatie
+/// effective_zoom = min(zoom_rx) over all connected clients        // multi-client aggregation
 /// visible_span   = ddc_bandwidth_rx / effective_zoom
 /// threshold      = 0.6 × visible_span
 /// trigger        = (ddc_bandwidth_rx/2 - abs(vfo_rx - ddc_center_rx)) < threshold
-///                  AND effective_zoom > 1.2          (strikt; lage zoom onbruikbaar)
+///                  AND effective_zoom > 1.2          (strict; low zoom unusable)
 ///                  AND ddc_bandwidth > 0             (band-switch transient guard)
 ///                  AND not state.ptt                 (PTT-defer)
 ///                  AND not flag.recentering          (per-RX flag)
 ///                  AND has_cap("auto_recenter_ex")
 /// ```
 ///
-/// Note: u64-vfo en u64-ddc_center worden via i128-arith omgezet om
-/// overflow/underflow bij `abs(vfo - ddc_center)` te vermijden.
+/// Note: u64-vfo and u64-ddc_center are converted via i128-arith to
+/// avoid overflow/underflow in `abs(vfo - ddc_center)`.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_trigger(
     rx_index: u8,
@@ -136,7 +136,7 @@ pub fn evaluate_trigger(
     };
     let threshold = 0.6 * visible_span;
 
-    // i128 signed-arith voor abs(vfo - ddc_center) zonder overflow
+    // i128 signed-arith for abs(vfo - ddc_center) without overflow
     let dist = (vfo_hz as i128 - ddc_center_hz as i128).unsigned_abs() as f64;
     let dist_from_edge = (ddc_bandwidth_hz as f64 / 2.0) - dist;
 
@@ -183,7 +183,7 @@ pub fn evaluate_trigger(
         decision
     );
 
-    let _ = rx_index; // niet gebruikt in result, alleen voor logging
+    let _ = rx_index; // not used in result, only for logging
     result
 }
 
@@ -210,11 +210,11 @@ mod tests {
     #[test]
     fn trigger_zoom_below_1_2_skips() {
         let s = make_state();
-        // zoom=1.0 (volledige DDC zichtbaar) -> skip
+        // zoom=1.0 (full DDC visible) -> skip
         assert_eq!(eval(true, Some(1.0), 14_000_000, 14_000_000, 384_000, false, &s), TriggerDecision::SkipZoomLow);
-        // zoom=1.19999 (net onder 1.2) -> skip
+        // zoom=1.19999 (just under 1.2) -> skip
         assert_eq!(eval(true, Some(1.19999), 14_000_000, 14_000_000, 384_000, false, &s), TriggerDecision::SkipZoomLow);
-        // zoom=1.2 exact -> strict gate skipt
+        // zoom=1.2 exact -> strict gate skips
         assert_eq!(eval(true, Some(1.2), 14_000_000, 14_000_000, 384_000, false, &s), TriggerDecision::SkipZoomLow);
     }
 
@@ -222,7 +222,7 @@ mod tests {
     fn trigger_within_zone_skips() {
         let s = make_state();
         // DDC=384k, zoom=8 -> visible=48k, threshold=28.8k.
-        // VFO op center: dist_from_edge = 192k > 28.8k -> SkipWithinZone
+        // VFO at center: dist_from_edge = 192k > 28.8k -> SkipWithinZone
         let d = eval(true, Some(8.0), 14_000_000, 14_000_000, 384_000, false, &s);
         assert_eq!(d, TriggerDecision::SkipWithinZone);
     }
@@ -230,8 +230,8 @@ mod tests {
     #[test]
     fn trigger_at_edge_fires() {
         let s = make_state();
-        // DDC=384k, zoom=8 -> threshold=28.8k. VFO 30k voorbij center -> dist_from_edge=162k -> still safe.
-        // Push VFO tot 165k voorbij center -> dist_from_edge=27k < 28.8k -> Trigger
+        // DDC=384k, zoom=8 -> threshold=28.8k. VFO 30k past center -> dist_from_edge=162k -> still safe.
+        // Push VFO to 165k past center -> dist_from_edge=27k < 28.8k -> Trigger
         let d = eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, false, &s);
         assert_eq!(d, TriggerDecision::Trigger);
     }
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn trigger_during_ptt_skips() {
         let s = make_state();
-        // VFO ver buiten zone, maar PTT actief -> SkipPtt (defer; per operator-keuze B)
+        // VFO far outside zone, but PTT active -> SkipPtt (defer; per operator-choice B)
         let d = eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, true, &s);
         assert_eq!(d, TriggerDecision::SkipPtt);
     }
@@ -255,20 +255,20 @@ mod tests {
     #[test]
     fn trigger_at_hw_init_skips() {
         let s = make_state();
-        // ddc_bw=0 (hardware-init transient na band-switch) -> SkipHwInit, no panic
+        // ddc_bw=0 (hardware-init transient after band-switch) -> SkipHwInit, no panic
         let d = eval(true, Some(8.0), 14_000_000, 14_000_000, 0, false, &s);
         assert_eq!(d, TriggerDecision::SkipHwInit);
     }
 
     #[test]
     fn trigger_per_rx_independent() {
-        // Per-RX state is via PerRxState - RX1 flag set blokkeert RX2 niet.
+        // Per-RX state is via PerRxState - RX1 flag set does not block RX2.
         let mut rx1 = make_state();
         rx1.recentering = true;
         let rx2 = make_state();
-        // RX1 evaluatie: SkipFlagged
+        // RX1 evaluation: SkipFlagged
         let d1 = eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, false, &rx1);
-        // RX2 evaluatie: Trigger (geen flag)
+        // RX2 evaluation: Trigger (no flag)
         let d2 = eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, false, &rx2);
         assert_eq!(d1, TriggerDecision::SkipFlagged);
         assert_eq!(d2, TriggerDecision::Trigger);
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn trigger_no_clients_skips() {
         let s = make_state();
-        // effective_zoom = None (geen clients) -> SkipNoClients
+        // effective_zoom = None (no clients) -> SkipNoClients
         let d = eval(true, None, 14_000_000, 14_000_000, 384_000, false, &s);
         assert_eq!(d, TriggerDecision::SkipNoClients);
     }
@@ -292,10 +292,10 @@ mod tests {
     #[test]
     fn formula_no_overflow_at_extremes() {
         let s = make_state();
-        // VFO bij u64::MAX-grens, ddc_center op 0 -> i128-arith voorkomt overflow
-        // Resultaat: enorme dist > threshold -> SkipWithinZone (geen panic)
+        // VFO at the u64::MAX boundary, ddc_center at 0 -> i128-arith prevents overflow
+        // Result: huge dist > threshold -> SkipWithinZone (no panic)
         let d = eval(true, Some(8.0), u64::MAX, 0, 384_000, false, &s);
-        // Geen panic = test slaagt; decision is irrelevant maar moet defined zijn
+        // No panic = test passes; decision is irrelevant but must be defined
         assert!(matches!(d, TriggerDecision::SkipWithinZone | TriggerDecision::Trigger));
     }
 

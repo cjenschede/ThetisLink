@@ -38,9 +38,9 @@ impl TunerModel {
     }
 }
 
-/// Bovengrens van het aantal tuner-slots dat tegelijk geconfigureerd
-/// mag zijn. Komt overeen met het aantal Amplitec-A posities (6) zodat
-/// elke positie maximaal een eigen tuner kan hebben.
+/// Upper bound on the number of tuner-slots that may be configured at
+/// once. Matches the number of Amplitec-A positions (6) so that each
+/// position can have at most its own tuner.
 pub const MAX_TUNERS: usize = 6;
 
 /// Maximum number of rotor-slots. For now single rotor (Yaesu G-1000DXC
@@ -49,7 +49,7 @@ pub const MAX_TUNERS: usize = 6;
 /// az/el station); raise here if that materialises.
 pub const MAX_ROTORS: usize = 1;
 
-/// Per-slot tuner configuration. Tot `MAX_TUNERS` van deze leven in
+/// Per-slot tuner configuration. Up to `MAX_TUNERS` of these live in
 /// [`ServerConfig::tuners`].
 #[derive(Clone, Debug)]
 pub struct TunerConfig {
@@ -89,43 +89,43 @@ impl Default for TunerConfig {
     }
 }
 
-/// Per-slot rotor configuration (PATCH-yaesu-rotor-mcp2221 fase 1).
-/// Een entry per fysiek MCP2221A-board dat een Yaesu G-1000DXC direct
-/// aanstuurt. Fase 1 vult alleen `enabled` + `mcp_serial` + `name`;
-/// kalibratie-velden (v_at_0deg / v_at_max_deg / max_deg) en
-/// default_speed komen in latere fasen erbij.
+/// Per-slot rotor configuration (PATCH-yaesu-rotor-mcp2221 phase 1).
+/// One entry per physical MCP2221A-board that drives a Yaesu G-1000DXC
+/// directly. Phase 1 only fills `enabled` + `mcp_serial` + `name`;
+/// calibration fields (v_at_0deg / v_at_max_deg / max_deg) and
+/// default_speed are added in later phases.
 #[derive(Clone, Debug)]
 pub struct RotorConfig {
     /// Enable this rotor slot at server start.
     pub enabled: bool,
-    /// Display alias (UI + logs). Vaak gelijk aan het deel achter
-    /// `rot_` in de USB serial, maar mag vrije tekst zijn.
+    /// Display alias (UI + logs). Often equal to the part after
+    /// `rot_` in the USB serial, but may be free text.
     pub name: String,
-    /// USB serial van het MCP2221A-board dat deze rotor aanstuurt
-    /// (`rot_<naam>` prefix per ThetisLink-conventie). Leeg = niet
-    /// gebonden.
+    /// USB serial of the MCP2221A-board that drives this rotor
+    /// (`rot_<naam>` prefix per ThetisLink convention). Empty = not
+    /// bound.
     pub mcp_serial: String,
-    /// Kalibratie (fase 4): Yaesu pin-4 spanning bij 0 deg (CCW eindpark).
-    /// Default 0,0 = niet-gekalibreerd. Operator zet dit via "Park CCW".
+    /// Calibration (phase 4): Yaesu pin-4 voltage at 0 deg (CCW end-park).
+    /// Default 0.0 = not calibrated. Operator sets this via "Park CCW".
     pub v_at_0deg: f32,
-    /// Kalibratie (fase 4): Yaesu pin-4 spanning bij `max_deg`
-    /// (CW eindpark). Default 4,5 V (typisch G-1000DXC). Operator zet
-    /// dit via "Park CW".
+    /// Calibration (phase 4): Yaesu pin-4 voltage at `max_deg`
+    /// (CW end-park). Default 4.5 V (typical G-1000DXC). Operator sets
+    /// this via "Park CW".
     pub v_at_max_deg: f32,
-    /// Maximale rotatie in graden (default 450 voor G-1000DXC).
+    /// Maximum rotation in degrees (default 450 for G-1000DXC).
     pub max_deg: u16,
-    /// Soft-start/stop snelheidsverhoging in procent per seconde
-    /// (PATCH fase 6). Default 50%/sec = volledige ramp 0->max in 2 s.
-    /// Lagere waarde voor zware antennes (5-10%/sec); hogere waarde
-    /// (75-100%/sec) voor lichte antennes. Wordt zowel voor de
-    /// soft-start (gate-on -> max DAC) als voor de soft-stop bij
-    /// GoTo-landing gebruikt.
+    /// Soft-start/stop speed ramp in percent per second
+    /// (PATCH phase 6). Default 50%/sec = full ramp 0->max in 2 s.
+    /// Lower value for heavy antennas (5-10%/sec); higher value
+    /// (75-100%/sec) for light antennas. Used both for the
+    /// soft-start (gate-on -> max DAC) and for the soft-stop at
+    /// GoTo-landing.
     pub ramp_pct_per_sec: f32,
-    /// Bij rotors met overlap-range (max_deg > 360, bv. G-1000DXC met
-    /// 450 deg): kies bij GoTo automatisch de kortste route via de
-    /// overlap-zone. Voorbeeld bij max_deg=450: huidig 350 deg, target
-    /// 30 deg -> CCW-route = 320 deg, CW via 390 deg = 40 deg -> CW wint. Default
-    /// uit zodat "ga naar 30 deg" letterlijk op 30 deg fysiek eindigt.
+    /// For rotors with an overlap-range (max_deg > 360, e.g. G-1000DXC with
+    /// 450 deg): at GoTo, automatically pick the shortest route via the
+    /// overlap-zone. Example at max_deg=450: current 350 deg, target
+    /// 30 deg -> CCW-route = 320 deg, CW via 390 deg = 40 deg -> CW wins. Default
+    /// off so "go to 30 deg" literally ends physically at 30 deg.
     pub shortest_route_in_overlap: bool,
 }
 
@@ -180,22 +180,22 @@ pub struct ServerConfig {
     /// on PTT-off. FTX-1 keeps its internal auto source selection and is not driven here.
     pub yaesu_ssb_switch_on_ptt: bool,
     // -- Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) --
-    // Tweede onafhankelijke radio (bv. FTX-1). De bestaande `yaesu_*`-keys
-    // hierboven = slot 0 (back-compat); deze `yaesu2_*`-keys = slot 1. Beide
-    // delen het gedeelde Yaesu-CAT-dialect; `RadioModel` draagt de verschillen.
+    // Second independent radio (e.g. FTX-1). The existing `yaesu_*`-keys
+    // above = slot 0 (back-compat); these `yaesu2_*`-keys = slot 1. Both
+    // share the common Yaesu-CAT dialect; `RadioModel` carries the differences.
     /// Slot-1 radio serial port (e.g. "COM25").
     pub yaesu2_port: Option<String>,
     pub yaesu2_enabled: bool,
     pub yaesu2_baud: u32,
-    /// Slot-1 USB audio input device name pattern. Aparte keuze want twee
-    /// radio's melden zich mogelijk identiek als "USB Audio CODEC" (edge-case 6).
+    /// Slot-1 USB audio input device name pattern. Separate choice because two
+    /// radios may identify identically as "USB Audio CODEC" (edge-case 6).
     pub yaesu2_audio_device: Option<String>,
     /// Slot-1 USB audio OUTPUT (TX) device pattern. `None`/empty -> input pattern
     /// (PATCH-yaesu-output-device).
     pub yaesu2_audio_output_device: Option<String>,
-    /// Slot-1 capture-kanaal-keuze voor dual-RX radio's (FTX-1 = 2 fysieke
-    /// ontvangers op L/R). 0 = L (hardware-RX 1), 1 = R (hardware-RX 2),
-    /// 2 = mix (beide gesommeerd). Default 2. Mono radio's (991A) negeren dit.
+    /// Slot-1 capture-channel choice for dual-RX radios (FTX-1 = 2 physical
+    /// receivers on L/R). 0 = L (hardware-RX 1), 1 = R (hardware-RX 2),
+    /// 2 = mix (both summed). Default 2. Mono radios (991A) ignore this.
     pub yaesu2_audio_channel: u8,
     /// Amplitec 6/2 serial port (e.g. "COM3")
     pub amplitec_port: Option<String>,
@@ -227,19 +227,19 @@ pub struct ServerConfig {
     /// which tuner to drive when the user presses Tune. **Schema is wired into
     /// load/save now; the runtime + UI that consume it land in a follow-up
     /// patch, alongside the MCP2221A tuner-driver rewrite.**
-    /// Dynamische lijst (1..=`MAX_TUNERS`) van tuner-slots, een per
-    /// fysieke MCP2221A board. Vroeger een vaste `[TunerConfig; 2]`,
-    /// nu een `Vec` zodat de server schalend kan zijn naar het aantal
-    /// Amplitec-posities (max 6) zonder code-wijziging per slot.
-    /// Slot-index is 0-based intern; UI-labels en config-keys nummeren
-    /// vanaf 1 (`tuner1_*`, `tuner2_*`, ...).
+    /// Dynamic list (1..=`MAX_TUNERS`) of tuner-slots, one per
+    /// physical MCP2221A board. Previously a fixed `[TunerConfig; 2]`,
+    /// now a `Vec` so the server can scale to the number of
+    /// Amplitec-positions (max 6) without a code change per slot.
+    /// Slot-index is 0-based internally; UI-labels and config-keys number
+    /// from 1 (`tuner1_*`, `tuner2_*`, ...).
     pub tuners: Vec<TunerConfig>,
     /// Show tuner control window on start (default true)
     pub show_tuner_window: bool,
     /// Per-slot Yaesu-rotor configuration (PATCH-yaesu-rotor-mcp2221).
-    /// Een entry per MCP2221A-board met `rot_` USB-serial prefix; tot
+    /// One entry per MCP2221A-board with `rot_` USB-serial prefix; up to
     /// `MAX_ROTORS`. Runtime-binding (rotor-backend `Mcp2221Yaesu`)
-    /// landt in fase 3 van de brief; fase 1 vult het schema en de
+    /// lands in phase 3 of the brief; phase 1 fills the schema and the
     /// wizard-claim.
     pub rotors: Vec<RotorConfig>,
     /// SPE Expert 1.3K-FA serial port (e.g. "COM6")
@@ -262,31 +262,31 @@ pub struct ServerConfig {
     pub rotor_enabled: bool,
     /// Show Rotor control window on start (default true)
     pub show_rotor_window: bool,
-    /// Welke rotor-backend is actief: `"ea7hg"` (Visual Rotor, default) of
-    /// `"pstrotator"` (XML over UDP naar een externe PstRotator). Leeg of
-    /// onbekend wordt als `"ea7hg"` geinterpreteerd voor backwards-compat.
+    /// Which rotor-backend is active: `"ea7hg"` (Visual Rotor, default) or
+    /// `"pstrotator"` (XML over UDP to an external PstRotator). Empty or
+    /// unknown is interpreted as `"ea7hg"` for backwards-compat.
     pub rotor_backend: String,
-    /// PstRotator host - verwacht een numeriek IP-adres (de worker
-    /// parset `host:port` als `SocketAddr` en doet geen DNS-resolutie).
-    /// PstRotator draait vaak op een andere PC in hetzelfde LAN -
-    /// daarom geen hardcoded loopback default.
+    /// PstRotator host - expects a numeric IP address (the worker
+    /// parses `host:port` as `SocketAddr` and does no DNS resolution).
+    /// PstRotator often runs on another PC in the same LAN -
+    /// hence no hardcoded loopback default.
     pub pstrotator_host: String,
-    /// PstRotator UDP listener port voor XML-commando's. Default 12000.
+    /// PstRotator UDP listener port for XML commands. Default 12000.
     pub pstrotator_port: u16,
-    /// Lokale UDP poort waarop onze server PstRotator's reply's ontvangt
-    /// (PstRotator stuurt replies naar `port + 1` = standaard 12001).
+    /// Local UDP port on which our server receives PstRotator's replies
+    /// (PstRotator sends replies to `port + 1` = default 12001).
     pub pstrotator_feedback_port: u16,
-    /// Polle ook `EL?` voor elevation-rotors. Default `false` (alleen AZ).
+    /// Also poll `EL?` for elevation-rotors. Default `false` (AZ only).
     pub pstrotator_has_elevation: bool,
-    /// PstRotator UDP-listener (v2.1.1+): luistert parallel aan de actieve
-    /// `rotor_backend` voor inkomende azimuth-broadcasts van bv. Log4OM ->
-    /// PstRotator en zet ze om in `RotorCmd::GoTo` op de Rotor-facade.
-    /// Maakt het mogelijk om de Adafruit-rotor vanuit een logging-programma
-    /// te besturen zonder de outgoing PstRotator-backend te activeren.
+    /// PstRotator UDP-listener (v2.1.1+): listens in parallel to the active
+    /// `rotor_backend` for incoming azimuth-broadcasts from e.g. Log4OM ->
+    /// PstRotator and converts them into `RotorCmd::GoTo` on the Rotor-facade.
+    /// Makes it possible to drive the Adafruit-rotor from a logging program
+    /// without activating the outgoing PstRotator-backend.
     pub pstrotator_listen_enabled: bool,
-    /// UDP-poort voor de listener. Default 12001 (=PstRotator's standaard
-    /// feedback-poort die de outgoing kant van zijn azimuth-updates
-    /// broadcastet).
+    /// UDP-port for the listener. Default 12001 (=PstRotator's default
+    /// feedback-port that broadcasts the outgoing side of its
+    /// azimuth-updates).
     pub pstrotator_listen_port: u16,
     /// Saved window positions: [x, y]
     pub tuner_window_pos: Option<[f32; 2]>,
@@ -305,14 +305,14 @@ pub struct ServerConfig {
     pub rf2k_window_size: Option<[f32; 2]>,
     pub ultrabeam_window_size: Option<[f32; 2]>,
     pub rotor_window_size: Option<[f32; 2]>,
-    /// UI-thema van de server-GUI: "classic" (default, het oorspronkelijke
-    /// lichtgrijs), "dark", "slate" of "custom". Zelfde varianten als de client.
+    /// UI theme of the server-GUI: "classic" (default, the original
+    /// light-grey), "dark", "slate" or "custom". Same variants as the client.
     pub theme: String,
-    /// Custom-palet als `bg,widget,text,accent` (elk rrggbb). Leeg = niet ingesteld.
+    /// Custom-palette as `bg,widget,text,accent` (each rrggbb). Empty = not set.
     pub theme_custom: String,
-    /// UI-taal van de server-GUI: "en"/"nl"/"de"/"fr". Default "nl" (server was
-    /// altijd Nederlands). Gefaseerde migratie: nog-niet-gemigreerde teksten blijven
-    /// Nederlands ongeacht deze keuze.
+    /// UI language of the server-GUI: "en"/"nl"/"de"/"fr". Default "nl" (server was
+    /// always Dutch). Phased migration: not-yet-migrated texts stay
+    /// Dutch regardless of this choice.
     pub language: String,
     /// Auto-start server on launch (skip settings screen)
     pub autostart: bool,
@@ -376,7 +376,7 @@ impl Default for ServerConfig {
             yaesu2_baud: 38400,
             yaesu2_audio_device: None,
             yaesu2_audio_output_device: None,
-            yaesu2_audio_channel: 2, // mix (beide ontvangers) als veilige default
+            yaesu2_audio_channel: 2, // mix (both receivers) as a safe default
             amplitec_port: None,
             amplitec_enabled: true,
             amplitec_labels: default_labels("Ant"),
@@ -447,9 +447,9 @@ impl Default for ServerConfig {
     }
 }
 
-/// Probeert een `tuner<N>_FIELD` key te parsen. Returnt `Some((slot0_idx,
-/// field))` waarbij `slot0_idx = N - 1`. Accepteert N in 1..=`MAX_TUNERS`.
-/// Returnt `None` bij niet-tuner-keys of onbekende slot-index.
+/// Tries to parse a `tuner<N>_FIELD` key. Returns `Some((slot0_idx,
+/// field))` where `slot0_idx = N - 1`. Accepts N in 1..=`MAX_TUNERS`.
+/// Returns `None` for non-tuner-keys or an unknown slot-index.
 fn parse_tuner_slot_prefix(key: &str) -> Option<(usize, &str)> {
     let rest = key.strip_prefix("tuner")?;
     let underscore = rest.find('_')?;
@@ -461,10 +461,10 @@ fn parse_tuner_slot_prefix(key: &str) -> Option<(usize, &str)> {
     }
 }
 
-/// Vergroot de `tuners`-Vec zodat `slot0_idx` een geldige index is, met
-/// default `TunerConfig`-entries voor gaten. Operator-config kan een Vec van
-/// 0 hebben (eerste run zonder tuners) en alleen `tuner2_*` keys; in dat
-/// geval krijgen slot 0 (en eventuele andere gaten) een default-entry.
+/// Grows the `tuners`-Vec so that `slot0_idx` is a valid index, with
+/// default `TunerConfig`-entries for gaps. Operator-config may have a Vec of
+/// 0 (first run without tuners) and only `tuner2_*` keys; in that
+/// case slot 0 (and any other gaps) get a default-entry.
 fn ensure_tuner_slot(tuners: &mut Vec<TunerConfig>, slot0_idx: usize) {
     if slot0_idx >= MAX_TUNERS {
         return;
@@ -503,7 +503,7 @@ fn parse_tuner_key(t: &mut TunerConfig, sub: &str, value: &str) {
 }
 
 /// `rotor<N>_FIELD` parser parallel to `parse_tuner_slot_prefix`. Returns
-/// `(slot0_idx, sub)` voor N in 1..=`MAX_ROTORS`.
+/// `(slot0_idx, sub)` for N in 1..=`MAX_ROTORS`.
 fn parse_rotor_slot_prefix(key: &str) -> Option<(usize, &str)> {
     let rest = key.strip_prefix("rotor")?;
     let underscore = rest.find('_')?;
@@ -531,12 +531,12 @@ fn parse_rotor_key(r: &mut RotorConfig, sub: &str, value: &str) {
         "mcp_serial" => r.mcp_serial = value.to_string(),
         "v_at_0deg" => {
             if let Ok(v) = value.parse::<f32>() {
-                // Yaesu pin-4 spanning na ongedaan-maken van de
-                // printje-spanningsdeler. Met de nieuwe 1,8k+2,2k deler
-                // (ratio 1,818) reikt het meetbereik tot ~7,45 V; eerdere
-                // clamp van 5,0 V kapte de hoge-graden-kalibratie af na
-                // restart. 10 V geeft ruime marge voor alle realistische
-                // rotors zonder load-bestand corruptie te accepteren.
+                // Yaesu pin-4 voltage after undoing the
+                // board voltage-divider. With the new 1.8k+2.2k divider
+                // (ratio 1.818) the measurement range reaches ~7.45 V; an earlier
+                // clamp of 5.0 V cut off the high-degrees calibration after
+                // restart. 10 V gives ample margin for all realistic
+                // rotors without accepting load-file corruption.
                 r.v_at_0deg = v.clamp(0.0, 10.0);
             }
         }
@@ -668,12 +668,12 @@ fn load_unlocked() -> ServerConfig {
                         config.yaesu2_audio_output_device = if v.is_empty() { None } else { Some(v) };
                     }
                     "yaesu2_audio_channel" => {
-                        // Tolerant: accepteer cijfer (0/1/2) of L/R/MIX (case-insensitive).
+                        // Tolerant: accept a digit (0/1/2) or L/R/MIX (case-insensitive).
                         let v = value.trim().to_lowercase();
                         config.yaesu2_audio_channel = match v.as_str() {
                             "0" | "l" | "left" => 0,
                             "1" | "r" | "right" => 1,
-                            _ => 2, // "2"/"mix"/onbekend -> mix
+                            _ => 2, // "2"/"mix"/unknown -> mix
                         };
                     }
                     "amplitec_port" => {
@@ -711,10 +711,10 @@ fn load_unlocked() -> ServerConfig {
                         {
                             if (1..=6).contains(&idx) {
                                 let v = value.trim();
-                                // Lege string OF "0" = geen cap (None). Een
-                                // ingestelde 0 W cap is functioneel niet
-                                // bruikbaar (cap-loop zou continu vuren bij
-                                // elke fwd>0) en niet wat de operator bedoelt.
+                                // Empty string OR "0" = no cap (None). A
+                                // configured 0 W cap is functionally not
+                                // usable (the cap-loop would fire continuously on
+                                // every fwd>0) and not what the operator intends.
                                 config.amplitec_max_w[idx - 1] = match v.parse::<u16>() {
                                     Ok(0) => None,
                                     Ok(n) => Some(n),
@@ -748,17 +748,17 @@ fn load_unlocked() -> ServerConfig {
                         config.tuners[0].enabled = v;
                     }
                     "tuner_assume_tuned" => {}
-                    // Per-slot keys: `tuner<N>_FIELD=value` met N=1..MAX_TUNERS.
-                    // Auto-grow de Vec tot index N-1 zodat oude config-files
-                    // (twee slots) en nieuwe (1..6 slots) beide werken.
+                    // Per-slot keys: `tuner<N>_FIELD=value` with N=1..MAX_TUNERS.
+                    // Auto-grow the Vec to index N-1 so old config-files
+                    // (two slots) and new ones (1..6 slots) both work.
                     k if parse_tuner_slot_prefix(k).is_some() => {
                         if let Some((slot0_idx, sub)) = parse_tuner_slot_prefix(k) {
                             ensure_tuner_slot(&mut config.tuners, slot0_idx);
                             parse_tuner_key(&mut config.tuners[slot0_idx], sub, value.trim());
                         }
                     }
-                    // Per-slot rotor-keys: `rotor<N>_FIELD=value` met N=1..MAX_ROTORS.
-                    // PATCH-yaesu-rotor-mcp2221 fase 1.
+                    // Per-slot rotor-keys: `rotor<N>_FIELD=value` with N=1..MAX_ROTORS.
+                    // PATCH-yaesu-rotor-mcp2221 phase 1.
                     k if parse_rotor_slot_prefix(k).is_some() => {
                         if let Some((slot0_idx, sub)) = parse_rotor_slot_prefix(k) {
                             ensure_rotor_slot(&mut config.rotors, slot0_idx);
@@ -862,8 +862,8 @@ fn load_unlocked() -> ServerConfig {
                         config.show_rotor_window = value.trim() == "true";
                     }
                     "rotor_backend" => {
-                        // Accepteer de drie geldige backends; alles anders
-                        // valt terug op "ea7hg" voor backwards-compat.
+                        // Accept the three valid backends; anything else
+                        // falls back to "ea7hg" for backwards-compat.
                         let v = value.trim().to_lowercase();
                         config.rotor_backend = match v.as_str() {
                             "pstrotator" => "pstrotator".to_string(),
@@ -992,7 +992,7 @@ fn load_unlocked() -> ServerConfig {
                         config.theme_custom = value.trim().to_string();
                     }
                     "language" => {
-                        // Accepteer alleen talen met een locale (en/nl/de/fr); anders nl.
+                        // Accept only languages with a locale (en/nl/de/fr); otherwise nl.
                         config.language = match value.trim() {
                             "en" | "nl" | "de" | "fr" => value.trim().to_string(),
                             _ => "nl".to_string(),
@@ -1167,9 +1167,9 @@ fn save_unlocked(config: &ServerConfig) {
         config.rotor_enabled,
         config.show_rotor_window,
     );
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1). Apart geblokt zodat het
-    // bestaande config-format ongewijzigd blijft bij upgrade (oude bestanden
-    // zonder deze keys laden gewoon de defaults: slot 1 disabled).
+    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1). Blocked separately so the
+    // existing config-format stays unchanged on upgrade (old files
+    // without these keys simply load the defaults: slot 1 disabled).
     contents.push_str(&format!("rx2_present={}\n", config.rx2_present));
     contents.push_str(&format!("yaesu2_port={}\n", config.yaesu2_port.as_deref().unwrap_or("")));
     contents.push_str(&format!("yaesu2_enabled={}\n", config.yaesu2_enabled));
@@ -1177,8 +1177,8 @@ fn save_unlocked(config: &ServerConfig) {
     contents.push_str(&format!("yaesu2_audio={}\n", config.yaesu2_audio_device.as_deref().unwrap_or("")));
     contents.push_str(&format!("yaesu2_audio_out={}\n", config.yaesu2_audio_output_device.as_deref().unwrap_or("")));
     contents.push_str(&format!("yaesu2_audio_channel={}\n", config.yaesu2_audio_channel));
-    // Rotor backend keuze + PstRotator-velden. Apart geblokt zodat de
-    // bestaande EA7HG-config-format ongewijzigd blijft bij upgrade.
+    // Rotor backend choice + PstRotator-fields. Blocked separately so the
+    // existing EA7HG-config-format stays unchanged on upgrade.
     contents.push_str(&format!("rotor_backend={}\n", config.rotor_backend));
     contents.push_str(&format!("pstrotator_host={}\n", config.pstrotator_host));
     contents.push_str(&format!("pstrotator_port={}\n", config.pstrotator_port));
@@ -1212,9 +1212,9 @@ fn save_unlocked(config: &ServerConfig) {
         contents.push_str(&format!("{}_threshold_v={}\n", prefix, t.threshold_v));
         contents.push_str(&format!("{}_hysteresis_v={}\n", prefix, t.hysteresis_v));
     }
-    // Per-rotor slots (PATCH-yaesu-rotor-mcp2221 fase 1) - rotor1_* / rotor2_*
-    // keys. Fase 1 schrijft alleen enabled / name / mcp_serial; latere fasen
-    // breiden uit met kalibratie + speed-velden.
+    // Per-rotor slots (PATCH-yaesu-rotor-mcp2221 phase 1) - rotor1_* / rotor2_*
+    // keys. Phase 1 writes only enabled / name / mcp_serial; later phases
+    // extend it with calibration + speed-fields.
     for (i, r) in config.rotors.iter().enumerate() {
         let prefix = format!("rotor{}", i + 1);
         contents.push_str(&format!("{}_enabled={}\n", prefix, r.enabled));

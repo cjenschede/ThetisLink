@@ -196,11 +196,11 @@ fn read_packet(port: &mut Box<dyn serialport::SerialPort>) -> Result<(u8, u8, Ve
                         return Err("Packet too short".to_string());
                     }
                     // Verify: computing checksum over all bytes including CHK should yield 1.
-                    // Note: ~elke 84-148s stuurt de RCU-06 een unsolicited broadcast frame
-                    // (3 bursts) met een afwijkende checksum-init waardoor verify=0x81. Deze
-                    // worden door read_packet als "Checksum mismatch (got 129)" gerapporteerd
-                    // en in de poll-loop herstelt zich na ~30s. Geen functionele impact -
-                    // motor-positie wordt door de RCU-06 zelf bijgehouden.
+                    // Note: ~every 84-148s the RCU-06 sends an unsolicited broadcast frame
+                    // (3 bursts) with a deviating checksum-init that makes verify=0x81. These
+                    // are reported by read_packet as "Checksum mismatch (got 129)"
+                    // and the poll-loop recovers after ~30s. No functional impact -
+                    // motor position is tracked by the RCU-06 itself.
                     let verify = compute_checksum(&payload);
                     if verify != 1 {
                         return Err(format!("Checksum mismatch (got {})", verify));
@@ -251,17 +251,17 @@ fn parse_status(data: &[u8]) -> Result<UltraBeamStatus, String> {
     s.frequency_khz = u16::from_le_bytes([data[3], data[4]]);
     s.band = data[5];
     s.direction = data[6];
-    // byte 7 bit 0 = "any motor moving" / busy. Field naam blijft `off_state`
-    // (al is dat misleidend) om de huidige API niet te breken; de UI gebruikt
-    // bit 0 van `motors_moving` voor per-motor weergave.
+    // byte 7 bit 0 = "any motor moving" / busy. Field name stays `off_state`
+    // (even though that is misleading) to avoid breaking the current API; the UI uses
+    // bit 0 of `motors_moving` for per-motor display.
     let flags = data[7];
     s.off_state = (flags & 0x01) != 0;
-    // byte 8 is een controller-state byte (geen motion-info); momenteel niet
-    // gebruikt door de UI. byte 9 is de per-motor moving bitfield:
+    // byte 8 is a controller-state byte (no motion info); currently not
+    // used by the UI. byte 9 is the per-motor moving bitfield:
     // bit 0 = motor 1, bit 1 = motor 2.
     s.motors_moving = data[9];
     s.freq_max_mhz = data[10];
-    // data[11..] = trailing bytes, niet geïnterpreteerd
+    // data[11..] = trailing bytes, not interpreted
     Ok(s)
 }
 
@@ -469,10 +469,10 @@ fn ultrabeam_thread(
                 match parse_status(&data) {
                     Ok(parsed) => {
                         let mut s = status.lock().unwrap();
-                        // Behoud elements_mm en motor_progress over status-polls heen -
-                        // die worden door aparte CMD_READ_ELEMENTS / CMD_MOTOR_PROGRESS
-                        // commando's gevuld en moeten niet door elke status-poll naar 0
-                        // gezet worden.
+                        // Preserve elements_mm and motor_progress across status polls -
+                        // these are filled by separate CMD_READ_ELEMENTS / CMD_MOTOR_PROGRESS
+                        // commands and must not be reset to 0 by every status
+                        // poll.
                         let preserved_elements = s.elements_mm;
                         let preserved_motor_dist = s.motor_distance_mm;
                         let preserved_motor_compl = s.motor_completion;
@@ -500,8 +500,8 @@ fn ultrabeam_thread(
         }
         seq = seq.wrapping_add(1);
 
-        // Per-motor moving bitfield (motors_moving) bevat bit 0 = motor 1, bit 1 =
-        // motor 2. Beide nul = niemand beweegt; geen progress-poll nodig.
+        // Per-motor moving bitfield (motors_moving) contains bit 0 = motor 1, bit 1 =
+        // motor 2. Both zero = nobody moving; no progress poll needed.
         {
             let moving = status.lock().unwrap().motors_moving;
             if moving != 0 {

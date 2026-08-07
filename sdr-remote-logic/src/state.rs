@@ -113,6 +113,25 @@ pub enum ConnectError {
     },
 }
 
+impl ConnectStatus {
+    /// True only when the server explicitly reports that Thetis.exe is not
+    /// running on the server PC. An old server that advertises no process
+    /// state (`None`) reads as false - "we don't know" must never be treated
+    /// as "not running", because clients act on this by launching Thetis.
+    ///
+    /// Shared by the desktop client and the Android bridge so both platforms
+    /// gate their Thetis-autostart on exactly the same condition.
+    pub fn thetis_reported_not_running(&self) -> bool {
+        matches!(
+            self,
+            ConnectStatus::Failed(ConnectError::TciUnreachable {
+                thetis_process_running: Some(false),
+                ..
+            })
+        )
+    }
+}
+
 /// Read-only radio state, broadcast from engine to UI via tokio::sync::watch.
 #[derive(Clone, Debug)]
 pub struct RadioState {
@@ -144,16 +163,16 @@ pub struct RadioState {
     pub vrx2_jitter_ms: f32,
     pub vrx2_buffer_depth: u32,
     pub loss_percent: u8,
-    /// Inkomende UDP-bandbreedte over het laatste ~500 ms venster (Kbit/s).
-    /// Telt alle ontvangen bytes op de socket; geen breakdown per stream-type.
+    /// Incoming UDP bandwidth over the last ~500 ms window (Kbit/s).
+    /// Counts all bytes received on the socket; no breakdown per stream-type.
     pub down_kbps: u32,
-    /// Uitgaande UDP-bandbreedte over het laatste ~500 ms venster (Kbit/s).
-    /// Telt alle verzonden bytes (audio TX + control + heartbeat).
+    /// Outgoing UDP bandwidth over the last ~500 ms window (Kbit/s).
+    /// Counts all bytes sent (audio TX + control + heartbeat).
     pub up_kbps: u32,
-    /// Per-`PacketType` byte-counter — kbps over het laatste ~5 s window,
-    /// gesorteerd op afnemende waarde. Gevuld door de engine, gelezen
-    /// door de Server-tab UI als expand-detail onder Down. Lege vec =
-    /// geen data nog beschikbaar.
+    /// Per-`PacketType` byte-counter — kbps over the last ~5 s window,
+    /// sorted by decreasing value. Filled by the engine, read
+    /// by the Server-tab UI as expand-detail under Down. Empty vec =
+    /// no data available yet.
     pub bw_breakdown: Vec<(u8, u32)>,
 
     // Audio levels
@@ -206,16 +225,20 @@ pub struct RadioState {
     pub mon_on: bool,
     pub tx_profile_names: Vec<String>,
 
-    // DX-cluster spot stream — toggle voor metered-link data-saving
+    // DX-cluster spot stream — toggle for metered-link data-saving
     pub dx_spots_enabled: bool,
+    /// Whether the server still sends the full-DDC spectrum row next to the
+    /// extracted view. Off = the RX waterfall is built from the view alone,
+    /// like VRX, at roughly half the spectrum bandwidth per receiver.
+    pub full_spectrum_enabled: bool,
 
-    /// RX1 audio-abonnement (default AAN). False = client wil geen RX1-audio
-    /// (bijv. alleen-VRX-gebruik, bandbreedte sparen).
+    /// RX1 audio subscription (default ON). False = client wants no RX1 audio
+    /// (e.g. VRX-only use, saving bandwidth).
     pub rx1_enabled: bool,
 
     // RX2 / VFO-B
     pub rx2_enabled: bool,
-    /// RX2 spectrum-abonnement, LOS van `rx2_enabled` (audio). Fase 3b/4.
+    /// RX2 spectrum subscription, SEPARATE from `rx2_enabled` (audio). Phase 3b/4.
     pub rx2_spectrum_enabled: bool,
     pub vfo_sync: bool,
     pub frequency_rx2_hz: u64,
@@ -296,14 +319,14 @@ pub struct RadioState {
     pub amplitec_switch_a: u8,  // 0=unknown, 1-6
     pub amplitec_switch_b: u8,
     pub amplitec_labels: String,  // comma-separated: "a1,a2,...,a6,b1,...,b6" (empty = not received)
-    /// Amplitec power-cap table per Amplitec-A positie (index 0 = A-1).
-    /// 0 = geen cap. Server pusht bij connect en bij wijziging.
+    /// Amplitec power-cap table per Amplitec-A position (index 0 = A-1).
+    /// 0 = no cap. Server pushes on connect and on change.
     pub amplitec_power_max_w: [u16; 6],
-    /// TX-block per positie. `true` = RX-only.
+    /// TX-block per position. `true` = RX-only.
     pub amplitec_power_tx_blocked: [bool; 6],
-    /// True zodra de server een AmplitecPowerTable packet heeft gepusht.
-    /// Wordt door de client-UI gebruikt om te wachten met initialiseren
-    /// van de edit-state tot we de echte waardes hebben.
+    /// True once the server has pushed an AmplitecPowerTable packet.
+    /// Used by the client UI to defer initializing
+    /// the edit-state until we have the real values.
     pub amplitec_power_loaded: bool,
 
     // JC-4s antenna tuner
@@ -417,8 +440,8 @@ pub struct RadioState {
     pub yaesu_power_on: bool,
     pub yaesu_af_gain: u8,
     pub yaesu_tx_power: u8,
-    /// Max TX-vermogen (watt) voor de huidige band (PATCH-yaesu-power-scaling).
-    /// 0 = oude server/onbekend -> client valt terug op 100 voor het sliderbereik.
+    /// Max TX power (watts) for the current band (PATCH-yaesu-power-scaling).
+    /// 0 = old server/unknown -> client falls back to 100 for the slider range.
     pub yaesu_tx_power_max: u8,
     pub yaesu_squelch: u8,
     pub yaesu_rf_gain: u8,
@@ -440,10 +463,10 @@ pub struct RadioState {
     pub yaesu_vfo_select: u8,  // 0=VFO, 1=Memory, 2=MemTune
     pub yaesu_memory_channel: u16,
     pub yaesu_memory_data: Option<String>,
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror van de slot-0
-    // Yaesu-velden hierboven. `*_model` = wire-code uit RadioInfo (0=991A,
-    // 1=FTX1) voor paneel-naamgeving. yaesu2_connected wordt true zodra een
-    // YaesuState2-packet binnenkomt → de UI toont dan het 2e paneel.
+    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror of the slot-0
+    // Yaesu fields above. `*_model` = wire-code from RadioInfo (0=991A,
+    // 1=FTX1) for panel naming. yaesu2_connected becomes true once a
+    // YaesuState2 packet arrives → the UI then shows the 2nd panel.
     pub yaesu_model: u8,
     pub yaesu2_model: u8,
     pub yaesu2_connected: bool,
@@ -468,7 +491,7 @@ pub struct RadioState {
     pub yaesu2_feature_freqs: [u16; 4],
     pub yaesu2_vfo_select: u8,
     pub yaesu2_memory_channel: u16,
-    pub yaesu2_memory_data: Option<String>, // tab-separated geheugen-dump radio 2 (Fase B)
+    pub yaesu2_memory_data: Option<String>, // tab-separated memory-dump radio 2 (Phase B)
     // New TCI controls (v2.10.3.13)
     pub agc_mode: u8,       // 0=off, 1=long, 2=slow, 3=med, 4=fast, 5=custom
     pub agc_gain: u8,       // 0-120
@@ -570,6 +593,7 @@ impl Default for RadioState {
             mon_on: false,
             tx_profile_names: Vec::new(),
             dx_spots_enabled: true,
+            full_spectrum_enabled: true,
             rx1_enabled: true,
             rx2_enabled: false,
             rx2_spectrum_enabled: false,

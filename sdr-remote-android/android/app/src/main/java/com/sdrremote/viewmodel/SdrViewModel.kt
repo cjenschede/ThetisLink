@@ -3,6 +3,7 @@
 package com.sdrremote.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -21,6 +22,9 @@ import kotlinx.coroutines.launch
 import uniffi.sdr_remote.SdrBridge
 
 private const val TAG = "SdrViewModel"
+
+/** ControlId::PowerOnOff in protocol.rs - value 1 = power on / launch Thetis. */
+private const val CONTROL_POWER = 0x02
 
 private enum class PttTarget { Thetis, Yaesu0, Yaesu1 }
 
@@ -183,6 +187,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         filterHighHz = s.filterHighHz,
                         thetisConfigured = s.thetisConfigured,
                         thetisStarting = s.thetisStarting,
+                        thetisNotRunning = s.thetisNotRunning,
                         txProfileNames = s.txProfileNames,
                         spectrumBins = s.spectrumBins,
                         spectrumCenterHz = s.spectrumCenterHz.toLong(),
@@ -344,11 +349,69 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                     // Presence-autocorrectie: subscription/audio meeschakelen als een
                     // radio wegvalt/bijkomt.
                     checkYaesuPresenceAutoSwitch()
+                    maybeAutostartThetis(s.connected, s.thetisNotRunning, s.thetisStarting)
+                    // Keep the engine's TX chain on the radio that is actually
+                    // selected, regardless of which screen is composed.
+                    syncTxChainForRadio(_state.value.selectedRadio)
                 } catch (e: Exception) {
                     Log.e(TAG, "Polling error", e)
                 }
             }
         }
+    }
+
+    /** Radio the per-radio TX chain was last pushed for; -1 = nothing pushed yet. */
+    private var lastTxChainRadio: Int = -1
+
+    /** Push the selected radio's mic gain and compressor into the engine.
+     *
+     *  Same class of bug as the Thetis autostart: this used to be a
+     *  LaunchedEffect inside the Yaesu tab, so switching radio while that tab
+     *  was not composed left the engine on the PREVIOUS radio's mic gain and
+     *  compressor - invisible, because opening the tab shows sliders read from
+     *  the per-radio preferences, which then match nothing that is being sent.
+     *  With TX in the path that is not a cosmetic mismatch, so it is driven from
+     *  the state stream instead of from composition.
+     *
+     *  Values and preference keys are exactly the ones the sliders use
+     *  (`thetislink_eq`), so the UI and the engine cannot disagree. */
+    private fun syncTxChainForRadio(radio: Int) {
+        if (radio == lastTxChainRadio) return
+        lastTxChainRadio = radio
+        val prefs = getApplication<Application>()
+            .getSharedPreferences("thetislink_eq", Context.MODE_PRIVATE)
+        val micGain = prefs.getFloat("yaesu_mic_gain_$radio", 0.2f)
+        // Migration fallback on the older shared key, as the slider does.
+        val comp = prefs.getFloat("yaesu_comp_$radio", prefs.getFloat("yaesu_comp", 0f))
+        Log.i(TAG, "TX chain -> radio $radio: mic gain $micGain, compressor ${comp.toInt()}")
+        yaesuTxGainSel(micGain)
+        yaesuCompressor(comp.toInt())
+    }
+
+    /** One-shot latch for the Thetis-autostart option. Process-lifetime: the
+     *  launch happens once per app start, so a launch that failed - or a Thetis
+     *  the user powers off on purpose afterwards - is not re-sent on the next
+     *  reconnect. */
+    private var thetisAutostartFired = false
+
+    /** Launch Thetis on the server PC when the user ticked "Start Thetis
+     *  automatically" on the Radio screen and the server explicitly reports
+     *  Thetis is not running. Sends the same control as a short press on the
+     *  power button.
+     *
+     *  Driven from the polling loop rather than from a Compose effect: the
+     *  power controls sit in a LazyColumn item, so a UI-side effect only runs
+     *  while that item is composed - it missed the launch whenever the screen
+     *  was scrolled elsewhere or the app had just started. Mirrors the desktop
+     *  client, where the same check hangs in the always-running frame loop. */
+    private fun maybeAutostartThetis(connected: Boolean, thetisNotRunning: Boolean, thetisStarting: Boolean) {
+        if (thetisAutostartFired || !connected || !thetisNotRunning || thetisStarting) return
+        val prefs = getApplication<Application>()
+            .getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("thetis_autostart", false)) return
+        thetisAutostartFired = true
+        Log.i(TAG, "Thetis autostart: server reports Thetis not running, sending power-on")
+        setControl(CONTROL_POWER, 1)
     }
 
     private var lastHeadsetActive: Boolean? = null

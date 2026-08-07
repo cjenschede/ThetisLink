@@ -104,8 +104,8 @@ pub struct StatusPanelShared {
     /// threshold + hysteresis sliders) without needing a separate channel.
     pub tuners_slot: Arc<std::sync::OnceLock<Arc<crate::tuner::Tuners>>>,
     /// Live Yaesu-rotor instance (PATCH-yaesu-rotor-mcp2221 fase 3).
-    /// `None` zolang er geen `rot_*` MCP2221A in `config.rotors` zit,
-    /// of zolang server-start nog niet de poll-thread heeft opgestart.
+    /// `None` as long as there is no `rot_*` MCP2221A in `config.rotors`,
+    /// or as long as server-start has not yet spun up the poll thread.
     pub rotor_slot: Arc<std::sync::OnceLock<Arc<crate::mcp2221_yaesu_rotor::RotorInstance>>>,
     /// Optional outbound relay monitor status (Phase A: status only, no TL frames routed).
     pub relay_status: Arc<std::sync::OnceLock<sdr_remote_relay::RelayStatusHandle>>,

@@ -68,7 +68,7 @@ pub enum Command {
     Rf2kTunerCUp,
     Rf2kTunerCDown,
     Rf2kTunerK,
-    // RF2K-S debug (Fase D)
+    // RF2K-S debug (Phase D)
     Rf2kSetHighPower(bool),
     Rf2kSetTuner6m(bool),
     Rf2kSetBandGap(bool),
@@ -86,8 +86,8 @@ pub enum Command {
     SetYaesuFreq(u64),
     SetYaesuMode(u8),
     SetYaesuMenu(u16, String), // (menu number, P2 value)
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — spiegel van de slot-0
-    // Yaesu-commando's, geroute naar radio 1 (Yaesu2*-controls / FrequencyYaesu2).
+    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror of the slot-0
+    // Yaesu commands, routed to radio 1 (Yaesu2*-controls / FrequencyYaesu2).
     SetYaesu2Enable(bool),
     SetYaesu2Volume(f32),
     SetYaesu2Ptt(bool),
@@ -96,8 +96,8 @@ pub enum Command {
     SetYaesu2TxGain(f32),
     SetYaesu2EqBand(u8, f32),
     SetYaesu2EqEnabled(bool),
-    /// FTX-1 EX-menu set (Fase C): (adres "p1p2p3", waarde). Reist als
-    /// YaesuMemoryData2 met "SETMENU:"-prefix naar de server.
+    /// FTX-1 EX-menu set (Phase C): (address "p1p2p3", value). Travels as
+    /// YaesuMemoryData2 with a "SETMENU:" prefix to the server.
     SetYaesu2Menu(String, String),
     // VRX1 (Virtual RX on RX1 IQ + VFO-A)
     SetVrxEnabled(bool),
@@ -131,13 +131,13 @@ pub enum Command {
     /// (slot 0=radio1/1=radio2, control=YaesuCtrl as u8, value=toggle 0/1 or level).
     SetYaesuControl(u8, u8, u16),
     WriteYaesuMemories(String), // tab-separated text to write to radio
-    WriteYaesu2Memories(String), // idem radio 2 (Fase B)
+    WriteYaesu2Memories(String), // same for radio 2 (Phase B)
     SetYaesuTxGain(f32),
     // Yaesu EQ: (band 0-4, gain_db -12..+12)
     SetYaesuEqBand(u8, f32),
     SetYaesuEqEnabled(bool),
-    // Client-side Yaesu TX-keten per radio (net als de EQ): compressor-amount 0-100
-    // en eigen AGC-toggle (los van de Thetis-AGC). Radio-processing werkt niet op USB.
+    // Client-side Yaesu TX chain per radio (just like the EQ): compressor-amount 0-100
+    // and its own AGC toggle (separate from the Thetis AGC). Radio processing does not work over USB.
     SetYaesuCompressor(u8),
     SetYaesuTxAgc(bool),
     SetYaesu2Compressor(u8),
@@ -146,14 +146,16 @@ pub enum Command {
     ThetisTune(bool),
     // TX Monitor
     SetMonitor(bool),
-    // DX-cluster spot stream opt-out (data-saving voor metered links)
+    // DX-cluster spot stream opt-out (data-saving for metered links)
     SetDxSpotsEnabled(bool),
-    /// Thetis-audio wideband opt-in (16 kHz Opus i.p.v. 8 kHz default).
-    /// Stuurt `ControlId::ThetisWidebandAudio` naar server en switcht
-    /// lokaal decoder/resampler pad bij ontvangst van WB-getagde audio
+    /// Ask the server to stop/resume the extra full-DDC spectrum row.
+    SetFullSpectrumEnabled(bool),
+    /// Thetis-audio wideband opt-in (16 kHz Opus instead of 8 kHz default).
+    /// Sends `ControlId::ThetisWidebandAudio` to the server and switches
+    /// the local decoder/resampler path on receipt of WB-tagged audio
     /// packets.
     SetThetisWidebandAudio(bool),
-    // RX1 audio-abonnement (default aan; false = geen RX1-audio, bandbreedte sparen)
+    // RX1 audio subscription (default on; false = no RX1 audio, save bandwidth)
     SetRx1Enabled(bool),
     // RX2 / VFO-B
     SetRx2Enabled(bool),

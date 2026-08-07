@@ -73,6 +73,9 @@ data class SdrUiState(
     val filterHighHz: Int = 0,
     val thetisConfigured: Boolean = true,
     val thetisStarting: Boolean = false,
+    /// Server explicitly reports Thetis is not running on the server PC.
+    /// Drives the Thetis-autostart option on the Radio screen.
+    val thetisNotRunning: Boolean = false,
     val txProfileNames: List<String> = emptyList(),
     // Spectrum (extracted view)
     val spectrumBins: List<UByte> = emptyList(),

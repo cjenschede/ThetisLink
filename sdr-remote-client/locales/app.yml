@@ -161,6 +161,41 @@ screen_starting:
   nl: "STARTEN..."
   de: "STARTET..."
   fr: "DÉMARRAGE..."
+screen_audio_levels_hover:
+  en: "Receive bars show the level as received, before the volume sliders. The mic bar shows what is transmitted, after gain and compressor."
+  nl: "De ontvangstbalken tonen het niveau zoals ontvangen, vóór de volumeschuiven. De mic-balk toont wat er uitgezonden wordt, ná gain en compressor."
+  de: "Die Empfangsbalken zeigen den Pegel wie empfangen, vor den Lautstärkereglern. Der Mic-Balken zeigt, was gesendet wird, nach Gain und Kompressor."
+  fr: "Les barres de réception montrent le niveau tel que reçu, avant les curseurs de volume. La barre micro montre ce qui est émis, après gain et compresseur."
+dev_mem_tone_write_hint:
+  en: "Written to the radio with \"Write to radio\": the channel is briefly recalled, because the tone is not part of the memory write itself"
+  nl: "Wordt met \"Schrijf naar radio\" opgeslagen: het kanaal wordt daarbij even opgeroepen, want de toon zit niet in het geheugenschrijfcommando zelf"
+  de: "Wird mit \"Ins Funkgerät schreiben\" gespeichert: der Kanal wird dabei kurz aufgerufen, denn der Ton ist nicht Teil des Speicherbefehls"
+  fr: "Enregistré avec \"Écrire dans la radio\" : le canal est rappelé brièvement, car la tonalité ne fait pas partie de la commande d'écriture mémoire"
+dev_read_tones:
+  en: "Read tones"
+  nl: "Tonen uitlezen"
+  de: "Töne auslesen"
+  fr: "Lire les tonalités"
+dev_read_tones_hover:
+  en: "Reads the CTCSS/DCS tone of every channel that has a tone mode. The radio briefly steps through those channels and returns where it was. Read the memories first."
+  nl: "Leest de CTCSS/DCS-toon van elk kanaal met een toonmodus. De radio loopt die kanalen even langs en gaat daarna terug naar waar hij stond. Lees eerst de geheugens in."
+  de: "Liest den CTCSS/DCS-Ton jedes Kanals mit Tonmodus. Das Funkgerät geht diese Kanäle kurz durch und kehrt danach zurück. Zuerst die Speicher einlesen."
+  fr: "Lit la tonalité CTCSS/DCS de chaque canal doté d'un mode tonalité. La radio parcourt brièvement ces canaux puis revient. Lisez d'abord les mémoires."
+dev_mem_field_not_stored:
+  en: "The radio does not report this memory field over CAT, or it does not apply in this mode"
+  nl: "De radio geeft dit geheugenveld niet door via CAT, of het speelt niet in deze mode"
+  de: "Das Funkgerät meldet dieses Speicherfeld nicht über CAT, oder es gilt in diesem Modus nicht"
+  fr: "La radio ne transmet pas ce champ mémoire via CAT, ou il ne s'applique pas dans ce mode"
+screen_thetis_autostart:
+  en: "Start Thetis automatically"
+  nl: "Thetis automatisch starten"
+  de: "Thetis automatisch starten"
+  fr: "Démarrer Thetis automatiquement"
+screen_thetis_autostart_hover:
+  en: "When this client starts and Thetis is not running on the server PC, launch it once. A later manual power-off is not undone."
+  nl: "Als deze client opstart en Thetis draait niet op de server-PC, start hem dan eenmalig. Een latere handmatige uitschakeling wordt niet ongedaan gemaakt."
+  de: "Wenn dieser Client startet und Thetis auf dem Server-PC nicht läuft, wird es einmalig gestartet. Ein späteres manuelles Ausschalten wird nicht rückgängig gemacht."
+  fr: "Si ce client démarre et que Thetis ne tourne pas sur le PC serveur, le lancer une seule fois. Un arrêt manuel ultérieur n'est pas annulé."
 screen_power_on:
   en: "POWER ON"
   nl: "INSCHAKELEN"
@@ -656,6 +691,16 @@ screen_receive_dx_spots:
   nl: "DX-spots ontvangen"
   de: "DX-Spots empfangen"
   fr: "Recevoir les spots DX"
+screen_full_spectrum_row:
+  en: "Full-band spectrum row per (V)RX chain"
+  nl: "Volbandspectrumrij per (V)RX-keten"
+  de: "Vollband-Spektrumzeile pro (V)RX-Kette"
+  fr: "Ligne de spectre pleine bande par chaîne (V)RX"
+screen_full_spectrum_row_hover:
+  en: "One extra full-DDC row per chain, shared by RX1+VRX1 and by RX2+VRX2. Keeps the waterfall history filled after tuning or zooming, and holds the plot steady while tuning fast. Off: every waterfall follows its own view, at roughly half the spectrum data."
+  nl: "Eén extra volledige DDC-rij per keten, gedeeld door RX1+VRX1 en door RX2+VRX2. Houdt de watervalhistorie gevuld na afstemmen of zoomen, en houdt het plaatje rustig tijdens snel afstemmen. Uit: elke waterval volgt zijn eigen weergave, met ongeveer de helft van de spectrumdata."
+  de: "Eine zusätzliche Voll-DDC-Zeile pro Kette, gemeinsam genutzt von RX1+VRX1 und von RX2+VRX2. Hält den Wasserfallverlauf nach Abstimmen oder Zoomen gefüllt und die Anzeige beim schnellen Abstimmen ruhig. Aus: jeder Wasserfall folgt seiner eigenen Ansicht, mit etwa halb so vielen Spektrumdaten."
+  fr: "Une ligne DDC complète supplémentaire par chaîne, partagée par RX1+VRX1 et par RX2+VRX2. Garde l'historique de la cascade rempli après un accord ou un zoom, et stabilise le tracé pendant l'accord rapide. Désactivé : chaque cascade suit sa propre vue, avec environ moitié moins de données spectre."
 screen_wideband_thetis_audio:
   en: "Wideband Thetis audio (FM/AM clearer, ~2x data)"
   nl: "Breedband Thetis-audio (FM/AM helderder, ~2x data)"
@@ -835,10 +880,10 @@ main_meter_click_hover:
   de: "Klick: S-Meter umschalten (Balken / analog)"
   fr: "Clic : basculer le S-mètre (barre / analogique)"
 main_vrx_enable_hover:
-  en: "Enable/disable VRX%{n} audio and spectrum."
-  nl: "VRX%{n}-audio en -spectrum in-/uitschakelen."
-  de: "VRX%{n}-Audio und -Spektrum ein-/ausschalten."
-  fr: "Activer/désactiver l'audio et le spectre de VRX%{n}."
+  en: "VRX%{n} audio on/off. Off saves bandwidth; the spectrum has its own switch."
+  nl: "VRX%{n}-audio aan/uit. Uit bespaart bandbreedte; het spectrum heeft zijn eigen schakelaar."
+  de: "VRX%{n}-Audio ein/aus. Aus spart Bandbreite; das Spektrum hat einen eigenen Schalter."
+  fr: "Audio VRX%{n} activé/désactivé. Désactivé économise de la bande passante ; le spectre a son propre bouton."
 main_vrx_copy_hover_a:
   en: "Copy VFO-A to VRX%{n}."
   nl: "Kopieer VFO-A naar VRX%{n}."
@@ -1184,11 +1229,16 @@ main_ptt_blocked:
   nl: "PTT geblokkeerd"
   de: "PTT blockiert"
   fr: "PTT bloqué"
+main_hover_master_volume:
+  en: "Overall playback volume: applies to every channel (RX, VRX and Yaesu) on top of each channel's own volume."
+  nl: "Totaal weergavevolume: werkt op elk kanaal (RX, VRX en Yaesu), bovenop het eigen volume van dat kanaal."
+  de: "Gesamtwiedergabelautstärke: wirkt auf jeden Kanal (RX, VRX und Yaesu), zusätzlich zur eigenen Lautstärke des Kanals."
+  fr: "Volume de lecture global : s'applique à chaque canal (RX, VRX et Yaesu), en plus du volume propre du canal."
 main_master_label:
   en: "Master:"
   nl: "Master:"
   de: "Master:"
-  fr: "Master :"
+  fr: "Volume principal :"
 main_disconnect:
   en: "Disconnect"
   nl: "Verbreken"
@@ -1264,26 +1314,26 @@ main_hover_chip_audio:
   nl: "%{name}-audio in-/uitschakelen. Uit bespaart bandbreedte."
   de: "%{name}-Audio ein-/ausschalten. Aus spart Bandbreite."
   fr: "Activer/désactiver l'audio %{name}. Désactivé économise la bande passante."
-main_hover_chip_spectrum:
-  en: "Enable/disable %{name} spectrum (separate from the audio checkbox)."
-  nl: "%{name}-spectrum in-/uitschakelen (los van het audio-vinkje)."
-  de: "%{name}-Spektrum ein-/ausschalten (getrennt vom Audio-Kontrollkästchen)."
-  fr: "Activer/désactiver le spectre %{name} (indépendant de la case audio)."
+main_hover_chip_window:
+  en: "Open/close the %{name} window (spectrum + waterfall). Closed also stops the spectrum stream."
+  nl: "Het %{name}-venster openen/sluiten (spectrum + waterval). Dicht stopt ook de spectrumstroom."
+  de: "Das %{name}-Fenster öffnen/schließen (Spektrum + Wasserfall). Geschlossen stoppt auch den Spektrumstrom."
+  fr: "Ouvrir/fermer la fenêtre %{name} (spectre + cascade). Fermée, le flux de spectre s'arrête aussi."
 main_hover_yaesu_audio:
   en: "%{label} - audio on/off. Off saves bandwidth."
   nl: "%{label} - audio aan/uit. Uit bespaart bandbreedte."
   de: "%{label} - Audio ein/aus. Aus spart Bandbreite."
   fr: "%{label} - audio activé/désactivé. Désactivé économise la bande passante."
-main_chip_close:
-  en: "close"
-  nl: "sluiten"
-  de: "schließen"
-  fr: "fermer"
-main_chip_win:
-  en: "win"
-  nl: "win"
-  de: "win"
-  fr: "win"
+main_chip_audio:
+  en: "audio"
+  nl: "audio"
+  de: "Audio"
+  fr: "audio"
+main_chip_window:
+  en: "window"
+  nl: "venster"
+  de: "Fenster"
+  fr: "fenêtre"
 main_hover_yaesu_window:
   en: "Open/close the %{label} control window (freq/PTT/DSP)"
   nl: "Het %{label}-bedieningsvenster openen/sluiten (freq/PTT/DSP)"
@@ -1431,6 +1481,11 @@ dev_no_cap:
   nl: "0 W = geen limiet"
   de: "0 W = keine Grenze"
   fr: "0 W = aucune limite"
+dev_edit_on_server:
+  en: "Read-only - edit this table in the server's Amplitec window (0 W = no cap)."
+  nl: "Alleen-lezen - bewerk deze tabel in het Amplitec-venster van de server (0 W = geen limiet)."
+  de: "Nur Lesen - diese Tabelle im Amplitec-Fenster des Servers bearbeiten (0 W = kein Limit)."
+  fr: "Lecture seule - modifiez cette table dans la fenêtre Amplitec du serveur (0 W = pas de limite)."
 dev_log:
   en: "Log"
   nl: "Log"

@@ -212,8 +212,8 @@ impl ClientAudio {
         // speaker/chassis switch-on spike decays before mic audio reaches TX.
         let mut was_open = false;
         let mut gate_delay_remaining: u32 = 0;
-        // Pre-allocated scratch - bewaart capacity over callback-aanroepen heen om
-        // real-time alloc op de audio-thread te voorkomen (latency-prioriteit).
+        // Pre-allocated scratch - retains capacity across callback invocations to
+        // avoid real-time alloc on the audio thread (latency priority).
         let mut mono_scratch: Vec<f32> = Vec::with_capacity(8192);
         let capture_stream = input_device
             .build_input_stream(
@@ -268,8 +268,8 @@ impl ClientAudio {
         let alarm_rate = self.playback_sample_rate;
         let mut alarm_pos: u32 = 0;
         let mut alarm_phase: f32 = 0.0;
-        // Pre-allocated scratches voor mute-drain en stereo-read. Capacity groeit
-        // automatisch bij eerste call die meer nodig heeft; daarna geen alloc meer.
+        // Pre-allocated scratches for mute-drain and stereo-read. Capacity grows
+        // automatically on the first call that needs more; no alloc after that.
         let mut drain_scratch: Vec<f32> = Vec::with_capacity(8192);
         let mut stereo_scratch: Vec<f32> = Vec::with_capacity(8192);
         let playback_stream = output_device
@@ -369,15 +369,15 @@ impl ClientAudio {
     }
 
     /// Write stereo: interleave L+R into single ring buffer.
-    /// Direct per-sample try_push voorkomt allocatie van een intermediate Vec
-    /// (latency-prioriteit). Pre-check `vacant_len >= 2` per frame voorkomt
-    /// een half-frame edge-case waarin L slaagt maar R faalt.
+    /// Direct per-sample try_push avoids allocating an intermediate Vec
+    /// (latency priority). A `vacant_len >= 2` pre-check per frame prevents
+    /// a half-frame edge case where L succeeds but R fails.
     pub fn write_playback_stereo(&mut self, left: &[f32], right: &[f32]) -> usize {
         let n = left.len().min(right.len());
         let mut written = 0;
         for i in 0..n {
-            // Pre-check: ring must have room for both L and R together - anders
-            // frame-skip om geen half-frame in ring achter te laten.
+            // Pre-check: ring must have room for both L and R together - otherwise
+            // frame-skip to avoid leaving a half-frame in the ring.
             if self.playback_producer.vacant_len() < 2 {
                 break;
             }

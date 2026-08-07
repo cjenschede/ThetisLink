@@ -9,10 +9,19 @@ use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 
 use sdr_remote_core::protocol::SpectrumPacket;
-use sdr_remote_core::{ddc_fft_size, SPECTRUM_BINS};
+use sdr_remote_core::{
+    ddc_fft_size, SPECTRUM_BINS, SPECTRUM_PACK_FLOOR_DB, SPECTRUM_PACK_MAX, SPECTRUM_PACK_RANGE_DB,
+};
 
 /// Number of 16-bit samples per complete wideband frame (legacy HPSDR constant, still used for wideband FFT)
 const WIDEBAND_SAMPLES: usize = 16_384;
+
+/// Peak-hold decay coefficient shared by RX1 and RX2 spectrum processing.
+/// New peaks are captured instantly; values below the current peak decay
+/// exponentially toward the incoming bin. At ~11.7 FFT/sec, 0.35 gives a
+/// ~50 ms effective time constant (snappier spectrum). RX1 and RX2 MUST use
+/// the same value — they previously drifted (RX2 was 0.6, sluggish).
+const PEAK_DECAY: f32 = 0.35;
 
 /// Spectrum processor: generates test data or processes real FFT data.
 /// Rate-limited to configured FPS.
@@ -423,11 +432,11 @@ impl SpectrumProcessor {
         let view_hi = (center_hz as f64) + (span_hz as f64 / 2.0);
         let bin_lo = ((view_lo - ddc_lo) / hz_per_bin).floor() as isize;
         let bin_hi = ((view_hi - ddc_lo) / hz_per_bin).ceil() as isize;
-        // Clamp BEIDE grenzen naar [0, total]. Een view volledig ONDER de DDC
-        // geeft een negatieve bin_hi; `negatief as usize` wrapt dan naar een
-        // gigantische index -> out-of-bounds panic in de bin-loop hieronder.
-        // Met clamp wordt dat 0, en de `end <= start`-guard geeft netjes een
-        // leeg spectrum terug i.p.v. de server te laten crashen.
+        // Clamp BOTH bounds to [0, total]. A view entirely BELOW the DDC
+        // yields a negative bin_hi; `negative as usize` then wraps to a
+        // gigantic index -> out-of-bounds panic in the bin loop below.
+        // With clamp it becomes 0, and the `end <= start` guard cleanly
+        // returns an empty spectrum instead of crashing the server.
         let start = bin_lo.clamp(0, total as isize) as usize;
         let end = bin_hi.clamp(0, total as isize) as usize;
         if end <= start {
@@ -441,34 +450,42 @@ impl SpectrumProcessor {
                 bins: Vec::new(),
             };
         }
-        let visible = end - start;
         let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
-        let bins: Vec<u16> = if visible <= max_bins {
-            self.smoothed[start..end].iter()
-                .map(|v| (v + cal_shift).clamp(0.0, 65535.0) as u16)
-                .collect()
-        } else {
-            let stride = visible as f64 / max_bins as f64;
-            (0..max_bins).map(|i| {
-                let s = start + (i as f64 * stride) as usize;
-                let e = (start + ((i as f64 + 1.0) * stride) as usize).min(end);
+        // Render the REQUESTED window, bin for bin. Positions that fall outside
+        // the DDC data carry no signal and are emitted as 0 (the packing floor),
+        // so the client draws the window at the span it asked for and can show
+        // where the band ends - instead of receiving a narrower, re-centred view,
+        // which made the display rescale as you approached the band edge.
+        let requested_bins = (span_hz as f64 / hz_per_bin).ceil().max(1.0);
+        let out_n = max_bins.min(requested_bins as usize).max(1);
+        let stride = requested_bins / out_n as f64;
+        let first = (view_lo - ddc_lo) / hz_per_bin;
+        let bins: Vec<u16> = (0..out_n)
+            .map(|i| {
+                let s = first + i as f64 * stride;
+                let e = first + (i as f64 + 1.0) * stride;
+                let js = s.floor() as isize;
+                let je = (e.ceil() as isize).max(js + 1);
                 let mut max_val = 0.0f32;
-                for j in s..e {
-                    if self.smoothed[j] > max_val {
-                        max_val = self.smoothed[j];
+                let mut have = false;
+                for j in js.max(0)..je.min(total as isize) {
+                    have = true;
+                    let v = self.smoothed[j as usize];
+                    if v > max_val {
+                        max_val = v;
                     }
                 }
+                if !have {
+                    return 0;
+                }
                 (max_val + cal_shift).clamp(0.0, 65535.0) as u16
-            }).collect()
-        };
-        let bin_center_offset = (start + end) as f64 / 2.0 - total as f64 / 2.0;
-        let actual_center_hz = (self.ddc_center_hz as f64 + bin_center_offset * hz_per_bin) as u32;
-        let actual_span_hz = (visible as f64 * hz_per_bin) as u32;
+            })
+            .collect();
         SpectrumPacket {
             sequence: self.sequence,
             num_bins: bins.len() as u16,
-            center_freq_hz: actual_center_hz,
-            span_hz: actual_span_hz,
+            center_freq_hz: center_hz as u32,
+            span_hz,
             ref_level: 0,
             db_per_unit: 1,
             bins,
@@ -486,8 +503,7 @@ impl SpectrumProcessor {
             return;
         }
         // Decay factor: at ~11.7 FFT/sec, lower decay = faster response.
-        // decay = 0.35 gives ~50ms effective time constant (snappier spectrum).
-        let decay = 0.35f32;
+        let decay = PEAK_DECAY;
         let len = bins.len().min(self.smoothed.len());
         for i in 0..len {
             if bins[i] >= self.smoothed[i] {
@@ -537,7 +553,9 @@ impl SpectrumProcessor {
             let overlap = ((i + 1) as f64).min(bin_hi_f) - (i as f64).max(bin_lo_f);
             if overlap <= 0.0 { continue; }
 
-            let db = self.smoothed[i] as f64 * 120.0 / 65535.0 - 150.0;
+            let db = self.smoothed[i] as f64 * SPECTRUM_PACK_RANGE_DB as f64
+                / SPECTRUM_PACK_MAX as f64
+                + SPECTRUM_PACK_FLOOR_DB as f64;
             sum_power += overlap * 10.0_f64.powf(db / 10.0);
         }
 
@@ -837,8 +855,8 @@ impl Rx2SpectrumProcessor {
                 self.skip_fft_frames -= 1;
                 return;
             }
-            // Same peak-hold + decay as RX1
-            let decay = 0.6f32;
+            // Same peak-hold + decay as RX1 (shared constant, no drift)
+            let decay = PEAK_DECAY;
             let len = bins.len().min(self.smoothed.len());
             for i in 0..len {
                 if bins[i] >= self.smoothed[i] {
@@ -870,7 +888,9 @@ impl Rx2SpectrumProcessor {
         for i in first..=last {
             let overlap = ((i + 1) as f64).min(bin_hi_f) - (i as f64).max(bin_lo_f);
             if overlap <= 0.0 { continue; }
-            let db = self.smoothed[i] as f64 * 120.0 / 65535.0 - 150.0;
+            let db = self.smoothed[i] as f64 * SPECTRUM_PACK_RANGE_DB as f64
+                / SPECTRUM_PACK_MAX as f64
+                + SPECTRUM_PACK_FLOOR_DB as f64;
             sum_power += overlap * 10.0_f64.powf(db / 10.0);
         }
         if sum_power <= 0.0 { return -140.0; }
@@ -992,11 +1012,7 @@ impl Rx2SpectrumProcessor {
         let view_hi = (center_hz as f64) + (span_hz as f64 / 2.0);
         let bin_lo = ((view_lo - ddc_lo) / hz_per_bin).floor() as isize;
         let bin_hi = ((view_hi - ddc_lo) / hz_per_bin).ceil() as isize;
-        // Clamp BEIDE grenzen naar [0, total]. Een view volledig ONDER de DDC
-        // geeft een negatieve bin_hi; `negatief as usize` wrapt dan naar een
-        // gigantische index -> out-of-bounds panic in de bin-loop hieronder.
-        // Met clamp wordt dat 0, en de `end <= start`-guard geeft netjes een
-        // leeg spectrum terug i.p.v. de server te laten crashen.
+        // Guard only - the window itself is not clamped; see the RX1 variant.
         let start = bin_lo.clamp(0, total as isize) as usize;
         let end = bin_hi.clamp(0, total as isize) as usize;
         if end <= start {
@@ -1005,29 +1021,34 @@ impl Rx2SpectrumProcessor {
                 span_hz: 0, ref_level: 0, db_per_unit: 1, bins: Vec::new(),
             };
         }
-        let visible = end - start;
         let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
-        let bins: Vec<u16> = if visible <= max_bins {
-            self.smoothed[start..end].iter()
-                .map(|v| (v + cal_shift).clamp(0.0, 65535.0) as u16).collect()
-        } else {
-            let stride = visible as f64 / max_bins as f64;
-            (0..max_bins).map(|i| {
-                let s = start + (i as f64 * stride) as usize;
-                let e = (start + ((i as f64 + 1.0) * stride) as usize).min(end);
+        // Requested window, bin for bin; outside the DDC data -> 0 (floor).
+        let requested_bins = (span_hz as f64 / hz_per_bin).ceil().max(1.0);
+        let out_n = max_bins.min(requested_bins as usize).max(1);
+        let stride = requested_bins / out_n as f64;
+        let first = (view_lo - ddc_lo) / hz_per_bin;
+        let bins: Vec<u16> = (0..out_n)
+            .map(|i| {
+                let s = first + i as f64 * stride;
+                let e = first + (i as f64 + 1.0) * stride;
+                let js = s.floor() as isize;
+                let je = (e.ceil() as isize).max(js + 1);
                 let mut max_val = 0.0f32;
-                for j in s..e { if self.smoothed[j] > max_val { max_val = self.smoothed[j]; } }
+                let mut have = false;
+                for j in js.max(0)..je.min(total as isize) {
+                    have = true;
+                    let v = self.smoothed[j as usize];
+                    if v > max_val { max_val = v; }
+                }
+                if !have { return 0; }
                 (max_val + cal_shift).clamp(0.0, 65535.0) as u16
-            }).collect()
-        };
-        let bin_center_offset = (start + end) as f64 / 2.0 - total as f64 / 2.0;
-        let actual_center_hz = (self.ddc_center_hz as f64 + bin_center_offset * hz_per_bin) as u32;
-        let actual_span_hz = (visible as f64 * hz_per_bin) as u32;
+            })
+            .collect();
         SpectrumPacket {
             sequence: self.sequence,
             num_bins: bins.len() as u16,
-            center_freq_hz: actual_center_hz,
-            span_hz: actual_span_hz,
+            center_freq_hz: center_hz as u32,
+            span_hz,
             ref_level: 0,
             db_per_unit: 1,
             bins,
@@ -1220,8 +1241,14 @@ impl FftPipeline {
                 -200.0
             };
 
-            // Map dB range to 0-255: -120 dB -> 0, -20 dB -> 255
-            let normalized = ((db + 120.0) / 100.0 * 65535.0).clamp(0.0, 65535.0);
+            // Wideband FFT path: DELIBERATELY a different pack scale than the
+            // DDC path (floor -120 dB, range 100 dB vs the shared -150/120).
+            // Not unified with SPECTRUM_PACK_* on purpose — wideband has its own
+            // dynamic range. Kept as explicit locals so the divergence is visible.
+            const WB_FLOOR_DB: f32 = -120.0;
+            const WB_RANGE_DB: f32 = 100.0;
+            let normalized = ((db - WB_FLOOR_DB) / WB_RANGE_DB * SPECTRUM_PACK_MAX)
+                .clamp(0.0, SPECTRUM_PACK_MAX);
             output[i] = normalized;
         }
 
@@ -1305,8 +1332,9 @@ impl DdcFftPipeline {
                 -200.0
             };
 
-            // Map dB range to 0-65535: -150 dB -> 0, -30 dB -> 65535
-            output[i] = ((db + 150.0) / 120.0 * 65535.0).clamp(0.0, 65535.0);
+            // Map dB range to 0..MAX per the shared pack scale (-150 dB -> 0, -30 dB -> full)
+            output[i] = ((db - SPECTRUM_PACK_FLOOR_DB) / SPECTRUM_PACK_RANGE_DB * SPECTRUM_PACK_MAX)
+                .clamp(0.0, SPECTRUM_PACK_MAX);
         }
 
         output

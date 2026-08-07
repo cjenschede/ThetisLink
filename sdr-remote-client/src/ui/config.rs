@@ -41,10 +41,98 @@ pub(crate) fn load_smart_steps() -> Vec<(Vec<f32>, bool)> {
     steps
 }
 
-/// Config file name stored next to the executable
+/// Config file name stored next to the executable (default profile).
 pub(crate) const CONFIG_FILE: &str = "thetislink-client.conf";
 
 pub(crate) const NUM_MEMORIES: usize = 5;
+
+// ---- Instance profile (multi-instance support) --------------------------------
+// A named profile lets a SECOND ThetisLink run alongside the first on one PC,
+// each with its OWN config file, log files and single-instance identity, so the
+// two never clobber each other's persisted state. Selected once at startup with
+// `--profile <name>`; no profile = the default, which keeps the original file
+// names / mutex so existing installs are byte-for-byte unchanged. A named
+// profile's config is seeded as a COPY of the default on first use (see
+// seed_profile_config_if_absent) - one extra .conf you can just delete to remove
+// the instance, leaving the original intact.
+static PROFILE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Record the active profile. Call ONCE, before any config/log path is resolved.
+/// A second call is ignored (OnceLock). The name is sanitised to `[A-Za-z0-9_-]`
+/// (safe as both a file-name fragment and a Win32 mutex name); an empty result
+/// falls back to the default profile.
+pub(crate) fn set_profile(name: Option<String>) {
+    let cleaned = name.and_then(|n| {
+        let s: String = n
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if s.is_empty() { None } else { Some(s) }
+    });
+    let _ = PROFILE.set(cleaned);
+}
+
+/// The active profile name, or `None` for the default (unnamed) profile.
+pub(crate) fn profile() -> Option<&'static str> {
+    PROFILE.get().and_then(|o| o.as_deref())
+}
+
+/// Config file name for the active profile: `thetislink-client.conf` for the
+/// default, `thetislink-client-<profile>.conf` for a named one.
+pub(crate) fn config_file_name() -> String {
+    match profile() {
+        Some(p) => format!("thetislink-client-{p}.conf"),
+        None => CONFIG_FILE.to_string(),
+    }
+}
+
+/// Per-profile side-file name (log, ui-events): `<base>.<ext>` for the default
+/// profile, `<base>-<profile>.<ext>` for a named one.
+pub(crate) fn per_profile_file(base: &str, ext: &str) -> String {
+    match profile() {
+        Some(p) => format!("{base}-{p}.{ext}"),
+        None => format!("{base}.{ext}"),
+    }
+}
+
+/// Decorate a window title with the profile tag (`  [B]`) when a named profile
+/// is active, so the windows of two instances are visually distinguishable. The
+/// default profile returns the title unchanged.
+pub(crate) fn window_title(base: &str) -> String {
+    match profile() {
+        Some(p) => format!("{base}  [{p}]"),
+        None => base.to_string(),
+    }
+}
+
+/// Seed a named profile's config file by copying the default config, ONCE, when
+/// the profile file does not yet exist. This makes `--profile B` start as a copy
+/// of the current settings (the user then tweaks only what differs). No-op for
+/// the default profile, if the profile file already exists, or if the default
+/// file is missing (the profile then starts from the built-in defaults).
+pub(crate) fn seed_profile_config_if_absent() {
+    if profile().is_none() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return; };
+    let dst = exe.with_file_name(config_file_name());
+    if dst.exists() {
+        return;
+    }
+    // Source is always the DEFAULT config (copy FROM the original).
+    let src = exe.with_file_name(CONFIG_FILE);
+    if !src.exists() {
+        log::info!(
+            "Profile {:?}: no default config to seed from - starting from defaults",
+            profile()
+        );
+        return;
+    }
+    match std::fs::copy(&src, &dst) {
+        Ok(_) => log::info!("Seeded profile config {} from {}", dst.display(), src.display()),
+        Err(e) => log::warn!("Could not seed profile config {}: {}", dst.display(), e),
+    }
+}
 
 /// Client configuration
 pub(crate) struct ClientConfig {
@@ -52,7 +140,7 @@ pub(crate) struct ClientConfig {
     pub(crate) password: String,
     pub(crate) rx_volume: f32,
     pub(crate) tx_gain: f32,
-    /// WAV-playback ('Play') volume, client-only. 1.0 = opgenomen niveau.
+    /// WAV-playback ('Play') volume, client-only. 1.0 = recorded level.
     pub(crate) play_volume: f32,
     pub(crate) vfo_a_volume: f32,
     pub(crate) vfo_b_volume: f32,
@@ -136,17 +224,18 @@ pub(crate) struct ClientConfig {
     pub(crate) rx1_enabled: bool,
     pub(crate) rx2_enabled: bool,
     pub(crate) rx2_spectrum_enabled: bool,
-    /// Opt-in voor wideband Thetis-audio (RX1/RX2/BinR 16 kHz i.p.v.
-    /// 8 kHz default). Verdubbelt RX-bandbreedte per kanaal ongeveer,
-    /// dus default false; aan-zetten via Settings -> Audio.
+    /// Opt-in for wideband Thetis audio (RX1/RX2/BinR 16 kHz instead of
+    /// 8 kHz default). Roughly doubles RX bandwidth per channel,
+    /// so default false; enable via Settings -> Audio.
     pub(crate) thetis_wideband_audio: bool,
+    /// Ask the server for the extra full-DDC spectrum row (default on).
+    pub(crate) full_spectrum_enabled: bool,
     pub(crate) popout_joined: bool,
-    /// Legacy globale s-meter-type (gemigreerd naar per-kanaal `meter_analog`).
+    /// Legacy global s-meter type (migrated to per-channel `meter_analog`).
     pub(crate) popout_meter_analog: bool,
-    /// S-meter-type per kanaal (M_RX1..M_YAESU2). Migreert van popout_meter_analog.
+    /// S-meter type per channel (M_RX1..M_YAESU2). Migrates from popout_meter_analog.
     pub(crate) meter_analog: [bool; 6],
     pub(crate) spectrum_popout: bool,
-    pub(crate) rx2_popout: bool,
     pub(crate) main_window_pos: Option<(f32, f32)>,
     pub(crate) ub_show_menu: bool,
     pub(crate) collapse_diversity: bool,
@@ -162,6 +251,11 @@ pub(crate) struct ClientConfig {
     pub(crate) yaesu_enabled: bool,
     pub(crate) yaesu_volume: f32,
     pub(crate) yaesu_popout: bool,
+    /// Last server-reported Yaesu presence (slot 0/1). Seeds the optimistic
+    /// pre-connect display so a radio present last session shows again at once;
+    /// the server prunes it on connect if it is (no longer) there.
+    pub(crate) yaesu_present_last: bool,
+    pub(crate) yaesu2_present_last: bool,
     // Tuple: (name, enabled, eq-gains, mic_gain)
     pub(crate) yaesu_eq_profiles: Vec<(String, bool, [f32; 5], f32)>,
     pub(crate) yaesu_eq_active: String,
@@ -177,24 +271,28 @@ pub(crate) struct ClientConfig {
     pub(crate) ptt_toggle: bool,
     pub(crate) yaesu_ptt_toggle: bool,
     pub(crate) midi_ptt_toggle: bool,
-    // Dual-radio slot 1 (FTX-1): eigen enable + PTT-mode + volume, persistent.
+    // Dual-radio slot 1 (FTX-1): own enable + PTT mode + volume, persistent.
     pub(crate) yaesu2_enabled: bool,
     pub(crate) yaesu2_ptt_toggle: bool,
     pub(crate) yaesu2_volume: f32,
-    /// USB-TX mic-gain multiplier per radio, persistent (los van EQ-profiel
-    /// zodat de schuif-waarde altijd onthouden wordt). Range 0.05..=3.0.
+    /// USB-TX mic-gain multiplier per radio, persistent (separate from the EQ
+    /// profile so the slider value is always remembered). Range 0.05..=3.0.
     pub(crate) yaesu_mic_gain: f32,
     pub(crate) yaesu2_mic_gain: f32,
-    /// Client-side TX-compressor (0-100) en AGC-toggle per radio, persistent.
+    /// Client-side TX compressor (0-100) and AGC toggle per radio, persistent.
     pub(crate) yaesu_compressor: u8,
     pub(crate) yaesu2_compressor: u8,
     pub(crate) yaesu_tx_agc: bool,
     pub(crate) yaesu2_tx_agc: bool,
-    /// FTX-1 (radio 2) popout-window open/dicht-stand, persistent.
+    /// FTX-1 (radio 2) popout window open/closed state, persistent.
     pub(crate) yaesu2_popout: bool,
     /// S-meter source choice: 0=Sig, 1=Avg (default), 2=MaxBin.
     /// Shared by RX1 and RX2 - same presentation method for both receivers.
     pub(crate) smeter_source: u8,
+    /// Launch Thetis on the server PC when this client starts and finds Thetis
+    /// not running. Fires once per client run (see `thetis_autostart_fired`),
+    /// so a deliberate shutdown from the Power button stays off.
+    pub(crate) thetis_autostart: bool,
     pub(crate) catsync_enabled: bool,
     pub(crate) catsync_url: String,
     /// Per-radio WebSDR URL for the two Yaesu radios (independent of Thetis and
@@ -202,10 +300,10 @@ pub(crate) struct ClientConfig {
     pub(crate) catsync_url_y1: String,
     pub(crate) catsync_url_y2: String,
     pub(crate) catsync_favorites: Vec<(String, String)>,
-    /// TL2-1 ctun-auto-recenter: setup-vink "Allow zoom below 2x (waterfall smear during tune)".
-    /// Default false -> zoom-min 2x, anti-smear feature volledig actief.
-    /// True -> zoom-min 1x toegestaan, smear bij tunen <1.2× zoom.
-    /// Server enforced strictest over alle clients (zolang één client false -> server klemt op 2x).
+    /// TL2-1 ctun-auto-recenter: setup checkbox "Allow zoom below 2x (waterfall smear during tune)".
+    /// Default false -> zoom-min 2x, anti-smear feature fully active.
+    /// True -> zoom-min 1x allowed, smear when tuning <1.2× zoom.
+    /// Server enforces strictest over all clients (as long as one client false -> server clamps to 2x).
     pub(crate) allow_zoom_below_2x: bool,
 
     /// PTT switch-on spike protection for a built-in speaker+mic in one chassis
@@ -228,7 +326,7 @@ pub(crate) struct ClientConfig {
     /// Human device label sent to the relay (shown in relay logs/dashboard).
     /// Auto-defaulted to the hostname on first run; user-editable; may contain spaces.
     pub(crate) relay_device_name: String,
-    /// PATCH-relay-audio-udp: route audio+PTT over kale UDP (port 443) instead of the
+    /// PATCH-relay-audio-udp: route audio+PTT over raw UDP (port 443) instead of the
     /// wss tunnel - no retransmit, low latency. Default on. The env var
     /// THETISLINK_RELAY_UDP_PORT overrides this (testing / non-standard port).
     pub(crate) relay_udp_enabled: bool,
@@ -321,10 +419,11 @@ impl Default for ClientConfig {
             rx2_spectrum_range_db: 100.0,
             rx2_auto_ref_enabled: true,
             rx2_waterfall_contrast: 1.2,
-            rx1_enabled: true, // default AAN
+            rx1_enabled: true, // default ON
             rx2_enabled: false,
             rx2_spectrum_enabled: false,
             thetis_wideband_audio: false,
+            full_spectrum_enabled: true,
             popout_joined: false,
             device_tab: 0,
             yaesu_enabled: false,
@@ -334,11 +433,12 @@ impl Default for ClientConfig {
             yaesu2_eq_profiles: Vec::new(),
             yaesu2_eq_active: String::new(),
             yaesu_popout: false,
+            yaesu_present_last: false,
+            yaesu2_present_last: false,
             yaesu_mem_file: String::new(),
             popout_meter_analog: false,
             meter_analog: [false; 6],
             spectrum_popout: false,
-            rx2_popout: false,
             main_window_pos: None,
             ub_show_menu: false,
             collapse_diversity: false,
@@ -370,6 +470,7 @@ impl Default for ClientConfig {
             yaesu2_popout: false,
             midi_ptt_toggle: true, // MIDI defaults to toggle (existing behavior)
             smeter_source: 1,      // Avg matches pre-multi-source server default
+            thetis_autostart: false, // opt-in: powers up the radio without being asked
             catsync_enabled: false,
             catsync_url: String::new(),
             catsync_url_y1: String::new(),
@@ -418,7 +519,7 @@ pub(crate) fn load_config() -> ClientConfig {
     let mut config = ClientConfig::default();
 
     let path = match std::env::current_exe() {
-        Ok(exe) => exe.with_file_name(CONFIG_FILE),
+        Ok(exe) => exe.with_file_name(config_file_name()),
         Err(_) => return config,
     };
     let contents = match std::fs::read_to_string(path) {
@@ -707,8 +808,6 @@ pub(crate) fn load_config() -> ClientConfig {
             config.main_window_pos = parse_f32_pair(val);
         } else if let Some(val) = line.strip_prefix("spectrum_popout=") {
             config.spectrum_popout = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("rx2_popout=") {
-            config.rx2_popout = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("device_tab=") {
             if let Ok(v) = val.trim().parse::<u8>() { config.device_tab = v; }
         } else if let Some(val) = line.strip_prefix("yaesu_enabled=") {
@@ -723,6 +822,10 @@ pub(crate) fn load_config() -> ClientConfig {
             }
         } else if let Some(val) = line.strip_prefix("yaesu_popout=") {
             config.yaesu_popout = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("yaesu_present_last=") {
+            config.yaesu_present_last = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("yaesu2_present_last=") {
+            config.yaesu2_present_last = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("mic_profile=") {
             // Format: mic_device_name|tx_profile_name
             if let Some((mic, profile)) = val.trim().split_once('|') {
@@ -732,9 +835,9 @@ pub(crate) fn load_config() -> ClientConfig {
             config.yaesu_eq_active = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("yaesu_eq_profile=") {
             // Format: name|enabled|g0,g1,g2,g3,g4[|mic_gain]
-            // mic_gain (4e veld) is optioneel - oude profielen zonder
-            // mic_gain fall back to internal default 0.2 zodat upgrades niet
-            // breken.
+            // mic_gain (4th field) is optional - old profiles without
+            // mic_gain fall back to internal default 0.2 so upgrades don't
+            // break.
             let parts: Vec<&str> = val.trim().splitn(4, '|').collect();
             if parts.len() >= 3 {
                 let name = parts[0].to_string();
@@ -781,13 +884,15 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("thetis_wideband_audio=") {
             config.thetis_wideband_audio = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("full_spectrum_enabled=") {
+            config.full_spectrum_enabled = val.trim() == "true";
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("popout_joined=") {
             config.popout_joined = val.trim() == "true";
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("popout_meter_analog=") {
-            // Legacy globaal type -> migreer naar alle kanalen (tenzij een expliciete
-            // meter_analog-regel dit later overschrijft).
+            // Legacy global type -> migrate to all channels (unless an explicit
+            // meter_analog line overrides this later).
             let on = val.trim() == "true";
             config.popout_meter_analog = on;
             config.meter_analog = [on; 6];
@@ -931,6 +1036,9 @@ pub(crate) fn load_config() -> ClientConfig {
             config.yaesu2_popout = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("midi_ptt_toggle=") {
             config.midi_ptt_toggle = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("thetis_autostart=") {
+            config.thetis_autostart = val.trim() == "true";
+            has_keys = true;
         } else if let Some(val) = line.strip_prefix("smeter_source=") {
             if let Ok(v) = val.trim().parse::<u8>() {
                 if v <= 2 { config.smeter_source = v; }
@@ -1035,7 +1143,7 @@ pub(crate) fn save_relay_device_name(name: &str) {
         Ok(e) => e,
         Err(_) => return,
     };
-    let path = exe.with_file_name(CONFIG_FILE);
+    let path = exe.with_file_name(config_file_name());
     let new_line = format!("relay_device_name={}", name.trim());
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut found = false;
@@ -1073,7 +1181,7 @@ fn save_relay_instance_id(id: &str) {
         Ok(e) => e,
         Err(_) => return,
     };
-    let path = exe.with_file_name(CONFIG_FILE);
+    let path = exe.with_file_name(config_file_name());
     let new_line = format!("relay_instance_id={id}");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut found = false;
@@ -1167,10 +1275,10 @@ pub(crate) fn save_config(
     rx2_enabled: bool,
     rx2_spectrum_enabled: bool,
     thetis_wideband_audio: bool,
+    full_spectrum_enabled: bool,
     popout_joined: bool,
     meter_analog: [bool; 6],
     spectrum_popout: bool,
-    rx2_popout: bool,
     main_window_pos: Option<(f32, f32)>,
     ub_show_menu: bool,
     collapse_diversity: bool,
@@ -1207,9 +1315,11 @@ pub(crate) fn save_config(
     theme: &str,
     theme_custom: &str,
     language: &str,
+    yaesu_present_last: bool,
+    yaesu2_present_last: bool,
 ) {
     if let Ok(exe) = std::env::current_exe() {
-        let path = exe.with_file_name(CONFIG_FILE);
+        let path = exe.with_file_name(config_file_name());
         let pw_enc = if password.is_empty() { String::new() } else { sdr_remote_core::auth::obfuscate_password(password) };
         let mut content = format!("server={}\npassword={}\nvolume={:.2}\ntx_gain={:.2}\nplay_volume={:.2}\nvfo_a_volume={:.2}\nvfo_b_volume={:.2}\nlocal_volume={:.2}\nrx2_volume={:.2}\n",
             server, pw_enc, volume, tx_gain, play_volume, vfo_a_volume, vfo_b_volume, local_volume, rx2_volume);
@@ -1370,11 +1480,11 @@ pub(crate) fn save_config(
         content.push_str(&format!("rx2_enabled={}\n", rx2_enabled));
         content.push_str(&format!("rx2_spectrum_enabled={}\n", rx2_spectrum_enabled));
         content.push_str(&format!("thetis_wideband_audio={}\n", thetis_wideband_audio));
+        content.push_str(&format!("full_spectrum_enabled={}\n", full_spectrum_enabled));
         content.push_str(&format!("popout_joined={}\n", popout_joined));
         content.push_str(&format!("meter_analog={}\n",
             meter_analog.iter().map(|b| if *b { "1" } else { "0" }).collect::<Vec<_>>().join(",")));
         content.push_str(&format!("spectrum_popout={}\n", spectrum_popout));
-        content.push_str(&format!("rx2_popout={}\n", rx2_popout));
         if let Some((x, y)) = main_window_pos {
             content.push_str(&format!("main_window_pos={:.0},{:.0}\n", x, y));
         }
@@ -1393,6 +1503,8 @@ pub(crate) fn save_config(
         content.push_str(&format!("yaesu_volume={:.3}\n", yaesu_volume));
         content.push_str(&format!("yaesu2_volume={:.3}\n", yaesu2_volume));
         content.push_str(&format!("yaesu_popout={}\n", yaesu_popout));
+        content.push_str(&format!("yaesu_present_last={}\n", yaesu_present_last));
+        content.push_str(&format!("yaesu2_present_last={}\n", yaesu2_present_last));
         content.push_str(&format!("yaesu_eq_active={}\n", yaesu_eq_active));
         for (name, enabled, gains, mic_gain) in yaesu_eq_profiles {
             content.push_str(&format!("yaesu_eq_profile={}|{}|{:.1},{:.1},{:.1},{:.1},{:.1}|{:.3}\n",
@@ -1455,10 +1567,10 @@ pub(crate) fn save_config(
         for (i, mapping) in midi_mappings.iter().enumerate() {
             content.push_str(&format!("midi_map_{}={}\n", i, mapping.to_config()));
         }
-        // Preserve toggles die via save_ptt_config (read-modify-append) worden
-        // beheerd, zodat deze volledige herschrijf ze niet dropt. yaesu2_enabled/
-        // _ptt_toggle/_popout + de mic-gains horen hier expliciet bij - anders
-        // verdwijnt de radio2-enable/window/mic-stand bij elke andere wijziging.
+        // Preserve toggles that are managed via save_ptt_config (read-modify-append),
+        // so this full rewrite doesn't drop them. yaesu2_enabled/
+        // _ptt_toggle/_popout + the mic-gains explicitly belong here - otherwise
+        // the radio2 enable/window/mic state disappears on every other change.
         if let Ok(existing) = std::fs::read_to_string(&path) {
             for line in existing.lines() {
                 if line.starts_with("ptt_toggle=") || line.starts_with("yaesu_ptt_toggle=") || line.starts_with("midi_ptt_toggle=")
@@ -1467,6 +1579,7 @@ pub(crate) fn save_config(
                     || line.starts_with("mic_gate_delay_thetis_ms=")
                     || line.starts_with("mic_gate_delay_yaesu_ms=")
                     || line.starts_with("smeter_source=")
+                    || line.starts_with("thetis_autostart=")
                     || line.starts_with("successful_connects=")
                     || line.starts_with("relay_enabled=")
                     || line.starts_with("relay_udp_enabled=")
@@ -1506,7 +1619,7 @@ pub(crate) fn save_relay_config(
         Ok(e) => e,
         Err(_) => return,
     };
-    let path = exe.with_file_name(CONFIG_FILE);
+    let path = exe.with_file_name(config_file_name());
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let token_enc = if token.is_empty() {
         String::new()
@@ -1538,7 +1651,7 @@ pub(crate) fn save_spike_protection(enabled: bool, thetis_ms: u32, yaesu_ms: u32
         Ok(e) => e,
         Err(_) => return,
     };
-    let path = exe.with_file_name(CONFIG_FILE);
+    let path = exe.with_file_name(config_file_name());
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let desired = [
         ("spike_protection", enabled.to_string()),
@@ -1557,14 +1670,14 @@ pub(crate) fn save_spike_protection(enabled: bool, thetis_ms: u32, yaesu_ms: u32
     let _ = std::fs::write(path, lines.join("\n") + "\n");
 }
 
-/// TL2-1 ctun-auto-recenter: persist setup-vink "Allow zoom below 2x" to config file.
-/// Read-modify-write op `allow_zoom_below_2x=` regel zonder andere keys aan te raken.
+/// TL2-1 ctun-auto-recenter: persist setup checkbox "Allow zoom below 2x" to config file.
+/// Read-modify-write on the `allow_zoom_below_2x=` line without touching other keys.
 pub(crate) fn save_allow_zoom_below_2x(allow: bool) {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(_) => return,
     };
-    let path = exe.with_file_name(CONFIG_FILE);
+    let path = exe.with_file_name(config_file_name());
     let new_line = format!("allow_zoom_below_2x={}", allow);
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut found = false;
@@ -1585,22 +1698,24 @@ pub(crate) fn save_allow_zoom_below_2x(allow: bool) {
     let _ = std::fs::write(path, updated_lines.join("\n") + "\n");
 }
 
-/// Persist the S-meter source choice (0=Sig, 1=Avg, 2=MaxBin) to the config
-/// file as a single `smeter_source=N` line. Read-modify-write so other keys
-/// are untouched. Called whenever the user changes the source in the Thetis tab.
-pub(crate) fn save_smeter_source(source: u8) {
+/// Persist one `key=value` line, leaving every other key untouched
+/// (read-modify-write). For settings that live outside the full-config
+/// rewrite; those keys must also be listed in the preserve-block of
+/// `save_full_config` so the rewrite does not drop them.
+fn save_single_key(key: &str, value: &str) {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(_) => return,
     };
-    let path = exe.with_file_name(CONFIG_FILE);
-    let new_line = format!("smeter_source={}", source);
+    let path = exe.with_file_name(config_file_name());
+    let prefix = format!("{}=", key);
+    let new_line = format!("{}={}", key, value);
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut found = false;
     let mut updated_lines: Vec<String> = existing
         .lines()
         .map(|l| {
-            if l.starts_with("smeter_source=") {
+            if l.starts_with(&prefix) {
                 found = true;
                 new_line.clone()
             } else {
@@ -1612,6 +1727,19 @@ pub(crate) fn save_smeter_source(source: u8) {
         updated_lines.push(new_line);
     }
     let _ = std::fs::write(path, updated_lines.join("\n") + "\n");
+}
+
+/// Persist the S-meter source choice (0=Sig, 1=Avg, 2=MaxBin) as a single
+/// `smeter_source=N` line. Called whenever the user changes the source in
+/// the Thetis tab.
+pub(crate) fn save_smeter_source(source: u8) {
+    save_single_key("smeter_source", &source.to_string());
+}
+
+/// Persist the "start Thetis when this client starts" choice as a single
+/// `thetis_autostart=` line. Called from the checkbox in the Thetis tab.
+pub(crate) fn save_thetis_autostart(on: bool) {
+    save_single_key("thetis_autostart", if on { "true" } else { "false" });
 }
 
 /// PATCH-4: detect first-run for the connection wizard. Returns true when:
@@ -1635,7 +1763,7 @@ pub(crate) fn mark_successful_connect() {
         Ok(e) => e,
         Err(_) => return,
     };
-    let path = exe.with_file_name(CONFIG_FILE);
+    let path = exe.with_file_name(config_file_name());
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     // Parse current value (if any). Default 0 covers both "missing key"
     // and "malformed value".

@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! UI-observability contract voor de unified control rendering.
+//! UI-observability contract for the unified control rendering.
 //!
-//! Ontwerpprincipes:
+//! Design principles:
 //!
-//! - Zero-cost als observability uit staat (prod default): `tracing::enabled!`
-//!   short-circuit in `TracingSink`, geen allocaties per event.
-//! - Events gaan door de intent-laag; elke `cmd_tx.send` uit een control-helper
-//!   MOET voorafgegaan worden door `record_intent` + guard-check - afgedwongen
-//!   doordat `ControlContext::cmd_tx` privé is (alleen `dispatch()` kan senden).
-//! - `RecordingSink` is alleen beschikbaar onder `cfg(test)` of
-//!   `feature = "ui-test"` - niet in release-builds.
-//! - Alle events krijgen bij emit een `frame_id` + `t_mono_ns`-stempel mee (zie
-//!   `StampedEvent`) voor timeline-correlatie in jq-scripts en
-//!   intent-chain-asserts.
+//! - Zero-cost when observability is off (prod default): `tracing::enabled!`
+//!   short-circuit in `TracingSink`, no allocations per event.
+//! - Events go through the intent layer; every `cmd_tx.send` from a control-helper
+//!   MUST be preceded by `record_intent` + guard-check - enforced
+//!   by `ControlContext::cmd_tx` being private (only `dispatch()` can send).
+//! - `RecordingSink` is only available under `cfg(test)` or
+//!   `feature = "ui-test"` - not in release builds.
+//! - All events get a `frame_id` + `t_mono_ns` stamp at emit time (see
+//!   `StampedEvent`) for timeline correlation in jq scripts and
+//!   intent-chain asserts.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -31,43 +31,43 @@ pub(crate) fn next_intent_id() -> IntentId {
     NEXT_INTENT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Hoog het frame-id op. Wordt één keer per render-frame door de
-/// render-orchestrator aangeroepen (stap 2).
+/// Increment the frame-id. Called once per render-frame by the
+/// render-orchestrator (step 2).
 pub(crate) fn begin_frame() -> u64 {
     CURRENT_FRAME.fetch_add(1, Ordering::Relaxed) + 1
 }
 
-/// Huidig frame-id. 0 vóór de eerste `begin_frame()`-aanroep.
+/// Current frame-id. 0 before the first `begin_frame()` call.
 pub(crate) fn current_frame() -> u64 {
     CURRENT_FRAME.load(Ordering::Relaxed)
 }
 
-/// Monotone tijd sinds de eerste observability-emit, in nanoseconden.
-/// Goedkoop: één `Instant::now()` + één subtraction.
+/// Monotonic time since the first observability emit, in nanoseconds.
+/// Cheap: one `Instant::now()` + one subtraction.
 pub(crate) fn mono_ns_since_start() -> u64 {
     let start = MONO_START.get_or_init(Instant::now);
     start.elapsed().as_nanos() as u64
 }
 
-/// Alle UI-acties die door de intent-laag gaan. Blijft beperkt tot
-/// control-helpers; audio/PTT/connection-init blijven direct op `cmd_tx`
-/// (hot-path, eigen latency-regels).
+/// All UI actions that go through the intent layer. Stays limited to
+/// control-helpers; audio/PTT/connection-init stay direct on `cmd_tx`
+/// (hot-path, own latency rules).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiIntent {
-    /// Tune de huidige frequency met een delta (Hz). Gebruikt voor zowel de
-    /// `−`/`+` step-buttons als het scroll-wheel. Source-onderscheid blijft
-    /// zichtbaar via voorafgaande `UiEvent::ScrollTuneApplied` (scroll) of
-    /// `UiEvent::ClickReceived` op `freq_step_arrows` (knop).
+    /// Tune the current frequency by a delta (Hz). Used for both the
+    /// `−`/`+` step-buttons and the scroll-wheel. Source distinction stays
+    /// visible via the preceding `UiEvent::ScrollTuneApplied` (scroll) or
+    /// `UiEvent::ClickReceived` on `freq_step_arrows` (button).
     TuneByDelta { channel: RxChannel, delta_hz: i64 },
     SelectBand { channel: RxChannel, band_hz: u64 },
     SelectMode { channel: RxChannel, mode: u8 },
     VfoSwap { channel: RxChannel },
     VfoSync,
-    /// Gebruiker heeft een absolute frequency getypt in de inline-edit en
-    /// ingediend met Enter. Het enige kanaal voor absolute freq-set vanuit
-    /// een control-helper - memory-recall of andere absolute-freq features
-    /// gaan later via een nieuwe intent-variant als ze control-helper
-    /// oorsprong hebben.
+    /// User typed an absolute frequency in the inline-edit and
+    /// submitted with Enter. The only channel for absolute freq-set from
+    /// a control-helper - memory-recall or other absolute-freq features
+    /// go later via a new intent variant if they have control-helper
+    /// origin.
     InlineFreqEdit { channel: RxChannel, hz: u64 },
 }
 
@@ -84,7 +84,7 @@ impl UiIntent {
     }
 }
 
-/// Reden waarom een intent niet in een command is omgezet.
+/// Reason why an intent was not converted into a command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandBlockReason {
     Disconnected,
@@ -100,15 +100,15 @@ impl CommandBlockReason {
     }
 }
 
-/// Structured events die de observability-laag uitstuurt.
+/// Structured events that the observability layer emits.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiEvent {
-    /// N.B. Dit event wordt NIET uit render-helpers geëmit - helpers zijn
-    /// stateless en kunnen geen enabled-overgang detecteren zonder extra
+    /// N.B. This event is NOT emitted from render-helpers - helpers are
+    /// stateless and cannot detect an enabled-transition without an extra
     /// per-site tracker. Plan:
-    /// verplaatsen naar een app-level `ConnectionStateChanged` emit wanneer
-    /// `self.connected` daadwerkelijk van waarde verandert. Variant blijft
-    /// voor forward-compat; geen emitter in deze fase.
+    /// move to an app-level `ConnectionStateChanged` emit when
+    /// `self.connected` actually changes value. Variant stays
+    /// for forward-compat; no emitter in this phase.
     GuardTransition {
         control_id: &'static str,
         channel: RxChannel,
@@ -138,8 +138,8 @@ pub(crate) enum UiEvent {
         reason: CommandBlockReason,
         intent_id: IntentId,
     },
-    /// Gedetecteerd wanneer `cmd_tx.send` faalt (kanaal gesloten).
-    /// Onderscheidt hard van `CommandSent` om vals-positieven te voorkomen.
+    /// Detected when `cmd_tx.send` fails (channel closed).
+    /// Distinguishes hard from `CommandSent` to prevent false positives.
     CommandSendFailed {
         intent_kind: &'static str,
         intent_id: IntentId,
@@ -154,9 +154,9 @@ pub(crate) enum UiEvent {
         hz: u64,
         connected: bool,
     },
-    /// Alleen non-production instrumentation; in prod nooit emitted (zie
-    /// `TracingSink::emit`). Gebruikt een aparte tracing-target `ui::frame`
-    /// zodat `RUST_LOG` ze onafhankelijk van andere ui-events kan filteren.
+    /// Non-production instrumentation only; never emitted in prod (see
+    /// `TracingSink::emit`). Uses a separate tracing-target `ui::frame`
+    /// so that `RUST_LOG` can filter them independently of other ui-events.
     RenderFrame {
         surface: UiSurface,
         control_count: u32,
@@ -164,8 +164,8 @@ pub(crate) enum UiEvent {
     },
 }
 
-/// Gestampeld event - wat `RecordingSink` vasthoudt en wat log-parsers
-/// kunnen correleren via `frame_id` en `t_mono_ns`.
+/// Stamped event - what `RecordingSink` holds and what log-parsers
+/// can correlate via `frame_id` and `t_mono_ns`.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StampedEvent {
     pub(crate) frame_id: u64,
@@ -173,14 +173,14 @@ pub(crate) struct StampedEvent {
     pub(crate) event: UiEvent,
 }
 
-/// Sink-contract. `emit` moet in prod default zero-cost zijn via een
+/// Sink-contract. `emit` must be zero-cost in the prod default via a
 /// `tracing::enabled!` check.
 pub(crate) trait UiEventSink: Send + Sync {
     fn emit(&self, event: UiEvent);
     fn record_intent(&self, intent: &UiIntent, connected: bool) -> IntentId;
 }
 
-/// Prod-implementatie: routeert naar `tracing` met structured fields.
+/// Prod implementation: routes to `tracing` with structured fields.
 pub(crate) struct TracingSink;
 
 impl TracingSink {
@@ -192,9 +192,9 @@ impl TracingSink {
 
 impl UiEventSink for TracingSink {
     fn emit(&self, event: UiEvent) {
-        // Short-circuit wanneer niets luistert - geen veld-assembly, geen allocatie.
+        // Short-circuit when nothing is listening - no field assembly, no allocation.
         if !tracing::enabled!(target: "ui", tracing::Level::INFO) {
-            // RenderFrame gaat op een apart target; check apart.
+            // RenderFrame goes on a separate target; check separately.
             if !matches!(event, UiEvent::RenderFrame { .. }) {
                 return;
             }
@@ -335,7 +335,7 @@ impl UiEventSink for TracingSink {
                 control_count,
                 guarded_count,
             } => {
-                // RenderFrame gebruikt non-production instrumentation + aparte target.
+                // RenderFrame uses non-production instrumentation + separate target.
                 #[cfg(any(test, feature = "ui-test"))]
                 {
                     tracing::info!(
@@ -368,9 +368,9 @@ impl UiEventSink for TracingSink {
 }
 
 // ---------------------------------------------------------------------------
-// RecordingSink - alleen onder test of feature = "ui-test". Geen stub in prod
-// builds: het symbool bestaat niet, dus kan niet per ongeluk worden
-// geconstrueerd.
+// RecordingSink - only under test or feature = "ui-test". No stub in prod
+// builds: the symbol does not exist, so it cannot be accidentally
+// constructed.
 // ---------------------------------------------------------------------------
 
 #[cfg(any(test, feature = "ui-test"))]
@@ -386,12 +386,12 @@ impl RecordingSink {
         }
     }
 
-    /// Alle opgenomen events inclusief frame_id + t_mono_ns stempel.
+    /// All recorded events including frame_id + t_mono_ns stamp.
     pub(crate) fn stamped(&self) -> Vec<StampedEvent> {
         self.inner.lock().unwrap().clone()
     }
 
-    /// Events zonder stempel - handig voor PartialEq-gebaseerde asserts.
+    /// Events without stamp - handy for PartialEq-based asserts.
     pub(crate) fn events(&self) -> Vec<UiEvent> {
         self.inner
             .lock()
@@ -405,7 +405,7 @@ impl RecordingSink {
         self.inner.lock().unwrap().clear();
     }
 
-    /// Aantal events waarvoor `pred` true is.
+    /// Number of events for which `pred` is true.
     pub(crate) fn count_by<F: Fn(&UiEvent) -> bool>(&self, pred: F) -> usize {
         self.inner
             .lock()
@@ -415,7 +415,7 @@ impl RecordingSink {
             .count()
     }
 
-    /// Eerste event waarvoor `pred` true is.
+    /// First event for which `pred` is true.
     pub(crate) fn find<F: Fn(&UiEvent) -> bool>(&self, pred: F) -> Option<UiEvent> {
         self.inner
             .lock()
@@ -425,9 +425,9 @@ impl RecordingSink {
             .map(|s| s.event.clone())
     }
 
-    /// Verifieer dat een gegeven `intent_id` zijn chain netjes afsluit:
-    /// één `IntentEmitted` + exact één van `CommandSent` / `CommandBlocked` /
-    /// `CommandSendFailed`, geen duplicaten.
+    /// Verify that a given `intent_id` closes its chain cleanly:
+    /// one `IntentEmitted` + exactly one of `CommandSent` / `CommandBlocked` /
+    /// `CommandSendFailed`, no duplicates.
     pub(crate) fn assert_intent_chain(&self, id: IntentId) -> Result<(), String> {
         let events = self.inner.lock().unwrap();
         let mut emitted = 0usize;

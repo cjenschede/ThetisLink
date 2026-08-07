@@ -1,6 +1,6 @@
 # ThetisLink
 
-> **Current release: [v2.6.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.6.0)** —
+> **Current release: [v2.7.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.7.0)** —
 > **"Arrange windows" is now a matrix placer (up to 12×12):** pick a grid size, select a
 > window and **paint it onto the cells** — **drag a rectangle to place a window in one gesture**
 > — and it is now **also built into the server GUI** to arrange the server's own device windows
@@ -16,7 +16,7 @@
 > **Backwards-compatible** — TL wire-protocol `VERSION` 3 unchanged; interoperates
 > with v2.5.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for these
 > features (the PA3GHM fork adds the extended-IQ feature-set).
-> Download `ThetisLink-2.6.0.zip` from the
+> Download `ThetisLink-2.7.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are

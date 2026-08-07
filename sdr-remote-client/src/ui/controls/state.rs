@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! State-splits: `RxChannelState` (per RX) + `SharedUiState`
-//! (kanaal-overstijgend). Beide worden via `ControlContext` aan
-//! render-helpers doorgegeven.
+//! State split: `RxChannelState` (per RX) + `SharedUiState`
+//! (cross-channel). Both are passed to render helpers via
+//! `ControlContext`.
 //!
-//! Deze structs zijn bewust klein en bevatten alleen velden die in de
-//! control-helpers gelezen of gewijzigd worden. Ze leven initieel naast de
-//! bestaande `ThetisLinkApp`-velden; tijdens migratie worden app-velden er
-//! stapsgewijs naartoe verplaatst.
+//! These structs are deliberately small and only contain fields that are
+//! read or modified in the control helpers. They initially live alongside the
+//! existing `ThetisLinkApp` fields; during migration the app fields are
+//! gradually moved over to them.
 
-/// Per-kanaal state die door control-helpers gelezen/gewijzigd wordt.
+/// Per-channel state that is read/modified by the control helpers.
 pub(crate) struct RxChannelState {
     pub(crate) frequency_hz: u64,
     pub(crate) mode: u8,
@@ -32,7 +32,7 @@ impl RxChannelState {
     }
 }
 
-/// Kanaal-overstijgende UI-state (VFO-sync, spectrum-scroll gating,
+/// Cross-channel UI state (VFO sync, spectrum-scroll gating,
 /// popout-layout flags, etc).
 pub(crate) struct SharedUiState {
     pub(crate) vfo_sync: bool,

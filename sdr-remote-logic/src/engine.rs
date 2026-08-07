@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use log::{info, warn};
+use log::{info, warn, debug};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
 use tokio::time::{interval, Duration};
@@ -19,21 +19,21 @@ use crate::audio::AudioBackend;
 use crate::commands::Command;
 use crate::state::RadioState;
 
-/// Phase C: kanalen die de client-engine aan de relay-monitor koppelen wanneer de
-/// client via de relay verbindt i.p.v. direct-UDP. De client (`sdr-remote-client`)
-/// knoopt deze aan een `RelayMonitor` met tunnel; de engine kent alleen de mpsc-kanalen.
+/// Phase C: channels that connect the client engine to the relay monitor when the
+/// client connects via the relay instead of direct-UDP. The client (`sdr-remote-client`)
+/// wires these to a `RelayMonitor` with tunnel; the engine only knows the mpsc channels.
 pub struct ClientRelayTunnel {
-    /// Engine -> monitor: te verzenden TL-frames (het adres is het server-adres, genegeerd door de relay).
+    /// Engine -> monitor: TL frames to send (the address is the server address, ignored by the relay).
     pub uplink_tx: mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
-    /// Monitor -> engine: ontvangen (gedecodeerde) TL-frames.
+    /// Monitor -> engine: received (decoded) TL frames.
     pub inbound_rx: mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>,
-    /// Het server-adres; `recv` tagt inkomende frames hiermee, net als direct-UDP.
+    /// The server address; `recv` tags incoming frames with this, just like direct-UDP.
     pub server_addr: SocketAddr,
 }
 
-/// Client-transport: direct-UDP (default, byte-identiek) of via de relay-tunnel.
-/// Bootst het `UdpSocket`-API-oppervlak na dat de engine gebruikt (`send_to`,
-/// `recv_from`, `local_addr`), zodat alle bestaande call-sites ongewijzigd blijven.
+/// Client transport: direct-UDP (default, byte-identical) or via the relay tunnel.
+/// Mimics the `UdpSocket` API surface that the engine uses (`send_to`,
+/// `recv_from`, `local_addr`), so all existing call-sites remain unchanged.
 enum ClientTransport {
     Direct(UdpSocket),
     Relay {
@@ -52,7 +52,7 @@ impl ClientTransport {
                 server_addr,
                 ..
             } => {
-                // De relay kent de bestemming; het addr-argument (server) wordt genegeerd.
+                // The relay knows the destination; the addr argument (server) is ignored.
                 let _ = uplink_tx.send((*server_addr, buf.to_vec()));
                 Ok(buf.len())
             }
@@ -90,18 +90,18 @@ impl ClientTransport {
         }
     }
 
-    /// True in relay-modus. De Connect-handler slaat dan de directe-IP-DNS/parse-check
-    /// over: in relay-modus is er geen direct server-IP (de route is url/station/token),
-    /// en het Connect-adres is puur een display-label dat de Relay-transport negeert.
+    /// True in relay mode. The Connect handler then skips the direct-IP DNS/parse check:
+    /// in relay mode there is no direct server IP (the route is url/station/token),
+    /// and the Connect address is purely a display label that the Relay transport ignores.
     fn is_relay(&self) -> bool {
         matches!(self, ClientTransport::Relay { .. })
     }
 }
 
-/// Pure toepassing van een `YaesuPresence`-pakket op de client-state. Presence is
-/// de connected-autoriteit (gedeeld naar desktop + Android). Retourneert
-/// `(slot0_changed, slot1_changed)` zodat de caller value-change-only kan loggen.
-/// Zet connected dynamisch true/false.
+/// Pure application of a `YaesuPresence` packet to the client state. Presence is
+/// the connected authority (shared to desktop + Android). Returns
+/// `(slot0_changed, slot1_changed)` so the caller can do value-change-only logging.
+/// Sets connected dynamically true/false.
 pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePacket) -> (bool, bool) {
     let c0 = state.yaesu_connected != p.slot0_present;
     let c1 = state.yaesu2_connected != p.slot1_present;
@@ -109,9 +109,9 @@ pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePack
     state.yaesu2_connected = p.slot1_present;
     state.yaesu_model = p.slot0_model;
     state.yaesu2_model = p.slot1_model;
-    // Een afwezige radio kan geen hoge SWR melden. Zonder dit blijft een oude
-    // hi_swr-vlag staan en houdt de andere radio het alarm met elke state-push
-    // opnieuw levend.
+    // An absent radio cannot report high SWR. Without this an old
+    // hi_swr flag stays set and the other radio keeps the alarm alive
+    // again with every state push.
     if !p.slot0_present {
         state.yaesu_hi_swr = false;
     }
@@ -169,10 +169,10 @@ impl TxAgc {
     }
 }
 
-// --- TX Compressor (spraakcompressor voor de Yaesu USB-TX-keten) ---
-// De radio-eigen processor werkt niet op USB-audio; deze client-side compressor
-// vult dat gat. `amount` 0.0..1.0 (0=uit): comprimeert pieken boven een drempel
-// (ratio) en past makeup-gain toe → meer dichtheid/punch.
+// --- TX Compressor (speech compressor for the Yaesu USB-TX chain) ---
+// The radio's own processor does not work on USB audio; this client-side compressor
+// fills that gap. `amount` 0.0..1.0 (0=off): compresses peaks above a threshold
+// (ratio) and applies makeup gain → more density/punch.
 struct TxCompressor {
     amount: f32,
     env: f32,
@@ -185,11 +185,11 @@ impl TxCompressor {
 
     fn process(&mut self, samples: &mut [f32]) {
         if self.amount <= 0.001 { return; }
-        // Drempel zakt, ratio + makeup stijgen met amount.
+        // Threshold drops, ratio + makeup rise with amount.
         let threshold = 0.30 - 0.22 * self.amount; // 0.30 → 0.08
         let ratio = 1.0 + 5.0 * self.amount;        // 1 → 6
         let makeup = 1.0 + 1.5 * self.amount;       // 1.0 → 2.5
-        let exp = 1.0 / ratio - 1.0;                // negatieve exponent → gain-reductie
+        let exp = 1.0 / ratio - 1.0;                // negative exponent → gain reduction
         for s in samples.iter_mut() {
             let a = s.abs();
             let coeff = if a > self.env { 0.30 } else { 0.02 }; // attack / release
@@ -275,26 +275,26 @@ impl ClientEngine {
         let mut dec_rx1 = OpusDecoder::new()?;
         let mut dec_bin_r = OpusDecoder::new()?;
         let mut dec_rx2 = OpusDecoder::new()?;
-        // Wideband parallel-decoders. Worden gebruikt zodra een
-        // multi-channel packet binnenkomt met `Flags::AUDIO_WIDEBAND`
-        // (opt-in via Settings → Audio). Default unused; geen
-        // runtime-impact zolang server NB streamt.
+        // Wideband parallel-decoders. Used as soon as a
+        // multi-channel packet arrives with `Flags::AUDIO_WIDEBAND`
+        // (opt-in via Settings → Audio). Default unused; no
+        // runtime impact as long as the server streams NB.
         let mut dec_rx1_wb = OpusDecoderWideband::new()?;
         let mut dec_bin_r_wb = OpusDecoderWideband::new()?;
         let mut dec_rx2_wb = OpusDecoderWideband::new()?;
 
         // Yaesu (FT-991A) codec + jitter buffer - independent third audio channel.
-        // RX-bandbreedte volgt de Thetis-wideband-toggle (build 122): per packet
-        // bepaalt de AUDIO_WIDEBAND-flag of we NB (8 kHz) of WB (16 kHz) decoderen.
-        // Beide decoders/resamplers blijven aan; `*_last_wb` onthoudt het laatste
-        // formaat voor PLC (Missing-frames dragen geen flag).
+        // RX bandwidth follows the Thetis wideband toggle (build 122): per packet
+        // the AUDIO_WIDEBAND flag determines whether we decode NB (8 kHz) or WB (16 kHz).
+        // Both decoders/resamplers stay active; `*_last_wb` remembers the last
+        // format for PLC (Missing frames carry no flag).
         let mut yaesu_decoder_nb = OpusDecoder::new()?;
         let mut yaesu_decoder_wb = OpusDecoderWideband::new()?;
         let mut yaesu_last_wb = false;
         let mut yaesu_jitter_buf = JitterBuffer::new(3, 40);
         let mut yaesu_logged_first = false;
-        // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — eigen onafhankelijk
-        // kanaal, exacte spiegel van slot 0.
+        // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — own independent
+        // channel, exact mirror of slot 0.
         let mut yaesu2_decoder_nb = OpusDecoder::new()?;
         let mut yaesu2_decoder_wb = OpusDecoderWideband::new()?;
         let mut yaesu2_last_wb = false;
@@ -306,13 +306,13 @@ impl ClientEngine {
         let mut yaesu_tx_accum: Vec<f32> = Vec::new();
         let mut yaesu_tx_encoder = OpusEncoderWideband::new()?;
         let mut yaesu_tx_bitrate_bps: i32 = 24_000;
-        // Anti-alias filter: sinc_len 128 + f_cutoff 0.95 (identiek aan
-        // server-side Yaesu TX resampler). De korte filter (sinc_len 32)
-        // liet NT-USB content >8 kHz onvoldoende afsnijden, waardoor die
-        // frequenties bij de 48→16 kHz decimatie terug-aliassen in
-        // 0-8 kHz en op de RF-uitgang als "raar klinkende" hoge tonen
-        // hoorbaar waren (operator-bevinding 2026-06-02). ~4 ms extra
-        // filter delay — verwaarloosbaar voor mic→Yaesu pad.
+        // Anti-alias filter: sinc_len 128 + f_cutoff 0.95 (identical to the
+        // server-side Yaesu TX resampler). The short filter (sinc_len 32)
+        // cut NT-USB content >8 kHz insufficiently, causing those
+        // frequencies to alias back into 0-8 kHz during the 48→16 kHz decimation
+        // and be audible on the RF output as "weird sounding" high tones
+        // (operator finding 2026-06-02). ~4 ms extra
+        // filter delay — negligible for the mic→Yaesu path.
         let mut yaesu_tx_resampler = rubato::SincFixedIn::<f32>::new(
             NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0,
             rubato::SincInterpolationParameters {
@@ -341,9 +341,9 @@ impl ClientEngine {
         let mut res_rx2_out = rubato::SincFixedIn::<f32>::new(
             playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mk_sinc(), FRAME_SAMPLES, 1,
         ).context("RX2 8k->device resampler")?;
-        // Wideband (16 kHz → playback_rate) parallel-resamplers voor de
-        // opt-in WB Thetis-audio pad. Idle zolang geen WB-getagde packet
-        // binnenkomt.
+        // Wideband (16 kHz → playback_rate) parallel-resamplers for the
+        // opt-in WB Thetis-audio path. Idle as long as no WB-tagged packet
+        // arrives.
         let mut res_rx1_out_wb = rubato::SincFixedIn::<f32>::new(
             playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
         ).context("RX1 16k->device WB resampler")?;
@@ -362,9 +362,9 @@ impl ClientEngine {
             playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
         ).context("WAV 16k->device resampler")?;
 
-        // Yaesu RX-resamplers per formaat (NB 8k→device, WB 16k→device); per packet
-        // gekozen op de wideband-flag (build 122). SincInterpolationParameters is niet
-        // Clone → closure die per gebruik een vers literal maakt.
+        // Yaesu RX resamplers per format (NB 8k→device, WB 16k→device); chosen per packet
+        // on the wideband flag (build 122). SincInterpolationParameters is not
+        // Clone → closure that makes a fresh literal per use.
         let mk_yaesu_sinc = || rubato::SincInterpolationParameters {
             sinc_len: 32, f_cutoff: 0.90, oversampling_factor: 32,
             interpolation: rubato::SincInterpolationType::Cubic,
@@ -389,16 +389,20 @@ impl ClientEngine {
         // RX1/RX2/Yaesu. VRX1 listens on RX1 IQ + VFO-A, VRX2 on RX2
         // IQ + VFO-B.
         let mut vrx1_decoder = OpusDecoder::new()?;
+        // When each VRX was switched on, so the wait for its first packet can be
+        // reported as a number instead of estimated by ear.
+        let mut vrx1_enable_at: Option<Instant> = None;
+        let mut vrx2_enable_at: Option<Instant> = None;
         let mut vrx1_jitter_buf = JitterBuffer::new(3, 40);
         let mut vrx1_logged_first = false;
-        // Start gedempt (0.0): VRX-audio wordt niet door de master-gain gedempt en
-        // de client stuurt het opgeslagen VRX-volume pas op connect. Op 1.0 starten
-        // gaf een harde geluids-piek bij opstart tot dat commando binnen was.
+        // Start muted (0.0): VRX audio is not attenuated by the master gain and
+        // the client only sends the stored VRX volume on connect. Starting at 1.0
+        // gave a hard audio peak at startup until that command arrived.
         let mut vrx1_volume: f32 = 0.0;
         let mut vrx2_decoder = OpusDecoder::new()?;
         let mut vrx2_jitter_buf = JitterBuffer::new(3, 40);
         let mut vrx2_logged_first = false;
-        let mut vrx2_volume: f32 = 0.0; // gedempt starten — zie vrx1_volume
+        let mut vrx2_volume: f32 = 0.0; // start muted — see vrx1_volume
         let mk_sinc_params_vrx = || rubato::SincInterpolationParameters {
             sinc_len: 32, f_cutoff: 0.90, oversampling_factor: 32,
             interpolation: rubato::SincInterpolationType::Cubic,
@@ -441,13 +445,13 @@ impl ClientEngine {
         )
         .context("create VRX2 16k->device resampler")?;
 
-        // Anti-alias parameters voor de TX-capture decimatie 48 → 16 kHz.
-        // Sinds build 29: identiek aan yaesu_tx_resampler — brede USB-mics
-        // (NT-USB e.d.) hebben content tot 16 kHz die anders terug-alias
-        // in 0-8 kHz en op de ANAN/Thetis TX-uitgang hoorbaar wordt
-        // bij FM/AM-TX (SSB blijft binnen 3 kHz dus subtieler).
-        // Comment-naam (`device->8k`) blijft historisch; pad encodeert
-        // wel naar 16 kHz wideband Opus (zie `OpusEncoderWideband`).
+        // Anti-alias parameters for the TX-capture decimation 48 → 16 kHz.
+        // Since build 29: identical to yaesu_tx_resampler — wide USB mics
+        // (NT-USB and the like) have content up to 16 kHz that otherwise aliases
+        // back into 0-8 kHz and becomes audible on the ANAN/Thetis TX output
+        // during FM/AM-TX (SSB stays within 3 kHz so it is subtler).
+        // The comment name (`device->8k`) stays for historical reasons; the path does
+        // encode to 16 kHz wideband Opus (see `OpusEncoderWideband`).
         let sinc_params_in = rubato::SincInterpolationParameters {
             sinc_len: 128,
             f_cutoff: 0.95,
@@ -482,8 +486,8 @@ impl ClientEngine {
         let mut ptt = false;
         let mut thetis_ptt = false;
         let mut yaesu_ptt = false;
-        // Slot-1 PTT (dual-radio). Mutueel exclusief met yaesu_ptt in de praktijk
-        // (één mic) → de mic-TX-keten kiest het packet-type op basis van welke aan staat.
+        // Slot-1 PTT (dual-radio). Mutually exclusive with yaesu_ptt in practice
+        // (one mic) → the mic-TX chain picks the packet type based on which is active.
         let mut yaesu2_ptt = false;
         let mut last_ptt = false;
         let mut ptt_burst_remaining: u32 = 0;
@@ -503,11 +507,11 @@ impl ClientEngine {
         let mut last_sent_volume: u16 = 0;
         let mut rx_volume_synced: bool = false; // Don't send ZZLA until server value received
         let mut agc = TxAgc::new();
-        let mut yaesu_agc = TxAgc::new(); // aparte AGC-envelope voor de Yaesu-TX-tak (deel B)
-        let mut yaesu_tx_agc_enabled = false; // eigen Yaesu-AGC-toggle (los van Thetis agc_enabled)
-        let mut yaesu_compressor = TxCompressor::new(); // client-side spraakcompressor (USB-TX)
-        // Radio 2 (FTX-1): eigen compressor/AGC zodat de TX-keten per radio instelbaar is
-        // (net als de per-radio EQ). PTT is mutueel exclusief → per-PTT de juiste keten.
+        let mut yaesu_agc = TxAgc::new(); // separate AGC envelope for the Yaesu TX branch (part B)
+        let mut yaesu_tx_agc_enabled = false; // own Yaesu AGC toggle (separate from Thetis agc_enabled)
+        let mut yaesu_compressor = TxCompressor::new(); // client-side speech compressor (USB-TX)
+        // Radio 2 (FTX-1): own compressor/AGC so the TX chain is configurable per radio
+        // (like the per-radio EQ). PTT is mutually exclusive → the right chain per PTT.
         let mut yaesu2_agc = TxAgc::new();
         let mut yaesu2_tx_agc_enabled = false;
         let mut yaesu2_compressor = TxCompressor::new();
@@ -535,19 +539,19 @@ impl ClientEngine {
         let mut playback_wav_rate: u32 = NETWORK_SAMPLE_RATE;
         let mut playback_pos: usize = 0;
         let mut playback_is_tx: bool = false;
-        // True zolang we voor een WAV-playback naar de hoofdradio de Thetis-TXEQ
-        // hebben uitgezet (om te herstellen bij stop/PTT-los/afloop).
+        // True as long as we have turned off the Thetis TXEQ for a WAV-playback to the
+        // main radio (to restore on stop/PTT-release/end).
         let mut thetis_txeq_bypassed: bool = false;
 
         let mut yaesu_volume: f32 = 0.5;   // Yaesu audio volume (client-only)
-        // Slot-1 volume start GEDEMPT (0.0) — verplicht per les uit build 88
-        // (VRX-piek bij opstart, project_audio_stutter_diagnose): elk nieuw
-        // audiokanaal start muted tot de UI/effectieve volume binnen is.
+        // Slot-1 volume starts MUTED (0.0) — required per lesson from build 88
+        // (VRX peak at startup, project_audio_stutter_diagnose): each new
+        // audio channel starts muted until the UI/effective volume has arrived.
         let mut yaesu2_volume: f32 = 0.0;
         let mut yaesu_local_mic_gain: f32 = 0.2; // Local Yaesu mic gain (before Opus encoding)
         let mut yaesu_eq = crate::eq::Equalizer::new(48000.0); // EQ at capture rate
-        // Slot-1 (FTX-1) eigen TX-mic-EQ + gain — toegepast wanneer op radio 2
-        // wordt gezonden (PTT mutueel exclusief, dus per-PTT gekozen in de encode-keten).
+        // Slot-1 (FTX-1) own TX-mic EQ + gain — applied when transmitting on radio 2
+        // (PTT mutually exclusive, so chosen per PTT in the encode chain).
         let mut yaesu2_local_mic_gain: f32 = 0.2;
         let mut yaesu2_eq = crate::eq::Equalizer::new(48000.0);
         let mut last_sent_rx2_volume: u16 = 0;
@@ -579,24 +583,24 @@ impl ClientEngine {
         let mut current_loss_percent: u8 = 0;
         let mut smoothed_loss: f32 = 0.0;
 
-        // Bandbreedte-monitor (down/up Kbit/s) over een rolling ~500 ms venster.
-        // RX-bytes worden bij elke recv_from() opgeteld; TX-bytes via de
-        // `send_tx!`-macro die elke send_to-call-site omhult. Bij elke
-        // window-rollover wordt de kbps berekend en in `state.down_kbps`/
-        // `up_kbps` geschreven — weergegeven in de Server-tab Statistics-grid.
+        // Bandwidth monitor (down/up Kbit/s) over a rolling ~500 ms window.
+        // RX bytes are summed on every recv_from(); TX bytes via the
+        // `send_tx!` macro that wraps every send_to call-site. On every
+        // window rollover the kbps is computed and written to `state.down_kbps`/
+        // `up_kbps` — shown in the Server-tab Statistics grid.
         let mut bw_window_start = Instant::now();
         let mut bw_rx_bytes: u64 = 0;
         let mut bw_tx_bytes: u64 = 0;
-        // Per-PacketType byte-counter voor de RX-stream — geïndexeerd op
-        // de `packet_type` byte (data[2]). Elke 5 s wordt een top-5
-        // overzicht naar info! gelogd zodat de operator kan zien welke
-        // stream het meeste verbruikt (zonder UI-uitbreiding).
+        // Per-PacketType byte counter for the RX stream — indexed on
+        // the `packet_type` byte (data[2]). Every 5 s a top-5
+        // overview is logged to info! so the operator can see which
+        // stream consumes the most (without a UI extension).
         let mut bw_by_type: [u64; 256] = [0; 256];
         let mut bw_breakdown_start = Instant::now();
-        // Lokale macro: wraps socket.send_to(buf, addr).await en telt buf-bytes
-        // bij bw_tx_bytes. Vervangt de 80+ inline call-sites in deze functie
-        // zonder per-site instrumentatie. Identifiers `socket` en `bw_tx_bytes`
-        // worden bij invocation in de huidige scope geresolveerd.
+        // Local macro: wraps socket.send_to(buf, addr).await and adds buf bytes
+        // to bw_tx_bytes. Replaces the 80+ inline call-sites in this function
+        // without per-site instrumentation. Identifiers `socket` and `bw_tx_bytes`
+        // are resolved in the current scope at invocation.
         macro_rules! send_tx {
             ($buf:expr, $addr:expr) => {{
                 let __buf: &[u8] = $buf;
@@ -681,6 +685,13 @@ impl ClientEngine {
             // after the MIDI controller had already stopped).
             let mut deferred_freq: Option<u64> = None;
             let mut deferred_freq_rx2: Option<u64> = None;
+            // The two Yaesu slots need the same treatment, and need it more: a
+            // Thetis VFO write goes over TCI, but a Yaesu write is a CAT frame on
+            // a serial link with a round trip per command. One MIDI sweep queues
+            // dozens of them, the radio keeps stepping long after the knob has
+            // stopped, and there is no way to call it back.
+            let mut deferred_yaesu_freq: Option<u64> = None;
+            let mut deferred_yaesu2_freq: Option<u64> = None;
             while let Ok(cmd) = self.cmd_rx.try_recv() {
                 match cmd {
                     Command::Connect(addr, pw) => {
@@ -730,9 +741,9 @@ impl ClientEngine {
                         // needed. If it has a hostname, try lookup_host once. Either failure
                         // mode produces a specific ConnectError so the UI can show a precise
                         // message instead of a generic "Disconnected".
-                        // In relay-modus is er geen direct server-IP: het adres is een
-                        // display-label (genegeerd door de Relay-transport). Sla de
-                        // directe-IP-DNS/parse-check dan over (security addendum fix).
+                        // In relay mode there is no direct server IP: the address is a
+                        // display label (ignored by the Relay transport). Skip the
+                        // direct-IP DNS/parse check in that case (security addendum fix).
                         let resolved_ok = if socket.is_relay() || addr.parse::<std::net::SocketAddr>().is_ok() {
                             true
                         } else {
@@ -913,6 +924,11 @@ impl ClientEngine {
                         rx_volume = v;
                     }
                     Command::SetLocalVolume(v) => {
+                        // Master gain: applied to EVERY playback channel (RX1, RX2,
+                        // VRX1/2 and both Yaesu slots), not only the Thetis RX paths -
+                        // otherwise "master" would silently mean "RX only". Levels are
+                        // measured BEFORE this gain, so the meters keep showing the link
+                        // rather than the slider.
                         local_volume = v;
                     }
                     Command::SetVfoAVolume(v) => {
@@ -1599,6 +1615,24 @@ impl ClientEngine {
                         state.playing = false;
                         info!("Playback stopped");
                     }
+                    Command::SetFullSpectrumEnabled(enabled) => {
+                        state.full_spectrum_enabled = enabled;
+                        if !enabled {
+                            // Drop what is already buffered: without fresh rows the
+                            // waterfall would otherwise keep redrawing one frozen
+                            // full-band row. The centre/span stay - the VRX tuning
+                            // limits are derived from them.
+                            state.full_spectrum_bins.clear();
+                            state.rx2_full_spectrum_bins.clear();
+                        }
+                        if let Some(ref addr) = server_addr {
+                            let ctrl = ControlPacket { control_id: ControlId::FullSpectrumEnabled, value: enabled as u16 };
+                            let mut buf = [0u8; ControlPacket::SIZE];
+                            ctrl.serialize(&mut buf);
+                            let _ = send_tx!(&buf, addr.as_str());
+                            info!("Full-spectrum row enable sent: {}", enabled);
+                        }
+                    }
                     Command::SetDxSpotsEnabled(enabled) => {
                         state.dx_spots_enabled = enabled;
                         if let Some(ref addr) = server_addr {
@@ -1609,8 +1643,8 @@ impl ClientEngine {
                             info!("DX spots enable sent: {}", enabled);
                         }
                         if !enabled {
-                            // Lokale UI-cache wissen zodat oude spots niet
-                            // blijven hangen na opt-out.
+                            // Clear the local UI cache so old spots don't
+                            // linger after opt-out.
                             state.dx_spots.clear();
                         }
                     }
@@ -1655,7 +1689,7 @@ impl ClientEngine {
                         info!("Yaesu EQ: {}", if on { "ON" } else { "OFF" });
                     }
                     Command::SetYaesuCompressor(level) => {
-                        // Client-side spraakcompressor radio 1 (0-100 → 0.0-1.0).
+                        // Client-side speech compressor radio 1 (0-100 → 0.0-1.0).
                         yaesu_compressor.set_amount(level as f32 / 100.0);
                         info!("Yaesu compressor: {}", level);
                     }
@@ -1664,7 +1698,7 @@ impl ClientEngine {
                         info!("Yaesu TX AGC: {}", if on { "ON" } else { "OFF" });
                     }
                     Command::SetYaesu2Compressor(level) => {
-                        // Client-side spraakcompressor radio 2 (FTX-1).
+                        // Client-side speech compressor radio 2 (FTX-1).
                         yaesu2_compressor.set_amount(level as f32 / 100.0);
                         info!("Yaesu2 compressor: {}", level);
                     }
@@ -1673,11 +1707,8 @@ impl ClientEngine {
                         info!("Yaesu2 TX AGC: {}", if on { "ON" } else { "OFF" });
                     }
                     Command::SetYaesuFreq(hz) => {
-                        if let Some(ref addr) = server_addr {
-                            let pkt = FrequencyPacket { frequency_hz: hz };
-                            let mut buf = [0u8; FrequencyPacket::SIZE];
-                            pkt.serialize_as_type(&mut buf, PacketType::FrequencyYaesu);
-                            let _ = send_tx!(&buf, addr.as_str());
+                        if server_addr.is_some() {
+                            deferred_yaesu_freq = Some(hz);
                         } else {
                             warn!("Yaesu freq -> {} Hz DROPPED: not connected (server_addr=None)", hz);
                         }
@@ -1722,7 +1753,7 @@ impl ClientEngine {
                         }
                     }
                     Command::WriteYaesu2Memories(tab_text) => {
-                        // Idem radio 2: YaesuMemoryData2-packet + Yaesu2WriteMemories-trigger.
+                        // Same for radio 2: YaesuMemoryData2 packet + Yaesu2WriteMemories trigger.
                         if let Some(ref addr) = server_addr {
                             let text_bytes = tab_text.as_bytes();
                             let mut send_buf = Vec::with_capacity(6 + text_bytes.len());
@@ -1760,8 +1791,8 @@ impl ClientEngine {
                         }
                     }
                     Command::SetYaesu2Menu(addr_str, value) => {
-                        // FTX-1 EX-set: reist als YaesuMemoryData2 met "SETMENU:"-prefix
-                        // (spiegelt het 991A SetYaesuMenu-pad, maar 6-cijferig adres).
+                        // FTX-1 EX-set: travels as YaesuMemoryData2 with "SETMENU:" prefix
+                        // (mirrors the 991A SetYaesuMenu path, but 6-digit address).
                         if let Some(ref addr) = server_addr {
                             let text = format!("SETMENU:{}:{}", addr_str, value);
                             let text_bytes = text.as_bytes();
@@ -1816,11 +1847,8 @@ impl ClientEngine {
                         }
                     }
                     Command::SetYaesu2Freq(hz) => {
-                        if let Some(ref addr) = server_addr {
-                            let pkt = FrequencyPacket { frequency_hz: hz };
-                            let mut buf = [0u8; FrequencyPacket::SIZE];
-                            pkt.serialize_as_type(&mut buf, PacketType::FrequencyYaesu2);
-                            let _ = send_tx!(&buf, addr.as_str());
+                        if server_addr.is_some() {
+                            deferred_yaesu2_freq = Some(hz);
                         }
                     }
                     Command::SetYaesu2Mode(mode) => {
@@ -1848,6 +1876,15 @@ impl ClientEngine {
                             ctrl.serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
                         }
+vrx1_enable_at = if on { Some(Instant::now()) } else { None };
+                                                // Re-baseline like a reconnect does. Enabling a channel makes
+                        // the server build a fresh runtime that starts its sequence
+                        // over, while this buffer still expects the numbers from the
+                        // previous subscription - so the new frames read as "too late"
+                        // and are dropped until the sequence climbs back. That is the
+                        // silence of several seconds after switching a VRX on.
+                        vrx1_jitter_buf.reset();
+                        vrx1_logged_first = false;
                     }
                     Command::SetVrxMode(mode) => {
                         if let Some(ref addr) = server_addr {
@@ -1875,6 +1912,10 @@ impl ClientEngine {
                             ctrl.serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
                         }
+vrx2_enable_at = if on { Some(Instant::now()) } else { None };
+                                                // Same re-baseline as VRX1 - see there.
+                        vrx2_jitter_buf.reset();
+                        vrx2_logged_first = false;
                     }
                     Command::SetVrx2Mode(mode) => {
                         if let Some(ref addr) = server_addr {
@@ -2097,6 +2138,26 @@ impl ClientEngine {
                     state.frequency_rx2_hz = hz;
                     pending_freq_rx2 = Some(hz);
                     pending_freq_rx2_time = Some(Instant::now());
+                }
+            }
+
+            // Same for the two Yaesu slots: only the last frequency of this drain
+            // pass reaches the radio, so a fast sweep costs one CAT write instead
+            // of a queue that outlives the gesture.
+            if let Some(hz) = deferred_yaesu_freq.take() {
+                if let Some(ref addr) = server_addr {
+                    let pkt = FrequencyPacket { frequency_hz: hz };
+                    let mut buf = [0u8; FrequencyPacket::SIZE];
+                    pkt.serialize_as_type(&mut buf, PacketType::FrequencyYaesu);
+                    let _ = send_tx!(&buf, addr.as_str());
+                }
+            }
+            if let Some(hz) = deferred_yaesu2_freq.take() {
+                if let Some(ref addr) = server_addr {
+                    let pkt = FrequencyPacket { frequency_hz: hz };
+                    let mut buf = [0u8; FrequencyPacket::SIZE];
+                    pkt.serialize_as_type(&mut buf, PacketType::FrequencyYaesu2);
+                    let _ = send_tx!(&buf, addr.as_str());
                 }
             }
 
@@ -2370,10 +2431,10 @@ impl ClientEngine {
                                         }
                                     }
 
-                                    // Re-send RX1 audio-abonnement on reconnect.
-                                    // Server default = AAN, dus alleen relevant als
-                                    // de client RX1 UIT wil — maar altijd sturen is
-                                    // idempotent en dekt beide gevallen.
+                                    // Re-send RX1 audio subscription on reconnect.
+                                    // Server default = ON, so only relevant if
+                                    // the client wants RX1 OFF — but always sending is
+                                    // idempotent and covers both cases.
                                     {
                                         let mut rx1_buf = [0u8; ControlPacket::SIZE];
                                         let ctrl = ControlPacket {
@@ -2384,7 +2445,7 @@ impl ClientEngine {
                                         let _ = send_tx!(&rx1_buf, addr.as_str());
                                     }
 
-                                    // Re-send RX2 AUDIO-abonnement op reconnect (los van spectrum).
+                                    // Re-send RX2 AUDIO subscription on reconnect (separate from spectrum).
                                     if state.rx2_enabled {
                                         let mut rx2_buf = [0u8; ControlPacket::SIZE];
                                         let ctrl = ControlPacket { control_id: ControlId::Rx2Enable, value: 1 };
@@ -2392,9 +2453,9 @@ impl ClientEngine {
                                         let _ = send_tx!(&rx2_buf, addr.as_str());
                                         info!("RX2 audio re-sent on reconnect");
                                     }
-                                    // Re-send RX2 SPECTRUM-abonnement op reconnect, LOS van het
-                                    // audio-abonnement (fase 3b/4) — anders krijgt een RX2-spectrum-
-                                    // zonder-audio-client na herverbinden geen spectrum meer.
+                                    // Re-send RX2 SPECTRUM subscription on reconnect, SEPARATE from the
+                                    // audio subscription (phase 3b/4) — otherwise an RX2-spectrum-
+                                    // without-audio client gets no spectrum after reconnecting.
                                     if state.rx2_spectrum_enabled {
                                         let mut rx2_buf = [0u8; ControlPacket::SIZE];
                                         let ctrl = ControlPacket { control_id: ControlId::Rx2SpectrumEnable, value: 1 };
@@ -2440,9 +2501,9 @@ impl ClientEngine {
                                     ctrl.serialize(&mut sm_buf);
                                     let _ = send_tx!(&sm_buf, addr.as_str());
                                     // Re-send DX-spots opt-out — server's ClientSession resets
-                                    // to default ON on every new insert, dus zonder dit pad
-                                    // zou de client visueel OFF tonen terwijl de server na
-                                    // reconnect weer Spot-frames stuurt.
+                                    // to default ON on every new insert, so without this path
+                                    // the client would visually show OFF while the server, after
+                                    // reconnect, sends Spot frames again.
                                     let ctrl = ControlPacket {
                                         control_id: ControlId::DxSpotsEnabled,
                                         value: state.dx_spots_enabled as u16,
@@ -2450,6 +2511,14 @@ impl ClientEngine {
                                     let mut dx_buf = [0u8; ControlPacket::SIZE];
                                     ctrl.serialize(&mut dx_buf);
                                     let _ = send_tx!(&dx_buf, addr.as_str());
+                                    // Same reasoning for the full-spectrum opt-out.
+                                    let ctrl = ControlPacket {
+                                        control_id: ControlId::FullSpectrumEnabled,
+                                        value: state.full_spectrum_enabled as u16,
+                                    };
+                                    let mut fs_buf = [0u8; ControlPacket::SIZE];
+                                    ctrl.serialize(&mut fs_buf);
+                                    let _ = send_tx!(&fs_buf, addr.as_str());
                                 }
                                 state.connected = true;
                                 was_connected = true;
@@ -2626,12 +2695,15 @@ impl ClientEngine {
                                     }
                                 }
                                 ControlId::TxProfile => state.tx_profile = ctrl.value as u8,
-                                // Client->server only (WAV-playback TXEQ-bypass); de server
-                                // broadcast 'm nooit terug, dus hier no-op.
+                                // Client->server only (WAV-playback TXEQ-bypass); the server
+                                // never broadcasts it back, so no-op here.
                                 ControlId::ThetisTxeq => {}
-                                // Client->server only (Yaesu STATE-abonnement + power on/off); no-op.
+                                // Client->server only (Yaesu STATE subscription + power on/off); no-op.
                                 ControlId::YaesuStateEnable | ControlId::Yaesu2StateEnable
-                                | ControlId::YaesuPowerOnOff | ControlId::Yaesu2PowerOnOff => {}
+                                | ControlId::YaesuPowerOnOff | ControlId::Yaesu2PowerOnOff
+                                // Diagnostic switch handled entirely server-side.
+                                | ControlId::YaesuCatMonitor
+                                | ControlId::YaesuReadMemoryTones => {}
                                 ControlId::NoiseReduction => state.nr_level = ctrl.value.min(4) as u8,
                                 ControlId::AutoNotchFilter => state.anf_on = ctrl.value != 0,
                                 ControlId::DriveLevel => state.drive_level = ctrl.value.min(100) as u8,
@@ -2654,8 +2726,10 @@ impl ClientEngine {
                                 ControlId::SpectrumEnable | ControlId::SpectrumFps
                                 | ControlId::SpectrumZoom | ControlId::SpectrumPan
                                 | ControlId::SpectrumMaxBins | ControlId::SpectrumFftSize
-                                | ControlId::SpectrumBinDepth => {}
-                                // RX1/RX2 audio-abonnement (server-echo, indien gepusht)
+                                | ControlId::SpectrumBinDepth
+                                // Client -> server only; the server never echoes it back.
+                                | ControlId::FullSpectrumEnabled => {}
+                                // RX1/RX2 audio subscription (server-echo, if pushed)
                                 ControlId::Rx1Enable => state.rx1_enabled = ctrl.value != 0,
                                 // RX2 controls from server
                                 ControlId::Rx2Enable => state.rx2_enabled = ctrl.value != 0,
@@ -2751,7 +2825,7 @@ impl ClientEngine {
                                 ControlId::DdcSampleRateRx1 => state.ddc_sample_rate_rx1 = ctrl.value,
                                 ControlId::DdcSampleRateRx2 => state.ddc_sample_rate_rx2 = ctrl.value,
                                 ControlId::AudioMode => {} // handled client-side
-                                ControlId::AllowZoomBelow2x => {} // handled client-side (setup-vink)
+                                ControlId::AllowZoomBelow2x => {} // handled client-side (setup checkbox)
                                 ControlId::SmeterSources => {} // client→server only; server echoes ignored
                                 ControlId::VrxEnable => {} // client→server only
                                 ControlId::VrxMode => {} // client→server only
@@ -2767,8 +2841,8 @@ impl ClientEngine {
                                 ControlId::VrxSpectrumEnable2 => {} // client→server only
                                 ControlId::VrxSpectrumSpanKhz => {} // client→server only
                                 ControlId::VrxSpectrumSpanKhz2 => {} // client→server only
-                                // Dual-radio slot 1 (Optie B-prime): client→server only;
-                                // server echoes ignored (zelfde patroon als slot-0 Yaesu + Vrx).
+                                // Dual-radio slot 1 (Option B-prime): client→server only;
+                                // server echoes ignored (same pattern as slot-0 Yaesu + Vrx).
                                 ControlId::Yaesu2Enable | ControlId::Yaesu2Ptt
                                 | ControlId::Yaesu2Freq | ControlId::Yaesu2MicGain
                                 | ControlId::Yaesu2Mode | ControlId::Yaesu2ReadMemories
@@ -3005,9 +3079,9 @@ impl ClientEngine {
                             }
                         }
                         Ok(Packet::YaesuState(ys)) => {
-                            // connected komt NIET meer hieruit — presence-authority is
-                            // nu YaesuPresence (PATCH-android-yaesu-presence-datasaver),
-                            // zodat wegvallen/bijkomen dynamisch is i.p.v. sticky.
+                            // connected no longer comes from here — presence authority is
+                            // now YaesuPresence (PATCH-android-yaesu-presence-datasaver),
+                            // so dropping/appearing is dynamic instead of sticky.
                             state.yaesu_freq_a = ys.freq_a;
                             state.yaesu_freq_b = ys.freq_b;
                             state.yaesu_mode = ys.mode;
@@ -3086,9 +3160,10 @@ impl ClientEngine {
                                         vrx1_jitter_buf.reset();
                                     }
                                     if !vrx1_logged_first {
-                                        info!(
-                                            "VRX1 audio: first packet received (seq={}, opus_bytes={})",
-                                            pkt.sequence, frame.opus_data.len()
+                                        debug!(
+                                            "VRX1 audio: first packet received (seq={}, opus_bytes={}) - {} ms after enable",
+                                            pkt.sequence, frame.opus_data.len(),
+                                            vrx1_enable_at.map(|t| t.elapsed().as_millis() as i64).unwrap_or(-1)
                                         );
                                         vrx1_logged_first = true;
                                     }
@@ -3103,9 +3178,10 @@ impl ClientEngine {
                                         vrx2_jitter_buf.reset();
                                     }
                                     if !vrx2_logged_first {
-                                        info!(
-                                            "VRX2 audio: first packet received (seq={}, opus_bytes={})",
-                                            pkt.sequence, frame.opus_data.len()
+                                        debug!(
+                                            "VRX2 audio: first packet received (seq={}, opus_bytes={}) - {} ms after enable",
+                                            pkt.sequence, frame.opus_data.len(),
+                                            vrx2_enable_at.map(|t| t.elapsed().as_millis() as i64).unwrap_or(-1)
                                         );
                                         vrx2_logged_first = true;
                                     }
@@ -3145,8 +3221,8 @@ impl ClientEngine {
                                     timestamp: pkt.timestamp,
                                     opus_data: pkt.opus_data,
                                     ptt: false,
-                                    // RX-bandbreedte volgt de Thetis-toggle: de
-                                    // AUDIO_WIDEBAND-flag bepaalt NB (8k) of WB (16k).
+                                    // RX bandwidth follows the Thetis toggle: the
+                                    // AUDIO_WIDEBAND flag determines NB (8k) or WB (16k).
                                     wideband: pkt.flags.wideband(),
                                 },
                                 arrival_ms,
@@ -3158,9 +3234,9 @@ impl ClientEngine {
                         Ok(Packet::PttDenied) => {
                             state.ptt_denied = true;
                         }
-                        // Dual-radio slot 1 (Optie B-prime) — exacte spiegel van slot 0.
+                        // Dual-radio slot 1 (Option B-prime) — exact mirror of slot 0.
                         Ok(Packet::YaesuState2(ys)) => {
-                            // connected komt NIET meer hieruit — zie YaesuPresence (3c).
+                            // connected no longer comes from here — see YaesuPresence (3c).
                             state.yaesu2_freq_a = ys.freq_a;
                             state.yaesu2_freq_b = ys.freq_b;
                             state.yaesu2_mode = ys.mode;
@@ -3203,7 +3279,7 @@ impl ClientEngine {
                                     timestamp: pkt.timestamp,
                                     opus_data: pkt.opus_data,
                                     ptt: false,
-                                    wideband: pkt.flags.wideband(), // RX volgt Thetis-toggle
+                                    wideband: pkt.flags.wideband(), // RX follows Thetis toggle
                                 },
                                 arrival_ms,
                             );
@@ -3212,20 +3288,20 @@ impl ClientEngine {
                             state.yaesu2_buffer_depth = yaesu2_jitter_buf.depth() as u32;
                         }
                         Ok(Packet::RadioInfo { slot, model }) => {
-                            // Per-radio model voor paneel-naamgeving ("991A 1"/"FTX1").
+                            // Per-radio model for panel naming ("991A 1"/"FTX1").
                             if slot == 0 { state.yaesu_model = model; }
                             else if slot == 1 { state.yaesu2_model = model; }
                         }
                         Ok(Packet::YaesuPresence(p)) => {
-                            // Presence-authority (PATCH-android-yaesu-presence-datasaver):
-                            // connected + model komen hiervandaan (broadcast naar álle
-                            // clients), NIET uit de subscription-gated YaesuState. Pure
-                            // toepassing in apply_yaesu_presence (unit-tested).
+                            // Presence authority (PATCH-android-yaesu-presence-datasaver):
+                            // connected + model come from here (broadcast to all
+                            // clients), NOT from the subscription-gated YaesuState. Pure
+                            // application in apply_yaesu_presence (unit-tested).
                             let (c0, c1) = apply_yaesu_presence(&mut state, &p);
-                            // Presence kan de hi_swr-vlag hebben gewist; het alarm
-                            // moet die daling meteen volgen.
+                            // Presence may have cleared the hi_swr flag; the alarm
+                            // must follow that drop immediately.
                             audio.set_swr_alarm(state.yaesu_hi_swr || state.yaesu2_hi_swr);
-                            // Value-change-only logging (L4) — gedeeld, dus ook desktop.
+                            // Value-change-only logging (L4) — shared, so desktop too.
                             if c0 { info!("[radio0] presence: {}", if p.slot0_present { "connected" } else { "disconnected" }); }
                             if c1 { info!("[radio1] presence: {}", if p.slot1_present { "connected" } else { "disconnected" }); }
                         }
@@ -3398,6 +3474,22 @@ impl ClientEngine {
                         let mut rx2_level_count: usize = 0;
                         let mut bin_r_level_accum: f32 = 0.0;
                         let mut bin_r_level_count: usize = 0;
+                        // Every stream measures its energy BEFORE its volume is applied,
+                        // so a bar shows what the link delivers, not what the local
+                        // volume slider leaves of it.
+                        let mut yaesu_level_accum: f32 = 0.0;
+                        let mut yaesu_level_count: usize = 0;
+                        let mut yaesu2_level_accum: f32 = 0.0;
+                        let mut yaesu2_level_count: usize = 0;
+                        let mut vrx1_level_accum: f32 = 0.0;
+                        let mut vrx1_level_count: usize = 0;
+                        let mut vrx2_level_accum: f32 = 0.0;
+                        let mut vrx2_level_count: usize = 0;
+                        // RX1's pre-volume energy of the frame being processed, so the
+                        // binaural-R fallback (R = copy of L) can report the same level
+                        // without measuring the volume-scaled copy.
+                        let mut rx1_pre_sq: f32 = 0.0;
+                        let mut rx1_pre_len: usize = 0;
 
                         if !skip_this_tick {
                             loop {
@@ -3410,10 +3502,10 @@ impl ClientEngine {
                                 }
 
                                 // Pull multi-channel frame from jitter buffer.
-                                // Tuple-payload `(blob, wideband)` zodat de decoder bij
-                                // pop weet op welk pad het frame thuishoort (WB = 16 kHz
-                                // Opus i.p.v. 8 kHz). Default false voor frames die
-                                // door FEC/PLC zijn opgevuld — die paden blijven NB.
+                                // Tuple payload `(blob, wideband)` so the decoder knows on
+                                // pop which path the frame belongs to (WB = 16 kHz
+                                // Opus instead of 8 kHz). Default false for frames that
+                                // are filled by FEC/PLC — those paths stay NB.
                                 let frame_data: Option<(Vec<u8>, bool)> = match jitter_buf.pull() {
                                     JitterResult::Frame(frame) => {
                                         frames_this_tick += 1;
@@ -3483,8 +3575,8 @@ impl ClientEngine {
                                             let opus_len = u16::from_be_bytes([blob[pos+1], blob[pos+2]]) as usize;
                                             if pos + 3 + opus_len > blob.len() { break; }
                                             let opus = &blob[pos+3..pos+3+opus_len];
-                                            // Decoder-pad keuze op basis van WB-flag van dit packet.
-                                            // Yaesu-RX heeft een eigen jitter-buf (geen WB-pad daar).
+                                            // Decoder-path choice based on this packet's WB flag.
+                                            // Yaesu-RX has its own jitter-buf (no WB path there).
                                             match ch_id {
                                                 0 => {
                                                     rx1_pcm = if is_wb {
@@ -3527,9 +3619,9 @@ impl ClientEngine {
                                     }
 
                                     // Resample and route based on audio_mode.
-                                    // Per-channel kiezen we de juiste resampler op basis
-                                    // van het WB-vlag-pad (16k vs 8k input). Output is
-                                    // altijd op playback_rate.
+                                    // Per channel we pick the right resampler based on
+                                    // the WB-flag path (16k vs 8k input). Output is
+                                    // always at playback_rate.
                                     // RX1 → always L
                                     let mut left_dev = if let Some(pcm) = rx1_pcm {
                                         let mut dev = if is_wb {
@@ -3537,10 +3629,15 @@ impl ClientEngine {
                                         } else {
                                             resample_to_device(&mut res_rx1_out, &pcm)
                                         };
-                                        apply_volume(&mut dev, rx_volume * vfo_a_volume * local_volume);
+                                        // Level BEFORE volume: the meter answers "is
+                                        // this stream carrying audio", which must not
+                                        // move when the operator turns the volume down.
                                         let sq: f32 = dev.iter().map(|s| s*s).sum();
                                         rx1_level_accum += sq;
                                         rx1_level_count += dev.len();
+                                        rx1_pre_sq = sq;
+                                        rx1_pre_len = dev.len();
+                                        apply_volume(&mut dev, rx_volume * vfo_a_volume * local_volume);
                                         dev
                                     } else { Vec::new() };
 
@@ -3551,21 +3648,21 @@ impl ClientEngine {
                                         } else {
                                             resample_to_device(&mut res_rx2_out, pcm)
                                         };
-                                        let rx2_vol = rx2_volume * vfo_b_volume * local_volume;
-                                        apply_volume(&mut dev, rx2_vol);
                                         let sq: f32 = dev.iter().map(|s| s*s).sum();
                                         rx2_level_accum += sq;
                                         rx2_level_count += dev.len();
+                                        let rx2_vol = rx2_volume * vfo_b_volume * local_volume;
+                                        apply_volume(&mut dev, rx2_vol);
                                         Some(dev)
                                     } else { None };
 
-                                    // RX1-audio kan bewust uit staan (Rx1Enable, fase 3a):
-                                    // dan is left_dev leeg. RX2 wordt additief in L gemengd
-                                    // (Mono/BIN) en de output-gate schrijft alleen als L
-                                    // niet leeg is — dus zonder deze seed valt RX2-audio weg
-                                    // terwijl de level-bar (gemeten vóór de mix) wél uitslaat.
-                                    // Seed L met stilte op RX2-lengte zodat RX2 hoorbaar blijft
-                                    // zonder RX1-audio. VRX heeft een eigen mixpad (ongevoelig).
+                                    // RX1 audio can be deliberately off (Rx1Enable, phase 3a):
+                                    // then left_dev is empty. RX2 is mixed additively into L
+                                    // (Mono/BIN) and the output-gate only writes if L
+                                    // is not empty — so without this seed RX2 audio drops out
+                                    // while the level bar (measured before the mix) does move.
+                                    // Seed L with silence at RX2 length so RX2 stays audible
+                                    // without RX1 audio. VRX has its own mix path (unaffected).
                                     if left_dev.is_empty() {
                                         if let Some(ref rx2) = rx2_dev {
                                             left_dev = vec![0.0; rx2.len()];
@@ -3594,20 +3691,22 @@ impl ClientEngine {
                                             } else {
                                                 resample_to_device(&mut res_bin_r_out, &pcm)
                                             };
+                                            // Pre-volume, and before RX2 is mixed in below:
+                                            // this bar is the pure RX1-R channel.
+                                            bin_r_level_accum += dev.iter().map(|s| s * s).sum::<f32>();
+                                            bin_r_level_count += dev.len();
                                             apply_volume(&mut dev, rx_volume * vfo_a_volume * local_volume);
                                             dev
-                                        } else { left_dev.clone() } // fallback mono
+                                        } else {
+                                            // Fallback: R is a copy of L, so it carries RX1's level.
+                                            bin_r_level_accum += rx1_pre_sq;
+                                            bin_r_level_count += rx1_pre_len;
+                                            left_dev.clone()
+                                        }
                                     } else {
                                         // Split: R = RX2 directly
                                         rx2_dev.clone().unwrap_or_default()
                                     };
-
-                                    // Measure BinR level BEFORE RX2 mix (pure RX1-R only)
-                                    if audio_mode == 1 && !right_dev.is_empty() {
-                                        let sq: f32 = right_dev.iter().map(|s| s * s).sum();
-                                        bin_r_level_accum += sq;
-                                        bin_r_level_count += right_dev.len();
-                                    }
 
                                     // In BIN: also mix RX2 into R channel
                                     if audio_mode == 1 {
@@ -3635,14 +3734,23 @@ impl ClientEngine {
                             // RX1 level (measured per-channel before mono mix)
                             if rx1_level_count > 0 {
                                 state.playback_level = (rx1_level_accum / rx1_level_count as f32).sqrt();
+                            } else {
+                                decay_level(&mut state.playback_level);
                             }
                             // RX2 level (measured per-channel before mono mix)
                             if rx2_level_count > 0 {
                                 state.playback_level_rx2 = (rx2_level_accum / rx2_level_count as f32).sqrt();
+                            } else {
+                                decay_level(&mut state.playback_level_rx2);
                             }
 
                             // Mix Yaesu audio (third channel, independent of RX1/RX2)
-                            // Only process when there are Yaesu audio packets in the buffer
+                            // Only process when there are Yaesu audio packets in the buffer.
+                            // The level write sits INSIDE that guard, so the fall-back has to
+                            // live outside it - same shape as VRX below.
+                            if !(yaesu_logged_first && yaesu_jitter_buf.depth() > 0) {
+                                decay_level(&mut state.playback_level_yaesu);
+                            }
                             if yaesu_logged_first && yaesu_jitter_buf.depth() > 0 {
                                 // If no RX1 audio, create silence buffer for Yaesu-only playback
                                 let target_samples = if playback_buf.is_empty() {
@@ -3654,8 +3762,8 @@ impl ClientEngine {
                                 };
                                 let mut yaesu_buf: Vec<f32> = Vec::with_capacity(target_samples);
                                 while yaesu_buf.len() < target_samples {
-                                    // (pcm, wideband) — formaat per frame uit de flag; PLC
-                                    // gebruikt het laatst-bekende formaat (yaesu_last_wb).
+                                    // (pcm, wideband) — format per frame from the flag; PLC
+                                    // uses the last-known format (yaesu_last_wb).
                                     let decoded: Option<(Vec<i16>, bool)> = match yaesu_jitter_buf.pull() {
                                         JitterResult::Frame(frame) => {
                                             if !frame.opus_data.is_empty() {
@@ -3692,16 +3800,22 @@ impl ClientEngine {
                                             } else {
                                                 resample_to_device(&mut yaesu_res_nb, &pcm)
                                             };
-                                            apply_volume(&mut resampled, yaesu_volume * 20.0);
+                                            // Pre-volume energy: the Yaesu volume carries a
+                                            // x20 make-up factor, which would otherwise dominate
+                                            // the bar instead of the received signal.
+                                            yaesu_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                            yaesu_level_count += resampled.len();
+                                            // (calibrated to the Thetis RX path below)
+                                            apply_volume(&mut resampled,
+                                                yaesu_volume * yaesu_rx_meter_cal(state.yaesu_model) * local_volume);
                                             yaesu_buf.extend_from_slice(&resampled);
                                         }
                                         None => break,
                                     }
                                 }
-                                // Measure Yaesu level before mixing
-                                if !yaesu_buf.is_empty() {
-                                    let sum_sq: f32 = yaesu_buf.iter().map(|s| s * s).sum();
-                                    state.playback_level_yaesu = (sum_sq / yaesu_buf.len() as f32).sqrt();
+                                if yaesu_level_count > 0 {
+                                    state.playback_level_yaesu = yaesu_rx_meter_cal(state.yaesu_model)
+                                        * (yaesu_level_accum / yaesu_level_count as f32).sqrt();
                                 }
                                 // Mix Yaesu into both L and R (additive, clamped)
                                 for (i, sample) in yaesu_buf.iter().enumerate() {
@@ -3714,8 +3828,13 @@ impl ClientEngine {
                                 }
                             }
 
-                            // Mix slot-1 (dual-radio) audio — exacte spiegel van slot 0,
-                            // eigen jitter-buf/decoder/resampler + muted-start volume.
+                            // Mix slot-1 (dual-radio) audio — exact mirror of slot 0,
+                            // own jitter-buf/decoder/resampler + muted-start volume.
+                            // Slot 1 needs the same fall-back as slot 0, and for the same
+                            // reason: its level write sits inside the dry-guard below.
+                            if !(yaesu2_logged_first && yaesu2_jitter_buf.depth() > 0) {
+                                decay_level(&mut state.playback_level_yaesu2);
+                            }
                             if yaesu2_logged_first && yaesu2_jitter_buf.depth() > 0 {
                                 let target_samples = if playback_buf.is_empty() {
                                     let frame_size = (playback_rate as usize * 20) / 1000;
@@ -3762,15 +3881,18 @@ impl ClientEngine {
                                             } else {
                                                 resample_to_device(&mut yaesu2_res_nb, &pcm)
                                             };
-                                            apply_volume(&mut resampled, yaesu2_volume * 20.0);
+                                            yaesu2_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                            yaesu2_level_count += resampled.len();
+                                            apply_volume(&mut resampled,
+                                                yaesu2_volume * yaesu_rx_meter_cal(state.yaesu2_model) * local_volume);
                                             yaesu2_buf.extend_from_slice(&resampled);
                                         }
                                         None => break,
                                     }
                                 }
                                 if !yaesu2_buf.is_empty() {
-                                    let sum_sq: f32 = yaesu2_buf.iter().map(|s| s * s).sum();
-                                    state.playback_level_yaesu2 = (sum_sq / yaesu2_buf.len() as f32).sqrt();
+                                    state.playback_level_yaesu2 = yaesu_rx_meter_cal(state.yaesu2_model)
+                                        * (yaesu2_level_accum / yaesu2_level_count.max(1) as f32).sqrt();
                                 }
                                 for (i, sample) in yaesu2_buf.iter().enumerate() {
                                     if i < playback_buf.len() {
@@ -3789,10 +3911,7 @@ impl ClientEngine {
                             // bar so the Server-tab doesn't show a stuck
                             // RMS value forever.
                             if !(vrx1_logged_first && vrx1_jitter_buf.depth() > 0) {
-                                state.playback_level_vrx1 *= 0.7;
-                                if state.playback_level_vrx1 < 0.001 {
-                                    state.playback_level_vrx1 = 0.0;
-                                }
+                                decay_level(&mut state.playback_level_vrx1);
                             }
                             if vrx1_logged_first && vrx1_jitter_buf.depth() > 0 {
                                 let target_samples = if playback_buf.is_empty() {
@@ -3837,15 +3956,17 @@ impl ClientEngine {
                                             } else {
                                                 resample_to_device(&mut vrx1_resampler_out, &pcm)
                                             };
-                                            apply_volume(&mut resampled, vrx1_volume);
+                                            vrx1_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                            vrx1_level_count += resampled.len();
+                                            apply_volume(&mut resampled, vrx1_volume * local_volume);
                                             vrx_buf.extend_from_slice(&resampled);
                                         }
                                         None => break,
                                     }
                                 }
-                                if !vrx_buf.is_empty() {
-                                    let sum_sq: f32 = vrx_buf.iter().map(|s| s * s).sum();
-                                    state.playback_level_vrx1 = (sum_sq / vrx_buf.len() as f32).sqrt();
+                                if vrx1_level_count > 0 {
+                                    state.playback_level_vrx1 =
+                                        (vrx1_level_accum / vrx1_level_count as f32).sqrt();
                                 }
                                 for (i, sample) in vrx_buf.iter().enumerate() {
                                     if i < playback_buf.len() {
@@ -3860,10 +3981,7 @@ impl ClientEngine {
                             // Mix VRX2 audio (server-side FFT-channelizer
                             // on RX2 IQ + VFO-B). Same pattern as VRX1.
                             if !(vrx2_logged_first && vrx2_jitter_buf.depth() > 0) {
-                                state.playback_level_vrx2 *= 0.7;
-                                if state.playback_level_vrx2 < 0.001 {
-                                    state.playback_level_vrx2 = 0.0;
-                                }
+                                decay_level(&mut state.playback_level_vrx2);
                             }
                             if vrx2_logged_first && vrx2_jitter_buf.depth() > 0 {
                                 let target_samples = if playback_buf.is_empty() {
@@ -3908,15 +4026,17 @@ impl ClientEngine {
                                             } else {
                                                 resample_to_device(&mut vrx2_resampler_out, &pcm)
                                             };
-                                            apply_volume(&mut resampled, vrx2_volume);
+                                            vrx2_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                            vrx2_level_count += resampled.len();
+                                            apply_volume(&mut resampled, vrx2_volume * local_volume);
                                             vrx_buf.extend_from_slice(&resampled);
                                         }
                                         None => break,
                                     }
                                 }
-                                if !vrx_buf.is_empty() {
-                                    let sum_sq: f32 = vrx_buf.iter().map(|s| s * s).sum();
-                                    state.playback_level_vrx2 = (sum_sq / vrx_buf.len() as f32).sqrt();
+                                if vrx2_level_count > 0 {
+                                    state.playback_level_vrx2 =
+                                        (vrx2_level_accum / vrx2_level_count as f32).sqrt();
                                 }
                                 for (i, sample) in vrx_buf.iter().enumerate() {
                                     if i < playback_buf.len() {
@@ -3932,7 +4052,7 @@ impl ClientEngine {
                             if bin_r_level_count > 0 {
                                 state.playback_level_bin_r = (bin_r_level_accum / bin_r_level_count as f32).sqrt();
                             } else {
-                                state.playback_level_bin_r = 0.0;
+                                decay_level(&mut state.playback_level_bin_r);
                             }
 
                             // WAV speaker playback (when not TX)
@@ -3961,7 +4081,7 @@ impl ClientEngine {
                                     playback_buf.resize(target, 0.0);
                                     bin_r_buf.resize(target, 0.0);
                                     for (i, &s) in resampled.iter().enumerate() {
-                                        // play_volume-schuif ook op speaker-playback.
+                                        // play_volume slider on speaker playback too.
                                         let sample = (s * local_volume * play_volume).clamp(-1.0, 1.0);
                                         playback_buf[i] = sample;
                                         bin_r_buf[i] = sample;
@@ -4138,28 +4258,28 @@ impl ClientEngine {
                             current_loss_percent = smoothed_loss.round() as u8;
                             loss_prev_max_seq = Some(max);
                         } else if loss_prev_max_seq.is_some() {
-                            // Had packets before, now nothing. Dit is alleen ECHT
-                            // verlies als de client nog RX-audio verwacht. Bij een
-                            // alleen-VRX-client (RX1+RX2-audio bewust uit) stopt de
-                            // AudioMultiCh-stroom met opzet — afwezigheid is dan geen
-                            // verlies. Anders zou de loss naar 100% klimmen en zou de
-                            // server-loss-gate het VRX-spectrum wegfilteren (de VRX-
-                            // audio/spectrum-stromen voeden deze meter niet).
+                            // Had packets before, now nothing. This is only REAL
+                            // loss if the client still expects RX audio. For a
+                            // VRX-only client (RX1+RX2 audio deliberately off) the
+                            // AudioMultiCh stream stops on purpose — absence is then not
+                            // loss. Otherwise the loss would climb to 100% and the
+                            // server-loss-gate would filter out the VRX spectrum (the VRX
+                            // audio/spectrum streams do not feed this meter).
                             if state.rx1_enabled || state.rx2_enabled {
                                 smoothed_loss = smoothed_loss * 0.7 + 100.0 * 0.3;
                                 current_loss_percent = smoothed_loss.round() as u8;
                             } else {
                                 smoothed_loss = 0.0;
                                 current_loss_percent = 0;
-                                loss_prev_max_seq = None; // schone herstart bij RX-audio-herstart
+                                loss_prev_max_seq = None; // clean restart when RX audio resumes
                             }
                         }
                         state.loss_percent = current_loss_percent;
                         loss_window_received = 0;
                         loss_window_max_seq = None;
 
-                        // Bandbreedte-window flush — synchroon met de heartbeat-
-                        // tick (~500 ms). bytes × 8 / venster_ms = bits/ms = kbps.
+                        // Bandwidth-window flush — in sync with the heartbeat
+                        // tick (~500 ms). bytes × 8 / window_ms = bits/ms = kbps.
                         let win_ms = bw_window_start.elapsed().as_millis().max(1) as u64;
                         state.down_kbps = (bw_rx_bytes.saturating_mul(8) / win_ms) as u32;
                         state.up_kbps = (bw_tx_bytes.saturating_mul(8) / win_ms) as u32;
@@ -4167,9 +4287,9 @@ impl ClientEngine {
                         bw_tx_bytes = 0;
                         bw_window_start = Instant::now();
 
-                        // Per-PacketType breakdown elke 5 s — gepublishd naar
-                        // `state.bw_breakdown` zodat de Server-tab in de UI
-                        // een uitklap-detail kan tonen zonder logspam.
+                        // Per-PacketType breakdown every 5 s — published to
+                        // `state.bw_breakdown` so the Server tab in the UI
+                        // can show a drill-down detail without log spam.
                         if bw_breakdown_start.elapsed() >= Duration::from_secs(5) {
                             let win_s = bw_breakdown_start.elapsed().as_secs_f64().max(0.001);
                             let mut by_type: Vec<(u8, u32)> = bw_by_type.iter().enumerate()
@@ -4254,13 +4374,24 @@ impl ClientEngine {
                         last_capture_ptt = capture_ptt;
                     }
 
-                    // Update capture level
-                    state.capture_level = audio.capture_level();
+                    // TX meters read what actually leaves this client: the level is
+                    // taken at the very end of each TX chain, after AGC/compressor/EQ
+                    // and the gain trim, right before Opus.
+                    //
+                    // Only cleared when nothing is being transmitted. A tick is
+                    // shorter than the 20 ms frame the chains encode, so clearing
+                    // every tick left the bar alternating between a real level and
+                    // zero - which reads as audio dropping out. Between frames the
+                    // last measured level therefore stands.
+                    if !ptt && !yaesu_ptt && !yaesu2_ptt {
+                        state.capture_level = 0.0;
+                        state.yaesu_mic_level = 0.0;
+                    }
 
-                    // Thetis-TXEQ-bypass tijdens WAV-playback naar de HOOFDRADIO (Thetis-PTT):
-                    // zet de mic-profiel-TX-EQ uit tijdens Play en herstel bij stop/PTT-los/
-                    // afloop - net als Thetis' eigen record/playback. Alleen Thetis (ptt); de
-                    // Yaesu-EQ wordt al client-side overgeslagen. Edge-getriggerd via de flag.
+                    // Thetis-TXEQ-bypass during WAV-playback to the MAIN RADIO (Thetis-PTT):
+                    // turn off the mic-profile TX-EQ during Play and restore on stop/PTT-release/
+                    // end - just like Thetis' own record/playback. Only Thetis (ptt); the
+                    // Yaesu EQ is already skipped client-side. Edge-triggered via the flag.
                     let thetis_wav_tx_active = playback_is_tx && ptt && playback_wav.is_some();
                     if thetis_wav_tx_active != thetis_txeq_bypassed {
                         let ctrl = ControlPacket {
@@ -4280,45 +4411,26 @@ impl ClientEngine {
                     // WAV TX playback: bypass mic capture when playing back a TX recording
                     if playback_is_tx && (ptt || yaesu_ptt || yaesu2_ptt) && playback_wav.is_some() {
                         let wav = playback_wav.as_ref().unwrap();
-                        // Aantal WAV-samples per 20 ms bij de HEADER-rate (8k->160,
-                        // 16k->320). Voorheen stond hier vast FRAME_SAMPLES (8k) plus
-                        // een blinde sample-duplicatie naar "16k"; een 16 kHz-opname
-                        // speelde daardoor half zo snel af, en de Yaesu-tak stopte
-                        // ruwe 8/16k-samples in een capture-rate (48k) accumulator
-                        // -> 3-6x te langzaam + hakkelen. Nu rate-aware.
+                        // Number of WAV samples per 20 ms at the HEADER rate (8k->160,
+                        // 16k->320). Previously this was a fixed FRAME_SAMPLES (8k) plus
+                        // a blind sample duplication to "16k"; a 16 kHz recording
+                        // therefore played back at half speed, and the Yaesu branch put
+                        // raw 8/16k samples into a capture-rate (48k) accumulator
+                        // -> 3-6x too slow + stuttering. Now rate-aware.
                         let samples_per_tick = (playback_wav_rate as usize * 20) / 1000;
                         let remaining = wav.len() - playback_pos;
                         let to_read = samples_per_tick.min(remaining);
                         if to_read > 0 {
-                            // play_volume-schuif: schaalt de opgenomen WAV. Toegepast op
-                            // src_f32 zodat zowel de meter (RMS hieronder) als beide
-                            // TX-takken (Thetis + Yaesu) het aangepaste niveau volgen.
+                            // play_volume slider: scales the recorded WAV, so both TX
+                            // branches (Thetis + Yaesu) follow the adjusted level. The
+                            // meters are taken at the end of those chains, not here.
                             let src_f32: Vec<f32> = wav[playback_pos..playback_pos + to_read]
                                 .iter()
                                 .map(|&s| (s as f32 / 32768.0) * play_volume)
                                 .collect();
 
-                            // Meter tijdens Play: toon het niveau van de UITGEZONDEN WAV
-                            // (niet de gemute mic). RMS van dit 20ms-blok naar de juiste
-                            // bar (Thetis of Yaesu). De drain hieronder overschrijft
-                            // yaesu_mic_level anders met de gemute mic / geschaalde WAV -
-                            // dat is gegate op !playback_is_tx.
-                            let wav_rms = if src_f32.is_empty() {
-                                0.0
-                            } else {
-                                (src_f32.iter().map(|s| s * s).sum::<f32>()
-                                    / src_f32.len() as f32)
-                                    .sqrt()
-                            };
-                            if ptt {
-                                state.capture_level = wav_rms;
-                            }
-                            if yaesu_ptt || yaesu2_ptt {
-                                state.yaesu_mic_level = wav_rms;
-                            }
-
-                            // Thetis-hoofdradio TX: resample header-rate -> 16 kHz voor
-                            // de wideband Opus-encoder. Alleen als Thetis-PTT actief is.
+                            // Thetis main-radio TX: resample header-rate -> 16 kHz for
+                            // the wideband Opus encoder. Only if Thetis-PTT is active.
                             if ptt {
                                 let f16 = resample_linear(
                                     &src_f32,
@@ -4326,6 +4438,9 @@ impl ClientEngine {
                                     NETWORK_SAMPLE_RATE_WIDEBAND,
                                 );
                                 if f16.len() >= FRAME_SAMPLES_WIDEBAND {
+                                    // Meter = the frame as encoded, tx_gain included.
+                                    state.capture_level = peak_scaled(
+                                        &f16[..FRAME_SAMPLES_WIDEBAND], tx_gain);
                                     let pcm_i16: Vec<i16> = f16[..FRAME_SAMPLES_WIDEBAND]
                                         .iter()
                                         .map(|&s| {
@@ -4351,13 +4466,13 @@ impl ClientEngine {
                                 }
                             }
 
-                            // Yaesu TX: voer op capture_rate in yaesu_tx_accum. GEEN pre-
-                            // attenuatie: de drain slaat voor WAV-playback de mic-keten over
-                            // (compressor/AGC + de 4x mic-boost). Die 4x + comp/AGC zijn
-                            // bedoeld voor een STILLE, dynamische mic; een opgenomen WAV zit
-                            // al op lijn-niveau. De AGC zou de WAV terug omhoog normaliseren
-                            // waarna de 4x alsnog clipt (vervorming). Nu gaat de WAV clean als
-                            // lijn-niveau door de keten: alleen play_volume + mic_gain.
+                            // Yaesu TX: feed into yaesu_tx_accum at capture_rate. NO pre-
+                            // attenuation: for WAV-playback the drain skips the mic chain
+                            // (compressor/AGC + the 4x mic-boost). That 4x + comp/AGC are
+                            // meant for a QUIET, dynamic mic; a recorded WAV is
+                            // already at line level. The AGC would normalize the WAV back up
+                            // after which the 4x would still clip (distortion). Now the WAV goes clean as
+                            // line level through the chain: only play_volume + mic_gain.
                             if yaesu_ptt || yaesu2_ptt {
                                 let fcap =
                                     resample_linear(&src_f32, playback_wav_rate, capture_rate);
@@ -4405,6 +4520,8 @@ impl ClientEngine {
                             continue;
                         }
 
+                        // Meter = what is encoded: after AGC, with tx_gain applied.
+                        state.capture_level = peak_scaled(&pcm_8k, tx_gain);
                         let pcm_i16: Vec<i16> = pcm_8k
                             .iter()
                             .map(|&s| (s * tx_gain * 32767.0).clamp(-32768.0, 32767.0) as i16)
@@ -4470,18 +4587,18 @@ impl ClientEngine {
                     }
 
                     // === Yaesu TX: completely separate mic audio path ===
-                    // Geldt voor beide radio's (PTT mutueel exclusief); per-PTT
-                    // worden hieronder de juiste EQ + mic-gain gekozen.
+                    // Applies to both radios (PTT mutually exclusive); per PTT
+                    // the right EQ + mic-gain are chosen below.
                     if yaesu_ptt || yaesu2_ptt {
                         // Resample to 16kHz, encode wideband Opus
                         while yaesu_tx_accum.len() >= capture_frame_samples {
                             let mut chunk: Vec<f32> = yaesu_tx_accum.drain(..capture_frame_samples).collect();
 
                             // Apply 5-band EQ at capture rate (before resampling).
-                            // Per-radio: slot-1 PTT → radio-2 EQ, anders radio-1 EQ.
-                            // ALLEEN voor de live mic: de TX-mic-EQ hoort bij de microfoon,
-                            // niet bij een directe WAV-playback (die moet klinken zoals
-                            // opgenomen). Dus overslaan tijdens playback_is_tx.
+                            // Per radio: slot-1 PTT → radio-2 EQ, otherwise radio-1 EQ.
+                            // ONLY for the live mic: the TX-mic-EQ belongs to the microphone,
+                            // not to a direct WAV-playback (which must sound as
+                            // recorded). So skip it during playback_is_tx.
                             if !playback_is_tx {
                                 if yaesu2_ptt {
                                     yaesu2_eq.process(&mut chunk);
@@ -4490,28 +4607,15 @@ impl ClientEngine {
                                 }
                             }
 
-                            // Measure Yaesu mic level (after EQ) for the UI meter.
-                            // Tijdens WAV-Play niet overschrijven: dan toont de meter het
-                            // uitgezonden WAV-niveau (in het WAV-blok gezet), niet de
-                            // gemute mic / de 1/4-geschaalde WAV-chunk.
-                            if !playback_is_tx {
-                                let level_sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
-                                state.yaesu_mic_level = if chunk.is_empty() {
-                                    0.0
-                                } else {
-                                    (level_sum_sq / chunk.len() as f32).sqrt()
-                                };
-                            }
-
                             // Resample to 16kHz and apply Yaesu-specific mic gain before Opus.
                             let mic_gain = if yaesu2_ptt { yaesu2_local_mic_gain } else { yaesu_local_mic_gain };
                             let mut resampled = resample_to_network(&mut yaesu_tx_resampler, &chunk);
-                            // Client-side TX-keten (radio-processing werkt niet op USB):
-                            // compressor → AGC, vóór de handmatige tx_gain/mic_gain-trim.
-                            // Per radio (net als de EQ): slot-1 PTT → radio-2 keten.
-                            // Compressor werkt zelf-gated op amount; AGC op de eigen toggle.
-                            // Mic-keten (compressor + AGC) ALLEEN voor live mic, niet voor
-                            // WAV-playback (die is al lijn-niveau; comp/AGC zou 'm vervormen).
+                            // Client-side TX chain (radio processing does not work on USB):
+                            // compressor → AGC, before the manual tx_gain/mic_gain trim.
+                            // Per radio (like the EQ): slot-1 PTT → radio-2 chain.
+                            // Compressor is self-gated on amount; AGC on its own toggle.
+                            // Mic chain (compressor + AGC) ONLY for live mic, not for
+                            // WAV-playback (which is already line level; comp/AGC would distort it).
                             if !playback_is_tx {
                                 if yaesu2_ptt {
                                     yaesu2_compressor.process(&mut resampled);
@@ -4525,8 +4629,8 @@ impl ClientEngine {
                                     }
                                 }
                             }
-                            // Live mic krijgt de 4x stille-mic-boost; WAV-playback gaat op
-                            // lijn-niveau (alleen mic_gain, geen 4x) zodat 'ie niet clipt.
+                            // Live mic gets the 4x quiet-mic boost; WAV-playback goes at
+                            // line level (only mic_gain, no 4x) so it does not clip.
                             let final_scale = if playback_is_tx { mic_gain } else { mic_gain * 4.0 };
                             let desired_bitrate = yaesu_tx_bitrate_for_mode(if yaesu2_ptt { state.yaesu2_mode } else { state.yaesu_mode });
                             if desired_bitrate != yaesu_tx_bitrate_bps {
@@ -4538,6 +4642,10 @@ impl ClientEngine {
                                     Err(e) => warn!("Yaesu TX Opus bitrate change failed: {}", e),
                                 }
                             }
+                            // Meter = the frame as encoded: EQ, compressor and AGC
+                            // applied, scaled by the same final gain. Covers live mic
+                            // and WAV-playback, which share this chain.
+                            state.yaesu_mic_level = peak_scaled(&resampled, final_scale);
                             let pcm_i16: Vec<i16> = resampled.iter()
                                 .map(|&s| (s * final_scale * 32767.0).clamp(-32768.0, 32767.0) as i16)
                                 .collect();
@@ -4553,7 +4661,7 @@ impl ClientEngine {
                                         };
                                         yaesu_tx_sequence = yaesu_tx_sequence.wrapping_add(1);
                                         let mut buf = Vec::with_capacity(256);
-                                        // Slot-1 PTT → AudioYaesu2, anders slot-0 AudioYaesu.
+                                        // Slot-1 PTT → AudioYaesu2, otherwise slot-0 AudioYaesu.
                                         let tx_ptype = if yaesu2_ptt {
                                             PacketType::AudioYaesu2
                                         } else {
@@ -4609,11 +4717,11 @@ fn yaesu_tx_bitrate_for_mode(mode: u8) -> i32 {
 }
 
 /// Resample i16 network-rate PCM -> f32 device rate
-/// Simpele lineaire resample voor WAV-TX-playback (recorded-message replay).
-/// Niet latency-/HF-kritisch, dus lineaire interpolatie volstaat en is
-/// stateless (geen resampler-state per tick). Gebruikt om een opgenomen WAV van
-/// zijn header-rate (8 of 16 kHz) naar de doel-rate te brengen: 16 kHz voor de
-/// Thetis-TX-encoder, of `capture_rate` voor de Yaesu-TX-accumulator.
+/// Simple linear resample for WAV-TX-playback (recorded-message replay).
+/// Not latency-/HF-critical, so linear interpolation suffices and is
+/// stateless (no resampler state per tick). Used to bring a recorded WAV from
+/// its header rate (8 or 16 kHz) to the target rate: 16 kHz for the
+/// Thetis-TX-encoder, or `capture_rate` for the Yaesu-TX-accumulator.
 fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if input.is_empty() || from_rate == 0 || to_rate == 0 || from_rate == to_rate {
         return input.to_vec();
@@ -4655,7 +4763,73 @@ fn resample_to_network(resampler: &mut impl rubato::Resampler<f32>, pcm_f32: &[f
     }
 }
 
+/// Peak of `samples` as if scaled by `gain`, without touching the buffer.
+///
+/// The TX meters report the frame as it is encoded (EQ, compressor, AGC and the
+/// gain trim included) while the scaling itself stays in the single existing
+/// pass that builds the i16 frame - no extra copy on the TX path.
+///
+/// Peak rather than RMS: on transmit the question is how much headroom is left
+/// before clipping, and speech RMS sits 10-15 dB below its peaks - which reads
+/// as an alarmingly quiet bar while the audio is fine. Receive meters stay on
+/// RMS, where average level is what tells you a stream is carrying signal.
+fn peak_scaled(samples: &[f32], gain: f32) -> f32 {
+    samples.iter().fold(0.0f32, |m, &s| m.max(s.abs())) * gain.abs()
+}
+
+/// Input calibration for a Yaesu receive meter, per radio model.
+///
+/// A Yaesu USB CODEC delivers a markedly lower line level than the Thetis DDC
+/// audio, which is why the volume path carries a x20 make-up factor. That
+/// factor is the operator's volume range and is excluded from the meter, so
+/// without calibration the Yaesu bars sit below RX/VRX for the same signal.
+///
+/// The two radios are not alike: measured on comparable signals where RX/VRX
+/// peak near -10 dB, the FT-991A needed +10 dB and the FTX-1 +24.5 dB (first
+/// tried at +27, which read 2-3 dB hot).
+/// One shared constant therefore lined up one radio and left the other far
+/// behind. Keyed on the model rather than the slot, so it follows the radio
+/// when the slots are swapped.
+/// Receive calibration per radio model. Used for BOTH the level meter and the
+/// playback gain: the two CODECs deliver line levels about 14 dB apart, so one
+/// flat constant cannot serve both radios.
+///
+/// The audio path used a flat 20.0 (+26 dB) for both until build 106, while the
+/// meter had been per-model since build 75/76. That left the 991A about 16 dB
+/// hot - audible at the very bottom of the volume slider, where every other
+/// channel had already gone quiet.
+fn yaesu_rx_meter_cal(model: u8) -> f32 {
+    match model {
+        1 => 16.8,  // FTX-1, +24.5 dB
+        _ => 3.16,  // FT-991A, +10 dB
+    }
+}
+
 /// Apply volume scaling to audio samples
+/// Per playout pass a dried-up meter keeps, i.e. how fast the bar falls once a
+/// stream stops arriving. About 0.4 s to zero at 20 ms frames: slow enough to
+/// read, fast enough to be believed.
+const LEVEL_DECAY: f32 = 0.7;
+/// Below this the bar is snapped to zero, so "no signal" is exactly zero and not
+/// an ever-smaller number that never arrives.
+const LEVEL_SILENCE: f32 = 0.001;
+
+/// What a receive meter does when its stream dries up. ONE rule for all six
+/// channels: fall back smoothly.
+///
+/// There used to be three. RX and Yaesu simply stopped writing the level, so the
+/// bar froze on its last value indefinitely; VRX decayed; BinR snapped to zero.
+/// Freezing is the one that lies, and it lies about the exact thing this bar is
+/// used to diagnose - whether audio is arriving at all. Pinned by
+/// `a_channel_that_stops_feeding_returns_to_zero` in
+/// `tests/channel_level_parity.rs`.
+fn decay_level(level: &mut f32) {
+    *level *= LEVEL_DECAY;
+    if *level < LEVEL_SILENCE {
+        *level = 0.0;
+    }
+}
+
 fn apply_volume(samples: &mut [f32], volume: f32) {
     if (volume - 1.0).abs() > f32::EPSILON {
         for s in samples.iter_mut() {
@@ -4668,15 +4842,15 @@ fn apply_volume(samples: &mut [f32], volume: f32) {
 mod tests {
     use super::*;
 
-    // Regression: de presence-flip is de kern-eis — presence bepaalt connected,
-    // dynamisch true/false. Test de pure apply_yaesu_presence-seam.
+    // Regression: the presence flip is the core requirement — presence determines connected,
+    // dynamically true/false. Tests the pure apply_yaesu_presence seam.
     #[test]
     fn presence_drives_connected_flip() {
         let mut state = RadioState::default();
         assert!(!state.yaesu_connected);
         assert!(!state.yaesu2_connected);
 
-        // Beide aanwezig → beide connected, models overgenomen, beide changed.
+        // Both present → both connected, models adopted, both changed.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
             slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1,
         });
@@ -4685,8 +4859,8 @@ mod tests {
         assert_eq!(state.yaesu_model, 0);
         assert_eq!(state.yaesu2_model, 1);
 
-        // Slot 0 valt weg → connected flipt naar false (kern van de dynamiek),
-        // slot 1 ongewijzigd (geen change-flag).
+        // Slot 0 drops out → connected flips to false (core of the dynamics),
+        // slot 1 unchanged (no change flag).
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
             slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1,
         });
@@ -4694,16 +4868,16 @@ mod tests {
         assert!(!state.yaesu_connected);
         assert!(state.yaesu2_connected);
 
-        // Idempotent: zelfde presence nogmaals → geen change-flags.
+        // Idempotent: same presence again → no change flags.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
             slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1,
         });
         assert!(!c0 && !c1);
     }
 
-    // Regression: een afwezige radio mag geen hi_swr-vlag laten staan. Anders
-    // blijft de andere radio het SWR-alarm bij elke state-push hernieuwen —
-    // het alarm dooft dan nooit meer.
+    // Regression: an absent radio must not leave a hi_swr flag set. Otherwise
+    // the other radio keeps renewing the SWR alarm on every state push —
+    // the alarm then never goes out.
     #[test]
     fn presence_absence_clears_hi_swr() {
         let mut state = RadioState::default();
@@ -4713,14 +4887,14 @@ mod tests {
         state.yaesu_hi_swr = true;
         state.yaesu2_hi_swr = true;
 
-        // Slot 1 verdwijnt → alleen diens vlag wordt gewist.
+        // Slot 1 disappears → only its flag is cleared.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
             slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1,
         });
         assert!(state.yaesu_hi_swr, "aanwezige radio houdt zijn vlag");
         assert!(!state.yaesu2_hi_swr, "afwezige radio verliest zijn vlag");
 
-        // Ook slot 0 verdwijnt → niets blijft over om het alarm te voeden.
+        // Slot 0 disappears too → nothing remains to feed the alarm.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
             slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1,
         });

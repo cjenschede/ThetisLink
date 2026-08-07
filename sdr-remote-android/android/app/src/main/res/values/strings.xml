@@ -136,6 +136,7 @@
     <string name="radio_power_shutdown">SHUTDOWN!</string>
     <string name="radio_power_hold">HOLD...</string>
     <string name="radio_power_starting">STARTING...</string>
+    <string name="radio_thetis_autostart">Start Thetis automatically</string>
     <string name="radio_power_on">POWER ON</string>
     <string name="radio_power_off">POWER OFF</string>
     <string name="radio_tx_profile">TX Profile:</string>

@@ -147,9 +147,9 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
 
 /// Yaesu CAT S-meter bar. The radio reports a raw 0..255-ish SM value;
 /// render it on the same S1..S9 / S9+dB visual scale as the main RX meter.
-/// De Yaesu s-meter-waarde is al de 0-228 display-schaal (S0=0, S9=108, S9+60=228).
-/// De analoge meter verwacht dBm en converteert intern via `dbm_to_display`; dit is
-/// de inverse, zodat we de raw-waarde door de gedeelde analoogmeter kunnen tonen.
+/// The Yaesu s-meter value is already the 0-228 display scale (S0=0, S9=108, S9+60=228).
+/// The analog meter expects dBm and converts internally via `dbm_to_display`; this is
+/// the inverse, so we can display the raw value through the shared analog meter.
 pub(crate) fn yaesu_raw_to_dbm(raw: u16) -> f32 {
     let disp = (raw as f32).clamp(0.0, 228.0);
     if disp <= 108.0 { disp / 2.0 - 127.0 } else { (disp - 108.0) / 2.0 - 73.0 }
@@ -274,28 +274,28 @@ pub(crate) fn yaesu_smeter_bar(ui: &mut egui::Ui, raw: u16, peak_raw: u16) -> eg
 /// Analog needle S-meter. Size from `override_size` or default 392x120.
 /// `value` and `peak_value` carry dBm in RX, watts in TX (same convention as
 /// `smeter_bar_sized` above).
-/// Analoge-s-meter vorm-constanten (module-niveau zodat callers de zichtbare
-/// verhouding kennen en de meter-breedte daarop kunnen cappen).
-const SM_ASPECT: f32 = 1.6;    // logische boog-box (breedte:hoogte) - strak om de schaal ("1".."+60")
-const SM_USED_FRAC: f32 = 0.6; // toon alleen de bovenste 60% (de boog-zone); de lege onderste 40% (naald-steel/pivot) valt weg
-const SM_REF_H: f32 = 120.0;   // referentie-hoogte voor de schaalfactor (fonts=11 @ 120px)
-/// Zichtbare breedte:hoogte-verhouding van de analoge s-meter (na de 60%-crop).
-/// Callers cappen de meter-breedte op `hoogte * SMETER_VIS_ASPECT` zodat de meter
-/// de volle beschikbare hoogte vult i.p.v. width-limited (en dus kleiner) te blijven.
+/// Analog s-meter shape constants (module-level so callers know the visible
+/// ratio and can cap the meter width accordingly).
+const SM_ASPECT: f32 = 1.6;    // logical arc box (width:height) - tight around the scale ("1".."+60")
+const SM_USED_FRAC: f32 = 0.6; // show only the top 60% (the arc zone); the empty bottom 40% (needle stem/pivot) is dropped
+const SM_REF_H: f32 = 120.0;   // reference height for the scale factor (fonts=11 @ 120px)
+/// Visible width:height ratio of the analog s-meter (after the 60% crop).
+/// Callers cap the meter width at `height * SMETER_VIS_ASPECT` so the meter
+/// fills the full available height instead of staying width-limited (and thus smaller).
 pub(crate) const SMETER_VIS_ASPECT: f32 = SM_ASPECT / SM_USED_FRAC; // = 2.667:1
 
 pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, transmitting: bool, other_tx: bool, override_size: Option<(f32, f32)>) -> egui::Rect {
-    // Vaste vorm: pas altijd de grootste box met een CONSTANTE breedte/hoogte-
-    // verhouding in de beschikbare ruimte, en schaal alle interne geometrie mee
-    // (scale). Zo blijft de meter-vorm gelijk ongeacht de window-afmeting.
+    // Fixed shape: always fit the largest box with a CONSTANT width/height
+    // ratio into the available space, and scale all internal geometry along
+    // (scale). This keeps the meter shape the same regardless of window size.
     let vis_aspect = SMETER_VIS_ASPECT;
     let (avail_w, avail_h) = override_size.unwrap_or((392.0, 120.0));
     let (width, vis_h) = if avail_w / avail_h.max(1.0) > vis_aspect {
-        (avail_h * vis_aspect, avail_h)       // hoogte-begrensd
+        (avail_h * vis_aspect, avail_h)       // height-limited
     } else {
-        (avail_w, avail_w / vis_aspect)        // breedte-begrensd (breedte maximaal benut)
+        (avail_w, avail_w / vis_aspect)        // width-limited (width fully used)
     };
-    let box_h = vis_h / SM_USED_FRAC;          // logische (volle) boog-hoogte
+    let box_h = vis_h / SM_USED_FRAC;          // logical (full) arc height
     let scale = (box_h / SM_REF_H).max(0.1);
     let desired_size = Vec2::new(width, vis_h);
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
@@ -303,8 +303,8 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
     if !ui.is_rect_visible(rect) {
         return rect;
     }
-    // Clip op de zichtbare rect: de naald-steel/pivot in de weggelaten onderste
-    // 40% (logisch onder deze rect) wordt zo netjes afgesneden.
+    // Clip to the visible rect: the needle stem/pivot in the dropped bottom
+    // 40% (logically below this rect) is thus cleanly cut off.
     let painter = ui.painter_at(rect);
 
     // Background: dark rounded rect
@@ -312,13 +312,13 @@ pub(crate) fn smeter_analog_sized(ui: &mut egui::Ui, value: f32, peak_value: f32
     painter.rect_filled(rect, round, Color32::from_rgb(25, 25, 30));
     painter.rect_stroke(rect, round, egui::Stroke::new(1.0, Color32::from_rgb(60, 60, 70)));
 
-    // Arc geometry - pivot op de LOGISCHE bodem (onder de zichtbare rect), radius
-    // o.b.v. de volle box_h. Alle maten hieronder * scale (evenredig meeschalen).
+    // Arc geometry - pivot at the LOGICAL bottom (below the visible rect), radius
+    // based on the full box_h. All dimensions below * scale (proportional scaling).
     let center_x = rect.center().x;
     let center_y = rect.min.y + box_h - 4.0 * scale;
     let center = egui::pos2(center_x, center_y);
-    // Radius o.b.v. de hoogte (vult de zichtbare boog-zone); width*0.5 is alleen een
-    // veiligheidscap zodat de boog nooit horizontaal overloopt bij een afwijkende box.
+    // Radius based on the height (fills the visible arc zone); width*0.5 is only a
+    // safety cap so the arc never overflows horizontally with a deviating box.
     let max_by_height = box_h - 26.0 * scale;
     let radius = max_by_height.min(width * 0.5).max(20.0);
 

@@ -46,13 +46,13 @@ pub enum RotorCmd {
 pub struct Rotor {
     cmd_tx: mpsc::Sender<RotorCmd>,
     status: Arc<Mutex<RotorStatus>>,
-    /// Maximale rotatie van de onderliggende hardware in tienden van
-    /// graden. Standaard 3600 (360°) voor EA7HG/PstRotator/etc.; de
-    /// Adafruit MCP2221A-backend zet hem op `max_deg × 10` uit de
-    /// kalibratie (typisch 4500 voor Yaesu G-1000DXC). Externe input-
-    /// bronnen die compass-headings 0-360° leveren (PstRotator-listener)
-    /// gebruiken deze waarde om bij overlap-rotors de mech-target +360°
-    /// als alternatief te overwegen.
+    /// Maximum rotation of the underlying hardware in tenths of a
+    /// degree. Default 3600 (360°) for EA7HG/PstRotator/etc.; the
+    /// Adafruit MCP2221A backend sets it to `max_deg × 10` from the
+    /// calibration (typically 4500 for Yaesu G-1000DXC). External input
+    /// sources that supply compass headings 0-360° (PstRotator listener)
+    /// use this value to consider the mechanical target +360° as an
+    /// alternative for overlap rotors.
     max_deg_x10: u16,
 }
 
@@ -87,7 +87,7 @@ impl Rotor {
         self.status.lock().unwrap().clone()
     }
 
-    /// Maximale rotatie in tienden van graden. Zie struct-doc.
+    /// Maximum rotation in tenths of a degree. See struct doc.
     pub fn max_deg_x10(&self) -> u16 {
         self.max_deg_x10
     }
@@ -99,9 +99,9 @@ impl Rotor {
         Self { cmd_tx, status, max_deg_x10: 3600 }
     }
 
-    /// Variant van `from_handles` met expliciete max-rotation (gebruikt
-    /// door de MCP2221A-rotor om de overlap-zone bekend te maken bij
-    /// externe input-bronnen zoals de PstRotator-listener).
+    /// Variant of `from_handles` with explicit max rotation (used by
+    /// the MCP2221A rotor to advertise the overlap zone to external
+    /// input sources such as the PstRotator listener).
     pub fn from_handles_with_max(
         cmd_tx: mpsc::Sender<RotorCmd>,
         status: Arc<Mutex<RotorStatus>>,

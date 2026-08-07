@@ -2,7 +2,9 @@
 # ThetisLink server-GUI translations (rust-i18n v2).
 # Base = English (fallback). Add a language = add its key under each entry.
 # Product names / protocol names stay identical across languages.
-# NB: gefaseerde migratie - nog-niet-gemigreerde strings staan hardcoded (NL) in de code.
+# NB: what stays hardcoded is deliberate: ham jargon and unit labels (Band:, Freq:,
+# MCP serial:), product names, and the credits/licence block - licence and
+# attribution text must stay verbatim.
 _version: 2
 
 language:
@@ -634,3 +636,136 @@ srv_empty:
   nl: "Leeg"
   de: "Leer"
   fr: "Vide"
+
+# --- Amplitec vermogenslimiet-tabel (server-editbaar) ---
+srv_power_cap_table:
+  en: "Power-cap table"
+  nl: "Vermogenslimiet-tabel"
+  de: "Leistungslimit-Tabelle"
+  fr: "Table de limite de puissance"
+srv_label:
+  en: "Label"
+  nl: "Label"
+  de: "Bezeichnung"
+  fr: "Étiquette"
+srv_max_w:
+  en: "Max W"
+  nl: "Max W"
+  de: "Max W"
+  fr: "Max W"
+srv_rx_only:
+  en: "RX only"
+  nl: "RX only"
+  de: "Nur RX"
+  fr: "RX seul"
+srv_no_cap:
+  en: "0 W = no cap"
+  nl: "0 W = geen limiet"
+  de: "0 W = kein Limit"
+  fr: "0 W = pas de limite"
+
+srv_rf2k_shutdown_warn:
+  en: "The RF2K-S controller will be shut down."
+  nl: "Hiermee wordt de RF2K-S controller afgesloten."
+  de: "Der RF2K-S-Controller wird heruntergefahren."
+  fr: "Le contrôleur RF2K-S va être arrêté."
+srv_are_you_sure:
+  en: "Are you sure?"
+  nl: "Weet je het zeker?"
+  de: "Sind Sie sicher?"
+  fr: "Êtes-vous sûr ?"
+srv_reset:
+  en: "Reset"
+  nl: "Reset"
+  de: "Zurücksetzen"
+  fr: "Réinitialiser"
+srv_stop:
+  en: "Stop"
+  nl: "Stop"
+  de: "Stopp"
+  fr: "Arrêt"
+srv_scan:
+  en: "Scan"
+  nl: "Scannen"
+  de: "Scannen"
+  fr: "Balayage"
+srv_rename_label:
+  en: "Rename:"
+  nl: "Hernoemen:"
+  de: "Umbenennen:"
+  fr: "Renommer :"
+srv_high_power_warn:
+  en: "Setting HIGH power can damage equipment."
+  nl: "HIGH power instellen kan apparatuur beschadigen."
+  de: "Das Einstellen von HIGH-Leistung kann Geräte beschädigen."
+  fr: "Régler la puissance sur HIGH peut endommager le matériel."
+srv_yes_set_high:
+  en: "Yes, set HIGH"
+  nl: "Ja, zet op HIGH"
+  de: "Ja, auf HIGH setzen"
+  fr: "Oui, régler sur HIGH"
+srv_tuner_erase_warn:
+  en: "All tuner memories will be erased."
+  nl: "Alle tuner-geheugens worden gewist."
+  de: "Alle Tuner-Speicher werden gelöscht."
+  fr: "Toutes les mémoires du tuner seront effacées."
+srv_cannot_be_undone:
+  en: "This cannot be undone!"
+  nl: "Dit kan niet ongedaan worden gemaakt!"
+  de: "Das kann nicht rückgängig gemacht werden!"
+  fr: "Cette action est irréversible !"
+srv_remove_tuner_slot:
+  en: "Remove this tuner slot from the config (auto-restart)"
+  nl: "Verwijder dit tuner-slot uit config (auto-restart)"
+  de: "Diesen Tuner-Slot aus der Konfiguration entfernen (Neustart erfolgt automatisch)"
+  fr: "Retirer ce slot de tuner de la configuration (redémarrage automatique)"
+srv_position:
+  en: "Position:"
+  nl: "Positie:"
+  de: "Position:"
+  fr: "Position :"
+srv_test_direction:
+  en: "Test direction:"
+  nl: "Test richting:"
+  de: "Testrichtung:"
+  fr: "Sens de test :"
+srv_calibration:
+  en: "Calibration:"
+  nl: "Kalibratie:"
+  de: "Kalibrierung:"
+  fr: "Étalonnage :"
+srv_function:
+  en: "Function:"
+  nl: "Functie:"
+  de: "Funktion:"
+  fr: "Fonction :"
+srv_name:
+  en: "Name:"
+  nl: "Naam:"
+  de: "Name:"
+  fr: "Nom :"
+srv_ramp_hover:
+  en: "Soft-start/stop speed (%/sec). Lower is gentler on heavy antennas."
+  nl: "Soft-start/stop snelheid (%/sec). Lager = traagheidsvriendelijker voor zware antennes."
+  de: "Sanftanlauf-/Stopp-Geschwindigkeit (%/s). Niedriger ist schonender für schwere Antennen."
+  fr: "Vitesse de démarrage/arrêt progressif (%/s). Plus bas = plus doux pour les antennes lourdes."
+srv_about_tagline:
+  en: "Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)"
+  nl: "Afstandsbediening voor Thetis SDR + Yaesu FT-991A / FTX-1 (twee radio's)"
+  de: "Fernsteuerung für Thetis SDR + Yaesu FT-991A / FTX-1 (Doppelfunkgerät)"
+  fr: "Commande à distance pour Thetis SDR + Yaesu FT-991A / FTX-1 (deux radios)"
+srv_close:
+  en: "Close"
+  nl: "Sluiten"
+  de: "Schließen"
+  fr: "Fermer"
+srv_not_calibrated:
+  en: "- not calibrated -"
+  nl: "- niet gekalibreerd -"
+  de: "- nicht kalibriert -"
+  fr: "- non étalonné -"
+srv_name_empty:
+  en: "the name cannot be empty"
+  nl: "naam mag niet leeg zijn"
+  de: "der Name darf nicht leer sein"
+  fr: "le nom ne peut pas être vide"

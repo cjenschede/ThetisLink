@@ -16,12 +16,17 @@ pub struct YaesuMemoryChannel {
     pub tone_mode: String,         // "None", "Tone", "Tone ENC", "DCS", "DCS ENC"
     pub ctcss: String,             // "67.0 Hz", etc.
     pub dcs: String,               // "023", etc.
-    pub narrow: bool,
-    pub skip: bool,
-    pub attenuator: bool,
-    pub tuner: bool,
+    // The fields below are NOT in the radio's memory read (see
+    // `sdr-remote-server/src/yaesu/memory.rs`): only Narrow is derivable, from
+    // the mode code. `None` / an empty string therefore means "the radio did
+    // not tell us", which the UI shows as "-". They are still parsed and
+    // written so a .tab file from the Yaesu programmer keeps its values.
+    pub narrow: Option<bool>,
+    pub skip: Option<bool>,
+    pub attenuator: Option<bool>,
+    pub tuner: Option<bool>,
     pub agc: String,               // "Auto", "Fast", "Mid", "Slow", "Off"
-    pub noise_blanker: bool,
+    pub noise_blanker: Option<bool>,
     pub ipo: String,            // "IPO", "AMP1", "AMP2"
     pub dnr: String,            // "Off", "1"-"15"
     pub step: String,              // "6.25 kHz", etc.
@@ -40,19 +45,87 @@ impl Default for YaesuMemoryChannel {
             tx_mode: "FM".into(),
             name: String::new(),
             tone_mode: "None".into(),
-            ctcss: "67.0 Hz".into(),
-            dcs: "023".into(),
-            narrow: false,
-            skip: false,
-            attenuator: false,
-            tuner: false,
-            agc: "Auto".into(),
-            noise_blanker: false,
-            ipo: "IPO".into(),
-            dnr: "Off".into(),
-            step: "6.25 kHz".into(),
+            // Unknown by default: a new channel gets these from the radio or
+            // from an imported .tab file, never invented here.
+            ctcss: String::new(),
+            dcs: String::new(),
+            narrow: None,
+            skip: None,
+            attenuator: None,
+            tuner: None,
+            agc: String::new(),
+            noise_blanker: None,
+            ipo: String::new(),
+            dnr: String::new(),
+            step: String::new(),
             comment: String::new(),
         }
+    }
+}
+
+/// Placeholder for a memory field the radio did not report, or that carries no
+/// meaning in this channel's mode. One symbol for both cases, because for the
+/// operator they amount to the same thing: nothing to read here.
+pub const MEM_UNKNOWN: &str = "-";
+
+/// Display text for a string memory field: empty reads as unknown.
+pub fn mem_text(v: &str) -> String {
+    if v.trim().is_empty() { MEM_UNKNOWN.to_string() } else { v.trim().to_string() }
+}
+
+/// Display text for an optional On/Off memory field.
+pub fn mem_flag(v: Option<bool>) -> String {
+    match v {
+        Some(true) => "On".to_string(),
+        Some(false) => "Off".to_string(),
+        None => MEM_UNKNOWN.to_string(),
+    }
+}
+
+/// True for the modes where repeater shift and CTCSS/DCS actually apply.
+/// In SSB/CW/data the radio still stores a tone mode, but it does nothing -
+/// showing it there suggests a setting that is not in play.
+pub fn mem_mode_uses_tone(mode: &str) -> bool {
+    matches!(mode.trim(), "FM" | "FM-N" | "DATA-FM" | "C4FM")
+}
+
+/// Tone value column: the CTCSS frequency or DCS code that belongs to the
+/// channel's tone mode, or `-` when the mode has no tone (or none was read).
+pub fn mem_tone_value(ch: &YaesuMemoryChannel) -> String {
+    if !mem_mode_uses_tone(&ch.mode) {
+        return MEM_UNKNOWN.to_string();
+    }
+    match ch.tone_mode.as_str() {
+        "Tone" | "Tone ENC" | "T SQL" => mem_text(&ch.ctcss),
+        "DCS" | "DCS ENC" | "D Code" => mem_text(&ch.dcs),
+        _ => MEM_UNKNOWN.to_string(),
+    }
+}
+
+/// Tone-mode column, blanked out in the modes where it does not apply.
+pub fn mem_tone_mode(ch: &YaesuMemoryChannel) -> String {
+    if !mem_mode_uses_tone(&ch.mode) || ch.tone_mode == "None" {
+        return MEM_UNKNOWN.to_string();
+    }
+    ch.tone_mode.clone()
+}
+
+/// Parse an On/Off column. Empty (or anything unrecognized) is `None`:
+/// the source did not report this field, which is not the same as "Off".
+fn parse_on_off(s: &str) -> Option<bool> {
+    match s.trim() {
+        v if v.eq_ignore_ascii_case("on") => Some(true),
+        v if v.eq_ignore_ascii_case("off") => Some(false),
+        _ => None,
+    }
+}
+
+/// Render an optional On/Off for the .tab file: unknown stays an empty column.
+fn on_off_field(v: Option<bool>) -> &'static str {
+    match v {
+        Some(true) => "On",
+        Some(false) => "Off",
+        None => "",
     }
 }
 
@@ -145,15 +218,17 @@ pub fn parse_tab_string(content: &str) -> Result<Vec<YaesuMemoryChannel>, String
             tone_mode: get(col_tone).to_string(),
             ctcss: get(col_ctcss).to_string(),
             dcs: get(col_dcs).to_string(),
-            narrow: get(col_narrow).eq_ignore_ascii_case("on"),
-            skip: get(col_skip).eq_ignore_ascii_case("on"),
-            attenuator: get(col_att).eq_ignore_ascii_case("on"),
-            tuner: get(col_tuner).eq_ignore_ascii_case("on"),
-            agc: { let v = get(col_agc); if v.is_empty() { "Auto".into() } else { v.to_string() } },
-            noise_blanker: get(col_nb).eq_ignore_ascii_case("on"),
-            ipo: { let v = get(col_ipo); if v.is_empty() || v.eq_ignore_ascii_case("off") { "IPO".into() } else { v.to_string() } },
-            dnr: { let v = get(col_dnr); if v.is_empty() || v.eq_ignore_ascii_case("off") { "Off".into() } else { v.to_string() } },
-            step: { let v = get(col_step); if v.is_empty() { "6.25 kHz".into() } else { v.to_string() } },
+            // An empty column means the source did not report it - keep that as
+            // unknown instead of substituting a plausible-looking default.
+            narrow: parse_on_off(get(col_narrow)),
+            skip: parse_on_off(get(col_skip)),
+            attenuator: parse_on_off(get(col_att)),
+            tuner: parse_on_off(get(col_tuner)),
+            agc: get(col_agc).to_string(),
+            noise_blanker: parse_on_off(get(col_nb)),
+            ipo: get(col_ipo).to_string(),
+            dnr: get(col_dnr).to_string(),
+            step: get(col_step).to_string(),
             comment: get(col_comment).to_string(),
         });
     }
@@ -174,7 +249,8 @@ pub fn to_tab_text(channels: &[YaesuMemoryChannel]) -> String {
     let mut out = String::new();
 
     // Header
-    out.push_str("Channel Number\tReceive Frequency\tTransmit Frequency\tOffset Frequency\tOffset Direction\tOperating Mode\tTx Operating Mode\tName\tTone Mode\tCTCSS\tDCS\tNarrow\tSkip\tAttenuator\tTuner\tAGC\tNoise Blanker\tIPO\tDNR\tStep\tComment\t\n");
+    out.push_str(sdr_remote_core::YAESU_MEMORY_TAB_HEADER);
+    out.push('\n');
 
     for ch in channels {
         // Calculate TX freq from RX + offset direction + offset freq
@@ -192,12 +268,12 @@ pub fn to_tab_text(channels: &[YaesuMemoryChannel]) -> String {
             ch.tone_mode,
             ch.ctcss,
             ch.dcs,
-            if ch.narrow { "On" } else { "Off" },
-            if ch.skip { "On" } else { "Off" },
-            if ch.attenuator { "On" } else { "Off" },
-            if ch.tuner { "On" } else { "Off" },
+            on_off_field(ch.narrow),
+            on_off_field(ch.skip),
+            on_off_field(ch.attenuator),
+            on_off_field(ch.tuner),
             ch.agc,
-            if ch.noise_blanker { "On" } else { "Off" },
+            on_off_field(ch.noise_blanker),
             ch.ipo,
             ch.dnr,
             ch.step,
@@ -268,6 +344,35 @@ pub const MODES: &[&str] = &[
 /// Offset directions for combo box.
 pub const OFFSET_DIRS: &[&str] = &["Simplex", "Minus", "Plus", "Split"];
 
+/// CTCSS tones for the memory editor. Same table and order as the radio's tone
+/// numbers (0-49), so the server can map a label back to the CN index.
+pub const CTCSS_TONES: &[&str] = &[
+    "67.0 Hz", "69.3 Hz", "71.9 Hz", "74.4 Hz", "77.0 Hz", "79.7 Hz", "82.5 Hz", "85.4 Hz",
+    "88.5 Hz", "91.5 Hz", "94.8 Hz", "97.4 Hz", "100.0 Hz", "103.5 Hz", "107.2 Hz", "110.9 Hz",
+    "114.8 Hz", "118.8 Hz", "123.0 Hz", "127.3 Hz", "131.8 Hz", "136.5 Hz", "141.3 Hz",
+    "146.2 Hz", "151.4 Hz", "156.7 Hz", "159.8 Hz", "162.2 Hz", "165.5 Hz", "167.9 Hz",
+    "171.3 Hz", "173.8 Hz", "177.3 Hz", "179.9 Hz", "183.5 Hz", "186.2 Hz", "189.9 Hz",
+    "192.8 Hz", "196.6 Hz", "199.5 Hz", "203.5 Hz", "206.5 Hz", "210.7 Hz", "218.1 Hz",
+    "225.7 Hz", "229.1 Hz", "233.6 Hz", "241.8 Hz", "250.3 Hz", "254.1 Hz",
+];
+
+/// DCS codes for the memory editor, in the radio's own code order (0-103) so
+/// the server can map a label back to the CN code number. From the CAT manual's
+/// DCS chart, not typed by hand.
+pub const DCS_CODES: &[&str] = &[
+    "023", "025", "026", "031", "032", "036", "043", "047", "051", "053",
+    "054", "065", "071", "072", "073", "074", "114", "115", "116", "122",
+    "125", "131", "132", "134", "143", "145", "152", "155", "156", "162",
+    "165", "172", "174", "205", "212", "223", "225", "226", "243", "244",
+    "245", "246", "251", "252", "255", "261", "263", "265", "266", "271",
+    "274", "306", "311", "315", "325", "331", "332", "343", "346", "351",
+    "356", "364", "365", "371", "411", "412", "413", "423", "431", "432",
+    "445", "446", "452", "454", "455", "462", "464", "465", "466", "503",
+    "506", "516", "523", "526", "532", "546", "565", "606", "612", "624",
+    "627", "631", "632", "654", "662", "664", "703", "712", "723", "731",
+    "732", "734", "743", "754",
+];
+
 /// Tone modes for combo box.
 pub const TONE_MODES: &[&str] = &["None", "Tone", "T SQL", "DCS", "D Code"];
 
@@ -275,34 +380,4 @@ pub const TONE_MODES: &[&str] = &["None", "Tone", "T SQL", "DCS", "D Code"];
 pub const OFFSET_FREQS: &[&str] = &[
     "", "100 kHz", "500 kHz", "600 kHz", "1 MHz", "1,6 MHz",
     "3 MHz", "5 MHz", "7,6 MHz", "9,4 MHz",
-];
-
-/// AGC modes for combo box.
-pub const AGC_MODES: &[&str] = &["Off", "Auto", "Fast", "Mid", "Slow"];
-
-/// IPO modes for combo box.
-pub const IPO_MODES: &[&str] = &["IPO", "AMP1", "AMP2"];
-
-/// DNR levels for combo box.
-pub const DNR_LEVELS: &[&str] = &[
-    "Off", "1", "2", "3", "4", "5", "6", "7",
-    "8", "9", "10", "11", "12", "13", "14", "15",
-];
-
-/// Step sizes for combo box.
-pub const STEPS: &[&str] = &[
-    "5 kHz", "6.25 kHz", "10 kHz", "12.5 kHz", "15 kHz", "20 kHz", "25 kHz",
-];
-
-/// Common CTCSS tones for combo box.
-pub const CTCSS_TONES: &[&str] = &[
-    "67.0 Hz", "69.3 Hz", "71.9 Hz", "74.4 Hz", "77.0 Hz", "79.7 Hz",
-    "82.5 Hz", "85.4 Hz", "88.5 Hz", "91.5 Hz", "94.8 Hz", "97.4 Hz",
-    "100.0 Hz", "103.5 Hz", "107.2 Hz", "110.9 Hz", "114.8 Hz", "118.8 Hz",
-    "123.0 Hz", "127.3 Hz", "131.8 Hz", "136.5 Hz", "141.3 Hz", "146.2 Hz",
-    "151.4 Hz", "156.7 Hz", "159.8 Hz", "162.2 Hz", "165.5 Hz", "167.9 Hz",
-    "171.3 Hz", "173.8 Hz", "177.3 Hz", "179.9 Hz", "183.5 Hz", "186.2 Hz",
-    "189.9 Hz", "192.8 Hz", "196.6 Hz", "199.5 Hz", "203.5 Hz", "206.5 Hz",
-    "210.7 Hz", "218.1 Hz", "225.7 Hz", "229.1 Hz", "233.6 Hz", "241.8 Hz",
-    "250.3 Hz", "254.1 Hz",
 ];

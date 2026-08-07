@@ -85,6 +85,10 @@ pub struct BridgeRadioState {
     pub filter_high_hz: i32,
     pub thetis_configured: bool,
     pub thetis_starting: bool,
+    /// Server explicitly reports Thetis.exe is not running on the server PC.
+    /// Drives the Thetis-autostart option; false when the server says nothing
+    /// about the process (old server) - see `ConnectStatus::thetis_reported_not_running`.
+    pub thetis_not_running: bool,
     pub tx_profile_names: Vec<String>,
     // Spectrum (extracted view)
     pub spectrum_bins: Vec<u8>,
@@ -323,6 +327,7 @@ impl From<RadioState> for BridgeRadioState {
             filter_high_hz: s.filter_high_hz,
             thetis_configured: s.thetis_configured,
             thetis_starting: s.thetis_starting,
+            thetis_not_running: s.connect_status.thetis_reported_not_running(),
             tx_profile_names: s.tx_profile_names,
             spectrum_bins: s.spectrum_bins.iter().map(|v| (v >> 8) as u8).collect(),
             spectrum_center_hz: s.spectrum_center_hz,

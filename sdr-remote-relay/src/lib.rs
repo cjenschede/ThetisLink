@@ -40,29 +40,33 @@ const BINARY_MAGIC: [u8; 4] = *b"TLB1";
 const BINARY_KIND_PING: u8 = 0;
 const BINARY_KIND_PONG: u8 = 1;
 
-// TLT1 = getunnelde TL-frame-data (Phase C), onderscheiden van de TLB1-probe.
+// TLT1 = tunneled TL-frame data (Phase C), distinct from the TLB1 probe.
 // Layout: magic(4) | version(1) | client_id(1) | length(2 LE) | payload(TL-bytes).
-// Een eigen magic (i.p.v. een losse prefix) is robuust omdat echte TL-payloads
-// ook binair zijn; een binary-frame met onbekende magic wordt non-fataal gedropt.
+// A dedicated magic (rather than a bare prefix) is robust because real TL payloads
+// are binary too; a binary frame with an unknown magic is dropped non-fatally.
 const TLT1_MAGIC: [u8; 4] = *b"TLT1";
 const TLT1_VERSION: u8 = 1;
 const TLT1_HEADER_LEN: usize = 8;
 
-// TLU1 = getunnelde audio over het kale-UDP-pad (PATCH-relay-audio-udp, fase 2).
+// TLU1 = tunneled audio over the bare-UDP path (PATCH-relay-audio-udp, fase 2).
 // Layout: magic(4) | version(1) | flags(1) | client_id(1) | seq(4 LE) | token(32 raw) |
-// AudioPacket. Alleen audio-packettypes gaan hierover; de rest blijft TLT1/wss.
+// AudioPacket. Only audio packet types travel over this; everything else stays on TLT1/wss.
 const TLU1_MAGIC: [u8; 4] = *b"TLU1";
 const TLU1_VERSION: u8 = 1;
 const TLU1_TOKEN_LEN: usize = 32;
 const TLU1_HEADER_LEN: usize = 4 + 1 + 1 + 1 + 4 + TLU1_TOKEN_LEN; // = 43
 
-/// Opus-audio packet types (byte [2] of the TL header) that should travel over the
-/// low-latency UDP path. Everything else (control, spectrum, meters) stays on wss.
-/// Mirrors `sdr_remote_core::protocol::PacketType`: Audio 0x01, AudioRx2 0x0E,
-/// AudioYaesu 0x16, AudioBinR 0x1A, AudioMultiCh 0x1B, AudioVrx 0x21, AudioYaesu2 0x25.
+/// Opus-audio packet types (byte [2] of the TL header) that should travel over
+/// the low-latency UDP path. Everything else (control, spectrum, meters) stays
+/// on wss. The relay stays dependency-light and does NOT link `sdr-remote-core`
+/// (which would pull in audiopus/opus), so this list is a deliberate mirror of
+/// `sdr_remote_core::protocol::AUDIO_PACKET_TYPES` — kept honest by a parity
+/// test in the server crate (`tracked_socket`/tests), which links both crates
+/// and fails the build if this ever drifts from the authoritative enum.
+pub const AUDIO_TYPE_BYTES: [u8; 7] = [0x01, 0x0E, 0x16, 0x1A, 0x1B, 0x21, 0x25];
+
 fn is_audio_packet(data: &[u8]) -> bool {
-    data.len() >= 4
-        && matches!(data[2], 0x01 | 0x0E | 0x16 | 0x1A | 0x1B | 0x21 | 0x25)
+    data.len() >= 4 && AUDIO_TYPE_BYTES.contains(&data[2])
 }
 
 /// Decode a 64-char hex token into 32 raw bytes (best-effort; bad chars -> 0).
@@ -125,6 +129,25 @@ const FALLBACK_RECOVER: Duration = Duration::from_secs(3);
 const FALLBACK_DWELL: Duration = Duration::from_secs(3);
 /// While in fallback the client re-asserts its request this often (lease refresh), so the
 /// station can expire the state of a client that vanished without sending an off.
+/// Whether UDP has demonstrably recovered: the healthy run must be long enough
+/// AND still be running.
+///
+/// Both halves are needed. `healthy_since` marks when the current run of UDP
+/// audio began and is never cleared, so on a path that has simply died it keeps
+/// satisfying "at least FALLBACK_RECOVER old" forever - which read as "recovered"
+/// on every pass and produced a flip every dwell period without end (observed at
+/// 1829 flips, 96 minutes after the last UDP audio frame). The second half asks
+/// whether audio is arriving *now*.
+fn udp_recovered(
+    healthy_since: Option<Instant>,
+    last_udp_audio: Option<Instant>,
+    recover_after: Duration,
+    stall_after: Duration,
+) -> bool {
+    healthy_since.map_or(false, |t| t.elapsed() >= recover_after)
+        && last_udp_audio.map_or(false, |t| t.elapsed() < stall_after)
+}
+
 const FALLBACK_HEARTBEAT: Duration = Duration::from_secs(5);
 /// Station drops a client's fallback state if it has not been re-asserted within this
 /// window (>2 heartbeats). Prevents a stale flag from being inherited by a reconnecting
@@ -158,23 +181,44 @@ fn parse_rcf_fallback(payload: &[u8]) -> Option<bool> {
     }
 }
 
-/// Audio packet identity for dedup: `(packet_type, sequence)`. AudioPacket layout is
+/// Audio packet identity for dedup: `(stream, sequence)`. AudioPacket layout is
 /// header(4: magic,ver,type,flags) + sequence(4, big-endian) + ...; type is byte[2], the
 /// sequence is bytes[4..8]. Different audio types (Audio/AudioRx2/AudioVrx/...) have
 /// independent sequence spaces, so the type is part of the key.
-fn audio_identity(payload: &[u8]) -> Option<(u8, u32)> {
+///
+/// AudioVrx is the exception: BOTH virtual receivers use that one type and carry the
+/// channel in the body (`vrx_id`, byte 12), while each keeps its own sequence counter.
+/// Keyed on the type alone, VRX2's frame 92 looked like VRX1's frame 92 and was dropped
+/// as a duplicate - one channel eating the other, for as long as their counters overlap.
+/// The channel therefore joins the stream identity.
+fn audio_identity(payload: &[u8]) -> Option<(u16, u32)> {
     if is_audio_packet(payload) && payload.len() >= 8 {
         let seq = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
-        Some((payload[2], seq))
+        let ty = payload[2];
+        // VRX audio = type 0x21; the channel byte only exists on that type.
+        let stream = if ty == 0x21 && payload.len() > 12 {
+            (ty as u16) | ((payload[12] as u16) << 8)
+        } else {
+            ty as u16
+        };
+        Some((stream, seq))
     } else {
         None
     }
 }
 
-/// `true` when an audio frame carries an active PTT flag. Header byte[3] = flags; bit 0
-/// (AudioFlags::PTT = 0x01) marks TX. Used for TX-always-both (fase 3b section 14.3).
+/// Header byte[3] = flags; bit 0 marks TX. This MIRRORS `Flags::PTT` in
+/// `sdr-remote-core`, deliberately: the relay stays dependency-light and does not
+/// link core. A mirror without a guard is how wire constants drift apart, and this
+/// one sits on the PTT path - so `ptt_bit_matches_core` in
+/// `sdr-remote-server/src/tracked_socket.rs` (the one crate that links both) pins
+/// the two together.
+pub const PTT_FLAG_BIT: u8 = 0x01;
+
+/// `true` when an audio frame carries an active PTT flag.
+/// Used for TX-always-both (fase 3b section 14.3).
 fn audio_ptt_active(payload: &[u8]) -> bool {
-    is_audio_packet(payload) && payload.len() > 3 && (payload[3] & 0x01) != 0
+    is_audio_packet(payload) && payload.len() > 3 && (payload[3] & PTT_FLAG_BIT) != 0
 }
 
 /// Sliding window that drops audio frames already delivered over the other transport, so a
@@ -184,8 +228,22 @@ fn audio_ptt_active(payload: &[u8]) -> bool {
 /// deduped. Keyed by (client_id, packet_type, sequence) so concurrent clients on a
 /// station's uplink never collide.
 struct DedupWindow {
-    order: std::collections::VecDeque<(u8, u8, u32)>,
-    seen: std::collections::HashSet<(u8, u8, u32)>,
+    order: std::collections::VecDeque<(u8, u16, u32)>,
+    seen: std::collections::HashSet<(u8, u16, u32)>,
+    /// Highest sequence seen per (client, stream), to recognise a stream that
+    /// starts over. A subscription restarts its counter at 0 while the window
+    /// still holds the previous run's numbers, and without this every frame of
+    /// the new run is taken for a repeat of the old one.
+    max_seq: std::collections::HashMap<(u8, u16), u32>,
+    /// Frames dropped as duplicates since the last report, per (client, stream).
+    ///
+    /// A dropped frame used to leave no trace at any log level, which made
+    /// "audio is not arriving" and "audio is being thrown away" the same silence.
+    /// That distinction cost two rounds of diagnosis in this very release (VRX1
+    /// and VRX2 eating each other, and a restarted stream taken for its own
+    /// repeat). Counting here and reporting periodically keeps the hot path free
+    /// of logging while making the difference visible.
+    dropped: std::collections::HashMap<(u8, u16), u64>,
 }
 
 impl DedupWindow {
@@ -195,7 +253,27 @@ impl DedupWindow {
         Self {
             order: std::collections::VecDeque::with_capacity(Self::CAP + 1),
             seen: std::collections::HashSet::with_capacity(Self::CAP + 1),
+            max_seq: std::collections::HashMap::new(),
+            dropped: std::collections::HashMap::new(),
         }
+    }
+
+    /// Take the drop tally and reset it. Returns an empty string when nothing was
+    /// dropped, so the caller can stay silent in the ordinary case.
+    fn take_drop_report(&mut self) -> String {
+        if self.dropped.is_empty() {
+            return String::new();
+        }
+        let mut parts: Vec<String> = self
+            .dropped
+            .iter()
+            .map(|((cid, ty), n)| format!("client{cid}/0x{ty:04x}:{n}"))
+            .collect();
+        parts.sort();
+        let total: u64 = self.dropped.values().sum();
+        let streams = self.dropped.len();
+        self.dropped.clear();
+        format!("dropped {total} duplicate frame(s) across {streams} stream(s) ({})", parts.join(", "))
     }
 
     /// `true` if this (client_id, audio frame) is a duplicate already delivered (drop it);
@@ -204,8 +282,31 @@ impl DedupWindow {
         let Some((ty, seq)) = audio_identity(payload) else {
             return false;
         };
+        let stream_key = (cid, ty);
+        // A stream that jumps far back has restarted (a channel switched off and
+        // on begins at 0 again). Forget what we remember of it, or its fresh
+        // frames are dropped as repeats of the previous run - which cost exactly
+        // as much audio as that run was long.
+        const RESTART_BACKJUMP: u32 = 64;
+        match self.max_seq.get(&stream_key).copied() {
+            Some(max) if max.wrapping_sub(seq) > RESTART_BACKJUMP
+                && max.wrapping_sub(seq) < u32::MAX / 2 =>
+            {
+                self.order.retain(|(c, s, _)| !(*c == cid && *s == ty));
+                self.seen.retain(|(c, s, _)| !(*c == cid && *s == ty));
+                self.max_seq.insert(stream_key, seq);
+            }
+            Some(max) if seq.wrapping_sub(max) < u32::MAX / 2 => {
+                self.max_seq.insert(stream_key, seq);
+            }
+            None => {
+                self.max_seq.insert(stream_key, seq);
+            }
+            _ => {}
+        }
         let key = (cid, ty, seq);
         if !self.seen.insert(key) {
+            *self.dropped.entry(stream_key).or_insert(0) += 1;
             return true;
         }
         self.order.push_back(key);
@@ -253,20 +354,31 @@ async fn recv_udp(sock: &Option<UdpSocket>, buf: &mut [u8]) -> Option<usize> {
     }
 }
 
-// Relay sentinel convention, mirrored from the server crate's
-// `tracked_socket::relay_sentinel_for`. The server is the downstream consumer of
-// these synthetic addresses, so the convention cannot be imported here without a
-// dependency cycle; it is kept in sync by hand. Mapping: client_id N <-> 203.0.113.(N+1):1.
-const RELAY_SENTINEL_PORT: u16 = 1;
+// Relay sentinel convention. The relay is the leaf crate, so it OWNS this
+// mapping; the server (`tracked_socket::relay_sentinel_for`) mirrors it because
+// it cannot be imported the other way without a dependency cycle. A parity test
+// in the server crate (which links both) fails the build if the two drift.
+// Mapping: client_id N <-> 203.0.113.(N+1):1.
+/// Strip the relay address out of a log line, keeping what is diagnostically
+/// useful (the scheme, so ws:// vs wss:// is still visible). The host is private
+/// to the operator and logs are the artefact people share when asking for help.
+fn redact_url(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, _)) => format!("{scheme}://<relay>"),
+        None => "<relay>".to_string(),
+    }
+}
+
+pub const RELAY_SENTINEL_PORT: u16 = 1;
 
 /// Synthetic per-client sentinel address for relay `client_id`.
-fn sentinel_for_client_id(id: u8) -> SocketAddr {
+pub fn sentinel_for_client_id(id: u8) -> SocketAddr {
     let last = 1u16 + (u16::from(id) % 254);
     SocketAddr::from((Ipv4Addr::new(203, 0, 113, last as u8), RELAY_SENTINEL_PORT))
 }
 
 /// Recover the relay `client_id` from a sentinel address (inverse of the above).
-fn client_id_from_sentinel(addr: SocketAddr) -> u8 {
+pub fn client_id_from_sentinel(addr: SocketAddr) -> u8 {
     match addr.ip() {
         IpAddr::V4(ip) => ip.octets()[3].saturating_sub(1),
         IpAddr::V6(_) => 0,
@@ -434,14 +546,14 @@ impl RelayStatusHandle {
     }
 }
 
-/// Tunnel-koppeling voor Phase C: draagt getunnelde TL-frame-bytes tussen deze
-/// relay-peer en het lokale endpoint (server: `TrackedSocket`; client: engine).
-/// - `inbound_tx`: hierheen duwt de monitor gedecodeerde inkomende `TLT1`-payloads
-///   als `(sentinel, tl_bytes)`.
-/// - `uplink_rx`: hieruit trekt de monitor te-verzenden `(sentinel, tl_bytes)` en
-///   verpakt ze in `TLT1` over de WebSocket.
-/// - `sentinel`: het synthetische client-adres waarmee inbound getagd wordt
-///   (v1: een client). Op de client-kant is dit gewoon het server-adres.
+/// Tunnel coupling for Phase C: carries tunneled TL-frame bytes between this
+/// relay peer and the local endpoint (server: `TrackedSocket`; client: engine).
+/// - `inbound_tx`: the monitor pushes decoded incoming `TLT1` payloads here
+///   as `(sentinel, tl_bytes)`.
+/// - `uplink_rx`: the monitor pulls outgoing `(sentinel, tl_bytes)` from here and
+///   wraps them in `TLT1` over the WebSocket.
+/// - `sentinel`: the synthetic client address that inbound traffic is tagged with
+///   (v1: a single client). On the client side this is simply the server address.
 pub struct RelayTunnel {
     pub sentinel: SocketAddr,
     pub inbound_tx: mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
@@ -479,12 +591,12 @@ impl RelayMonitor {
         }
     }
 
-    /// Status-only monitor op een eigen thread (geen TL-tunnel).
+    /// Status-only monitor on its own thread (no TL tunnel).
     pub fn start_threaded(initial: RelayConfig) -> Self {
         Self::start_threaded_inner(initial, None)
     }
 
-    /// Monitor op een eigen thread die tevens TL-frames tunnelt (Phase C).
+    /// Monitor on its own thread that also tunnels TL frames (Phase C).
     pub fn start_threaded_tunnel(initial: RelayConfig, tunnel: RelayTunnel) -> Self {
         Self::start_threaded_inner(initial, Some(tunnel))
     }
@@ -609,7 +721,11 @@ async fn monitor_loop(
         set_status(
             &status,
             RelayPhase::Connecting,
-            format!("Connecting to {} as {}", config.url, config.role.as_str()),
+            // The relay host is deliberately not published (it is kept out of the
+            // source via THETISLINK_FORBIDDEN_HOSTS), and a log is the one artefact
+            // that gets mailed around when something breaks. Log the role and the
+            // scheme, not the address.
+            format!("Connecting to {} as {}", redact_url(&config.url), config.role.as_str()),
             false,
             false,
             None,
@@ -653,8 +769,8 @@ async fn monitor_loop(
     }
 }
 
-/// Poll de tunnel-uplink-receiver, of blijf eeuwig pending als er geen tunnel is
-/// (zodat de select!-tak dan nooit vuurt).
+/// Poll the tunnel uplink receiver, or stay pending forever when there is no tunnel
+/// (so the select! branch never fires in that case).
 async fn recv_uplink(
     rx: &mut Option<&mut mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>>,
 ) -> Option<(SocketAddr, Vec<u8>)> {
@@ -684,9 +800,9 @@ async fn run_connection(
     shutdown_rx: &mut watch::Receiver<bool>,
     tunnel: Option<&mut RelayTunnel>,
 ) -> Result<(), String> {
-    // Split de tunnel in onafhankelijke stukken zodat de select!-takken elkaars
-    // borrows niet in de weg zitten: sentinel (Copy), inbound_tx (goedkope clone),
-    // en een reborrow van uplink_rx (&mut, blijft over reconnects behouden).
+    // Split the tunnel into independent pieces so the select! branches do not get
+    // in each other's way with borrows: sentinel (Copy), inbound_tx (cheap clone),
+    // and a reborrow of uplink_rx (&mut, preserved across reconnects).
     let (tunnel_sentinel, tunnel_inbound, mut tunnel_uplink) = match tunnel {
         Some(t) => (Some(t.sentinel), Some(t.inbound_tx.clone()), Some(&mut t.uplink_rx)),
         None => (None, None, None),
@@ -776,10 +892,7 @@ async fn run_connection(
     let udp_socket: Option<UdpSocket> = match (config.udp_port, &udp_token) {
         (Some(port), Some(_)) => match open_udp(&config.url, port).await {
             Ok(sock) => {
-                log::info!(
-                    "Relay UDP audio path up ({}:{port})",
-                    url_host(&config.url).unwrap_or_default()
-                );
+                log::info!("Relay UDP audio path up (<relay>:{port})");
                 Some(sock)
             }
             Err(e) => {
@@ -801,6 +914,11 @@ async fn run_connection(
         let _ = sock.send(&encode_tlu1(0, udp_seq, tok, &[])).await;
     }
     let mut last_udp_keepalive = Instant::now();
+    // Last audio frame seen PER STREAM, for the resume log. Per stream on purpose:
+    // RX audio runs continuously, so a single "any audio" timestamp never goes
+    // quiet and the moment a VRX stream resumes stays invisible inside it.
+    let mut last_stream_seen: std::collections::HashMap<u16, Instant> =
+        std::collections::HashMap::new();
 
     write
         .send(Message::Text(peer_frame("hello", config.role).into()))
@@ -838,6 +956,14 @@ async fn run_connection(
         log::warn!("TEST HOOK: dropping inbound UDP audio for the first {test_drop_udp_secs}s");
     }
     let mut last_udp_audio: Option<Instant> = None; // last inbound audio frame over UDP
+    // Last inbound audio frame over ANY path. A quiet UDP socket only means the
+    // path is broken if audio is in fact being sent; when the operator switches a
+    // channel off there is simply nothing to carry, and treating that as a stall
+    // made the transport flip to wss and back on every toggle.
+    let mut last_any_audio: Option<Instant> = None;
+    // Same, for inbound frames.
+    let mut last_stream_in: std::collections::HashMap<u16, Instant> =
+        std::collections::HashMap::new();
     let mut udp_healthy_since: Option<Instant> = None; // start of the current healthy UDP run
     let mut fallback_requested = false; // client: are we in wss-audio fallback?
     let mut last_fallback_flip = ready_at - FALLBACK_DWELL; // allow an immediate first flip
@@ -956,9 +1082,23 @@ async fn run_connection(
                     Some(Ok(Message::Binary(data))) => {
                         peer_active = true;
                         last_peer_activity = Instant::now();
-                        // TLT1 = getunnelde TL-frame-data -> lever payload aan het lokale endpoint.
+                        // TLT1 = tunneled TL-frame data -> deliver payload to the local endpoint.
                         if let Some(inbound) = &tunnel_inbound {
                             if let Some((cid, payload)) = parse_tlt1(&data) {
+                                if let Some((stream, seq)) = audio_identity(payload) {
+                                    let now = Instant::now();
+                                    last_any_audio = Some(now);
+                                    let quiet = last_stream_in
+                                        .get(&stream)
+                                        .map_or(true, |t: &Instant| t.elapsed() > Duration::from_millis(500));
+                                    if quiet {
+                                        log::debug!(
+                                            "Relay {:?} RECV wss: stream 0x{:04x} resumes at seq={}",
+                                            config.role, stream, seq
+                                        );
+                                    }
+                                    last_stream_in.insert(stream, now);
+                                }
                                 // Fase 3a: station intercepts a client's wss-audio fallback
                                 // request (per-session scope, idempotent) instead of
                                 // forwarding it to the engine.
@@ -1003,9 +1143,9 @@ async fn run_connection(
                                 if dedup.is_duplicate(cid, payload) {
                                     continue;
                                 }
-                                // Station demultiplext op client_id naar een per-client
-                                // sentinel; de client heeft maar een peer (de server) en
-                                // gebruikt zijn vaste sentinel-adres.
+                                // Station demultiplexes on client_id into a per-client
+                                // sentinel; the client has only one peer (the server) and
+                                // uses its fixed sentinel address.
                                 let sentinel = match config.role {
                                     RelayRole::Station => sentinel_for_client_id(cid),
                                     RelayRole::Client => {
@@ -1073,9 +1213,9 @@ async fn run_connection(
             maybe_out = recv_uplink(&mut tunnel_uplink) => {
                 match maybe_out {
                     Some((addr, bytes)) => {
-                        // Station addresseert de juiste client via het client_id uit de
-                        // sentinel; de client stuurt id 0 (de relay stempelt het echte
-                        // nummer erin op basis van welke WS-verbinding het frame kwam).
+                        // Station addresses the right client via the client_id from the
+                        // sentinel; the client sends id 0 (the relay stamps in the real
+                        // number based on which WS connection the frame came from).
                         let client_id = match config.role {
                             RelayRole::Station => client_id_from_sentinel(addr),
                             RelayRole::Client => 0,
@@ -1089,6 +1229,24 @@ async fn run_connection(
                         // The receiving end de-dups, so a frame on both paths plays once.
                         let audio = is_audio_packet(&bytes);
                         let ptt = audio && audio_ptt_active(&bytes);
+                        // First audio frame after a quiet spell: the moment a stream
+                        // resumes. Logged on both ends so a delay can be pinned to a
+                        // hop instead of inferred - endpoint, transport or network.
+                        if let Some((stream, seq)) = audio_identity(&bytes) {
+                            let now = Instant::now();
+                            let quiet = last_stream_seen
+                                .get(&stream)
+                                .map_or(true, |t| t.elapsed() > Duration::from_millis(500));
+                            if quiet {
+                                log::debug!(
+                                    "Relay {:?} SEND: stream 0x{:04x} resumes at seq={} (udp={} wss={})",
+                                    config.role, stream, seq,
+                                    udp_socket.is_some() && udp_token.is_some(),
+                                    fallback_requested
+                                );
+                            }
+                            last_stream_seen.insert(stream, now);
+                        }
                         let udp_up = udp_socket.is_some() && udp_token.is_some();
                         let (do_udp, do_wss) = if !audio {
                             (false, true) // control/spectrum: wss only
@@ -1129,13 +1287,13 @@ async fn run_connection(
                         }
                     }
                     None => {
-                        // Uplink-kanaal gesloten -> tak uitschakelen (geen busy-spin).
+                        // Uplink channel closed -> disable the branch (no busy-spin).
                         tunnel_uplink = None;
                     }
                 }
             }
             maybe_udp = recv_udp(&udp_socket, &mut udp_buf) => {
-                // Fase 2 downlink: relay levert [client_id(1)] + AudioPacket over UDP.
+                // Fase 2 downlink: relay delivers [client_id(1)] + AudioPacket over UDP.
                 if let Some(n) = maybe_udp {
                     // Test hook: pretend the network drops inbound UDP for the first N s.
                     let test_drop = test_drop_udp_secs > 0
@@ -1148,12 +1306,23 @@ async fn run_connection(
                         // Fase 3: UDP-audio health (client fallback monitor + recovery run).
                         // A gap longer than the stall threshold (re)starts the healthy run,
                         // so recovery only fires after continuous UDP audio (hysteresis).
-                        if audio_identity(payload).is_some() {
+                        if let Some((stream, seq)) = audio_identity(payload) {
                             let now = Instant::now();
                             if last_udp_audio.map_or(true, |t| now.duration_since(t) > FALLBACK_STALL) {
                                 udp_healthy_since = Some(now);
                             }
                             last_udp_audio = Some(now);
+                            last_any_audio = Some(now);
+                            let quiet = last_stream_in
+                                .get(&stream)
+                                .map_or(true, |t: &Instant| t.elapsed() > Duration::from_millis(500));
+                            if quiet {
+                                log::debug!(
+                                    "Relay {:?} RECV udp: stream 0x{:04x} resumes at seq={}",
+                                    config.role, stream, seq
+                                );
+                            }
+                            last_stream_in.insert(stream, now);
                         }
                         // Fase 3: drop a frame already delivered over wss during overlap.
                         let is_dup = dedup.is_duplicate(cid, payload);
@@ -1218,10 +1387,19 @@ async fn run_connection(
                     // Transport state machine (flip only after the dwell).
                     if last_fallback_flip.elapsed() >= FALLBACK_DWELL {
                         if !fallback_requested {
-                            let stalled = match last_udp_audio {
-                                None => ready_at.elapsed() >= FALLBACK_CONNECT_TIMEOUT,
-                                Some(t) => t.elapsed() >= FALLBACK_STALL,
-                            };
+                            // Silence is not a stall. Only conclude that UDP is broken
+                            // while audio is demonstrably being carried - over wss, or
+                            // over UDP until it went quiet. With every channel switched
+                            // off there is nothing to carry, and flipping then cost the
+                            // operator seconds of audio on the next enable while the
+                            // transport switched back.
+                            let audio_flowing = last_any_audio
+                                .map_or(false, |t| t.elapsed() < FALLBACK_STALL);
+                            let stalled = audio_flowing
+                                && match last_udp_audio {
+                                    None => ready_at.elapsed() >= FALLBACK_CONNECT_TIMEOUT,
+                                    Some(t) => t.elapsed() >= FALLBACK_STALL,
+                                };
                             if stalled {
                                 let _ = write
                                     .send(Message::Binary(
@@ -1239,7 +1417,9 @@ async fn run_connection(
                                     "Relay fallback ON (reason={reason} gap_ms={gap_ms:?} flips={fallback_flips}) - requesting wss audio"
                                 );
                             }
-                        } else if udp_healthy_since.map_or(false, |t| t.elapsed() >= FALLBACK_RECOVER) {
+                        } else if udp_recovered(
+                            udp_healthy_since, last_udp_audio, FALLBACK_RECOVER, FALLBACK_STALL,
+                        ) {
                             let _ = write
                                 .send(Message::Binary(
                                     encode_tlt1(0, &encode_rcf_fallback(false)).into(),
@@ -1278,6 +1458,13 @@ async fn run_connection(
                         .await
                         .map_err(|e| e.to_string())?;
                     last_status = Instant::now();
+                    // Ride the existing status tick: one line only when frames were
+                    // actually discarded, so a healthy link stays quiet and a link that
+                    // is throwing audio away says so instead of looking like silence.
+                    let report = dedup.take_drop_report();
+                    if !report.is_empty() {
+                        log::info!("Relay {:?} dedup: {}", config.role, report);
+                    }
                 }
 
                 if last_rtt_ping.elapsed() >= PEER_RTT_INTERVAL {
@@ -1407,7 +1594,7 @@ fn parse_binary_probe(data: &[u8]) -> Option<(u8, u64)> {
     Some((kind, seq))
 }
 
-/// Verpak TL-frame-bytes in een TLT1-tunnelframe (payload wordt geclamped op u16).
+/// Wrap TL-frame bytes in a TLT1 tunnel frame (payload is clamped to u16).
 fn encode_tlt1(client_id: u8, payload: &[u8]) -> Vec<u8> {
     let len = payload.len().min(u16::MAX as usize);
     let mut buf = Vec::with_capacity(TLT1_HEADER_LEN + len);
@@ -1419,8 +1606,8 @@ fn encode_tlt1(client_id: u8, payload: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// Parse een TLT1-tunnelframe -> (client_id, payload) als de magic klopt en het
-/// frame compleet is. Andere magics (bv. TLB1) geven None (non-fataal).
+/// Parse a TLT1 tunnel frame -> (client_id, payload) if the magic matches and the
+/// frame is complete. Other magics (e.g. TLB1) return None (non-fatal).
 fn parse_tlt1(data: &[u8]) -> Option<(u8, &[u8])> {
     if data.len() < TLT1_HEADER_LEN || data[0..4] != TLT1_MAGIC {
         return None;
@@ -1582,6 +1769,47 @@ fn short_error(err: &str) -> String {
 }
 
 #[cfg(test)]
+mod recovery_tests {
+    use super::udp_recovered;
+    use std::time::{Duration, Instant};
+
+    const RECOVER: Duration = Duration::from_secs(3);
+    const STALL: Duration = Duration::from_millis(500);
+
+    /// The failure that produced 1829 transport flips: a UDP path that died
+    /// leaves `healthy_since` frozen, and "old enough" alone reads as recovered
+    /// forever.
+    #[test]
+    fn a_dead_udp_path_does_not_read_as_recovered() {
+        let long_ago = Instant::now() - Duration::from_secs(5760);
+        assert!(
+            !udp_recovered(Some(long_ago), Some(long_ago), RECOVER, STALL),
+            "a healthy run that ended 96 minutes ago is not a recovery"
+        );
+    }
+
+    #[test]
+    fn a_run_that_is_long_enough_and_still_live_is_a_recovery() {
+        let started = Instant::now() - Duration::from_secs(4);
+        let just_now = Instant::now();
+        assert!(udp_recovered(Some(started), Some(just_now), RECOVER, STALL));
+    }
+
+    #[test]
+    fn a_fresh_run_is_not_yet_a_recovery() {
+        // Audio is arriving, but not for long enough - that is the hysteresis.
+        let started = Instant::now() - Duration::from_millis(200);
+        assert!(!udp_recovered(Some(started), Some(Instant::now()), RECOVER, STALL));
+    }
+
+    #[test]
+    fn no_udp_audio_at_all_is_never_a_recovery() {
+        assert!(!udp_recovered(None, None, RECOVER, STALL));
+        assert!(!udp_recovered(Some(Instant::now() - Duration::from_secs(9)), None, RECOVER, STALL));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1650,6 +1878,50 @@ mod tests {
     }
 
     #[test]
+    fn vrx_channels_do_not_dedup_each_other() {
+        // Both virtual receivers use packet type 0x21 with their own sequence
+        // counters, so keyed on the type alone VRX2's frame N looked like VRX1's
+        // frame N and was dropped - one channel silently eating the other.
+        let mut w = DedupWindow::new();
+        let mut frame = |vrx_id: u8, seq: u32| {
+            let mut p = vec![0u8, 0, 0x21, 0];
+            p.extend_from_slice(&seq.to_be_bytes());
+            p.extend_from_slice(&[0, 0, 0, 0]); // timestamp
+            p.push(vrx_id);
+            p.extend_from_slice(&[0, 0]); // opus length
+            p
+        };
+        assert!(!w.is_duplicate(1, &frame(0, 92)), "VRX1 frame is fresh");
+        assert!(!w.is_duplicate(1, &frame(1, 92)), "same seq on VRX2 is a different stream");
+        assert!(w.is_duplicate(1, &frame(0, 92)), "a real repeat is still a duplicate");
+    }
+
+    #[test]
+    fn a_restarted_stream_is_not_its_own_duplicate() {
+        // Switching a channel off and on restarts its sequence at 0 while the
+        // window still holds the previous run. Measured on air: the engine only
+        // saw seq=126 after 2568 ms, because 0..125 were dropped as repeats -
+        // exactly as long as the previous session had been.
+        let mut w = DedupWindow::new();
+        let mut frame = |vrx_id: u8, seq: u32| {
+            let mut p = vec![0u8, 0, 0x21, 0];
+            p.extend_from_slice(&seq.to_be_bytes());
+            p.extend_from_slice(&[0, 0, 0, 0]);
+            p.push(vrx_id);
+            p.extend_from_slice(&[0, 0]);
+            p
+        };
+        for seq in 0..126u32 {
+            assert!(!w.is_duplicate(1, &frame(1, seq)));
+        }
+        // Same channel starts over.
+        assert!(!w.is_duplicate(1, &frame(1, 0)), "a restarted stream must pass");
+        assert!(!w.is_duplicate(1, &frame(1, 1)));
+        // And within the new run a genuine repeat is still caught.
+        assert!(w.is_duplicate(1, &frame(1, 1)), "repeats inside the new run still drop");
+    }
+
+    #[test]
     fn encode_tlu1_layout_and_hex32() {
         let tok = "bb".repeat(32); // 64 hex chars -> 32 bytes of 0xbb
         let frame = encode_tlu1(3, 0x0102_0304, &tok, b"xy");
@@ -1694,7 +1966,7 @@ mod tests {
 
     #[test]
     fn tlt1_is_distinct_from_tlb1_probe() {
-        // Een TLB1-probe mag NIET als TLT1 parsen, en andersom.
+        // A TLB1 probe must NOT parse as TLT1, and vice versa.
         let probe = binary_probe_frame(BINARY_KIND_PING, RelayRole::Station, 7, BINARY_PROBE_LEN);
         assert!(parse_tlt1(&probe).is_none(), "TLB1-probe parseerde als TLT1");
 
@@ -1707,13 +1979,13 @@ mod tests {
 
     #[test]
     fn tlt1_rejects_truncated_and_wrong_magic() {
-        // Onbekende magic -> None (non-fataal drop).
+        // Unknown magic -> None (non-fatal drop).
         assert!(parse_tlt1(b"XXXX\x01\x00\x00\x00").is_none());
-        // Te kort voor de header -> None.
+        // Too short for the header -> None.
         assert!(parse_tlt1(b"TLT1").is_none());
-        // Header claimt meer payload dan aanwezig -> None.
+        // Header claims more payload than present -> None.
         let mut bad = encode_tlt1(0, b"abcd");
-        bad.truncate(TLT1_HEADER_LEN + 2); // header zegt 4, maar 2 aanwezig
+        bad.truncate(TLT1_HEADER_LEN + 2); // header says 4, but 2 present
         assert!(parse_tlt1(&bad).is_none());
     }
 

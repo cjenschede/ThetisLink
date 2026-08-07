@@ -32,8 +32,8 @@ mod ui;
 mod vrx_bridge;
 mod vrx_manager;
 
-// Server-GUI vertalingen (rust-i18n). Basis = Engels (fallback); de gebruiker
-// kiest een taal in Settings (persisted als `language=`), toegepast via set_locale.
+// Server GUI translations (rust-i18n). Base = English (fallback); the user
+// picks a language in Settings (persisted as `language=`), applied via set_locale.
 rust_i18n::i18n!("locales", fallback = "en");
 
 use std::collections::VecDeque;
@@ -497,7 +497,7 @@ fn main() -> Result<()> {
         hide_console();
 
         let config = config::load();
-        // Pas de opgeslagen UI-taal toe voordat de GUI opstart.
+        // Apply the saved UI language before the GUI starts up.
         rust_i18n::set_locale(&config.language);
 
         let icon = egui::IconData {
@@ -606,10 +606,10 @@ pub async fn run_server_async(
     }
 
     // Amplitec antenna switch - use prebuilt (from GUI) or create here (CLI mode)
-    // De serial-thread retry zelf naar binnen toe, dus we maken de
-    // instance altijd zodra de poort geconfigureerd is - ook als het
-    // apparaat nu offline staat. De UI ziet `connected=false` tot het
-    // bord weer aangesloten is.
+    // The serial thread retries internally, so we always create the
+    // instance as soon as the port is configured - even if the
+    // device is currently offline. The UI sees `connected=false` until the
+    // board is connected again.
     let amplitec = if amplitec_prebuilt.is_some() {
         amplitec_prebuilt
     } else if config.amplitec_enabled && config.amplitec_port.is_some() {
@@ -707,13 +707,13 @@ pub async fn run_server_async(
     // idempotent-safe via OnceLock.
     let _ = status_panel_state.tuners_slot.set(tuners.clone());
 
-    // PATCH-yaesu-rotor-mcp2221 fase 3+4+5: RotorInstance wordt nu in
-    // de rotor-backend match-arm hieronder aangemaakt (alleen voor
-    // backend == "mcp2221_yaesu"), zodat de Rotor-facade en de
-    // status_panel-RotorInstance één gedeelde MCP2221A driver delen.
-    // De drie rotor-backends (EA7HG TCP / PstRotator UDP / Adafruit
-    // MCP2221A) zijn mutex-exclusief - slechts één tegelijk actief om
-    // hardware-conflicten te voorkomen.
+    // PATCH-yaesu-rotor-mcp2221 phase 3+4+5: RotorInstance is now created in
+    // the rotor-backend match arm below (only for
+    // backend == "mcp2221_yaesu"), so that the Rotor facade and the
+    // status_panel RotorInstance share one MCP2221A driver.
+    // The three rotor backends (EA7HG TCP / PstRotator UDP / Adafruit
+    // MCP2221A) are mutually exclusive - only one active at a time to
+    // avoid hardware conflicts.
 
     // UltraBeam RCU-06 - use prebuilt (from GUI) or create here (CLI mode)
     let ultrabeam = if ultrabeam_prebuilt.is_some() {
@@ -735,7 +735,7 @@ pub async fn run_server_async(
     };
 
     // Rotor - use prebuilt (from GUI) or create here (CLI mode).
-    // Backend keuze: EA7HG Visual Rotor (default) of PstRotator XML/UDP.
+    // Backend choice: EA7HG Visual Rotor (default) or PstRotator XML/UDP.
     let rotor_inst = if rotor_prebuilt.is_some() {
         rotor_prebuilt
     } else if config.rotor_enabled {
@@ -764,13 +764,13 @@ pub async fn run_server_async(
                 }
             }
             "mcp2221_yaesu" => {
-                // Aansturing direct via een Adafruit MCP2221A-printje
+                // Driven directly via an Adafruit MCP2221A board
                 // (PATCH-yaesu-rotor-mcp2221). Slot 0 in config.rotors;
-                // de RotorInstance maakt zelf de poll-thread + Rotor
-                // facade. We publiceren de RotorInstance óók in
-                // `rotor_slot` zodat het status-panel zijn live ADC +
-                // Park-knoppen + DAC-slider blijft tonen, en de Rotor
-                // facade gaat de bestaande client-rotor-window kant op.
+                // the RotorInstance creates its own poll thread + Rotor
+                // facade. We also publish the RotorInstance in
+                // `rotor_slot` so the status panel keeps showing its live ADC +
+                // Park buttons + DAC slider, and the Rotor
+                // facade goes toward the existing client rotor window.
                 if let Some(rot_cfg) = config.rotors.first() {
                     if rot_cfg.enabled && rot_cfg.mcp_serial.starts_with("rot_") {
                         let label = if rot_cfg.name.is_empty() {
@@ -794,7 +794,7 @@ pub async fn run_server_async(
                         let facade = inst.make_rotor_facade();
                         let _ = status_panel_state.rotor_slot.set(inst);
                         info!(
-                            "Rotor (Adafruit MCP2221A) instance gebonden - serial \"{}\" (label \"{}\", cal {:.3}V->{:.3}V @ {}°)",
+                            "Rotor (Adafruit MCP2221A) instance bound - serial \"{}\" (label \"{}\", cal {:.3}V->{:.3}V @ {}°)",
                             rot_cfg.mcp_serial, label,
                             rot_cfg.v_at_0deg, rot_cfg.v_at_max_deg, rot_cfg.max_deg
                         );
@@ -807,7 +807,7 @@ pub async fn run_server_async(
                     }
                 } else {
                     log::warn!(
-                        "mcp2221_yaesu backend selected but no rotor in config.rotors - gebruik wizard om een rot_<naam> bord te claimen"
+                        "mcp2221_yaesu backend selected but no rotor in config.rotors - use the wizard to claim a rot_<name> board"
                     );
                     None
                 }
@@ -825,17 +825,17 @@ pub async fn run_server_async(
         None
     };
 
-    // PstRotator UDP-listener (v2.1.1+): luistert parallel aan de
-    // actieve `rotor_backend` voor inkomende azimuth-broadcasts. Spawn
-    // alleen als er een actieve Rotor-facade is om het commando naartoe
-    // te sturen - zonder rotor geen punt.
+    // PstRotator UDP listener (v2.1.1+): listens in parallel to the
+    // active `rotor_backend` for incoming azimuth broadcasts. Only spawn
+    // if there is an active Rotor facade to send the command to -
+    // without a rotor there is no point.
     let pstrotator_listen_shutdown = if config.pstrotator_listen_enabled {
         if let Some(rotor_arc) = rotor_inst.as_ref() {
             if config.rotor_backend == "pstrotator" {
                 warn!(
-                    "PstRotator listener: rotor_backend is ook 'pstrotator' - \
-                     mogelijk feedback-loop met outgoing replies. Listener \
-                     blijft actief maar wees alert op duplicaten."
+                    "PstRotator listener: rotor_backend is also 'pstrotator' - \
+                     possible feedback loop with outgoing replies. Listener \
+                     stays active but watch out for duplicates."
                 );
             }
             match pstrotator_listen::spawn(
@@ -845,7 +845,7 @@ pub async fn run_server_async(
                 Ok(shutdown) => Some(shutdown),
                 Err(e) => {
                     warn!(
-                        "PstRotator listener bind on UDP {} faalde: {} (listener uitgeschakeld voor deze run)",
+                        "PstRotator listener bind on UDP {} failed: {} (listener disabled for this run)",
                         config.pstrotator_listen_port, e
                     );
                     None
@@ -853,8 +853,8 @@ pub async fn run_server_async(
             }
         } else {
             warn!(
-                "PstRotator listener ingeschakeld maar geen actieve rotor-backend - \
-                 ingeschakelde listener zonder doel doet niets, listener overgeslagen"
+                "PstRotator listener enabled but no active rotor backend - \
+                 an enabled listener without a target does nothing, listener skipped"
             );
             None
         }
@@ -913,11 +913,11 @@ pub async fn run_server_async(
     // Tune commands per Amplitec-A position.
     let _ = tuner;
 
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Optie B-prime). De 2e radio
-    // wordt hier uit config aangemaakt (werkt in GUI- én headless-mode). Model is
-    // per-poort autodetect via `ID;` (detect_model) -> élke combinatie 2×991A /
-    // 2×FTX1 / mix werkt; faalt detect (radio uit) -> FTX1-aanname-label, bring-up
-    // logt straks het echte ID. Slot 0 blijft volledig ongemoeid.
+    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime). The 2nd radio
+    // is created here from config (works in both GUI and headless mode). Model is
+    // per-port autodetected via `ID;` (detect_model) -> every combination 2×991A /
+    // 2×FTX1 / mix works; if detect fails (radio off) -> FTX1-assumption label, bring-up
+    // will log the real ID later. Slot 0 stays completely untouched.
     yaesu::log_input_devices();
     let yaesu2_prebuilt: Option<Arc<yaesu::YaesuRadio>> = if config.yaesu2_enabled {
         if let Some(ref port) = config.yaesu2_port {
@@ -929,10 +929,10 @@ pub async fn run_server_async(
             let audio_out = config.yaesu2_audio_output_device.clone();
             match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu_ssb_switch_on_ptt) {
                 Ok(r) => Some(Arc::new(r)),
-                Err(e) => { warn!("[radio1] init failed: {} - slot 1 uit, server draait door", e); None }
+                Err(e) => { warn!("[radio1] init failed: {} - slot 1 off, server keeps running", e); None }
             }
         } else {
-            warn!("[radio1] enabled maar geen yaesu2_port geconfigureerd - slot 1 uit");
+            warn!("[radio1] enabled but no yaesu2_port configured - slot 1 off");
             None
         }
     } else {
