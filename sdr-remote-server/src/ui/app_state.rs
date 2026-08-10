@@ -39,6 +39,7 @@ impl ServerApp {
             yaesu_audio_output_device: config.yaesu_audio_output_device.unwrap_or_default(),
             yaesu_enabled: config.yaesu_enabled,
             yaesu_ssb_switch_on_ptt: config.yaesu_ssb_switch_on_ptt,
+            ftx1_memory_write_ack: config.ftx1_memory_write_ack,
             yaesu2_port: config.yaesu2_port.clone().unwrap_or_default(),
             yaesu2_audio_device: config.yaesu2_audio_device.clone().unwrap_or_default(),
             yaesu2_audio_output_device: config.yaesu2_audio_output_device.clone().unwrap_or_default(),
@@ -165,7 +166,17 @@ impl ServerApp {
             status_bind_addr: format!("0.0.0.0:{}", sdr_remote_core::DEFAULT_PORT),
             status_view: StatusView::Status,
             show_layout_arranger: false,
-            layout_grid_per_monitor: Vec::new(),
+            layout_grid_per_monitor:
+                sdr_remote_layout::layout_grids_from_config(&config.layout_grids),
+            layout_pending: Vec::new(),
+            layout_memories: {
+                let mut v: Vec<LayoutMemory> = config.layout_memories.iter()
+                    .map(|s| LayoutMemory::from_config_string(s)).collect();
+                v.resize_with(LAYOUT_MEM_SLOTS, LayoutMemory::default);
+                v
+            },
+            ui_zoom: config.ui_zoom,
+            ui_zoom_pending: true,
             layout_active_item: None,
             layout_drag_anchor: None,
             layout_target_monitor: 0,

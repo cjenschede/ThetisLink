@@ -179,6 +179,13 @@ pub struct ServerConfig {
     /// On = switch the 991A USB modulation source only during TX, then restore
     /// on PTT-off. FTX-1 keeps its internal auto source selection and is not driven here.
     pub yaesu_ssb_switch_on_ptt: bool,
+    /// Permission to write the FTX-1's memory bank. Off by default, and deliberately
+    /// so: on this radio `MW` resets the channel's CTCSS tone to 100.0 Hz, and there
+    /// is no CAT route to put it back (measured from both sides). So a write costs
+    /// the operator every tone stored in the radio itself. The server GUI explains
+    /// that and asks for it to be accepted; without acceptance an FTX-1 memory write
+    /// is refused. The FT-991A is unaffected - it stores tones fine.
+    pub ftx1_memory_write_ack: bool,
     // -- Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) --
     // Second independent radio (e.g. FTX-1). The existing `yaesu_*`-keys
     // above = slot 0 (back-compat); these `yaesu2_*`-keys = slot 1. Both
@@ -297,6 +304,12 @@ pub struct ServerConfig {
     pub rotor_window_pos: Option<[f32; 2]>,
     /// Saved main window position: [x, y]
     pub main_window_pos: Option<[f32; 2]>,
+    /// Per-monitor placement matrices of the arranger, one line.
+    pub layout_grids: String,
+    /// Stored arrangements, one line each.
+    pub layout_memories: Vec<String>,
+    /// UI scale of the server GUI (1.0 = 100%).
+    pub ui_zoom: f32,
     /// Saved window sizes: [w, h]
     pub main_window_size: Option<[f32; 2]>,
     pub tuner_window_size: Option<[f32; 2]>,
@@ -369,6 +382,7 @@ impl Default for ServerConfig {
             yaesu_enabled: false,
             yaesu_baud: 38400,
             yaesu_ssb_switch_on_ptt: false,
+            ftx1_memory_write_ack: false,
             yaesu_audio_device: None,
             yaesu_audio_output_device: None,
             yaesu2_port: None,
@@ -412,6 +426,9 @@ impl Default for ServerConfig {
             ultrabeam_window_pos: None,
             rotor_window_pos: None,
             main_window_pos: None,
+            layout_grids: String::new(),
+            layout_memories: Vec::new(),
+            ui_zoom: 1.0,
             main_window_size: None,
             tuner_window_size: None,
             amplitec_window_size: None,
@@ -630,6 +647,10 @@ fn load_unlocked() -> ServerConfig {
                     }
                     "yaesu_enabled" => {
                         config.yaesu_enabled = value.trim() != "false";
+                    }
+                    "ftx1_memory_write_ack" => {
+                        // Absent key -> false: an older conf must not silently grant it.
+                        config.ftx1_memory_write_ack = value.trim() == "true";
                     }
                     "yaesu_ssb_switch_on_ptt" => {
                         config.yaesu_ssb_switch_on_ptt = value.trim() != "false";
@@ -905,6 +926,25 @@ fn load_unlocked() -> ServerConfig {
                             config.rotor_window_pos.get_or_insert([0.0, 0.0])[1] = v;
                         }
                     }
+                    "layout_grids" => {
+                        config.layout_grids = value.trim().to_string();
+                    }
+                    "ui_zoom" => {
+                        if let Ok(v) = value.trim().parse::<f32>() {
+                            config.ui_zoom = v.clamp(0.5, 2.0);
+                        }
+                    }
+                    // layout_mem<N> = <name>|<key:x,y,w,h>...   N is 1-based.
+                    k if k.starts_with("layout_mem") => {
+                        if let Ok(i) = k["layout_mem".len()..].trim().parse::<usize>() {
+                            if (1..=64).contains(&i) {
+                                if config.layout_memories.len() < i {
+                                    config.layout_memories.resize(i, String::new());
+                                }
+                                config.layout_memories[i - 1] = value.trim().to_string();
+                            }
+                        }
+                    }
                     "main_pos_x" => {
                         if let Ok(v) = value.trim().parse::<f32>() {
                             config.main_window_pos.get_or_insert([0.0, 0.0])[0] = v;
@@ -1141,13 +1181,14 @@ pub fn save(config: &ServerConfig) {
 fn save_unlocked(config: &ServerConfig) {
     let path = config_path();
     let mut contents = format!(
-        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_ssb_switch_on_ptt={}\nyaesu_audio={}\nyaesu_audio_out={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
+        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_ssb_switch_on_ptt={}\nftx1_memory_write_ack={}\nyaesu_audio={}\nyaesu_audio_out={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
         config.tci_addr.as_deref().unwrap_or(""),
         config.thetis_path.as_deref().unwrap_or(""),
         config.yaesu_port.as_deref().unwrap_or(""),
         config.yaesu_enabled,
         config.yaesu_baud,
         config.yaesu_ssb_switch_on_ptt,
+        config.ftx1_memory_write_ack,
         config.yaesu_audio_device.as_deref().unwrap_or(""),
         config.yaesu_audio_output_device.as_deref().unwrap_or(""),
         config.amplitec_port.as_deref().unwrap_or(""),
@@ -1264,6 +1305,16 @@ fn save_unlocked(config: &ServerConfig) {
     if let Some(pos) = config.rotor_window_pos {
         contents.push_str(&format!("rotor_pos_x={}\nrotor_pos_y={}\n", pos[0], pos[1]));
     }
+    // Arranger: the painted matrices, the stored arrangements and the UI scale.
+    if !config.layout_grids.is_empty() {
+        contents.push_str(&format!("layout_grids={}\n", config.layout_grids));
+    }
+    for (i, mem) in config.layout_memories.iter().enumerate() {
+        if !mem.is_empty() {
+            contents.push_str(&format!("layout_mem{}={}\n", i + 1, mem));
+        }
+    }
+    contents.push_str(&format!("ui_zoom={:.2}\n", config.ui_zoom));
     // Main window position
     if let Some(pos) = config.main_window_pos {
         contents.push_str(&format!("main_pos_x={}\nmain_pos_y={}\n", pos[0], pos[1]));

@@ -1798,6 +1798,7 @@ private fun YaesuTab(
         yaesuSplit = fullState.yaesu2Split,
         yaesuScan = fullState.yaesu2Scan,
         yaesuMemoryData = fullState.yaesu2MemoryData,
+        yaesuMenuData = fullState.yaesu2MenuData,
         yaesuFeatureToggles = fullState.yaesu2FeatureToggles,
         yaesuFeatureLevels = fullState.yaesu2FeatureLevels,
         yaesuFeatureFreqs = fullState.yaesu2FeatureFreqs,
@@ -1809,8 +1810,12 @@ private fun YaesuTab(
     val isMemory = state.yaesuVfoSelect == 1
 
     // Parse memory data (tab-separated, header: Ch, RxFreq, TxFreq, Offset, Dir, Mode, TxMode, Name, Tone, CTCSS, ...)
+    // Two separate streams. They used to share one field, told apart by a "MENU:"
+    // prefix; since the server pushes both the moment a client connects they arrive
+    // together and the second silently replaced the first - the memory list showed
+    // for a moment and then disappeared behind the EX list.
     val memData = state.yaesuMemoryData
-    val isMenuData = memData.startsWith("MENU:")
+    val menuData = state.yaesuMenuData
     data class YaesuMem(
         val ch: String, val name: String, val rxFreq: String, val mode: String,
         val dir: String, val tone: String,
@@ -1821,7 +1826,7 @@ private fun YaesuTab(
         val details: String,
     )
     val memChannels = remember(memData) {
-        if (memData.isNotEmpty() && !isMenuData) {
+        if (memData.isNotEmpty()) {
             val rows = memData.lines()
             // Column positions come from the header line, so the server can add
             // or reorder columns without silently shifting what is shown here.
@@ -1868,9 +1873,9 @@ private fun YaesuTab(
             }
         } else emptyList()
     }
-    val menuItems = remember(memData) {
-        if (isMenuData) {
-            memData.removePrefix("MENU:").lines().filter { it.isNotBlank() }
+    val menuItems = remember(menuData) {
+        if (menuData.isNotEmpty()) {
+            menuData.removePrefix("MENU:").lines().filter { it.isNotBlank() }
         } else emptyList()
     }
 
@@ -2577,9 +2582,9 @@ private fun YaesuTab(
         }
 
         // Reset loading state when data arrives
-        LaunchedEffect(memData) {
-            if (memData.isNotEmpty() && !isMenuData) memLoading = false
-            if (isMenuData) settingsLoading = false
+        LaunchedEffect(memData, menuData) {
+            if (memData.isNotEmpty()) memLoading = false
+            if (menuData.isNotEmpty()) settingsLoading = false
         }
         // Timeout fallback
         LaunchedEffect(memLoading) {
@@ -2665,9 +2670,19 @@ private fun YaesuTab(
             ) {
                 menuItems.forEach { item ->
                     val parts = item.split(":", limit = 2)
-                    val num = parts.getOrElse(0) { "" }.trim().toIntOrNull() ?: 0
+                    val key = parts.getOrElse(0) { "" }.trim()
                     val value = parts.getOrElse(1) { "" }.trim()
-                    val name = YAESU_MENU_NAMES[num] ?: stringResource(R.string.dev_menu_num, num)
+                    // The 991A numbers its EX menu 1..153; the FTX-1 uses a six-digit
+                    // group/sub/item address. Both arrive as digits, so the length
+                    // decides which table to look in - reading a six-digit address as
+                    // a 991A number gave a lookup that always missed, which is why the
+                    // FTX-1 showed a bare number with no name.
+                    val num = key.toIntOrNull() ?: 0
+                    val name = if (key.length == 6) {
+                        FTX1_MENU_NAMES[key] ?: stringResource(R.string.dev_menu_num, num)
+                    } else {
+                        YAESU_MENU_NAMES[num] ?: stringResource(R.string.dev_menu_num, num)
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),

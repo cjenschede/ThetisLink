@@ -143,6 +143,16 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Volume state - loaded from SharedPreferences, persists across restarts
     val rxVolumeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("rx_volume", 0.5f)) }
     val localVolumeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("local_volume", 1f)) }
+    // Switching between Thetis and a Yaesu switches which level this slider holds, so
+    // it has to reload - otherwise it shows the other one's value and the first touch
+    // sets the wrong level.
+    LaunchedEffect(yaesuActive) {
+        localVolumeState.floatValue = if (yaesuActive) {
+            prefs.getFloat("yaesu_volume", 1f)
+        } else {
+            prefs.getFloat("local_volume", 1f)
+        }
+    }
     val txGainState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("tx_gain", 0.5f)) }
 
     // AGC state - loaded from SharedPreferences, persists across restarts
@@ -459,15 +469,21 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             prefs.edit().putFloat("rx_volume", v).apply()
         }
     }
+    // One slider, two meanings: in Yaesu mode it is the Yaesu level, otherwise the
+    // Thetis level. They are stored under their OWN key. Both used to land in
+    // "local_volume", so adjusting the Yaesu overwrote the remembered Thetis level -
+    // after which Thetis came back at a level neither the slider nor the preference
+    // agreed with.
     val onLocalVolumeChange: (Float) -> Unit = remember {
         { v ->
             localVolumeState.floatValue = v
             if (viewModel.yaesuMode.value) {
                 viewModel.yaesuVolumeSel(v) // geselecteerde radio (niet altijd radio1)
+                prefs.edit().putFloat("yaesu_volume", v).apply()
             } else {
                 viewModel.setLocalVolume(v)
+                prefs.edit().putFloat("local_volume", v).apply()
             }
-            prefs.edit().putFloat("local_volume", v).apply()
         }
     }
     val onTxGainChange: (Float) -> Unit = remember {
@@ -873,7 +889,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             modifier = Modifier.padding(16.dp),
                         )
                         AudioStats(
-                            captureLevel = state.captureLevel,
+                            // Yaesu panel: the Yaesu TX level, not the Thetis capture
+                            // level - the playback meter next to it already picks the
+                            // Yaesu side, this one did not.
+                            captureLevel = state.yaesuMicLevel,
                             playbackLevel = if (state.selectedRadio == 1) state.playbackLevelYaesu2 else state.playbackLevelYaesu,
                             rttMs = state.rttMs,
                             jitterMs = state.jitterMs,

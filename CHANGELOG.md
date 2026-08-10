@@ -16,6 +16,170 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.8.0] — 2026-08-08 (Radio data ready the moment you connect · UI scale · arrangement memories · Android audio fixed)
+
+> **Feature release.** The wire protocol stays **VERSION = 3** and there are **no new
+> control ids**: what changed is the *value* on two existing ones, chosen so old and new
+> peers keep working in both directions (see the Technical Reference). Stock Thetis
+> v2.10.3.x remains sufficient; no Thetis-fork change is required. Desktop client, Windows
+> server and Android client are all rebuilt.
+
+### Fixed
+- **Android: a Yaesu radio stayed silent.** Switching on *Yaesu active* mutes the Thetis
+  audio, and the Android app did that by setting the **master volume** to zero — which since
+  v2.7.0 also covers the Yaesu path, so the switch silenced the radio it had just switched
+  on. The level meters kept moving throughout, because they are measured before the volume is
+  applied, which made it look like a radio or squelch problem. Thetis is now silenced with
+  the client-only RX volumes. **This affected the released v2.7.0 APK.**
+- **Android: the memory list disappeared behind the EX menu.** Both travelled through one
+  field, told apart by a prefix; now that the server pushes both on connect they arrived
+  together and the second replaced the first. They have their own field now.
+- **FTX-1: changing frequency on a memory channel snapped back a few seconds later.**
+  The escape from memory to VFO sends `MA`, which only COPIES the channel into the VFO.
+  The FT-991A leaves memory operation on that; the FTX-1 does not, so it kept working
+  from the channel and put its own frequency back at its own pace while ThetisLink showed
+  VFO. Leaving is a separate command there (`VM` with parameters, P1=0 MAIN P2=00 VFO).
+  The **V/M button** shared this snap-back and is fixed with it - but see the entry
+  below for the more serious fault it also had.
+- **The V/M button overwrote a memory channel.** One click stored whatever the VFO
+  happened to hold into the current memory channel, destroying what was there. It was
+  wired to a bare `VM;`, which both CAT manuals give as a WRITE - *VFO-A to memory
+  channel* on the FT-991A, *MAIN-side to memory channel* on the FTX-1 - and not as the
+  toggle its label suggests. There was no confirmation and nothing in the log, so a
+  channel could be gone without anyone noticing. **This affected every release since
+  v2.0.0.**
+  The toggle now leaves memory with `MA` (plus `VM000;` on an FTX-1) and enters it with
+  a plain recall, and writes nothing at all. The parameterised `VM P1 P2P2` on the same
+  manual page is the mode switch; the bare form is the write.
+- **FTX-1: after transmitting FM from a memory channel you were left in VFO on the
+  wrong frequency.** The mode restore after PTT-off recalls the channel, and that recall
+  used the three-digit `MC` form, which this radio rejects. Nothing showed it: the
+  transmission itself had worked and the failure was one silent command at the end.
+  Every other FTX-1 path already used the five-digit form.
+- **Coming back to the memory channel you had just left did not work** on either radio -
+  you had to select a different one first. Clicking a channel recalled it *and* opened the
+  row editor, so the row turned into a form and the one row you most wanted to click again
+  had nothing left to click. Colour now says where the radio is rather than which row was
+  last touched: **green** the radio is on this channel, **amber** the channel you left when
+  you tuned into VFO, click it to come back. The whole row is the target, not the channel
+  number alone; double-click opens the editor, which also gained a **Close** - it had no
+  way out at all before.
+- **The memory row offered two controls that led nowhere.** Its unlabelled "x" read as a
+  close button but removed the row, and could not do more than that: a memory channel
+  cannot be erased over CAT on either radio. And the **offset column was a dropdown of ten
+  fixed values** matching neither radio, which the server never read back when writing -
+  so every choice made there went nowhere. Neither radio stores a shift *amount* per
+  channel; the record holds the direction and the size is a per-band menu setting (991A
+  80-83, FTX-1 EX 010316-010319). The column is display-only now, derived from transmit
+  minus receive frequency.
+- **ThetisLink kept transmitting after the radio had stopped.** Set a TX time-out timer
+  on the radio, hold PTT past it, and the radio drops back to receive while ThetisLink
+  goes on showing TX and sending transmit audio - because nothing ever told it what the
+  radio was doing. Two independent releases now cover it. The **FTX-1 reports its real
+  transmit state** (`RI` P4, already in the 200 ms poll, so no extra CAT traffic), which
+  catches any cause at all: the timer, a fault, or a hand on the set's own PTT. It waits
+  for four consecutive answers so a single garbled frame can never cut a live
+  transmission. And **both radios expose their TX time-out timer in the EX menu** (991A
+  036, FTX-1 030112), read once when the radio connects, so ThetisLink stops 1.5 s before
+  the radio does - first, so you hear a clean end rather than a cut. The FT-991A has no
+  reliable transmit readback of its own, so the timer is its only net. Nothing was added
+  to the PTT-on path; keying is as fast as it was.
+- **The PTT latch stayed held after the radio let go.** The button went grey, because it
+  follows the reported state, but the latch behind it did not: the next click only
+  released a PTT that had already stopped, so it took a *second* click to key again. It
+  now lets go on a confirmed transmitting -> not-transmitting edge, for both radios.
+- **The EX menu dropdown silently dropped choices it could not parse.** The FT-991A TX
+  time-out timer offered nothing but "OFF" and so could not be set from ThetisLink at
+  all: its encoding is `00:OFF 01-30 min`, and the parser kept only the parts containing
+  a colon, binning the range and 30 of the 31 settings with it. The same split cut any
+  label at its first space, so `6:SKY BLUE` was offered as "SKY" - a colour the radio
+  does not have. Six menus were affected: TX TOT (36) and WIRES DG-ID (153) lost a whole
+  range; DISPLAY COLOR (6), CW FREQ DISPLAY (59), SPECTRUM COLOR (117) and WATERFALL
+  COLOR (118) had truncated labels.
+- **FTX-1: the tones in the list were replaced by 100.0 Hz on every connect.** The
+  server reads the tones from the radio when it connects and merges them into the list.
+  This radio cannot store a tone in a memory channel and reports 100.0 Hz for one that
+  has none - which is exactly what the CAT memory-write command (`MW`) leaves behind on
+  every channel it writes. So each connect replaced the real tones with the damage, in
+  the very copy ThetisLink uses to put the tone back on the radio each time it lands on
+  a channel (see the FTX-1 tone entry below). For the FTX-1 the list is the truth now: a read fills an empty
+  tone (one set on the radio's own front panel does work) but never overwrites a value
+  already there. The FT-991A stores tones properly and is unchanged - for it a read is
+  the truth.
+- **A client that dropped without warning and came straight back got nothing.** State
+  is pushed once per subscriber and then only on change, with the recipient lists pruned
+  against the connected clients. That works when a client leaves cleanly, because it is
+  gone from that list - but a client that drops silently (a crash, a network blip, a
+  kill) and returns on the same address inside the 15-second session timeout never left,
+  so it stayed marked as already-served. A freshly started client then sat with an empty
+  memory table and EX menu until the slow safety net came round, up to a minute later.
+  Joining is now counted, so anyone arriving is served regardless of what the address
+  list says.
+- **FTX-1: the tones now work in practice, and writing memories asks first.** This radio
+  cannot *store* a tone in a memory channel over CAT, and that is documented rather than
+  merely observed: `MW` carries a field for the tone **mode** but none for the tone
+  **number** (P9 is `00: (Fixed)`), and `MW` is set-only so there is nothing to read back.
+  Writing a memory therefore also resets that channel's tone to 100.0 Hz **in the radio**,
+  which is what was behind "the repeater stopped opening after a write". ThetisLink now
+  keeps the tones in its own list and re-applies the right one every time the radio lands
+  on a channel, so transmitting through ThetisLink works normally. The limit is stated
+  plainly rather than glossed over: **this holds only while ThetisLink is connected** - the
+  radio on its own will transmit 100.0 Hz on channels that were written. Because a write
+  costs those tones, **FTX-1 memory writing is off by default** and refused until the
+  condition is accepted in the server settings (Yaesu tab). Reading is never gated, and the
+  FT-991A - which stores tones properly - is unaffected.
+- **Android: the MIC meter stayed at -80 dB while transmitting.** The Yaesu TX level is
+  measured in the shared engine but was never carried across to Android, and the Yaesu panel
+  showed the Thetis capture level instead - which reads silence while a Yaesu is keyed. Audio
+  went out and stations heard it; only the meter was blind. **This affected the released v2.7.0
+  APK.**
+- **Android: the Volume slider quietly attenuated the Yaesu.** That slider is the Thetis level
+  in practice, since the Yaesu panel has its own, but it drove the master - which covers every
+  path. A setting that is right for Thetis then left a Yaesu barely audible while its own
+  slider read full open. The two levels are stored separately now and the slider reloads when
+  you switch, so it shows the level it is actually controlling.
+- **Android: FTX-1 EX settings showed a bare number.** The name lookup read the FTX-1's
+  six-digit address as an FT-991A menu number and always missed. A table of 440 labels was
+  added, generated from the chart the desktop already uses.
+- **The tones no longer disappear from the memory list.** They are not part of the bulk read,
+  so every fresh read produced a list with empty tone columns and replaced the good one —
+  pressing *Read radio* lost them just as effectively. A read now carries over the tones
+  already known, but only for channels whose frequency is unchanged.
+- **FT-991A: the memory read no longer comes up one channel short.** The CTCSS pre-read's
+  answer could land in the first memory query, after which every channel received the
+  previous channel's answer and the last was never collected — a list one channel short with
+  silently shifted data.
+- **The master volume no longer snaps back to 100 %** (desktop), and a saved window layout is
+  restored correctly on a display that is not at 100 % scale.
+
+### Added
+- **The radio's data is there the moment you connect.** Memory channels, tones and EX
+  settings are read **once when the radio connects** and kept by the server; every client is
+  then served from that copy instead of making the radio walk its channels again. That walk
+  took about a second on the FT-991A and several on the FTX-1 (405 EX values), during which
+  no other CAT command could get through. *Consequence:* a channel or setting changed **on
+  the radio itself** is noticed after pressing **Read radio**, which always fetches fresh.
+- **UI scale, 50 %–150 %, in both the client and the server GUI.** It scales the contents of
+  the windows, not their position, so a saved layout survives a change of scale. `Ctrl +` /
+  `Ctrl -` do the same and are remembered.
+- **Arrangement memories.** Five slots that hold a whole layout: *Store* records where every
+  open window is, *Recall* puts them all back and reopens a window that was closed. Real
+  positions are stored rather than the grid, so a layout fine-tuned by hand comes back as you
+  left it. A recall made before a radio is connected completes itself when that radio
+  appears. The painted matrix now survives a restart as well, and the grid goes up to 18×18.
+- Both memory lists **start empty** instead of loading a saved file, so what is on screen
+  demonstrably came from the radio. *Load file* still loads a saved list on request.
+
+### Changed
+- **One push mechanism for every kind of state.** State that used to be re-sent whenever the
+  *number* of clients changed is now tracked per client, so a client arriving while another
+  leaves can no longer be missed. Everything gains a slow full resend as a safety net,
+  because a push is not guaranteed to arrive: the small state every 10 s, the larger blocks
+  every 60 s. Recorded in full in the project's internal design note.
+- The window arranger is **one implementation shared by the client and the server GUI**
+  instead of two copies that had drifted apart; the server GUI gains the UI scale, the 18×18
+  grid and the arrangement memories it lacked.
+
 ## [2.7.0] — 2026-08-07 (VRX audio reliability · Yaesu CTCSS/DCS from the client · rebuilt audio-level meters · shared full-band spectrum row)
 
 > **Feature release.** The wire protocol stays **VERSION = 3**: everything added here is

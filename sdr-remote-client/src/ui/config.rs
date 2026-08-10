@@ -145,6 +145,12 @@ pub(crate) struct ClientConfig {
     pub(crate) vfo_a_volume: f32,
     pub(crate) vfo_b_volume: f32,
     pub(crate) local_volume: f32,
+    /// UI scale, independent of the Windows display scaling. On a high-DPI
+    /// screen the OS scale decides how many POINTS the app has to lay out in,
+    /// and a Surface at 200% ends up with fewer points than an ordinary 1080p
+    /// monitor at 100% - so less fits, despite the higher resolution. This lets
+    /// the app be scaled down without touching the system-wide setting.
+    pub(crate) ui_zoom: f32,
     pub(crate) rx2_volume: f32,
     pub(crate) memories: [Memory; NUM_MEMORIES],
     pub(crate) tx_profiles: Vec<(u8, String)>,
@@ -247,6 +253,14 @@ pub(crate) struct ClientConfig {
     pub(crate) amplitec_power_show: bool,
     pub(crate) bw_breakdown_expanded: bool,
     pub(crate) yaesu_memories_h: f32,
+    /// Height of the slot-1 memory list. Separate from slot 0 on purpose: the
+    /// two windows are laid out independently and a shared height moves one
+    /// while you are adjusting the other.
+    pub(crate) yaesu2_memories_h: f32,
+    /// Per-monitor placement matrices, one config line (see arranger.rs).
+    pub(crate) layout_grids: String,
+    /// Stored arrangements, one config line each.
+    pub(crate) layout_memories: Vec<String>,
     pub(crate) device_tab: u8,
     pub(crate) yaesu_enabled: bool,
     pub(crate) yaesu_volume: f32,
@@ -356,6 +370,7 @@ impl Default for ClientConfig {
             vfo_a_volume: 1.0,
             vfo_b_volume: 1.0,
             local_volume: 1.0,
+            ui_zoom: 1.0,
             rx2_volume: 0.2,
             memories: Default::default(),
             tx_profiles: vec![(0, "Default".to_string())],
@@ -450,6 +465,9 @@ impl Default for ClientConfig {
             amplitec_power_show: false,
             bw_breakdown_expanded: false,
             yaesu_memories_h: 250.0,
+            yaesu2_memories_h: 250.0,
+            layout_grids: String::new(),
+            layout_memories: Vec::new(),
             band_mem: HashMap::new(),
             window_w: 400.0,
             window_h: 500.0,
@@ -918,6 +936,24 @@ pub(crate) fn load_config() -> ClientConfig {
             config.amplitec_power_show = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("bw_breakdown_expanded=") {
             config.bw_breakdown_expanded = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("layout_grids=") {
+            config.layout_grids = val.trim().to_string();
+        } else if let Some(val) = line.strip_prefix("layout_mem") {
+            // layout_mem<N>=<name>|<key:x,y,w,h>...  N is 1-based.
+            if let Some((idx, body)) = val.split_once('=') {
+                if let Ok(i) = idx.trim().parse::<usize>() {
+                    if (1..=64).contains(&i) {
+                        if config.layout_memories.len() < i {
+                            config.layout_memories.resize(i, String::new());
+                        }
+                        config.layout_memories[i - 1] = body.trim().to_string();
+                    }
+                }
+            }
+        } else if let Some(val) = line.strip_prefix("yaesu2_memories_h=") {
+            if let Ok(v) = val.trim().parse::<f32>() {
+                config.yaesu2_memories_h = v.clamp(100.0, 800.0);
+            }
         } else if let Some(val) = line.strip_prefix("yaesu_memories_h=") {
             if let Ok(v) = val.trim().parse::<f32>() {
                 config.yaesu_memories_h = v.clamp(100.0, 800.0);
@@ -938,6 +974,10 @@ pub(crate) fn load_config() -> ClientConfig {
                 config.vfo_b_volume = v.clamp(0.0, 1.0);
             }
             has_keys = true;
+        } else if let Some(val) = line.strip_prefix("ui_zoom=") {
+            if let Ok(v) = val.trim().parse::<f32>() {
+                config.ui_zoom = v.clamp(0.5, 2.0);
+            }
         } else if let Some(val) = line.strip_prefix("local_volume=") {
             if let Ok(v) = val.trim().parse::<f32>() {
                 config.local_volume = v.clamp(0.0, 1.0);
@@ -1276,6 +1316,7 @@ pub(crate) fn save_config(
     rx2_spectrum_enabled: bool,
     thetis_wideband_audio: bool,
     full_spectrum_enabled: bool,
+    ui_zoom: f32,
     popout_joined: bool,
     meter_analog: [bool; 6],
     spectrum_popout: bool,
@@ -1290,6 +1331,9 @@ pub(crate) fn save_config(
     amplitec_power_show: bool,
     bw_breakdown_expanded: bool,
     yaesu_memories_h: f32,
+    yaesu2_memories_h: f32,
+    layout_grids: &str,
+    layout_memories: &[String],
     device_tab: u8,
     yaesu_enabled: bool,
     yaesu_volume: f32,
@@ -1481,6 +1525,7 @@ pub(crate) fn save_config(
         content.push_str(&format!("rx2_spectrum_enabled={}\n", rx2_spectrum_enabled));
         content.push_str(&format!("thetis_wideband_audio={}\n", thetis_wideband_audio));
         content.push_str(&format!("full_spectrum_enabled={}\n", full_spectrum_enabled));
+        content.push_str(&format!("ui_zoom={:.2}\n", ui_zoom));
         content.push_str(&format!("popout_joined={}\n", popout_joined));
         content.push_str(&format!("meter_analog={}\n",
             meter_analog.iter().map(|b| if *b { "1" } else { "0" }).collect::<Vec<_>>().join(",")));
@@ -1498,6 +1543,15 @@ pub(crate) fn save_config(
         content.push_str(&format!("amplitec_power_show={}\n", amplitec_power_show));
         content.push_str(&format!("bw_breakdown_expanded={}\n", bw_breakdown_expanded));
         content.push_str(&format!("yaesu_memories_h={:.0}\n", yaesu_memories_h));
+        content.push_str(&format!("yaesu2_memories_h={:.0}\n", yaesu2_memories_h));
+        if !layout_grids.is_empty() {
+            content.push_str(&format!("layout_grids={}\n", layout_grids));
+        }
+        for (i, mem) in layout_memories.iter().enumerate() {
+            if !mem.is_empty() {
+                content.push_str(&format!("layout_mem{}={}\n", i + 1, mem));
+            }
+        }
         content.push_str(&format!("device_tab={}\n", device_tab));
         content.push_str(&format!("yaesu_enabled={}\n", yaesu_enabled));
         content.push_str(&format!("yaesu_volume={:.3}\n", yaesu_volume));

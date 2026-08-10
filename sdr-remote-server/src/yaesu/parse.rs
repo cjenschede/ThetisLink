@@ -345,6 +345,16 @@ pub(super) fn parse_responses(
                             s.squelch_open = open;
                         }
                     }
+                    // P4 = the radio's OWN transmit state (0 RX / 1 TX / 2 TX-INHIBIT).
+                    // This is what a time-out timer, a fault or a hand on the set shows up
+                    // in - none of which ThetisLink can see from the PTT it sent itself.
+                    // TX-INHIBIT counts as not transmitting: the radio is refusing to.
+                    if let Some(p4) = payload.chars().nth(3) {
+                        let tx = p4 == '1';
+                        let mut s = status.lock().unwrap();
+                        s.radio_tx = Some(tx);
+                        s.radio_rx_streak = if tx { 0 } else { s.radio_rx_streak.saturating_add(1) };
+                    }
                     // High-SWR flag = P2 (0 Normal / 1 Hi-SWR). The radio only asserts it
                     // while transmitting into a high SWR; it clears otherwise.
                     let hi = payload.chars().nth(1) == Some('1');

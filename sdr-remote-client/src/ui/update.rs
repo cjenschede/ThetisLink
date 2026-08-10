@@ -92,9 +92,18 @@ impl eframe::App for SdrRemoteApp {
         // (which causes the OS to oscillate the window between frames).
         // Size via screen_rect (always available; i.viewport().inner_rect can
         // be None on Windows/eframe -> capture then never fired).
+        // Geometry is stored in SYSTEM points, deliberately. egui reports
+        // screen_rect/outer_rect in ITS points, which shrink as the UI zoom goes
+        // down, while with_position/with_inner_size and the OS monitor rects are
+        // in system points where that zoom does not exist. At zoom 1.0 the two
+        // coincide, which is why this went unnoticed; at 70% a restored window
+        // lands in the wrong place and comes back the wrong size. Multiplying by
+        // the zoom converts egui points back to system points, so a saved layout
+        // survives a change of UI scale.
+        let z = ctx.zoom_factor().max(0.01);
         {
             let sr = ctx.screen_rect();
-            let (w, h) = (sr.width(), sr.height());
+            let (w, h) = (sr.width() * z, sr.height() * z);
             if (w - self.window_w).abs() > 5.0 || (h - self.window_h).abs() > 5.0 {
                 self.window_w = w;
                 self.window_h = h;
@@ -102,7 +111,7 @@ impl eframe::App for SdrRemoteApp {
             }
         }
         if let Some(outer) = ctx.input(|i| i.viewport().outer_rect) {
-            let np = outer.min;
+            let np = egui::pos2(outer.min.x * z, outer.min.y * z);
             if self.main_window_pos.map_or(true, |p| (p.x - np.x).abs() > 5.0 || (p.y - np.y).abs() > 5.0) {
                 self.main_window_pos = Some(np);
                 self.main_geom_dirty = true;
@@ -117,23 +126,35 @@ impl eframe::App for SdrRemoteApp {
             self.main_geom_dirty = false;
         }
 
-        // Volume routing based on popout state:
-        // - Both popout: master slider in main, VFO A/B sliders in popouts
-        // - Only VFO A popout: master=100%, VFO B=0%, main slider=VFO A
-        // - Only VFO B popout: master=100%, main slider=VFO A
-        // - No popout: master=100%, main slider=VFO A
-        let both_popout = self.spectrum_popout && self.rx2_popout;
-        if !both_popout {
-            // Force master to 100% when not in dual-popout mode
-            if self.local_volume < 1.0 {
-                self.local_volume = 1.0;
-                let _ = self.cmd_tx.send(Command::SetLocalVolume(1.0));
+        // Finish a recall that had to wait for a window to exist.
+        self.apply_pending_layout(ctx);
+
+        // UI scale. Two directions, on purpose:
+        //  - our setting -> egui, so a stored choice applies on startup and on change;
+        //  - egui -> our setting, so egui's own Ctrl+/Ctrl-/Ctrl+0 is picked up and
+        //    persisted instead of being silently reset on the next launch.
+        // Applies to the pop-outs too: they share this context.
+        let egui_zoom = ctx.zoom_factor();
+        if (egui_zoom - self.ui_zoom).abs() > 0.001 {
+            if self.ui_zoom_pending {
+                ctx.set_zoom_factor(self.ui_zoom);
+                self.ui_zoom_pending = false;
+            } else {
+                self.ui_zoom = egui_zoom.clamp(0.5, 2.0);
+                self.save_full_config();
             }
-            // (removed) Previously VFO-B (RX2 audio) was muted as soon as the RX1 popout
-            // was open but the RX2 popout closed — that coupled the RX2 audio volume to
-            // the RX2 spectrum popout (volume dropped to 0 without spectrum). RX2 audio should
-            // play regardless of the popout; the volume is now preserved.
         }
+
+        // (removed in 2.7.0 build 3) The master volume used to be forced back to 100%
+        // whenever RX1 and RX2 were not both popped out. That belonged to the morphing
+        // slider: the top row then showed VFO A in every other layout, and a master left
+        // at 50% would have attenuated everything while the visible slider said otherwise.
+        //
+        // Build 103 made that row permanently the master and removed the morphing, but
+        // left this behind - so on any layout without both pop-outs the master snapped
+        // back to 100% on the next repaint. Visible on a small screen, where those two
+        // windows do not fit; invisible on a desktop that always has both open, which is
+        // why it survived testing.
 
         // Push new waterfall data (always, before rendering).
         // Tuning-latch on view-data removed (experiment 2026-05-06): the
@@ -439,7 +460,15 @@ impl eframe::App for SdrRemoteApp {
                     let scrolled = helpers::slider_wheel(ui, &resp, &mut self.local_volume, 0.001..=1.0, 0.02);
                     if resp.changed() || scrolled {
                         let _ = self.cmd_tx.send(Command::SetLocalVolume(self.local_volume));
+                        // Save on release, not per frame: egui reports "changed" on every
+                        // frame of a drag even when the value stands still, which wrote the
+                        // config to disk dozens of times a second. Same reason the window
+                        // geometry above uses a dirty flag.
+                        self.master_volume_dirty = true;
+                    }
+                    if self.master_volume_dirty && !ui.ctx().input(|i| i.pointer.any_down()) {
                         self.save_full_config();
+                        self.master_volume_dirty = false;
                     }
                 }
             }); // end row 1

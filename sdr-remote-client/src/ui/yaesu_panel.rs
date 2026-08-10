@@ -574,53 +574,7 @@ impl SdrRemoteApp {
             self.save_full_config();
         }
         if self.collapse_yaesu_memories {
-            let mem_max_h = self.yaesu_memories_h;
-            ui.indent("yaesu_memories_body", |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("yaesu_memories_scroll")
-                    .max_height(mem_max_h)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.render_yaesu_memories(ui);
-                    });
-            });
-        }
-        // Drag-handle below memories - only visible when memories expanded
-        // so it can resize the visible portion of the channel list.
-        if self.collapse_yaesu_memories {
-            let handle_h = 6.0;
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), handle_h),
-                egui::Sense::drag(),
-            );
-            let visuals = ui.visuals();
-            let fill = if response.hovered() || response.dragged() {
-                visuals.widgets.hovered.bg_fill
-            } else {
-                visuals.widgets.inactive.bg_fill
-            };
-            ui.painter().rect_filled(rect, 2.0, fill);
-            let grip_color = visuals.widgets.inactive.fg_stroke.color;
-            let cx = rect.center().x;
-            let cy = rect.center().y;
-            for dx in [-12.0, 0.0, 12.0] {
-                ui.painter().line_segment(
-                    [egui::pos2(cx + dx - 4.0, cy), egui::pos2(cx + dx + 4.0, cy)],
-                    egui::Stroke::new(1.0, grip_color),
-                );
-            }
-            if response.dragged() {
-                let dy = response.drag_delta().y;
-                if dy.abs() > 0.01 {
-                    self.yaesu_memories_h = (self.yaesu_memories_h + dy).clamp(100.0, 800.0);
-                }
-            }
-            if response.drag_stopped() {
-                self.save_full_config();
-            }
-            if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-            }
+            self.render_memories_scroll_and_handle(ui, 0);
         }
 
         if super::helpers::chevron_label(
@@ -826,6 +780,74 @@ impl SdrRemoteApp {
     /// state via mem::swap into the (shared) slot-0 fields, render the same table,
     /// and swap back - this keeps the working 991A table unchanged and the UI
     /// shared. The read/write commands follow `yaesu_mem_active_slot`.
+    /// The memory list plus the drag-handle underneath it, shared by both Yaesu
+    /// windows (parity by construction, per docs/internal/UI-STYLE-GUIDE.md).
+    ///
+    /// Slot 1 used to bound the list with `ui.available_height()` instead of the
+    /// stored height, and had no handle. The list then took everything below it,
+    /// so Radio settings could never be reached while memories were expanded -
+    /// and the handle IS the horizontal line that separates the two, so its
+    /// absence also removed the visual boundary. A comment there claimed the line
+    /// had been dropped "for parity with the 991A window", which is the opposite
+    /// of what that window does.
+    ///
+    /// The height is stored PER SLOT: the two windows are arranged independently,
+    /// so one shared value would move the other list while you adjust this one.
+    pub(super) fn render_memories_scroll_and_handle(&mut self, ui: &mut egui::Ui, slot: u8) {
+        let mem_max_h = if slot == 0 { self.yaesu_memories_h } else { self.yaesu2_memories_h };
+        let (body_id, scroll_id) = if slot == 0 {
+            ("yaesu_memories_body", "yaesu_memories_scroll")
+        } else {
+            ("yaesu2_memories_body", "yaesu2_memories_scroll")
+        };
+        ui.indent(body_id, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt(scroll_id)
+                .max_height(mem_max_h)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.render_yaesu_memories_slot(ui, slot);
+                });
+        });
+
+        // Drag-handle: resizes the visible portion of the list, and doubles as the
+        // line that marks where Radio settings begins.
+        let handle_h = 6.0;
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), handle_h),
+            egui::Sense::drag(),
+        );
+        let visuals = ui.visuals();
+        let fill = if response.hovered() || response.dragged() {
+            visuals.widgets.hovered.bg_fill
+        } else {
+            visuals.widgets.inactive.bg_fill
+        };
+        ui.painter().rect_filled(rect, 2.0, fill);
+        let grip_color = visuals.widgets.inactive.fg_stroke.color;
+        let cx = rect.center().x;
+        let cy = rect.center().y;
+        for dx in [-12.0, 0.0, 12.0] {
+            ui.painter().line_segment(
+                [egui::pos2(cx + dx - 4.0, cy), egui::pos2(cx + dx + 4.0, cy)],
+                egui::Stroke::new(1.0, grip_color),
+            );
+        }
+        if response.dragged() {
+            let dy = response.drag_delta().y;
+            if dy.abs() > 0.01 {
+                let h = if slot == 0 { &mut self.yaesu_memories_h } else { &mut self.yaesu2_memories_h };
+                *h = (*h + dy).clamp(100.0, 800.0);
+            }
+        }
+        if response.drag_stopped() {
+            self.save_full_config();
+        }
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+    }
+
     pub(super) fn render_yaesu_memories_slot(&mut self, ui: &mut egui::Ui, slot: u8) {
         if slot == 0 {
             self.render_yaesu_memories(ui);
@@ -837,7 +859,12 @@ impl SdrRemoteApp {
             std::mem::swap(&mut s.yaesu_mem_selected, &mut s.yaesu2_mem_selected);
             std::mem::swap(&mut s.yaesu_mem_filter, &mut s.yaesu2_mem_filter);
             std::mem::swap(&mut s.yaesu_mem_dirty, &mut s.yaesu2_mem_dirty);
+            std::mem::swap(&mut s.yaesu_mem_push_deferred, &mut s.yaesu2_mem_push_deferred);
+            std::mem::swap(&mut s.yaesu_mem_expect_push, &mut s.yaesu2_mem_expect_push);
             std::mem::swap(&mut s.yaesu_mem_radio_received, &mut s.yaesu2_mem_radio_received);
+            std::mem::swap(&mut s.yaesu_mem_blob_hash, &mut s.yaesu2_mem_blob_hash);
+            std::mem::swap(&mut s.yaesu_mem_active_ch, &mut s.yaesu2_mem_active_ch);
+            std::mem::swap(&mut s.yaesu_mem_active_live, &mut s.yaesu2_mem_active_live);
         };
         swap_in_out(self);
         self.yaesu_mem_active_slot = 1;
@@ -1143,18 +1170,8 @@ impl SdrRemoteApp {
             // Scale the list down to the bottom of the window instead of a
             // fixed height: use the remaining available height (with a
             // lower bound so it stays usable in a small window).
-            let avail = ui.available_height().max(120.0);
-            ui.indent("yaesu2_memories_body", |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("yaesu2_memories_scroll")
-                    .max_height(avail)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.render_yaesu_memories_slot(ui, 1);
-                    });
-            });
+            self.render_memories_scroll_and_handle(ui, 1);
         }
-        // (no separator here - parity with the 991A window; the line didn't belong)
         // Radio Settings (EX Menu) - FTX-1 hierarchical. C1: raw address/value list
         // to verify the server scan; C3 turns it into a P1>P2>P3 browser.
         if super::helpers::chevron_label(ui, self.collapse_yaesu2_menu,
@@ -1362,6 +1379,11 @@ impl SdrRemoteApp {
                 .clicked()
             {
                 self.yaesu_mem_radio_received = false;
+                // Asked for on purpose, so the answer must land even with the table
+                // open - and reading from the radio replaces the list, which is what
+                // the operator just asked for, so an open edit is settled by it.
+                self.yaesu_mem_expect_push = true;
+                self.yaesu_mem_dirty = false;
                 let _ = self.cmd_tx.send(Command::SetControl(
                     sdr_remote_core::protocol::ControlId::YaesuReadMemoryTones,
                     self.yaesu_mem_active_slot as u16,
@@ -1369,6 +1391,8 @@ impl SdrRemoteApp {
             }
             if ui.button(rust_i18n::t!("dev_read_radio").to_string()).clicked() {
                 self.yaesu_mem_radio_received = false; // allow processing new data
+                self.yaesu_mem_expect_push = true;
+                self.yaesu_mem_dirty = false;
                 // Route read/write to the active radio (slot 0 = 991A, 1 = FTX-1).
                 let cmd = if self.yaesu_mem_active_slot == 0 {
                     sdr_remote_core::protocol::ControlId::YaesuReadMemories
@@ -1388,7 +1412,12 @@ impl SdrRemoteApp {
                         } else {
                             Command::WriteYaesu2Memories(text)
                         };
-                        let _ = self.cmd_tx.send(cmd);
+                        if self.cmd_tx.send(cmd).is_ok() {
+                            // Written to the radio and to file: the edit is settled, so
+                            // the server's list may land again. Only on a successful
+                            // dispatch - a failed send leaves the edit open.
+                            self.yaesu_mem_dirty = false;
+                        }
                     }
                 }
             }
@@ -1478,7 +1507,7 @@ impl SdrRemoteApp {
         let filter_lower = self.yaesu_mem_filter.to_lowercase();
         let selected = self.yaesu_mem_selected;
         let mut tune_action: Option<(u64, u8, u16)> = None; // (freq, mode, channel#)
-        let mut delete_idx: Option<usize> = None;
+        let mut close_edit = false;
 
         // Use a horizontal layout so the table can exceed the viewport width
         egui::ScrollArea::both().show(ui, |ui| {
@@ -1570,35 +1599,28 @@ impl SdrRemoteApp {
                                             ch.offset_direction = d.to_string();
                                             if d == "Simplex" {
                                                 ch.offset_freq.clear();
-                                            } else if ch.offset_freq.is_empty() {
-                                                // Default offset based on band
-                                                ch.offset_freq = if ch.rx_freq_hz >= 430_000_000 {
-                                                    "1,60 MHz".into()
-                                                } else {
-                                                    "600 kHz".into()
-                                                };
                                             }
+                                            // No default is invented for the other
+                                            // directions: the amount is not ours to set,
+                                            // it comes from the radio's per-band menu.
                                             self.yaesu_mem_dirty = true;
                                         }
                                     }
                                 });
 
-                            // Offset frequency
-                            if ch.offset_direction != "Simplex" {
-                                egui::ComboBox::from_id_salt(format!("mof_{}", idx))
-                                    .width(70.0).selected_text(if ch.offset_freq.is_empty() { "-" } else { &ch.offset_freq })
-                                    .show_ui(ui, |ui| {
-                                        for &f in yaesu_memory::OFFSET_FREQS {
-                                            let label = if f.is_empty() { "-" } else { f };
-                                            if ui.selectable_label(ch.offset_freq == f, label).clicked() {
-                                                ch.offset_freq = f.to_string();
-                                                self.yaesu_mem_dirty = true;
-                                            }
-                                        }
-                                    });
-                            } else {
-                                ui.label("-");
-                            }
+                            // Offset frequency: shown, never chosen. Neither radio stores
+                            // a shift AMOUNT per memory channel - the record holds only the
+                            // direction, and the size is a menu setting per band (FT-991A
+                            // 80-83, FTX-1 EX 010316-010319). This was a dropdown of ten
+                            // fixed values that belonged to neither radio and that the
+                            // server never read back when writing: a choice that went
+                            // nowhere. The value here is derived from transmit minus
+                            // receive frequency, which is what the radio actually reports.
+                            ui.label(
+                                RichText::new(if ch.offset_freq.is_empty() { "-" } else { &ch.offset_freq })
+                                    .color(Color32::from_rgb(200, 200, 200)),
+                            )
+                            .on_hover_text(rust_i18n::t!("dev_mem_offset_readonly").to_string());
 
                             // Tone mode
                             egui::ComboBox::from_id_salt(format!("mt_{}", idx))
@@ -1667,50 +1689,102 @@ impl SdrRemoteApp {
                             ro_label(yaesu_memory::mem_flag(ch.skip));
                             ro_label(yaesu_memory::mem_text(&ch.step));
 
-                            // Actions
+                            // One action, because the other two earned their way out.
+                            // "Tune" did what a single click on the row already does, and
+                            // the delete could not delete anything: a memory channel cannot
+                            // be erased over CAT on either radio, so all it did was drop the
+                            // row from this list while the channel stayed in the set - a
+                            // button that reads as destructive and is not, sitting one slip
+                            // away from the way out.
                             ui.horizontal(|ui| {
-                                if ui.small_button(rust_i18n::t!("dev_tune").to_string()).clicked() {
-                                    tune_action = Some((ch.rx_freq_hz, yaesu_memory::mode_string_to_internal(&ch.mode), ch.channel_number));
+                                if ui.small_button(rust_i18n::t!("dev_mem_close_edit").to_string())
+                                    .on_hover_text(rust_i18n::t!("dev_mem_close_edit_hover").to_string())
+                                    .clicked()
+                                {
+                                    close_edit = true;
                                 }
-                                if ui.small_button("×").clicked() { delete_idx = Some(idx); }
                             });
 
                             ui.end_row();
                         } else {
                             // --- Display mode ---
                             let ch = &self.yaesu_mem_channels[idx];
-                            let c = Color32::from_rgb(200, 200, 200);
+                            // Colour says where the RADIO is, which is not the same thing as
+                            // which row you last touched:
+                            //   green   the radio is on this channel now
+                            //   amber   the last channel you used, but you have since tuned
+                            //           away into VFO - click it to come back
+                            //   grey    everything else
+                            // Without the amber state the row you left stayed lit as though
+                            // the radio were still there.
+                            let is_here = self.yaesu_mem_active_ch == Some(ch.channel_number);
+                            let c = if is_here && self.yaesu_mem_active_live {
+                                Color32::from_rgb(120, 230, 140)
+                            } else if is_here {
+                                Color32::from_rgb(230, 180, 90)
+                            } else {
+                                Color32::from_rgb(200, 200, 200)
+                            };
 
-                            let resp = ui.add(egui::Label::new(RichText::new(format!("{}", ch.channel_number)).color(c)).sense(egui::Sense::click()));
-                            if resp.clicked() {
-                                self.yaesu_mem_selected = Some(idx);
-                                tune_action = Some((ch.rx_freq_hz, yaesu_memory::mode_string_to_internal(&ch.mode), ch.channel_number));
-                            }
+                            // Clicking the channel number recalls it - and ONLY recalls it.
+                            // It used to open the row editor at the same time, which turned
+                            // the row into a form: the one row you most wanted to click
+                            // again was the one row that no longer had anything to click.
+                            // Coming back to the channel you had just left meant going to
+                            // another one first. The editor has its own button, at the end
+                            // of the row.
+                            // The whole row recalls, not just the number. A one-character
+                            // target for the action you take most often is a target you
+                            // miss; every cell that only displays something now carries the
+                            // click. The Edit and delete buttons at the end keep their own.
+                            let hint = rust_i18n::t!("dev_mem_click_to_recall").to_string();
+                            let mut recall_click = false;
+                            let mut edit_click = false;
+                            let mut cell = |ui: &mut egui::Ui, t: RichText| {
+                                let r = ui
+                                    .add(egui::Label::new(t).sense(egui::Sense::click()))
+                                    .on_hover_text(&hint);
+                                // Double click opens the row editor. Single click recalls,
+                                // which is the frequent action and keeps the light target;
+                                // the Edit button at the end of the row still works, but it
+                                // is a long way right on a twenty-column table.
+                                if r.double_clicked() {
+                                    edit_click = true;
+                                } else if r.clicked() {
+                                    recall_click = true;
+                                }
+                            };
 
-                            ui.add(egui::Label::new(RichText::new(&ch.name).color(c).strong()).sense(egui::Sense::click()));
-                            ui.add(egui::Label::new(RichText::new(yaesu_memory::format_freq_display(ch.rx_freq_hz)).color(c).family(egui::FontFamily::Monospace)).sense(egui::Sense::click()));
-                            ui.label(RichText::new(&ch.mode).color(c));
+                            cell(ui, RichText::new(format!("{}", ch.channel_number)).color(c));
+                            cell(ui, RichText::new(&ch.name).color(c).strong());
+                            cell(ui, RichText::new(yaesu_memory::format_freq_display(ch.rx_freq_hz)).color(c).family(egui::FontFamily::Monospace));
+                            cell(ui, RichText::new(&ch.mode).color(c));
 
                             // Dir
                             let dir_text = match ch.offset_direction.as_str() {
                                 "Simplex" => "S", "Plus" => "+", "Minus" => "-",
                                 _ => &ch.offset_direction,
                             };
-                            ui.label(RichText::new(dir_text).color(c));
+                            cell(ui, RichText::new(dir_text).color(c));
 
                             // Offset freq
-                            ui.label(RichText::new(yaesu_memory::mem_text(&ch.offset_freq)).color(c));
+                            cell(ui, RichText::new(yaesu_memory::mem_text(&ch.offset_freq)).color(c));
 
-                            ui.label(RichText::new(yaesu_memory::mem_tone_mode(ch)).color(c));
-                            ui.label(RichText::new(yaesu_memory::mem_tone_value(ch)).color(c));
+                            cell(ui, RichText::new(yaesu_memory::mem_tone_mode(ch)).color(c));
+                            cell(ui, RichText::new(yaesu_memory::mem_tone_value(ch)).color(c));
 
                             // "-" here means the radio does not report this field
                             // over CAT (or it does not apply in this mode) - it is
                             // not the same as "off". Hover explains it.
                             let not_stored = rust_i18n::t!("dev_mem_field_not_stored").to_string();
                             let mut ro_label = |txt: String| {
-                                ui.add(egui::Label::new(RichText::new(txt).color(c)))
-                                    .on_hover_text(&not_stored);
+                                if ui
+                                    .add(egui::Label::new(RichText::new(txt).color(c)).sense(egui::Sense::click()))
+                                    .on_hover_text(&not_stored)
+                                    .clicked()
+                                {
+                                    recall_click = true;
+                                }
                             };
                             ro_label(yaesu_memory::mem_text(&ch.agc));
                             ro_label(yaesu_memory::mem_flag(ch.noise_blanker));
@@ -1723,6 +1797,16 @@ impl SdrRemoteApp {
 
                             if ui.small_button(rust_i18n::t!("dev_edit").to_string()).clicked() {
                                 self.yaesu_mem_selected = Some(idx);
+                            }
+
+                            if edit_click {
+                                self.yaesu_mem_selected = Some(idx);
+                            } else if recall_click {
+                                tune_action = Some((ch.rx_freq_hz, yaesu_memory::mode_string_to_internal(&ch.mode), ch.channel_number));
+                                // Optimistic, so the row turns green under the click instead
+                                // of after the radio has confirmed; sync corrects it.
+                                self.yaesu_mem_active_ch = Some(ch.channel_number);
+                                self.yaesu_mem_active_live = true;
                             }
 
                             ui.end_row();
@@ -1745,31 +1829,11 @@ impl SdrRemoteApp {
             };
             let _ = self.cmd_tx.send(Command::SetControl(recall, ch_num));
             self.yaesu_in_memory_mode = true;
-            self.yaesu_current_mem_ch = self.yaesu_mem_selected;
+            // `yaesu_current_mem_ch` is set at the click; the edit selection has
+            // nothing to do with where the radio is any more.
         }
-        if let Some(idx) = delete_idx {
-            self.yaesu_mem_channels.remove(idx);
+        if close_edit {
             self.yaesu_mem_selected = None;
-            self.yaesu_mem_dirty = true;
-            self.yaesu_mem_delete_popup = true;
-        }
-
-        // Popup shown after a delete: make clear the row is only removed locally
-        // and cannot be erased from the radio over CAT (front-panel only).
-        if self.yaesu_mem_delete_popup {
-            let ctx = ui.ctx().clone();
-            egui::Window::new(rust_i18n::t!("dev_row_removed_title").to_string())
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(&ctx, |ui| {
-                    ui.set_max_width(360.0);
-                    ui.label(rust_i18n::t!("dev_row_removed_body").to_string());
-                    ui.add_space(8.0);
-                    if ui.button(rust_i18n::t!("dev_ok").to_string()).clicked() {
-                        self.yaesu_mem_delete_popup = false;
-                    }
-                });
         }
     }
 

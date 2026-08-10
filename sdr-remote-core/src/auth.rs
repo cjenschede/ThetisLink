@@ -119,6 +119,23 @@ pub fn totp_uri(secret_base32: &str) -> String {
     )
 }
 
+/// The code `verify_totp` expects right now.
+///
+/// The counterpart to `verify_totp`, and the reason it exists is testing: without a
+/// generator nothing could exercise the accepted-code path, and a missing step there
+/// went unnoticed until a reviewer read it. Returns an empty string for a secret that
+/// does not decode, which `verify_totp` rejects.
+pub fn generate_totp(secret_base32: &str) -> String {
+    let Some(secret_bytes) = base32::decode(base32::Alphabet::Rfc4648 { padding: false }, secret_base32) else {
+        return String::new();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    totp_lite::totp_custom::<totp_lite::Sha1>(TOTP_PERIOD, TOTP_DIGITS, &secret_bytes, now)
+}
+
 /// Verify a TOTP code. Accepts current period and one period before/after (clock skew tolerance).
 pub fn verify_totp(secret_base32: &str, code: &str) -> bool {
     if code.len() != TOTP_DIGITS as usize { return false; }

@@ -58,6 +58,11 @@ pub struct BridgeRadioState {
     pub up_kbps: u32,
     pub dx_spots_enabled: bool,
     pub capture_level: f32,
+    /// TX level of the Yaesu chain - measured on the frame as encoded, so EQ,
+    /// compressor and AGC are included. One field for both radios: only the
+    /// selected one transmits. Without this the Yaesu panel showed the THETIS
+    /// capture level, which sits at silence while a Yaesu is being keyed.
+    pub yaesu_mic_level: f32,
     pub playback_level: f32,
     pub frequency_hz: u64,
     pub frequency_rx2_hz: u64,
@@ -176,6 +181,12 @@ pub struct BridgeRadioState {
     pub yaesu_scan: bool,
     pub playback_level_yaesu: f32,
     pub yaesu_memory_data: String,
+    /// EX/menu values, in their OWN field. They used to share the memory field,
+    /// told apart by a "MENU:" prefix - which worked only while the two never
+    /// arrived together. Since both are pushed on connect they do, and whichever
+    /// came second hid the other: the memory list appeared for a moment and then
+    /// vanished behind the EX list.
+    pub yaesu_menu_data: String,
     pub yaesu_model: u8,
     pub yaesu_tuner_state: u8,
     /// Radio meldt hoge SWR tijdens TX (zelf-wissend).
@@ -207,6 +218,7 @@ pub struct BridgeRadioState {
     pub yaesu2_scan: bool,
     pub playback_level_yaesu2: f32,
     pub yaesu2_memory_data: String,
+    pub yaesu2_menu_data: String,
     // DSP/functie-feature-state (beide slots): toggles bitfield, levels, freqs.
     pub yaesu_feature_toggles: u32,
     pub yaesu_feature_levels: Vec<u8>,
@@ -302,6 +314,7 @@ impl From<RadioState> for BridgeRadioState {
             up_kbps: s.up_kbps,
             dx_spots_enabled: s.dx_spots_enabled,
             capture_level: s.capture_level,
+            yaesu_mic_level: s.yaesu_mic_level,
             playback_level: s.playback_level,
             frequency_hz: s.frequency_hz,
             frequency_rx2_hz: s.frequency_rx2_hz,
@@ -408,6 +421,7 @@ impl From<RadioState> for BridgeRadioState {
             yaesu_scan: s.yaesu_scan,
             playback_level_yaesu: s.playback_level_yaesu,
             yaesu_memory_data: s.yaesu_memory_data.clone().unwrap_or_default(),
+            yaesu_menu_data: s.yaesu_menu_data.clone().unwrap_or_default(),
             yaesu_model: s.yaesu_model,
             yaesu_tuner_state: s.yaesu_tuner_state,
             yaesu_hi_swr: s.yaesu_hi_swr,
@@ -434,6 +448,7 @@ impl From<RadioState> for BridgeRadioState {
             yaesu2_scan: s.yaesu2_scan,
             playback_level_yaesu2: s.playback_level_yaesu2,
             yaesu2_memory_data: s.yaesu2_memory_data.clone().unwrap_or_default(),
+            yaesu2_menu_data: s.yaesu2_menu_data.clone().unwrap_or_default(),
             yaesu_feature_toggles: s.yaesu_feature_toggles,
             yaesu_feature_levels: s.yaesu_feature_levels.to_vec(),
             yaesu_feature_freqs: s.yaesu_feature_freqs.to_vec(),
@@ -679,6 +694,18 @@ impl SdrBridge {
 
     pub fn set_rx_volume(&self, volume: f32) {
         let _ = self.cmd_tx.send(Command::SetRxVolume(volume));
+    }
+
+    /// Local RX1 playback volume - client-only, independent of the Thetis AF gain
+    /// (ZZLA) and of the master. This is how Thetis audio is silenced while a Yaesu
+    /// is being listened to: the master would silence the Yaesu along with it.
+    pub fn set_vfo_a_volume(&self, volume: f32) {
+        let _ = self.cmd_tx.send(Command::SetVfoAVolume(volume));
+    }
+
+    /// Local RX2 playback volume, counterpart of `set_vfo_a_volume`.
+    pub fn set_vfo_b_volume(&self, volume: f32) {
+        let _ = self.cmd_tx.send(Command::SetVfoBVolume(volume));
     }
 
     pub fn set_local_volume(&self, volume: f32) {

@@ -114,6 +114,21 @@ srv_991a_ptt_switch_hover:
   nl: "Uit (standaard): houd 991A USB-routing actief zolang een client verbonden is en herstel ca. 2 s na verbreken (geen PTT-vertraging).\nAan: schakel 991A-routing alleen tijdens PTT; handig als je de handmicrofoon buiten TX meteen terug wilt. FTX-1 auto bronkeuze blijft ongewijzigd."
   de: "Aus (Standard): 991A-USB-Routing aktiv halten, solange ein Client verbunden ist, und ca. 2 s nach dem Trennen wiederherstellen (keine PTT-Verzögerung).\nEin: 991A-Routing nur während PTT umschalten; nützlich, wenn das Handmikrofon außerhalb TX sofort wieder aktiv sein soll. FTX-1 Auto-Quellenwahl bleibt unverändert."
   fr: "Désactivé (par défaut) : garder le routage USB du 991A actif tant qu'un client est connecté et le restaurer environ 2 s après la déconnexion (aucun délai PTT).\nActivé : commuter le routage du 991A uniquement pendant le PTT ; utile pour retrouver aussitôt le micro à main hors TX. La sélection auto de source du FTX-1 reste inchangée."
+srv_ftx1_mem_write_ack:
+  en: "Allow writing FTX-1 memory channels (I accept the condition below)"
+  nl: "Schrijven van FTX-1-geheugenkanalen toestaan (ik accepteer de voorwaarde hieronder)"
+  de: "Schreiben von FTX-1-Speicherkanaelen erlauben (ich akzeptiere die Bedingung unten)"
+  fr: "Autoriser l'ecriture des memoires du FTX-1 (j'accepte la condition ci-dessous)"
+srv_ftx1_mem_write_note:
+  en: "The FTX-1 resets the CTCSS tone of every channel it writes to 100.0 Hz, and has no CAT command to put it back. Tones set on the radio by hand are lost on the channels written. ThetisLink keeps the real tones in its own list and applies them each time the radio lands on a channel, so transmitting through ThetisLink still works - but the radio on its own, without ThetisLink, will transmit 100.0 Hz. Leave this off and *Write radio* still hands your list to the server - the tones in it are applied per channel, so they work - but nothing is written into the radio. What you then give up is that a frequency or name you edit lives in the server's list and not in the set. Reading is always allowed. The FT-991A is unaffected."
+  nl: "De FTX-1 zet de CTCSS-toon van elk kanaal dat hij schrijft terug op 100,0 Hz en heeft geen CAT-commando om die terug te zetten. Tonen die met de hand op de radio zijn gezet, zijn op de geschreven kanalen weg. ThetisLink bewaart de echte tonen in zijn eigen lijst en zet ze telkens als de radio op een kanaal komt, dus zenden via ThetisLink blijft werken - maar de radio alleen, zonder ThetisLink, zendt 100,0 Hz uit. Laat dit uit staan, dan geeft *Write radio* je lijst nog steeds aan de server - de tonen erin worden per kanaal gezet, dus die werken - maar er wordt niets in de radio geschreven. Wat je dan opgeeft: een frequentie of naam die je hier wijzigt staat in de lijst van de server en niet in de set. Lezen mag altijd. De FT-991A heeft hier geen last van."
+  de: "Der FTX-1 setzt den CTCSS-Ton jedes geschriebenen Kanals auf 100,0 Hz zurueck und hat keinen CAT-Befehl, um ihn wiederherzustellen. Von Hand am Geraet gesetzte Toene gehen auf den geschriebenen Kanaelen verloren. ThetisLink haelt die echten Toene in seiner eigenen Liste und setzt sie bei jedem Kanalwechsel, Senden ueber ThetisLink funktioniert also weiterhin - das Geraet allein, ohne ThetisLink, sendet jedoch 100,0 Hz. Bleibt dies aus, uebergibt *Write radio* die Liste weiterhin an den Server - die Toene darin werden pro Kanal gesetzt und funktionieren also -, aber in das Geraet wird nichts geschrieben. Der Preis: eine hier geaenderte Frequenz oder ein Name steht in der Serverliste und nicht im Geraet. Lesen ist immer erlaubt. Der FT-991A ist nicht betroffen."
+  fr: "Le FTX-1 remet a 100,0 Hz la tonalite CTCSS de chaque memoire qu'il ecrit, et n'a aucune commande CAT pour la retablir. Les tonalites reglees a la main sur le poste sont perdues sur les memoires ecrites. ThetisLink conserve les vraies tonalites dans sa propre liste et les applique chaque fois que le poste arrive sur une memoire : l'emission via ThetisLink continue donc de fonctionner, mais le poste seul, sans ThetisLink, emettra 100,0 Hz. Si vous laissez ceci desactive, *Write radio* transmet toujours votre liste au serveur - les tonalites qu'elle contient sont appliquees memoire par memoire et fonctionnent donc - mais rien n'est ecrit dans le poste. La contrepartie : une frequence ou un nom modifie ici figure dans la liste du serveur et pas dans le poste. La lecture reste toujours possible. Le FT-991A n'est pas concerne."
+srv_ftx1_mem_write_ack_hover:
+  en: "Off by default. Reading the FTX-1's memory is always allowed - only writing is gated."
+  nl: "Standaard uit. Het lezen van het FTX-1-geheugen mag altijd - alleen schrijven zit achter deze vink."
+  de: "Standardmaessig aus. Das Lesen des FTX-1-Speichers ist immer erlaubt - nur das Schreiben ist gesperrt."
+  fr: "Desactive par defaut. La lecture des memoires du FTX-1 est toujours permise - seule l'ecriture est verrouillee."
 srv_radio2_note:
   en: "Radio 2 changes: save + restart the server."
   nl: "Radio 2 wijzigingen: opslaan + server herstarten."
@@ -596,6 +611,51 @@ srv_arrange_title:
   nl: "Vensters schikken"
   de: "Fenster anordnen"
   fr: "Organiser les fenêtres"
+srv_layout_memory:
+  en: "Arrangement memory"
+  nl: "Schikgeheugen"
+  de: "Anordnungsspeicher"
+  fr: "Mémoire d'agencement"
+srv_layout_memory_help:
+  en: "Store the current window positions in a slot and put them back later - handy after moving a window by hand."
+  nl: "Bewaar de huidige vensterposities in een geheugen en zet ze later terug - handig nadat je een venster met de hand hebt verschoven."
+  de: "Aktuelle Fensterpositionen in einem Speicher ablegen und später zurückholen - praktisch, nachdem ein Fenster von Hand verschoben wurde."
+  fr: "Enregistrez les positions actuelles des fenêtres dans un emplacement et restaurez-les plus tard - pratique après avoir déplacé une fenêtre à la main."
+srv_layout_memory_name:
+  en: "name"
+  nl: "naam"
+  de: "Name"
+  fr: "nom"
+srv_layout_memory_store:
+  en: "Store"
+  nl: "Bewaren"
+  de: "Speichern"
+  fr: "Enregistrer"
+srv_layout_memory_store_hint:
+  en: "Store the positions of all open windows in this slot"
+  nl: "Bewaar de posities van alle open vensters in dit geheugen"
+  de: "Positionen aller offenen Fenster in diesem Speicher ablegen"
+  fr: "Enregistrer les positions de toutes les fenêtres ouvertes dans cet emplacement"
+srv_layout_memory_recall:
+  en: "Recall"
+  nl: "Terughalen"
+  de: "Abrufen"
+  fr: "Rappeler"
+srv_layout_memory_count:
+  en: "%{n} windows"
+  nl: "%{n} vensters"
+  de: "%{n} Fenster"
+  fr: "%{n} fenêtres"
+srv_ui_scale:
+  en: "UI scale:"
+  nl: "UI-schaal:"
+  de: "UI-Skalierung:"
+  fr: "Échelle UI :"
+srv_ui_scale_hint:
+  en: "Ctrl+ / Ctrl- works too"
+  nl: "Ctrl+ / Ctrl- werkt ook"
+  de: "Strg+ / Strg- geht auch"
+  fr: "Ctrl+ / Ctrl- fonctionne aussi"
 srv_arrange_help:
   en: "Pick a grid size, select a window and paint it onto the cells (click or drag). A window may cover several adjacent cells - it is stretched over that block. Each screen has its own grid."
   nl: "Kies een rasterformaat, selecteer een venster en schilder het in de cellen (klik of sleep). Een venster mag meerdere aangrenzende cellen beslaan - het wordt over dat blok uitgerekt. Elk scherm heeft zijn eigen raster."

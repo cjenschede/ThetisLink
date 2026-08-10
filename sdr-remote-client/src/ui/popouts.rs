@@ -107,6 +107,7 @@ impl SdrRemoteApp {
             size,
             default_size,
             Self::viewport_native_ppp(ctx),
+            ctx.zoom_factor(),
             &mut init,
         );
         self.set_popout_init(kind, init);
@@ -688,17 +689,27 @@ impl SdrRemoteApp {
             .unwrap_or_else(|| ctx.pixels_per_point())
     }
 
+    /// UNITS. Geometry is stored in SYSTEM points, so a saved layout survives a
+    /// change of UI scale: the windows stay where they are and only the content
+    /// inside them scales. Everything egui-facing, however, is in EGUI points -
+    /// egui-winit converts both a ViewportBuilder and a ViewportCommand with
+    /// `zoom_factor * native_pixels_per_point`. So divide by the zoom on the way
+    /// in, multiply by it on the way out (see `track_popout_geometry`). At zoom
+    /// 1.0 the two are identical, which is why this distinction stayed invisible
+    /// until a high-DPI screen made a smaller UI scale worth having.
     pub(super) fn apply_popout_geometry(
         builder: ViewportBuilder,
         pos: Option<egui::Pos2>,
         size: Option<egui::Vec2>,
         default_size: [f32; 2],
         native_ppp: f32,
+        zoom: f32,
         init_applied: &mut bool,
     ) -> ViewportBuilder {
         let mut b = builder;
+        let z = zoom.max(0.01);
         if !*init_applied {
-            let sz = size.map(|v| [v.x, v.y]).unwrap_or(default_size);
+            let sz = size.map(|v| [v.x / z, v.y / z]).unwrap_or(default_size);
             b = b.with_inner_size(sz);
             if let Some(p) = pos {
                 // Validate the persisted position against the live monitor
@@ -710,12 +721,16 @@ impl SdrRemoteApp {
                 // with_position() and let it open on the primary monitor. On
                 // non-Windows / query failure this returns true (trust the
                 // saved value). Manual "Recenter windows" stays as a fallback.
+                // The position is in SYSTEM points, so the size handed to the
+                // check has to be too - `sz` above has already been divided by the
+                // zoom for the builder. Mixing the two made the check reason about
+                // a window a factor `zoom` too large.
                 if window_placement::saved_window_is_visible(
                     p,
-                    egui::vec2(sz[0], sz[1]),
+                    egui::vec2(sz[0] * z, sz[1] * z),
                     native_ppp,
                 ) {
-                    b = b.with_position(p);
+                    b = b.with_position(egui::pos2(p.x / z, p.y / z));
                 } else {
                     log::warn!(
                         "popout: saved pos ({}, {}) falls outside all connected monitors - opening on primary screen",
@@ -744,11 +759,14 @@ impl SdrRemoteApp {
         // Size via screen_rect (egui's canvas - moves reliably with a
         // resize; viewport().inner_rect turned out to be frozen). Position via outer_rect
         // (the only source for window position).
+        // Stored in SYSTEM points - see the note in ui/update.rs. egui's points
+        // shrink with the UI zoom; the OS ones do not.
+        let z = ctx.zoom_factor().max(0.01);
         let outer = ctx.input(|i| i.viewport().outer_rect);
-        let ns = ctx.screen_rect().size();
+        let ns = ctx.screen_rect().size() * z;
         let mut state_changed = false;
         if let Some(o) = outer {
-            let np = o.min;
+            let np = egui::pos2(o.min.x * z, o.min.y * z);
             if pos.map_or(true, |p| (p.x - np.x).abs() > 5.0 || (p.y - np.y).abs() > 5.0) {
                 *pos = Some(np);
                 state_changed = true;
@@ -773,8 +791,10 @@ impl SdrRemoteApp {
     /// position on the next frame, so an open pop-out moves immediately - no
     /// restart needed.
     pub(super) fn recenter_popouts(&mut self, ctx: &egui::Context) {
+        // outer_rect is in egui points; the stored positions are in system points.
+        let z = ctx.zoom_factor().max(0.01);
         let anchor = ctx.input(|i| i.viewport().outer_rect)
-            .map(|r| r.min)
+            .map(|r| egui::pos2(r.min.x * z, r.min.y * z))
             .unwrap_or(egui::pos2(80.0, 80.0));
         let base = egui::pos2(anchor.x + 40.0, anchor.y + 40.0);
         let place = |pos: &mut Option<egui::Pos2>, init: &mut bool, dx: f32, dy: f32| {

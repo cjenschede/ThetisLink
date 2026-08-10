@@ -60,11 +60,26 @@ pub(crate) enum SnapWindow {
     Ultrabeam,
     Rotor,
 }
-impl SnapWindow {
-    const ALL: [SnapWindow; 7] = [
-        SnapWindow::Main, SnapWindow::Tuner, SnapWindow::Amplitec, SnapWindow::Spe,
-        SnapWindow::Rf2k, SnapWindow::Ultrabeam, SnapWindow::Rotor,
-    ];
+impl sdr_remote_layout::SnapTarget for SnapWindow {
+    fn all() -> &'static [Self] {
+        &[
+            SnapWindow::Main, SnapWindow::Tuner, SnapWindow::Amplitec, SnapWindow::Spe,
+            SnapWindow::Rf2k, SnapWindow::Ultrabeam, SnapWindow::Rotor,
+        ]
+    }
+    /// Stable ASCII key: goes into the config file and into egui Ids, so it must
+    /// not follow the translated label.
+    fn key(self) -> &'static str {
+        match self {
+            SnapWindow::Main => "main",
+            SnapWindow::Tuner => "tuner",
+            SnapWindow::Amplitec => "amplitec",
+            SnapWindow::Spe => "spe",
+            SnapWindow::Rf2k => "rf2k",
+            SnapWindow::Ultrabeam => "ultrabeam",
+            SnapWindow::Rotor => "rotor",
+        }
+    }
     fn label(self) -> String {
         match self {
             SnapWindow::Main => rust_i18n::t!("srv_win_main").to_string(),
@@ -90,71 +105,17 @@ impl SnapWindow {
     }
 }
 
-/// Maximum grid size in the "Vensters schikken" matrix (GRID_MAX x GRID_MAX).
-const GRID_MAX: usize = 12;
 /// Toggle-on blue (style guide): used for the active button/selection highlight.
 const SNAP_ACCENT: Color32 = Color32::from_rgb(100, 160, 230);
 
-/// One placement matrix (per monitor): grid of `rows` x `cols` cells; each
-/// cell holds at most one window. A window that spans multiple adjacent cells
-/// is stretched over its bounding rectangle on "Toepassen".
-#[derive(Clone)]
-pub(crate) struct LayoutGrid {
-    rows: u8, // 1..=GRID_MAX
-    cols: u8, // 1..=GRID_MAX
-    cells: Vec<Option<SnapWindow>>, // rows*cols, row-by-row
-}
-impl LayoutGrid {
-    fn new() -> Self {
-        Self { rows: 2, cols: 2, cells: vec![None; 4] }
-    }
-    fn set_size(&mut self, rows: u8, cols: u8) {
-        let rows = rows.clamp(1, GRID_MAX as u8);
-        let cols = cols.clamp(1, GRID_MAX as u8);
-        if rows == self.rows && cols == self.cols { return; }
-        let mut cells = vec![None; rows as usize * cols as usize];
-        for r in 0..self.rows.min(rows) as usize {
-            for c in 0..self.cols.min(cols) as usize {
-                cells[r * cols as usize + c] = self.cells[r * self.cols as usize + c];
-            }
-        }
-        self.rows = rows;
-        self.cols = cols;
-        self.cells = cells;
-    }
-    fn cell(&self, r: usize, c: usize) -> Option<SnapWindow> {
-        self.cells.get(r * self.cols as usize + c).copied().flatten()
-    }
-    fn set(&mut self, r: usize, c: usize, w: Option<SnapWindow>) {
-        if let Some(slot) = self.cells.get_mut(r * self.cols as usize + c) {
-            *slot = w;
-        }
-    }
-    fn remove(&mut self, w: SnapWindow) {
-        for slot in self.cells.iter_mut() {
-            if *slot == Some(w) { *slot = None; }
-        }
-    }
-    fn bounds(&self, w: SnapWindow) -> Option<(usize, usize, usize, usize)> {
-        let (mut minr, mut minc, mut maxr, mut maxc) = (usize::MAX, usize::MAX, 0, 0);
-        let mut found = false;
-        for r in 0..self.rows as usize {
-            for c in 0..self.cols as usize {
-                if self.cell(r, c) == Some(w) {
-                    found = true;
-                    minr = minr.min(r); minc = minc.min(c);
-                    maxr = maxr.max(r); maxc = maxc.max(c);
-                }
-            }
-        }
-        if found { Some((minr, minc, maxr, maxc)) } else { None }
-    }
-    fn placed(&self) -> Vec<SnapWindow> {
-        SnapWindow::ALL.iter().copied()
-            .filter(|w| self.cells.contains(&Some(*w)))
-            .collect()
-    }
-}
+/// The placement matrix, the stored arrangements and the grid limit all come from
+/// the shared arranger (`sdr-remote-layout`), which the desktop client uses too.
+/// They used to be a second copy here, and the two drifted: the client reached
+/// 18x18 with arrangement memories and a UI scale while this one stayed at 12x12
+/// with none of it.
+pub(crate) type LayoutGrid = sdr_remote_layout::LayoutGrid<SnapWindow>;
+pub(crate) type LayoutMemory = sdr_remote_layout::LayoutMemory<SnapWindow>;
+pub(crate) use sdr_remote_layout::{SnapTarget, LAYOUT_MEM_SLOTS};
 
 pub struct ServerApp {
     tci_addr: String,
@@ -167,6 +128,7 @@ pub struct ServerApp {
     yaesu_audio_output_device: String,
     yaesu_enabled: bool,
     yaesu_ssb_switch_on_ptt: bool,
+    ftx1_memory_write_ack: bool,
     // Dual-radio slot 1 (radio 2) - now also in the settings GUI instead of conf-only.
     yaesu2_port: String,
     yaesu2_audio_device: String,
@@ -332,6 +294,16 @@ pub struct ServerApp {
     // a grid PER monitor in which you "paint" the server windows over cells.
     show_layout_arranger: bool,
     layout_grid_per_monitor: Vec<LayoutGrid>,
+    /// Stored arrangements (LAYOUT_MEM_SLOTS entries, empty = free slot).
+    layout_memories: Vec<LayoutMemory>,
+    /// Windows a recall wanted but could not place yet, because that backend was
+    /// not running. Carried out as soon as they appear. Not persisted.
+    layout_pending: Vec<(SnapWindow, [f32; 2], [f32; 2])>,
+    /// UI scale. Kept next to egui's own zoom_factor and synced both ways in
+    /// update(), so a stored choice applies at startup and egui's Ctrl+/Ctrl-
+    /// is picked up instead of being reset on the next launch.
+    ui_zoom: f32,
+    ui_zoom_pending: bool,
     layout_active_item: Option<SnapWindow>,
     /// Anchor cell of an ongoing rectangle drag in the placement grid.
     layout_drag_anchor: Option<(usize, usize)>,

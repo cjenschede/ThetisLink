@@ -241,6 +241,16 @@ pub struct SessionManager {
     /// PATCH-2: ringbuffer of recent connect attempts for the Status panel.
     /// Bounded at CONNECT_HISTORY_CAPACITY entries; oldest evicted on overflow.
     connect_history: VecDeque<ConnectAttempt>,
+    /// Bumped every time a client joins. The push loops keep tick-lists of who
+    /// already has each value, and prune them against the active addresses - which
+    /// works when a client leaves cleanly, because it is gone from that list. It does
+    /// not work when a client drops WITHOUT saying so and comes back on the same
+    /// address inside the 15 s session timeout: it never left, so it stays ticked off,
+    /// and a freshly started client would sit with an empty memory table and EX menu
+    /// until the slow resend came round - up to a minute. Watching this number costs
+    /// the loops one comparison per tick and makes "a client that joins gets the
+    /// current value" true by construction rather than by inference.
+    connect_generation: u64,
 }
 
 impl SessionManager {
@@ -260,6 +270,7 @@ impl SessionManager {
             password,
             totp_secret,
             connect_history: VecDeque::with_capacity(CONNECT_HISTORY_CAPACITY),
+            connect_generation: 0,
         }
     }
 
@@ -334,6 +345,11 @@ impl SessionManager {
     pub fn create_challenge(&mut self, addr: SocketAddr) -> [u8; 16] {
         let nonce = sdr_remote_core::auth::generate_nonce();
         let now = Instant::now();
+        // Deliberately NOT bumping connect_generation here. Issuing a challenge only
+        // means someone knocked: anyone reaching the port from a new address would
+        // otherwise make the server re-offer the memory list and the EX settings to
+        // every connected client. That is traffic an unauthenticated party should not
+        // be able to cause. The bump happens where a client is actually admitted.
         self.clients.insert(addr, ClientSession {
             addr,
             last_seen: now,
@@ -383,6 +399,7 @@ impl SessionManager {
                         return sdr_remote_core::protocol::AUTH_TOTP_REQUIRED;
                     }
                     session.auth_state = AuthState::Authenticated;
+                    self.mark_admitted();
                     self.auth_failures.clear(&addr);
                     info!("Client {} authenticated", addr);
                     return sdr_remote_core::protocol::AUTH_ACCEPTED;
@@ -404,6 +421,7 @@ impl SessionManager {
             if matches!(session.auth_state, AuthState::PendingTotp) {
                 if sdr_remote_core::auth::verify_totp(&secret, code) {
                     session.auth_state = AuthState::Authenticated;
+                    self.mark_admitted();
                     self.auth_failures.clear(&addr);
                     info!("Client {} TOTP verified, fully authenticated", addr);
                     return true;
@@ -430,6 +448,7 @@ impl SessionManager {
             };
             info!("New client connected: {}", addr);
             let now = Instant::now();
+            self.mark_admitted();
             self.clients.insert(addr, ClientSession {
                 addr,
                 last_seen: now,
@@ -467,9 +486,34 @@ impl SessionManager {
         }
     }
 
+    /// How far a heartbeat sequence may run backwards before it means the client
+    /// restarted rather than that UDP reordered a few packets. A client counts from
+    /// zero, one per heartbeat, so thirty-two is many seconds of traffic - far more
+    /// than any reordering, and far less than the wrap of a u32.
+    const HEARTBEAT_RESTART_GAP: u32 = 32;
+
     /// Update heartbeat stats for a client session
+    ///
+    /// This is also where a SILENT restart is caught. A client that crashes or is
+    /// killed sends no Disconnect, so its session stays alive for the 15 s timeout; if
+    /// it comes back on the same address inside that window the server sees a known
+    /// address and calls it existing. Nothing else distinguishes the two - there is no
+    /// connect packet, a client simply starts sending heartbeats. But it starts them
+    /// from zero, and that is the tell: a sequence that jumps far backwards is a new
+    /// process behind the same address, and it needs the state a fresh subscriber gets.
     pub fn update_heartbeat(&mut self, addr: SocketAddr, seq: u32, rtt: u16, loss: u8, jitter: u8) {
+        let restarted = self
+            .clients
+            .get(&addr)
+            .is_some_and(|c| c.last_heartbeat_seq.saturating_sub(seq) > Self::HEARTBEAT_RESTART_GAP);
+        if restarted {
+            info!("Client {} restarted without disconnecting - serving it as new", addr);
+            self.mark_admitted();
+        }
         if let Some(session) = self.clients.get_mut(&addr) {
+            if restarted {
+                session.connected_since = Instant::now();
+            }
             session.last_heartbeat_seq = seq;
             session.rtt_ms = rtt;
             session.loss_percent = loss;
@@ -478,6 +522,21 @@ impl SessionManager {
     }
 
     /// Remove a client session (explicit disconnect)
+    /// A client is now in and needs what a fresh subscriber gets.
+    ///
+    /// Exactly four things count as being admitted: a first contact with no password,
+    /// an accepted password, an accepted TOTP code, and a silent restart behind an
+    /// address that was already known. Issuing a challenge is not one of them - that
+    /// is only someone knocking.
+    fn mark_admitted(&mut self) {
+        self.connect_generation = self.connect_generation.wrapping_add(1);
+    }
+
+    /// See `connect_generation`. Changes whenever anyone joins.
+    pub fn connect_generation(&self) -> u64 {
+        self.connect_generation
+    }
+
     pub fn remove(&mut self, addr: SocketAddr) {
         self.clients.remove(&addr);
         if self.tx_holder == Some(addr) {
@@ -1122,5 +1181,116 @@ mod tests {
         // Same but one of two toggles checkbox-off -> clamp to 2.0
         mgr.clients.get_mut(&"127.0.0.1:5002".parse::<SocketAddr>().unwrap()).unwrap().allow_zoom_below_2x = false;
         assert_eq!(mgr.effective_zoom_rx1(), Some(2.0));
+    }
+}
+
+#[cfg(test)]
+mod connect_generation_tests {
+    use super::*;
+
+    fn mgr() -> SessionManager {
+        SessionManager::new(None, None)
+    }
+
+    const A: &str = "127.0.0.1:5001";
+
+    /// The number has to move when a client is admitted, or the push loops have
+    /// nothing to notice.
+    #[test]
+    fn being_admitted_moves_the_generation() {
+        let mut m = mgr();
+        let before = m.connect_generation();
+        assert_eq!(m.touch(A.parse().unwrap()), TouchResult::NewClient);
+        assert_ne!(m.connect_generation(), before);
+    }
+
+    /// The case this exists for: a client drops WITHOUT saying so and comes back on
+    /// the same address before the session times out. It never left, so pruning the
+    /// tick-lists against the active addresses cannot see it, and `touch` calls it
+    /// existing - but its heartbeat sequence restarts from zero, and that is the tell.
+    #[test]
+    fn a_silent_restart_on_the_same_address_moves_it_again() {
+        let mut m = mgr();
+        let a = A.parse().unwrap();
+        m.touch(a);
+        m.update_heartbeat(a, 400, 0, 0, 0);
+        let settled = m.connect_generation();
+        m.update_heartbeat(a, 0, 0, 0, 0); // a new process behind the same address
+        assert_ne!(
+            m.connect_generation(), settled,
+            "a restarted client must be served as new"
+        );
+    }
+
+    /// A few packets arriving out of order are not a restart. Treating them as one
+    /// would re-send the memory list and the EX settings to every client over a
+    /// reordered heartbeat.
+    #[test]
+    fn a_reordered_heartbeat_is_not_a_restart() {
+        let mut m = mgr();
+        let a = A.parse().unwrap();
+        m.touch(a);
+        m.update_heartbeat(a, 400, 0, 0, 0);
+        let settled = m.connect_generation();
+        m.update_heartbeat(a, 397, 0, 0, 0);
+        assert_eq!(m.connect_generation(), settled);
+    }
+
+    /// Knocking is not joining. Issuing a challenge must not move the number: anyone
+    /// reaching the port from a new address could otherwise make the server re-offer
+    /// the memory list and the EX settings to every connected client.
+    #[test]
+    fn knocking_does_not_move_it() {
+        let mut m = SessionManager::new(Some("secret".into()), None);
+        let settled = m.connect_generation();
+        let _ = m.create_challenge(A.parse().unwrap());
+        assert_eq!(m.connect_generation(), settled);
+    }
+
+    /// An accepted password admits exactly once. It used to bump twice, because the
+    /// increment was written out by hand at each site.
+    #[test]
+    fn an_accepted_password_admits_exactly_once() {
+        let mut m = SessionManager::new(Some("secret".into()), None);
+        let a = A.parse().unwrap();
+        let nonce = m.create_challenge(a);
+        let before = m.connect_generation();
+        let resp = sdr_remote_core::auth::compute_hmac("secret", &nonce);
+        assert_eq!(
+            m.verify_auth(a, &resp),
+            sdr_remote_core::protocol::AUTH_ACCEPTED
+        );
+        assert_eq!(m.connect_generation(), before + 1);
+    }
+
+    /// And a 2FA client is admitted by the TOTP step, not by the password step - that
+    /// path had no bump at all, so a client behind 2FA joined invisibly.
+    #[test]
+    fn a_totp_client_is_admitted_when_the_code_is_accepted() {
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let mut m = SessionManager::new(Some("secret".into()), Some(secret.clone()));
+        let a = A.parse().unwrap();
+        let nonce = m.create_challenge(a);
+        let resp = sdr_remote_core::auth::compute_hmac("secret", &nonce);
+        assert_eq!(
+            m.verify_auth(a, &resp),
+            sdr_remote_core::protocol::AUTH_TOTP_REQUIRED,
+            "the password step must not admit a 2FA client"
+        );
+        let before = m.connect_generation();
+        let code = sdr_remote_core::auth::generate_totp(&secret);
+        assert!(m.verify_totp(a, &code));
+        assert_eq!(m.connect_generation(), before + 1, "the TOTP step admits");
+    }
+
+    /// Leaving is not joining either.
+    #[test]
+    fn leaving_leaves_it_alone() {
+        let mut m = mgr();
+        let a = A.parse().unwrap();
+        m.touch(a);
+        let settled = m.connect_generation();
+        m.remove(a);
+        assert_eq!(m.connect_generation(), settled);
     }
 }

@@ -481,6 +481,8 @@ impl ClientEngine {
         let mut connect_any_reply_seen: bool = false;
         let mut yaesu_mem_data_clear_at: Option<Instant> = None;
         let mut yaesu2_mem_data_clear_at: Option<Instant> = None;
+        let mut yaesu_menu_data_clear_at: Option<Instant> = None;
+        let mut yaesu2_menu_data_clear_at: Option<Instant> = None;
         let mut tx_sequence: u32 = 0;
         let mut hb_sequence: u32 = 0;
         let mut ptt = false;
@@ -1679,6 +1681,9 @@ impl ClientEngine {
                         }
                     }
                     Command::SetYaesuVolume(v) => {
+                        if (yaesu_volume - v).abs() > 0.001 {
+                            log::info!("Yaesu volume -> {:.3} (local_volume {:.3})", v, local_volume);
+                        }
                         yaesu_volume = v;
                     }
                     Command::SetYaesuEqBand(band, gain_db) => {
@@ -3194,9 +3199,19 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
                         }
                         Ok(Packet::YaesuMemoryData(text)) => {
-                            info!("Received Yaesu memory data ({}B)", text.len());
-                            state.yaesu_memory_data = Some(text);
-                            yaesu_mem_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
+                            // One packet type carries two payloads, told apart by the
+                            // prefix. They go into separate fields: both are pushed when
+                            // a client subscribes, so they arrive in the same instant and
+                            // a shared field loses one of them.
+                            if text.starts_with("MENU:") {
+                                info!("Received Yaesu EX settings ({}B)", text.len());
+                                state.yaesu_menu_data = Some(text);
+                                yaesu_menu_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
+                            } else {
+                                info!("Received Yaesu memory data ({}B)", text.len());
+                                state.yaesu_memory_data = Some(text);
+                                yaesu_mem_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
+                            }
                         }
                         Ok(Packet::AudioYaesu(pkt)) => {
                             // Detect stream reset (server resets seq to 0 on re-enable)
@@ -3307,9 +3322,15 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         }
                         Ok(Packet::FrequencyYaesu2(_)) => {} // client→server only
                         Ok(Packet::YaesuMemoryData2(text)) => {
-                            info!("[radio1] received memory data ({}B)", text.len());
-                            state.yaesu2_memory_data = Some(text);
-                            yaesu2_mem_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
+                            if text.starts_with("MENU:") {
+                                info!("[radio1] received EX settings ({}B)", text.len());
+                                state.yaesu2_menu_data = Some(text);
+                                yaesu2_menu_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
+                            } else {
+                                info!("[radio1] received memory data ({}B)", text.len());
+                                state.yaesu2_memory_data = Some(text);
+                                yaesu2_mem_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
+                            }
                         }
                         Ok(Packet::AuthChallenge(nonce)) => {
                             info!("Auth challenge received");
@@ -4127,6 +4148,18 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         if Instant::now() >= clear_at {
                             state.yaesu2_memory_data = None;
                             yaesu2_mem_data_clear_at = None;
+                        }
+                    }
+                    if let Some(clear_at) = yaesu_menu_data_clear_at {
+                        if Instant::now() >= clear_at {
+                            state.yaesu_menu_data = None;
+                            yaesu_menu_data_clear_at = None;
+                        }
+                    }
+                    if let Some(clear_at) = yaesu2_menu_data_clear_at {
+                        if Instant::now() >= clear_at {
+                            state.yaesu2_menu_data = None;
+                            yaesu2_menu_data_clear_at = None;
                         }
                     }
 

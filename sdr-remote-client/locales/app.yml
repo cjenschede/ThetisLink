@@ -501,6 +501,16 @@ screen_password_required_to_connect:
   fr: "Mot de passe requis pour se connecter"
 
 # --- screens.rs (Theme) ---
+screen_ui_scale:
+  en: "UI scale:"
+  nl: "UI-schaal:"
+  de: "UI-Skalierung:"
+  fr: "Échelle de l'interface :"
+screen_ui_scale_hint:
+  en: "(or Ctrl +/-; independent of the Windows display scaling)"
+  nl: "(of Ctrl +/-; los van de Windows-schermschaling)"
+  de: "(oder Strg +/-; unabhängig von der Windows-Anzeigeskalierung)"
+  fr: "(ou Ctrl +/- ; indépendant de la mise à l'échelle Windows)"
 screen_theme:
   en: "Theme:"
   nl: "Thema:"
@@ -1154,6 +1164,41 @@ main_empty:
   nl: "Leeg"
   de: "Leer"
   fr: "Vide"
+main_layout_memory:
+  en: "Arrangement memory"
+  nl: "Schikgeheugen"
+  de: "Anordnungsspeicher"
+  fr: "Mémoire d'agencement"
+main_layout_memory_help:
+  en: "Store the current window positions in a slot and put them back later - handy after moving a window by hand."
+  nl: "Bewaar de huidige vensterposities in een geheugen en zet ze later terug - handig nadat je een venster met de hand hebt verschoven."
+  de: "Aktuelle Fensterpositionen in einem Speicher ablegen und später zurückholen - praktisch, nachdem ein Fenster von Hand verschoben wurde."
+  fr: "Enregistrez les positions actuelles des fenêtres dans un emplacement et restaurez-les plus tard - pratique après avoir déplacé une fenêtre à la main."
+main_layout_memory_name:
+  en: "name"
+  nl: "naam"
+  de: "Name"
+  fr: "nom"
+main_layout_memory_store:
+  en: "Store"
+  nl: "Bewaren"
+  de: "Speichern"
+  fr: "Enregistrer"
+main_layout_memory_store_hint:
+  en: "Store the positions of all open windows in this slot"
+  nl: "Bewaar de posities van alle open vensters in dit geheugen"
+  de: "Positionen aller offenen Fenster in diesem Speicher ablegen"
+  fr: "Enregistrer les positions de toutes les fenêtres ouvertes dans cet emplacement"
+main_layout_memory_recall:
+  en: "Recall"
+  nl: "Terughalen"
+  de: "Abrufen"
+  fr: "Rappeler"
+main_layout_memory_count:
+  en: "%{n} windows"
+  nl: "%{n} vensters"
+  de: "%{n} Fenster"
+  fr: "%{n} fenêtres"
 main_grid_size:
   en: "Grid:"
   nl: "Raster:"
@@ -2136,6 +2181,26 @@ dev_value:
   nl: "Waarde"
   de: "Wert"
   fr: "Valeur"
+dev_mem_close_edit:
+  en: "Close"
+  nl: "Sluiten"
+  de: "Schliessen"
+  fr: "Fermer"
+dev_mem_close_edit_hover:
+  en: "Leave edit mode. Your changes stay in the list; use Write radio to put them in the radio."
+  nl: "Bewerken beeindigen. Je wijzigingen blijven in de lijst staan; met Radio schrijven zet je ze in de radio."
+  de: "Bearbeiten beenden. Die Aenderungen bleiben in der Liste; mit Radio schreiben gelangen sie ins Geraet."
+  fr: "Quitter le mode edition. Vos modifications restent dans la liste ; utilisez Ecrire sur la radio pour les y placer."
+dev_mem_offset_readonly:
+  en: "Read-only. The shift size is not stored per memory channel on either radio - the channel holds only the direction, and the size is a per-band menu setting (FT-991A 80-83, FTX-1 EX 010316-010319). The value shown is transmit minus receive frequency."
+  nl: "Alleen-lezen. De grootte van de shift staat bij geen van beide radio's in het geheugenkanaal - daar staat alleen de richting; de grootte is een menu-instelling per band (FT-991A 80-83, FTX-1 EX 010316-010319). De getoonde waarde is zend- min ontvangfrequentie."
+  de: "Nur Anzeige. Die Groesse des Shifts steht bei keinem der beiden Geraete im Speicherkanal - dort steht nur die Richtung; die Groesse ist eine Menueeinstellung pro Band (FT-991A 80-83, FTX-1 EX 010316-010319). Angezeigt wird Sende- minus Empfangsfrequenz."
+  fr: "Lecture seule. La taille du decalage n'est stockee dans la memoire sur aucun des deux postes - la memoire ne retient que le sens ; la taille est un reglage de menu par bande (FT-991A 80-83, FTX-1 EX 010316-010319). La valeur affichee est la frequence d'emission moins celle de reception."
+dev_mem_click_to_recall:
+  en: "Click to put the radio on this channel, double-click to edit the row. Green = the radio is here now, amber = the channel you left when you tuned into VFO."
+  nl: "Klik om de radio op dit kanaal te zetten, dubbelklik om de rij te bewerken. Groen = de radio staat hier nu, oranje = het kanaal dat je verliet toen je naar VFO ging."
+  de: "Klicken, um das Geraet auf diesen Kanal zu setzen, Doppelklick zum Bearbeiten der Zeile. Gruen = das Geraet ist jetzt hier, Orange = der Kanal, den Sie beim Wechsel auf VFO verlassen haben."
+  fr: "Cliquez pour placer le poste sur cette memoire, double-cliquez pour modifier la ligne. Vert = le poste y est actuellement, orange = la memoire quittee en passant en VFO."
 dev_write_radio:
   en: "Write radio"
   nl: "Radio schrijven"
@@ -2211,16 +2276,6 @@ dev_edit:
   nl: "Bewerken"
   de: "Bearbeiten"
   fr: "Modifier"
-dev_row_removed_title:
-  en: "Row removed from list"
-  nl: "Rij verwijderd uit lijst"
-  de: "Zeile aus Liste entfernt"
-  fr: "Ligne retirée de la liste"
-dev_row_removed_body:
-  en: "The row was removed from this list only.\n\nA memory channel cannot be erased from the radio over CAT: 'Write radio' does not delete it, so 'Read radio' brings it back. To clear it on the radio, use its front panel (hold F(M-LIST), select the channel, tap ERASE)."
-  nl: "De rij is alleen uit deze lijst verwijderd.\n\nEen geheugenkanaal kan niet via CAT uit de radio worden gewist: 'Radio schrijven' verwijdert het niet, dus 'Radio lezen' haalt het terug. Om het op de radio te wissen, gebruik het frontpaneel (houd F(M-LIST) ingedrukt, selecteer het kanaal, tik op ERASE)."
-  de: "Die Zeile wurde nur aus dieser Liste entfernt.\n\nEin Speicherkanal kann über CAT nicht aus der Radio gelöscht werden: 'Radio schreiben' löscht ihn nicht, sodass 'Radio lesen' ihn zurückholt. Um ihn an der Radio zu löschen, das Bedienfeld verwenden (F(M-LIST) halten, den Kanal wählen, ERASE antippen)."
-  fr: "La ligne n'a été retirée que de cette liste.\n\nUn canal mémoire ne peut pas être effacé de la radio via CAT : 'Écrire sur la radio' ne le supprime pas, donc 'Lire la radio' le ramène. Pour l'effacer sur la radio, utilisez sa façade (maintenez F(M-LIST), sélectionnez le canal, appuyez sur ERASE)."
 dev_ok:
   en: "OK"
   nl: "OK"

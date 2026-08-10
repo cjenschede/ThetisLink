@@ -151,6 +151,10 @@ pub struct YaesuRadio {
     _tx_producer: Arc<Mutex<Option<ringbuf::HeapProd<f32>>>>,
     /// Memory channel data read from radio (tab-separated text, ready to send to client)
     pub memory_data: Arc<Mutex<Option<String>>>,
+    /// EX/menu values, in its OWN mailbox rather than sharing the memory one. Both
+    /// are pushed independently now, and a shared mailbox means whichever is written
+    /// second in a 200ms window silently replaces the first.
+    pub menu_data: Arc<Mutex<Option<String>>>,
     /// Radio model + slot - drives the per-radio log prefix and per-model CAT quirks.
     pub model: RadioModel,
     pub slot: u8,
@@ -276,6 +280,10 @@ pub struct YaesuState {
     /// anything afterwards - the tone walk needs to know which channels carry a
     /// tone mode, long after the list was delivered.
     pub last_memory_blob: Option<String>,
+    /// The server's copy of the EX/menu values, so a client can be served without
+    /// the radio being walked again - the FTX-1 scan is 405 parameters and seconds
+    /// of occupied CAT. See docs/internal/DESIGN-state-sync-push.md.
+    pub last_menu_blob: Option<String>,
     pub split_active: bool,  // true = split mode active
     pub scan_active: bool,   // true = scanning
     /// Internal ATU state from the `AC;` readback (PATCH-yaesu-internal-atu), normalised:
@@ -324,6 +332,21 @@ pub struct YaesuState {
     /// returns to the session snapshot read at CAT connect; no factory-default assumption.
     /// FTX-1 keeps its internal auto source selection; set in new_with_model.
     pub ssb_switch_on_ptt: bool,
+    /// What the radio itself says about transmitting, as opposed to what we asked
+    /// for. `None` = the model gives no reliable answer (the FT-991A; its `TX;` was
+    /// measured unreliable). The FTX-1 reports it in `RI` P4, which the fast poll
+    /// already fetches, so this costs no extra CAT traffic.
+    pub radio_tx: Option<bool>,
+    /// Consecutive `RI` answers saying "not transmitting". A single garbled or stale
+    /// frame must never drop a live transmission, so the watchdog waits for a run of
+    /// them rather than acting on one.
+    pub radio_rx_streak: u8,
+    /// The radio's own TX time-out timer in minutes, from its EX menu (FT-991A 036,
+    /// FTX-1 030112), read once when the radio connects. 0 = off.
+    pub tot_minutes: u8,
+    /// Whether an FTX-1 memory write is allowed at all - see `ftx1_memory_write_ack`
+    /// in config.rs for what it costs. Never consulted for the FT-991A.
+    pub ftx1_memory_write_ack: bool,
 }
 
 impl Default for YaesuState {
@@ -349,6 +372,7 @@ impl Default for YaesuState {
             memory_channel: 0,
             filled_memory_channels: Vec::new(),
             last_memory_blob: None,
+            last_menu_blob: None,
             split_active: false,
             scan_active: false,
             tuner_state: 0, // off/bypass until AC; readback says otherwise
@@ -366,6 +390,10 @@ impl Default for YaesuState {
             auto_dfm_saved_mode: '4',
             auto_dfm_saved_memory_channel: 0,
             ssb_switch_on_ptt: true,
+            radio_tx: None,
+            radio_rx_streak: 0,
+            tot_minutes: 0,
+            ftx1_memory_write_ack: false,
         }
     }
 }
@@ -490,7 +518,7 @@ impl YaesuRadio {
     /// single-radio call path (ui/mod.rs) without requiring all callers to
     /// change. Slot 1 (FTX-1) uses `new_with_model`.
     pub fn new(port_name: &str, baud: u32, audio_device: Option<&str>) -> Result<Self, String> {
-        Self::new_with_model(port_name, baud, audio_device, None, RadioModel::Ft991a, 0, 0, true)
+        Self::new_with_model(port_name, baud, audio_device, None, RadioModel::Ft991a, 0, 0, true, false)
     }
 
     pub fn new_with_model(
@@ -508,6 +536,9 @@ impl YaesuRadio {
         // 991A SSB/AM USB routing: true = per-PTT (radio normal outside TX), false =
         // presence-based routing. FTX-1 keeps its internal auto source selection.
         ssb_switch_on_ptt: bool,
+        // FTX-1 only: permission to write its memory bank, which costs the tones
+        // stored in the radio. Off unless the operator accepted that in the GUI.
+        ftx1_memory_write_ack: bool,
     ) -> Result<Self, String> {
         let prefix = model.tag(slot);
         // Probe serial port (best-effort). If the Yaesu is off at server-start
@@ -533,6 +564,7 @@ impl YaesuRadio {
 
         let status = Arc::new(Mutex::new(YaesuState::default()));
         status.lock().unwrap().ssb_switch_on_ptt = ssb_switch_on_ptt;
+        status.lock().unwrap().ftx1_memory_write_ack = ftx1_memory_write_ack;
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         // Create persistent audio RX channel (capture -> network loop)
@@ -547,6 +579,7 @@ impl YaesuRadio {
         let tx_producer: Arc<Mutex<Option<ringbuf::HeapProd<f32>>>> = Arc::new(Mutex::new(None));
         let last_audio_time = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let memory_data: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let menu_data: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         // Initial audio setup.
         //
@@ -633,6 +666,7 @@ impl YaesuRadio {
         {
             let status = status.clone();
             let memory_data = memory_data.clone();
+            let menu_data = menu_data.clone();
             let port_name = port_name.to_string();
             let audio_device = audio_device.map(|s| s.to_string());
             let output_device = output_device.map(|s| s.to_string());
@@ -642,9 +676,12 @@ impl YaesuRadio {
             let tx_producer = tx_producer.clone();
             let last_audio_time_clone = last_audio_time.clone();
             let prefix = prefix.clone();
+            // The loop's own sender, so the PTT watchdog can release through the
+            // normal command path instead of a second copy of that logic.
+            let self_tx = cmd_tx.clone();
             std::thread::spawn(move || {
                 yaesu_reconnect_thread(
-                    cmd_rx, status, memory_data,
+                    cmd_rx, self_tx, status, memory_data, menu_data,
                     port_name, baud, audio_device, output_device,
                     rx_audio_tx, capture_stream, output_stream, tx_producer,
                     last_audio_time_clone, model, prefix, capture_channel,
@@ -664,7 +701,8 @@ impl YaesuRadio {
             _output_stream: output_stream,
             _last_audio_time: last_audio_time,
             _tx_producer: tx_producer,
-            memory_data: memory_data,
+            memory_data,
+            menu_data,
             model,
             slot,
         })
@@ -672,6 +710,38 @@ impl YaesuRadio {
 
     pub fn send_command(&self, cmd: YaesuCmd) {
         let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Record a menu value WE just wrote, in the server's copy, and publish it.
+    ///
+    /// Without this the copy would be stale the moment ThetisLink changes an EX
+    /// parameter itself, and only a full re-scan would repair it - seconds of
+    /// occupied CAT for one changed value. The write knows what it changed, so the
+    /// copy is patched directly. `key` is the line key as the scan writes it: three
+    /// digits on the 991A ("017"), six on the FTX-1 ("010203").
+    pub fn note_menu_value(&self, key: &str, value: &str) {
+        let mut st = self.status.lock().unwrap();
+        let Some(blob) = st.last_menu_blob.clone() else { return };
+        let prefix = format!("{}:", key);
+        let mut found = false;
+        let mut out: Vec<String> = blob
+            .lines()
+            .map(|l| {
+                if l.starts_with(&prefix) {
+                    found = true;
+                    format!("{}{}", prefix, value)
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        if !found {
+            out.push(format!("{}{}", prefix, value));
+        }
+        let merged = out.join("\n");
+        st.last_menu_blob = Some(merged.clone());
+        drop(st);
+        *self.menu_data.lock().unwrap() = Some(format!("MENU:{}", merged));
     }
 
     pub fn status(&self) -> YaesuState {

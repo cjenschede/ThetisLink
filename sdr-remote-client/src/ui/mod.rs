@@ -35,7 +35,7 @@ pub(crate) mod ftx1_ex_chart;
 pub(crate) use helpers::*;
 pub(crate) use meters::*;
 pub(crate) use spectrum::*;
-pub(crate) use arranger::{LayoutGrid, SnapWindow};
+pub(crate) use arranger::{LayoutGrid, LayoutMemory, SnapWindow, LAYOUT_MEM_SLOTS};
 
 /// Convert RX filter edges (signed Hz) to the TX modulation filter band - a
 /// POSITIVE audio passband (Thetis applies the sideband per mode).
@@ -306,6 +306,14 @@ pub struct SdrRemoteApp {
     vfo_a_volume: f32,    // Client-only VFO A playback volume
     vfo_b_volume: f32,    // Client-only VFO B playback volume
     local_volume: f32,    // Client-only master volume
+    /// UI scale (egui zoom factor), separate from the OS display scaling.
+    ui_zoom: f32,
+    /// Set when OUR value must be pushed into egui (startup, or the picker was
+    /// used). Without it the update loop cannot tell "the user pressed Ctrl+-"
+    /// from "we have not applied our stored value yet".
+    ui_zoom_pending: bool,
+    /// Master volume changed but not yet written to disk - saved on pointer-up.
+    master_volume_dirty: bool,
     tx_gain: f32,
     // Cached state from RadioState (updated each frame)
     connected: bool,
@@ -460,6 +468,12 @@ pub struct SdrRemoteApp {
     /// grid size (e.g. 2x3) and paint the open windows into the cells;
     /// "Apply" snaps each window over its enclosing cell rectangle.
     layout_grid_per_monitor: Vec<LayoutGrid>,
+    /// Stored arrangements (LAYOUT_MEM_SLOTS entries, empty = free slot).
+    layout_memories: Vec<LayoutMemory>,
+    /// Windows a recall wanted but could not place yet, because they were not
+    /// on offer at that moment (no connection -> no radios). Carried out as soon
+    /// as they appear. Not persisted: it is an intent within this session.
+    layout_pending: Vec<(SnapWindow, egui::Pos2, egui::Vec2)>,
     /// The currently selected window in the palette (painted when
     /// clicking/dragging in the grid). None = nothing selected (clear only).
     layout_active_item: Option<SnapWindow>,
@@ -872,6 +886,15 @@ pub struct SdrRemoteApp {
     tune_step_hz: i64,
     yaesu_in_memory_mode: bool,
     yaesu_current_mem_ch: Option<usize>, // index into yaesu_mem_channels
+    /// Which channel the memory TABLE marks, per radio, as a channel NUMBER rather
+    /// than a row index - the two lists are different lengths, so an index means a
+    /// different channel in each. Sticky: it survives tuning away into VFO, which is
+    /// what makes "the one you left" findable.
+    yaesu_mem_active_ch: Option<u16>,
+    yaesu2_mem_active_ch: Option<u16>,
+    /// Whether the radio is on that channel right now (as opposed to having left it).
+    yaesu_mem_active_live: bool,
+    yaesu2_mem_active_live: bool,
     yaesu_enabled: bool,
     // Yaesu memory channels
     yaesu_mem_channels: Vec<yaesu_memory::YaesuMemoryChannel>,
@@ -879,9 +902,23 @@ pub struct SdrRemoteApp {
     yaesu_mem_selected: Option<usize>,
     yaesu_mem_filter: String,
     yaesu_mem_dirty: bool,
+    /// A pushed list was held back because the table has unsaved edits. Only to
+    /// keep the log to one line instead of one per frame.
+    yaesu_mem_push_deferred: bool,
+    /// The operator asked the radio for a list, so the next one that arrives is
+    /// the answer to that and must land even though the table is open. Without
+    /// this, pressing "Read radio" while looking at the table did nothing
+    /// visible: the hold-back that protects an edit also swallowed the reply.
+    yaesu_mem_expect_push: bool,
+    yaesu2_mem_expect_push: bool,
+    yaesu2_mem_push_deferred: bool,
     /// Show the "row removed locally only" popup after clicking delete (x).
-    yaesu_mem_delete_popup: bool,
     yaesu_mem_radio_received: bool,
+    /// Hash of the last memory list taken from the server, per slot. The list is
+    /// PUSHED now (initial snapshot on subscribe, then on change), so it arrives
+    /// unannounced and repeatedly; parsing only when the content actually differs
+    /// keeps a later push working without re-parsing the same list every frame.
+    yaesu_mem_blob_hash: Option<u64>,
     // Slot-1 (FTX-1) memory state (Phase B). render_yaesu_memories is shared
     // via mem::swap of these fields + yaesu_mem_active_slot (for read/write cmds).
     yaesu2_mem_channels: Vec<yaesu_memory::YaesuMemoryChannel>,
@@ -890,13 +927,19 @@ pub struct SdrRemoteApp {
     yaesu2_mem_filter: String,
     yaesu2_mem_dirty: bool,
     yaesu2_mem_radio_received: bool,
+    yaesu2_mem_blob_hash: Option<u64>,
     yaesu_mem_active_slot: u8,
     yaesu_menu_items: Vec<yaesu_menu::MenuItem>,
     yaesu_menu_received: bool,
+    /// Hash of the last EX list taken from the server, per slot - same reason as
+    /// the memory list: these are PUSHED, so "have I seen this" is a question
+    /// about the content, not a one-shot latch.
+    yaesu_menu_blob_hash: Option<u64>,
     // Slot-1 (FTX-1) EX-menu (Phase C). Hierarchical: address = "p1p2p3" (6 digits).
     // C1 = raw (address,value) list; C3 turns it into a P1>P2>P3 browser.
     yaesu2_menu_entries: Vec<(String, String)>,
     yaesu2_menu_received: bool,
+    yaesu2_menu_blob_hash: Option<u64>,
     collapse_yaesu2_menu: bool,
     /// Editable value buffers per EX-address (lazily filled on render).
     yaesu2_menu_edits: std::collections::HashMap<String, String>,
@@ -948,6 +991,7 @@ pub struct SdrRemoteApp {
     collapse_yaesu_memories: bool,
     collapse_yaesu_menu: bool,
     yaesu_memories_h: f32,
+    yaesu2_memories_h: f32,
     /// Persisted main-window outer position; tracked during runtime so a
     /// next launch can re-apply it via `with_position()`. `None` until the
     /// first frame reads `viewport().outer_rect`.

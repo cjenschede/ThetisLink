@@ -18,6 +18,7 @@ ringbuf = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 sdr-remote-theme = { path = "../sdr-remote-theme" }
+sdr-remote-layout = { path = "../sdr-remote-layout" }
 log = { workspace = true }
 env_logger = { workspace = true }
 tracing = { workspace = true }

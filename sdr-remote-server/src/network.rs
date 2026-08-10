@@ -74,6 +74,85 @@ fn write_bind_diag(entry: &str) {
     }
 }
 
+/// How often the SMALL state is sent again regardless of the tick-lists.
+///
+/// The safety net from `docs/internal/DESIGN-state-sync-push.md`: a push is not
+/// guaranteed to arrive, and a tick-list that says "delivered" cannot tell the
+/// difference between arrived and lost. Costs nothing at the device end - it is
+/// served from what the server already holds - and only a few dozen bytes on the
+/// network, so it may be generous. Only the DX-spot stream had one before.
+const STATE_RESEND_SECS: u64 = 10;
+
+/// The same net for the BIG blobs - the memory list and the EX settings.
+///
+/// Deliberately slower: those are kilobytes each (the FTX-1 alone has 405 EX values
+/// and 99 channels), and repeating them every 10 s would put roughly 100 kB/min per
+/// client on the wire - which a metered mobile link notices. A lost memory list is
+/// not time-critical: a minute late is not worse than ten seconds late, while the
+/// traffic is six times less.
+const BLOB_RESEND_SECS: u64 = 60;
+
+/// Decide what to push and to whom, for a blob that follows the state-sync rule
+/// (see `docs/internal/DESIGN-state-sync-push.md`): if it CHANGED it goes to every
+/// subscriber; otherwise only to subscribers that have not had the current one yet.
+///
+/// `sent` is the tick-list of who already has it, kept per blob. It is pruned here
+/// so a departed client cannot keep a stale entry alive.
+///
+/// The third element says whether this was a real CHANGE. A top-up after the safety
+/// net cleared the tick-list is not an event - logging it as one buries the real
+/// ones: four identical lines every interval, tens of thousands a day, and then
+/// "did client X get its block" is no longer answerable.
+fn blob_push_targets(
+    mailbox: &std::sync::Mutex<Option<String>>,
+    stored: impl FnOnce() -> Option<String>,
+    addrs: &[std::net::SocketAddr],
+    sent: &mut std::collections::HashSet<std::net::SocketAddr>,
+) -> (Option<String>, Vec<std::net::SocketAddr>, bool) {
+    sent.retain(|a| addrs.contains(a));
+    match mailbox.lock().unwrap().take() {
+        Some(text) => {
+            sent.clear(); // changed - everyone gets the new one
+            (Some(text), addrs.to_vec(), true)
+        }
+        None => {
+            let fresh: Vec<_> = addrs.iter().copied().filter(|a| !sent.contains(a)).collect();
+            if fresh.is_empty() { (None, Vec::new(), false) } else { (stored(), fresh, false) }
+        }
+    }
+}
+
+/// Send one blob to a set of clients, chunked, and report who took EVERY chunk.
+///
+/// Only a complete send counts as delivered: ticking a client off on the intent
+/// would make a failed send permanent, because the tick-list would say "done" and
+/// nothing would ever offer it again.
+fn push_blob(
+    socket: &crate::tracked_socket::TrackedSocket,
+    packet_type: PacketType,
+    text: &str,
+    targets: &[std::net::SocketAddr],
+) -> std::collections::HashSet<std::net::SocketAddr> {
+    let mut delivered: std::collections::HashSet<std::net::SocketAddr> =
+        targets.iter().copied().collect();
+    // UDP max ~64KB per datagram; the client reassembles on packet type.
+    for chunk in text.as_bytes().chunks(60000) {
+        let mut send_buf = Vec::with_capacity(6 + chunk.len());
+        let header = Header::new(packet_type, Flags::NONE);
+        let mut hdr_buf = [0u8; 4];
+        header.serialize(&mut hdr_buf);
+        send_buf.extend_from_slice(&hdr_buf);
+        send_buf.extend_from_slice(&(chunk.len() as u16).to_be_bytes());
+        send_buf.extend_from_slice(chunk);
+        for addr in targets {
+            if socket.try_send_to(&send_buf, *addr).is_err() {
+                delivered.remove(addr);
+            }
+        }
+    }
+    delivered
+}
+
 /// Server network service
 pub struct NetworkService {
     socket: Arc<TrackedSocket>,
@@ -500,14 +579,57 @@ impl NetworkService {
                     // so a just-connected client immediately has the correct AGC/IPO/NB/DNR/Proc
                     // states (otherwise the first cycle-click is a no-op on stale 0).
                     let mut sent_features0: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    // The memory list follows the same rule as the feature-state above:
+                    // a fresh subscriber gets the current list once, and after that it is
+                    // sent only when it CHANGES. The client therefore never has to ask for
+                    // it, and can never hold something the server does not have.
+                    let mut sent_memory0: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    // The EX/menu values follow the same rule, on their own tick-list.
+                    let mut sent_menu0: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    let mut last_resend0 = std::time::Instant::now();
+                    let mut last_blob_resend0 = std::time::Instant::now();
                     // Presence-based SSB routing (opt-out mode, per-PTT OFF): turn the USB
                     // routing on as long as a client is on radio 1, and restore ~2s after
                     // the last one leaves. In per-PTT mode the SetPtt handler does this.
                     let mut ssb_applied0 = false;
                     let mut absent_ticks0: u32 = 0;
+                    let mut last_conn_gen0: u64 = 0;
+                    // Why the blob tick-list was last cleared, so the log names the real
+                    // cause instead of always blaming the safety net.
+                    let mut blob_reason0: &'static str = "safety-net top-up";
                     loop {
                         tokio::select! {
                             _ = tick.tick() => {
+                                // Safety net: periodically forget who has what, so a lost
+                                // push is repaired. The small feature-state runs at the fast
+                                // interval; the memory list and the EX settings are kilobytes
+                                // each and run at the slow one.
+                                if last_resend0.elapsed().as_secs() >= STATE_RESEND_SECS {
+                                    last_resend0 = std::time::Instant::now();
+                                    sent_features0.clear();
+                                }
+                                if last_blob_resend0.elapsed().as_secs() >= BLOB_RESEND_SECS {
+                                    last_blob_resend0 = std::time::Instant::now();
+                                    sent_memory0.clear();
+                                    sent_menu0.clear();
+                                    blob_reason0 = "safety-net top-up";
+                                }
+                                // Someone joined (see SessionManager::connect_generation).
+                                // A client that dropped without saying so and came back on
+                                // the same address inside the session timeout is still
+                                // ticked off, so it would wait for the slow resend above -
+                                // up to a minute with an empty memory table. Offer
+                                // everything again instead; it is kilobytes on a rare event.
+                                {
+                                    let gen = session.lock().await.connect_generation();
+                                    if gen != last_conn_gen0 {
+                                        last_conn_gen0 = gen;
+                                        sent_features0.clear();
+                                        sent_memory0.clear();
+                                        sent_menu0.clear();
+                                        blob_reason0 = "a client joined";
+                                    }
+                                }
                                 // Audio subscribers (for SSB-USB routing/TX) and state
                                 // subscribers (window-open OR audio) separately, under one lock.
                                 let (audio_addrs, addrs) = {
@@ -582,25 +704,47 @@ impl NetworkService {
                                         }
                                     }
 
-                                    // Check for memory data ready to send
-                                    let mem_data = y.memory_data.lock().unwrap().take();
-                                    if let Some(text) = mem_data {
-                                        let text_bytes = text.as_bytes();
-                                        // Split into chunks if needed (UDP max ~64KB)
-                                        let chunk_size = 60000;
-                                        for chunk in text_bytes.chunks(chunk_size) {
-                                            let mut send_buf = Vec::with_capacity(6 + chunk.len());
-                                            let header = Header::new(PacketType::YaesuMemoryData, Flags::NONE);
-                                            let mut hdr_buf = [0u8; 4];
-                                            header.serialize(&mut hdr_buf);
-                                            send_buf.extend_from_slice(&hdr_buf);
-                                            send_buf.extend_from_slice(&(chunk.len() as u16).to_be_bytes());
-                                            send_buf.extend_from_slice(chunk);
-                                            for addr in &addrs {
-                                                let _ = socket.try_send_to(&send_buf, *addr);
+                                    // Memory list. Two reasons to send: it just changed (a
+                                    // read, or a write by us) -> everyone; or a subscriber is
+                                    // here that has never had it -> that subscriber only.
+                                    // Memory list, pushed per the state-sync rule.
+                                    let (blob0, targets0, blob0_changed) = blob_push_targets(
+                                        &y.memory_data,
+                                        || y.status().last_memory_blob.clone(),
+                                        &addrs, &mut sent_memory0);
+                                    if let Some(text) = blob0 {
+                                        if !targets0.is_empty() {
+                                            let done = push_blob(&socket, PacketType::YaesuMemoryData, &text, &targets0);
+                                            for a in &done { sent_memory0.insert(*a); }
+                                            // A change is an event; a safety-net top-up is not.
+                                            if blob0_changed {
+                                                info!("Sent Yaesu memory data to {} clients ({}B)", done.len(), text.len());
+                                            } else {
+                                                log::debug!("Sent Yaesu memory data ({}) to {} clients ({}B)", blob_reason0, done.len(), text.len());
+                                                blob_reason0 = "new subscriber";
                                             }
                                         }
-                                        info!("Sent Yaesu memory data to {} clients ({}B)", addrs.len(), text_bytes.len());
+                                    }
+
+                                    // EX/menu values, same rule, own tick-list. Kept
+                                    // separate from the memory list so neither can
+                                    // overwrite the other in a 200ms window.
+                                    let (menu0, mtargets0, menu0_changed) = blob_push_targets(
+                                        &y.menu_data,
+                                        || y.status().last_menu_blob.clone().map(|b| format!("MENU:{}", b)),
+                                        &addrs, &mut sent_menu0);
+                                    if let Some(text) = menu0 {
+                                        if !mtargets0.is_empty() {
+                                            let done = push_blob(&socket, PacketType::YaesuMemoryData, &text, &mtargets0);
+                                            for a in &done { sent_menu0.insert(*a); }
+                                            // A change is an event; a safety-net top-up is not.
+                                            if menu0_changed {
+                                                info!("Sent Yaesu EX settings to {} clients ({}B)", done.len(), text.len());
+                                            } else {
+                                                log::debug!("Sent Yaesu EX settings ({}) to {} clients ({}B)", blob_reason0, done.len(), text.len());
+                                                blob_reason0 = "new subscriber";
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -628,12 +772,51 @@ impl NetworkService {
                     let mut last_freqs1 = [u16::MAX; YaesuFeaturePacket::N_FREQS];
                     // Fresh subscribers get the current feature-state once (see slot 0).
                     let mut sent_features1: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    // Same rule as slot 0: the list once per subscriber, then on change only.
+                    let mut sent_memory1: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    let mut sent_menu1: std::collections::HashSet<std::net::SocketAddr> = std::collections::HashSet::new();
+                    let mut last_resend1 = std::time::Instant::now();
+                    let mut last_blob_resend1 = std::time::Instant::now();
                     // Presence-based SSB routing (opt-out mode) for radio 2 (FTX-1).
                     let mut ssb_applied1 = false;
                     let mut absent_ticks1: u32 = 0;
+                    let mut last_conn_gen1: u64 = 0;
+                    // Why the blob tick-list was last cleared, so the log names the real
+                    // cause instead of always blaming the safety net.
+                    let mut blob_reason1: &'static str = "safety-net top-up";
                     loop {
                         tokio::select! {
                             _ = tick.tick() => {
+                                // Safety net: periodically forget who has what, so a lost
+                                // push is repaired. The small feature-state runs at the fast
+                                // interval; the memory list and the EX settings are kilobytes
+                                // each and run at the slow one.
+                                if last_resend1.elapsed().as_secs() >= STATE_RESEND_SECS {
+                                    last_resend1 = std::time::Instant::now();
+                                    sent_features1.clear();
+                                }
+                                if last_blob_resend1.elapsed().as_secs() >= BLOB_RESEND_SECS {
+                                    last_blob_resend1 = std::time::Instant::now();
+                                    sent_memory1.clear();
+                                    sent_menu1.clear();
+                                    blob_reason1 = "safety-net top-up";
+                                }
+                                // Someone joined (see SessionManager::connect_generation).
+                                // A client that dropped without saying so and came back on
+                                // the same address inside the session timeout is still
+                                // ticked off, so it would wait for the slow resend above -
+                                // up to a minute with an empty memory table. Offer
+                                // everything again instead; it is kilobytes on a rare event.
+                                {
+                                    let gen = session.lock().await.connect_generation();
+                                    if gen != last_conn_gen1 {
+                                        last_conn_gen1 = gen;
+                                        sent_features1.clear();
+                                        sent_memory1.clear();
+                                        sent_menu1.clear();
+                                        blob_reason1 = "a client joined";
+                                    }
+                                }
                                 let (audio_addrs, addrs) = {
                                     let s = session.lock().await;
                                     (s.yaesu2_addrs(), s.yaesu2_state_addrs())
@@ -704,23 +887,44 @@ impl NetworkService {
                                         }
                                     }
 
-                                    let mem_data = y.memory_data.lock().unwrap().take();
-                                    if let Some(text) = mem_data {
-                                        let text_bytes = text.as_bytes();
-                                        let chunk_size = 60000;
-                                        for chunk in text_bytes.chunks(chunk_size) {
-                                            let mut send_buf = Vec::with_capacity(6 + chunk.len());
-                                            let header = Header::new(PacketType::YaesuMemoryData2, Flags::NONE);
-                                            let mut hdr_buf = [0u8; 4];
-                                            header.serialize(&mut hdr_buf);
-                                            send_buf.extend_from_slice(&hdr_buf);
-                                            send_buf.extend_from_slice(&(chunk.len() as u16).to_be_bytes());
-                                            send_buf.extend_from_slice(chunk);
-                                            for addr in &addrs {
-                                                let _ = socket.try_send_to(&send_buf, *addr);
+                                    // Memory list, pushed per the state-sync rule.
+                                    let (blob1, targets1, blob1_changed) = blob_push_targets(
+                                        &y.memory_data,
+                                        || y.status().last_memory_blob.clone(),
+                                        &addrs, &mut sent_memory1);
+                                    if let Some(text) = blob1 {
+                                        if !targets1.is_empty() {
+                                            let done = push_blob(&socket, PacketType::YaesuMemoryData2, &text, &targets1);
+                                            for a in &done { sent_memory1.insert(*a); }
+                                            // A change is an event; a safety-net top-up is not.
+                                            if blob1_changed {
+                                                info!("[radio2] Sent memory data to {} clients ({}B)", done.len(), text.len());
+                                            } else {
+                                                log::debug!("[radio2] Sent memory data ({}) to {} clients ({}B)", blob_reason1, done.len(), text.len());
+                                                blob_reason1 = "new subscriber";
                                             }
                                         }
-                                        info!("[radio2] Sent memory data to {} clients ({}B)", addrs.len(), text_bytes.len());
+                                    }
+
+                                    // EX/menu values, same rule, own tick-list. Kept
+                                    // separate from the memory list so neither can
+                                    // overwrite the other in a 200ms window.
+                                    let (menu1, mtargets1, menu1_changed) = blob_push_targets(
+                                        &y.menu_data,
+                                        || y.status().last_menu_blob.clone().map(|b| format!("MENU:{}", b)),
+                                        &addrs, &mut sent_menu1);
+                                    if let Some(text) = menu1 {
+                                        if !mtargets1.is_empty() {
+                                            let done = push_blob(&socket, PacketType::YaesuMemoryData2, &text, &mtargets1);
+                                            for a in &done { sent_menu1.insert(*a); }
+                                            // A change is an event; a safety-net top-up is not.
+                                            if menu1_changed {
+                                                info!("[radio2] Sent EX settings to {} clients ({}B)", done.len(), text.len());
+                                            } else {
+                                                log::debug!("[radio2] Sent EX settings ({}) to {} clients ({}B)", blob_reason1, done.len(), text.len());
+                                                blob_reason1 = "new subscriber";
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -804,9 +1008,34 @@ impl NetworkService {
                     let mut prev: Option<(bool, u8, bool, u8)> = None;
                     let mut sent_addrs: std::collections::HashSet<std::net::SocketAddr> =
                         std::collections::HashSet::new();
+                    let mut last_presence_resend = std::time::Instant::now();
+                    let mut last_conn_gen_presence: u64 = 0;
+                    // Who has been TOLD about, as opposed to who has been sent to. The
+                    // safety net clears `sent_addrs` every STATE_RESEND_SECS so the value
+                    // goes out again, which is the point - but it meant every client was
+                    // announced as a fresh subscriber every ten seconds, forever. This set
+                    // is pruned the same way, so a client that leaves and returns is
+                    // reported once more, and a client that simply stays is reported once.
+                    let mut logged_addrs: std::collections::HashSet<std::net::SocketAddr> =
+                        std::collections::HashSet::new();
                     loop {
                         tokio::select! {
                             _ = tick.tick() => {
+                                // Safety net (see STATE_RESEND_SECS).
+                                if last_presence_resend.elapsed().as_secs() >= STATE_RESEND_SECS {
+                                    last_presence_resend = std::time::Instant::now();
+                                    sent_addrs.clear();
+                                }
+                                // Same reason as the memory list: a rejoin inside the
+                                // session timeout is invisible to the address pruning.
+                                {
+                                    let gen = session.lock().await.connect_generation();
+                                    if gen != last_conn_gen_presence {
+                                        last_conn_gen_presence = gen;
+                                        sent_addrs.clear();
+                                        logged_addrs.clear();
+                                    }
+                                }
                                 let present0 = yaesu.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent0;
                                 let present1 = yaesu2.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent1;
                                 let model0 = yaesu.as_ref().map(|y| y.model.as_code()).unwrap_or(0);
@@ -815,6 +1044,7 @@ impl NetworkService {
 
                                 let addrs = session.lock().await.active_addrs();
                                 sent_addrs.retain(|a| addrs.contains(a)); // prune disconnected
+                                logged_addrs.retain(|a| addrs.contains(a));
 
                                 let changed = prev != Some(tuple);
                                 if changed {
@@ -840,7 +1070,9 @@ impl NetworkService {
                                 for addr in &addrs {
                                     if changed || !sent_addrs.contains(addr) {
                                         if socket.try_send_to(&buf, *addr).is_ok() {
-                                            if !changed { info!("Yaesu presence initial push -> {}", addr); }
+                                            if !changed && logged_addrs.insert(*addr) {
+                                                info!("Yaesu presence initial push -> {}", addr);
+                                            }
                                             sent_addrs.insert(*addr);
                                         }
                                     }
@@ -906,6 +1138,7 @@ impl NetworkService {
                 let _last_sync_freq: u64 = 0; // last freq synced B=A
                 let mut prev_controls: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
                 let mut prev_client_count: usize = 0;
+                let mut last_state_resend = std::time::Instant::now();
                 let mut prev_smeter_count: usize = 0;
                 let mut prev_freq: u64 = 0;
                 let mut prev_mode: u8 = 255;
@@ -913,8 +1146,15 @@ impl NetworkService {
                 let mut prev_vfo_b_mode: u8 = 255;
                 let mut prev_tx_profile_names: Vec<String> = Vec::new();
                 let mut prev_tx_filter: Option<(i32, i32)> = None;
-                let mut prev_equipment: std::collections::HashMap<u8, Vec<u8>> = std::collections::HashMap::new();
-                let mut prev_eq_client_count: usize = 0;
+                // Per device: the last payload sent, and WHO already has it. It used to
+                // be the payload plus a client COUNT, which cannot see one client
+                // leaving and another arriving between two ticks - the newcomer then
+                // waited for the device to change by itself, which for something like
+                // a tuner can be a very long time.
+                let mut prev_equipment: std::collections::HashMap<
+                    u8, (Vec<u8>, std::collections::HashSet<std::net::SocketAddr>)
+                > = std::collections::HashMap::new();
+                let mut last_equipment_resend = std::time::Instant::now();
                 // DX-spot dedup + refresh-tracking. Before this fix the
                 // server resent every equipment_tick (200 ms = 5 Hz) all cached
                 // spots again to all clients - ~90 Kbit/s in steady-state with
@@ -1123,23 +1363,38 @@ impl NetworkService {
                         _ = equipment_tick.tick() => {
                             // Get client addresses ONCE for all equipment broadcasts
                             let eq_addrs = session.lock().await.active_addrs();
-                            if eq_addrs.is_empty() { prev_eq_client_count = 0; continue; }
-                            // New client: force full equipment sync
-                            if eq_addrs.len() != prev_eq_client_count {
-                                prev_equipment.clear();
-                                prev_eq_client_count = eq_addrs.len();
+                            if eq_addrs.is_empty() { continue; }
+                            // Safety net: forget who has what every so often, so one
+                            // lost datagram cannot leave a client stale indefinitely.
+                            // The payloads are kept - only the tick-lists are cleared.
+                            if last_equipment_resend.elapsed().as_secs() >= STATE_RESEND_SECS {
+                                last_equipment_resend = std::time::Instant::now();
+                                for (_, sent) in prev_equipment.values_mut() { sent.clear(); }
                             }
 
                             // Helper: serialize, compare with prev, send only if changed
+                            // Changed -> everyone; otherwise only whoever is not ticked
+                            // off yet. A client counts as served only on a successful
+                            // send: ticking it off on the intent would make a failed
+                            // send permanent.
                             macro_rules! send_if_changed {
                                 ($device_id:expr, $pkt:expr, $addrs:expr) => {{
                                     let mut buf = Vec::with_capacity(128);
                                     $pkt.serialize(&mut buf);
                                     let key = $device_id as u8;
-                                    if prev_equipment.get(&key).map_or(true, |prev| prev != &buf) {
-                                        prev_equipment.insert(key, buf.clone());
-                                        for addr in $addrs {
-                                            let _ = socket.try_send_to(&buf, *addr);
+                                    let entry = prev_equipment.entry(key).or_insert_with(
+                                        || (Vec::new(), std::collections::HashSet::new()));
+                                    let changed = entry.0 != buf;
+                                    if changed {
+                                        entry.0 = buf.clone();
+                                        entry.1.clear();
+                                    }
+                                    entry.1.retain(|a| $addrs.contains(a));
+                                    for addr in $addrs {
+                                        if changed || !entry.1.contains(addr) {
+                                            if socket.try_send_to(&buf, *addr).is_ok() {
+                                                entry.1.insert(*addr);
+                                            }
                                         }
                                     }
                                 }};
@@ -1181,10 +1436,22 @@ impl NetworkService {
                                     (&mut buf[..]).try_into().unwrap();
                                 pkt.serialize(arr);
                                 let key: u8 = 0xFE; // sentinel outside DeviceType range
-                                if prev_equipment.get(&key).map_or(true, |prev| prev != &buf) {
-                                    prev_equipment.insert(key, buf.clone());
-                                    for addr in &eq_addrs {
-                                        let _ = socket.try_send_to(&buf, *addr);
+                                // Hand-rolled copy of send_if_changed (the packet is
+                                // serialised into a fixed array, so it cannot use the
+                                // macro) - same tick-list rule.
+                                let entry = prev_equipment.entry(key).or_insert_with(
+                                    || (Vec::new(), std::collections::HashSet::new()));
+                                let changed = entry.0 != buf;
+                                if changed {
+                                    entry.0 = buf.clone();
+                                    entry.1.clear();
+                                }
+                                entry.1.retain(|a| eq_addrs.contains(a));
+                                for addr in &eq_addrs {
+                                    if changed || !entry.1.contains(addr) {
+                                        if socket.try_send_to(&buf, *addr).is_ok() {
+                                            entry.1.insert(*addr);
+                                        }
                                     }
                                 }
                             }
@@ -1901,8 +2168,19 @@ impl NetworkService {
                                 prev_client_count = 0;
                                 continue;
                             }
+                            // Safety net (see STATE_RESEND_SECS): this family keeps a
+                            // previous VALUE per item rather than a tick-list per client,
+                            // so "send it again" means forgetting the previous value.
+                            // Without it a lost push here is never repaired, and the
+                            // count check below cannot see one client leaving while
+                            // another arrives between two ticks.
+                            let periodic_resend =
+                                last_state_resend.elapsed().as_secs() >= STATE_RESEND_SECS;
+                            if periodic_resend { last_state_resend = std::time::Instant::now(); }
                             // New client or Yaesu mode change: force full state resend
-                            if all_addrs.len() != prev_client_count || smeter_addrs.len() != prev_smeter_count {
+                            if periodic_resend
+                                || all_addrs.len() != prev_client_count
+                                || smeter_addrs.len() != prev_smeter_count {
                                 prev_freq = 0;
                                 prev_mode = 255;
                                 prev_vfo_b_freq = 0;
@@ -2976,6 +3254,7 @@ impl NetworkService {
                                         if let Ok(num) = parts[0].parse::<u16>() {
                                             info!("Client {} set menu {:03} = {}", addr, num, parts[1]);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::SetMenu(num, parts[1].to_string()));
+                                            yaesu.note_menu_value(&format!("{:03}", num), parts[1]);
                                         }
                                     }
                                 }
@@ -3070,6 +3349,10 @@ impl NetworkService {
                                         info!("Client {} [radio1] set EX {} = {}", addr, parts[0], parts[1]);
                                         yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(
                                             format!("EX{}{};", parts[0], parts[1])));
+                                        // Six-digit key here, three on the 991A - the
+                                        // scan writes them that way, so the copy is
+                                        // patched with the same key.
+                                        yaesu.note_menu_value(parts[0], parts[1]);
                                     }
                                 }
                             } else if yaesu2_write_armed {
@@ -3665,8 +3948,28 @@ impl NetworkService {
                                 }
                                 ControlId::YaesuReadMemories => {
                                     if let Some(ref yaesu) = yaesu {
-                                        info!("Client {} requested Yaesu memory read", addr);
-                                        yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
+                                        // value 1 = "the server's copy is fine" (a client
+                                        // that just connected); value 0 = "read the radio
+                                        // now" (the Read radio button). Older clients only
+                                        // ever send 0, so they keep today's behaviour
+                                        // exactly - and a newer client talking to an older
+                                        // server has its 1 ignored, which also lands on a
+                                        // real read. No capability flag needed either way.
+                                        // "The server's copy is fine" - normally delivered by
+                                        // the subscriber push, so there is nothing to do. But if
+                                        // there IS no copy the push has nothing to send and the
+                                        // client would wait forever: the connect-time read can
+                                        // fail (radio in standby, FTX-1 cold scan). Fall back to
+                                        // a real read in that case.
+                                        if ctrl.value == 1 && yaesu.status().last_memory_blob.is_some() {
+                                            info!("Client {} will get the Yaesu memories from the server's copy", addr);
+                                        } else {
+                                            if ctrl.value == 1 {
+                                                warn!("Client {} wanted the server's copy of the Yaesu memories, but there is none - reading the radio", addr);
+                                            }
+                                            info!("Client {} requested Yaesu memory read", addr);
+                                            yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
+                                        }
                                     }
                                 }
                                 ControlId::YaesuRecallMemory => {
@@ -3741,8 +4044,18 @@ impl NetworkService {
                                 }
                                 ControlId::YaesuReadMenus => {
                                     if let Some(ref yaesu) = yaesu {
-                                        info!("Client {} requested Yaesu menu read", addr);
-                                        yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMenus);
+                                        // Same rule as the memory list: value 1 = the
+                                        // server's copy is fine, which the subscriber
+                                        // push already delivers. 0 = walk the radio now.
+                                        if ctrl.value == 1 && yaesu.status().last_menu_blob.is_some() {
+                                            info!("Client {} will get the EX settings from the server's copy", addr);
+                                        } else {
+                                            if ctrl.value == 1 {
+                                                warn!("Client {} wanted the server's copy of the EX settings, but there is none - reading the radio", addr);
+                                            }
+                                            info!("Client {} requested Yaesu menu read", addr);
+                                            yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMenus);
+                                        }
                                     }
                                 }
                                 ControlId::YaesuSetMenu => {
@@ -3754,6 +4067,12 @@ impl NetworkService {
                                                 if let Ok(num) = num_str.parse::<u16>() {
                                                     info!("Client {} Yaesu set menu {:03} = {}", addr, num, val);
                                                     yaesu.send_command(crate::yaesu::YaesuCmd::SetMenu(num, val.to_string()));
+                                                    // Patch the server's copy right away and let
+                                                    // it push. Waiting for a re-scan would mean
+                                                    // seconds of occupied CAT for one value, and
+                                                    // until then every other client would hold
+                                                    // the old one.
+                                                    yaesu.note_menu_value(&format!("{:03}", num), val);
                                                 }
                                             }
                                         }
@@ -4051,8 +4370,17 @@ impl NetworkService {
                                 // Slot-1 memories (Phase B) - read/write to radio 2.
                                 ControlId::Yaesu2ReadMemories => {
                                     if let Some(ref yaesu) = yaesu2 {
-                                        info!("Client {} [radio1] requested memory read", addr);
-                                        yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
+                                        // Same rule as slot 0, including the fall-back when
+                                        // the server has no copy yet.
+                                        if ctrl.value == 1 && yaesu.status().last_memory_blob.is_some() {
+                                            info!("Client {} [radio1] will get the memories from the server's copy", addr);
+                                        } else {
+                                            if ctrl.value == 1 {
+                                                warn!("Client {} [radio1] wanted the server's copy of the memories, but there is none - reading the radio", addr);
+                                            }
+                                            info!("Client {} [radio1] requested memory read", addr);
+                                            yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
+                                        }
                                     }
                                 }
                                 ControlId::Yaesu2WriteMemories => {
@@ -4071,8 +4399,15 @@ impl NetworkService {
                                 // with a "SETMENU:" prefix (see handler below).
                                 ControlId::Yaesu2ReadMenus => {
                                     if let Some(ref yaesu) = yaesu2 {
-                                        info!("Client {} [radio1] requested EX menu read", addr);
-                                        yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMenus);
+                                        if ctrl.value == 1 && yaesu.status().last_menu_blob.is_some() {
+                                            info!("Client {} [radio1] will get the EX settings from the server's copy", addr);
+                                        } else {
+                                            if ctrl.value == 1 {
+                                                warn!("Client {} [radio1] wanted the server's copy of the EX settings, but there is none - reading the radio", addr);
+                                            }
+                                            info!("Client {} [radio1] requested EX menu read", addr);
+                                            yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMenus);
+                                        }
                                     }
                                 }
                                 ControlId::Yaesu2SetMenu => {}

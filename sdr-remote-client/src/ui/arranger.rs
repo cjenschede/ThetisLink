@@ -18,11 +18,13 @@ pub(crate) enum SnapWindow {
     Yaesu1,
     Yaesu2,
 }
-impl SnapWindow {
-    const ALL: [SnapWindow; 7] = [
-        SnapWindow::Main, SnapWindow::Rx1, SnapWindow::Rx2, SnapWindow::Vrx1,
-        SnapWindow::Vrx2, SnapWindow::Yaesu1, SnapWindow::Yaesu2,
-    ];
+impl sdr_remote_layout::SnapTarget for SnapWindow {
+    fn all() -> &'static [Self] {
+        &[
+            SnapWindow::Main, SnapWindow::Rx1, SnapWindow::Rx2, SnapWindow::Vrx1,
+            SnapWindow::Vrx2, SnapWindow::Yaesu1, SnapWindow::Yaesu2,
+        ]
+    }
     /// Short cell label. `Main` has an i18n text; the rest are product names.
     fn label(self) -> String {
         match self {
@@ -61,74 +63,14 @@ impl SnapWindow {
     }
 }
 
-/// Maximum grid size in the "Arrange windows" matrix (GRID_MAX x GRID_MAX).
-const GRID_MAX: usize = 12;
-
-/// One placement matrix (per monitor): grid of `rows` x `cols` cells; each
-/// cell holds at most one window. A window that spans multiple adjacent cells
-/// is stretched over its enclosing rectangle on "Apply".
-#[derive(Clone)]
-pub(crate) struct LayoutGrid {
-    rows: u8, // 1..=GRID_MAX
-    cols: u8, // 1..=GRID_MAX
-    cells: Vec<Option<SnapWindow>>, // rows*cols, row by row
-}
-impl LayoutGrid {
-    fn new() -> Self {
-        Self { rows: 2, cols: 2, cells: vec![None; 4] }
-    }
-    /// Reformat to rows x cols; keep assignments that still fall within the
-    /// new grid.
-    fn set_size(&mut self, rows: u8, cols: u8) {
-        let rows = rows.clamp(1, GRID_MAX as u8);
-        let cols = cols.clamp(1, GRID_MAX as u8);
-        if rows == self.rows && cols == self.cols { return; }
-        let mut cells = vec![None; rows as usize * cols as usize];
-        for r in 0..self.rows.min(rows) as usize {
-            for c in 0..self.cols.min(cols) as usize {
-                cells[r * cols as usize + c] = self.cells[r * self.cols as usize + c];
-            }
-        }
-        self.rows = rows;
-        self.cols = cols;
-        self.cells = cells;
-    }
-    fn cell(&self, r: usize, c: usize) -> Option<SnapWindow> {
-        self.cells.get(r * self.cols as usize + c).copied().flatten()
-    }
-    fn set(&mut self, r: usize, c: usize, w: Option<SnapWindow>) {
-        if let Some(slot) = self.cells.get_mut(r * self.cols as usize + c) {
-            *slot = w;
-        }
-    }
-    /// Remove a window from all cells of this grid.
-    fn remove(&mut self, w: SnapWindow) {
-        for slot in self.cells.iter_mut() {
-            if *slot == Some(w) { *slot = None; }
-        }
-    }
-    /// Enclosing rectangle (min_r, min_c, max_r, max_c) of a window, or None.
-    fn bounds(&self, w: SnapWindow) -> Option<(usize, usize, usize, usize)> {
-        let (mut minr, mut minc, mut maxr, mut maxc) = (usize::MAX, usize::MAX, 0, 0);
-        let mut found = false;
-        for r in 0..self.rows as usize {
-            for c in 0..self.cols as usize {
-                if self.cell(r, c) == Some(w) {
-                    found = true;
-                    minr = minr.min(r); minc = minc.min(c);
-                    maxr = maxr.max(r); maxc = maxc.max(c);
-                }
-            }
-        }
-        if found { Some((minr, minc, maxr, maxc)) } else { None }
-    }
-    /// All distinct windows in this grid (in ALL order).
-    fn placed(&self) -> Vec<SnapWindow> {
-        SnapWindow::ALL.iter().copied()
-            .filter(|w| self.cells.contains(&Some(*w)))
-            .collect()
-    }
-}
+/// The placement matrix, the stored arrangements and the grid limit come from the
+/// shared arranger (`sdr-remote-layout`), which the server GUI uses too. They were
+/// a second copy on each side and the two drifted apart; a change lands in both by
+/// construction now.
+pub(crate) type LayoutGrid = sdr_remote_layout::LayoutGrid<SnapWindow>;
+pub(crate) type LayoutMemory = sdr_remote_layout::LayoutMemory<SnapWindow>;
+pub(crate) use sdr_remote_layout::{SnapTarget, LAYOUT_MEM_SLOTS};
+pub(crate) use sdr_remote_layout::{layout_grids_from_config, layout_grids_to_config};
 
 impl SdrRemoteApp {
     /// Is this window AVAILABLE to arrange (server configuration), regardless of
@@ -185,6 +127,40 @@ impl SdrRemoteApp {
         }
     }
 
+    /// The viewport a pop-out is drawn in, so an ALREADY OPEN one can be moved
+    /// with an explicit command. See `snap_move_now`.
+    fn snap_viewport_id(w: SnapWindow) -> Option<egui::ViewportId> {
+        let name = match w {
+            SnapWindow::Main => return None, // root viewport, moved by the caller
+            SnapWindow::Rx1 => "spectrum_popout",
+            SnapWindow::Rx2 => "rx2_popout",
+            SnapWindow::Vrx1 => "vrx1_popout",
+            SnapWindow::Vrx2 => "vrx2_popout",
+            SnapWindow::Yaesu1 => "yaesu_popout",
+            SnapWindow::Yaesu2 => "yaesu2_popout",
+        };
+        Some(egui::ViewportId::from_hash_of(name))
+    }
+
+    /// Move a pop-out that is ALREADY OPEN, by command rather than by builder.
+    ///
+    /// Measured 2026-08-08 on the server, same mechanism here: a ViewportBuilder
+    /// only takes effect for fields egui sees CHANGE, and egui compares against the
+    /// last builder it was given - not against where the window actually is. Move a
+    /// window by hand and then recall an arrangement that puts it back where egui
+    /// already has it on record, and nothing happens. That is exactly the case when
+    /// recalling a STORED arrangement: the values match what egui last saw, so the
+    /// builder path is silent. A command carries no comparison and always lands.
+    fn snap_move_now(&self, ctx: &egui::Context, w: SnapWindow, pos: egui::Pos2, size: egui::Vec2) {
+        if !self.snap_is_open(w) { return; } // not open yet: the builder does it
+        let Some(id) = Self::snap_viewport_id(w) else { return };
+        let z = ctx.zoom_factor().max(0.01);
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(
+            egui::pos2(pos.x / z, pos.y / z)));
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::InnerSize(
+            egui::vec2(size.x / z, size.y / z)));
+    }
+
     /// Set position+size of a window and reset init_applied so
     /// apply_popout_geometry applies the new geometry the next frame
     /// (same mechanism as recenter_popouts). Does NOT save - the caller
@@ -201,6 +177,89 @@ impl SdrRemoteApp {
             SnapWindow::Yaesu1 => { self.yaesu_popout_pos = Some(pos); self.yaesu_popout_size = Some(size); self.yaesu_popout_init_applied = false; }
             SnapWindow::Yaesu2 => { self.yaesu2_popout_pos = Some(pos); self.yaesu2_popout_size = Some(size); self.yaesu2_popout_init_applied = false; }
         }
+    }
+
+    /// Is this window currently OPEN? (`snap_is_available` asks whether it COULD
+    /// be arranged; this asks whether it is on screen right now.) A VRX window is
+    /// derived from its spectrum subscription - model B - so that flag is the one
+    /// to read.
+    fn snap_is_open(&self, w: SnapWindow) -> bool {
+        match w {
+            SnapWindow::Main => true,
+            SnapWindow::Rx1 => self.spectrum_popout,
+            SnapWindow::Rx2 => self.rx2_popout,
+            SnapWindow::Vrx1 => self.vrx1_high_res_spectrum,
+            SnapWindow::Vrx2 => self.vrx2_high_res_spectrum,
+            SnapWindow::Yaesu1 => self.yaesu_popout,
+            SnapWindow::Yaesu2 => self.yaesu2_popout,
+        }
+    }
+
+    /// Current position+size of a window, the counterpart of `snap_set_geometry`.
+    fn snap_geometry(&self, w: SnapWindow) -> Option<(egui::Pos2, egui::Vec2)> {
+        match w {
+            SnapWindow::Main => self.main_window_pos
+                .map(|p| (p, egui::vec2(self.window_w, self.window_h))),
+            SnapWindow::Rx1 => self.spectrum_popout_pos.zip(self.spectrum_popout_size),
+            SnapWindow::Rx2 => self.rx2_popout_pos.zip(self.rx2_popout_size),
+            SnapWindow::Vrx1 => self.vrx_popout_pos.zip(self.vrx_popout_size),
+            SnapWindow::Vrx2 => self.vrx2_popout_pos.zip(self.vrx2_popout_size),
+            SnapWindow::Yaesu1 => self.yaesu_popout_pos.zip(self.yaesu_popout_size),
+            SnapWindow::Yaesu2 => self.yaesu2_popout_pos.zip(self.yaesu2_popout_size),
+        }
+    }
+
+    /// Everything that is open right now, ready to store in a memory slot.
+    fn capture_layout(&self) -> Vec<(SnapWindow, egui::Pos2, egui::Vec2)> {
+        <SnapWindow as SnapTarget>::all().iter().copied()
+            .filter(|w| self.snap_is_open(*w))
+            .filter_map(|w| self.snap_geometry(w).map(|(p, s)| (w, p, s)))
+            .collect()
+    }
+
+    /// Put the windows back where a stored arrangement had them. Windows that the
+    /// server configuration no longer offers (e.g. Yaesu 2 unplugged) are skipped
+    /// rather than force-opened.
+    fn recall_layout(&mut self, ctx: &egui::Context, idx: usize) {
+        let Some(mem) = self.layout_memories.get(idx).cloned() else { return };
+        if mem.is_empty() { return; }
+        let mut n = 0usize;
+        for (w, pos, size) in mem.windows {
+            if !self.snap_is_available(w) {
+                // Not on offer yet - typically a recall done before there is a
+                // connection, so the radios are unknown and their windows cannot be
+                // opened. Giving up would leave a stored arrangement permanently
+                // incomplete, so remember the intent and carry it out the moment the
+                // window becomes available. The geometry is stored right away as
+                // well, so opening it by hand in the meantime also lands correctly.
+                log::info!("Arrangement {}: {:?} not available yet - queued until it appears",
+                           idx + 1, w);
+                self.snap_set_geometry(w, pos, size);
+                self.layout_pending.retain(|(pw, _, _)| *pw != w);
+                self.layout_pending.push((w, pos, size));
+                continue;
+            }
+            self.snap_open(w);
+            if w == SnapWindow::Main {
+                self.main_window_pos = Some(pos);
+                self.window_w = size.x;
+                self.window_h = size.y;
+                self.main_geom_dirty = true;
+                // Same unit boundary as apply_layout: stored in system points, a
+                // viewport command wants egui points.
+                let z = ctx.zoom_factor().max(0.01);
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                    egui::pos2(pos.x / z, pos.y / z)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                    egui::vec2(size.x / z, size.y / z)));
+            } else {
+                self.snap_move_now(ctx, w, pos, size);
+                self.snap_set_geometry(w, pos, size);
+            }
+            n += 1;
+        }
+        self.save_full_config();
+        log::info!("Arrangement {} recalled: {} window(s) restored", idx + 1, n);
     }
 
     /// Index (in monitor_work_areas_px) of the monitor where the main window is.
@@ -249,8 +308,8 @@ impl SdrRemoteApp {
                 }
                 None => continue,
             };
-            let col_w = aw / grid.cols as f32;
-            let row_h = ah / grid.rows as f32;
+            let col_w = aw / grid.cols() as f32;
+            let row_h = ah / grid.rows() as f32;
             for w in placed {
                 let Some((minr, minc, maxr, maxc)) = grid.bounds(w) else { continue };
                 // Open the window first (if still closed) so the snap becomes visible
@@ -269,9 +328,19 @@ impl SdrRemoteApp {
                     self.window_w = iw;
                     self.window_h = ih;
                     self.main_geom_dirty = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(iw, ih)));
+                    // Unit boundary. Everything above is in SYSTEM points (the work
+                    // area came from the OS and was divided by the NATIVE scale), but
+                    // egui-winit multiplies a viewport command by
+                    // `zoom_factor * native_pixels_per_point` - so a command wants EGUI
+                    // points. The window builder used when a pop-out opens takes system
+                    // points instead, which is why the two paths need different units.
+                    // Without this the main window came out a factor `zoom` too small:
+                    // at 50% you would need a 24x24 grid to fill the screen.
+                    let z = ctx.zoom_factor().max(0.01);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x / z, y / z)));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(iw / z, ih / z)));
                 } else {
+                    self.snap_move_now(ctx, w, egui::pos2(x, y), egui::vec2(iw, ih));
                     self.snap_set_geometry(w, egui::pos2(x, y), egui::vec2(iw, ih));
                 }
                 placed_total += 1;
@@ -281,6 +350,28 @@ impl SdrRemoteApp {
             self.save_full_config();
             log::info!("Layout applied: {} window(s) snapped", placed_total);
         }
+    }
+
+    /// Place windows a recall could not reach yet, now that they exist.
+    ///
+    /// Called every frame; does nothing while the queue is empty, which is almost
+    /// always. An entry is dropped once carried out, so a window is placed once and
+    /// stays wherever the operator puts it afterwards.
+    pub(super) fn apply_pending_layout(&mut self, ctx: &egui::Context) {
+        if self.layout_pending.is_empty() { return; }
+        let ready: Vec<_> = self.layout_pending.iter().copied()
+            .filter(|(w, _, _)| self.snap_is_available(*w))
+            .collect();
+        if ready.is_empty() { return; }
+        for (w, pos, size) in ready {
+            self.layout_pending.retain(|(pw, _, _)| *pw != w);
+            self.snap_open(w);
+            self.snap_move_now(ctx, w, pos, size);
+            self.snap_set_geometry(w, pos, size);
+            log::info!("Queued arrangement: {:?} appeared - placed at {:.0},{:.0} {:.0}x{:.0}",
+                       w, pos.x, pos.y, size.x, size.y);
+        }
+        self.save_full_config();
     }
 
     /// "Arrange windows" - matrix placer. Pick a grid size (e.g. 2x3),
@@ -301,12 +392,10 @@ impl SdrRemoteApp {
 
         // Remove unavailable windows (e.g. Yaesu 2 absent) from ALL grids + the
         // active selection.
-        let avail: Vec<SnapWindow> =
-            SnapWindow::ALL.iter().copied().filter(|w| self.snap_is_available(*w)).collect();
+        let avail: Vec<SnapWindow> = <SnapWindow as SnapTarget>::all().iter().copied()
+            .filter(|w| self.snap_is_available(*w)).collect();
         for grid in self.layout_grid_per_monitor.iter_mut() {
-            for slot in grid.cells.iter_mut() {
-                if let Some(w) = *slot { if !avail.contains(&w) { *slot = None; } }
-            }
+            grid.retain_available(&avail);
         }
         if let Some(a) = self.layout_active_item {
             if !avail.contains(&a) { self.layout_active_item = None; }
@@ -329,11 +418,26 @@ impl SdrRemoteApp {
         let mut fill_rect: Option<((usize, usize), (usize, usize))> = None; // fill rectangle
         let mut clear_all = false;
         let mut do_apply = false;
+        // The memory slots are edited inside the closure, which must not borrow
+        // `self` - same snapshot-then-apply pattern as the grid above.
+        self.layout_memories.resize_with(LAYOUT_MEM_SLOTS, LayoutMemory::default);
+        let mem_names_before: Vec<String> =
+            self.layout_memories.iter().map(|m| m.name.clone()).collect();
+        let mut mem_names = mem_names_before.clone();
+        let mem_counts: Vec<usize> =
+            self.layout_memories.iter().map(|m| m.windows.len()).collect();
+        let mut save_slot: Option<usize> = None;
+        let mut recall_slot: Option<usize> = None;
+        let mut names_changed = false;
 
         egui::Window::new(rust_i18n::t!("main_arrange_windows_title").to_string())
             .open(&mut open_flag)
             .resizable(true)
-            .default_size([360.0, 560.0])
+            // Wide enough for the 18x18 size-picker (18 cells of 15 points plus
+            // the gaps is already ~300) and tall enough for picker + palette +
+            // matrix + the memory slots, so the window is usable the moment it
+            // opens instead of needing a resize first.
+            .default_size([470.0, 780.0])
             .show(ctx, |ui| {
               egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                 ui.label(RichText::new(
@@ -358,159 +462,26 @@ impl SdrRemoteApp {
                     }
                 }
 
-                // --- Grid-size picker (up to GRID_MAX x GRID_MAX; hover/click) ---
-                const MAXG: usize = GRID_MAX;
-                const PCELL: f32 = 15.0;
-                const PGAP: f32 = 2.0;
-                let dim = PCELL * MAXG as f32 + PGAP * (MAXG as f32 - 1.0);
-                ui.horizontal(|ui| {
-                    ui.label(rust_i18n::t!("main_grid_size").to_string());
-                    let (prect, presp) =
-                        ui.allocate_exact_size(egui::vec2(dim, dim), egui::Sense::click());
-                    let hover = presp.hover_pos().map(|p| {
-                        let c = (((p.x - prect.min.x) / (PCELL + PGAP)) as i32).clamp(0, MAXG as i32 - 1) as usize;
-                        let r = (((p.y - prect.min.y) / (PCELL + PGAP)) as i32).clamp(0, MAXG as i32 - 1) as usize;
-                        (r, c)
-                    });
-                    let pnt = ui.painter_at(prect);
-                    for r in 0..MAXG {
-                        for c in 0..MAXG {
-                            let cr = egui::Rect::from_min_size(
-                                prect.min + egui::vec2(c as f32 * (PCELL + PGAP), r as f32 * (PCELL + PGAP)),
-                                egui::vec2(PCELL, PCELL),
-                            );
-                            let preview = hover.map_or(false, |(hr, hc)| r <= hr && c <= hc);
-                            let cur = r < gsnap.rows as usize && c < gsnap.cols as usize;
-                            let fill = if preview {
-                                theme::TL_SELECTED_FILL
-                            } else if cur {
-                                Color32::from_gray(80)
-                            } else {
-                                Color32::from_gray(45)
-                            };
-                            pnt.rect_filled(cr, egui::Rounding::same(2.0), fill);
-                            pnt.rect_stroke(cr, egui::Rounding::same(2.0), egui::Stroke::new(1.0, Color32::from_gray(100)));
-                        }
-                    }
-                    if let Some((hr, hc)) = hover {
-                        if presp.clicked() { resize_to = Some((hr as u8 + 1, hc as u8 + 1)); }
-                    }
-                    let (lr, lc) = hover
-                        .map(|(r, c)| (r + 1, c + 1))
-                        .unwrap_or((gsnap.rows as usize, gsnap.cols as usize));
-                    ui.label(RichText::new(format!("{} x {}", lr, lc)).strong());
-                });
+                resize_to = sdr_remote_layout::grid_size_picker(
+                    ui, &rust_i18n::t!("main_grid_size").to_string(),
+                    gsnap.rows(), gsnap.cols(), theme::TL_SELECTED_FILL);
 
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- Palette: open windows as colored buttons (click = select) ---
                 ui.label(rust_i18n::t!("main_pick_window").to_string());
-                ui.horizontal_wrapped(|ui| {
-                    for w in &avail {
-                        let is_active = active == Some(*w);
-                        let txt = RichText::new(w.label()).size(12.0).color(Color32::WHITE);
-                        let mut btn = egui::Button::new(txt)
-                            .fill(w.color())
-                            .rounding(egui::Rounding::same(4.0));
-                        if is_active {
-                            btn = btn.stroke(egui::Stroke::new(2.0, Color32::WHITE));
-                        }
-                        if ui.add(btn).clicked() {
-                            select = Some(if is_active { None } else { Some(*w) });
-                        }
-                    }
-                });
+                select = sdr_remote_layout::window_palette(ui, &avail, active);
 
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- Placement grid: click/drag to paint `active` ---
                 ui.label(rust_i18n::t!("main_place_hint").to_string());
-                let cols = gsnap.cols as usize;
-                let rows = gsnap.rows as usize;
-                let avail = ui.available_width().clamp(120.0, 380.0);
-                let cell = (avail / cols as f32).clamp(22.0, 88.0);
-                let gw = cell * cols as f32;
-                let gh = cell * rows as f32;
-                let (grect, gresp) =
-                    ui.allocate_exact_size(egui::vec2(gw, gh), egui::Sense::click_and_drag());
-                let gp = ui.painter_at(grect);
-                for r in 0..rows {
-                    for c in 0..cols {
-                        let cr = egui::Rect::from_min_size(
-                            grect.min + egui::vec2(c as f32 * cell, r as f32 * cell),
-                            egui::vec2(cell, cell),
-                        ).shrink(1.5);
-                        let w = gsnap.cell(r, c);
-                        let fill = w.map(|w| w.color()).unwrap_or(Color32::from_gray(48));
-                        gp.rect_filled(cr, egui::Rounding::same(3.0), fill);
-                        gp.rect_stroke(cr, egui::Rounding::same(3.0), egui::Stroke::new(1.0, Color32::from_gray(100)));
-                        if let Some(w) = w {
-                            gp.text(
-                                cr.center(),
-                                egui::Align2::CENTER_CENTER,
-                                w.label(),
-                                egui::FontId::proportional((cell * 0.22).clamp(9.0, 13.0)),
-                                Color32::WHITE,
-                            );
-                        }
-                    }
-                }
-                // Cell under the pointer: `inside` = strictly within the grid
-                // (for click/right-click); `clamped` = clamped to the edge (for
-                // dragging, so past the edge you still hit the edge cell).
-                let ptr = gresp.interact_pointer_pos();
-                let clamped = ptr.map(|p| {
-                    let c = (((p.x - grect.min.x) / cell) as i32).clamp(0, cols as i32 - 1) as usize;
-                    let r = (((p.y - grect.min.y) / cell) as i32).clamp(0, rows as i32 - 1) as usize;
-                    (r, c)
-                });
-                let inside = ptr.and_then(|p| {
-                    if !grect.contains(p) { return None; }
-                    let c = ((p.x - grect.min.x) / cell) as usize;
-                    let r = ((p.y - grect.min.y) / cell) as usize;
-                    if r < rows && c < cols { Some((r, c)) } else { None }
-                });
-                // Drag preview: highlight rectangle anchor..current (translucent + border).
-                if gresp.dragged() {
-                    if let (Some(a), Some(cur), Some(w)) = (drag_anchor, clamped, active) {
-                        let (r0, r1) = (a.0.min(cur.0), a.0.max(cur.0));
-                        let (c0, c1) = (a.1.min(cur.1), a.1.max(cur.1));
-                        let pr = egui::Rect::from_min_max(
-                            grect.min + egui::vec2(c0 as f32 * cell, r0 as f32 * cell),
-                            grect.min + egui::vec2((c1 + 1) as f32 * cell, (r1 + 1) as f32 * cell),
-                        ).shrink(1.5);
-                        gp.rect_filled(pr, egui::Rounding::same(3.0), w.color().gamma_multiply(0.55));
-                        gp.rect_stroke(pr, egui::Rounding::same(3.0), egui::Stroke::new(2.0, Color32::WHITE));
-                    }
-                }
-                // Interaction. Dragging = fill rectangle (anchor -> release); single
-                // click = 1 cell; right-click / click-on-active = clear.
-                if gresp.secondary_clicked() {
-                    if let Some((r, c)) = inside { clear_cell = Some((r, c)); }
-                } else if gresp.drag_started() {
-                    if active.is_some() {
-                        if let Some(cell_rc) = inside.or(clamped) { set_anchor = Some(Some(cell_rc)); }
-                    }
-                } else if gresp.drag_stopped() {
-                    if active.is_some() {
-                        if let Some(cur) = clamped {
-                            fill_rect = Some((drag_anchor.unwrap_or(cur), cur));
-                        }
-                    }
-                    set_anchor = Some(None);
-                } else if gresp.clicked() {
-                    if let Some((r, c)) = inside {
-                        match active {
-                            // click on already-active window = clear that cell (toggle)
-                            Some(a) if gsnap.cell(r, c) == Some(a) => clear_cell = Some((r, c)),
-                            Some(_) => paint_cell = Some((r, c)),
-                            // nothing selected: clicking a filled cell selects that window
-                            None => { if let Some(w) = gsnap.cell(r, c) { select = Some(Some(w)); } }
-                        }
-                    }
-                }
+                let intents = sdr_remote_layout::placement_grid(ui, &gsnap, active, drag_anchor);
+                if let Some(sel) = intents.select { select = Some(sel); }
+                paint_cell = intents.paint_cell;
+                clear_cell = intents.clear_cell;
+                set_anchor = intents.set_anchor;
+                fill_rect = intents.fill_rect;
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -519,11 +490,64 @@ impl SdrRemoteApp {
                         .fill(theme::TL_SELECTED_FILL)).clicked() { do_apply = true; }
                     if ui.button(rust_i18n::t!("main_empty").to_string()).clicked() { clear_all = true; }
                 });
+
+                // --- Arrangement memories: store/restore actual window positions ---
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label(rust_i18n::t!("main_layout_memory").to_string());
+                ui.label(RichText::new(
+                    rust_i18n::t!("main_layout_memory_help").to_string()
+                ).size(11.0).weak());
+                ui.add_space(4.0);
+                for i in 0..LAYOUT_MEM_SLOTS {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{}", i + 1)).strong().monospace());
+                        // Save on lost focus, not per keystroke: the name lives in the
+                        // full config file, and rewriting that on every character typed
+                        // is a file write per keypress for nothing.
+                        let name_resp = ui.add(egui::TextEdit::singleline(&mut mem_names[i])
+                            .desired_width(120.0)
+                            .hint_text(rust_i18n::t!("main_layout_memory_name").to_string()));
+                        if name_resp.lost_focus() && mem_names[i] != mem_names_before[i] {
+                            names_changed = true;
+                        }
+                        if ui.button(rust_i18n::t!("main_layout_memory_store").to_string())
+                            .on_hover_text(rust_i18n::t!("main_layout_memory_store_hint").to_string())
+                            .clicked()
+                        {
+                            save_slot = Some(i);
+                        }
+                        let filled = mem_counts[i] > 0;
+                        let mut recall = egui::Button::new(
+                            rust_i18n::t!("main_layout_memory_recall").to_string());
+                        if filled { recall = recall.fill(theme::TL_SELECTED_FILL); }
+                        if ui.add_enabled(filled, recall).clicked() { recall_slot = Some(i); }
+                        if filled {
+                            ui.label(RichText::new(
+                                rust_i18n::t!("main_layout_memory_count", n = mem_counts[i]).to_string()
+                            ).size(11.0).weak());
+                        }
+                    });
+                }
+
               }); // ScrollArea
             });
 
         // --- Apply intents to the state (after the closure) ---
         self.show_layout_arranger = open_flag;
+        for (slot, name) in self.layout_memories.iter_mut().zip(mem_names.into_iter()) {
+            slot.name = name;
+        }
+        if let Some(i) = save_slot {
+            let windows = self.capture_layout();
+            let n = windows.len();
+            if let Some(slot) = self.layout_memories.get_mut(i) { slot.windows = windows; }
+            self.save_full_config();
+            log::info!("Arrangement {} stored: {} window(s)", i + 1, n);
+        } else if names_changed {
+            self.save_full_config();
+        }
+        if let Some(i) = recall_slot { self.recall_layout(ctx, i); }
         if sel_mon != cur_mon && sel_mon < self.layout_grid_per_monitor.len() {
             self.layout_target_monitor = sel_mon;
         }
@@ -531,7 +555,7 @@ impl SdrRemoteApp {
         let mon = cur_mon;
         if let Some((rr, cc)) = resize_to { self.layout_grid_per_monitor[mon].set_size(rr, cc); }
         if clear_all {
-            for slot in self.layout_grid_per_monitor[mon].cells.iter_mut() { *slot = None; }
+            self.layout_grid_per_monitor[mon].clear_all();
         }
         if let Some((r, c)) = clear_cell { self.layout_grid_per_monitor[mon].set(r, c, None); }
         if let Some((r, c)) = paint_cell {

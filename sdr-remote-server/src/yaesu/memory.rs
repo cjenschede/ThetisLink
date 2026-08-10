@@ -112,6 +112,15 @@ pub(super) fn read_all_memories(
     // Before the long scan (one query, no channel switching) - see
     // `read_current_ctcss` for why this is the only tone we can honestly fill.
     let current_ctcss = read_current_ctcss(port, current_mem_ch);
+    // Then start the scan from an EMPTY input buffer. Measured 2026-08-08: the CN
+    // answer above can arrive after its own read has returned, and the first MT
+    // query then consumes it ("channel 1 answered without an MT frame: [CN00012;]").
+    // From there every channel receives the previous channel's answer and the last
+    // one is never collected - a list one channel short, with the data silently
+    // shifted. Intermittent, because it depends on whether the CN reply beats the
+    // first MT query; a manual re-read always looked fine because the buffer was
+    // clean by then. Same fault the tone walk had, same remedy.
+    port.drain();
 
     // A live radio answers EVERY channel quickly (programmed or empty -
     // the full 117-channel read takes <1s). A radio in standby/off does not
@@ -122,44 +131,93 @@ pub(super) fn read_all_memories(
     // slow-but-valid response resets the counter, and empty leading channels (which
     // answer quickly) do not trigger this.
     let mut consec_timeouts = 0u16;
+    // The echo check keeps reporting a channel number that is NOT the one asked
+    // (constant 014 with the radio parked on memory 14), while the count and the
+    // empty/occupied split are correct. Three explanations fitted the warnings and
+    // two were already refuted by measurement, so dump the raw bytes at INFO - the
+    // probe below sat at DEBUG and this server logs at INFO, which is why it has
+    // never recorded a single frame.
     for ch in 1..=117u16 {
         let t0 = Instant::now();
         let response = cat_query(port, &format!("MT{:03};", ch));
-        // Build 116 added an echo check here ("does the answer contain MT{ch:03}?")
-        // and a per-channel retry, copied from the FTX-1 branch. It rejected valid
-        // answers and cut the list to one or two channels: 117 channels went by in
-        // 1.3 s, so the radio was answering - the assumption about what the answer
-        // LOOKS like was wrong, and it was never measured. Reverted to the form
-        // that reads this radio correctly. The raw probe below records the real
-        // shape, so the next attempt can start from a measurement.
-        if ch <= 3 {
-            log::debug!("MT{:03} RAW probe: [{}] ({}B)", ch, response.escape_debug(), response.len());
-        }
         let timed_out = response.trim().is_empty() && t0.elapsed() >= Duration::from_millis(250);
         if timed_out {
             consec_timeouts += 1;
             if consec_timeouts >= 4 {
                 return Err("radio not responding (powered off?)".to_string());
             }
+            // Observation only, no retry (an attempt to add one in build 116 rejected
+            // valid answers and cut the list to two channels - the shape of the reply
+            // had been assumed rather than measured). This names the channel that
+            // stayed silent, and how long it waited, so the next short read says WHICH
+            // one went missing instead of only that the total was one too low.
+            warn!("Yaesu: channel {} gave no answer after {} ms - skipped (list will be short)",
+                  ch, t0.elapsed().as_millis());
             continue;
         }
         consec_timeouts = 0;
 
-        if response.trim().is_empty() || response.contains("?;") {
+        if response.trim().is_empty() {
+            warn!("Yaesu: channel {} answered nothing (in {} ms, no timeout) - skipped",
+                  ch, t0.elapsed().as_millis());
             continue;
         }
+        if response.contains("?;") {
+            continue; // genuinely empty channel - definitive, not a miss
+        }
 
-        if let Some(start) = response.find("MT") {
-            if let Some(end) = response[start..].find(';') {
+        let Some(start) = response.find("MT") else {
+            // Answered, but not with an MT frame. Measured, not repaired: this is
+            // one of three ways a channel could vanish without a trace, which is
+            // why a short list showed no warning at all.
+            warn!("Yaesu: channel {} answered without an MT frame: [{}] - skipped",
+                  ch, response.escape_debug());
+            continue;
+        };
+        {
+            let Some(end) = response[start..].find(';') else {
+                warn!("Yaesu: channel {} answer has no terminator: [{}] - skipped",
+                      ch, response.escape_debug());
+                continue;
+            };
+            {
                 let d = &response[start + 2..start + end]; // skip "MT"
 
 
                 // MT response: P1(3)+P2(9)+P3(5)+P4(1)+P5(1)+P6(1)+P7(1)+P8(1)+P9(2)+P10(1)+P11(1)+P12(12) = 38
-                if d.len() < 26 { continue; }
+                if d.len() < 26 {
+                    warn!("Yaesu: channel {} answer too short ({} chars, need 26): [{}] - skipped",
+                          ch, d.len(), response.escape_debug());
+                    continue;
+                }
 
-                let _ch_num = &d[0..3];   // P1: channel number
+                // P1 (d[0..3]) is DELIBERATELY not read. Per the CAT reference it
+                // holds the requested channel - "MT + P1(3) + P2(9) + ..." with the
+                // example reply MT001145500000+00000040000REPEATER1   ; - but this
+                // radio does not do that. Measured 2026-08-08 over three scans with
+                // the radio parked on memory 14:
+                //
+                //   MT001 -> MT014144525000+0000004100000lokaal 1    ;
+                //   MT002 -> MT014144700000+0000004100000lokaal 2    ;
+                //   MT003 -> MT014145500000+0000004100000aanroep     ;
+                //
+                // P1 is the CURRENT memory channel, the same for every query, while
+                // the payload belongs to the channel asked (different frequencies,
+                // correct tags, the tag at the spec's positions 29-40). With memory
+                // scan running on the radio, P1 followed the scan instead.
+                //
+                // So the answer cannot be matched to the question on this radio, and
+                // an echo check here can only raise false alarms. This is why build
+                // 116 - which copied the FTX-1's echo validation, where MR does echo
+                // correctly - cut the list to one or two channels: valid answers were
+                // rejected until consec_timeouts aborted the read. Do not add one back
+                // without measuring P1 again first.
                 let freq_hz: u64 = d[3..12].parse().unwrap_or(0); // P2: 9-digit freq
-                if freq_hz == 0 { continue; }
+                if freq_hz == 0 {
+                    warn!("Yaesu: channel {} has an unreadable frequency [{}] - skipped",
+                          ch, &d[3..12]);
+                    continue;
+                }
 
                 // P3: clar direction + offset (5 chars at 12..17), e.g. "+0000"
                 // P4: rx_clar (17), P5: tx_clar (18)
@@ -289,6 +347,42 @@ fn current_memory_channel<P: CatPort + ?Sized>(port: &mut P, five_digit: bool) -
 /// Stop scanning if the radio is scanning, and report whether it was.
 /// A scanning radio ignores a memory write, silently - the operator sees a
 /// write that did nothing (`SC` per the CAT manual: P1 0 = off, 1 = up, 2 = down).
+/// Put the FTX-1's MAIN side on VFO for the duration of a memory write, and report
+/// what it was so it can be put back.
+///
+/// The radio refuses `MW` for the channel it is CURRENTLY sitting on while it is in
+/// memory mode - observed on air: writing 23 channels wrote 22, and the one refused
+/// was the channel in use. Nothing says so; the radio answers "?;" and that single
+/// channel silently keeps its old contents. The operator's manual route says the same
+/// thing in front-panel terms: leave the channel first, then store.
+///
+/// FTX-1 CAT OM (2508-C), `VM VFO / MEMORY CHANNEL`:
+///   Set  VM P1 P2 P2 ;   P1 0=MAIN 1=SUB, P2 00=VFO 10=MT 11=Memory 20=PMS
+///   Read VM P1 ;         answer VM P1 P2 P2 ;
+fn ftx1_leave_memory_mode<P: CatPort + ?Sized>(port: &mut P) -> Option<String> {
+    let resp = port.query("VM0;");
+    let i = resp.find("VM")?;
+    let rest = &resp[i + 2..];
+    // answer: VM + P1(1) + P2(2) + ';'
+    if rest.len() < 4 { return None; }
+    let was: String = rest[1..3].to_string();
+    if was == "00" {
+        return None; // already on VFO - nothing to restore
+    }
+    info!("Memory write: MAIN side is on {} (not VFO), switching to VFO for the write", was);
+    port.send("VM000;");
+    std::thread::sleep(Duration::from_millis(80));
+    Some(was)
+}
+
+/// Counterpart of `ftx1_leave_memory_mode`.
+fn ftx1_restore_memory_mode<P: CatPort + ?Sized>(port: &mut P, was: Option<String>) {
+    if let Some(w) = was {
+        port.send(&format!("VM0{};", w));
+        info!("Memory write done: MAIN side put back on {}", w);
+    }
+}
+
 fn pause_scan<P: CatPort + ?Sized>(port: &mut P) -> Option<char> {
     let resp = port.query("SC;");
     let p = resp.find("SC")?;
@@ -326,6 +420,318 @@ pub(super) struct MemoryWriteReturn {
 /// with 3 digits and stores via `MT`, the FTX-1 with 5 and stores via `MW`.
 /// The `CN` command itself is identical on both (P1=0 is "fixed" on the 991A
 /// and "MAIN-side" on the FTX-1, P2=0 = CTCSS), per both CAT manuals.
+/// Translate a memory record's tone mode (the `MW` P8 code) into the `CT` code.
+///
+/// They are NOT the same numbering, and the two that differ are the two that matter:
+///
+///   MW P8:  1 = CTCSS ENC/DEC      2 = CTCSS ENC
+///   CT P2:  1 = ENC on / DEC off   2 = ENC on / DEC on
+///
+/// So 1 and 2 are swapped between them. Passing the value straight through would set
+/// encode where encode+decode was asked for, and the other way round - a repeater that
+/// opens but a squelch that never closes, or the reverse. Nothing would report it.
+/// (FTX-1 CAT OM 2508-C: MW P8 on the MW page, CT P2 under "CT SQL TYPE".)
+/// `ftx1_tone_mode_to_ct` for callers outside this module.
+pub(super) fn ftx1_tone_mode_to_ct_pub(mw_p8: char) -> char { ftx1_tone_mode_to_ct(mw_p8) }
+
+fn ftx1_tone_mode_to_ct(mw_p8: char) -> char {
+    match mw_p8 {
+        '1' => '2', // ENC/DEC
+        '2' => '1', // ENC only
+        '3' => '3', // DCS
+        '4' => '4', // PR FREQ
+        '5' => '5', // REV TONE
+        _ => '0',   // off
+    }
+}
+
+/// Read a channel and its two neighbours, for the log.
+///
+/// This is the measurement that decides between two defects that look identical in
+/// the log we have: does `AM;` write to the WRONG channel, or does it not write at
+/// all? The pass only ever checks the channel it meant to write, so both come out as
+/// "the channel is unchanged". If a neighbour moved instead, the target pointer is
+/// wrong; if nothing moved anywhere, the store is a no-op in this state. Those need
+/// opposite fixes, and guessing between them has cost five attempts already.
+fn ftx1_dump_neighbourhood<P: CatPort + ?Sized>(port: &mut P, ch: u16, when: &str) {
+    for probe in [ch.saturating_sub(1), ch, ch + 1] {
+        if probe == 0 { continue; }
+        port.drain();
+        let r = port.query(&format!("MR{:05};", probe));
+        info!("PROBE {} ch {:>3}: [{}]", when, probe, r.trim().escape_debug());
+    }
+    port.drain();
+    let mc = port.query("MC0;");
+    let fa = port.query("FA;");
+    let vm = port.query("VM0;");
+    let cn = port.query("CN00;");
+    info!("PROBE {} state: MC0=[{}] FA=[{}] VM0=[{}] CN00=[{}]",
+          when, mc.trim().escape_debug(), fa.trim().escape_debug(),
+          vm.trim().escape_debug(), cn.trim().escape_debug());
+}
+
+/// Store the CTCSS/DCS tone of an FTX-1 memory channel.
+///
+/// This mirrors, command for command, the front-panel sequence the operator worked out
+/// on the radio itself (2026-08-09, reproducible):
+///
+///   in the channel -> M>V -> set the tone -> MW -> select the memory -> MW
+///   -> the name is now empty -> type the name
+///
+/// In CAT:
+///
+///   MC0nnnnn;  be on the channel
+///   MA;        MEMORY CHANNEL to MAIN-side   (M>V)
+///   CN0 P2 nnn;  the tone (Table 1: 004 = 77.0 Hz)
+///   MC0nnnnn;  select the target memory
+///   AM;        MAIN-SIDE TO MEMORY CHANNEL   (MW)
+///   MT0nnnnn<tag>;  the name, which the store clears
+///
+/// Two things were wrong in the attempt before this one, and both came from not
+/// following that sequence. Rebuilding VFO-A with `FA` and `MD` only carries what is
+/// sent - shift, direction and everything else silently reverted to whatever VFO-A
+/// happened to hold. `MA` copies the WHOLE channel, so only the tone changes. And the
+/// store empties the name, which nothing put back.
+///
+/// `AM` is also why an earlier attempt was abandoned: on 2026-08-05 it overwrote
+/// memory 16 with the contents of VFO-A (430.125 MHz became 14.280 MHz). The command
+/// was never the problem - VFO-A held something else. `MA` is exactly the preparation
+/// that was missing.
+///
+/// Every channel is read back and the pass STOPS on the first mismatch rather than
+/// working through the bank. That failure has cost a channel once; it must cost at
+/// most one.
+///
+/// The caller has already stepped off memory mode and paused any scan.
+/// Not called while the tone write is off; kept because the probe mode is the way
+/// back in the moment a route is found.
+#[allow(dead_code)]
+fn ftx1_write_tones_via_vfo<P: CatPort + ?Sized>(
+    port: &mut P,
+    rows: &[(u16, u64, u8, bool, String, char, char)], // (channel, freq_hz, tone number, is_dcs, tag cmd, MW P8, mode)
+    is_tx: &dyn Fn() -> bool,
+) -> usize {
+    let mut stored = 0usize;
+    // Measuring mode. Set THETISLINK_FTX1_TONE_PROBE=<channel> before starting the
+    // server: the pass then touches ONLY that channel, dumps it and its neighbours
+    // before and after, and waits two seconds before reading back instead of 150 ms.
+    // Nothing else in the bank is written, which is the point - the failure being
+    // measured is "something else got written".
+    let probe_only: Option<u16> = std::env::var("THETISLINK_FTX1_TONE_PROBE")
+        .ok()
+        .and_then(|v| v.trim().parse::<u16>().ok());
+    if let Some(only) = probe_only {
+        info!("FTX-1 tone PROBE mode: channel {} only, the rest of the bank is left alone", only);
+    }
+    for (ch, freq_hz, tone_num, is_dcs, mt_cmd, tone_mode, mode_char) in rows {
+        if let Some(only) = probe_only {
+            if *ch != only { continue; }
+            ftx1_dump_neighbourhood(port, *ch, "before");
+        }
+        if is_tx() {
+            warn!("FTX-1 tone write aborted at channel {}: radio went into TX", ch);
+            break;
+        }
+        let select = format!("MC0{:05};", ch);
+        // Be on the channel, and WAIT until the radio says it is there.
+        //
+        // Without this the pass wrote the previous channel's contents into the next
+        // one: the recall had not landed yet when MA copied, so the whole walk shifted
+        // by one. On air that turned into memories 5 and 6 holding each other's
+        // frequency - a memory bank quietly rearranged, which is the worst kind of
+        // failure here because nothing looks wrong until you use the channel.
+        // The tone READ walk has always confirmed the recall this way; the write pass
+        // did not.
+        port.send(&select);
+        std::thread::sleep(Duration::from_millis(80));
+        let mut on_channel = false;
+        for _ in 0..4 {
+            if current_memory_channel(port, true) == Some(*ch) {
+                on_channel = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        if !on_channel {
+            warn!("FTX-1 channel {}: the radio did not report being on it - skipped, \
+                   nothing written", ch);
+            continue;
+        }
+        // Copy the WHOLE channel to MAIN - not a rebuilt version of it.
+        port.send("MA;");
+        std::thread::sleep(Duration::from_millis(80));
+        // MA brings across what the RADIO holds, which is the right starting point for
+        // everything this pass does not manage - shift, direction, filters. But where
+        // the operator's list differs from the radio, the list is the intent: without
+        // putting it back on top, MA followed by AM writes the radio's own old content
+        // back and quietly undoes the MW pass that just ran. Observed: channel 6 came
+        // back at 145.600 while the list said 145.625.
+        port.send(&format!("FA{:09};", freq_hz));
+        std::thread::sleep(Duration::from_millis(40));
+        port.send(&format!("MD0{};", mode_char));
+        std::thread::sleep(Duration::from_millis(40));
+        // Then the tone: first WHICH kind of tone (CT), then WHICH tone (CN).
+        // MA carried the channel's own tone mode across, but the operator may have
+        // just changed it in the table, and CT is what makes that take.
+        // Read the answers instead of firing and hoping. Both were sent with `send`,
+        // so a "?;" refusal was invisible: we could see that the tone did not change
+        // but not whether the radio had REFUSED the command or accepted and ignored
+        // it. Those need opposite fixes - a wrong command form versus a radio that
+        // will not take a tone in this state - and that is the last thing separating
+        // them.
+        let ct_cmd = format!("CT0{};", ftx1_tone_mode_to_ct(*tone_mode));
+        port.drain();
+        let ct_resp = port.query(&ct_cmd);
+        info!("PROBE CT: sent [{}] -> [{}]", ct_cmd, ct_resp.trim().escape_debug());
+        std::thread::sleep(Duration::from_millis(40));
+
+        let p2 = if *is_dcs { 1 } else { 0 };
+        let cn_cmd = format!("CN0{}{:03};", p2, tone_num);
+        port.drain();
+        let cn_resp = port.query(&cn_cmd);
+        info!("PROBE CN: sent [{}] -> [{}]", cn_cmd, cn_resp.trim().escape_debug());
+        std::thread::sleep(Duration::from_millis(60));
+        // And straight back: did it take at all, before anything is stored?
+        port.drain();
+        let cn_now = port.query(if *is_dcs { "CN01;" } else { "CN00;" });
+        info!("PROBE CN readback right after setting it: [{}]", cn_now.trim().escape_debug());
+        // Last check before the irreversible step: MAIN must actually hold the
+        // frequency we are about to store. Everything up to here is a set command
+        // without a reply, so this is the first moment the radio can contradict us -
+        // and storing the wrong contents is what rearranges a memory bank.
+        port.drain();
+        let main_now = port.query("FA;");
+        let main_ok = main_now.find("FA")
+            .and_then(|i| main_now.get(i + 2..i + 11))
+            .and_then(|f| f.parse::<u64>().ok())
+            == Some(*freq_hz);
+        if !main_ok {
+            warn!("FTX-1 channel {}: MAIN reads [{}] instead of {} just before storing - \
+                   skipped, nothing written", ch, main_now.escape_debug(), freq_hz);
+            continue;
+        }
+
+        // Store MAIN into the channel selected at the top of this loop. NO second MC
+        // here: on the front panel the button after the first MW picks a target while
+        // MAIN keeps the prepared contents, but over CAT `MC` is a plain RECALL - it
+        // puts the channel back on MAIN and AM then stores the channel into itself.
+        // Observed: channel 6 kept reading 145.600 where the list said 145.625, no
+        // matter what was prepared. The selection made before MA is what AM writes to.
+        // `VM;` rather than `AM;`. The manual lists both as "MAIN-SIDE TO MEMORY
+        // CHANNEL", and the front-panel key the operator presses to store is the one
+        // called MW - whose CAT name is the bare VM. AM has now been measured doing
+        // nothing at all here: channel, neighbours and stored tone all unchanged, with
+        // the radio left in memory mode. So try the other of the two.
+        port.send("VM;");
+        // A store that commits slowly would read back as "nothing happened", so in
+        // measuring mode give it far more room than it should ever need.
+        std::thread::sleep(Duration::from_millis(if probe_only.is_some() { 2000 } else { 150 }));
+        if probe_only.is_some() {
+            // The tone was measured present right after CN and absent at the end, so
+            // one of our own two remaining steps undoes it. Read between them.
+            port.drain();
+            let after_store = port.query(if *is_dcs { "CN01;" } else { "CN00;" });
+            info!("PROBE CN after the store command: [{}]", after_store.trim().escape_debug());
+        }
+        // The store clears the name; put it back.
+        port.drain();
+        let tag_resp = port.query(mt_cmd);
+        if probe_only.is_some() {
+            port.drain();
+            let after_tag = port.query(if *is_dcs { "CN01;" } else { "CN00;" });
+            info!("PROBE CN after the tag write [{}]: [{}]",
+                  mt_cmd.escape_debug(), after_tag.trim().escape_debug());
+            ftx1_dump_neighbourhood(port, *ch, "after AM");
+
+            // The store wipes a tone set before it, so try the other way round: set it
+            // AFTER, while sitting on the channel, and then leave and come back. That
+            // last part is the whole question - an earlier note in this file says this
+            // radio treats a CN change as memory-tune, which would mean it survives
+            // until the next channel change and no further.
+            let other = if *ch > 1 { *ch - 1 } else { *ch + 1 };
+            port.send(&format!("MC0{:05};", ch));
+            std::thread::sleep(Duration::from_millis(120));
+            port.drain();
+            let r1 = port.query(&format!("CT0{};", ftx1_tone_mode_to_ct(*tone_mode)));
+            std::thread::sleep(Duration::from_millis(40));
+            let r2 = port.query(&format!("CN0{}{:03};", p2, tone_num));
+            std::thread::sleep(Duration::from_millis(120));
+            port.drain();
+            let on_channel = port.query(if *is_dcs { "CN01;" } else { "CN00;" });
+            info!("PROBE tone set ON the channel: CT->[{}] CN->[{}] reads [{}]",
+                  r1.trim().escape_debug(), r2.trim().escape_debug(),
+                  on_channel.trim().escape_debug());
+
+            port.send(&format!("MC0{:05};", other));
+            std::thread::sleep(Duration::from_millis(200));
+            port.send(&format!("MC0{:05};", ch));
+            std::thread::sleep(Duration::from_millis(200));
+            port.drain();
+            let after_trip = port.query(if *is_dcs { "CN01;" } else { "CN00;" });
+            info!("PROBE tone after leaving to ch {} and back: [{}]",
+                  other, after_trip.trim().escape_debug());
+        }
+        if tag_resp.contains("?;") {
+            warn!("FTX-1 channel {}: the name was refused after storing - sent [{}]",
+                  ch, mt_cmd.escape_debug());
+        }
+
+        // Read the channel back. The frequency is the guard: if it moved, MAIN did not
+        // hold what we thought and the channel has just been overwritten.
+        port.drain();
+        // MR takes a bare 5-digit channel - no MAIN/SUB digit, unlike MC. Sending
+        // MR0nnnnn is one character too long and the radio answers "?;", which reads
+        // as "cannot read the channel" and stopped the pass on its first channel.
+        // The frequency sits at offset 7..16 of the answer, as the bulk reader has it.
+        let want = format!("MR{:05}", ch);
+        let back = port.query(&format!("MR{:05};", ch));
+        let got = back.find(&want)
+            .and_then(|i| back.get(i + 7..i + 16))
+            .and_then(|f| f.parse::<u64>().ok());
+        match got {
+            Some(f) if f == *freq_hz => {
+                let label = if *is_dcs { dcs_code_label(*tone_num) } else { ctcss_freq_label(*tone_num) };
+                // The frequency proves the channel survived; the tone proves the write
+                // did what it was for. Reading it back is the whole point - a tone that
+                // did not take looks identical to one that did until you key up.
+                port.drain();
+                let key = if *is_dcs { "CN01" } else { "CN00" };
+                let tone_back = port.query(if *is_dcs { "CN01;" } else { "CN00;" });
+                let got_tone = tone_back.find(key)
+                    .and_then(|i| tone_back[i + 4..].get(..3))
+                    .and_then(|v| v.parse::<u8>().ok());
+                match got_tone {
+                    Some(v) if v == *tone_num => {
+                        info!("FTX-1 channel {}: tone {} ({}) stored and read back", ch, tone_num, label);
+                        stored += 1;
+                    }
+                    Some(v) => {
+                        warn!("FTX-1 channel {}: asked for tone {} ({}) but the radio reads {} - \
+                               stopping the tone pass", ch, tone_num, label, v);
+                        break;
+                    }
+                    None => {
+                        warn!("FTX-1 channel {}: could not read the tone back [{}] - stopping the tone pass",
+                              ch, tone_back.escape_debug());
+                        break;
+                    }
+                }
+            }
+            Some(f) => {
+                warn!("FTX-1 channel {}: after storing, the frequency reads {} instead of {} - \
+                       stopping the tone pass before it touches another channel", ch, f, freq_hz);
+                break;
+            }
+            None => {
+                warn!("FTX-1 channel {}: could not read the channel back [{}] - stopping the tone pass",
+                      ch, back.escape_debug());
+                break;
+            }
+        }
+    }
+    stored
+}
+
 fn write_memory_tones<P: CatPort + ?Sized>(
     port: &mut P,
     entries: &[(u16, String, u8, bool)], // (channel, store cmd, value, is_dcs)
@@ -366,7 +772,12 @@ fn write_memory_tones<P: CatPort + ?Sized>(
             }
         }
         if ret.vfo_a_freq == 0 {
-            warn!("tone write skipped: radio is in VFO mode but its VFO-A frequency is unknown,                    so it could not be returned there");
+            warn!(
+                concat!(
+                    "tone write skipped: radio is in VFO mode but its VFO-A frequency is ",
+                    "unknown, so it could not be returned there",
+                ),
+            );
             return 0;
         }
     }
@@ -565,15 +976,56 @@ pub(super) fn read_memory_tones<P: CatPort + ?Sized>(
 
 /// Fill the CTCSS/DCS columns of a memory blob with tones read from the radio.
 /// Columns are looked up by name, like every other reader of this format.
-pub(super) fn merge_tones_into_blob(blob: &str, tones: &[(u16, String, bool)]) -> String {
+/// Merge tones read from the radio into the list.
+///
+/// `fill_only` is for the FTX-1, and it is not a preference - it follows from what
+/// that radio can do. It cannot STORE a tone in a memory channel over CAT, and `MW`
+/// resets the tone of every channel it writes to 100.0 Hz. So after any memory write
+/// the radio reports 100.0 Hz for those channels, and merging that back over the list
+/// replaced the operator's real tones with the damage - on every connect, because the
+/// tone read runs then. The list is the truth for this radio; a read can fill a gap
+/// (a tone set on the set's own front panel, which does work) but must never overwrite
+/// a value that is already there.
+///
+/// The FT-991A stores tones properly, so for it a read IS the truth and overwrites.
+pub(super) fn merge_tones_into_blob(
+    blob: &str,
+    tones: &[(u16, String, bool)],
+    fill_only: bool,
+    prefix: &str,
+) -> String {
+    let (out, skipped) = merge_tones_counted(blob, tones, fill_only);
+    if skipped > 0 {
+        // The sister path already reports what it KEPT; silence about what was
+        // ignored is the half an operator would report as a fault, because the
+        // radio disagrees with the list and nothing says which one won.
+        info!(
+            concat!(
+                "{} {} tone(s) read from the radio were ignored: the list already had a ",
+                "value there, and on this radio the list is the truth (it cannot store ",
+                "a tone in a memory channel)",
+            ),
+            prefix, skipped,
+        );
+    }
+    out
+}
+
+/// `merge_tones_into_blob` plus the number of read tones it declined to apply.
+fn merge_tones_counted(
+    blob: &str,
+    tones: &[(u16, String, bool)],
+    fill_only: bool,
+) -> (String, usize) {
+    let mut skipped = 0usize;
     let mut lines = blob.lines();
-    let Some(header) = lines.next() else { return blob.to_string() };
+    let Some(header) = lines.next() else { return (blob.to_string(), 0) };
     let cols: Vec<&str> = header.split('\t').collect();
     let idx = |name: &str| cols.iter().position(|c| c.trim().eq_ignore_ascii_case(name));
     let (Some(col_ch), Some(col_ctcss), Some(col_dcs)) =
         (idx("Channel Number"), idx("CTCSS"), idx("DCS"))
     else {
-        return blob.to_string();
+        return (blob.to_string(), 0);
     };
     let mut out = String::with_capacity(blob.len() + 64);
     out.push_str(header);
@@ -584,12 +1036,116 @@ pub(super) fn merge_tones_into_blob(blob: &str, tones: &[(u16, String, bool)]) -
             if let Some((_, label, is_dcs)) = tones.iter().find(|(c, _, _)| *c == ch) {
                 let target = if *is_dcs { col_dcs } else { col_ctcss };
                 if let Some(slot) = f.get_mut(target) {
-                    *slot = label.clone();
+                    if !fill_only || slot.trim().is_empty() {
+                        *slot = label.clone();
+                    } else {
+                        skipped += 1;
+                    }
                 }
             }
         }
         out.push_str(&f.join("\t"));
         out.push('\n');
+    }
+    (out, skipped)
+}
+
+/// The tone a memory channel should have, from the server's copy of the list:
+/// `(tone number, is_dcs, CT code)`. `None` when that channel has no tone mode.
+///
+/// Used to re-apply the tone every time the FTX-1 lands on a channel - see
+/// `ftx1_tone_keeper` in poll.rs for why that is necessary.
+pub(super) fn tone_wanted_for_channel(blob: &str, ch: u16) -> Option<(u8, bool, char)> {
+    let mut lines = blob.lines();
+    let header = lines.next()?;
+    let cols: Vec<&str> = header.split('\t').collect();
+    let idx = |name: &str| cols.iter().position(|c| c.trim().eq_ignore_ascii_case(name));
+    let (col_ch, col_tone, col_ctcss, col_dcs) =
+        (idx("Channel Number")?, idx("Tone Mode")?, idx("CTCSS")?, idx("DCS")?);
+    for line in lines {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.get(col_ch).and_then(|c| c.trim().parse::<u16>().ok()) != Some(ch) {
+            continue;
+        }
+        let mode = match f.get(col_tone).map(|v| v.trim()) {
+            Some("None") | None => return None,
+            Some("Tone") => '1',
+            Some("Tone ENC") => '2',
+            Some("DCS") => '3',
+            Some("PR FREQ") => '4',
+            Some("REV") => '5',
+            _ => return None,
+        };
+        let is_dcs = matches!(mode, '3' | '4');
+        let label = if is_dcs { f.get(col_dcs) } else { f.get(col_ctcss) };
+        let num = label
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .and_then(|v| if is_dcs { dcs_num_from_label(v) } else { ctcss_num_from_label(v) })?;
+        return Some((num, is_dcs, mode));
+    }
+    None
+}
+
+/// The tones already known in a blob, as `(channel, label, is_dcs)` - the exact
+/// shape `merge_tones_into_blob` takes, so what came out of one read can be carried
+/// into the next.
+///
+/// The bulk memory read cannot fetch per-channel tones (P9 is fixed "00"); they are
+/// gathered separately by stepping the radio through the channels that have a tone
+/// mode. So a plain re-read produces a list with the tone columns empty, and without
+/// this the tones silently disappeared every time anyone pressed "read radio" - or
+/// every time an older client asked for a read on connect.
+///
+/// A tone is only carried over when the channel still has the SAME frequency. If the
+/// channel was reprogrammed, the old tone does not belong to it any more, and a wrong
+/// tone is worse than none.
+pub(super) fn tones_from_blob(blob: &str) -> Vec<(u16, String, bool)> {
+    let mut lines = blob.lines();
+    let Some(header) = lines.next() else { return Vec::new() };
+    let cols: Vec<&str> = header.split('\t').collect();
+    let idx = |name: &str| cols.iter().position(|c| c.trim().eq_ignore_ascii_case(name));
+    let (Some(col_ch), Some(col_ctcss), Some(col_dcs)) =
+        (idx("Channel Number"), idx("CTCSS"), idx("DCS"))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in lines {
+        let f: Vec<&str> = line.split('\t').collect();
+        let Some(ch) = f.get(col_ch).and_then(|c| c.trim().parse::<u16>().ok()) else { continue };
+        for (col, is_dcs) in [(col_ctcss, false), (col_dcs, true)] {
+            if let Some(v) = f.get(col) {
+                let v = v.trim();
+                if !v.is_empty() {
+                    out.push((ch, v.to_string(), is_dcs));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Frequency per channel, used to decide whether a remembered tone still applies.
+pub(super) fn freqs_from_blob(blob: &str) -> Vec<(u16, String)> {
+    let mut lines = blob.lines();
+    let Some(header) = lines.next() else { return Vec::new() };
+    let cols: Vec<&str> = header.split('\t').collect();
+    let idx = |name: &str| cols.iter().position(|c| c.trim().eq_ignore_ascii_case(name));
+    // Column name exactly as YAESU_MEMORY_TAB_HEADER spells it. A wrong name here
+    // finds nothing and the carry-over silently does nothing at all.
+    let (Some(col_ch), Some(col_rx)) = (idx("Channel Number"), idx("Receive Frequency")) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in lines {
+        let f: Vec<&str> = line.split('\t').collect();
+        if let (Some(ch), Some(rx)) = (
+            f.get(col_ch).and_then(|c| c.trim().parse::<u16>().ok()),
+            f.get(col_rx),
+        ) {
+            out.push((ch, rx.trim().to_string()));
+        }
     }
     out
 }
@@ -992,9 +1548,14 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
     // Same as the 991A: the tone is not in MW/MR (P9 fixed), so it goes out
     // per channel via CN afterwards - stored with MW here instead of MT.
     let mut tone_writes: Vec<(u16, String, u8, bool)> = Vec::new();
+    let mut tone_rows: Vec<(u16, u64, u8, bool, String, char, char)> = Vec::new();
     // A scanning radio ignores memory writes without saying so - the operator
     // just sees nothing happen. Pause the scan for the duration and put it back.
     let scan_was = pause_scan(port);
+    // The channel the radio is sitting on cannot be written while it is in memory
+    // mode, so step off it first. Without this exactly one channel out of the whole
+    // bank silently kept its old contents - the one in use.
+    let mode_was = ftx1_leave_memory_mode(port);
 
     let mut lines = tab_text.lines();
     let header = lines.next().ok_or("Empty tab text")?;
@@ -1044,7 +1605,10 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
         log::debug!("MW write {:05}: [{}] ({}B)", ch, mw_cmd, mw_cmd.len());
         let mw_resp = port.query(&mw_cmd);
         if mw_resp.contains("?;") {
-            warn!("MW{:05} rejected", ch);
+            // The command itself, so a refusal can be read instead of guessed at.
+            // The radio says only "?;" - which field it objected to is in what we
+            // sent, not in the answer.
+            warn!("MW{:05} rejected - sent [{}]", ch, mw_cmd);
             std::thread::sleep(Duration::from_millis(50));
             continue;
         }
@@ -1061,7 +1625,7 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
         log::debug!("MT write {:05}: [{}] ({}B)", ch, mt_cmd, mt_cmd.len());
         let mt_resp = port.query(&mt_cmd);
         if mt_resp.contains("?;") {
-            warn!("MT{:05} (tag) rejected", ch);
+            warn!("MT{:05} (tag) rejected - sent [{}]", ch, mt_cmd.escape_debug());
         }
         count += 1;
         // Channels with an active tone mode get their tone via CN below; the
@@ -1071,6 +1635,9 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
                 // FTX-1: collected for symmetry only - the tone pass is disabled
                 // for this radio (see below), so nothing is written from it.
                 tone_writes.push((ch, mw_cmd.clone(), n, matches!(tone, '3' | '4')));
+                // The tone pass reprograms the channel from VFO-A, so it needs the
+                // channel's own frequency and mode - MW cannot carry the tone.
+                tone_rows.push((ch, freq_hz, n, matches!(tone, '3' | '4'), mt_cmd.clone(), tone, mode_char));
             }
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -1088,12 +1655,48 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
     // Reading the tone of the current channel still works and stays on. Writing
     // stays off until a route is found that is verified not to touch the rest of
     // the channel - a memory bank is not the place to keep guessing.
-    if !tone_writes.is_empty() {
-        warn!(
-            "FTX-1: {} channel(s) carry a tone, but writing tones is not supported on this radio              - frequency/mode/name were written, the tone was left untouched",
-            tone_writes.len()
-        );
+    // Tone writing is OFF for this radio. Measured 2026-08-09 with the probe mode
+    // (THETISLINK_FTX1_TONE_PROBE), on channel 6, both store commands the manual
+    // offers:
+    //
+    //   AM;  channel, both neighbours and the stored tone unchanged; radio left in
+    //        memory mode (VM011)
+    //   VM;  the same, radio left on VFO (VM000)
+    //
+    // Setting the tone DOES work - CN00048; is accepted and reads back. Both ways of
+    // keeping it fail, each measured three times:
+    //
+    //   tone before the store -> the store wipes it (back to what the VFO held)
+    //   tone after the store  -> accepted, but gone at the first channel change
+    //
+    // The second is what an older note in this file suspected: this radio treats a CN
+    // change as memory-tune. The manual's own store commands carry no tone field
+    // (MW has "P9 00: Fixed") and do not pick up the current one, so there is no route
+    // left in the documentation. See docs/internal/OPEN-ftx1-memory-tone-write.md.
+    //
+    // Frequency, mode and name ARE written (the MW pass above). Only the tone is left
+    // alone, and it is said out loud rather than silently skipped.
+    if !tone_rows.is_empty() {
+        // Off by default; the probe mode is the only way it runs, so a measurement
+        // costs one env var and touches one channel.
+        if std::env::var("THETISLINK_FTX1_TONE_PROBE").is_ok() {
+            info!("FTX-1: PROBE run - the tone pass is off by default, measuring only");
+            let _ = ftx1_write_tones_via_vfo(port, &tone_rows, is_tx);
+        } else {
+            warn!(
+                concat!(
+                    "FTX-1: {} channel(s) carry a tone, but this radio cannot STORE a tone in a ",
+                    "memory channel over CAT - frequency, mode and name were written, and MW has ",
+                    "reset the tone of those channels to 100.0 Hz in the radio itself. The list ",
+                    "keeps the real tones and the server re-applies them on every channel change, ",
+                    "so transmitting through ThetisLink is unaffected",
+                ),
+                  tone_rows.len());
+        }
     }
+    // Put the radio back where the operator had it: memory mode first, then the
+    // scan - resuming a scan while still on VFO would start it in the wrong place.
+    ftx1_restore_memory_mode(port, mode_was);
     if let Some(mode) = scan_was {
         port.send(&format!("SC{};", mode));
         info!("Memory write done: scan resumed (SC{})", mode);
@@ -1281,6 +1884,62 @@ pub(super) fn read_all_menus_ftx1(port: &mut Box<dyn serialport::SerialPort>) ->
     Ok(lines.join("\n"))
 }
 
+/// The radio's TX time-out timer, in minutes, out of the EX-menu blob this server
+/// already reads once per connect. 0 = off (and 0 is also what an unreadable or
+/// missing entry gives, so the watchdog stays quiet rather than guessing a limit).
+///
+/// The two models number their menus differently: FT-991A `036`, FTX-1 `030112`.
+pub(super) fn tot_minutes_from_menu_blob(model: RadioModel, blob: &str) -> u8 {
+    let key = if matches!(model, RadioModel::Ftx1) { "030112" } else { "036" };
+    for line in blob.lines() {
+        let Some((k, v)) = line.split_once(':') else { continue };
+        if k.trim() != key {
+            continue;
+        }
+        // Both models answer 00-30 (minutes), 00 = OFF.
+        return v.trim().parse::<u8>().ok().filter(|m| *m <= 30).unwrap_or(0);
+    }
+    0
+}
+
+#[cfg(test)]
+mod tot_tests {
+    use super::*;
+
+    #[test]
+    fn the_991a_reads_its_own_menu_number() {
+        let blob = "035:0\n036:05\n037:1";
+        assert_eq!(tot_minutes_from_menu_blob(RadioModel::Ft991a, blob), 5);
+    }
+
+    #[test]
+    fn the_ftx1_reads_its_own_menu_number() {
+        let blob = "030111:1\n030112:10\n030113:0";
+        assert_eq!(tot_minutes_from_menu_blob(RadioModel::Ftx1, blob), 10);
+    }
+
+    /// The models must not read each other's menus - 036 means something else
+    /// entirely on an FTX-1.
+    #[test]
+    fn a_model_ignores_the_other_ones_key() {
+        let blob = "036:05";
+        assert_eq!(tot_minutes_from_menu_blob(RadioModel::Ftx1, blob), 0);
+    }
+
+    #[test]
+    fn off_and_missing_both_mean_no_limit() {
+        assert_eq!(tot_minutes_from_menu_blob(RadioModel::Ft991a, "036:00"), 0);
+        assert_eq!(tot_minutes_from_menu_blob(RadioModel::Ft991a, "037:5"), 0);
+        assert_eq!(tot_minutes_from_menu_blob(RadioModel::Ft991a, ""), 0);
+    }
+
+    /// A value out of range is a misread, not a 99-minute limit.
+    #[test]
+    fn an_impossible_value_is_not_trusted() {
+        assert_eq!(tot_minutes_from_menu_blob(RadioModel::Ft991a, "036:99"), 0);
+    }
+}
+
 #[cfg(test)]
 mod mc_read_form {
     use super::mc_read;
@@ -1361,12 +2020,32 @@ mod tone_write_tests {
         MemoryWriteReturn { vfo_select: 1, memory_channel: ch, vfo_a_freq: 0 }
     }
 
+    /// The FTX-1 tone write is OFF, and this has now flipped twice - so the reasons
+    /// are here rather than in a commit message.
+    ///
+    /// It was off for months on the conclusion that no CAT route could store a tone
+    /// without damaging the channel: `AM` had overwritten memory 16 with the contents
+    /// of VFO-A (hardware, 2026-08-05).
+    ///
+    /// On 2026-08-09 that conclusion was overturned by the operator, who found a
+    /// reproducible front-panel sequence, and the write was enabled through it. Six
+    /// sequences later it was measured with the probe mode
+    /// (`THETISLINK_FTX1_TONE_PROBE`) rather than reasoned about:
+    ///
+    ///   `AM;`  channel, both neighbours and the stored tone unchanged; radio left in
+    ///          memory mode (VM011)
+    ///   `VM;`  the same, radio left on VFO (VM000)
+    ///
+    /// And the measurement that settles it: after `CN00048;` the radio still answered
+    /// `CN00=004`. The tone had not changed in the CURRENT state, let alone in a
+    /// channel. Setting the tone does not take on this radio, so no store route can
+    /// help - which is why the search through store commands was the wrong search.
+    ///
+    /// Do not re-enable on reasoning. The probe mode is the way back in: it touches
+    /// one channel, dumps both neighbours, and answers in one run what six sequences
+    /// could not. See docs/internal/OPEN-ftx1-memory-tone-write.md.
     #[test]
-    fn ftx1_tone_writing_is_not_attempted() {
-        // No CAT route on this radio stores a per-memory tone without damaging
-        // the channel - AM turned out to be VFO->memory and overwrote it. The
-        // FTX-1 write path therefore collects no tone entries at all; this test
-        // is the guard against quietly re-enabling it.
+    fn ftx1_tone_writing_is_off_and_says_so() {
         let src = include_str!("memory.rs");
         let ftx1_fn = src
             .split("pub(super) fn write_all_memories_ftx1")
@@ -1374,21 +2053,26 @@ mod tone_write_tests {
             .expect("FTX-1 write path present");
         let body = &ftx1_fn[..ftx1_fn.find("
 pub(super) fn").unwrap_or(ftx1_fn.len())];
+        // The pass may only run behind the probe env var: a measurement costs one
+        // variable and touches one channel, an ordinary write must never reach it.
+        let call = body.find("ftx1_write_tones_via_vfo(port");
+        if let Some(at) = call {
+            let before = &body[..at];
+            let guard = before.rfind("THETISLINK_FTX1_TONE_PROBE");
+            assert!(
+                guard.is_some() && guard.unwrap() > before.len().saturating_sub(400),
+                "the tone pass may only run inside the probe guard"
+            );
+        }
         assert!(
             !body.contains("write_memory_tones("),
-            "FTX-1 must not call the tone pass - see the comment there for what each attempt did"
+            "the 991A tone pass must not be used here either"
         );
-    }
-
-    #[test]
-    fn ft991a_recalls_with_three_digits_and_stores_with_mt() {
-        let mt = "MT007014550000+00000040100CH 7        ;".to_string();
-        let mut port = FakePort::new(&[("CN00;", "CN00004;")]);
-        let n = write_memory_tones(&mut port, &[(7, mt.clone(), 4, false)], ret_memory(3), false, &|| false);
-        assert_eq!(n, 1);
-        // "MC;" first: ask the radio where it is, so the return does not rely on
-        // a snapshot that may lag behind what was just recalled.
-        assert_eq!(port.sent(), vec!["MC;", "MC007;", "CN00004;", mt.as_str(), "CN00;", "MC003;"]);
+        // Silently skipping is how this went unnoticed for months.
+        assert!(
+            body.contains("cannot STORE a tone"),
+            "a skipped tone must be reported, not quietly dropped"
+        );
     }
 
     #[test]
@@ -1481,5 +2165,201 @@ pub(super) fn").unwrap_or(ftx1_fn.len())];
         assert_eq!(n, 1);
         assert_eq!(port.sent().first(), Some(&"FA;"), "read the VFO before stepping channels");
         assert_eq!(port.sent().last(), Some(&"FA014250000;"), "and return to it afterwards");
+    }
+}
+
+#[cfg(test)]
+mod tone_carry_tests {
+    use super::*;
+
+    /// The header these helpers read is the shared constant; a renamed column must
+    /// fail the test rather than silently carry nothing over.
+    fn blob(rows: &[&str]) -> String {
+        let mut s = String::from(sdr_remote_core::YAESU_MEMORY_TAB_HEADER);
+        s.push('\n');
+        for r in rows { s.push_str(r); s.push('\n'); }
+        s
+    }
+
+    /// 21 columns: Ch, RxFreq, TxFreq, Offset, Dir, Mode, TxMode, Name, ToneMode,
+    /// CTCSS, DCS, then the rest empty.
+    fn row(ch: u16, rx: &str, ctcss: &str) -> String {
+        let mut f = vec![ch.to_string(), rx.to_string(), String::new(), String::new(),
+                         String::new(), "FM".to_string(), String::new(), "REPEATER".to_string(),
+                         "TONE".to_string(), ctcss.to_string(), String::new()];
+        while f.len() < 21 { f.push(String::new()); }
+        f.join("\t")
+    }
+
+    #[test]
+    fn a_known_tone_is_read_back_out_of_a_blob() {
+        let b = blob(&[&row(1, "145500000", "88.5 Hz"), &row(2, "145600000", "")]);
+        let tones = tones_from_blob(&b);
+        assert_eq!(tones.len(), 1);
+        assert_eq!(tones[0].0, 1);
+        assert_eq!(tones[0].1, "88.5 Hz");
+        assert!(!tones[0].2); // CTCSS, not DCS
+    }
+
+    /// The whole point: a fresh read has empty tone columns, and the tones we already
+    /// knew have to survive it.
+    fn header_columns_exist() {
+        assert!(!freqs_from_blob(&blob(&[&row(1, "145500000", "")])).is_empty(),
+                "column names must match YAESU_MEMORY_TAB_HEADER");
+    }
+
+    #[test]
+    fn the_column_names_match_the_shared_header() {
+        header_columns_exist();
+    }
+
+    #[test]
+    fn a_tone_survives_a_re_read_of_the_same_channel() {
+        let old = blob(&[&row(1, "145500000", "88.5 Hz")]);
+        let fresh = blob(&[&row(1, "145500000", "")]);
+        let keep = tones_from_blob(&old);
+        let merged = merge_tones_into_blob(&fresh, &keep, false, "[test]");
+        assert!(merged.contains("88.5 Hz"), "tone should have been carried over");
+    }
+
+    /// A channel that was reprogrammed keeps no old tone - a wrong tone is worse
+    /// than none.
+    #[test]
+    fn a_reprogrammed_channel_loses_its_old_tone() {
+        let old = blob(&[&row(1, "145500000", "88.5 Hz")]);
+        let fresh = blob(&[&row(1, "433000000", "")]);
+        let of = freqs_from_blob(&old);
+        let nf = freqs_from_blob(&fresh);
+        let keep: Vec<_> = tones_from_blob(&old).into_iter()
+            .filter(|(ch, _, _)| {
+                let o = of.iter().find(|(c, _)| c == ch).map(|(_, f)| f);
+                let n = nf.iter().find(|(c, _)| c == ch).map(|(_, f)| f);
+                o.is_some() && o == n
+            })
+            .collect();
+        assert!(keep.is_empty(), "a changed frequency must drop the remembered tone");
+    }
+}
+
+#[cfg(test)]
+mod ftx1_tone_mode_tests {
+    use super::*;
+
+    /// The two codings differ in exactly the two values that matter, and nothing
+    /// reports it when they are confused: the repeater still opens, but the squelch
+    /// behaves the other way round.
+    ///
+    ///   MW P8:  1 = CTCSS ENC/DEC      2 = CTCSS ENC
+    ///   CT P2:  1 = ENC on / DEC off   2 = ENC on / DEC on
+    #[test]
+    fn the_two_tone_mode_codings_are_not_the_same() {
+        assert_eq!(ftx1_tone_mode_to_ct('1'), '2', "MW 'ENC/DEC' is CT 2");
+        assert_eq!(ftx1_tone_mode_to_ct('2'), '1', "MW 'ENC only' is CT 1");
+    }
+
+    /// The rest map straight through, including "no tone".
+    #[test]
+    fn the_other_tone_modes_map_straight_through() {
+        assert_eq!(ftx1_tone_mode_to_ct('0'), '0');
+        assert_eq!(ftx1_tone_mode_to_ct('3'), '3'); // DCS
+        assert_eq!(ftx1_tone_mode_to_ct('4'), '4'); // PR FREQ
+        assert_eq!(ftx1_tone_mode_to_ct('5'), '5'); // REV TONE
+        assert_eq!(ftx1_tone_mode_to_ct('x'), '0', "anything unknown is safest as off");
+    }
+}
+
+#[cfg(test)]
+mod tone_keeper_tests {
+    use super::*;
+
+    fn blob(rows: &[&str]) -> String {
+        let mut s = String::from(sdr_remote_core::YAESU_MEMORY_TAB_HEADER);
+        s.push('\n');
+        for r in rows { s.push_str(r); s.push('\n'); }
+        s
+    }
+
+    /// 21 columns: Ch, RxFreq, TxFreq, Offset, Dir, Mode, TxMode, Name, ToneMode,
+    /// CTCSS, DCS, rest empty.
+    fn row(ch: u16, tone_mode: &str, ctcss: &str, dcs: &str) -> String {
+        let mut f = vec![ch.to_string(), "145600000".into(), String::new(), String::new(),
+                         String::new(), "FM".into(), String::new(), "REP".into(),
+                         tone_mode.to_string(), ctcss.to_string(), dcs.to_string()];
+        while f.len() < 21 { f.push(String::new()); }
+        f.join("\t")
+    }
+
+    #[test]
+    fn a_channel_with_a_ctcss_tone_is_found() {
+        let b = blob(&[&row(6, "Tone", "77.0 Hz", "")]);
+        assert_eq!(tone_wanted_for_channel(&b, 6), Some((4, false, '1')));
+    }
+
+    #[test]
+    fn a_channel_without_a_tone_mode_asks_for_nothing() {
+        let b = blob(&[&row(6, "None", "77.0 Hz", "")]);
+        assert_eq!(tone_wanted_for_channel(&b, 6), None,
+                   "a tone value with the mode off must not be applied");
+    }
+
+    /// A tone mode with no value is not something to send - CN would need a number
+    /// this row does not have.
+    #[test]
+    fn a_tone_mode_without_a_value_asks_for_nothing() {
+        let b = blob(&[&row(6, "Tone", "", "")]);
+        assert_eq!(tone_wanted_for_channel(&b, 6), None);
+    }
+
+    #[test]
+    fn dcs_uses_the_dcs_column_and_its_own_table() {
+        let b = blob(&[&row(6, "DCS", "77.0 Hz", "023")]);
+        let got = tone_wanted_for_channel(&b, 6).expect("a DCS row is found");
+        assert!(got.1, "must be flagged as DCS so CN01 is used");
+        assert_eq!(got.2, '3');
+    }
+
+    #[test]
+    fn an_unknown_channel_asks_for_nothing() {
+        let b = blob(&[&row(6, "Tone", "77.0 Hz", "")]);
+        assert_eq!(tone_wanted_for_channel(&b, 7), None);
+    }
+}
+
+#[cfg(test)]
+mod tone_merge_tests {
+    use super::*;
+
+    fn blob(ctcss: &str) -> String {
+        let mut cols = vec![""; 21];
+        cols[0] = "6";
+        cols[9] = ctcss;
+        format!("{}\n{}\n", sdr_remote_core::YAESU_MEMORY_TAB_HEADER, cols.join("\t"))
+    }
+
+    fn ctcss_of(b: &str) -> String {
+        b.lines().nth(1).unwrap().split('\t').nth(9).unwrap().to_string()
+    }
+
+    /// The FT-991A stores tones, so what it reports is the truth.
+    #[test]
+    fn a_991a_read_overwrites() {
+        let m = merge_tones_into_blob(&blob("77.0 Hz"), &[(6, "100.0 Hz".into(), false)], false, "[test]");
+        assert_eq!(ctcss_of(&m), "100.0 Hz");
+    }
+
+    /// The FTX-1 cannot store one, and reports 100.0 Hz for a channel that has none -
+    /// which is exactly what MW leaves behind. Merging that back wiped the operator's
+    /// real tones from the list on every connect.
+    #[test]
+    fn an_ftx1_read_never_overwrites_a_tone_the_list_already_has() {
+        let m = merge_tones_into_blob(&blob("77.0 Hz"), &[(6, "100.0 Hz".into(), false)], true, "[test]");
+        assert_eq!(ctcss_of(&m), "77.0 Hz", "the list is the truth for this radio");
+    }
+
+    /// A tone set on the set's own front panel does work, so a read still fills a gap.
+    #[test]
+    fn an_ftx1_read_still_fills_an_empty_one() {
+        let m = merge_tones_into_blob(&blob(""), &[(6, "88.5 Hz".into(), false)], true, "[test]");
+        assert_eq!(ctcss_of(&m), "88.5 Hz");
     }
 }

@@ -345,6 +345,28 @@ impl SdrRemoteApp {
             }
         });
 
+        // UI scale, independent of the Windows display scaling. A high-DPI screen at
+        // 200% gives the app FEWER points to lay out in than an ordinary 1080p monitor
+        // at 100%, so less fits despite the higher resolution - this scales the app
+        // down without touching the system-wide setting. egui's Ctrl+/Ctrl- does the
+        // same thing and is picked up and stored (see update.rs).
+        ui.horizontal(|ui| {
+            ui.label(rust_i18n::t!("screen_ui_scale").to_string());
+            // One step list, shared with the server GUI, so the two cannot end up
+            // offering different scales.
+            let picked = sdr_remote_layout::ui_scale_picker(ui, "ui_zoom_select", self.ui_zoom);
+            if let Some(v) = picked {
+                self.ui_zoom = v;
+                self.ui_zoom_pending = true;
+                self.save_full_config();
+            }
+            ui.label(
+                egui::RichText::new(rust_i18n::t!("screen_ui_scale_hint").to_string())
+                    .size(11.0)
+                    .color(egui::Color32::GRAY),
+            );
+        });
+
         // UI theme: pick a preset (Classic/Dark/Slate) or Custom. Applies immediately and
         // persists. Custom exposes colour pickers for the base slots; the per-element
         // colours join the palette in later migration steps.

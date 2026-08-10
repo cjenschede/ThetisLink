@@ -463,6 +463,11 @@ pub struct RadioState {
     pub yaesu_vfo_select: u8,  // 0=VFO, 1=Memory, 2=MemTune
     pub yaesu_memory_channel: u16,
     pub yaesu_memory_data: Option<String>,
+    /// EX/menu values, SEPARATE from the memory list above. They used to share one
+    /// field, distinguished by a "MENU:" prefix. That worked only as long as the
+    /// two never arrived close together - since both are pushed on connect they do,
+    /// and the second silently replaced the first before the UI ever saw it.
+    pub yaesu_menu_data: Option<String>,
     // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror of the slot-0
     // Yaesu fields above. `*_model` = wire-code from RadioInfo (0=991A,
     // 1=FTX1) for panel naming. yaesu2_connected becomes true once a
@@ -492,6 +497,7 @@ pub struct RadioState {
     pub yaesu2_vfo_select: u8,
     pub yaesu2_memory_channel: u16,
     pub yaesu2_memory_data: Option<String>, // tab-separated memory-dump radio 2 (Phase B)
+    pub yaesu2_menu_data: Option<String>,   // EX/menu values radio 2, own field (see slot 0)
     // New TCI controls (v2.10.3.13)
     pub agc_mode: u8,       // 0=off, 1=long, 2=slow, 3=med, 4=fast, 5=custom
     pub agc_gain: u8,       // 0-120
@@ -770,6 +776,7 @@ impl Default for RadioState {
             yaesu_vfo_select: 0,
             yaesu_memory_channel: 0,
             yaesu_memory_data: None,
+            yaesu_menu_data: None,
             yaesu_model: 0,
             yaesu2_model: 1,
             yaesu2_connected: false,
@@ -794,6 +801,7 @@ impl Default for RadioState {
             yaesu2_vfo_select: 0,
             yaesu2_memory_channel: 0,
             yaesu2_memory_data: None,
+            yaesu2_menu_data: None,
             agc_mode: 3, // med
             agc_gain: 80,
             rit_enable: false,

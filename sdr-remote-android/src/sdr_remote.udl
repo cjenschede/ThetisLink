@@ -40,6 +40,7 @@ dictionary BridgeRadioState {
     u32 up_kbps;
     boolean dx_spots_enabled;
     f32 capture_level;
+    f32 yaesu_mic_level;
     f32 playback_level;
     u64 frequency_hz;
     u64 frequency_rx2_hz;
@@ -146,6 +147,7 @@ dictionary BridgeRadioState {
     boolean yaesu_scan;
     f32 playback_level_yaesu;
     string yaesu_memory_data;
+    string yaesu_menu_data;
     u8 yaesu_model;
     u8 yaesu_tuner_state;
     boolean yaesu_hi_swr;
@@ -172,6 +174,7 @@ dictionary BridgeRadioState {
     boolean yaesu2_scan;
     f32 playback_level_yaesu2;
     string yaesu2_memory_data;
+    string yaesu2_menu_data;
     u32 yaesu_feature_toggles;
     sequence<u8> yaesu_feature_levels;
     sequence<u16> yaesu_feature_freqs;
@@ -214,6 +217,8 @@ interface SdrBridge {
     void set_playback_mute(boolean mute);
     void set_dx_spots_enabled(boolean enabled);
     void set_rx_volume(f32 volume);
+    void set_vfo_a_volume(f32 volume);
+    void set_vfo_b_volume(f32 volume);
     void set_local_volume(f32 volume);
     void set_tx_gain(f32 gain);
     void set_frequency(u64 hz);

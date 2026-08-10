@@ -188,6 +188,9 @@ impl SdrRemoteApp {
             vfo_a_volume: config.vfo_a_volume,
             vfo_b_volume: config.vfo_b_volume,
             local_volume: config.local_volume,
+            ui_zoom: config.ui_zoom,
+            ui_zoom_pending: true,
+            master_volume_dirty: false,
             tx_gain: config.tx_gain,
             connected: false,
             ptt: false,
@@ -305,7 +308,14 @@ impl SdrRemoteApp {
             vrx1_popout: false,
             vrx2_popout: false,
             show_layout_arranger: false,
-            layout_grid_per_monitor: Vec::new(),
+            layout_grid_per_monitor: arranger::layout_grids_from_config(&config.layout_grids),
+            layout_pending: Vec::new(),
+            layout_memories: {
+                let mut v: Vec<LayoutMemory> = config.layout_memories.iter()
+                    .map(|s| LayoutMemory::from_config_string(s)).collect();
+                v.resize_with(LAYOUT_MEM_SLOTS, LayoutMemory::default);
+                v
+            },
             layout_active_item: None,
             layout_drag_anchor: None,
             layout_target_monitor: 0,
@@ -638,33 +648,43 @@ impl SdrRemoteApp {
             tune_step_hz: 1_000,
             yaesu_in_memory_mode: false,
             yaesu_current_mem_ch: None,
+            yaesu_mem_active_ch: None,
+            yaesu2_mem_active_ch: None,
+            yaesu_mem_active_live: false,
+            yaesu2_mem_active_live: false,
             yaesu_enabled: config.yaesu_enabled,
-            yaesu_mem_channels: {
-                let mem_file = config.yaesu_mem_file.clone();
-                if !mem_file.is_empty() {
-                    match yaesu_memory::parse_tab_file(std::path::Path::new(&mem_file)) {
-                        Ok(ch) => { log::info!("Loaded {} Yaesu memory channels from {}", ch.len(), mem_file); ch }
-                        Err(e) => { log::warn!("Yaesu memory file: {}", e); Vec::new() }
-                    }
-                } else { Vec::new() }
-            },
+            // Starts EMPTY, like slot 1. It used to load the saved file here, which
+            // meant slot 0 always showed a list and slot 1 never did - and a list from
+            // disk is indistinguishable on screen from one read out of the radio. That
+            // masked a fault where the pushed list never arrived (build 20), and it is
+            // why the 991A appeared to have tones at startup while the FTX-1 did not:
+            // those came from the file. The server pushes the real list within a second
+            // of connecting; "Load file" still loads one on request.
+            yaesu_mem_channels: Vec::new(),
             yaesu_mem_file: config.yaesu_mem_file.clone(),
             yaesu_mem_selected: None,
             yaesu_mem_filter: String::new(),
             yaesu_mem_dirty: false,
-            yaesu_mem_delete_popup: false,
+            yaesu_mem_push_deferred: false,
+            yaesu_mem_expect_push: false,
+            yaesu2_mem_expect_push: false,
+            yaesu2_mem_push_deferred: false,
             yaesu_mem_radio_received: false,
+            yaesu_mem_blob_hash: None,
             yaesu2_mem_channels: Vec::new(),
             yaesu2_mem_file: "ftx1_memories.tab".to_string(),
             yaesu2_mem_selected: None,
             yaesu2_mem_filter: String::new(),
             yaesu2_mem_dirty: false,
             yaesu2_mem_radio_received: false,
+            yaesu2_mem_blob_hash: None,
             yaesu_mem_active_slot: 0,
             yaesu_menu_items: Vec::new(),
             yaesu_menu_received: false,
+            yaesu_menu_blob_hash: None,
             yaesu2_menu_entries: Vec::new(),
             yaesu2_menu_received: false,
+            yaesu2_menu_blob_hash: None,
             collapse_yaesu2_menu: config.collapse_yaesu2_menu,
             yaesu2_menu_edits: std::collections::HashMap::new(),
             yaesu2_menu_filter: String::new(),
@@ -698,6 +718,7 @@ impl SdrRemoteApp {
             collapse_yaesu_memories: config.collapse_yaesu_memories,
             collapse_yaesu_menu: config.collapse_yaesu_menu,
             yaesu_memories_h: config.yaesu_memories_h,
+            yaesu2_memories_h: config.yaesu2_memories_h,
             main_window_pos: config.main_window_pos.map(|(x, y)| egui::pos2(x, y)),
             theme_variant: theme::ThemeVariant::from_str(&config.theme),
             theme_custom: theme::Palette::from_config_string(&config.theme_custom)

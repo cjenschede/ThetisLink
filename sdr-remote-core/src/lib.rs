@@ -6,7 +6,7 @@ pub mod jitter;
 pub mod protocol;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.7.0";
+pub const VERSION: &str = "2.8.0";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).

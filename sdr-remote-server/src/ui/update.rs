@@ -13,6 +13,25 @@ impl eframe::App for ServerApp {
         // light-gray scheme of this window, so the default changes nothing.
         sdr_remote_theme::apply_visuals(ctx, self.theme_variant, &self.theme_custom);
 
+        // Finish a recall that had to wait for a device to appear.
+        self.apply_pending_layout(ctx);
+
+        // UI scale. Two directions, on purpose:
+        //  - our setting -> egui, so a stored choice applies on startup and on change;
+        //  - egui -> our setting, so egui's own Ctrl+/Ctrl-/Ctrl+0 is picked up and
+        //    persisted instead of being silently reset on the next launch.
+        // Applies to the device windows too: they share this context.
+        let egui_zoom = ctx.zoom_factor();
+        if (egui_zoom - self.ui_zoom).abs() > 0.001 {
+            if self.ui_zoom_pending {
+                ctx.set_zoom_factor(self.ui_zoom);
+                self.ui_zoom_pending = false;
+            } else {
+                self.ui_zoom = egui_zoom.clamp(0.5, 2.0);
+                self.save_window_positions();
+            }
+        }
+
         // Auto-start on first frame if configured
         if self.pending_autostart {
             self.pending_autostart = false;
@@ -208,6 +227,19 @@ impl eframe::App for ServerApp {
                     // FTX-1 keeps its internal auto source selection either way.
                     ui.checkbox(&mut self.yaesu_ssb_switch_on_ptt, rust_i18n::t!("srv_991a_ptt_switch").to_string())
                         .on_hover_text(rust_i18n::t!("srv_991a_ptt_switch_hover").to_string());
+
+                    // FTX-1 memory write permission. Costs the tones stored in the radio,
+                    // so the condition is spelled out next to the box rather than hidden in
+                    // a tooltip - a hover text is not where you put something irreversible.
+                    ui.checkbox(&mut self.ftx1_memory_write_ack, rust_i18n::t!("srv_ftx1_mem_write_ack").to_string())
+                        .on_hover_text(rust_i18n::t!("srv_ftx1_mem_write_ack_hover").to_string());
+                    ui.indent("ftx1_mem_write_note", |ui| {
+                        ui.label(
+                            egui::RichText::new(rust_i18n::t!("srv_ftx1_mem_write_note").to_string())
+                                .small()
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                    });
                     ui.add_space(4.0);
 
                     // Dual-radio slot 1 (radio 2) - same setup as radio 1.
@@ -600,6 +632,18 @@ impl eframe::App for ServerApp {
                             }
                         });
                     });
+                    // UI scale, next to the arrange button: the two belong together -
+                    // a smaller scale is what makes a finer grid worth having.
+                    ui.horizontal(|ui| {
+                        ui.label(rust_i18n::t!("srv_ui_scale").to_string());
+                        if let Some(v) = sdr_remote_layout::ui_scale_picker(ui, "srv_ui_zoom", self.ui_zoom) {
+                            self.ui_zoom = v;
+                            self.ui_zoom_pending = true;
+                            self.save_window_positions();
+                        }
+                        ui.label(egui::RichText::new(rust_i18n::t!("srv_ui_scale_hint").to_string())
+                            .size(11.0).color(egui::Color32::GRAY));
+                    });
                     // PATCH-2: Status / Logs tabs + "Schik" button (arrange windows).
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut self.status_view, StatusView::Status, rust_i18n::t!("srv_status").to_string());
@@ -772,9 +816,14 @@ impl eframe::App for ServerApp {
                         tuner_title
                     });
                 if !self.tuner_window_init_applied {
-                    tuner_vb = tuner_vb.with_inner_size(tuner_sz);
+                    // Geometry is stored in SYSTEM points so a saved layout survives
+                    // a change of UI scale; a ViewportBuilder wants EGUI points, which
+                    // egui-winit scales by zoom_factor. Identical at 100%, a factor
+                    // `zoom` out at anything else.
+                    let z = ctx.zoom_factor().max(0.01);
+                    tuner_vb = tuner_vb.with_inner_size([tuner_sz[0] / z, tuner_sz[1] / z]);
                     if let Some(pos) = self.tuner_window_pos {
-                        tuner_vb = tuner_vb.with_position(egui::pos2(pos[0], pos[1]));
+                        tuner_vb = tuner_vb.with_position(egui::pos2(pos[0] / z, pos[1] / z));
                     }
                     self.tuner_window_init_applied = true;
                 }
@@ -784,11 +833,13 @@ impl eframe::App for ServerApp {
                     tuner_vb,
                     |ctx, _class| {
                         // Track window position and size
+                        // Back to SYSTEM points on the way in (see the builder above).
+                        let z = ctx.zoom_factor().max(0.01);
                         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                            self.tuner_window_pos = Some([rect.left(), rect.top()]);
+                            self.tuner_window_pos = Some([rect.left() * z, rect.top() * z]);
                         }
                         if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
-                            self.tuner_window_size = Some([rect.width(), rect.height()]);
+                            self.tuner_window_size = Some([rect.width() * z, rect.height() * z]);
                         }
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.show_tuner_window = false;
@@ -924,9 +975,12 @@ impl eframe::App for ServerApp {
                 let mut amp_vb = ViewportBuilder::default()
                     .with_title("Amplitec 6/2 Antenna Switch");
                 if !self.amplitec_window_init_applied {
-                    amp_vb = amp_vb.with_inner_size(amp_sz);
+                    // Geometry is stored in SYSTEM points; a ViewportBuilder wants
+                    // EGUI points, which egui-winit scales by zoom_factor.
+                    let z = ctx.zoom_factor().max(0.01);
+                    amp_vb = amp_vb.with_inner_size([amp_sz[0] / z, amp_sz[1] / z]);
                     if let Some(pos) = self.amplitec_window_pos {
-                        amp_vb = amp_vb.with_position(egui::pos2(pos[0], pos[1]));
+                        amp_vb = amp_vb.with_position(egui::pos2(pos[0] / z, pos[1] / z));
                     }
                     self.amplitec_window_init_applied = true;
                 }
@@ -935,11 +989,13 @@ impl eframe::App for ServerApp {
                     ViewportId::from_hash_of("amplitec_control"),
                     amp_vb,
                     |ctx, _class| {
+                        // Back to SYSTEM points on the way in (see the builder above).
+                        let z = ctx.zoom_factor().max(0.01);
                         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                            self.amplitec_window_pos = Some([rect.left(), rect.top()]);
+                            self.amplitec_window_pos = Some([rect.left() * z, rect.top() * z]);
                         }
                         if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
-                            self.amplitec_window_size = Some([rect.width(), rect.height()]);
+                            self.amplitec_window_size = Some([rect.width() * z, rect.height() * z]);
                         }
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.show_amplitec_window = false;
@@ -1022,9 +1078,14 @@ impl eframe::App for ServerApp {
                     .with_title("SPE Expert 1.3K-FA")
                     .with_resizable(true);
                 if !self.spe_window_init_applied {
-                    spe_vb = spe_vb.with_inner_size(spe_sz);
+                    // Geometry is stored in SYSTEM points so a saved layout survives
+                    // a change of UI scale; a ViewportBuilder wants EGUI points, which
+                    // egui-winit scales by zoom_factor. Identical at 100%, a factor
+                    // `zoom` out at anything else.
+                    let z = ctx.zoom_factor().max(0.01);
+                    spe_vb = spe_vb.with_inner_size([spe_sz[0] / z, spe_sz[1] / z]);
                     if let Some(pos) = self.spe_window_pos {
-                        spe_vb = spe_vb.with_position(egui::pos2(pos[0], pos[1]));
+                        spe_vb = spe_vb.with_position(egui::pos2(pos[0] / z, pos[1] / z));
                     }
                     self.spe_window_init_applied = true;
                 }
@@ -1033,11 +1094,13 @@ impl eframe::App for ServerApp {
                     ViewportId::from_hash_of("spe_expert_control"),
                     spe_vb,
                     |ctx, _class| {
+                        // Back to SYSTEM points on the way in (see the builder above).
+                        let z = ctx.zoom_factor().max(0.01);
                         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                            self.spe_window_pos = Some([rect.left(), rect.top()]);
+                            self.spe_window_pos = Some([rect.left() * z, rect.top() * z]);
                         }
                         if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
-                            self.spe_window_size = Some([rect.width(), rect.height()]);
+                            self.spe_window_size = Some([rect.width() * z, rect.height() * z]);
                         }
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.show_spe_window = false;
@@ -1073,9 +1136,14 @@ impl eframe::App for ServerApp {
                     .with_title("RF2K-S Power Amplifier")
                     .with_resizable(true);
                 if !self.rf2k_window_init_applied {
-                    rf2k_vb = rf2k_vb.with_inner_size(rf2k_sz);
+                    // Geometry is stored in SYSTEM points so a saved layout survives
+                    // a change of UI scale; a ViewportBuilder wants EGUI points, which
+                    // egui-winit scales by zoom_factor. Identical at 100%, a factor
+                    // `zoom` out at anything else.
+                    let z = ctx.zoom_factor().max(0.01);
+                    rf2k_vb = rf2k_vb.with_inner_size([rf2k_sz[0] / z, rf2k_sz[1] / z]);
                     if let Some(pos) = self.rf2k_window_pos {
-                        rf2k_vb = rf2k_vb.with_position(egui::pos2(pos[0], pos[1]));
+                        rf2k_vb = rf2k_vb.with_position(egui::pos2(pos[0] / z, pos[1] / z));
                     }
                     self.rf2k_window_init_applied = true;
                 }
@@ -1084,11 +1152,13 @@ impl eframe::App for ServerApp {
                     ViewportId::from_hash_of("rf2k_control"),
                     rf2k_vb,
                     |ctx, _class| {
+                        // Back to SYSTEM points on the way in (see the builder above).
+                        let z = ctx.zoom_factor().max(0.01);
                         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                            self.rf2k_window_pos = Some([rect.left(), rect.top()]);
+                            self.rf2k_window_pos = Some([rect.left() * z, rect.top() * z]);
                         }
                         if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
-                            self.rf2k_window_size = Some([rect.width(), rect.height()]);
+                            self.rf2k_window_size = Some([rect.width() * z, rect.height() * z]);
                         }
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.show_rf2k_window = false;
@@ -1133,9 +1203,12 @@ impl eframe::App for ServerApp {
                     .with_title("UltraBeam RCU-06")
                     .with_resizable(true);
                 if !self.ultrabeam_window_init_applied {
-                    ub_vb = ub_vb.with_inner_size(ub_sz);
+                    // Geometry is stored in SYSTEM points; a ViewportBuilder wants
+                    // EGUI points, which egui-winit scales by zoom_factor.
+                    let z = ctx.zoom_factor().max(0.01);
+                    ub_vb = ub_vb.with_inner_size([ub_sz[0] / z, ub_sz[1] / z]);
                     if let Some(pos) = self.ultrabeam_window_pos {
-                        ub_vb = ub_vb.with_position(egui::pos2(pos[0], pos[1]));
+                        ub_vb = ub_vb.with_position(egui::pos2(pos[0] / z, pos[1] / z));
                     }
                     self.ultrabeam_window_init_applied = true;
                 }
@@ -1144,11 +1217,13 @@ impl eframe::App for ServerApp {
                     ViewportId::from_hash_of("ultrabeam_control"),
                     ub_vb,
                     |ctx, _class| {
+                        // Back to SYSTEM points on the way in (see the builder above).
+                        let z = ctx.zoom_factor().max(0.01);
                         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                            self.ultrabeam_window_pos = Some([rect.left(), rect.top()]);
+                            self.ultrabeam_window_pos = Some([rect.left() * z, rect.top() * z]);
                         }
                         if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
-                            self.ultrabeam_window_size = Some([rect.width(), rect.height()]);
+                            self.ultrabeam_window_size = Some([rect.width() * z, rect.height() * z]);
                         }
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.show_ultrabeam_window = false;
@@ -1201,9 +1276,14 @@ impl eframe::App for ServerApp {
                     .with_title(backend_title)
                     .with_resizable(true);
                 if !self.rotor_window_init_applied {
-                    rotor_vb = rotor_vb.with_inner_size(rotor_sz);
+                    // Geometry is stored in SYSTEM points so a saved layout survives
+                    // a change of UI scale; a ViewportBuilder wants EGUI points, which
+                    // egui-winit scales by zoom_factor. Identical at 100%, a factor
+                    // `zoom` out at anything else.
+                    let z = ctx.zoom_factor().max(0.01);
+                    rotor_vb = rotor_vb.with_inner_size([rotor_sz[0] / z, rotor_sz[1] / z]);
                     if let Some(pos) = self.rotor_window_pos {
-                        rotor_vb = rotor_vb.with_position(egui::pos2(pos[0], pos[1]));
+                        rotor_vb = rotor_vb.with_position(egui::pos2(pos[0] / z, pos[1] / z));
                     }
                     self.rotor_window_init_applied = true;
                 }
@@ -1212,11 +1292,13 @@ impl eframe::App for ServerApp {
                     ViewportId::from_hash_of("rotor_control"),
                     rotor_vb,
                     |ctx, _class| {
+                        // Back to SYSTEM points on the way in (see the builder above).
+                        let z = ctx.zoom_factor().max(0.01);
                         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                            self.rotor_window_pos = Some([rect.left(), rect.top()]);
+                            self.rotor_window_pos = Some([rect.left() * z, rect.top() * z]);
                         }
                         if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
-                            self.rotor_window_size = Some([rect.width(), rect.height()]);
+                            self.rotor_window_size = Some([rect.width() * z, rect.height() * z]);
                         }
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.show_rotor_window = false;

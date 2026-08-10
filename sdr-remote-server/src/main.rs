@@ -347,6 +347,7 @@ fn main() -> Result<()> {
             yaesu_enabled: defaults.yaesu_enabled,
             yaesu_baud: defaults.yaesu_baud,
             yaesu_ssb_switch_on_ptt: defaults.yaesu_ssb_switch_on_ptt,
+            ftx1_memory_write_ack: false,
             yaesu_audio_device: defaults.yaesu_audio_device,
             yaesu_audio_output_device: defaults.yaesu_audio_output_device,
             yaesu2_port: defaults.yaesu2_port,
@@ -388,6 +389,9 @@ fn main() -> Result<()> {
             ultrabeam_enabled: ub_en,
             rotor_enabled: rot_en,
             main_window_pos: None,
+            layout_grids: String::new(),
+            layout_memories: Vec::new(),
+            ui_zoom: 1.0,
             main_window_size: None,
             tuner_window_size: None,
             amplitec_window_size: None,
@@ -549,6 +553,18 @@ pub async fn run_server_async(
 ) -> Result<()> {
     let bind_addr: SocketAddr = format!("0.0.0.0:{}", DEFAULT_PORT).parse()?;
     info!("ThetisLink Server v{} starting up...", sdr_remote_core::version_string());
+    // Which build is this? During a release the version string carries no build
+    // number (BUILD = None), so two exes an hour apart look identical in the log -
+    // and a measurement run against the wrong one costs a full round trip. The
+    // executable's own timestamp settles it without adding a build number back.
+    if let Ok(t) = std::env::current_exe()
+        .and_then(std::fs::metadata)
+        .and_then(|m| m.modified())
+    {
+        let secs = t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        info!("Executable built/copied at epoch {} ({})", secs,
+              std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default());
+    }
     info!("PA3GHM - Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
     info!("Licensed under GPL-2.0-or-later - source: https://github.com/cjenschede/ThetisLink");
 
@@ -927,7 +943,7 @@ pub async fn run_server_async(
             info!("[radio1] slot 1 enabled: {} @ {} baud, model={:?}", port, det_baud, model);
             let audio = config.yaesu2_audio_device.clone();
             let audio_out = config.yaesu2_audio_output_device.clone();
-            match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu_ssb_switch_on_ptt) {
+            match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu_ssb_switch_on_ptt, config.ftx1_memory_write_ack) {
                 Ok(r) => Some(Arc::new(r)),
                 Err(e) => { warn!("[radio1] init failed: {} - slot 1 off, server keeps running", e); None }
             }

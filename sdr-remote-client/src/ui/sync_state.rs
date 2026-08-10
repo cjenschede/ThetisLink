@@ -7,6 +7,15 @@
 
 use super::*;
 
+/// Content fingerprint of a pushed blob. Cheaper to keep than the blob itself, and
+/// all we need to know: "is this the same list I already parsed?"
+fn blob_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
 impl SdrRemoteApp {
     /// Optimistic audio-enable reconciliation (RX1/RX2 share this one path). The
     /// client shows the requested value immediately (set on the toggle / at startup,
@@ -41,6 +50,30 @@ impl SdrRemoteApp {
             }
             None => *cur = server,
         }
+    }
+
+    /// The radio stopped transmitting without us asking, so let go of the local PTT
+    /// latch too.
+    ///
+    /// It stops on its own more often than you would think: a TX time-out timer runs
+    /// out, a fault trips, someone keys the set's own PTT. The button already goes
+    /// grey (it follows the reported state), but the latch behind it stayed held, so
+    /// the next click only released a PTT that was no longer transmitting and it took
+    /// a second click to key again - exactly the moment you did not want to press
+    /// twice.
+    ///
+    /// Caller checks for a confirmed transmitting -> not transmitting edge. Acting on
+    /// "not transmitting" alone would unlatch in the gap between keying and the server
+    /// confirming it.
+    fn release_ptt_latch(&mut self, slot: u8) {
+        if slot == 0 {
+            self.yaesu_mouse_ptt = false;
+            self.yaesu_ptt_last_sent = false;
+        } else {
+            self.yaesu2_mouse_ptt = false;
+            self.yaesu2_ptt_last_sent = false;
+        }
+        self.apply_ptt_spike_protection(true, false);
     }
 
     pub(super) fn sync_state(&mut self) {
@@ -82,8 +115,14 @@ impl SdrRemoteApp {
         // `self.yaesu_connected` = previous-frame value (updated further down).
         if state.yaesu_connected && !self.yaesu_connected {
             self.yaesu_mem_radio_received = false;
-            let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuReadMemories, 0));
-            log::info!("[radio0] 991A detected (yaesu_connected rising) - memory auto-read fired");
+            // value 1 = "the server's copy is fine". The server reads the radio once
+            // when the radio connects; asking it to walk 117 channels again for every
+            // client that turns up repeats work whose answer has not changed, and
+            // blocks the CAT link while it does. The Read radio button still sends 0
+            // and forces a real read. An older server ignores the value and reads the
+            // radio, which is simply today's behaviour.
+            let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuReadMemories, 1));
+            log::info!("[radio0] 991A detected (yaesu_connected rising) - asked the server for its memory list");
         }
         // Dual-radio slot 1: the same Yaesu-enable also switches on the 2nd radio.
         // The client is dual-radio-aware -> sends Yaesu2Enable=1 (arrives on
@@ -113,8 +152,8 @@ impl SdrRemoteApp {
             // it doesn't fire while the client is idle (no repaint, audio off +
             // windows closed). The server does a whole-scan retry for the cold radio.
             self.yaesu2_mem_radio_received = false;
-            let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2ReadMemories, 0));
-            log::info!("[radio1] FTX-1 detected (yaesu2_connected rising) - memory auto-read fired");
+            let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2ReadMemories, 1));
+            log::info!("[radio1] FTX-1 detected (yaesu2_connected rising) - asked the server for its memory list");
         }
         if !state.connected {
             self.yaesu_enable_sent = false;
@@ -829,7 +868,13 @@ impl SdrRemoteApp {
             self.yaesu_smeter_peak = state.yaesu_smeter;
             self.yaesu_smeter_peak_time = Instant::now();
         }
-        self.yaesu_tx_active = state.yaesu_tx_active;
+        {
+            let was_tx = self.yaesu_tx_active;
+            self.yaesu_tx_active = state.yaesu_tx_active;
+            if was_tx && !self.yaesu_tx_active && self.yaesu_mouse_ptt {
+                self.release_ptt_latch(0);
+            }
+        }
         self.yaesu_power_on = state.yaesu_power_on;
         // Dual-radio slot 1
         self.yaesu_model = state.yaesu_model;
@@ -851,7 +896,13 @@ impl SdrRemoteApp {
             self.yaesu2_smeter_peak = state.yaesu2_smeter;
             self.yaesu2_smeter_peak_time = Instant::now();
         }
-        self.yaesu2_tx_active = state.yaesu2_tx_active;
+        {
+            let was_tx = self.yaesu2_tx_active;
+            self.yaesu2_tx_active = state.yaesu2_tx_active;
+            if was_tx && !self.yaesu2_tx_active && self.yaesu2_mouse_ptt {
+                self.release_ptt_latch(1);
+            }
+        }
         self.yaesu2_power_on = state.yaesu2_power_on;
         self.yaesu2_split = state.yaesu2_split;
         self.yaesu2_scan = state.yaesu2_scan;
@@ -923,26 +974,77 @@ impl SdrRemoteApp {
             self.yaesu_current_mem_ch = self.yaesu_mem_channels.iter()
                 .position(|ch| ch.channel_number == state.yaesu_memory_channel);
         }
-        // Check for incoming Yaesu data from server (memory or menu)
-        if let Some(ref text) = state.yaesu_memory_data {
-            if text.starts_with("MENU:") {
-                // Menu data
-                if !self.yaesu_menu_received {
-                    self.yaesu_menu_received = true;
-                    let menu_text = &text[5..];
-                    let mut items = Vec::new();
-                    for line in menu_text.lines() {
-                        if let Some((num_str, val)) = line.split_once(':') {
-                            if let Ok(num) = num_str.trim().parse::<u16>() {
-                                items.push(yaesu_menu::MenuItem { number: num, raw_value: val.to_string() });
-                            }
+        // The table's own marker, per radio. Kept as a channel number: the two lists
+        // are different lengths, so one shared row index marked a different channel in
+        // each table and moved one radio's marker when the other was tuned.
+        self.yaesu_mem_active_live = self.yaesu_in_memory_mode;
+        if self.yaesu_in_memory_mode && state.yaesu_memory_channel > 0 {
+            self.yaesu_mem_active_ch = Some(state.yaesu_memory_channel);
+        }
+        let slot1_in_memory = state.yaesu2_vfo_select == 1 || state.yaesu2_vfo_select == 2;
+        self.yaesu2_mem_active_live = slot1_in_memory;
+        if slot1_in_memory && state.yaesu2_memory_channel > 0 {
+            self.yaesu2_mem_active_ch = Some(state.yaesu2_memory_channel);
+        }
+        // Incoming Yaesu EX settings. Own field, own comparison - the memory list
+        // below is a separate stream that arrives in the same instant on connect.
+        if let Some(ref text) = state.yaesu_menu_data {
+            // Content-compared, like the memory list: the EX values are pushed now
+            // (once per subscriber, then on change), so a later push must be accepted
+            // while an unchanged repeat must not re-parse every frame.
+            if self.yaesu_menu_blob_hash != Some(blob_hash(text)) {
+                self.yaesu_menu_blob_hash = Some(blob_hash(text));
+                self.yaesu_menu_received = true;
+                let menu_text = text.strip_prefix("MENU:").unwrap_or(text);
+                let mut items = Vec::new();
+                for line in menu_text.lines() {
+                    if let Some((num_str, val)) = line.split_once(':') {
+                        if let Ok(num) = num_str.trim().parse::<u16>() {
+                            items.push(yaesu_menu::MenuItem { number: num, raw_value: val.to_string() });
                         }
                     }
-                    log::info!("Received {} menu items from radio", items.len());
-                    self.yaesu_menu_items = items;
                 }
-            } else if !self.yaesu_mem_radio_received {
-                // Memory channel data
+                log::info!("Received {} menu items from radio", items.len());
+                self.yaesu_menu_items = items;
+            }
+        } else {
+            self.yaesu_menu_received = false;
+            self.yaesu_menu_blob_hash = None;
+        }
+        // Incoming Yaesu memory list.
+        //
+        // An open edit wins. The list is pushed now - on connect, on change, and
+        // through the slow safety net - so it arrives while the operator is typing a
+        // tone into the table. Applying it then throws that away, and the value that
+        // gets written to the radio a moment later is the old one. The hash is
+        // deliberately NOT updated, so the next push after the edit is saved or
+        // written does land. (Design note §2.4: a push must not overwrite unsaved
+        // work in the client.)
+        if let Some(ref text) = state.yaesu_memory_data {
+            // Held back while the table is OPEN as well, not only while it has
+            // unsaved edits: a list that reorders itself under your hands is as
+            // unwelcome as one that discards a value you just typed. It lands as soon
+            // as the section is collapsed, or after a write or a read. Never held back
+            // when there is nothing to show yet - the first list must always arrive.
+            // An answer the operator asked for is never held back - it IS the
+            // action they just took.
+            let busy = !self.yaesu_mem_expect_push
+                && !self.yaesu_mem_channels.is_empty()
+                && (self.yaesu_mem_dirty || self.collapse_yaesu_memories);
+            if busy && self.yaesu_mem_blob_hash != Some(blob_hash(text)) {
+                if !self.yaesu_mem_push_deferred {
+                    self.yaesu_mem_push_deferred = true;
+                    log::info!("Yaesu memory list from the server held back: the table is open{}",
+                               if self.yaesu_mem_dirty { " with unsaved edits" } else { "" });
+                }
+            } else if self.yaesu_mem_blob_hash != Some(blob_hash(text)) {
+                self.yaesu_mem_push_deferred = false;
+                self.yaesu_mem_expect_push = false;
+                // Memory channel data. Compared on CONTENT, not on a one-shot latch:
+                // the server pushes this list (once per subscriber, then whenever it
+                // changes), so a second push has to be accepted while an unchanged
+                // repeat must not re-parse over local edits every frame.
+                self.yaesu_mem_blob_hash = Some(blob_hash(text));
                 self.yaesu_mem_radio_received = true;
                 match crate::ui::yaesu_memory::parse_tab_string(text) {
                     Ok(mut radio_channels) => {
@@ -956,31 +1058,54 @@ impl SdrRemoteApp {
                         }
                         log::info!("Received {} memory channels from radio", radio_channels.len());
                         self.yaesu_mem_channels = radio_channels;
-                        self.yaesu_mem_dirty = true;
+                        // NOT dirty: this list came from the radio, there is nothing
+                        // unsaved about it. Marking it dirty lit the Save button
+                        // unprompted and, worse, made "are there open edits?"
+                        // permanently true - which is what this flag now guards.
+                        self.yaesu_mem_dirty = false;
                     }
                     Err(e) => log::warn!("Parse memory data from radio: {}", e),
                 }
             }
         } else {
             self.yaesu_mem_radio_received = false;
-            self.yaesu_menu_received = false;
+            self.yaesu_mem_blob_hash = None;
         }
-        // Slot-1 (FTX-1) memory dump -> yaesu2_mem_channels (Phase B). No MENU branch
-        // (EX-menu = Phase C). FTX-1 MT/MR format to be verified on hardware.
+        // Slot-1 (FTX-1) EX values: own field, own comparison - same split as slot 0.
+        if let Some(ref text) = state.yaesu2_menu_data {
+            let menu_body = text.strip_prefix("MENU:").unwrap_or(text);
+            if self.yaesu2_menu_blob_hash != Some(blob_hash(menu_body)) {
+                self.yaesu2_menu_blob_hash = Some(blob_hash(menu_body));
+                self.yaesu2_menu_received = true;
+                self.yaesu2_menu_entries = menu_body.lines()
+                    .filter_map(|l| l.split_once(':')
+                        .map(|(a, v)| (a.trim().to_string(), v.trim().to_string())))
+                    .filter(|(a, _)| a.len() == 6)
+                    .collect();
+                self.yaesu2_menu_edits.clear(); // fresh values -> reset edit buffers
+                log::info!("[radio1] received {} EX menu values", self.yaesu2_menu_entries.len());
+            }
+        } else {
+            self.yaesu2_menu_received = false;
+            self.yaesu2_menu_blob_hash = None;
+        }
+        // Slot-1 (FTX-1) memory dump -> yaesu2_mem_channels (Phase B). Same rule as
+        // slot 0: an open edit wins over an incoming push.
         if let Some(ref text) = state.yaesu2_memory_data {
-            if let Some(menu_body) = text.strip_prefix("MENU:") {
-                // FTX-1 EX-menu dump (Phase C): "p1p2p3:value" lines.
-                if !self.yaesu2_menu_received {
-                    self.yaesu2_menu_received = true;
-                    self.yaesu2_menu_entries = menu_body.lines()
-                        .filter_map(|l| l.split_once(':')
-                            .map(|(a, v)| (a.trim().to_string(), v.trim().to_string())))
-                        .filter(|(a, _)| a.len() == 6)
-                        .collect();
-                    self.yaesu2_menu_edits.clear(); // fresh values -> reset edit buffers
-                    log::info!("[radio1] received {} EX menu values", self.yaesu2_menu_entries.len());
+            let busy2 = !self.yaesu2_mem_expect_push
+                && !self.yaesu2_mem_channels.is_empty()
+                && (self.yaesu2_mem_dirty || self.collapse_yaesu2_memories);
+            if busy2 && self.yaesu2_mem_blob_hash != Some(blob_hash(text)) {
+                if !self.yaesu2_mem_push_deferred {
+                    self.yaesu2_mem_push_deferred = true;
+                    log::info!("[radio1] memory list from the server held back: the table is open{}",
+                               if self.yaesu2_mem_dirty { " with unsaved edits" } else { "" });
                 }
-            } else if !self.yaesu2_mem_radio_received {
+            } else if self.yaesu2_mem_blob_hash != Some(blob_hash(text)) {
+                self.yaesu2_mem_push_deferred = false;
+                self.yaesu2_mem_expect_push = false;
+                // Content-compared, exactly like slot 0.
+                self.yaesu2_mem_blob_hash = Some(blob_hash(text));
                 self.yaesu2_mem_radio_received = true;
                 match crate::ui::yaesu_memory::parse_tab_string(text) {
                     Ok(mut radio_channels) => {
@@ -1001,7 +1126,7 @@ impl SdrRemoteApp {
                             }
                             log::info!("[radio1] received {} memory channels", radio_channels.len());
                             self.yaesu2_mem_channels = radio_channels;
-                            self.yaesu2_mem_dirty = true;
+                            self.yaesu2_mem_dirty = false;
                         }
                     }
                     Err(e) => log::warn!("[radio1] parse memory data: {}", e),
@@ -1009,7 +1134,7 @@ impl SdrRemoteApp {
             }
         } else {
             self.yaesu2_mem_radio_received = false;
-            self.yaesu2_menu_received = false;
+            self.yaesu2_mem_blob_hash = None;
         }
         self.dx_spots = state.dx_spots.clone();
 

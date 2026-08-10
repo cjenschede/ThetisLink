@@ -5106,7 +5106,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-android"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -5122,7 +5122,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-client"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5137,6 +5137,7 @@ dependencies = [
  "ringbuf",
  "rust-i18n",
  "sdr-remote-core",
+ "sdr-remote-layout",
  "sdr-remote-logic",
  "sdr-remote-relay",
  "sdr-remote-theme",
@@ -5152,7 +5153,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-core"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "anyhow",
  "audiopus",
@@ -5167,8 +5168,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdr-remote-layout"
+version = "0.1.0"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "sdr-remote-logic"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5182,7 +5190,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-relay"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "futures-util",
  "log",
@@ -5193,7 +5201,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-server"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5213,6 +5221,7 @@ dependencies = [
  "rust-i18n",
  "rustfft",
  "sdr-remote-core",
+ "sdr-remote-layout",
  "sdr-remote-relay",
  "sdr-remote-theme",
  "serde",

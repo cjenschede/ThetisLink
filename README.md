@@ -1,26 +1,29 @@
 # ThetisLink
 
-> **Current release: [v2.7.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.7.0)** —
-> **Virtual receivers now start reliably and stay clean after retuning**: three separate faults
-> sat under one symptom, and a VRX also stays inside the DDC band with the spectrum drawing the
-> band edge honestly instead of silently rescaling. **CTCSS and DCS can be set from the client**
-> on the FT-991A — per memory channel, all 104 DCS codes, with a *Read tones* action that walks
-> the channels and puts the radio back where it was. The **audio-level bars were rebuilt**: they
-> measure the link rather than your volume slider, fall back to zero when a stream stops, and the
-> **Yaesu receive path is now calibrated per radio model** — the FT-991A plays about 16 dB
-> quieter than before, so set its volume higher than you are used to. The **full-band spectrum
-> row is shared** between an RX and the VRX on the same receiver, which fills the waterfall
-> history after tuning; a checkbox turns it off and roughly halves the spectrum data. The
-> **channel buttons say what they do** now (channel name as a heading, `audio` and `window`),
-> the audio switch also sits inside every channel window, and the **master volume really is a
-> master** — it applies to all six channels. Plus **Thetis autostart** from client and Android,
-> **several clients on one PC** via named profiles, and fixes for a MIDI wheel running a Yaesu
-> away and a relay that mistook a dead UDP path for a recovered one.
+> **Current release: [v2.8.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.8.0)** —
+> **The radio's data is there the moment you connect.** Memory channels, tones and EX settings
+> are read **once, when the radio connects**, and every client is served from the server's copy
+> instead of making the radio walk its channels again — that walk took a second on an FT-991A and
+> several on the FTX-1's 405 EX values, with no other CAT command able to get through. **ThetisLink
+> now lets go of PTT when the radio already has**: set a TX time-out timer and it releases just
+> before the limit instead of transmitting into a radio that stopped, and on the FTX-1 it follows
+> the radio's real transmit state, so a fault or the set's own PTT ends the transmission here too.
+> **FTX-1 tones work in practice** — that radio cannot store a tone in a memory channel over CAT,
+> so ThetisLink keeps them in its list and applies the right one each time the radio lands on a
+> channel; writing its memory bank is off until you accept what it costs. The **memory table tells
+> you where the radio is**: green for the channel it is on, amber for the one you left when you
+> tuned into VFO, and one click anywhere in the row brings you back. The **window arranger is now
+> one implementation** shared by the desktop client and the server GUI, which gains the UI scale,
+> the 18×18 grid and five arrangement memories. Three **Android** faults that shipped in v2.7.0 are
+> fixed: a Yaesu stayed silent when switched on, the memory list disappeared behind the EX menu,
+> and the FTX-1's EX settings showed bare numbers. Also: the **V/M button no longer overwrites a
+> memory channel** — it did in every release since v2.0.0, silently — and the EX menu dropdown no
+> longer drops the choices it could not parse, which had left the TX time-out timer unsettable.
 > Illustrated explainers are online — see **Documentation** below.
-> **Backwards-compatible** — TL wire-protocol `VERSION` 3 unchanged; interoperates
-> with v2.6.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for these
-> features (the PA3GHM fork adds the extended-IQ feature-set).
-> Download `ThetisLink-2.7.0.zip` from the
+> **Backwards-compatible** — TL wire-protocol `VERSION` 3 unchanged and no new control ids;
+> interoperates with v2.7.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for
+> these features (the PA3GHM fork adds the extended-IQ feature-set).
+> Download `ThetisLink-2.8.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are

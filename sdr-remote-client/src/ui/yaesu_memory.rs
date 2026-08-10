@@ -375,9 +375,3 @@ pub const DCS_CODES: &[&str] = &[
 
 /// Tone modes for combo box.
 pub const TONE_MODES: &[&str] = &["None", "Tone", "T SQL", "DCS", "D Code"];
-
-/// Offset frequencies for combo box.
-pub const OFFSET_FREQS: &[&str] = &[
-    "", "100 kHz", "500 kHz", "600 kHz", "1 MHz", "1,6 MHz",
-    "3 MHz", "5 MHz", "7,6 MHz", "9,4 MHz",
-];

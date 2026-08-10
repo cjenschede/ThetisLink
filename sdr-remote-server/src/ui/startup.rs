@@ -26,6 +26,7 @@ impl ServerApp {
             yaesu_port: if yaesu_port_str.is_empty() { None } else { Some(yaesu_port_str.clone()) },
             yaesu_enabled: self.yaesu_enabled,
             yaesu_ssb_switch_on_ptt: self.yaesu_ssb_switch_on_ptt,
+            ftx1_memory_write_ack: self.ftx1_memory_write_ack,
             yaesu_baud: 38400,
             yaesu_audio_device: if self.yaesu_audio_device.is_empty() { None } else { Some(self.yaesu_audio_device.clone()) },
             yaesu_audio_output_device: if self.yaesu_audio_output_device.is_empty() { None } else { Some(self.yaesu_audio_output_device.clone()) },
@@ -70,6 +71,9 @@ impl ServerApp {
             ultrabeam_window_pos: self.ultrabeam_window_pos,
             rotor_window_pos: self.rotor_window_pos,
             main_window_pos: self.main_window_pos,
+            layout_grids: sdr_remote_layout::layout_grids_to_config(&self.layout_grid_per_monitor),
+            layout_memories: self.layout_memories.iter().map(|m| m.to_config_string()).collect(),
+            ui_zoom: self.ui_zoom,
             main_window_size: self.main_window_size,
             tuner_window_size: self.tuner_window_size,
             amplitec_window_size: self.amplitec_window_size,
@@ -133,10 +137,11 @@ impl ServerApp {
             // run in the timeout thread (does not block the UI thread).
             // If detect fails (radio off) -> 991A-assumed label; bring-up logs the real ID.
             let ssb_on_ptt = config.yaesu_ssb_switch_on_ptt;
+            let mem_write_ack = config.ftx1_memory_write_ack;
             match with_timeout(com_timeout, move || {
                 let (model, det_baud) = crate::yaesu::detect_model(&port, baud)
                     .unwrap_or((crate::yaesu::RadioModel::Ft991a, baud));
-                crate::yaesu::YaesuRadio::new_with_model(&port, det_baud, audio_dev_opt.as_deref(), audio_out_opt.as_deref(), model, 0, 0, ssb_on_ptt)
+                crate::yaesu::YaesuRadio::new_with_model(&port, det_baud, audio_dev_opt.as_deref(), audio_out_opt.as_deref(), model, 0, 0, ssb_on_ptt, mem_write_ack)
             }) {
                 Ok(radio) => {
                     // YaesuRadio is fail-soft: the underlying serial open

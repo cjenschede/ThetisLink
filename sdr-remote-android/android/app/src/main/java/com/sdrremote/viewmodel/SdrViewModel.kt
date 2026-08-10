@@ -42,6 +42,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     private val _yaesuMemData = MutableStateFlow("")
     val yaesuMemData: StateFlow<String> = _yaesuMemData.asStateFlow()
     private val _yaesu2MemData = MutableStateFlow("")
+    // Same sticky treatment as the memory lists: the bridge field is cleared
+    // shortly after arrival, so the last non-empty value is what the UI shows.
+    private val _yaesuMenuData = MutableStateFlow("")
+    private val _yaesu2MenuData = MutableStateFlow("")
     val yaesu2MemData: StateFlow<String> = _yaesu2MemData.asStateFlow()
 
     private val _state = MutableStateFlow(SdrUiState())
@@ -63,7 +67,15 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     // Init uit dezelfde prefs-key als de sticky "Volume:"-slider bij de PTT
     // ("local_volume" in de "thetislink"-store) zodat applyYaesuAudio() na herstart
     // het opgeslagen volume gebruikt i.p.v. de default (max).
+    // Own key. It used to share "local_volume" with the Thetis level, which is why a
+    // Yaesu could start at a value that was set for Thetis, and vice versa.
     private var yaesuVol =
+        getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+            .getFloat("yaesu_volume", 1.0f)
+    // The "Volume" slider is in practice the THETIS level: the Yaesu panel has its
+    // own. It drives the client-only RX volumes rather than the master, so it cannot
+    // quietly scale the Yaesu as well - the master stays neutral at 1.0.
+    private var thetisVol =
         getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
             .getFloat("local_volume", 1.0f)
     private var requestedPtt = false
@@ -161,6 +173,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         upKbps = s.upKbps.toInt(),
                         dxSpotsEnabled = s.dxSpotsEnabled,
                         captureLevel = s.captureLevel,
+                        yaesuMicLevel = s.yaesuMicLevel,
                         playbackLevel = s.playbackLevel,
                         frequencyHz = s.frequencyHz.toLong(),
                         frequencyRx2Hz = s.frequencyRx2Hz.toLong(),
@@ -271,6 +284,14 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                             _yaesuMemData.value = s.yaesuMemoryData
                             s.yaesuMemoryData
                         } else _yaesuMemData.value,
+                        yaesuMenuData = if (s.yaesuMenuData.isNotEmpty()) {
+                            _yaesuMenuData.value = s.yaesuMenuData
+                            s.yaesuMenuData
+                        } else _yaesuMenuData.value,
+                        yaesu2MenuData = if (s.yaesu2MenuData.isNotEmpty()) {
+                            _yaesu2MenuData.value = s.yaesu2MenuData
+                            s.yaesu2MenuData
+                        } else _yaesu2MenuData.value,
                         yaesuModel = s.yaesuModel.toInt(),
                         yaesuTunerState = s.yaesuTunerState.toInt(),
                         yaesuHiSwr = s.yaesuHiSwr,
@@ -497,12 +518,12 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 bridge?.yaesuEnable(true)
                 bridge?.yaesuReadMemories()
                 delay(200)
-                bridge?.setLocalVolume(0f)
+                muteThetisLocally(true)
                 bridge?.enableSpectrum(false)
             } else {
-                // First restore local Thetis audio to saved slider value, then disable Yaesu
-                val savedLocalVol = prefs.getFloat("local_volume", 1f)
-                bridge?.setLocalVolume(savedLocalVol)
+                // Thetis audible again. The master is left alone - it belongs to the
+                // operator, not to this switch.
+                muteThetisLocally(false)
                 bridge?.enableSpectrum(true)
                 bridge?.setSpectrumFps(prefs.getInt("spectrum_fps", 15).toUByte())
                 bridge?.setSpectrumMaxBins(2048u) // anders default (hoge) bin-count → hoge datarate
@@ -547,8 +568,14 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         val active = _yaesuMode.value
         val s = sel()
         val targetVolume = if (pttSpeakerMuted) 0f else yaesuVol
-        bridge?.yaesuVolume(if (active && s == 0) targetVolume else 0f)
-        bridge?.yaesu2Volume(if (active && s == 1) targetVolume else 0f)
+        val v0 = if (active && s == 0) targetVolume else 0f
+        val v1 = if (active && s == 1) targetVolume else 0f
+        // Diagnosis: audible level meters with no sound means this product is zero
+        // somewhere. Print every factor rather than reason about which one it is.
+        Log.i(TAG, "applyYaesuAudio active=$active sel=$s yaesuVol=$yaesuVol " +
+                   "pttMuted=$pttSpeakerMuted -> slot0=$v0 slot1=$v1")
+        bridge?.yaesuVolume(v0)
+        bridge?.yaesu2Volume(v1)
     }
 
     /** Yaesu-window open/dicht (data-besparing): open → abonneer de geselecteerde,
@@ -618,11 +645,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             if (on) {
                 applyYaesuAudio()
-                bridge?.setLocalVolume(0f)   // mute lokale Thetis-audio
+                muteThetisLocally(true)      // mute lokale Thetis-audio
                 bridge?.enableSpectrum(false)
             } else {
-                val savedLocalVol = prefs.getFloat("local_volume", 1f)
-                bridge?.setLocalVolume(savedLocalVol)
+                muteThetisLocally(false)
                 bridge?.enableSpectrum(true)
                 bridge?.setSpectrumFps(prefs.getInt("spectrum_fps", 15).toUByte())
                 bridge?.setSpectrumMaxBins(2048u) // anders default (hoge) bin-count → hoge datarate
@@ -704,6 +730,27 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Silence the Thetis audio LOCALLY, without touching the master.
+     *
+     * This used to be done with setLocalVolume(0f). That worked while the master
+     * only covered Thetis - but since the master was made to control everything
+     * (v2.7.0) it multiplies the Yaesu path too, so switching a Yaesu on silenced
+     * the very radio it switched on. The level meters kept moving, because they are
+     * measured before the volume is applied.
+     *
+     * The local RX volumes are the right knob: client-only, independent of the
+     * Thetis AF gain (ZZLA/ZZLB) so the server is not touched, and independent of
+     * the master so the Yaesu keeps its own level.
+     */
+    private fun muteThetisLocally(mute: Boolean) {
+        // Unmuting restores the level the operator set, not full scale: restoring to
+        // 1.0 would make Thetis blast out on every switch back from a Yaesu.
+        val v = if (mute) 0f else thetisVol
+        bridge?.setVfoAVolume(v)
+        bridge?.setVfoBVolume(v)
+    }
+
     private fun setPttSpeakerMuted(mute: Boolean) {
         if (pttSpeakerMuted == mute) return
         pttSpeakerMuted = mute
@@ -757,11 +804,16 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun setDxSpotsEnabled(enabled: Boolean) { bridge?.setDxSpotsEnabled(enabled) }
     fun setRxVolume(volume: Float) { bridge?.setRxVolume(volume) }
     fun setLocalVolume(volume: Float) {
-        // In Yaesu mode, local Thetis audio must stay muted
-        if (_yaesuMode.value) {
-            bridge?.setLocalVolume(0f)
-        } else {
-            bridge?.setLocalVolume(volume)
+        // Drives THETIS, not the master. The master multiplies every path including the
+        // Yaesu, so putting this slider on it made it a hidden attenuator: a setting
+        // that is right for Thetis then leaves a Yaesu far too quiet while its own
+        // slider reads full open. The master stays at its neutral 1.0.
+        thetisVol = volume
+        if (!_yaesuMode.value) {
+            // In Yaesu mode Thetis is muted on purpose - remember the new level and
+            // apply it when Thetis comes back.
+            bridge?.setVfoAVolume(volume)
+            bridge?.setVfoBVolume(volume)
         }
     }
     fun setTxGain(gain: Float) { bridge?.setTxGain(gain) }

@@ -19,6 +19,7 @@ ringbuf = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 sdr-remote-theme = { path = "../sdr-remote-theme" }
+sdr-remote-layout = { path = "../sdr-remote-layout" }
 qrcode = "0.14"
 bytemuck = { workspace = true }
 log = { workspace = true }

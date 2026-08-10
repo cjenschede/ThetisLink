@@ -1,10 +1,10 @@
-# ThetisLink v2.7.0 — Technische Documentatie
+# ThetisLink v2.8.0 — Technische Documentatie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een ANAN 7000DLE + Thetis SDR-ontvanger en maximaal twee Yaesu transceivers (FT-991A / FTX-1) via een netwerkverbinding. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
 
-**Versie:** v2.7.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.8.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -26,9 +26,31 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.7.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.8.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.8.0 hoogtepunten
+
+**De gegevens van de radio staan er zodra je verbindt, één schikker voor beide applicaties, en
+drie Android-fouten die in v2.7.0 zijn meegegaan.** Compatibel met v2.7.x — wire `VERSION`
+blijft 3 en er zijn **geen nieuwe control-ids**; wat wijzigde is de *waarde* op twee bestaande
+(`0` = lees de radio nu, `1` = de kopie van de server volstaat), zo gekozen dat oude en nieuwe
+kanten in beide richtingen blijven werken. Geheugenkanalen, tonen en EX-instellingen worden
+**eenmalig bij het verbinden van de radio** gelezen en door de server bewaard; een client wordt
+daarna uit die kopie bediend in plaats van de radio opnieuw zijn kanalen te laten langslopen —
+dat kostte ongeveer een seconde op de FT-991A en enkele op de 405 EX-waarden van de FTX-1,
+waarin geen ander CAT-commando erdoor kon. Toestand bereikt clients via **één push-mechaniek**:
+een verse abonnee krijgt de huidige waarde één keer, daarna alleen wijzigingen, met een trage
+volledige hersturing als vangnet omdat een push niet gegarandeerd aankomt. De **vensterschikker
+is nu één implementatie**, gedeeld door de desktopclient en de server-GUI in plaats van twee
+kopieën die uit elkaar waren gelopen; de server-GUI krijgt daarmee de UI-schaal, het 18×18-raster
+en vijf **schikgeheugens**. Op **Android** drie fouten die in de uitgebrachte v2.7.0-APK zaten:
+een Yaesu bleef stil zodra je hem aanzette (het mastervolume dempt Thetis, en sinds v2.7.0 dekt
+de master ook het Yaesu-pad), de geheugenlijst verdween achter het EX-menu (beide liepen door één
+veld), en de EX-instellingen van de FTX-1 toonden kale nummers in plaats van namen. Verder
+opgelost: de tonen verdwijnen niet meer bij elke uitlezing uit de geheugenlijst, en de
+FT-991A-geheugenuitlezing komt niet meer één kanaal tekort.
 
 ### v2.7.0 hoogtepunten
 
@@ -624,7 +646,7 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0x22 | YaesuFreq | — | Gebruikt FrequencyPacket formaat |
 | 0x23 | YaesuMicGain | gain x10 | ThetisLink TX gain (200 = 20.0x) |
 | 0x24 | YaesuMode | mode nr | Operating mode |
-| 0x25 | YaesuReadMemories | trigger | Lees alle geheugens |
+| 0x25 | YaesuReadMemories | 0 = lees de radio nu, 1 = de serverkopie volstaat | Lees alle geheugens |
 | 0x26 | YaesuRecallMemory | 1-117 | Memory channel recall (991A 1-117 incl. PMS; FTX-1 5-cijferig) |
 | 0x27 | YaesuWriteMemories | trigger | Schrijf alle geheugens |
 | 0x28 | YaesuSelectVfo | 0=A, 1=B, 2=swap | VFO selectie |
@@ -633,7 +655,7 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0x2B | YaesuRadioMicGain | 0-100 | Radio mic gain (niet ThetisLink TX gain) |
 | 0x2C | YaesuRfPower | 0-100 | RF vermogen |
 | 0x2D | YaesuButton | button ID | Raw CAT button |
-| 0x2E | YaesuReadMenus | trigger | Lees alle 153 EX menu items |
+| 0x2E | YaesuReadMenus | 0 = lees de radio nu, 1 = de serverkopie volstaat | Lees alle 153 EX menu items |
 | 0x2F | YaesuSetMenu | menu nr | Stel EX menu in |
 
 Control packets zijn **bidirectioneel**: client->server stuurt wijzigingen, server->client broadcast de huidige staat.
@@ -2210,10 +2232,16 @@ hij de toon leest. Die wandeling
   voorafgaande bulk-uitlezing voor deze bevestigingen zou worden aangezien;
 - **breekt af bij TX** en keert terug naar het kanaal waar de radio stond.
 
-**Beperking FTX-1:** lezen werkt, schrijven niet. Er bestaat geen veilige
-CAT-route om een toon op die radio op te slaan - de route die leek te werken
-schreef het kanaal opnieuw vanuit VFO-A en vernietigde de inhoud - dus het
-schrijfpad is daar uitgeschakeld en een regressietest houdt dat zo.
+**Beperking FTX-1 (v2.8.0):** lezen werkt; een toon *opslaan* in een geheugenkanaal
+niet, en de reden staat zwart op wit in plaats van dat hij is afgeleid - `MW` heeft
+wel een veld voor de toon-**modus** (P8) maar geen voor het toon-**nummer** (P9 is
+`00: (Fixed)`), en `MW` is set-only. Een geheugen schrijven zet de toon van dat kanaal
+in de radio dus terug op 100,0 Hz. ThetisLink bewaart de tonen in zijn eigen lijst en
+zet telkens de juiste terug zodra de radio op een kanaal landt, dus zenden via
+ThetisLink werkt gewoon - maar de radio op zichzelf zendt op geschreven kanalen
+100,0 Hz uit. Vanwege die prijs staat schrijven naar de FTX-1 uit tot het in de
+serverinstellingen is geaccepteerd. Zie [Bekende Beperkingen](#31-bekende-beperkingen) voor het
+volledige verhaal.
 
 ## 27. Netwerk Authenticatie (HMAC-SHA256 + TOTP 2FA)
 
@@ -2521,8 +2549,32 @@ venster van 30 metingen voor min/gem/max. Dat is wat de verbindingsindicator too
 
 4. **macOS:** Experimentele ondersteuning. cpal werkt met CoreAudio maar sommige USB audio devices worden niet correct gedetecteerd.
 
-5. **FTX-1 CTCSS/DCS schrijven:** de toon van een geheugenkanaal is bij een FTX-1
-   wel te *lezen* maar niet te schrijven. De radio biedt geen veilige CAT-route om
-   een toon op te slaan; de route die ernaar uitziet schrijft het kanaal opnieuw
-   vanuit VFO-A en overschrijft de inhoud. Stel de toon op de set zelf in. De
-   FT-991A kan beide.
+5. **FTX-1 CTCSS/DCS schrijven:** de toon van een geheugenkanaal kan bij een FTX-1
+   **niet over CAT worden opgeslagen**, en dat staat zwart op wit: het `MW`-commando
+   heeft wel een veld voor de toon-**modus** (P8) maar geen veld voor het
+   toon-**nummer** — P9 is `00: (Fixed)` in de FTX-1 CAT-handleiding — en `MW` is
+   set-only, dus teruglezen kan ook niet. Een geheugen schrijven zet daarmee de
+   **toon van dat kanaal in de radio terug op 100,0 Hz**, zonder CAT-commando om die
+   te herstellen. Alle andere routes zijn gemeten en dicht: een toon die je vóór het
+   opslaan zet wordt door het opslaan gewist, een toon die je erná zet verdwijnt bij
+   de eerste kanaalwissel.
+
+   **(v2.8.0)** ThetisLink werkt hier omheen in plaats van te doen alsof het er niet
+   is. De tonen staan in de lijst van de server, en telkens als de radio op een
+   geheugenkanaal landt zet de server de toon van dat kanaal opnieuw (`CT` + `CN`).
+   Twee CAT-commando's per kanaalwissel, niets naar de bank geschreven, en zenden via
+   ThetisLink werkt gewoon. De grens is eerlijk: dit geldt **alleen zolang ThetisLink
+   verbonden is**. De radio zelf zendt uit wat er is opgeslagen, en dat is na een
+   schrijfactie 100,0 Hz. Omdat een schrijfactie die tonen kost, staat het schrijven
+   naar de FTX-1 **standaard uit**. *Write radio* geeft de lijst dan nog steeds aan de
+   server - de tonen erin worden per kanaal gezet en werken dus - maar er gaat niets de
+   radio in; wat je daarmee opgeeft is dat een gewijzigde frequentie of naam in de lijst
+   van de server staat en niet in de set. Pas als de voorwaarde in de serverinstellingen
+   is geaccepteerd (Yaesu → *Schrijven van FTX-1-geheugenkanalen toestaan*) wordt de
+   radio zelf geschreven. Lezen is nooit gepoort. De FT-991A slaat tonen
+   wel gewoon op en heeft hier geen last van.
+
+6. **Een geheugenkanaal wissen:** kan bij geen van beide radio's over CAT - er bestaat
+   geen commando voor. Schrijven kan wel, leegmaken niet, dus een ongewenst kanaal
+   wis je op de set zelf. Een rij verwijderen in de clienttabel haalt hem alleen uit
+   de lijst; in de radio blijft het kanaal staan.

@@ -11,10 +11,43 @@
 use super::*;
 
 /// Self-reconnecting thread: runs the serial poll loop, reconnects on failure.
+/// Make a memory list the server's own copy: the filled-channel numbers (so Mem+/Mem-
+/// can skip the gaps) and the blob that both the push and the FTX-1 tone keeper read.
+///
+/// Called from three places that mean the same thing - a read finished, a write
+/// finished, or a write was refused but the list itself is still good.
+fn adopt_memory_list(
+    tab_text: &str,
+    status: &Arc<Mutex<YaesuState>>,
+    memory_data: &Arc<Mutex<Option<String>>>,
+) {
+    let mut filled: Vec<u16> = tab_text
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.split('\t').next())
+        .filter_map(|c| c.trim().parse::<u16>().ok())
+        .filter(|&c| c >= 1)
+        .collect();
+    filled.sort_unstable();
+    filled.dedup();
+    {
+        let mut st = status.lock().unwrap();
+        st.filled_memory_channels = filled;
+        st.last_memory_blob = Some(tab_text.to_string());
+    }
+    *memory_data.lock().unwrap() = Some(tab_text.to_string());
+}
+
 pub(super) fn yaesu_reconnect_thread(
     cmd_rx: mpsc::Receiver<YaesuCmd>,
+    // The loop's own way back into the command queue. The PTT watchdog uses it to
+    // release PTT through exactly the same handler an operator release goes through,
+    // so the auto-DATA mode restore and the USB routing restore cannot drift apart
+    // from it.
+    self_tx: mpsc::Sender<YaesuCmd>,
     status: Arc<Mutex<YaesuState>>,
     memory_data: Arc<Mutex<Option<String>>>,
+    menu_data: Arc<Mutex<Option<String>>>,
     port_name: String,
     baud: u32,
     audio_device: Option<String>,
@@ -147,6 +180,20 @@ pub(super) fn yaesu_reconnect_thread(
                 prefix, hf, m50, m144, m430);
         }
 
+        // FTX-1 firmware version, once per connect. RT Systems documents 1.08 as the
+        // minimum for programming this radio, and the memory-tone write is unexplained
+        // - so this belongs in the log rather than in an open question.
+        // CAT OM p26: VE FIRMWARE VERSION, read `VE P1;` with P1 0 = MAIN CPU.
+        if matches!(model, RadioModel::Ftx1) {
+            let v = cat_query(&mut port, "VE0;");
+            let v = v.trim();
+            if v.is_empty() {
+                warn!("{} firmware version: no answer to VE0;", prefix);
+            } else {
+                info!("{} firmware (MAIN CPU): [{}]", prefix, v.escape_debug());
+            }
+        }
+
         // Rebuild audio streams unconditionally after each successful open.
         // On cold-start (Yaesu was off when new() ran) the USB
         // audio device only becomes available here; on mid-runtime reconnect
@@ -215,7 +262,7 @@ pub(super) fn yaesu_reconnect_thread(
 
         // Run poll loop until disconnect (with audio watchdog)
         yaesu_poll_loop(
-            port, &cmd_rx, &status, &memory_data,
+            port, &cmd_rx, &self_tx, &status, &memory_data, &menu_data,
             &audio_device, &output_device, &rx_audio_tx, &capture_stream, &output_stream, &tx_producer, &last_audio_time,
             model, &prefix, capture_channel, ft991a_usb_routing_snapshot,
         );
@@ -232,8 +279,10 @@ pub(super) fn yaesu_reconnect_thread(
 fn yaesu_poll_loop(
     mut port: Box<dyn serialport::SerialPort>,
     cmd_rx: &mpsc::Receiver<YaesuCmd>,
+    self_tx: &mpsc::Sender<YaesuCmd>,
     status: &Arc<Mutex<YaesuState>>,
     memory_data: &Arc<Mutex<Option<String>>>,
+    menu_data: &Arc<Mutex<Option<String>>>,
     audio_device: &Option<String>,
     output_device: &Option<String>,
     rx_audio_tx: &tokio::sync::mpsc::Sender<Vec<f32>>,
@@ -268,6 +317,43 @@ fn yaesu_poll_loop(
     // (one warn per unique char); `warned_short_if` = deviating IF length (one warn).
     let mut warned_modes: HashSet<char> = HashSet::new();
     let mut warned_short_if = false;
+    // Read the memory channels ONCE per radio connect, rather than once per
+    // CLIENT connect. Walking 117 channels takes ~0.6s (991A) / ~1.4s (FTX-1) and
+    // blocks every other CAT command on this single-threaded loop for that whole
+    // time; doing it again for each client repeats work whose answer has not
+    // changed. Clients are served from the copy this fills (`last_memory_blob`).
+    // What is traded away is freshness: a channel edited on the radio's own front
+    // panel is not noticed until "Read radio" is pressed.
+    // FTX-1 tone keeper. The radio cannot STORE a tone per memory channel over CAT -
+    // measured from both sides, see docs/internal/OPEN-ftx1-memory-tone-write.md - but
+    // it does accept one for the channel it is sitting on, and keeps it until the next
+    // channel change. So re-apply it on every change: the operator's list then decides
+    // what the radio actually transmits, which is what the tone is for.
+    //
+    // What this is not: it does not write to the memory bank, and it only holds while
+    // ThetisLink is connected. Take TL away and the radio falls back to whatever is
+    // stored in the channel.
+    let mut tone_keeper_last: Option<u16> = None;
+    // When we asked the radio to transmit. The PTT watchdog below needs it for both
+    // of its checks; `None` = we are not asking for TX.
+    let mut ptt_on_at: Option<Instant> = None;
+    let mut auto_read_pending = true;
+    // The per-channel tones are not in the bulk read (P9 is fixed "00"), so without
+    // this a freshly connected client sees a list without tones. Read them once here
+    // too, right after the memory list they depend on. Side effect worth knowing: the
+    // radio briefly steps through the channels that have a tone mode and returns to
+    // where it was - a handful of repeater channels, not the whole bank.
+    let mut auto_tones_pending = true;
+    // The EX/menu values follow the same rule, but LAST: an operator looks at the
+    // memory list first, and the FTX-1 EX scan occupies the CAT link for seconds.
+    let mut auto_menu_pending = true;
+    // ...but not on the first iteration. The read needs to know which memory the
+    // radio is on (the per-channel CTCSS tone is not in the bulk read; only the
+    // current channel's tone can be fetched, via CN), and that comes from the IF
+    // answer to the 500ms full poll, which has not been parsed yet at t=0. Let the
+    // radio and the poll loop settle first - the same ~1.5s the FTX-1 auto-read
+    // already waits for.
+    let session_start = Instant::now();
 
     loop {
         // Read available serial data
@@ -317,8 +403,127 @@ fn yaesu_poll_loop(
         // Parse complete responses (terminated by ';')
         parse_responses(&mut read_buf, status, prefix, model, &mut warned_modes, &mut warned_short_if);
 
-        // Handle commands from the application
-        match cmd_rx.try_recv() {
+        // PTT watchdog: ThetisLink must not keep transmitting after the radio has
+        // stopped. Nothing here polls anything extra - both signals are already in
+        // hand - and nothing here runs on the PTT-on path, so keying stays as fast
+        // as it was.
+        //
+        // Two independent reasons to let go, because they cover different failures:
+        //
+        //   the radio says so   the FTX-1 reports its real TX state in RI P4, which
+        //                       the 200 ms poll already reads. This catches ANY cause
+        //                       - the time-out timer, a fault, a hand on the set - and
+        //                       is the truthful signal. The FT-991A has no reliable
+        //                       equivalent (its `TX;` was measured unreliable), so it
+        //                       gets nothing from this half.
+        //
+        //   the timer ran out   both models expose their TX time-out timer in the EX
+        //                       menu, which is read once at connect. Knowing the limit,
+        //                       we can stop just before the radio does instead of
+        //                       finding out afterwards. This is the only half that
+        //                       covers the FT-991A.
+        if let Some(since) = ptt_on_at {
+            let (tot, streak, still_asking) = {
+                let s = status.lock().unwrap();
+                (s.tot_minutes, s.radio_rx_streak, s.tx_active)
+            };
+            if !still_asking {
+                ptt_on_at = None;
+            } else {
+                // A run of four, not one: a single garbled or stale RI answer must
+                // never cut a live transmission. At the 200 ms fast poll that is under
+                // a second, and the radio has already stopped by then anyway.
+                let radio_dropped = matches!(model, RadioModel::Ftx1)
+                    && since.elapsed() >= Duration::from_millis(1500)
+                    && streak >= 4;
+                // Just under the limit rather than on it, so we are first and the
+                // operator hears a clean end instead of a cut.
+                let timer_due = tot > 0
+                    && since.elapsed() >= Duration::from_secs(tot as u64 * 60).saturating_sub(
+                        Duration::from_millis(1500));
+                if radio_dropped || timer_due {
+                    if radio_dropped {
+                        warn!(
+                            concat!(
+                                "{} the radio stopped transmitting on its own (RI P4) - ",
+                                "releasing PTT; a time-out timer, a fault or the set's own ",
+                                "PTT will do this",
+                            ),
+                            prefix,
+                        );
+                    } else {
+                        warn!(
+                            concat!(
+                                "{} the radio's {}-minute TX time-out timer is about to ",
+                                "expire - releasing PTT",
+                            ),
+                            prefix, tot,
+                        );
+                    }
+                    ptt_on_at = None;
+                    // Through the queue, not inline: the release then does everything a
+                    // normal release does.
+                    let _ = self_tx.send(YaesuCmd::SetPtt(false));
+                }
+            }
+        }
+
+        // Keep the FTX-1's tone in step with the list (see `tone_keeper_last`).
+        if matches!(model, RadioModel::Ftx1) {
+            let (in_memory, ch, tx) = {
+                let st = status.lock().unwrap();
+                (st.vfo_select == 1, st.memory_channel, st.tx_active)
+            };
+            if !in_memory || ch == 0 {
+                tone_keeper_last = None; // out of memory mode: apply again on return
+            } else if !tx && tone_keeper_last != Some(ch) {
+                let blob = status.lock().unwrap().last_memory_blob.clone();
+                if let Some(b) = blob {
+                    if let Some((num, is_dcs, mode)) =
+                        crate::yaesu::memory::tone_wanted_for_channel(&b, ch)
+                    {
+                        let ct = crate::yaesu::memory::ftx1_tone_mode_to_ct_pub(mode);
+                        let _ = port.write_all(format!("CT0{};", ct).as_bytes());
+                        std::thread::sleep(Duration::from_millis(30));
+                        let p2 = if is_dcs { 1 } else { 0 };
+                        let _ = port.write_all(format!("CN0{}{:03};", p2, num).as_bytes());
+                        info!("{} channel {}: tone re-applied from the list (CT0{} CN0{}{:03})",
+                              prefix, ch, ct, p2, num);
+                    }
+                    // Only mark it done when there WAS a list to consult; otherwise
+                    // retry on the next pass, once the list has arrived.
+                    tone_keeper_last = Some(ch);
+                }
+            }
+        }
+
+        // Handle commands from the application. The connect-time read is fed in
+        // here as if it were a command, so it goes through exactly the same path
+        // (including the filled-channel list and the stored copy).
+        let incoming = if auto_read_pending
+            && session_start.elapsed() >= Duration::from_millis(1500)
+        {
+            auto_read_pending = false;
+            info!("{} reading the memory channels once, now the radio is up", prefix);
+            Ok(YaesuCmd::ReadAllMemories)
+        } else if auto_tones_pending && !auto_read_pending {
+            auto_tones_pending = false;
+            // Only meaningful if the memory read produced something; the tone walk
+            // needs that list to know which channels have a tone mode at all.
+            if status.lock().unwrap().last_memory_blob.is_some() {
+                info!("{} reading the memory tones once, now the radio is up", prefix);
+                Ok(YaesuCmd::ReadMemoryTones)
+            } else {
+                cmd_rx.try_recv()
+            }
+        } else if auto_menu_pending && !auto_read_pending && !auto_tones_pending {
+            auto_menu_pending = false;
+            info!("{} reading the EX settings once, now the radio is up", prefix);
+            Ok(YaesuCmd::ReadAllMenus)
+        } else {
+            cmd_rx.try_recv()
+        };
+        match incoming {
             Ok(YaesuCmd::ReadAllMemories) => {
                 info!("{} reading all memory channels...", prefix);
                 // The per-memory CTCSS tone is not in the bulk read (P9 is fixed
@@ -335,26 +540,44 @@ fn yaesu_poll_loop(
                 };
                 match mem_result {
                     Ok(tab_text) => {
+                        // Carry over the tones we already knew. The bulk read cannot
+                        // fetch them (P9 is fixed "00"), so a fresh read has the tone
+                        // columns empty - which silently threw away the tones every
+                        // time anyone pressed "read radio", or an older client asked
+                        // for a read on connect. Only for channels whose frequency is
+                        // unchanged: a reprogrammed channel keeps no old tone.
+                        let tab_text = {
+                            let previous = status.lock().unwrap().last_memory_blob.clone();
+                            match previous {
+                                Some(prev) => {
+                                    let old_freqs = crate::yaesu::memory::freqs_from_blob(&prev);
+                                    let new_freqs = crate::yaesu::memory::freqs_from_blob(&tab_text);
+                                    let keep: Vec<_> = crate::yaesu::memory::tones_from_blob(&prev)
+                                        .into_iter()
+                                        .filter(|(ch, _, _)| {
+                                            let o = old_freqs.iter().find(|(c, _)| c == ch).map(|(_, f)| f);
+                                            let n = new_freqs.iter().find(|(c, _)| c == ch).map(|(_, f)| f);
+                                            o.is_some() && o == n
+                                        })
+                                        .collect();
+                                    if keep.is_empty() {
+                                        tab_text
+                                    } else {
+                                        info!("{} kept {} known tone(s) across the read", prefix, keep.len());
+                                        // Carry-over: these ARE the list's tones going
+                                        // back on, so they overwrite.
+                                        crate::yaesu::memory::merge_tones_into_blob(&tab_text, &keep, false, prefix)
+                                    }
+                                }
+                                None => tab_text,
+                            }
+                        };
                         let count = tab_text.lines().count() - 1;
                         info!("{} read {} memory channels", prefix, count);
                         // Persist the filled channel numbers (first column) so
                         // Mem+/Mem- can skip empties - memory_data itself is taken
                         // when sent to the client.
-                        let mut filled: Vec<u16> = tab_text
-                            .lines()
-                            .skip(1)
-                            .filter_map(|l| l.split('\t').next())
-                            .filter_map(|c| c.trim().parse::<u16>().ok())
-                            .filter(|&c| c >= 1)
-                            .collect();
-                        filled.sort_unstable();
-                        filled.dedup();
-                        {
-                            let mut st = status.lock().unwrap();
-                            st.filled_memory_channels = filled;
-                            st.last_memory_blob = Some(tab_text.clone());
-                        }
-                        *memory_data.lock().unwrap() = Some(tab_text);
+                        adopt_memory_list(&tab_text, &status, &memory_data);
                     }
                     // On "radio not responding" (standby/off) do NOT clobber: we
                     // return Err -> memory_data stays unchanged, so the client
@@ -393,7 +616,9 @@ fn yaesu_poll_loop(
                                 matches!(model, RadioModel::Ftx1), &is_tx,
                             );
                             if !tones.is_empty() {
-                                let merged = crate::yaesu::memory::merge_tones_into_blob(&blob, &tones);
+                                let merged = crate::yaesu::memory::merge_tones_into_blob(
+                                    &blob, &tones, matches!(model, RadioModel::Ftx1), prefix,
+                                );
                                 status.lock().unwrap().last_memory_blob = Some(merged.clone());
                                 // Hand the filled-in list to the client, same route
                                 // as a normal memory read.
@@ -428,6 +653,43 @@ fn yaesu_poll_loop(
                     warn!("{} memory write refused: radio is transmitting", prefix);
                     continue;
                 }
+                // The FTX-1 gate. Writing this radio's bank costs every CTCSS tone
+                // stored in it: `MW` resets the channel's tone to 100.0 Hz and no CAT
+                // command puts it back. That is not a cost to pay by accident, so the
+                // write only happens once the operator has accepted it in the server
+                // GUI. The FT-991A never reaches this check.
+                if matches!(model, RadioModel::Ftx1)
+                    && !status.lock().unwrap().ftx1_memory_write_ack
+                {
+                    warn!(
+                        concat!(
+                            "{} memory write refused: writing the FTX-1's memory resets the ",
+                            "CTCSS tone of every channel it touches to 100.0 Hz, and the radio ",
+                            "has no CAT command to put it back. Accept that in the server ",
+                            "settings (Yaesu > 'Allow writing FTX-1 memory channels') if you ",
+                            "want to write anyway.",
+                        ),
+                        prefix
+                    );
+                    // Refusing the RADIO write is not a reason to throw the list away.
+                    // On this model the list is what decides the tone anyway: the keeper
+                    // applies it on every channel landing, and setting a tone that way is
+                    // free - it takes effect and is never stored. So adopt the list and
+                    // skip only the part that does damage.
+                    //
+                    // What this costs is stated where the operator can see it: without
+                    // the tick, a frequency or name edited here lives in the server's
+                    // list and not in the radio.
+                    adopt_memory_list(&tab_text, &status, &memory_data);
+                    info!(
+                        concat!(
+                            "{} the list is now the server's own (its tones are applied ",
+                            "per channel); the radio itself was not written",
+                        ),
+                        prefix
+                    );
+                    continue;
+                }
                 let is_tx = || status.lock().map(|s| s.tx_active).unwrap_or(false);
                 let write_result = match model {
                     // FTX-1 writes freq via MW + name via MT (both 5-digit).
@@ -435,7 +697,19 @@ fn yaesu_poll_loop(
                     _ => write_all_memories(&mut port, &tab_text, ret, &is_tx),
                 };
                 match write_result {
-                    Ok(count) => info!("{} wrote {} memory channels", prefix, count),
+                    Ok(count) => {
+                        info!("{} wrote {} memory channels", prefix, count);
+                        // The list we just wrote IS the truth now, so the server's copy
+                        // has to become it. Without this the copy stayed on the values
+                        // from before the write, and two things went wrong with it: the
+                        // safety net pushed that stale list back over the client within
+                        // the minute (the freshly written tone vanished from the table
+                        // again), and a later read carried the OLD tones over the new
+                        // ones - same channel, same frequency, so the carry-over could
+                        // not tell them apart. Written, then overwritten by its own
+                        // predecessor.
+                        adopt_memory_list(&tab_text, &status, &memory_data);
+                    }
                     Err(e) => warn!("{} memory write failed: {}", prefix, e),
                 }
                 last_response = Instant::now();
@@ -452,7 +726,47 @@ fn yaesu_poll_loop(
                 match menu_result {
                     Ok(data) => {
                         info!("{} read {} menu values", prefix, data.lines().count());
-                        *memory_data.lock().unwrap() = Some(format!("MENU:{}", data));
+                        // Keep the server's own copy (so a client can be served without
+                        // the radio being walked again) AND publish it for the push.
+                        {
+                            let tot = crate::yaesu::memory::tot_minutes_from_menu_blob(model, &data);
+                            let mut s = status.lock().unwrap();
+                            s.last_menu_blob = Some(data.clone());
+                            s.tot_minutes = tot;
+                            // Both branches, because the absence is the more useful
+                            // half: on an FT-991A the time-out timer is the ONLY thing
+                            // that releases PTT for us, so tot == 0 means no net at all.
+                            // Logging only the presence put the asymmetry the wrong way
+                            // round.
+                            if tot > 0 {
+                                info!(
+                                    concat!(
+                                        "{} TX time-out timer is set to {} min - ",
+                                        "ThetisLink releases PTT just before it fires",
+                                    ),
+                                    prefix, tot,
+                                );
+                            } else if matches!(model, RadioModel::Ft991a) {
+                                warn!(
+                                    concat!(
+                                        "{} no TX time-out timer is set - EX 036 did not read back a ",
+                                        "usable value. This radio has no transmit ",
+                                        "readback, so nothing will ",
+                                        "release PTT if it stops on its own",
+                                    ),
+                                    prefix,
+                                );
+                            } else {
+                                info!(
+                                    concat!(
+                                        "{} no TX time-out timer is set; the radio's own ",
+                                        "transmit state is followed instead",
+                                    ),
+                                    prefix,
+                                );
+                            }
+                        }
+                        *menu_data.lock().unwrap() = Some(format!("MENU:{}", data));
                     }
                     Err(e) => warn!("{} menu read failed: {}", prefix, e),
                 }
@@ -485,7 +799,20 @@ fn yaesu_poll_loop(
                                 s.vfo_escape_pending = 15;
                             }
                             let mc = internal_mode_to_yaesu(cur_mode, model);
-                            format!("MA;MD0{};FA{:09};", mc, hz)
+                            // `MA` only COPIES the channel into the VFO; on the FTX-1 it
+                            // does not leave memory mode, so the radio kept operating from
+                            // the channel and put its own frequency back a few seconds
+                            // later. Measured, not guessed: the escape guard's own warning
+                            // said "radio stayed Memory (P7='1')".
+                            //
+                            // Leaving is a separate command there - VM P1 P2P2 with P1=0
+                            // MAIN and P2=00 VFO (FTX-1 CAT OM 2508-C p27), which is the
+                            // parameterised VM, not the bare `VM;` that WRITES a memory.
+                            // The FT-991A leaves on `MA` alone and is left as it was.
+                            match model {
+                                RadioModel::Ftx1 => format!("MA;VM000;MD0{};FA{:09};", mc, hz),
+                                _ => format!("MA;MD0{};FA{:09};", mc, hz),
+                            }
                         } else {
                             format!("FA{:09};", hz)
                         }
@@ -528,6 +855,12 @@ fn yaesu_poll_loop(
                         // (the TX-poll confirms afterwards). Especially for the FTX-1, which does not
                         // mute its USB-RX in hardware during TX.
                         status.lock().unwrap().tx_active = on;
+                        // Start/stop the watchdog's clock alongside the PTT itself.
+                        ptt_on_at = if on { Some(Instant::now()) } else { None };
+                        if on {
+                            // Do not carry an old radio answer into a new transmission.
+                            status.lock().unwrap().radio_rx_streak = 0;
+                        }
 
                         // 991A SSB USB TX routing per PTT (hybrid option): switch the 991A
                         // to USB source only during TX, then restore it on PTT-off. FTX-1
@@ -621,7 +954,15 @@ fn yaesu_poll_loop(
                             }
                             if saved_mem > 0 {
                                 std::thread::sleep(Duration::from_millis(50));
-                                let mc_cmd = format!("MC{:03};", saved_mem);
+                                // Same five-digit form the rest of the FTX-1 paths use.
+                                // A three-digit MC is rejected there, so the operator was
+                                // left in VFO on the wrong frequency after an FM
+                                // transmission from a memory channel - silently, because
+                                // the write itself succeeded.
+                                let mc_cmd = match model {
+                                    RadioModel::Ftx1 => format!("MC0{:05};", saved_mem),
+                                    _ => format!("MC{:03};", saved_mem),
+                                };
                                 if let Err(e) = port.write_all(mc_cmd.as_bytes()) {
                                     warn!("{} auto-DATA memory-restore {} failed: {}",
                                         prefix, mc_cmd, e);
@@ -701,7 +1042,43 @@ fn yaesu_poll_loop(
                             0 => "VS0;FT0;".to_string(),  // VFO A: select + TX on A
                             1 => "VS1;FT1;".to_string(),  // VFO B: select + TX on B
                             2 => "SV;".to_string(),        // A<>B swap
-                            3 => "VM;".to_string(),        // V/M toggle
+                            // V/M. This used to send a bare "VM;" as a "toggle". It is
+                            // not one: both CAT manuals give it as a WRITE.
+                            //   FTX-1  p26: VM  MAIN-SIDE TO MEMORY CHANNEL
+                            //   991A   p18: VM  VFO-A TO MEMORY CHANNEL
+                            // One click on that button therefore overwrote a memory
+                            // channel with whatever the VFO happened to hold. (The
+                            // FTX-1's VM0nn; WITH parameters is a different command on
+                            // the same page - that one switches VFO/memory mode and is
+                            // what the memory write uses.)
+                            //
+                            // A toggle that writes nothing: entering memory is a plain
+                            // recall of the current channel, and leaving it starts with
+                            // `MA;` (MEMORY CHANNEL TO VFO-A / to MAIN-side) on both
+                            // radios. But `MA` only COPIES: the 991A leaves memory
+                            // operation on it, the FTX-1 does not and needs `VM000;`
+                            // (P1=0 MAIN, P2=00 VFO - FTX-1 CAT OM 2508-C p27) as well.
+                            // Without it the button appeared to work and the radio then
+                            // put the channel's own frequency back, the same defect the
+                            // frequency escape above had.
+                            3 => {
+                                let (in_memory, ch) = {
+                                    let st = status.lock().unwrap();
+                                    (st.vfo_select == 1 || st.vfo_select == 2, st.memory_channel)
+                                };
+                                if in_memory {
+                                    match model {
+                                        RadioModel::Ftx1 => "MA;VM000;".to_string(),
+                                        _ => "MA;".to_string(),
+                                    }
+                                } else {
+                                    let ch = if ch >= 1 { ch } else { 1 };
+                                    match model {
+                                        RadioModel::Ftx1 => format!("MC0{:05};", ch),
+                                        _ => format!("MC{:03};", ch),
+                                    }
+                                }
+                            }
                             _ => String::new(),
                         }
                     }

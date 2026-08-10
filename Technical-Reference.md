@@ -1,10 +1,10 @@
-# ThetisLink v2.7.0 - Technical Reference
+# ThetisLink v2.8.0 - Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of an ANAN 7000DLE + Thetis SDR receiver and up to two Yaesu transceivers (FT-991A / FTX-1) over a network connection. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
 
-**Version:** v2.7.0 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.8.0 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
 **Target platform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
 **Design priority:** latency > bandwidth > features
@@ -26,9 +26,31 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.7.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.8.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.8.0 highlights
+
+**The radio's data is there the moment you connect, one arranger for both applications, and
+three Android faults that shipped in v2.7.0.** Backwards-compatible with v2.7.x — wire
+`VERSION` stays 3 and there are **no new control ids**; what changed is the *value* on two
+existing ones (`0` = read the radio now, `1` = the server's copy will do), chosen so old and
+new peers keep working in both directions. Memory channels, tones and EX settings are read
+**once when the radio connects** and kept by the server, so a client is served from that copy
+instead of making the radio walk its channels again — that walk took about a second on the
+FT-991A and several on the FTX-1's 405 EX values, during which no other CAT command could get
+through. State reaches clients through **one push mechanism**: a fresh subscriber gets the
+current value once, after that only changes, with a slow full resend as a safety net because a
+push is not guaranteed to arrive. The **window arranger is now one implementation** shared by
+the desktop client and the server GUI instead of two copies that had drifted apart; the server
+GUI gains the UI scale, the 18×18 grid and five **arrangement memories** it lacked. On
+**Android**, three faults that were in the released v2.7.0 APK: a Yaesu stayed silent when it
+was switched on (the master volume mutes Thetis, and since v2.7.0 the master also covers the
+Yaesu), the memory list disappeared behind the EX menu (both travelled through one field), and
+the FTX-1's EX settings showed bare numbers instead of names. Also fixed: the tones no longer
+vanish from the memory list on every read, and the FT-991A memory read no longer comes up one
+channel short.
 
 ### v2.7.0 highlights
 
@@ -629,7 +651,7 @@ Sends control commands (bidirectional).
 | 0x22 | YaesuFreq | — | Uses FrequencyPacket format |
 | 0x23 | YaesuMicGain | gain x10 | ThetisLink TX gain (200 = 20.0x) |
 | 0x24 | YaesuMode | mode nr | Operating mode |
-| 0x25 | YaesuReadMemories | trigger | Read all memories |
+| 0x25 | YaesuReadMemories | 0 = read the radio now, 1 = the server copy will do | Read all memories |
 | 0x26 | YaesuRecallMemory | 1-117 | Memory channel recall (991A 1-117 incl. PMS; FTX-1 5-digit) |
 | 0x27 | YaesuWriteMemories | trigger | Write all memories |
 | 0x28 | YaesuSelectVfo | 0=A, 1=B, 2=swap | VFO selection |
@@ -638,7 +660,7 @@ Sends control commands (bidirectional).
 | 0x2B | YaesuRadioMicGain | 0-100 | Radio mic gain (not ThetisLink TX gain) |
 | 0x2C | YaesuRfPower | 0-100 | RF power |
 | 0x2D | YaesuButton | button ID | Raw CAT button |
-| 0x2E | YaesuReadMenus | trigger | Read all 153 EX menu items |
+| 0x2E | YaesuReadMenus | 0 = read the radio now, 1 = the server copy will do | Read all 153 EX menu items |
 | 0x2F | YaesuSetMenu | menu nr | Set EX menu item |
 
 Control packets are **bidirectional**: client->server sends changes, server->client broadcasts current state.
@@ -2212,10 +2234,15 @@ confirming the radio actually moved before reading its tone. The walk
   would be mistaken for these confirmations;
 - **aborts on TX** and returns to the channel the radio was on.
 
-**FTX-1 limitation:** reading works, writing does not. No safe CAT route exists
-for storing a tone on that radio - the route that appeared to work re-stored the
-channel from VFO-A and destroyed its contents - so the write path is disabled
-there and a regression test keeps it that way.
+**FTX-1 limitation (v2.8.0):** reading works; *storing* a tone in a memory channel
+does not, and the reason is documented rather than inferred - `MW` carries a tone
+**mode** field (P8) but no tone **number** (P9 is `00: (Fixed)`), and `MW` is
+set-only. Writing a memory therefore resets that channel's tone to 100.0 Hz in the
+radio. ThetisLink keeps the tones in its own list and re-applies the right one every
+time the radio lands on a channel, so transmitting through ThetisLink is unaffected -
+but the radio on its own will transmit 100.0 Hz on channels that were written. Because
+of that cost, writing to the FTX-1 is off until it is accepted in the server settings.
+See [Known Limitations](#31-known-limitations) for the full account.
 
 ## 27. Network Authentication (HMAC-SHA256 + TOTP 2FA)
 
@@ -2516,7 +2543,32 @@ window for min/avg/max. That is what the connection indicator reports.
 
 4. **macOS:** Experimental support. cpal works with CoreAudio but some USB audio devices are not correctly detected.
 
-5. **FTX-1 CTCSS/DCS write:** the tone of a memory channel can be *read* from an
-   FTX-1 but not written to it. The radio exposes no safe CAT route for storing a
-   tone; the apparent route re-stores the channel from VFO-A and overwrites its
-   contents. Set the tone on the radio itself. The FT-991A supports both.
+5. **FTX-1 CTCSS/DCS write:** the tone of a memory channel cannot be *stored* in an
+   FTX-1 over CAT, and this is documented rather than merely observed: the `MW`
+   command carries a tone **mode** field (P8) but no tone **number** — P9 is
+   `00: (Fixed)` in the FTX-1 CAT manual — and `MW` is set-only, so there is
+   nothing to read back either. Writing a memory therefore also **resets that
+   channel's tone to 100.0 Hz in the radio**, with no CAT command to put it back.
+   Every other route was measured and closed as well: a tone set before the store
+   is wiped by the store; a tone set after it is discarded at the next channel
+   change.
+
+   **(v2.8.0)** ThetisLink works around this instead of pretending it does not
+   exist. The tones live in the server's list, and every time the radio lands on a
+   memory channel the server re-applies that channel's tone (`CT` + `CN`). Two CAT
+   commands per channel change, nothing written to the bank, and transmitting
+   through ThetisLink is unaffected. The limit is honest: this holds **only while
+   ThetisLink is connected**. The radio on its own transmits whatever is stored,
+   which after a write is 100.0 Hz. Because a write costs those tones, writing to the
+   FTX-1 is **off by default**. *Write radio* still hands the list to the server -
+   its tones are applied per channel and therefore work - but nothing goes into the
+   radio; what that gives up is that an edited frequency or name lives in the
+   server's list and not in the set. Only once the condition is accepted in the
+   server settings (Yaesu → *Allow writing FTX-1 memory channels*) is the radio
+   itself written. Reading is never gated. The FT-991A stores tones properly and is
+   unaffected by all of this.
+
+6. **Erasing a memory channel:** not possible over CAT on either radio - no command
+   exists for it. A memory can be written but never cleared, so an unwanted channel
+   has to be erased on the set itself. Deleting a row in the client table removes it
+   from the list only; the channel stays in the radio.

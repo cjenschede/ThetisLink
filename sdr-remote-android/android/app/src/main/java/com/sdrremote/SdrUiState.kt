@@ -47,6 +47,9 @@ data class SdrUiState(
     val upKbps: Int = 0,
     val dxSpotsEnabled: Boolean = true,
     val captureLevel: Float = 0f,
+    /// TX level of the Yaesu chain. The Thetis capture level is a different
+    /// meter and reads silence while a Yaesu is keyed.
+    val yaesuMicLevel: Float = 0f,
     val playbackLevel: Float = 0f,
     val frequencyHz: Long = 0,
     val frequencyRx2Hz: Long = 0,
@@ -163,6 +166,11 @@ data class SdrUiState(
     val yaesuScan: Boolean = false,
     val playbackLevelYaesu: Float = 0f,
     val yaesuMemoryData: String = "",
+    /// EX/menu values, separate from the memory list. They used to share one
+    /// field with a "MENU:" prefix to tell them apart; since the server pushes
+    /// both on connect they arrive together and one hid the other.
+    val yaesuMenuData: String = "",
+    val yaesu2MenuData: String = "",
     val yaesuModel: Int = 0, // 0=991A, 1=FTX-1
     val yaesuTunerState: Int = 0, // interne ATU: 0=uit, 1=aan, 2=tunend
     val yaesuHiSwr: Boolean = false, // radio meldt hoge SWR tijdens TX (zelf-wissend)

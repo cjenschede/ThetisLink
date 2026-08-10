@@ -182,16 +182,125 @@ pub fn is_enum(encoding: &str) -> bool {
     encoding.contains(':')
 }
 
-/// Parse enum encoding "0:OFF 1:ON 2:AUTO" into vec of (code, label).
+/// Parse an encoding string into the (code, label) pairs a dropdown offers.
+///
+/// Three shapes appear in `MENU_DEFS`, and splitting on whitespace only handles the
+/// first of them:
+///
+/// ```text
+/// 0:OFF 1:ON 2:AUTO         plain pairs
+/// 6:SKY BLUE                a label containing a space
+/// 00:OFF 01-30 min          a value RANGE, optionally with a unit
+/// ```
+///
+/// Both of the others used to lose choices silently: a label was cut at its first
+/// space ("SKY BLUE" offered as "SKY"), and a range was dropped entirely - which is
+/// why the TX time-out menu offered nothing but "OFF" and could not be set from here
+/// at all. So an option now runs from one `code:` to the next, and a range is
+/// expanded into the values it stands for, keeping the digit width the radio expects
+/// ("01", not "1").
 pub fn parse_enum_options(encoding: &str) -> Vec<(String, String)> {
-    encoding.split_whitespace()
-        .filter_map(|item| {
-            let mut parts = item.splitn(2, ':');
-            let code = parts.next()?.to_string();
-            let label = parts.next()?.to_string();
-            Some((code, label))
-        })
-        .collect()
+    let mut out: Vec<(String, String)> = Vec::new();
+    // A range being collected, plus the unit words that follow it.
+    let mut range: Option<(u32, u32, usize)> = None;
+    let mut unit: Vec<&str> = Vec::new();
+
+    fn flush(out: &mut Vec<(String, String)>, range: &mut Option<(u32, u32, usize)>, unit: &mut Vec<&str>) {
+        if let Some((lo, hi, width)) = range.take() {
+            let suffix = if unit.is_empty() { String::new() } else { format!(" {}", unit.join(" ")) };
+            for v in lo..=hi {
+                out.push((format!("{:0width$}", v, width = width), format!("{:0width$}{}", v, suffix, width = width)));
+            }
+        }
+        unit.clear();
+    }
+
+    for token in encoding.split_whitespace() {
+        if let Some((code, label)) = token.split_once(':') {
+            // Only a numeric code starts a new option; a colon inside a label must not.
+            if !code.is_empty() && code.chars().all(|c| c.is_ascii_digit()) {
+                flush(&mut out, &mut range, &mut unit);
+                out.push((code.to_string(), label.to_string()));
+                continue;
+            }
+        }
+        if let Some((lo, hi)) = token.split_once('-') {
+            if !lo.is_empty()
+                && lo.chars().all(|c| c.is_ascii_digit())
+                && !hi.is_empty()
+                && hi.chars().all(|c| c.is_ascii_digit())
+            {
+                flush(&mut out, &mut range, &mut unit);
+                if let (Ok(a), Ok(b)) = (lo.parse::<u32>(), hi.parse::<u32>()) {
+                    if a <= b {
+                        range = Some((a, b, lo.len()));
+                    }
+                }
+                continue;
+            }
+        }
+        // A bare word: the unit of a pending range, otherwise the rest of the label
+        // of the option before it.
+        if range.is_some() {
+            unit.push(token);
+        } else if let Some(last) = out.last_mut() {
+            last.1.push(' ');
+            last.1.push_str(token);
+        }
+    }
+    flush(&mut out, &mut range, &mut unit);
+    out
+}
+
+#[cfg(test)]
+mod enum_option_tests {
+    use super::*;
+
+    #[test]
+    fn plain_pairs_still_work() {
+        let o = parse_enum_options("0:OFF 1:ON 2:AUTO");
+        assert_eq!(o.len(), 3);
+        assert_eq!(o[2], ("2".into(), "AUTO".into()));
+    }
+
+    /// "SKY BLUE" used to be offered as "SKY".
+    #[test]
+    fn a_label_may_contain_spaces() {
+        let o = parse_enum_options("5:RED 6:SKY BLUE 7:MULTI");
+        assert_eq!(o[1], ("6".into(), "SKY BLUE".into()));
+        assert_eq!(o[2], ("7".into(), "MULTI".into()));
+    }
+
+    /// The defect that made the TX time-out timer unsettable: the whole range was
+    /// dropped and the dropdown offered only "OFF".
+    #[test]
+    fn a_range_becomes_every_value_it_stands_for() {
+        let o = parse_enum_options("00:OFF 01-30 min");
+        assert_eq!(o.len(), 31, "OFF plus 30 minute settings");
+        assert_eq!(o[0], ("00".into(), "OFF".into()));
+        assert_eq!(o[1], ("01".into(), "01 min".into()));
+        assert_eq!(o[30], ("30".into(), "30 min".into()));
+    }
+
+    /// The radio wants the width it published: "01", never "1".
+    #[test]
+    fn a_range_keeps_the_digit_width() {
+        let o = parse_enum_options("00:AUTO 01-99");
+        assert_eq!(o.len(), 100);
+        assert_eq!(o[1].0, "01");
+        assert_eq!(o[99].0, "99");
+        assert_eq!(o[1].1, "01", "no unit means no trailing space");
+    }
+
+    #[test]
+    fn a_range_without_a_leading_pair_is_still_expanded() {
+        let o = parse_enum_options("01-03 dB");
+        assert_eq!(o, vec![
+            ("01".to_string(), "01 dB".to_string()),
+            ("02".to_string(), "02 dB".to_string()),
+            ("03".to_string(), "03 dB".to_string()),
+        ]);
+    }
 }
 
 /// Format a display value from raw P2 and encoding.
