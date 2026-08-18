@@ -1,0 +1,27 @@
+[package]
+name = "thetislink-chat"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[[bin]]
+name = "thetislink-chat"
+path = "src/main.rs"
+
+# Deliberately few, and self-contained: this container is built from its own
+# directory (see Dockerfile), so it cannot use a path dependency on the workspace
+# without dragging the whole tree into the image. The relay is standalone for the
+# same reason. Everything here is MIT/Apache-2.0 and already present in the
+# workspace lockfile, so nothing new enters the SBOM.
+[dependencies]
+env_logger = "0.11"
+log = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+# Ticket verification (design §3): HMAC-SHA256, the same primitive the rest of
+# ThetisLink already uses for network auth.
+hmac = "0.12"
+sha2 = "0.10"
+# Messages and consent. rusqlite (MIT) bundles SQLite (public domain).
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+getrandom = "0.2"

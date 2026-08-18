@@ -840,11 +840,11 @@ impl SdrRemoteApp {
                 let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0, zoom_step);
                 let zoom_changed = zoom_resp.changed() || zoom_scrolled;
                 if zoom_changed {
-                    let max_pan = (0.5 - 0.5 / self.rx2_spectrum_zoom) * 0.05;
+                    let max_pan = crate::ui::tuning::max_pan_fraction(self.rx2_spectrum_zoom);
                     self.rx2_spectrum_pan = self.rx2_spectrum_pan.clamp(-max_pan, max_pan);
                 }
                 ui.label(rust_i18n::t!("main_pan_label").to_string());
-                let max_pan = if self.rx2_spectrum_zoom > 1.01 { (0.5 - 0.5 / self.rx2_spectrum_zoom) * 0.05 } else { 0.0 };
+                let max_pan = crate::ui::tuning::max_pan_fraction(self.rx2_spectrum_zoom);
                 let pan_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_pan, -max_pan..=max_pan)
                     .custom_formatter(|v, _| format!("{:+.2}", v))
                 ).on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
@@ -925,9 +925,8 @@ impl SdrRemoteApp {
             // Smooth RX2 display center (same algorithm as RX1)
             let rx2_target_center = Self::spectrum_target_center_hz(
                 self.rx2_frequency_hz,
-                self.rx2_full_spectrum_span_hz,
+                self.rx2_full_span_hz(),
                 self.rx2_spectrum_pan,
-                self.rx2_spectrum_center_hz,
             );
             let rx2_tuning_active = Self::tuning_latch_active(
                 self.rx2_force_full_tuning,
@@ -947,8 +946,47 @@ impl SdrRemoteApp {
                 self.rx2_smooth_display_center_hz = rx2_target_center;
             }
             let rx2_smooth_center = self.rx2_smooth_display_center_hz as u64;
-            let rx2_smooth_vfo = (self.rx2_smooth_display_center_hz
-                - self.rx2_spectrum_pan as f64 * self.rx2_full_spectrum_span_hz as f64) as u64;
+            // Same rule as RX1: the marker is the VFO, smoothed alongside the
+            // centre, and not a subtraction that needs a span the client may
+            // not have been told yet.
+            let rx2_vfo_target = self.rx2_frequency_hz as f64;
+            if self.rx2_pending_freq.is_some() || self.rx2_smooth_vfo_hz == 0.0 {
+                self.rx2_smooth_vfo_hz = rx2_vfo_target;
+            } else {
+                self.rx2_smooth_vfo_hz += (rx2_vfo_target - self.rx2_smooth_vfo_hz) * alpha_rx2;
+            }
+            if (self.rx2_smooth_vfo_hz - rx2_vfo_target).abs() < 1.0 {
+                self.rx2_smooth_vfo_hz = rx2_vfo_target;
+            }
+            let rx2_smooth_vfo = self.rx2_smooth_vfo_hz as u64;
+            // The same trail RX1 leaves, gated the same way: a kilohertz of
+            // movement, so it fires on any real tuning and on nothing else.
+            // Without it RX2's zoom and centre could only be read off the
+            // sliders, which is no way to check a build.
+            let rx2_quiet_enough = self
+                .rx2_logged_at
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(1))
+                .unwrap_or(true);
+            if rx2_quiet_enough && self.rx2_frequency_hz.abs_diff(self.rx2_logged_freq_hz) >= 1_000 {
+                self.rx2_logged_freq_hz = self.rx2_frequency_hz;
+                self.rx2_logged_at = Some(Instant::now());
+                log::info!(
+                    "RX2 view: tuning={} vfo={} Hz, drawn centre={} server centre={} span={} Hz, zoom={:.1} pan={:.4}, width={} Hz from {}",
+                    rx2_tuning_active,
+                    self.rx2_frequency_hz,
+                    rx2_smooth_center,
+                    self.rx2_spectrum_center_hz,
+                    self.rx2_spectrum_span_hz,
+                    self.rx2_spectrum_zoom,
+                    self.rx2_spectrum_pan,
+                    self.rx2_full_span_hz(),
+                    Self::full_span_source(
+                        self.ddc_sample_rate_rx2,
+                        self.rx2_full_spectrum_span_hz,
+                        self.full_spectrum_enabled,
+                    ),
+                );
+            }
             let (rx2_plot_bins, rx2_plot_center_hz, rx2_plot_span_hz) = if !rx2_tuning_active || self.rx2_full_spectrum_bins.is_empty() {
                 (&self.rx2_spectrum_bins, self.rx2_spectrum_center_hz, self.rx2_spectrum_span_hz)
             } else {

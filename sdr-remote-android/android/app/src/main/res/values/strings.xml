@@ -243,4 +243,57 @@
     <string name="dev_port_a">Port A — ANT1 (TX+RX)</string>
     <string name="dev_port_b">Port B — RX2 (RX)</string>
     <string name="dev_digit_tuner_hint">tap digit = tune · long-press = enter</string>
+
+    <!-- Chat on the relay (shared design with the desktop window; the wording
+         follows the same consent text, which is the one text every user reads
+         once and carefully). -->
+    <string name="main_chat">Chat</string>
+    <string name="chat_left_user">someone who left</string>
+    <string name="chat_empty">Nothing has been said yet.</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_cancel">Cancel</string>
+    <string name="chat_reply">reply</string>
+    <string name="chat_edit">edit</string>
+    <string name="chat_edited">(edited)</string>
+    <string name="chat_editing">editing your message - Send saves the correction</string>
+    <string name="chat_replying_to">answering %1$s</string>
+    <string name="chat_input_hint">Your message</string>
+    <string name="chat_as_name">You are here as %1$s</string>
+    <string name="chat_leave">Remove me</string>
+    <string name="chat_leave_title">Remove yourself from the chat?</string>
+    <string name="chat_leave_explain">This takes your name off everything you wrote. You do not need it to finish for the day - just leave the tab, you stay in the chat. Your messages can stay without your name so other people\'s conversations remain readable, or go with you if your call sign is in the text itself.</string>
+    <string name="chat_leave_keep">Remove me, keep messages</string>
+    <string name="chat_leave_delete">Remove me and delete</string>
+    <string name="chat_offline_no_relay">No relay is set up, so there is no chat. The chat runs beside the relay you connect through.</string>
+    <string name="chat_offline_no_ticket">This relay offers no chat.</string>
+    <string name="chat_offline_unreachable">The chat is not answering. Audio, PTT and the radio are unaffected.</string>
+    <string name="chat_answer_title">An answer to your report</string>
+    <string name="chat_consent_title">Joining the chat</string>
+    <string name="chat_consent_intro">One room for the users of this relay. Joining means agreeing to a name that others see next to what you write.</string>
+    <string name="chat_consent_name_q">Under which name?</string>
+    <string name="chat_consent_callsign_warning">Note: a callsign appears in a public register with name and address. Choose your own name if you would rather not share that.</string>
+    <string name="chat_consent_optional">Without agreeing, the rest of ThetisLink works as usual; only the chat is unavailable.</string>
+    <string name="chat_consent_name_hint">Call sign or nickname</string>
+    <string name="chat_consent_admin">The administrator is PA3GHM, reachable at the address on the relay page, for access to what is stored about you or for its removal.</string>
+    <string name="chat_consent_stored">Stored: the name you choose here, what you write, and when. Nothing else, and nothing from your radio.</string>
+    <string name="chat_consent_withdraw">You can leave at any time, with or without your messages.</string>
+    <string name="chat_consent_ban">The administrator can remove a station from the chat if it becomes unworkable. You are told when that happens, what you wrote stays, and it also closes problem reporting. Leaving the chat does not undo a removal.</string>
+    <string name="chat_consent_access">Everyone connected to this relay can read what you write here.</string>
+    <string name="chat_consent_age">I am sixteen or older, or a parent agrees.</string>
+    <string name="chat_consent_agree">I agree - join</string>
+    <string name="chat_report_button">Report a problem</string>
+    <string name="chat_report_title">Report a problem</string>
+    <string name="chat_report_explain">What were you doing, what did you expect, and what happened instead? Your description is the report.</string>
+    <string name="chat_report_hint">What is wrong</string>
+    <string name="chat_report_no_log">The log comes from Android\'s own system log for this app and from the app\'s own log file, and the settings from this app\'s preferences. Only the administrator sees them.</string>
+    <string name="chat_report_send">Send report</string>
+    <string name="chat_report_attach">Send my log and settings along</string>
+    <string name="chat_report_reading">reading the log and settings...</string>
+    <string name="chat_report_attach_shown">This is what goes with it. Read it before you send: addresses, names and anything that looked like a password have been taken out, but the last check is yours.</string>
+    <string name="settings_roger">Roger beep</string>
+    <string name="settings_roger_hint">A short tone at the end of a transmission. The transmitter stays keyed for its length, so the other station hears it. Never in data or digital modes.</string>
+    <string name="settings_roger_radio1">Radio 1</string>
+    <string name="settings_roger_radio2">Radio 2</string>
+    <string name="settings_roger_volume">Level</string>
+    <string name="settings_roger_fm">Also in FM</string>
 </resources>

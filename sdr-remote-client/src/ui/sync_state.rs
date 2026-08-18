@@ -81,20 +81,20 @@ impl SdrRemoteApp {
         // Yaesu STATE subscription (freq/s-meter/CAT) follows the OPEN window, separate
         // from the audio checkbox -> a muted window stays live. Reset on disconnect so
         // it is re-sent after reconnect (server default is off).
-        if !state.connected {
-            self.yaesu_state_sent = None;
-            self.yaesu2_state_sent = None;
-        } else {
-            if self.yaesu_state_sent != Some(self.yaesu_popout) {
-                let _ = self.cmd_tx.send(Command::SetControl(
-                    ControlId::YaesuStateEnable, self.yaesu_popout as u16));
-                self.yaesu_state_sent = Some(self.yaesu_popout);
-            }
-            if self.yaesu2_state_sent != Some(self.yaesu2_popout) {
-                let _ = self.cmd_tx.send(Command::SetControl(
-                    ControlId::Yaesu2StateEnable, self.yaesu2_popout as u16));
-                self.yaesu2_state_sent = Some(self.yaesu2_popout);
-            }
+        // Cleared by the session counter above rather than by `!state.connected`:
+        // this was a fourth path with the same weakness. After a quick restart
+        // the server has forgotten the subscription while this side still
+        // believes it was sent, and then the comparison below finds nothing to
+        // do and the window stays dead.
+        if self.yaesu_state_sent != Some(self.yaesu_popout) {
+            let _ = self.cmd_tx.send(Command::SetControl(
+                ControlId::YaesuStateEnable, self.yaesu_popout as u16));
+            self.yaesu_state_sent = Some(self.yaesu_popout);
+        }
+        if self.yaesu2_state_sent != Some(self.yaesu2_popout) {
+            let _ = self.cmd_tx.send(Command::SetControl(
+                ControlId::Yaesu2StateEnable, self.yaesu2_popout as u16));
+            self.yaesu2_state_sent = Some(self.yaesu2_popout);
         }
         // Send Yaesu enable on first connect if persisted as enabled
         if state.connected && self.yaesu_enabled && !self.yaesu_enable_sent {
@@ -155,10 +155,31 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2ReadMemories, 1));
             log::info!("[radio1] FTX-1 detected (yaesu2_connected rising) - asked the server for its memory list");
         }
-        if !state.connected {
+        // A new session, counted rather than sensed. Everything that has to be
+        // asked for again hangs off this one line now.
+        //
+        // It used to hang off `!state.connected`, and that is a flank: it
+        // exists at an instant, it arrives through a watch channel that keeps
+        // only the latest value, and this loop reads that once a frame. A
+        // server that restarted and came back quickly therefore never happened
+        // here - so VRX and both Yaesu slots were never asked for again, while
+        // the engine's own restore (which reads its own variable and cannot
+        // miss anything) brought RX1 and RX2 back. That is precisely the
+        // "only RX comes back, VRX stays silent" the owner reported, and it
+        // got worse rather than better when the engine side was fixed first
+        // (2026-08-16).
+        if state.session_generation != self.session_generation_seen {
+            self.session_generation_seen = state.session_generation;
+            self.vrx_state_sync_pending = true;
             self.yaesu_enable_sent = false;
             self.yaesu2_enable_sent = false;
             self.yaesu2_autoread_at = None;
+            self.yaesu_state_sent = None;
+            self.yaesu2_state_sent = None;
+            log::info!(
+                "new session {} - asking for VRX and Yaesu again",
+                state.session_generation
+            );
         }
         // Force HF to A (FTX-1): HF always wins the USB-audio. If HF is on B
         // while A is VHF/UHF, you'd transmit on A (FT0) but hear HF on B =
@@ -192,7 +213,29 @@ impl SdrRemoteApp {
             // because server_addr is not set yet, so the server would keep its
             // default (on) while the GUI shows off.
             let _ = self.cmd_tx.send(Command::SetFullSpectrumEnabled(self.full_spectrum_enabled));
+            // And the view itself. The client starts at 32x and assumed the
+            // server did too; the server starts at 1x. Nothing sent it the
+            // difference, because zoom and pan are only sent when they change
+            // and neither had. So the server cut a window the client was not
+            // drawing, and the band edges sat wrong until something forced a
+            // send - which switching the full-band spectrum on happened to do,
+            // permanently, which is why that looked like the cure (2026-08-14).
+            //
+            // Sent on every (re)connect, not once at startup: the server keeps
+            // this per client and forgets it when the client goes away.
+            let _ = self.cmd_tx.send(Command::SetSpectrumZoom(self.spectrum_zoom));
+            let _ = self.cmd_tx.send(Command::SetSpectrumPan(self.spectrum_pan));
+            self.last_sent_zoom = self.spectrum_zoom;
+            self.last_sent_pan = self.spectrum_pan;
+            let _ = self.cmd_tx.send(Command::SetRx2SpectrumZoom(self.rx2_spectrum_zoom));
+            let _ = self.cmd_tx.send(Command::SetRx2SpectrumPan(self.rx2_spectrum_pan));
+            self.rx2_last_sent_zoom = self.rx2_spectrum_zoom;
+            self.rx2_last_sent_pan = self.rx2_spectrum_pan;
             let _ = self.cmd_tx.send(Command::SetVrxMode(self.vrx1_mode));
+            // The server keeps the VRX window offset per client and forgets it
+            // when the client goes; 0 here matches its own default.
+            self.vrx1_last_sent_pan_hz = 0;
+            self.vrx2_last_sent_pan_hz = 0;
             if self.vrx1_freq_hz > 0 {
                 let _ = self.cmd_tx.send(Command::SetVrxFrequency(self.vrx1_freq_hz));
             }
@@ -228,9 +271,45 @@ impl SdrRemoteApp {
             }
             self.vrx_state_sync_pending = false;
         }
-        if !state.connected {
-            self.vrx_state_sync_pending = true;
+        // MEASUREMENT ONLY (2026-08-16, onderzoek reconnect). Held against what
+        // the server says it has, for the two families this side owns and the
+        // engine cannot see: VRX and the two Yaesu slots.
+        //
+        // The prediction being tested is that these go quiet together with the
+        // VRX restore, because both hang on the same sampled edge - `connected`
+        // arrives through a watch channel that only keeps the latest value, and
+        // this loop reads it once a frame (twice a second while disconnected).
+        // A `false` between two frames never existed here. Nothing is corrected;
+        // that comes after this line has shown when it happens.
+        if let Some(theirs) = state.server_subs {
+            use sdr_remote_core::protocol::SubscriptionMask as M;
+            let mut ours = M::default();
+            ours.set(M::VRX1, self.vrx1_enabled);
+            ours.set(M::VRX2, self.vrx2_enabled);
+            ours.set(M::YAESU, self.yaesu_enabled);
+            ours.set(M::YAESU2, self.yaesu2_enabled);
+            const MINE: u16 = M::VRX1 | M::VRX2 | M::YAESU | M::YAESU2;
+            let differ = (ours.0 ^ theirs.0) & MINE;
+            if differ != self.subs_differ_seen {
+                self.subs_differ_seen = differ;
+                if differ == 0 {
+                    log::info!("UI subscriptions agree again");
+                } else {
+                    log::warn!(
+                        "UI subscriptions disagree on {:?}: we want {:#06x}, the server has {:#06x}",
+                        M::names_of(differ), ours.0 & MINE, theirs.0 & MINE
+                    );
+                }
+            }
         }
+
+        // Note for whoever looks here for the zoom: the zoom flags are
+        // deliberately NOT reset on a new session. Resetting them meant every
+        // reconnect derived the opening zoom again and threw away whatever the
+        // operator had set - and with a relay in the path, a link that drops
+        // for a moment costs them their view. The width is matched once per
+        // session; after that the zoom is the operator's, and a reconnect
+        // re-sends it rather than replacing it (2026-08-15).
         // TL2-1 ctun-auto-recenter: snapshot previous connected-state before mutation,
         // otherwise we don't detect false->true reconnects (an older
         // `state.connected && !self.connected` check never worked because
@@ -314,16 +393,11 @@ impl SdrRemoteApp {
         // Use `was_connected` snapshot - see comment above on connected-state mutation.
         let reconnected = state.connected && !was_connected;
         if reconnected || (state.power_on && !self.power_on) {
-            self.full_spectrum_span_hz = 0;
-            self.spectrum_pan = 0.0;
-            self.last_sent_zoom = 0.0;
-            self.last_sent_pan = 0.0;
-            self.zoom_pan_changed_at = Some(Instant::now());
-            self.rx2_full_spectrum_span_hz = 0;
-            self.rx2_spectrum_pan = 0.0;
-            self.rx2_last_sent_zoom = 0.0;
-            self.rx2_last_sent_pan = 0.0;
-            self.rx2_zoom_pan_changed_at = Some(Instant::now());
+            // The bins are cleared with the span they belong to. Setting the
+            // span to 0 alone left the previous session's full-band picture in
+            // place, and two decisions further down read `is_empty()` on it to
+            // choose what to draw (2026-08-15).
+            self.reset_view_for_new_session();
             // Reset TCI control states to defaults - server will push current values
             self.vfo_sync = false;
             self.mon_on = false;
@@ -368,8 +442,11 @@ impl SdrRemoteApp {
         self.agc_enabled = state.agc_enabled;
         self.other_tx = state.other_tx;
         if !state.playing { self.playing = false; }
-        if let Some(ref p) = state.last_recorded_path {
-            self.last_recorded_path = Some(p.clone());
+        if !state.last_recorded.is_empty() && state.last_recorded != self.last_recorded {
+            self.last_recorded = state.last_recorded.clone();
+            // Everything just recorded starts ticked: it was asked for a
+            // moment ago, so wanting to hear it is the safe assumption.
+            self.play_ticked = vec![true; self.last_recorded.len()];
         }
         self.thetis_swr_x100 = state.thetis_swr_x100;
         self.thetis_configured = state.thetis_configured;
@@ -440,7 +517,47 @@ impl SdrRemoteApp {
             self.tune_drive = state.tune_drive;
             self.mon_volume = state.mon_volume;
             self.ddc_sample_rate_rx1 = state.ddc_sample_rate_rx1;
+            // Match the zoom to the receiver, the moment its width is known.
+            //
+            // This used to wait for the first full-band spectrum row, so with
+            // the full-band option off it never happened at all: the client
+            // opened at a fixed 32x whatever the receiver was, and the picture
+            // was wrong until the option was switched on once - which set it,
+            // and left it right afterwards. That is why turning full-band on
+            // and off again "cured" it, and why fixing the zoom handshake in
+            // build 68 did not: this is the value, that was the agreement.
+            //
+            // The width is in the state already; VRX has derived its own zoom
+            // from it since it was written.
+            // Once per session, and only against a live link. The flag used to
+            // be cleared on disconnect, which made this run off the previous
+            // session's rate the moment the link dropped: the slider went to
+            // the opening zoom while the picture stayed frozen where the
+            // operator had left it. The flag survives a disconnect now, so this
+            // fires on the first connection and not again - the guard is what
+            // states that deriving a width belongs to a live session, and it is
+            // what keeps a stale rate from doing it (2026-08-15).
+            if Self::should_derive_opening_zoom(
+                state.connected,
+                self.rx_zoom_initialized,
+                self.ddc_sample_rate_rx1,
+            ) {
+                self.adopt_opening_zoom_rx1(self.ddc_sample_rate_rx1 as u32 * 1000);
+            }
             self.ddc_sample_rate_rx2 = state.ddc_sample_rate_rx2;
+            // RX2 gets its width the same way, and for the same reason: its
+            // rate is in the state already, so waiting for a full-band row it
+            // may never receive left it on the opening 32x whatever receiver
+            // it was looking at. The one difference is that RX2 was never the
+            // receiver anyone watched while the picture was wrong, so it kept
+            // the fault RX1 was cured of in build 79.
+            if Self::should_derive_opening_zoom(
+                state.connected,
+                self.rx2_zoom_initialized,
+                self.ddc_sample_rate_rx2,
+            ) {
+                self.adopt_opening_zoom_rx2(self.ddc_sample_rate_rx2 as u32 * 1000);
+            }
         }
         // Spectrum
         if state.spectrum_sequence != self.last_spectrum_seq && !state.spectrum_bins.is_empty() {
@@ -453,6 +570,55 @@ impl SdrRemoteApp {
             // Same bins into the channel type, so RX1 carries its identity the
             // way VRX already does. Rendering still reads the fields above;
             // what moves here is the derivation (auto-ref) below.
+            // Does the view the server sends match the one this client asked
+            // for? It should: the server cuts `DDC / zoom`. When it does not,
+            // the two are working from different numbers and every frequency,
+            // marker and band edge on screen is drawn against the wrong scale.
+            //
+            // This is checked rather than assumed because the setting is sent
+            // once, on connect, and `set_spectrum_zoom` on the server drops it
+            // without a word if the session is not in its map yet. Whether it
+            // lands is a matter of timing - which is why the same build was
+            // sometimes right and sometimes wrong, and why anything that forced
+            // a resend appeared to cure it (2026-08-14).
+            //
+            // Detecting it needs nothing that is not already here, and unlike a
+            // better-timed send it cannot lose a race.
+            //
+            // When to speak lives in `view_mismatch_worth_reporting`, where it
+            // can be tested one condition at a time - the two mistakes this
+            // check made in the field were both a missing condition, and both
+            // would have been caught by a test that could not be written while
+            // it sat here (2026-08-15).
+            let ddc_span_hz = self.ddc_sample_rate_rx1 as f64 * 1000.0;
+            if ddc_span_hz > 0.0 && self.spectrum_span_hz > 0 && self.spectrum_zoom >= 1.0 {
+                let expected = ddc_span_hz / self.spectrum_zoom as f64;
+                let got = self.spectrum_span_hz as f64;
+                let since_report = self
+                    .view_mismatch_at
+                    .map_or(u128::MAX, |t| t.elapsed().as_millis());
+                let since_send = self
+                    .view_sent_at
+                    .map_or(u128::MAX, |t| t.elapsed().as_millis());
+                if Self::view_mismatch_worth_reporting(
+                    expected,
+                    got,
+                    since_report,
+                    since_send,
+                    self.zoom_pan_changed_at.is_some(),
+                ) {
+                    self.view_mismatch_at = Some(Instant::now());
+                    log::warn!(
+                        "RX1 view disagrees: asked for {:.0} Hz at {:.1}x, receiving {} Hz - sending zoom and pan again",
+                        expected, self.spectrum_zoom, self.spectrum_span_hz
+                    );
+                    let _ = self.cmd_tx.send(Command::SetSpectrumZoom(self.spectrum_zoom));
+                    let _ = self.cmd_tx.send(Command::SetSpectrumPan(self.spectrum_pan));
+                    self.last_sent_zoom = self.spectrum_zoom;
+                    self.last_sent_pan = self.spectrum_pan;
+                    self.view_sent_at = Some(Instant::now());
+                }
+            }
             self.rx1_spectrum.ingest(SpectrumSnapshot {
                 channel: ChannelId::Rx1,
                 bins: self.spectrum_bins.clone(),
@@ -569,16 +735,10 @@ impl SdrRemoteApp {
             self.full_spectrum_center_hz = state.full_spectrum_center_hz;
             self.full_spectrum_span_hz = state.full_spectrum_span_hz;
             self.full_spectrum_sequence = state.full_spectrum_sequence;
-            if old_span == 0 && self.full_spectrum_span_hz > 0 {
-                self.spectrum_zoom = default_zoom_for_span(self.full_spectrum_span_hz);
-                self.spectrum_pan = 0.0;
-                self.last_sent_zoom = 0.0;
-                self.last_sent_pan = 0.0;
-                self.zoom_pan_changed_at = Some(Instant::now());
-                if !self.vrx1_zoom_initialized {
-                    self.vrx1_spectrum_zoom = default_zoom_for_span(self.full_spectrum_span_hz);
-                    self.vrx1_pan = 0.0;
-                }
+            if old_span == 0 && self.full_spectrum_span_hz > 0 && !self.rx_zoom_initialized {
+                // The fallback for a session that never learns the DDC rate.
+                // Same derivation, same method - see `adopt_opening_zoom_rx1`.
+                self.adopt_opening_zoom_rx1(self.full_spectrum_span_hz);
             }
         }
 
@@ -638,6 +798,41 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, span_khz));
             }
         }
+        // Where each VRX window should sit. Sent whenever it moves by more
+        // than a step of the wire unit, so the server cuts its window where the
+        // operator is looking - without this the client can only pan inside the
+        // one screen it was already sent, and barely moves.
+        if self.connected {
+            let step = sdr_remote_core::protocol::VRX_PAN_STEP_HZ;
+            let want1 =
+                (self.vrx1_pan as f64 * self.vrx_ddc_span_hz(VrxChannel::Vrx1) as f64) as i32;
+            let want2 =
+                (self.vrx2_pan as f64 * self.vrx_ddc_span_hz(VrxChannel::Vrx2) as f64) as i32;
+            let moved = (want1 - self.vrx1_last_sent_pan_hz).abs() >= step
+                || (want2 - self.vrx2_last_sent_pan_hz).abs() >= step;
+            if moved && self.vrx_pan_changed_at.is_none() {
+                self.vrx_pan_changed_at = Some(Instant::now());
+            }
+            // Wait for the drag to settle, the way the main spectrum's zoom and
+            // pan already do. Ten hertz is a fine step and a mouse crosses many
+            // of them per second: sending on every one was a packet per frame
+            // while dragging, per channel. The end of the gesture is what the
+            // server needs, not every position along the way.
+            if let Some(at) = self.vrx_pan_changed_at {
+                if at.elapsed().as_millis() >= 100 {
+                    self.vrx_pan_changed_at = None;
+                    if (want1 - self.vrx1_last_sent_pan_hz).abs() >= step {
+                        self.vrx1_last_sent_pan_hz = want1;
+                        let _ = self.cmd_tx.send(Command::SetVrxSpectrumPan(0, want1));
+                    }
+                    if (want2 - self.vrx2_last_sent_pan_hz).abs() >= step {
+                        self.vrx2_last_sent_pan_hz = want2;
+                        let _ = self.cmd_tx.send(Command::SetVrxSpectrumPan(1, want2));
+                    }
+                }
+            }
+        }
+
         // (pending_freq already cleared above, before frequency acceptance)
 
         // Delayed auto_ref restore after TX->RX transition
@@ -844,6 +1039,8 @@ impl SdrRemoteApp {
         self.rotor_available = state.rotor_available;
         // Yaesu
         self.yaesu_connected = state.yaesu_connected;
+        self.yaesu_port_trouble = state.yaesu_port_trouble;
+        self.yaesu2_port_trouble = state.yaesu2_port_trouble;
         // Optimistic display presence: while actually connected the server is the
         // authority (prunes a radio that is gone); when NOT connected we hold the
         // last-known value so it seeds the pre-connect display next session (see the
@@ -1009,7 +1206,14 @@ impl SdrRemoteApp {
             }
         } else {
             self.yaesu_menu_received = false;
-            self.yaesu_menu_blob_hash = None;
+            // The hash deliberately stays. The engine holds a blob for half a
+            // second and then drops it, so this branch runs between every push -
+            // and clearing the hash here made the NEXT identical push look new.
+            // The result was the same list parsed again every twenty seconds and
+            // eight identical lines in the log each time, which is three quarters
+            // of a quiet session and three quarters of what a problem report
+            // carries. A changed blob still differs from this hash and is still
+            // accepted; nothing is lost by remembering (2026-08-16).
         }
         // Incoming Yaesu memory list.
         //
@@ -1021,21 +1225,29 @@ impl SdrRemoteApp {
         // written does land. (Design note §2.4: a push must not overwrite unsaved
         // work in the client.)
         if let Some(ref text) = state.yaesu_memory_data {
-            // Held back while the table is OPEN as well, not only while it has
-            // unsaved edits: a list that reorders itself under your hands is as
-            // unwelcome as one that discards a value you just typed. It lands as soon
-            // as the section is collapsed, or after a write or a read. Never held back
-            // when there is nothing to show yet - the first list must always arrive.
-            // An answer the operator asked for is never held back - it IS the
-            // action they just took.
+            // Held back while there are UNSAVED EDITS, and only then.
+            //
+            // It used to be held back while the table was merely open as well,
+            // on the reasoning that a list reordering itself under your hands is
+            // unwelcome. The cost of that turned out to be worse: somebody
+            // watching the table is usually watching it because they want to see
+            // what the server now holds, and the update never arrived at all
+            // while they looked. An FTX-1 tone restored on the server sat there
+            // for minutes while the client showed the old list, with the log
+            // saying "held back: the table is open" over and over (2026-08-12).
+            // Unsaved work is worth protecting; a view of reality is not worth
+            // withholding. Never held back when there is nothing to show yet -
+            // the first list must always arrive - and never for an answer the
+            // operator asked for, which IS the action they just took.
             let busy = !self.yaesu_mem_expect_push
                 && !self.yaesu_mem_channels.is_empty()
-                && (self.yaesu_mem_dirty || self.collapse_yaesu_memories);
+                && self.yaesu_mem_dirty;
             if busy && self.yaesu_mem_blob_hash != Some(blob_hash(text)) {
                 if !self.yaesu_mem_push_deferred {
                     self.yaesu_mem_push_deferred = true;
-                    log::info!("Yaesu memory list from the server held back: the table is open{}",
-                               if self.yaesu_mem_dirty { " with unsaved edits" } else { "" });
+                    log::info!(
+                        "Yaesu memory list from the server held back: the table has unsaved edits"
+                    );
                 }
             } else if self.yaesu_mem_blob_hash != Some(blob_hash(text)) {
                 self.yaesu_mem_push_deferred = false;
@@ -1069,7 +1281,14 @@ impl SdrRemoteApp {
             }
         } else {
             self.yaesu_mem_radio_received = false;
-            self.yaesu_mem_blob_hash = None;
+            // The hash deliberately stays. The engine holds a blob for half a
+            // second and then drops it, so this branch runs between every push -
+            // and clearing the hash here made the NEXT identical push look new.
+            // The result was the same list parsed again every twenty seconds and
+            // eight identical lines in the log each time, which is three quarters
+            // of a quiet session and three quarters of what a problem report
+            // carries. A changed blob still differs from this hash and is still
+            // accepted; nothing is lost by remembering (2026-08-16).
         }
         // Slot-1 (FTX-1) EX values: own field, own comparison - same split as slot 0.
         if let Some(ref text) = state.yaesu2_menu_data {
@@ -1087,19 +1306,30 @@ impl SdrRemoteApp {
             }
         } else {
             self.yaesu2_menu_received = false;
-            self.yaesu2_menu_blob_hash = None;
+            // The hash deliberately stays. The engine holds a blob for half a
+            // second and then drops it, so this branch runs between every push -
+            // and clearing the hash here made the NEXT identical push look new.
+            // The result was the same list parsed again every twenty seconds and
+            // eight identical lines in the log each time, which is three quarters
+            // of a quiet session and three quarters of what a problem report
+            // carries. A changed blob still differs from this hash and is still
+            // accepted; nothing is lost by remembering (2026-08-16).
         }
         // Slot-1 (FTX-1) memory dump -> yaesu2_mem_channels (Phase B). Same rule as
-        // slot 0: an open edit wins over an incoming push.
+        // slot 0: unsaved edits win over an incoming push, and nothing else does.
+        // This is the radio the rule mattered most for: its tones live in the
+        // server's list, so a client that refuses updates while the table is
+        // open is a client that cannot show what it just asked to be stored.
         if let Some(ref text) = state.yaesu2_memory_data {
             let busy2 = !self.yaesu2_mem_expect_push
                 && !self.yaesu2_mem_channels.is_empty()
-                && (self.yaesu2_mem_dirty || self.collapse_yaesu2_memories);
+                && self.yaesu2_mem_dirty;
             if busy2 && self.yaesu2_mem_blob_hash != Some(blob_hash(text)) {
                 if !self.yaesu2_mem_push_deferred {
                     self.yaesu2_mem_push_deferred = true;
-                    log::info!("[radio1] memory list from the server held back: the table is open{}",
-                               if self.yaesu2_mem_dirty { " with unsaved edits" } else { "" });
+                    log::info!(
+                        "[radio1] memory list from the server held back: the table has unsaved edits"
+                    );
                 }
             } else if self.yaesu2_mem_blob_hash != Some(blob_hash(text)) {
                 self.yaesu2_mem_push_deferred = false;
@@ -1134,7 +1364,14 @@ impl SdrRemoteApp {
             }
         } else {
             self.yaesu2_mem_radio_received = false;
-            self.yaesu2_mem_blob_hash = None;
+            // The hash deliberately stays. The engine holds a blob for half a
+            // second and then drops it, so this branch runs between every push -
+            // and clearing the hash here made the NEXT identical push look new.
+            // The result was the same list parsed again every twenty seconds and
+            // eight identical lines in the log each time, which is three quarters
+            // of a quiet session and three quarters of what a problem report
+            // carries. A changed blob still differs from this hash and is still
+            // accepted; nothing is lost by remembering (2026-08-16).
         }
         self.dx_spots = state.dx_spots.clone();
 
@@ -1222,16 +1459,8 @@ impl SdrRemoteApp {
             self.rx2_full_spectrum_center_hz = state.rx2_full_spectrum_center_hz;
             self.rx2_full_spectrum_span_hz = state.rx2_full_spectrum_span_hz;
             self.rx2_full_spectrum_sequence = state.rx2_full_spectrum_sequence;
-            if old_span == 0 && self.rx2_full_spectrum_span_hz > 0 {
-                self.rx2_spectrum_zoom = default_zoom_for_span(self.rx2_full_spectrum_span_hz);
-                self.rx2_spectrum_pan = 0.0;
-                self.rx2_last_sent_zoom = 0.0;
-                self.rx2_last_sent_pan = 0.0;
-                self.rx2_zoom_pan_changed_at = Some(Instant::now());
-                if !self.vrx2_zoom_initialized {
-                    self.vrx2_spectrum_zoom = default_zoom_for_span(self.rx2_full_spectrum_span_hz);
-                    self.vrx2_pan = 0.0;
-                }
+            if old_span == 0 && self.rx2_full_spectrum_span_hz > 0 && !self.rx2_zoom_initialized {
+                self.adopt_opening_zoom_rx2(self.rx2_full_spectrum_span_hz);
             }
         }
         // (rx2_pending_freq already cleared above, before frequency acceptance)

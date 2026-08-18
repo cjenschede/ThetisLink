@@ -275,6 +275,9 @@ sdr-remote/
 │       ├── protocol.rs         # Packet format, ControlId, serialization, deserialization
 │       ├── codec.rs            # Opus encode/decode wrapper
 │       ├── jitter.rs           # Adaptive jitter buffer
+│       ├── stream.rs           # Per stream: both decoders, format, concealment + comfort noise
+│       ├── diagnose.rs         # Cleaning a problem report (log denylist / settings allowlist)
+│       ├── conf_layout.rs      # Grouping .conf files as they are written
 │       └── auth.rs             # HMAC-SHA256 authentication + TOTP
 ├── sdr-remote-logic/           # Platform-independent client engine (no egui)
 │   └── src/
@@ -284,6 +287,8 @@ sdr-remote/
 │       ├── audio.rs            # AudioBackend trait + SWR-alarm beep mixer
 │       ├── engine.rs           # ClientEngine (network, codec, resampling, jitter)
 │       ├── eq.rs               # TX EQ / compressor / AGC processing
+│       ├── rx_stream.rs        # Receive stream: decoders + resamplers in one type
+│       ├── roger.rs            # Roger-beep generator
 │       ├── i18n.rs             # NL/EN string tables
 │       └── wav.rs              # WAV record/playback helpers
 │   └── tests/
@@ -293,11 +298,16 @@ sdr-remote/
 │       │                           # after gain, and every channel falling back to zero)
 │       └── connect_state_machine.rs # Scripted server on loopback: connect/auth states
 ├── sdr-remote-theme/           # Shared UI colour palette / theme constants
+├── sdr-remote-layout/          # Shared window arranger (client + server GUI)
+├── sdr-remote-chat/            # Shared chat model + report form (desktop egui + Android)
+│   └── src/                    # model.rs (no UI), worker.rs (HTTP), panel.rs (egui, feature)
 ├── vrx-rs/                     # VRX engine: FFT channelizer + per-VRX Opus/runtime
 │   └── src/                    # channelizer.rs, opus.rs, runtime.rs, config.rs, wav.rs
 ├── sdr-remote-relay/           # Relay client library (linked into server + client)
 ├── thetislink-relay/           # Self-hosted VPS relay binary
 │   └── src/                    # main.rs (forwarder), admin_api.rs, store.rs (SQLite)
+├── thetislink-chat/            # Chat service + report postbox (own container beside the relay)
+│   └── src/                    # routes.rs, postbox.rs, store.rs, admin_page.rs, ticket.rs
 ├── sdr-remote-server/          # Windows server (runs next to Thetis)
 │   └── src/
 │       ├── main.rs             # Startup, argument parsing, shutdown
@@ -324,7 +334,8 @@ sdr-remote/
 │       │   ├── parse.rs        # CAT response parser (IF/SC/AC/RI/... -> YaesuState)
 │       │   ├── memory.rs       # Memory channels + CTCSS/DCS read/write, tone walk, scan pause
 │       │   ├── ex_menu.rs      # FT-991A EX-menu read/write helpers
-│       │   └── audio.rs        # Yaesu USB audio stream builders (capture + TX output)
+│       │   ├── audio.rs        # Yaesu USB audio stream builders (capture + TX output)
+│       │   └── tone_store.rs   # CTCSS/DCS per channel, kept beside the radio
 │       ├── amplitec.rs         # Amplitec antenna switch
 │       ├── rf2k.rs             # RF2K-S PA HTTP controller
 │       ├── spe_expert.rs       # SPE Expert 1.3K-FA serial controller
@@ -885,7 +896,7 @@ The following additive types were introduced across v2.0.3–v2.4.2 and are gate
 | 0x2B | TxFilterBand | TX modulation-filter band (low/high edges) push (`TxFilterBandPacket`, SIZE 12). |
 | 0x2C | YaesuControl | Typed Yaesu control channel (SIZE 8). |
 | 0x2D | YaesuFeature | Yaesu DSP feature-state snapshot (toggles/levels/freqs; SIZE 33). |
-| 0x2E | YaesuPresence | Yaesu radio presence (configured + active) per slot (SIZE 8). |
+| 0x2E | YaesuPresence | Yaesu radio presence (configured + active) per slot, plus a port-trouble code per slot: 0 = nothing to report, 1 = the COM port is held by another program, 2 = the COM port does not exist (SIZE 10; the two trouble bytes are additive - an older peer's 8-byte form reads as trouble 0). |
 
 **Control values (client ↔ server):**
 
@@ -1993,9 +2004,26 @@ Improved lost-frame reconstruction via Opus Forward Error Correction in the jitt
 
 ### Properties
 
-- Transparent improvement: no extra bandwidth, FEC data is already in the Opus frame (set via `set_inband_fec(true)` and `set_expected_packet_loss(10)`)
+- Transparent improvement: no extra bandwidth, FEC data is already in the Opus frame (set via `set_inband_fec(true)` and `set_packet_loss_perc(...)`)
 - Effective for spread loss (1-2 frames lost, next intact)
 - Not effective for burst loss (multiple consecutive frames lost)
+
+### Since v2.9.0
+
+This section described the v0.6.5 model, which is out of date in three ways:
+
+- **Error correction is not fixed at 10%.** The server measures the loss and
+  switches correction on and off: "error correction on at N%" and "link clean
+  again - error correction off". That is also why a fault on this path can come
+  and go with the quality of the link.
+- **Each stream picks its own format, and that choice can no longer be left
+  out.** Decoder, resampler and the wideband flag belong to one type per stream
+  (`RxStream`). Until 2.9.0 concealment and error correction always ran through
+  the narrowband decoder, whatever arrived.
+- **Concealment does not last on its own.** Opus is inaudible after about
+  260 ms (measured); after that, generated noise fills the gap at that stream's
+  own noise floor, three decibels under it, until the link counts as lost.
+
 
 ---
 
@@ -2533,7 +2561,143 @@ window for min/avg/max. That is what the connection indicator reports.
 
 ---
 
-## 31. Known Limitations
+## 31. Chat and diagnosis postbox (v2.9.0)
+
+A second service beside the relay, in its own container, with its own database
+and its own route. The separation is a requirement and not a preference: a chat
+update must never stop the relay, which is carrying audio and PTT.
+
+### 31.1 Shape
+
+```
+browser ─┐
+         ├─ Caddy :443 ──┬─ /chat*  → thetislink-chat :18082 ─ chat.db
+client  ─┤               ├─ /admin* → thetislink-relay :18081 ─ stations.db
+server  ─┘               └─ /       → thetislink-relay :18080  (wss tunnel)
+```
+
+The dependency points **chat → relay** and never the other way. The chat asks
+the relay to validate an administrator password or session; the relay knows
+nothing about the chat and needs no change to support it.
+
+### 31.2 The ticket
+
+The relay signs a short-lived ticket (HMAC-SHA256, 15 minutes, rotated at half
+life) and hands it to every registered peer on the `relay-ready` reply, next to
+the UDP token. The chat verifies the signature before anything in the payload
+steers a decision. No ticket means no chat — which is simply a relay with no
+chat behind it, and a normal state.
+
+`THETISLINK_CHAT_KEYS` holds the signing keys, comma-separated; the first signs
+and all of them verify, so a key can be rotated without a flag day.
+
+### 31.3 Endpoints
+
+| Method | Path | Who |
+|---|---|---|
+| GET | `/chat/version` | anyone — the only endpoint without a ticket |
+| GET | `/chat/state` | ticket |
+| POST | `/chat/consent`, `/chat/leave` | ticket |
+| GET | `/chat/messages?since=` | ticket |
+| POST | `/chat/message` | ticket + `chat:write` |
+| POST | `/chat/diagnosis` | ticket + `chat:write` + daily counter |
+| GET | `/chat/replies` | ticket |
+| GET | `/chat/admin`, `/chat/admin/api/*` | administrator |
+| GET/POST | `/chat/admin/diagnoses`, `/diagnosis`, `/release`, `/reply` | administrator |
+
+A report requires **no consent**: joining the chat means agreeing to a name
+others see, while a report is a private line to the administrator. Demanding the
+first for the second would force a public identity for a private message.
+
+### 31.4 The administrator side
+
+Two ways in, and they are for different callers. A **bearer token**
+(`THETISLINK_CHAT_ADMIN_TOKEN`) for `scripts/postbox.sh`, and a **session
+cookie** for the page at `/chat/admin`. The page trades a password once for a
+cookie (HttpOnly, Secure, SameSite=Strict, `Path=/chat/admin`, 30-minute sliding
+idle) plus a CSRF token required on anything that changes something. A bearer
+token needs no CSRF: a browser never attaches one by itself.
+
+The password it accepts is the **relay's** administrator password — one person
+runs both services, so there is one thing to remember. The chat forwards what
+was typed to the relay's own login and believes the answer; it stores neither
+the password nor the hash. A relay that cannot be reached answers 503 and does
+**not** count as a failed attempt — it says nothing about the password — while
+unverifiable attempts have a counter of their own so the token cannot be guessed
+freely during an outage.
+
+The page carries a `Content-Security-Policy` with a per-response nonce on its two
+inline blocks, plus `nosniff` and `no-referrer`. It displays somebody else's log,
+which is the one thing on it that comes from outside.
+
+### 31.5 Limits
+
+| | |
+|---|---|
+| message | 2000 characters — keeps log fragments out of a shared room |
+| retention | 90 days, or sooner at 200 000 messages |
+| report | 512 kB, 15 per station per day |
+| postbox | 20 MB total, uncollected reports expire after 30 days |
+| request | 1 MB at Caddy, 1 MB in the reader |
+
+The reader's limit must stay above the report limit, and a test says so: at
+64 kB it did not, and a report longer than that was silently trimmed and then
+refused as malformed JSON.
+
+### 31.6 Redaction
+
+Two mechanisms, and the difference is the design:
+
+- **the log gets a denylist** — relay host, IP addresses, e-mail addresses, user
+  names in paths, anything key-shaped. Nobody can enumerate what a log line
+  contains, so patterns are all there is. Loopback is deliberately kept:
+  `127.0.0.1` is not a person and says something useful.
+- **the settings get an allowlist**, by family, with an absolute veto on any name
+  containing `password`, `secret`, `token`, `key`, `url`, `instance`,
+  `credential` or `auth`. The veto is checked first and wins: every sensitive key
+  in both config files matches a safe family on its prefix, so without it the
+  families would have shipped the lot.
+
+Everything fails closed. If the relay host cannot be worked out, nothing is
+built. Callsigns are deliberately **not** stripped: they may be somebody's chosen
+name and they are often what makes a report readable.
+
+### 31.7 Fetching the server's log from a client (packet 0x35/0x36)
+
+`ServerReportRequest` (0x35, client → server, header only) asks the connected
+server for its own attachment. The server builds and cleans it with the same
+code the client uses on its own files, then answers with `ServerReportPart`
+(0x36):
+
+```
+header(4) | part u16 | parts u16 | len u16 | bytes
+```
+
+1100 bytes per part, with a short pause every sixteen. Nothing is acknowledged
+and nothing is retransmitted; the numbering is what lets a client tell a
+complete transfer from a lossy one and say "163 of 171 parts" instead of
+attaching a shorter log that looks whole. A transfer that stalls times out after
+20 seconds.
+
+Only an authenticated client can ask — everything else is dropped at the auth
+gate well before this — and that is the intended bar: somebody who can key the
+transmitter can read the log about it.
+
+### 31.8 Deployment
+
+```
+docker compose up -d --build thetislink-chat
+docker builder prune -f
+```
+
+Only that container is touched. The second line is not tidiness: seven days of
+relay builds once left 2.84 GB of build cache, and a full disk means Caddy
+cannot renew a certificate — a relay taken down by a chat update, which is the
+one thing the separation exists to prevent.
+
+---
+
+## 32. Known Limitations
 
 1. **HPSDR protocol coverage:** ThetisLink talks to Thetis (via TCI), not to the SDR hardware directly. Both HPSDR Protocol 1 (Hermes, Angelia, Orion) and Protocol 2 (ANAN 7000DLE, 8000DLE, G2, Hermes-Lite 2, etc.) are therefore supported as long as Thetis itself supports the device.
 

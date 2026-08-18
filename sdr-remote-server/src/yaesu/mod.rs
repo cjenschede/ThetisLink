@@ -20,6 +20,7 @@ use ex_menu::*;
 mod parse;
 use parse::*;
 mod poll;
+mod tone_store;
 use poll::*;
 
 /// Radio model for the dual-radio abstraction (PATCH-dual-radio-991a-ftx1).
@@ -89,11 +90,19 @@ pub fn log_input_devices() {
 /// arrives. Returns the detected model + the baud that worked.
 ///
 /// **Model assignment is per-port, not per-slot** - so every combination works:
-/// 2× 991A, 2× FTX-1, or a mix. `ID=0670` -> FT-991A; any other valid
-/// Yaesu `ID` -> FTX-1 by elimination (the exact FTX-1 code is unknown until the
-/// first bring-up and does not need to be - the shared parser works).
-/// No response on any baud -> `None`; the caller degrades to an
-/// assumption label; the reconnect thread reads the real ID at startup.
+/// 2× 991A, 2× FTX-1, or a mix. Only a code this build recognises names a model:
+/// `0670` -> FT-991A, `0840` -> FTX-1.
+///
+/// Anything else is NOT a model. It used to be "FTX-1 by elimination", which
+/// reads as reasonable until the first read after opening a port comes back
+/// garbled - as it routinely does - and a station with one FT-991A is driven all
+/// session as an FTX-1: no memory channels, no menu values, an IF frame parsed
+/// as gibberish, and the contradiction logged as a warning nobody sees.
+///
+/// No recognisable answer on any baud -> `None`, and the caller assumes the
+/// 991A-compatible dialect. That assumption is temporary by construction: the
+/// serial thread re-reads `ID;` on every successful open (bring-up probe) and
+/// adopts the radio's own dialect when it names a model this build knows.
 pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel, u32)> {
     let mut bauds = vec![preferred_baud];
     for b in [38400u32, 4800, 9600, 19200, 57600, 115200] {
@@ -111,18 +120,85 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
         {
             Ok(p) => p,
             // Failing to open the port (e.g. already in use / does not exist) is not
-            // baud-dependent -> trying further makes no sense.
-            Err(_) => return None,
+            // baud-dependent -> trying further makes no sense. But say WHICH of
+            // the two it was: "in use by another program" asks for a different
+            // next move than "check the cable".
+            Err(e) => {
+                if let Some(text) = port_trouble_log_text(classify_open_error(&e)) {
+                    log::warn!("{}: {}", port_name, text);
+                }
+                return None;
+            }
         };
-        let resp = cat_query(&mut port, "ID;");
-        let code = resp_payload("ID", &resp);
-        if resp.contains(';') && !code.is_empty() {
-            let model = RadioModel::from_id_code(&code).unwrap_or(RadioModel::Ftx1);
-            return Some((model, baud));
+        // Anything left in the port from before this process is not an answer to
+        // a question we asked. Draining is right HERE and wrong inside
+        // `cat_query` (see the note there): a port just opened has no
+        // conversation in flight to lose.
+        let _ = port.clear(serialport::ClearBuffer::Input);
+
+        // Three attempts, because the first read after opening a port routinely
+        // comes back partial or empty and the real answer arrives a moment
+        // later. That is not a theory: a station where this went wrong logged
+        // `firmware (MAIN CPU): [ID0670;?;]` - the ID answer turning up as the
+        // reply to the NEXT question, one query behind for the rest of the
+        // session.
+        for _ in 0..3 {
+            let resp = cat_query(&mut port, "ID;");
+            let code = resp_payload("ID", &resp);
+            if let Some(model) = RadioModel::from_id_code(&code) {
+                return Some((model, baud));
+            }
+            if resp.contains(';') && !code.is_empty() {
+                // Something answered, but not with an ID we know. It used to be
+                // called an FTX-1 at this point, which is how a garbled first
+                // read turned an FT-991A into a radio the server then failed to
+                // read a single memory channel or menu value from. A guess is
+                // not a detection: keep asking.
+                log::warn!(
+                    "{}: ID; answered '{}', which is not a model this build knows - asking again",
+                    port_name,
+                    code
+                );
+            }
+            std::thread::sleep(Duration::from_millis(150));
         }
-        // No valid response on this baud -> port is dropped here, next baud.
+        // Nothing recognisable on this baud -> port is dropped here, next baud.
     }
     None
+}
+
+/// Sort a failed serial open into the `PORT_TROUBLE_*` wire codes.
+///
+/// A USB serial link that exists and is free practically never fails to open -
+/// so the two failures that do happen deserve their own names. Access denied
+/// means another program holds the port: Windows gives a COM port to one
+/// process at a time, and 991A/FTX-1 owners routinely run other control
+/// software that keeps the CAT port open in the background. Not-found means
+/// the port itself is gone: cable out, or the COM number moved after a replug.
+/// Anything else stays unnamed - a guess is not a diagnosis.
+pub(crate) fn classify_open_error(e: &serialport::Error) -> u8 {
+    use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING, PORT_TROUBLE_NONE};
+    match e.kind() {
+        serialport::ErrorKind::NoDevice => PORT_TROUBLE_MISSING,
+        serialport::ErrorKind::Io(std::io::ErrorKind::PermissionDenied) => PORT_TROUBLE_BUSY,
+        serialport::ErrorKind::Io(std::io::ErrorKind::NotFound) => PORT_TROUBLE_MISSING,
+        _ => PORT_TROUBLE_NONE,
+    }
+}
+
+/// The operator-facing words for a trouble code, for the server log. The GUIs
+/// translate the code themselves; the log speaks English like the rest of it.
+pub(crate) fn port_trouble_log_text(code: u8) -> Option<&'static str> {
+    use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING};
+    match code {
+        PORT_TROUBLE_BUSY => Some(
+            "the COM port is in use by another program - close other CAT/control software for this radio",
+        ),
+        PORT_TROUBLE_MISSING => Some(
+            "the COM port does not exist - check the USB cable, and the COM number in Device Manager",
+        ),
+        _ => None,
+    }
 }
 
 /// Yaesu FT-991A CAT serial controller with auto-reconnect.
@@ -155,9 +231,29 @@ pub struct YaesuRadio {
     /// are pushed independently now, and a shared mailbox means whichever is written
     /// second in a 200ms window silently replaces the first.
     pub menu_data: Arc<Mutex<Option<String>>>,
-    /// Radio model + slot - drives the per-radio log prefix and per-model CAT quirks.
-    pub model: RadioModel,
+    /// Radio model as its wire code - drives the per-radio log prefix and
+    /// per-model CAT quirks. Shared with the serial thread rather than fixed at
+    /// construction: a silent port is assumed 991A, and the thread corrects
+    /// this the moment the radio answers `ID;` with a model it knows. Read it
+    /// through [`Self::model_code`].
+    model_shared: Arc<std::sync::atomic::AtomicU8>,
     pub slot: u8,
+    /// Cleared when this radio is dropped, so its threads stop.
+    ///
+    /// The serial thread holds a sender of the command channel itself (the PTT
+    /// watchdog releases through it), which means the channel never disconnects
+    /// and "the owner is gone" cannot be noticed that way. Without this flag a
+    /// radio that was built but never adopted - the GUI gives up on a slow port
+    /// after five seconds - kept a thread running for the life of the process:
+    /// opening the port, reading memories, writing convincing `[radio0/991A]`
+    /// lines into the log for a radio no client could see (2026-08-12).
+    alive: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for YaesuRadio {
+    fn drop(&mut self) {
+        self.alive.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Thread-safe holder for a cpal::Stream that can be swapped on reconnect.
@@ -242,6 +338,12 @@ const SWR_991A_RAW_THRESHOLD: u16 = 110;
 #[derive(Clone, Debug)]
 pub struct YaesuState {
     pub connected: bool,
+    /// Why the serial port cannot be opened, when it cannot - one of the
+    /// `PORT_TROUBLE_*` codes from the protocol. Set by the reconnect loop on
+    /// every failed open, cleared on a successful one. This is what turns the
+    /// most common field problem - other CAT software still holding the port
+    /// in the background - from a silent absence into a named one.
+    pub port_trouble: u8,
     pub vfo_a_freq: u64,
     pub vfo_b_freq: u64,
     pub mode: u8,           // Internal mode (0=LSB, 1=USB, etc. - Thetis numbering)
@@ -353,6 +455,7 @@ impl Default for YaesuState {
     fn default() -> Self {
         Self {
             connected: false,
+            port_trouble: sdr_remote_core::protocol::PORT_TROUBLE_NONE,
             vfo_a_freq: 0,
             vfo_b_freq: 0,
             mode: 1, // USB default
@@ -547,6 +650,7 @@ impl YaesuRadio {
         // powering up the Yaesu after the server was running required a full
         // server restart. Probe-open is just a courtesy log: drop immediately
         // and let the reconnect thread re-open in its own loop.
+        let mut probe_trouble: Option<&'static str> = None;
         let initial_port_ok = match serialport::new(port_name, baud)
             .data_bits(serialport::DataBits::Eight)
             .stop_bits(serialport::StopBits::One)
@@ -559,12 +663,17 @@ impl YaesuRadio {
                 drop(port);
                 true
             }
-            Err(_) => false,
+            Err(e) => {
+                probe_trouble = port_trouble_log_text(classify_open_error(&e));
+                false
+            }
         };
 
         let status = Arc::new(Mutex::new(YaesuState::default()));
         status.lock().unwrap().ssb_switch_on_ptt = ssb_switch_on_ptt;
         status.lock().unwrap().ftx1_memory_write_ack = ftx1_memory_write_ack;
+        let model_shared = Arc::new(std::sync::atomic::AtomicU8::new(model.as_code()));
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         // Create persistent audio RX channel (capture -> network loop)
@@ -652,6 +761,10 @@ impl YaesuRadio {
 
         if initial_port_ok {
             info!("{} serial probed OK on {} @ {} baud", prefix, port_name, baud);
+        } else if let Some(text) = probe_trouble {
+            // Not merely absent - the open failed for a nameable reason, and
+            // that name is the operator's whole next move.
+            warn!("{} {}: {}", prefix, port_name, text);
         } else {
             info!(
                 "{} serial not detected on {} @ {} baud - background retry until radio comes online",
@@ -676,6 +789,8 @@ impl YaesuRadio {
             let tx_producer = tx_producer.clone();
             let last_audio_time_clone = last_audio_time.clone();
             let prefix = prefix.clone();
+            let model_shared = model_shared.clone();
+            let alive = alive.clone();
             // The loop's own sender, so the PTT watchdog can release through the
             // normal command path instead of a second copy of that logic.
             let self_tx = cmd_tx.clone();
@@ -684,7 +799,7 @@ impl YaesuRadio {
                     cmd_rx, self_tx, status, memory_data, menu_data,
                     port_name, baud, audio_device, output_device,
                     rx_audio_tx, capture_stream, output_stream, tx_producer,
-                    last_audio_time_clone, model, prefix, capture_channel,
+                    last_audio_time_clone, model, model_shared, alive, slot, prefix, capture_channel,
                 );
             });
         }
@@ -703,9 +818,16 @@ impl YaesuRadio {
             _tx_producer: tx_producer,
             memory_data,
             menu_data,
-            model,
+            model_shared,
             slot,
+            alive,
         })
+    }
+
+    /// The model as currently known: the configured/assumed one until the radio
+    /// has answered `ID;`, the radio's own after that.
+    pub fn model_code(&self) -> u8 {
+        self.model_shared.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn send_command(&self, cmd: YaesuCmd) {
@@ -752,5 +874,66 @@ impl YaesuRadio {
     /// for the software squelch). Clone of the Arc, not of the state.
     pub fn status_arc(&self) -> Arc<Mutex<YaesuState>> {
         self.status.clone()
+    }
+}
+
+#[cfg(test)]
+mod model_id_tests {
+    use super::*;
+
+    /// The two codes this build knows, and nothing else.
+    #[test]
+    fn only_a_known_id_names_a_model() {
+        assert_eq!(RadioModel::from_id_code("0670"), Some(RadioModel::Ft991a));
+        assert_eq!(RadioModel::from_id_code("0840"), Some(RadioModel::Ftx1));
+    }
+
+    /// An unknown or garbled code must stay unknown.
+    ///
+    /// It used to become an FTX-1 one call up, and that is how a station with a
+    /// single FT-991A ended up being driven as an FTX-1: the first `ID;` after
+    /// opening the port came back partial, the code was unrecognised, and the
+    /// guess stuck for the whole session - no memory channels, no menu values,
+    /// an IF frame parsed as gibberish, and a warning about it buried in the log.
+    #[test]
+    fn a_garbled_id_never_becomes_a_model() {
+        for code in ["", "06", "0670;?", "ID0670", "xxxx", "0000", "?", "0841"] {
+            assert_eq!(
+                RadioModel::from_id_code(code),
+                None,
+                "{code:?} must not be read as a model"
+            );
+        }
+    }
+
+    /// Whitespace around a good code is still that code: a serial line adds
+    /// stray characters more often than it drops them.
+    #[test]
+    fn a_known_code_survives_stray_whitespace() {
+        assert_eq!(RadioModel::from_id_code(" 0670 "), Some(RadioModel::Ft991a));
+    }
+}
+
+/// How many Yaesu slots currently hold an open CAT connection.
+///
+/// One number, process-wide, and it exists for one reason: a warning that says
+/// what went wrong is worth little next to one that says WHY. Two slots on two
+/// COM ports can still be one radio - a 991A's USB presents more than one port
+/// and both accept CAT - and then the two pollers' answers interleave. Reads
+/// come back holding somebody else's reply, memory channels are skipped, and
+/// the time-out timer cannot be read. Every one of those looks like a
+/// different fault in the log unless the common cause is named (2026-08-16,
+/// from a report by a user running exactly this setup).
+pub static ACTIVE_CAT_SLOTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// The sentence appended to a symptom that two CAT talkers would explain.
+/// Empty when only one slot is open, so a single-radio station never reads a
+/// speculation about a second one.
+pub fn two_slot_hint() -> &'static str {
+    if ACTIVE_CAT_SLOTS.load(std::sync::atomic::Ordering::Relaxed) > 1 {
+        " - NOTE: two radio slots hold a CAT connection. If both ports lead to the same radio (a 991A's USB offers more than one, and both accept CAT), their questions and answers interleave and this is the likely cause. Use one slot for CAT."
+    } else {
+        ""
     }
 }

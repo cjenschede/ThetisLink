@@ -239,4 +239,55 @@
     <string name="dev_port_a">Port A — ANT1 (TX+RX)</string>
     <string name="dev_port_b">Port B — RX2 (RX)</string>
     <string name="dev_digit_tuner_hint">toucher un chiffre = accorder · appui long = saisir</string>
+
+    <!-- Chat sur le relais -->
+    <string name="main_chat">Chat</string>
+    <string name="chat_left_user">quelqu\'un qui est parti</string>
+    <string name="chat_empty">Rien n\'a encore ete dit.</string>
+    <string name="chat_send">Envoyer</string>
+    <string name="chat_cancel">Annuler</string>
+    <string name="chat_reply">repondre</string>
+    <string name="chat_edit">modifier</string>
+    <string name="chat_edited">(modifie)</string>
+    <string name="chat_editing">modification du message - Envoyer enregistre la correction</string>
+    <string name="chat_replying_to">reponse a %1$s</string>
+    <string name="chat_input_hint">Votre message</string>
+    <string name="chat_as_name">Vous etes ici en tant que %1$s</string>
+    <string name="chat_leave">Me retirer</string>
+    <string name="chat_leave_title">Vous retirer de la discussion ?</string>
+    <string name="chat_leave_explain">Cela retire votre nom de tout ce que vous avez ecrit. Inutile pour terminer votre session : changez simplement d\'onglet, vous restez dans la discussion. Vos messages peuvent rester sans votre nom afin que les conversations des autres restent lisibles, ou partir avec vous si votre indicatif figure dans le texte.</string>
+    <string name="chat_leave_keep">Me retirer, garder les messages</string>
+    <string name="chat_leave_delete">Me retirer et supprimer</string>
+    <string name="chat_offline_no_relay">Aucun relais n\'est configure, donc pas de chat. Le chat tourne a cote du relais par lequel vous vous connectez.</string>
+    <string name="chat_offline_no_ticket">Ce relais ne propose pas de chat.</string>
+    <string name="chat_offline_unreachable">Le chat ne repond pas. L\'audio, le PTT et la radio n\'en dependent pas.</string>
+    <string name="chat_answer_title">Une reponse a votre signalement</string>
+    <string name="chat_consent_title">Rejoindre le chat</string>
+    <string name="chat_consent_intro">Un salon pour les utilisateurs de ce relais. Rejoindre signifie accepter un nom que les autres voient a cote de ce que vous ecrivez.</string>
+    <string name="chat_consent_name_q">Sous quel nom ?</string>
+    <string name="chat_consent_callsign_warning">Attention : un indicatif figure dans un registre public avec nom et adresse. Choisissez un autre nom si vous preferez ne pas le partager.</string>
+    <string name="chat_consent_optional">Sans accord, le reste de ThetisLink fonctionne normalement ; seule la discussion est indisponible.</string>
+    <string name="chat_consent_name_hint">Indicatif ou surnom</string>
+    <string name="chat_consent_admin">L\'administrateur est PA3GHM, joignable a l\'adresse indiquee sur la page du relais, pour l\'acces aux donnees vous concernant ou leur suppression.</string>
+    <string name="chat_consent_stored">Sont conserves : le nom choisi ici, ce que vous ecrivez, et quand. Rien d\'autre, et rien venant de votre radio.</string>
+    <string name="chat_consent_withdraw">Vous pouvez partir a tout moment, avec ou sans vos messages.</string>
+    <string name="chat_consent_ban">L\'administrateur peut retirer une station de la discussion si la situation devient intenable. Vous en etes informe, ce que vous avez ecrit reste, et cela ferme aussi le signalement de problemes. Quitter la discussion n\'annule pas un retrait.</string>
+    <string name="chat_consent_access">Toute personne connectee a ce relais peut lire ce que vous ecrivez ici.</string>
+    <string name="chat_consent_age">J\'ai seize ans ou plus, ou un parent est d\'accord.</string>
+    <string name="chat_consent_agree">J\'accepte - rejoindre</string>
+    <string name="chat_report_button">Signaler un probleme</string>
+    <string name="chat_report_title">Signaler un probleme</string>
+    <string name="chat_report_explain">Que faisiez-vous, qu\'attendiez-vous, et que s\'est-il passe a la place ? Votre description est le signalement.</string>
+    <string name="chat_report_hint">Ce qui ne va pas</string>
+    <string name="chat_report_no_log">Le journal provient du journal systeme d\'Android pour cette application et de son propre fichier journal, et les reglages de ses propres preferences. Seul l\'administrateur les voit.</string>
+    <string name="chat_report_send">Envoyer le signalement</string>
+    <string name="chat_report_attach">Joindre mon journal et mes reglages</string>
+    <string name="chat_report_reading">lecture du journal et des reglages...</string>
+    <string name="chat_report_attach_shown">Voici ce qui part avec. Relisez-le avant d\'envoyer : adresses, noms et tout ce qui ressemblait a un mot de passe ont ete retires, mais la derniere verification vous revient.</string>
+    <string name="settings_roger">Bip de fin</string>
+    <string name="settings_roger_hint">Une breve tonalite a la fin de votre emission. L\'emetteur reste en emission le temps voulu, pour que le correspondant l\'entende. Jamais en modes data ou numeriques.</string>
+    <string name="settings_roger_radio1">Radio 1</string>
+    <string name="settings_roger_radio2">Radio 2</string>
+    <string name="settings_roger_volume">Niveau</string>
+    <string name="settings_roger_fm">Aussi en FM</string>
 </resources>

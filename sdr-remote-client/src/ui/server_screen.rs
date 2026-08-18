@@ -129,7 +129,10 @@ impl SdrRemoteApp {
                     .add(
                         egui::TextEdit::singleline(&mut self.relay_url)
                             .desired_width(260.0)
-                            .hint_text("ws://relay.example.com:18080"),
+                            // wss://, not ws:// - the relay sits behind TLS on
+                            // 443, and the first real user copied this hint
+                            // verbatim and could not connect.
+                            .hint_text("wss://relay.example.com"),
                     )
                     .changed();
             });
@@ -321,6 +324,48 @@ impl SdrRemoteApp {
         }
 
         ui.separator();
+
+        // Chat, with the unread count on it (design §1.7): without a number
+        // where people already look, nobody opens the window - and one channel
+        // nobody opens is as empty as two were. Shown only with a relay
+        // configured, because the chat lives on it; without one there is nothing
+        // behind this button and an unexplained dead control is worse than none.
+        //
+        // Switched ON as well as filled in: the chat needs the ticket the relay
+        // hands out on connecting, so an address that is saved but not in use
+        // has no more chat behind it than no address at all. An address stays
+        // in the settings after the relay is switched off, so checking only the
+        // address left exactly the dead button this rule exists to avoid
+        // (2026-08-17).
+        if self.relay_enabled && !self.relay_url.trim().is_empty() {
+            ui.horizontal(|ui| {
+                let label = if self.chat.unread() > 0 {
+                    format!("{} ({})", rust_i18n::t!("chat_window_button"), self.chat.unread())
+                } else {
+                    rust_i18n::t!("chat_window_button").to_string()
+                };
+                let btn = egui::Button::new(RichText::new(label).strong());
+                // Toggled-on gets the fill, per the house rule; a momentary
+                // action would not.
+                let btn = if self.chat_open {
+                    btn.fill(Color32::from_rgb(70, 110, 170))
+                } else {
+                    btn
+                };
+                if ui.add(btn).clicked() {
+                    self.chat_open = !self.chat_open;
+                    self.save_full_config();
+                }
+                if self.chat.unread() > 0 {
+                    ui.label(
+                        RichText::new(rust_i18n::t!("chat_unread_hint").to_string())
+                            .small()
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                }
+            });
+            ui.separator();
+        }
 
         // UI language: English base + choice of NL/DE/FR. Applies immediately
         // (rust_i18n::set_locale) and persists (language= in the client conf).
@@ -647,6 +692,52 @@ impl SdrRemoteApp {
 
         ui.separator();
 
+        // The roger beep. One place for the sound of it, and a tick per
+        // channel - an operator wants one beep of their own, not three that
+        // differ by accident.
+        let roger_before = self.roger;
+        ui.horizontal(|ui| {
+            ui.label(rust_i18n::t!("screen_roger").to_string());
+            ui.add(
+                egui::DragValue::new(&mut self.roger.freq_hz)
+                    .speed(10.0)
+                    .range(sdr_remote_logic::roger::FREQ_MIN_HZ..=sdr_remote_logic::roger::FREQ_MAX_HZ)
+                    .suffix(" Hz"),
+            )
+            .on_hover_text(rust_i18n::t!("screen_roger_freq_tooltip").to_string());
+            ui.add(
+                egui::DragValue::new(&mut self.roger.duration_ms)
+                    .speed(10.0)
+                    .range(sdr_remote_logic::roger::DURATION_MIN_MS..=sdr_remote_logic::roger::DURATION_MAX_MS)
+                    .suffix(" ms"),
+            )
+            .on_hover_text(rust_i18n::t!("screen_roger_duration_tooltip").to_string());
+            ui.label(rust_i18n::t!("screen_roger_volume").to_string());
+            let resp = ui.add(egui::Slider::new(&mut self.roger.volume, 0.0..=1.0).fixed_decimals(2));
+            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.roger.volume, 0.0..=1.0, 0.05);
+            let _ = scrolled;
+            ui.checkbox(&mut self.roger.include_fm, rust_i18n::t!("screen_roger_fm").to_string())
+                .on_hover_text(rust_i18n::t!("screen_roger_fm_tooltip").to_string());
+        });
+        ui.horizontal(|ui| {
+            ui.label(rust_i18n::t!("screen_roger_on").to_string());
+            ui.checkbox(&mut self.roger.on_thetis, "Thetis");
+            let l1 = self.yaesu_slot_label(0);
+            let l2 = self.yaesu_slot_label(1);
+            ui.checkbox(&mut self.roger.on_radio1, l1);
+            ui.checkbox(&mut self.roger.on_radio2, l2);
+            ui.label(
+                RichText::new(rust_i18n::t!("screen_roger_note").to_string())
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        });
+        if self.roger != roger_before {
+            self.roger = self.roger.clamped();
+            super::config::save_roger(&self.roger);
+            let _ = self.cmd_tx.send(Command::SetRogerBeep(self.roger));
+        }
+
         // Audio recording
         let rec_yaesu_label = self.yaesu_slot_label(0);
         let rec_yaesu2_label = self.yaesu_slot_label(1);
@@ -709,11 +800,46 @@ impl SdrRemoteApp {
                     });
                     self.recording = true;
                 }
-                // Play button for last recording
-                if let Some(ref wav_path) = self.last_recorded_path {
+                // Play, and - when the last Start wrote more than one file -
+                // which of them. Without the picker the button silently meant
+                // the last source in a fixed order, so recording both radios
+                // could only ever play back the second one.
+                if !self.last_recorded.is_empty() {
+                    self.play_ticked.resize(self.last_recorded.len(), true);
+                    // A tick per recording, and everything ticked plays
+                    // together. Only worth showing when there is a choice: with
+                    // one recording the button says all there is to say.
+                    if self.last_recorded.len() > 1 {
+                        let mut changed = false;
+                        for (i, (label, _)) in self.last_recorded.iter().enumerate() {
+                            if ui.checkbox(&mut self.play_ticked[i], label).changed() {
+                                changed = true;
+                            }
+                        }
+                        // Changing the selection mid-playback would leave the
+                        // button offering to stop something else.
+                        if changed && self.playing {
+                            let _ = self.cmd_tx.send(Command::StopPlayback);
+                            self.playing = false;
+                        }
+                    }
+                    let wav_paths: Vec<String> = self
+                        .last_recorded
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| self.play_ticked.get(*i).copied().unwrap_or(false))
+                        .map(|(_, (_, path))| path.clone())
+                        .collect();
                     if !self.playing {
-                        if ui.button(rust_i18n::t!("screen_play_icon").to_string()).clicked() {
-                            let _ = self.cmd_tx.send(Command::PlayRecording { path: wav_path.clone() });
+                        if ui
+                            .add_enabled(
+                                !wav_paths.is_empty(),
+                                egui::Button::new(rust_i18n::t!("screen_play_icon").to_string()),
+                            )
+                            .on_disabled_hover_text(rust_i18n::t!("screen_play_none_ticked").to_string())
+                            .clicked()
+                        {
+                            let _ = self.cmd_tx.send(Command::PlayRecording { paths: wav_paths });
                             self.playing = true;
                         }
                     } else {

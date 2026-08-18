@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 sdr-remote-core = { path = "../sdr-remote-core" }
 sdr-remote-relay = { path = "../sdr-remote-relay" }
+sdr-remote-chat = { path = "../sdr-remote-chat" }
 vrx-rs = { path = "../vrx-rs" }
 tokio = { workspace = true }
 cpal = { workspace = true }

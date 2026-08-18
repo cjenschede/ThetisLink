@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Spacer
@@ -59,6 +60,10 @@ fun SettingsDialog(
     onSmeterSourceChange: (Int) -> Unit = {},
     dxSpotsEnabled: Boolean = true,
     onDxSpotsEnabledChange: (Boolean) -> Unit = {},
+    // The roger beep: pitch, length, level, whether FM counts, and a tick per
+    // channel. The tone and the rules live in the shared engine this app
+    // already runs; this is only the way to say what it should do.
+    onRogerChange: (Float, Float, Int, Boolean, Boolean, Boolean, Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
     onReboot: () -> Unit,
     onShutdown: () -> Unit,
     onDismiss: () -> Unit,
@@ -67,6 +72,28 @@ fun SettingsDialog(
     val prefs = remember { context.getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE) }
     var password by remember { mutableStateOf(prefs.getString("password", "") ?: "") }
     var rebootConfirm by remember { mutableStateOf(false) }
+    var rogerFreq by remember { mutableStateOf(prefs.getFloat("roger_freq_hz", 1000f)) }
+    var rogerVol by remember { mutableStateOf(prefs.getFloat("roger_volume", 0.25f)) }
+    var rogerMs by remember { mutableStateOf(prefs.getInt("roger_duration_ms", 150)) }
+    var rogerFm by remember { mutableStateOf(prefs.getBoolean("roger_include_fm", true)) }
+    var rogerThetis by remember { mutableStateOf(prefs.getBoolean("roger_on_thetis", false)) }
+    var rogerRadio1 by remember { mutableStateOf(prefs.getBoolean("roger_on_radio1", false)) }
+    var rogerRadio2 by remember { mutableStateOf(prefs.getBoolean("roger_on_radio2", false)) }
+    // Saved and sent in one place, so a setting cannot reach the engine without
+    // also surviving a restart - which is the way round it went wrong on the
+    // desktop (build 67).
+    fun saveRoger() {
+        prefs.edit()
+            .putFloat("roger_freq_hz", rogerFreq)
+            .putFloat("roger_volume", rogerVol)
+            .putInt("roger_duration_ms", rogerMs)
+            .putBoolean("roger_include_fm", rogerFm)
+            .putBoolean("roger_on_thetis", rogerThetis)
+            .putBoolean("roger_on_radio1", rogerRadio1)
+            .putBoolean("roger_on_radio2", rogerRadio2)
+            .apply()
+        onRogerChange(rogerFreq, rogerVol, rogerMs, rogerFm, rogerThetis, rogerRadio1, rogerRadio2)
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -240,6 +267,56 @@ fun SettingsDialog(
                     )
                 }
                 Text(stringResource(R.string.settings_dx_spots_hint), fontSize = 11.sp, color = Color.Gray)
+
+                // Roger beep - a tone at the end of a transmission, sent while
+                // the transmitter is still keyed. Releasing PTT holds it for the
+                // length set here, so the far end actually hears it.
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                Text(stringResource(R.string.settings_roger), fontSize = 14.sp)
+                Text(stringResource(R.string.settings_roger_hint), fontSize = 11.sp, color = Color.Gray)
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Thetis", fontSize = 13.sp)
+                    Switch(checked = rogerThetis, onCheckedChange = {
+                        rogerThetis = it; saveRoger()
+                    })
+                    Spacer(Modifier.weight(1f))
+                    Text(stringResource(R.string.settings_roger_radio1), fontSize = 13.sp)
+                    Switch(checked = rogerRadio1, onCheckedChange = {
+                        rogerRadio1 = it; saveRoger()
+                    })
+                    Spacer(Modifier.weight(1f))
+                    Text(stringResource(R.string.settings_roger_radio2), fontSize = 13.sp)
+                    Switch(checked = rogerRadio2, onCheckedChange = {
+                        rogerRadio2 = it; saveRoger()
+                    })
+                }
+                Text("${rogerFreq.toInt()} Hz", fontSize = 12.sp, color = Color.Gray)
+                Slider(
+                    value = rogerFreq,
+                    onValueChange = { rogerFreq = it; saveRoger() },
+                    valueRange = 300f..2700f,
+                )
+                Text("${rogerMs} ms", fontSize = 12.sp, color = Color.Gray)
+                Slider(
+                    value = rogerMs.toFloat(),
+                    onValueChange = { rogerMs = it.toInt(); saveRoger() },
+                    valueRange = 50f..1500f,
+                )
+                Text(stringResource(R.string.settings_roger_volume) + " " +
+                     String.format("%.2f", rogerVol), fontSize = 12.sp, color = Color.Gray)
+                Slider(
+                    value = rogerVol,
+                    onValueChange = { rogerVol = it; saveRoger() },
+                    valueRange = 0f..1f,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.settings_roger_fm), fontSize = 13.sp)
+                    Spacer(Modifier.weight(1f))
+                    Switch(checked = rogerFm, onCheckedChange = { rogerFm = it; saveRoger() })
+                }
 
                 // Audio routing
                 Spacer(Modifier.height(12.dp))

@@ -147,6 +147,120 @@ pub fn hq_sinc_params() -> rubato::SincInterpolationParameters {
     }
 }
 
+/// What a stretch of audio looks like, in the three numbers that separate
+/// "clean" from "rough" without storing the audio itself.
+///
+/// `peak` and `clipped` find a signal that outgrew its headroom. `roughness()`
+/// compares the energy in the difference between neighbouring samples against
+/// the energy in the signal itself - which is a high-pass filter and its
+/// output level, written as two running sums. Low for a signal whose energy
+/// sits well below half the sample rate, higher the more of it sits up near
+/// the top, and anything that adds harmonics up there - clipping, aliasing, a
+/// codec pushed past its bitrate - raises it. Being a ratio of energies it
+/// does not move when the operator turns the volume up, which is the whole
+/// point of it.
+#[derive(Default, Clone, Copy)]
+struct LevelStats {
+    peak: f32,
+    clipped: u32,
+    sum_sq: f64,
+    sum_step_sq: f64,
+    n: u64,
+}
+
+impl LevelStats {
+    fn feed(&mut self, samples: &[f32]) {
+        // The step across a frame boundary is not carried; one sample in every
+        // 960 contributes nothing, which is below the precision of anything
+        // this is used for.
+        let mut prev = samples.first().copied().unwrap_or(0.0);
+        for &s in samples {
+            let a = s.abs();
+            if a > self.peak { self.peak = a; }
+            if a >= 0.999 { self.clipped += 1; }
+            self.sum_sq += (s as f64) * (s as f64);
+            let d = (s - prev) as f64;
+            self.sum_step_sq += d * d;
+            prev = s;
+        }
+        self.n += samples.len() as u64;
+    }
+
+    fn rms(&self) -> f64 {
+        if self.n == 0 { 0.0 } else { (self.sum_sq / self.n as f64).sqrt() }
+    }
+
+    /// Zero for silence, where the ratio would be meaningless rather than
+    /// large.
+    fn roughness(&self) -> f64 {
+        if self.sum_sq < 1e-12 { 0.0 } else { (self.sum_step_sq / self.sum_sq).sqrt() }
+    }
+}
+
+/// When the receive encoders should spend bits on repeating themselves.
+///
+/// In-band FEC is not a free upgrade: Opus takes the redundancy out of the
+/// same budget as the sound, and at 12.8 kbps that is audible - a station
+/// heard it as receive audio that was rough where the same server's VRX, which
+/// has never carried FEC, was clean (2026-08-13). Nor is it free to go
+/// without: on a link that drops packets, no redundancy means holes.
+///
+/// So neither answer is right all the time, and this picks per link from what
+/// the clients report rather than guessing once. It turns on readily and lets
+/// go slowly: a burst of loss should be covered before it is understood, and a
+/// link that has just misbehaved has not proved anything by being quiet for
+/// one second.
+#[derive(Default)]
+struct LossProtection {
+    on: bool,
+    applied_pct: u8,
+    clean_ticks: u32,
+    pending: Option<(bool, u8)>,
+}
+
+impl LossProtection {
+    /// Above this, protect. Below one percent, start counting towards letting
+    /// go. Between the two, leave whatever is already in force.
+    const ON_AT_PCT: u8 = 2;
+    /// Twenty seconds of a clean link at 20 ms per tick.
+    const CLEAN_TICKS_TO_RELEASE: u32 = 1000;
+
+    fn update(&mut self, loss_pct: u8) {
+        if loss_pct >= Self::ON_AT_PCT {
+            self.clean_ticks = 0;
+            // Told to Opus a little high: the figure it is given is what it
+            // budgets for, and a burst that averages two percent does not
+            // arrive spread evenly.
+            let want = loss_pct.saturating_add(3).clamp(5, 20);
+            if !self.on || want.abs_diff(self.applied_pct) >= 5 {
+                self.on = true;
+                self.applied_pct = want;
+                self.pending = Some((true, want));
+            }
+            return;
+        }
+        if !self.on {
+            return;
+        }
+        if loss_pct == 0 {
+            self.clean_ticks += 1;
+            if self.clean_ticks >= Self::CLEAN_TICKS_TO_RELEASE {
+                self.on = false;
+                self.applied_pct = 0;
+                self.clean_ticks = 0;
+                self.pending = Some((false, 0));
+            }
+        } else {
+            self.clean_ticks = 0;
+        }
+    }
+
+    /// The change to apply, once, if there is one.
+    fn take_change(&mut self) -> Option<(bool, u8)> {
+        self.pending.take()
+    }
+}
+
 // ── Multi-channel audio bundler ─────────────────────────────────────────
 
 /// Multi-channel audio loop that replaces the three separate TCI loops.
@@ -168,9 +282,14 @@ pub async fn tci_multichannel_audio_loop(
     let tci_frame_samples = (tci_rate * 20 / 1000) as usize; // 960
 
     // Per-channel mono encoders + resamplers - narrowband (8 kHz).
-    let mut enc_rx1 = OpusEncoder::new()?;
-    let mut enc_bin_r = OpusEncoder::new()?;
-    let mut enc_rx2 = OpusEncoder::new()?;
+    // Silence suppression off, and nothing else changed. A receiver is never
+    // silent - band noise between the signals is the signal too - and the
+    // voice-activity detector calls that silence and lets the far end invent
+    // something in its place. VRX, on the same voice configuration but with
+    // this one switch off, is the stream nobody calls rough.
+    let mut enc_rx1 = OpusEncoder::new_rx_continuous()?;
+    let mut enc_bin_r = OpusEncoder::new_rx_continuous()?;
+    let mut enc_rx2 = OpusEncoder::new_rx_continuous()?;
     let mk_resampler = || rubato::SincFixedIn::<f32>::new(
         NETWORK_SAMPLE_RATE as f64 / tci_rate as f64, 1.0,
         hq_sinc_params(), tci_frame_samples, 1,
@@ -183,9 +302,9 @@ pub async fn tci_multichannel_audio_loop(
     // at least one client has the Thetis-wideband-audio opt-in enabled.
     // The resamplers stay idle (no `process()` call) as long as no
     // client wants wideband - no noticeable CPU impact.
-    let mut enc_rx1_wb = OpusEncoderWideband::new()?;
-    let mut enc_bin_r_wb = OpusEncoderWideband::new()?;
-    let mut enc_rx2_wb = OpusEncoderWideband::new()?;
+    let mut enc_rx1_wb = OpusEncoderWideband::new_rx_continuous()?;
+    let mut enc_bin_r_wb = OpusEncoderWideband::new_rx_continuous()?;
+    let mut enc_rx2_wb = OpusEncoderWideband::new_rx_continuous()?;
     let mk_resampler_wb = || rubato::SincFixedIn::<f32>::new(
         NETWORK_SAMPLE_RATE_WIDEBAND as f64 / tci_rate as f64, 1.0,
         hq_sinc_params(), tci_frame_samples, 1,
@@ -200,6 +319,69 @@ pub async fn tci_multichannel_audio_loop(
     let mut bin_r_accum: Vec<f32> = Vec::with_capacity(tci_frame_samples * 4);
     let mut tick = interval(Duration::from_millis(20));
     let mut had_clients = false;
+
+    // How this loop is being fed, summarised every ten seconds.
+    //
+    // For a fault nobody could otherwise see: RX1 audio that is clean from a
+    // fresh server and slightly rough after the first PTT, and stays rough
+    // until the server is restarted - while VRX1, which is made from IQ inside
+    // this process, stays perfect throughout. That points at how Thetis's audio
+    // arrives rather than at what is done with it, and this is the smallest
+    // thing that can tell the two apart: how full the buffer is when a frame is
+    // taken, how often there was nothing to take, and how often a backlog had
+    // to be thrown away. A handful of counters and one line per ten seconds -
+    // nothing per frame, nothing in the path itself.
+    let mut m_ticks: u32 = 0;
+    let mut m_starved: u32 = 0;
+    let mut m_trimmed: u32 = 0;
+    let mut m_fill_sum: u64 = 0;
+    let mut m_fill_min: usize = usize::MAX;
+    let mut m_fill_max: usize = 0;
+    let mut m_since = Instant::now();
+    // What the audio itself looks like, at the two places that can differ.
+    //
+    // The counters above say the feed is healthy, and rebuilding the wideband
+    // resampler and encoder on resume did not cure the roughness, so the fault
+    // is not in how much arrives nor in stale filter state. Three numbers say
+    // what is left. Peak and the number of samples at full scale catch a level
+    // that grew after transmitting and now clips - which sounds exactly like
+    // this and hides from the narrowband stream, whose band edge sits below
+    // where clipping puts its harmonics. The roughness ratio (mean step
+    // between neighbouring samples over mean level) rises when high-frequency
+    // content is added, whatever adds it.
+    //
+    // Taken on Thetis's own samples and again after the wideband resampler, so
+    // the two can be told apart: if the input is unchanged and the output is
+    // not, the resampler is doing it; if both change together, it arrives that
+    // way and Thetis is where to look.
+    let mut m_in = LevelStats::default();
+    let mut m_wb = LevelStats::default();
+    // The narrowband encoder's own input, for the level line below. Its
+    // decoded counterpart used to be measured here too, along with a
+    // subtraction that put a dB figure on what each codec did. Both are gone:
+    // under a speech codec the subtraction measured phase rather than quality
+    // - it read 4 dB on a stream that sounded fine - and the arithmetic behind
+    // it was the worst thing this loop did all second. A loop whose first rule
+    // is latency does not carry an instrument that cannot answer its question.
+    let mut m_nb = LevelStats::default();
+    // How long a tick takes to do its work, worst and average.
+    //
+    // Because the last attempt at this fault killed every audio stream on the
+    // server at once - not only the one it touched - and the most likely way
+    // for a change here to do that is to make this loop too slow to keep its
+    // twenty milliseconds. Everything else on this server shares the same
+    // runtime, so a bundler that overruns starves the lot. If that is what
+    // happened it is here in plain numbers, and if it is not, that is worth
+    // knowing too before anything else is blamed.
+    // Whether the receive encoders are currently spending bits on redundancy.
+    let mut loss_protect = LossProtection::default();
+
+    let mut m_work_max = Duration::ZERO;
+    let mut m_work_sum = Duration::ZERO;
+
+    // Set when a tick found nothing to send; cleared on the first tick that
+    // has audio again, which is where the backlog is dropped.
+    let mut resume_pending = false;
 
     info!("Stereo audio mixer started");
 
@@ -224,6 +406,7 @@ pub async fn tci_multichannel_audio_loop(
         tokio::select! {
             // Wait for tick or shutdown â€" audio is drained non-blocking below
             _ = tick.tick() => {
+                let work_started = Instant::now();
                 // Drain ALL channels non-blocking to prevent select! bias
                 fn drain_channel(rx_opt: &mut Option<tokio::sync::mpsc::Receiver<Vec<f32>>>, accum: &mut Vec<f32>) {
                     if let Some(rx) = rx_opt.as_mut() {
@@ -245,11 +428,153 @@ pub async fn tci_multichannel_audio_loop(
                 drain_channel(&mut bin_r_audio_rx, &mut bin_r_accum);
                 // Cap accumulators
                 let max = tci_frame_samples * 10;
-                if rx1_accum.len() > max { rx1_accum.drain(..rx1_accum.len() - max); }
+                if rx1_accum.len() > max { m_trimmed += 1; rx1_accum.drain(..rx1_accum.len() - max); }
                 if rx2_accum.len() > max { rx2_accum.drain(..rx2_accum.len() - max); }
                 if bin_r_accum.len() > max { bin_r_accum.drain(..bin_r_accum.len() - max); }
+                // Measured before the frame is taken, so it says what was there
+                // to work with.
+                m_ticks += 1;
+                let fill = rx1_accum.len();
+                m_fill_sum += fill as u64;
+                m_fill_min = m_fill_min.min(fill);
+                m_fill_max = m_fill_max.max(fill);
+                if m_since.elapsed() >= Duration::from_secs(10) {
+                    if m_ticks > 0 {
+                        info!(
+                            "RX1 audio feed (10 s): {} ticks, {} with nothing to send, {} backlogs dropped; buffer frames avg {:.2} min {:.2} max {:.2}",
+                            m_ticks,
+                            m_starved,
+                            m_trimmed,
+                            m_fill_sum as f64 / m_ticks as f64 / tci_frame_samples as f64,
+                            m_fill_min as f64 / tci_frame_samples as f64,
+                            m_fill_max as f64 / tci_frame_samples as f64,
+                        );
+                        // Second line, so the first stays as it was and the
+                        // two can be read against each other over a session.
+                        info!(
+                            "RX1 audio level (10 s): from Thetis peak {:.3} rms {:.4} rough {:.4} clipped {}; wideband out peak {:.3} rms {:.4} rough {:.4} clipped {}",
+                            m_in.peak, m_in.rms(), m_in.roughness(), m_in.clipped,
+                            m_wb.peak, m_wb.rms(), m_wb.roughness(), m_wb.clipped,
+                        );
+                        // Third line: what each codec does to its own input.
+                        // The two paths are at different sample rates, so their
+                        // numbers do not compare across - but each path's
+                        // in-to-out change does, and that is the comparison the
+                        // complaint is about.
+                        // Above the threshold this is a warning, not a
+                        // reading. Overrunning the tick is the one thing known
+                        // to silence every audio stream on this server, and a
+                        // number that looks identical whether it says 4 ms or
+                        // 19 ms is an instrument, not an alarm. Two thirds of
+                        // the budget leaves room to notice before it bites.
+                        let avg_ms = m_work_sum.as_secs_f64() * 1000.0 / m_ticks as f64;
+                        let worst_ms = m_work_max.as_secs_f64() * 1000.0;
+                        const TICK_MS: f64 = 20.0;
+                        const ALARM_AT: f64 = TICK_MS * 2.0 / 3.0;
+                        if worst_ms >= ALARM_AT {
+                            warn!(
+                                "RX1 bundler work (10 s): avg {:.2} ms, worst {:.2} ms of the {:.0} ms tick - past {:.1} ms this loop starts starving every other audio stream",
+                                avg_ms, worst_ms, TICK_MS, ALARM_AT,
+                            );
+                        } else {
+                            info!(
+                                "RX1 bundler work (10 s): avg {:.2} ms, worst {:.2} ms of the {:.0} ms tick",
+                                avg_ms, worst_ms, TICK_MS,
+                            );
+                        }
+                    }
+                    m_work_max = Duration::ZERO;
+                    m_work_sum = Duration::ZERO;
+                    m_ticks = 0; m_starved = 0; m_trimmed = 0;
+                    m_fill_sum = 0; m_fill_min = usize::MAX; m_fill_max = 0;
+                    m_in = LevelStats::default();
+                    m_wb = LevelStats::default();
+                    m_nb = LevelStats::default();
+                    m_since = Instant::now();
+                }
                 if rx1_accum.len() < tci_frame_samples {
+                    m_starved += 1;
+                    let work = work_started.elapsed();
+                    m_work_sum += work;
+                    if work > m_work_max { m_work_max = work; }
+                    // Nothing came in: Thetis has paused its RX audio, which is
+                    // what it does while transmitting. Remember it, so the
+                    // burst that arrives when it resumes is not carried as
+                    // latency for the rest of the session.
+                    resume_pending = true;
                     continue;
+                }
+
+                // Back after a pause. Thetis hands over what it held in one
+                // burst, and this loop only ever takes one frame per 20 ms
+                // tick, so without this the whole burst stays in the buffer -
+                // permanently. Measured at a station: one frame before a
+                // transmission, two after the first, five after the next, and
+                // it never came down again (2026-08-13). That is 80 ms of
+                // latency bought with nothing, on a project whose first rule is
+                // latency. Dropping back to a single frame costs the tail of a
+                // pause nobody was listening to, and hands the operator their
+                // twenty milliseconds back.
+                if resume_pending {
+                    resume_pending = false;
+                    // Start the wideband chain afresh.
+                    //
+                    // Measured at a station on 2026-08-13: receive audio is
+                    // clean from a fresh server, slightly rough from the first
+                    // transmission onwards, and clean again the moment the
+                    // server restarts - while a phone, which listens to the
+                    // narrowband stream, never hears it at all, and switching
+                    // the wideband option off makes it clean instantly. So the
+                    // fault is in these two objects and nowhere else: they are
+                    // the only thing that a server restart renews and that a
+                    // client restart, or toggling the option, does not.
+                    //
+                    // A sinc resampler and a predictive codec both carry state
+                    // across the pause a transmission makes, and neither was
+                    // ever told the stream had stopped. Rebuilding them is what
+                    // the server restart does, minus the restart. It costs the
+                    // first frame after a pause - the resampler needs one to
+                    // fill its window - which lands exactly where nobody was
+                    // listening anyway.
+                    //
+                    // Tried at the station and it did not cure it: the
+                    // roughness is still there after a transmission. Kept
+                    // anyway, because resuming a sinc window and a predictive
+                    // codec across a gap is wrong whether or not it is this
+                    // fault, and it costs a frame nobody hears. What it does
+                    // settle is that the cause is not stale state in these two
+                    // - which is why the level statistics above were added, to
+                    // say whether the audio arrives changed or is changed here.
+                    if let (Ok(r), Ok(e)) = (mk_resampler_wb(), OpusEncoderWideband::new_rx_continuous()) {
+                        res_rx1_wb = r;
+                        enc_rx1_wb = e;
+                        if let (Ok(r2), Ok(e2)) = (mk_resampler_wb(), OpusEncoderWideband::new_rx_continuous()) {
+                            res_rx2_wb = r2;
+                            enc_rx2_wb = e2;
+                        }
+                        if let (Ok(r3), Ok(e3)) = (mk_resampler_wb(), OpusEncoderWideband::new_rx_continuous()) {
+                            res_bin_r_wb = r3;
+                            enc_bin_r_wb = e3;
+                        }
+                        info!("Wideband audio chain rebuilt after the pause");
+                    }
+                    if rx1_accum.len() > tci_frame_samples {
+                        let carried = rx1_accum.len() / tci_frame_samples;
+                        rx1_accum.drain(..rx1_accum.len() - tci_frame_samples);
+                        info!(
+                            "RX1 audio resumed after a pause: dropped a {} frame ({} ms) backlog rather than carry it",
+                            carried,
+                            carried * 20
+                        );
+                    }
+                    // The other channels are on the same stream and pause with
+                    // it; left as they are they would drift apart from RX1.
+                    if rx2_accum.len() > tci_frame_samples {
+                        rx2_accum.drain(..rx2_accum.len() - tci_frame_samples);
+                    }
+                    if bin_r_accum.len() > tci_frame_samples {
+                        bin_r_accum.drain(..bin_r_accum.len() - tci_frame_samples);
+                    }
                 }
 
                 let addrs = {
@@ -299,7 +624,9 @@ pub async fn tci_multichannel_audio_loop(
 
                 // CH0: RX1 (always present)
                 let rx1_frame: Vec<f32> = rx1_accum.drain(..tci_frame_samples).collect();
+                m_in.feed(&rx1_frame);
                 let rx1_8k = resample_to_network(&mut res_rx1, &rx1_frame);
+                m_nb.feed(&rx1_8k);
                 let rx1_i16 = pcm_to_i16(&rx1_8k);
                 if rx1_i16.len() >= FRAME_SAMPLES {
                     if let Ok(opus) = enc_rx1.encode(&rx1_i16[..FRAME_SAMPLES]) {
@@ -309,6 +636,7 @@ pub async fn tci_multichannel_audio_loop(
                 }
                 if any_wb {
                     let rx1_16k = resample_to_network(&mut res_rx1_wb, &rx1_frame);
+                    m_wb.feed(&rx1_16k);
                     let rx1_i16_wb = pcm_to_i16(&rx1_16k);
                     if rx1_i16_wb.len() >= FRAME_SAMPLES_WIDEBAND {
                         if let Ok(opus) = enc_rx1_wb.encode(&rx1_i16_wb[..FRAME_SAMPLES_WIDEBAND]) {
@@ -377,9 +705,9 @@ pub async fn tci_multichannel_audio_loop(
                     // - the desktop client UI's "RX2 enabled" toggle must
                     // mute the upstream RX2 stream entirely, not just the
                     // local playback (bandwidth bug uncovered 2026-05-13).
-                    let client_modes: Vec<(std::net::SocketAddr, u8, bool, bool, bool)> = {
+                    let (client_modes, worst_loss): (Vec<(std::net::SocketAddr, u8, bool, bool, bool)>, u8) = {
                         let sess = session.lock().await;
-                        addrs
+                        let modes = addrs
                             .iter()
                             .map(|&a| (
                                 a,
@@ -388,8 +716,36 @@ pub async fn tci_multichannel_audio_loop(
                                 sess.client_rx2_enabled(a),
                                 sess.client_thetis_wideband(a),
                             ))
-                            .collect()
+                            .collect();
+                        // The worst link decides. One set of encoders feeds
+                        // everybody, so protection cannot be granted per
+                        // listener - and the listener who needs it is the one
+                        // whose audio falls apart without it, not the one who
+                        // would rather have the last decibel.
+                        let worst = addrs.iter().map(|&a| sess.client_loss(a)).max().unwrap_or(0);
+                        (modes, worst)
                     };
+                    loss_protect.update(worst_loss);
+                    if let Some((on, pct)) = loss_protect.take_change() {
+                        // Checked, not discarded. If the encoder refuses, the
+                        // protection simply does not happen - and the whole
+                        // point of it is the link where its absence is audible.
+                        let mut failed = 0usize;
+                        for e in [&mut enc_rx1, &mut enc_bin_r, &mut enc_rx2] {
+                            if e.set_loss_protection(on, pct).is_err() { failed += 1; }
+                        }
+                        for e in [&mut enc_rx1_wb, &mut enc_bin_r_wb, &mut enc_rx2_wb] {
+                            if e.set_loss_protection(on, pct).is_err() { failed += 1; }
+                        }
+                        if failed > 0 {
+                            warn!("RX audio: {} of 6 encoders refused the error-correction change - they keep their previous setting", failed);
+                        }
+                        if on {
+                            info!("RX audio: packet loss {}% - error correction on at {}%", worst_loss, pct);
+                        } else {
+                            info!("RX audio: link clean again - error correction off, all bits to the sound");
+                        }
+                    }
 
                     for (addr, mode, rx1_enabled, rx2_enabled, want_wb) in &client_modes {
                         // Filter channels based on client's audio mode.
@@ -439,6 +795,9 @@ pub async fn tci_multichannel_audio_loop(
                     }
                     sequence = sequence.wrapping_add(1);
                 }
+                let work = work_started.elapsed();
+                m_work_sum += work;
+                if work > m_work_max { m_work_max = work; }
             }
             _ = shutdown.changed() => break,
         }
@@ -477,8 +836,17 @@ pub async fn yaesu_audio_loop(
     // + both radios. We therefore keep both encoders/resamplers running and
     // send each subscriber the format that client wants (`client_thetis_wideband`),
     // with the `AUDIO_WIDEBAND`-flag on WB-packets. Mirror of the Thetis-multi-ch-path.
-    let mut enc_nb = OpusEncoder::new_radio_rx()?;      // 8 kHz, DTX-off
-    let mut enc_wb = OpusEncoderWideband::new()?;       // 16 kHz
+    // The same receive configuration as the Thetis path and VRX: no silence
+    // suppression, and redundancy only when the link is losing packets. These
+    // two used to differ from each other and from everything else - the
+    // narrowband one on the Audio model with fixed protection, the wideband one
+    // still on the voice defaults with silence suppression on, which is exactly
+    // the setting an operator heard as rough on the Thetis path. Four receive
+    // configurations meant a fault could sit in one of them unnoticed while
+    // the others were being fixed.
+    let mut enc_nb = OpusEncoder::new_rx_continuous()?;
+    let mut enc_wb = OpusEncoderWideband::new_rx_continuous()?;
+    let mut loss_protect = LossProtection::default();
     let mut res_nb = rubato::SincFixedIn::<f32>::new(
         NETWORK_SAMPLE_RATE as f64 / sample_rate as f64,
         1.0, hq_sinc_params(), frame_samples, 1,
@@ -522,11 +890,25 @@ pub async fn yaesu_audio_loop(
             _ = tick.tick() => {
                 // Subscribers + their WB-preference. RX-bandwidth follows the Thetis-toggle
                 // per client; TX always stays wideband (see network.rs).
-                let subs: Vec<(std::net::SocketAddr, bool)> = {
+                let (subs, worst_loss): (Vec<(std::net::SocketAddr, bool)>, u8) = {
                     let s = session.lock().await;
                     let addrs = if slot == 0 { s.yaesu_addrs() } else { s.yaesu2_addrs() };
-                    addrs.into_iter().map(|a| (a, s.client_thetis_wideband(a))).collect()
+                    let worst = addrs.iter().map(|&a| s.client_loss(a)).max().unwrap_or(0);
+                    (addrs.into_iter().map(|a| (a, s.client_thetis_wideband(a))).collect(), worst)
                 };
+                loss_protect.update(worst_loss);
+                if let Some((on, pct)) = loss_protect.take_change() {
+                    if enc_nb.set_loss_protection(on, pct).is_err()
+                        || enc_wb.set_loss_protection(on, pct).is_err()
+                    {
+                        warn!("Radio {} audio: an encoder refused the error-correction change - it keeps its previous setting", slot + 1);
+                    }
+                    if on {
+                        info!("Radio {} audio: packet loss {}% - error correction on at {}%", slot + 1, worst_loss, pct);
+                    } else {
+                        info!("Radio {} audio: link clean again - error correction off", slot + 1);
+                    }
+                }
                 if subs.is_empty() {
                     accumulator.clear();
                     had_clients = false;
@@ -534,13 +916,14 @@ pub async fn yaesu_audio_loop(
                 }
 
                 if !had_clients {
-                    match (OpusEncoder::new_radio_rx(), OpusEncoderWideband::new()) {
+                    match (OpusEncoder::new_rx_continuous(), OpusEncoderWideband::new_rx_continuous()) {
                         (Ok(n), Ok(w)) => {
                             enc_nb = n;
                             enc_wb = w;
                             sequence = 0;
                             accumulator.clear();
                             had_clients = true;
+                            loss_protect = LossProtection::default();
                             info!("Yaesu audio: client(s) enabled, encoders reset");
                         }
                         _ => {
@@ -707,6 +1090,9 @@ fn service_vrx_channel(
     mgr: &Arc<std::sync::Mutex<crate::vrx_manager::PerClientVrxManager>>,
     sink: &mut crate::vrx_bridge::ThetisVrxSink,
     timer: &mut crate::vrx_bridge::VrxFeedTimer,
+    // Reported loss per listener, in the same order as `audio_addrs`.
+    losses: &[u8],
+    protect: &mut std::collections::HashMap<std::net::SocketAddr, LossProtection>,
 ) {
     // No set allocation on the hot path: the subscriber list is tiny (one entry
     // per client), so a linear `contains` is cheaper than building a HashSet.
@@ -718,9 +1104,27 @@ fn service_vrx_channel(
             ch + 1, before - rts.len(), rts.len()
         );
     }
+    protect.retain(|a, _| audio_addrs.contains(a));
     // Mute during TX: keep the runtimes (state intact), skip DSP/Opus/UDP.
     if tx_active {
         return;
+    }
+    // Unlike the two shared streams, a VRX runtime belongs to one listener, so
+    // it can be protected on that listener's own link rather than on the worst
+    // in the room.
+    for (addr, loss) in audio_addrs.iter().zip(losses.iter()) {
+        let p = protect.entry(*addr).or_default();
+        p.update(*loss);
+        if let Some((on, pct)) = p.take_change() {
+            if let Some(rt) = rts.get_mut(addr) {
+                rt.runtime.set_loss_protection(on, pct);
+            }
+            if on {
+                log::info!("VRX{} for {}: packet loss {}% - error correction on at {}%", ch + 1, addr, loss, pct);
+            } else {
+                log::info!("VRX{} for {}: link clean again - error correction off", ch + 1, addr);
+            }
+        }
     }
     let mut total_feed = std::time::Duration::ZERO;
     for &addr in audio_addrs {
@@ -840,6 +1244,10 @@ pub async fn tci_iq_consumer(
     let _ = &vrx_dir;
     let mut vrx1_rts: std::collections::HashMap<std::net::SocketAddr, ClientRt> =
         std::collections::HashMap::new();
+    let mut vrx1_protect: std::collections::HashMap<std::net::SocketAddr, LossProtection> =
+        std::collections::HashMap::new();
+    let mut vrx2_protect: std::collections::HashMap<std::net::SocketAddr, LossProtection> =
+        std::collections::HashMap::new();
     let mut vrx2_rts: std::collections::HashMap<std::net::SocketAddr, ClientRt> =
         std::collections::HashMap::new();
     let mut vrx1_sink = crate::vrx_bridge::ThetisVrxSink::new(socket.clone());
@@ -909,9 +1317,11 @@ pub async fn tci_iq_consumer(
                         let spec = spectrum.lock().await;
                         (spec.vfo_freq_hz(), spec.ddc_center_hz())
                     };
-                    let (audio_addrs, auto_addrs, active) = {
+                    let (audio_addrs, auto_addrs, active, losses) = {
                         let sess = session.lock().await;
-                        (sess.vrx_audio_addrs(0), sess.vrx_autotune_addrs(0), sess.active_addrs())
+                        let a = sess.vrx_audio_addrs(0);
+                        let l: Vec<u8> = a.iter().map(|&x| sess.client_loss(x)).collect();
+                        (a, sess.vrx_autotune_addrs(0), sess.active_addrs(), l)
                     };
                     // Cleanup vangnet (§3a): drop per-client control-state for clients
                     // no longer active-authed - covers both explicit disconnect and
@@ -932,6 +1342,7 @@ pub async fn tci_iq_consumer(
                         0, frame_rate, &iq_pairs, vfo_hz, ddc_center_hz,
                         &audio_addrs, &auto_addrs, tx_active, ts,
                         &mut vrx1_rts, &vrx_mgr, &mut vrx1_sink, &mut vrx1_timer,
+                        &losses, &mut vrx1_protect,
                     );
                 }
                 let cur_fft = spectrum.lock().await.ddc_fft_size();
@@ -975,9 +1386,11 @@ pub async fn tci_iq_consumer(
                         let spec = rx2_spectrum.lock().await;
                         (spec.vfo_freq_hz(), spec.ddc_center_hz())
                     };
-                    let (audio_addrs, auto_addrs) = {
+                    let (audio_addrs, auto_addrs, losses) = {
                         let sess = session.lock().await;
-                        (sess.vrx_audio_addrs(1), sess.vrx_autotune_addrs(1))
+                        let a = sess.vrx_audio_addrs(1);
+                        let l: Vec<u8> = a.iter().map(|&x| sess.client_loss(x)).collect();
+                        (a, sess.vrx_autotune_addrs(1), l)
                     };
                     let tx_active = ptt.lock().await.is_tx_or_prefill();
                     let ts = server_start.elapsed().as_millis() as u32;
@@ -985,6 +1398,7 @@ pub async fn tci_iq_consumer(
                         1, frame_rate, &iq_pairs, vfo_hz, ddc_center_hz,
                         &audio_addrs, &auto_addrs, tx_active, ts,
                         &mut vrx2_rts, &vrx_mgr, &mut vrx2_sink, &mut vrx2_timer,
+                        &losses, &mut vrx2_protect,
                     );
                 }
                 let cur_fft = rx2_spectrum.lock().await.ddc_fft_size();
@@ -1005,5 +1419,102 @@ pub async fn tci_iq_consumer(
             }
             _ = shutdown.changed() => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LevelStats;
+
+    /// A clean tone and a distorted one at the same level have to come out
+    /// with different roughness, or the number is not worth logging.
+    #[test]
+    fn roughness_rises_with_added_high_frequency() {
+        let n = 4800;
+        let clean: Vec<f32> = (0..n)
+            .map(|i| (i as f32 * std::f32::consts::TAU * 700.0 / 48000.0).sin() * 0.5)
+            .collect();
+        // Same tone, hard-limited: same peak region, extra harmonics.
+        let squared: Vec<f32> = clean.iter().map(|&s| if s > 0.0 { 0.5 } else { -0.5 }).collect();
+
+        let mut a = LevelStats::default();
+        a.feed(&clean);
+        let mut b = LevelStats::default();
+        b.feed(&squared);
+
+        assert!(b.roughness() > a.roughness() * 2.0,
+            "clean {} vs squared {}", a.roughness(), b.roughness());
+        // And the number does not follow the volume knob: the same tone at a
+        // quarter of the level has to read the same.
+        let quiet: Vec<f32> = clean.iter().map(|&s| s * 0.25).collect();
+        let mut c = LevelStats::default();
+        c.feed(&quiet);
+        assert!((c.roughness() - a.roughness()).abs() < 1e-6);
+    }
+
+    /// Protection has to arrive on the first bad report and leave only after
+    /// the link has stayed clean for a while - the other way round would
+    /// switch on and off through every burst, which sounds worse than either
+    /// setting held steady.
+    #[test]
+    fn loss_protection_arrives_fast_and_leaves_slow() {
+        let mut p = super::LossProtection::default();
+
+        p.update(0);
+        assert_eq!(p.take_change(), None, "a clean link needs no change");
+
+        p.update(4);
+        let (on, pct) = p.take_change().expect("loss must switch protection on");
+        assert!(on);
+        assert!(pct >= 5, "asked for more than the average, got {pct}");
+        assert_eq!(p.take_change(), None, "a change is applied once");
+
+        // Still lossy: no churn while it stays in the same region.
+        for _ in 0..50 {
+            p.update(4);
+            assert_eq!(p.take_change(), None);
+        }
+
+        // One clean second is not proof; twenty is.
+        for _ in 0..50 {
+            p.update(0);
+            assert_eq!(p.take_change(), None, "let go too early");
+        }
+        for _ in 0..super::LossProtection::CLEAN_TICKS_TO_RELEASE {
+            p.update(0);
+        }
+        assert_eq!(p.take_change(), Some((false, 0)), "never let go");
+    }
+
+    /// A single lost packet in the middle of a quiet spell must not reset the
+    /// wait, but it must not be treated as clean either.
+    #[test]
+    fn loss_protection_holds_through_a_blip() {
+        let mut p = super::LossProtection::default();
+        p.update(6);
+        assert!(p.take_change().unwrap().0);
+
+        for _ in 0..(super::LossProtection::CLEAN_TICKS_TO_RELEASE - 1) {
+            p.update(0);
+        }
+        p.update(1); // not enough to protect against, not clean either
+        p.update(0);
+        assert_eq!(p.take_change(), None, "the blip should have restarted the wait");
+    }
+
+    #[test]
+    fn silence_is_not_infinitely_rough() {
+        let mut s = LevelStats::default();
+        s.feed(&[0.0; 960]);
+        assert_eq!(s.roughness(), 0.0);
+        assert_eq!(s.peak, 0.0);
+    }
+
+    #[test]
+    fn full_scale_samples_are_counted() {
+        let mut s = LevelStats::default();
+        s.feed(&[0.5, 1.0, -1.0, 0.2, 0.9989]);
+        assert_eq!(s.clipped, 2);
+        assert!((s.peak - 1.0).abs() < 1e-6);
     }
 }

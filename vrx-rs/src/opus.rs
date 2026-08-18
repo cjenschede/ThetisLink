@@ -40,7 +40,11 @@ impl VrxOpusEncoder {
     /// still keeps the stream alive).
     pub fn new_with_rate(output_rate_hz: u32) -> Result<Self> {
         let (sample_rate, bandwidth, bitrate, frame_samples) = match output_rate_hz {
-            16_000 => (SampleRate::Hz16000, Bandwidth::Wideband, 20_000, FRAME_SAMPLES_WB),
+            // 24 kbps, the same as every other wideband receive stream in
+            // ThetisLink. It sat at 20 for no reason anybody wrote down, and a
+            // receive path that is a little different from its neighbours for
+            // no stated reason is how a fault hides for a fortnight.
+            16_000 => (SampleRate::Hz16000, Bandwidth::Wideband, 24_000, FRAME_SAMPLES_WB),
             _ => (SampleRate::Hz8000, Bandwidth::Narrowband, 12_800, FRAME_SAMPLES_NB),
         };
         let mut encoder =
@@ -57,6 +61,19 @@ impl VrxOpusEncoder {
             encode_buf: vec![0u8; MAX_ENCODED_SIZE],
             frame_samples,
         })
+    }
+
+    /// Turn packet-loss protection on or off on a running encoder.
+    ///
+    /// Opus takes the redundancy out of the same bits it pays for sound with,
+    /// so this is worth having only on a link that is actually losing packets.
+    /// The server decides that from what its clients report and says so here;
+    /// nothing is reallocated and no audio is interrupted.
+    pub fn set_loss_protection(&mut self, on: bool, loss_pct: u8) -> Result<()> {
+        self.encoder.set_inband_fec(on).context("set FEC")?;
+        self.encoder
+            .set_packet_loss_perc(if on { loss_pct.min(100) } else { 0 })
+            .context("set packet loss")
     }
 
     pub fn frame_samples(&self) -> usize {

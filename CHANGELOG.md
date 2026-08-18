@@ -16,6 +16,419 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.9.0] — 2026-08-18 (A dropout sounds like the band again · surviving a network change · chat and problem reports on a relay)
+
+> **Who this release changes things for.** Read this bit and skip the rest if it
+> does not apply to you.
+>
+> - **Everyone.** A short interruption sounds like band noise again instead of
+>   silence, on every channel rather than only the first - concealment had been
+>   running on the wrong decoder, quietly, for as long as wideband audio has
+>   existed. And a phone that changes between WiFi and mobile data gets its audio
+>   back by itself, which it did not before.
+> - **Stations on a relay.** A chat room shared with the other users of it, and a
+>   button that reports a problem straight to the administrator with your log
+>   attached - cleaned, and shown to you before it goes. Both optional; neither
+>   is needed to operate.
+> - **Nobody has to do anything.** No settings change, no configuration is
+>   invalidated, and a station without a relay sees none of the new surface.
+>
+### Chat and problem reporting — an invitation, and what it is not
+
+Stations on a relay get two things that work independently of each other.
+
+**A room** shared with the people using the same relay. One room, no channels, no
+private messages, no files. Messages carry a time and you can answer one message
+in particular. Your own typo is yours to fix for fifteen minutes.
+
+**A report button** that sends a problem straight to the administrator with your
+log and settings attached — cleaned, and you see exactly what travels before it
+is sent. That works whether or not you join the conversation: reporting and
+chatting are separate choices.
+
+**What it is not.** It is not a service. The relay this runs on is PA3GHM's own
+server: he pays for it, he runs it, and it is there for as long as he enjoys
+running it. **He may decline a request and he may stop the service.** That is
+written here because it is fairer said in advance than afterwards.
+
+Want to join? Ask PA3GHM at **pa3ghm@gmail.com**, with your callsign and a short
+note about your setup. A no is a valid answer and needs no explanation.
+
+**Without a relay** you see none of this, and the rest of ThetisLink works exactly
+as before — audio, PTT, spectrum, the radio. The chat is deliberately the least
+important thing on the screen and must never hold anything else up. Running your
+own relay? The chat service is a separate container and its source is in this
+repository, so you can put it beside your own.
+
+**Before you agree to anything** you get a screen telling you what is kept, for
+how long, and who the administrator is. You choose the name you appear under —
+and worth knowing in advance: a callsign appears in a public register with your
+name and address, so pick something else if you would rather not share that.
+Without agreeing, the rest of ThetisLink works as usual; only the conversation is
+unavailable. You can withdraw at any time.
+
+> **Feature release.** The wire protocol gains **two packet types**
+> (`0x35` `ServerReportRequest`, `0x36` `ServerReportPart`) for fetching a connected
+> server's log from a client; everything else is unchanged and an older peer that
+> knows neither simply never asks and never answers. A new service runs beside the
+> relay in its own container — a chat update cannot stop the relay. Stock Thetis
+> v2.10.3.x remains sufficient.
+
+### Added
+- **A log the phone keeps for itself.** Android's system log is one ring buffer
+  shared with the whole device, so on a busy phone ThetisLink's own lines are
+  evicted within minutes — a fault reproduced this morning could not be read
+  back this afternoon, which is exactly the kind that only happens on mobile
+  data. The app now writes the same lines to a file of its own as well, in the
+  same shape and on the same clock as the desktop log, so the two can be laid
+  side by side in one report. It lives in the app's private storage, is capped
+  at 2 MB with one older copy, and goes when the app is uninstalled. It holds no
+  passwords, keys or access codes, and no longer the relay address either: that
+  is written as `<relay>` from the start, on the desktop too, so the one thing a
+  report must never carry is not sitting in plain text in a file. A report sends
+  the last stretch of it, cleaned as always, and you see it before it goes.
+- **The chat entrance is only offered where there is a chat behind it.** Most
+  stations never run a relay, and the chat lives on one. The Android tab used to
+  be there for everyone — a third of the tab row leading nowhere. It now appears
+  only for a station that goes through a relay, and the relay has to be switched
+  on rather than merely filled in, because the chat needs the ticket the relay
+  hands out on connecting. A relay that carries no chat is deliberately a
+  different case: the entrance stays, and the screen behind it says why it is
+  empty.
+- **The chat, on Android.** The phone gets the same chat as the desktop: the
+  consent screen, the conversation with times and replies, correcting your own
+  typo, leaving with or without your messages, and the unread count on the tab
+  so a message finds you rather than the other way round. It is one tab beside
+  *Radio* and *Devices*, and while it is open the spectrum pauses like it does
+  on the devices screen — the chat is the least important thing on that screen
+  and stays that way. Reporting a problem works without joining, and the
+  administrator's answer arrives in the same place. A report from the phone
+  carries a log like the desktop's does — see *A log the phone keeps for
+  itself* below.
+- **A typo in the chat is yours to fix, for fifteen minutes.** An *edit* button
+  on your own messages puts the text back in the input field; Send saves the
+  correction, and every reader's copy is brought up to date with a *(edited)*
+  marker on it. After fifteen minutes the conversation owns the text — others
+  have answered what it said — and the button simply disappears rather than
+  opening a field the service would refuse. Only your own messages, judged by
+  station rather than by name, and a message whose author left cannot be edited
+  by anyone.
+- **A missing radio now says why, when the server can tell.** Windows gives a
+  COM port to one program at a time, and other 991A/FTX-1 control software
+  left running in the background is the single most common reason a radio
+  "is not there" in ThetisLink. The server now recognises the two nameable
+  failures when it tries to open the port — *in use by another program* and
+  *does not exist* — shows them under the port selector in its own GUI, writes
+  them in the log, and sends them with the radio presence so the desktop client
+  shows the reason in the Devices tab instead of nothing. The presence packet
+  gains two additive bytes for this; older clients and servers are unaffected
+  in both directions.
+- **Chat, in the server GUI and the desktop client.** One room for the users of a
+  relay, behind a *Chat* button. Messages carry a time, and *reply* answers one
+  message in particular, shown above the answer as a quoted line — one level deep,
+  so a conversation stays a list you read from top to bottom. The chat hangs off
+  the relay connection; without a relay there is nothing to see, and a chat that is
+  down leaves audio, PTT, spectrum and the radio entirely alone.
+- **The server is a station, not an accessory.** It gets the same window as the
+  client rather than a smaller one: it runs beside Thetis and drives the radio
+  whether or not anybody has a client open. Both draw the same component, so the
+  two cannot drift apart, and the consent text exists once.
+- **Report a problem.** Your description is the report — what you were doing, what
+  you expected, what happened instead — and the log plus settings are an attachment
+  with a tickbox. It is on by default, and nothing is read from your disk while it
+  is off. You see exactly what will be sent before it goes.
+- **Reporting works without joining the chat.** Joining means agreeing to a name
+  others see; a report is a private line to the administrator. Somebody who wants no
+  part of the conversation can still report a fault, and the answer still reaches
+  them.
+- **A report can carry the connected server's log as well.** A second tickbox, shown
+  only when there is a server to ask. The server cleans its own files before a byte
+  leaves and sends them in numbered parts, so an incomplete transfer says
+  "163 of 171 parts" instead of attaching a shorter log that looks whole.
+- **An answer comes back.** The administrator's reply appears at the top of the chat
+  window, whether or not you joined the conversation. One way and short; for
+  anything needing a conversation there is the e-mail address on the consent screen.
+- **A postbox page for the administrator**, served by the chat container at
+  `/chat/admin`: the list, one report at a time, an answer back, a download under a
+  name you choose, and remove-when-collected. Same password as the relay
+  administration, and arriving from that page needs no second login.
+
+### Changed
+- **The spectrum pan range now follows the span instead of a fixed factor.**
+  One rule for RX1, RX2 and both VRX windows, with the tighter of two limits
+  winning: never more than the window you are looking at (half a screen either
+  way, so more zoom means less pan and the slider means the same thing at every
+  zoom), and never past the edge of the spectrum there is (so below about 2x the
+  pan cannot reach a whole window — there is nothing beyond the edge to pan to,
+  and at 1x there is no pan at all). It replaces a flat five-percent factor
+  unrelated to either span or zoom: at 8x it offered a fifth of what fits, at
+  32x more than the window was wide.
+- **The relay dashboard no longer calls a connected device "last seen two days
+  ago".** "Last seen" freezes at session start, so a server that stays
+  connected for days read as long gone while the connection counter said
+  otherwise. A device with a live session now shows a green *connected* badge
+  with "since ..." under it; the frozen time remains for devices that are
+  actually gone.
+- **Settings in a report are chosen by family rather than one by one.** 158 of 165
+  client settings and 121 of 124 server settings now travel; the ones left behind
+  are the password, the relay token and the relay URLs. An absolute veto on any name
+  containing `password`, `secret`, `token`, `key`, `url`, `instance`, `credential`
+  or `auth` is checked first and wins — every sensitive key matches a safe family on
+  its prefix, so without it the families would have shipped the lot.
+- **Addresses inside settings are scrubbed rather than withheld.** `tci=<ip>:40001`
+  still says the link is configured and on which port, which is half of what
+  explains a server problem.
+- **The consent screen names the administrator** — who they are and where to reach
+  them for access or removal — and asks for the age confirmation as a tickbox.
+  Consent text version 2.
+
+### Fixed
+- **The phone's consent screen now warns about a callsign, as the desktop
+  always did.** It asks for "callsign or nickname" and said nothing about a
+  callsign appearing in a public register with name and address - so the one
+  place that decision is made was the one place the warning was missing. The
+  model behind the chat is shared between desktop and phone; the texts are two
+  copies, and this is what that costs. A test now fails when a consent line
+  exists on one platform and not the other.
+
+  **Upgrading from 2.8.0:** a client older than this records its agreement
+  against whatever version the service names, because it echoes that number
+  back rather than sending its own. An agreement logged as version 3 by an
+  older client was therefore given to the version 3 text without the removal
+  clause. Anyone who agreed on 2.8.0 and wants to see the current text can
+  leave the chat and rejoin.
+- **A dropout sounds like the band again, on every channel.** Concealment — the
+  noise that stands in for audio while a link hiccups — always ran through the
+  narrowband decoder, so with wideband audio switched on it ran on a decoder
+  that had never heard anything and produced silence. Error correction had the
+  same fault, which is why it came and went: the server only switches error
+  correction on when packets are being lost, and while it ran it fed that
+  decoder enough history to conceal with. Each stream now decodes, corrects and
+  conceals in its own format, and both radios, both VRX and RX2 conceal at all,
+  which they never did. Opus itself is inaudible after about a quarter of a
+  second, measured, so a longer gap is carried by generated noise at the
+  stream's own noise floor, three decibels under it. Recordings made during a
+  dropout are no longer shorter than what was heard; the level meters
+  deliberately still ignore concealed audio, because that bar answers "is
+  anything still arriving".
+- **Audio survives a phone changing network.** Switching between WiFi and mobile
+  data left the control channel working and the audio gone until the app was
+  killed. Two faults, one on each side. In the app, a second relay monitor could
+  start while the first was still running; both carry the same install id, the
+  relay gives a returning client its own slot back and closes the older
+  connection, and the two then evicted each other every five seconds for as long
+  as the app ran. In the relay, the connection that dies after a network change
+  revoked the audio capability by client id — and that id had just been handed
+  to the connection replacing it, so the live client lost the key it had been
+  issued twelve seconds earlier. Capabilities now belong to a connection, and a
+  connection serial is never reused.
+- **Receive audio no longer turns rough after the first transmission.** With the
+  wideband option on, RX audio was clean from a fresh server and slightly rough
+  from the first PTT onwards, until the server was restarted — a phone, which
+  listens to the narrowband stream, never heard it, and switching the option off
+  made it clean at once. The wideband resampler and encoder carry state across
+  the pause a transmission makes and were never told the stream had stopped;
+  they are now rebuilt when it resumes, which is what a server restart did
+  minus the restart.
+- **Transmitting no longer buys permanent RX audio latency.** Thetis pauses its
+  receive audio while transmitting and hands over what it held in one burst
+  afterwards. The mixer takes one frame per 20 ms tick and never catches up, so
+  that burst stayed in the buffer for the rest of the session — measured at a
+  station as one frame before transmitting, two after the first, five after the
+  next, and never coming down. Each transmission cost twenty to eighty
+  milliseconds that nothing gave back. After a pause the backlog is now dropped
+  rather than carried, and the log says how much was dropped.
+- **The VFO and filter markers now follow the pan.** They were placed at "the
+  centre of the view minus the pan offset", which is the VFO only when the
+  client knows the full span — and it only learns that once the full-band row
+  has been switched on. Until then the offset was multiplied by zero, so the
+  markers sat in the middle of the screen while the spectrum panned underneath
+  them. That is also why switching the full-band row on once made the pan
+  behave for the rest of the session. The markers are now the VFO itself,
+  smoothed on the same clock as the view so the two still travel together while
+  tuning.
+- **The FT-991A power button works at once instead of a minute later.** A radio
+  on standby keeps its CAT port alive — that is how it can be switched on at
+  all — but answers nothing else. ThetisLink still ran its connect-time reads
+  against it: 117 memory channels, 20 tones and 153 menu items, all into
+  timeouts, well over a minute of them. A *power on* pressed during that minute
+  waited in the queue behind it, and the radio duly woke up when the futile
+  reading finished. Measured twice at a station: click at 22:57:40, radio on at
+  22:59:01. Nothing is read from a radio that reports itself off now; the reads
+  keep their turn and happen the moment it is on. Also stops the session
+  starting with unreadable values recorded as zeroes.
+- **A second report no longer carries the first one's server log.** The server's
+  log was fetched when the tickbox was ticked and never again, so reopening the
+  form with the box still on attached whatever had arrived last time — labelled
+  "received" and looking perfectly fresh. A report about a fault could thus
+  arrive with a server log from before the test, which is to say with no
+  evidence in it. Opening the form now asks the server again, and Send waits
+  for the answer as it already did.
+- **An Android report now carries ThetisLink's own log rather than Android's.**
+  The log was filtered to the app's process, which also returns everything the
+  framework says about it — window, input method and renderer chatter, in such
+  volume that the app's own lines were a rounding error. It is filtered to
+  ThetisLink's own tags now, with crashes kept.
+- **An open memory table no longer refuses to show what the server holds.** The
+  client held back every list the server pushed while that table was open, not
+  only while it had unsaved edits — so somebody watching the table, which is
+  usually why it is open, never saw an update at all. A restored FTX-1 tone sat
+  in the server's list for minutes while the client showed the old one. Unsaved
+  edits still win over an incoming push; nothing else does.
+- **A restored FTX-1 tone now also reaches the radio.** The kept tones came
+  back into the list correctly, but the set had already been given the tone the
+  list held a second earlier — read straight off the radio, which for this model
+  is the 100.0 Hz it falls back to. The list said 77.0 and the radio transmitted
+  100.0. The tone keeper now waits until the connect-time reads are in, and
+  applies the list again as soon as the kept tones have been merged.
+- **An FTX-1's memory tones now survive a restart.** That radio cannot store a
+  CTCSS tone in a memory channel over CAT, so ThetisLink holds it in the
+  server's list and applies it to the set when the channel is recalled — but
+  that list lived in memory only, so a server restart read the radio again,
+  found no tones, and the operator's work was gone. The tones are now kept in a
+  small file beside the server's configuration, per slot and stamped with the
+  radio model so a different radio in that slot cannot inherit them. The
+  FT-991A is untouched: it stores its own tones, and there the radio remains
+  the thing that knows.
+- **A report carries more of what a diagnosis needs.** The log tail went from
+  200 kB to 1 MB — the old size was set against a postbox limit that has since
+  gone up, and a fault that started an hour earlier had already scrolled out of
+  view. The server's own memory list for each radio travels with it too, which
+  is the one thing a report could not show and precisely what a missing tone
+  turns on.
+- **A radio that took a moment to answer was dropped for the whole session.**
+  The server GUI gave a radio five seconds to be found, while looking for one
+  on a silent port can take six — a radio that is simply switched off. When it
+  ran over, that slot was discarded and no client saw the radio again until a
+  restart, *and* the half-built radio kept a thread running: opening the port,
+  reading memories, writing convincing log lines about a radio nothing was
+  connected to. The wait is now twenty seconds (it guards against a hung
+  driver, not against a slow radio), an abandoned radio stops its threads, and
+  the log says plainly that the slot is gone until a restart.
+- **The problem-report form did not close after a successful send.** Nothing
+  visibly happened, so the obvious thing to do was press Send again — and
+  again. One reporter sent fifteen copies that way and then hit the day's
+  limit, at which point reporting the actual fault was impossible. The form now
+  closes on the service's confirmation and says the report was sent, as it did
+  before the shared-model refactor lost that step.
+- **The reporting limits are now stated before the work, not after it.** How
+  many reports a station may still send today travels with the chat state, so
+  the form says "none left today" when it opens instead of at the send button
+  after a description has been written and a log read. The refusal is also
+  shown *in* the form rather than only in the conversation behind it.
+- **Those limits went up where they were too tight**: 100 reports per station
+  per day (was 15 — one station has three front ends now), 4 MB per report (was
+  512 kB, and a report carrying both a client and a server log passes that), 8
+  MB at the request layer and at the TLS front (both were 1 MB), and a 200 MB
+  postbox backlog (was 20 MB). A body over the ceiling now gets a *413* saying
+  so and leaves a line in the service log; it used to be dropped without a word,
+  which reads exactly like a relay that is down.
+- **A radio that was off at server start could still end up in the wrong
+  dialect.** The probe that reads `ID;` when the port finally opens asked once;
+  the first read after opening a serial port routinely comes back empty, and
+  when it did, an FTX-1 was driven as an FT-991A for the whole session — no
+  memory channels, no menu values, V/M and Mem+/- dead. It now drains the port
+  and asks up to three times, exactly as the startup detection has always done.
+  Found through a problem report from the field, with the server log attached.
+- **A pasted table no longer reads as a wall of empty boxes in the desktop
+  chat.** The standard UI font covers little beyond latin-1, so line-drawing
+  characters came out as tofu on the desktop while a phone showed the table
+  fine. Someone else's message is not ours to write, so those characters are
+  now drawn as the ASCII they came from (`|`, `-`, `+`), along with the curly
+  quotes, dashes and ellipses a word processor leaves behind. Display only —
+  what was sent is unchanged, and every other front end still shows the
+  original.
+- **A problem report from Android can carry the log and settings after all.**
+  It said no log could travel, which was true of a file but not of the log
+  itself: an app may read its own system log without any permission, and the
+  settings sit in its own preferences. Both are now offered with a tickbox, on
+  by default, cleaned by the same redaction the desktop uses and shown in full
+  before sending — the preview is the safeguard, on a phone as much as anywhere.
+- **The chat input grows with the message.** A longer message no longer scrolls
+  out of its own single line; the field grows to about five rows (then scrolls),
+  so everything can be read back before it goes. Enter still sends — a
+  deliberate line break is Shift+Enter.
+- **The Send button of the problem-report form no longer needs a window
+  resize.** Inside a small chat window the form could spawn so small that the
+  buttons fell off the bottom. Everything above the buttons now scrolls, and the
+  button row stays in reach at any window size.
+- **Switching the FT-991A on from standby now follows the ritual the radio
+  demands.** Yaesu's CAT manual is explicit: power-ON needs dummy data first,
+  then a pause of one to two seconds, then the command. ThetisLink sent the bare
+  command, which a sleeping set ignores — the power button only worked after the
+  radio had been switched on by hand once. Found by the second real user. The
+  FTX-1 has no CAT power-on at all (its PS command only knows OFF); ThetisLink
+  now says so in the log instead of sending a command the set cannot obey.
+- **The relay address examples now show `wss://`.** Both the client and the
+  server GUI hinted `ws://relay.example.com:18080` in the empty relay field —
+  a form that cannot reach a relay behind TLS. The first user who copied it
+  could not connect. It reads `wss://relay.example.com` now.
+- **The PTT watchdog no longer takes the radio's word for whether we are asking
+  to transmit.** Its timer was disarmed whenever the radio's `TX;` answer read
+  "not transmitting" — and the FT-991A's `TX;` answer is known-unreliable, so a
+  single spurious answer mid-transmission could silently switch off the
+  time-out protection for the rest of that transmission, on exactly the radio
+  that has no other net. Whether ThetisLink is asking for TX is something it
+  knows without asking the radio, and that is what arms the timer now.
+- **A radio that was off at server start is no longer driven with the wrong
+  dialect all session.** A silent port is assumed to be an FT-991A; when the
+  radio is switched on later and answers `ID;` with a model this build knows,
+  the serial thread now adopts that radio's own dialect on the spot — memory
+  channels, menu reads and the client's radio panel follow. Previously the
+  mismatch was a single log warning and the assumption stuck until a server
+  restart.
+- **The unread counter on the Chat button can now actually appear.** New
+  messages were only fetched while the chat window was open, and an open window
+  clears the counter — so the number the design promised could never be seen.
+  A closed window now checks once per half minute (members only); open windows
+  keep the 3-second rhythm.
+- **Building a server report no longer holds up audio and PTT.** Reading and
+  cleaning the 200 kB log, and pacing its two hundred datagrams onto the wire,
+  ran inside the same loop that carries transmit audio — a report requested
+  during somebody's transmission stalled it audibly. The work now runs on its
+  own thread; at most one at a time, as before.
+- **Sending a report can no longer silently drop the server's log.** With the
+  server-log box ticked and the transfer still underway, the Send button now
+  waits (saying why) instead of sending a report without the half that was asked
+  for. A transfer that failed does not block sending — the report itself then
+  records that the log was requested and did not arrive.
+- **"0 of 0 parts" now says what it means.** Asking the server for its log twice
+  within 20 seconds is refused server-side by design; the client used to show a
+  transfer failure with zero everywhere. It now says the server answers once per
+  20 seconds and to try again shortly.
+- **The reply-quote marker is now the ">" of quoted e-mail** instead of an arrow
+  glyph the standard UI font cannot draw on every machine.
+- **Agreeing to the consent text always looped back to "read it again".** The window
+  showed consent text version 2, but the agreement was sent carrying version 1 — the
+  number lived in a place the sending thread could not see — so the service refused
+  it, the window asked the reader to start over, and no amount of reading ever got
+  anyone into the chat. The version now travels with the agreement itself. Found by
+  the first person who tried to join.
+- **An unrecognised radio ID was called an FTX-1.** A station with a single FT-991A
+  was driven all session as an FTX-1 — no memory channels, no menu values, the IF
+  frame parsed as gibberish — because the first `ID;` after opening a port came back
+  garbled and the guess stuck. The port is drained after opening, the ID is asked up
+  to three times, and an unrecognised code is no longer a model.
+- **The two radio slots disagreed about what to assume** when no radio answered:
+  slot 0 said FT-991A and slot 1 said FTX-1, so the same fault behaved differently
+  depending on which slot a radio sat in. Both assume the 991A dialect now, which is
+  what the documentation always said.
+- **`sdr-remote-theme` and `sdr-remote-layout` were never published.** Both have been
+  listed as workspace members since they were created and neither was ever copied to
+  the public repository, so a public clone could not resolve the workspace and could
+  not build at all. The coherence check now reads the member list from the staged
+  manifest instead of a hand-kept list.
+- **The Android app is no longer readable over a USB cable.** Every release so far
+  was built in a mode that let anyone with a cable read the app's private storage -
+  which holds the relay token, the saved password and the log file. That mode is
+  off. The signing key is unchanged, so this installs over an existing app as an
+  ordinary update and nothing needs reinstalling. One consequence: reading the log
+  with `adb run-as` no longer works. The log still travels with a problem report,
+  which was always the route that mattered for a phone that is not plugged into
+  anything.
+
+---
+
 ## [2.8.0] — 2026-08-08 (Radio data ready the moment you connect · UI scale · arrangement memories · Android audio fixed)
 
 > **Feature release.** The wire protocol stays **VERSION = 3** and there are **no new

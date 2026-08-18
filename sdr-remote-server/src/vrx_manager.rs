@@ -36,6 +36,10 @@ pub struct ChState {
     pub rate_mode: u8,
     /// High-res spectrum span in kHz; 0 = spectrum off.
     pub spectrum_span_khz: u16,
+    /// Where this client is looking, relative to its listening frequency, in
+    /// Hz. The window is cut here instead of always on the frequency itself -
+    /// otherwise a client can only pan inside the one screen it was sent.
+    pub spectrum_pan_hz: i32,
 }
 
 impl Default for ChState {
@@ -44,6 +48,7 @@ impl Default for ChState {
             control: Arc::new(Mutex::new(VrxControlState::default())),
             rate_mode: RATE_AUTO,
             spectrum_span_khz: 0,
+            spectrum_pan_hz: 0,
         }
     }
 }
@@ -91,6 +96,17 @@ impl PerClientVrxManager {
 
     pub fn set_spectrum_span(&mut self, addr: SocketAddr, ch: u8, span_khz: u16) {
         self.entry(addr)[idx(ch)].spectrum_span_khz = span_khz;
+    }
+
+    pub fn set_spectrum_pan(&mut self, addr: SocketAddr, ch: u8, pan_hz: i32) {
+        self.entry(addr)[idx(ch)].spectrum_pan_hz = pan_hz;
+    }
+
+    pub fn spectrum_pan(&self, addr: &SocketAddr, ch: u8) -> i32 {
+        self.clients
+            .get(addr)
+            .map(|c| c[idx(ch)].spectrum_pan_hz)
+            .unwrap_or(0)
     }
 
     pub fn spectrum_span(&self, addr: &SocketAddr, ch: u8) -> u16 {

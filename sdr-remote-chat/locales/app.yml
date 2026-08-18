@@ -1,0 +1,358 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# ThetisLink chat translations (rust-i18n v2).
+#
+# One copy, used by the desktop client and the server GUI alike. Two copies of
+# a consent text is one copy nobody updates - and a consent text that says
+# something different in two places is worse than none.
+_version: 2
+
+chat_as_name:
+  en: "You appear as %{name}"
+  nl: "Je verschijnt als %{name}"
+  de: "Sie erscheinen als %{name}"
+  fr: "Vous apparaissez comme %{name}"
+chat_cancel:
+  en: "Cancel"
+  nl: "Annuleren"
+  de: "Abbrechen"
+  fr: "Annuler"
+chat_connecting:
+  en: "One moment..."
+  nl: "Even geduld..."
+  de: "Einen Moment..."
+  fr: "Un instant..."
+chat_consent_access:
+  en: "Want to know what is kept about you? Just ask. What ThetisLink already records about connections, apart from the chat, is in the manual."
+  nl: "Wil je weten wat er over je bewaard wordt? Vraag het. Wat ThetisLink zelf al over verbindingen bijhoudt - los van de chat - staat in de handleiding."
+  de: "Moechten Sie wissen, was ueber Sie gespeichert wird? Fragen Sie einfach. Was ThetisLink ohnehin ueber Verbindungen aufzeichnet, steht im Handbuch."
+  fr: "Vous voulez savoir ce qui est conserve a votre sujet ? Demandez-le. Ce que ThetisLink enregistre deja sur les connexions figure dans le manuel."
+chat_consent_agree:
+  en: "I agree - join the chat"
+  nl: "Ik ga akkoord - meedoen"
+  de: "Ich stimme zu - teilnehmen"
+  fr: "J'accepte - participer"
+chat_consent_callsign_warning:
+  en: "Note: a callsign appears in a public register with name and address. Choose your own name if you would rather not share that."
+  nl: "Let op: een roepletter staat in een openbaar register met naam en adres. Kies een eigen naam als je dat liever niet deelt."
+  de: "Hinweis: ein Rufzeichen steht in einem oeffentlichen Register mit Name und Adresse. Waehlen Sie einen eigenen Namen, wenn Sie das lieber nicht teilen."
+  fr: "Attention : un indicatif figure dans un registre public avec nom et adresse. Choisissez un nom personnel si vous preferez ne pas le partager."
+chat_consent_intro:
+  en: "In the chat you can share experiences and problems with other ThetisLink users."
+  nl: "In de chat kun je met andere ThetisLink-gebruikers ervaringen en problemen delen."
+  de: "Im Chat koennen Sie Erfahrungen und Probleme mit anderen ThetisLink-Nutzern teilen."
+  fr: "Dans la discussion, vous pouvez partager experiences et problemes avec d'autres utilisateurs de ThetisLink."
+chat_consent_name_hint:
+  en: "your callsign, or a name you choose"
+  nl: "je roepletter, of een naam die je zelf kiest"
+  de: "Ihr Rufzeichen oder ein selbst gewaehlter Name"
+  fr: "votre indicatif, ou un nom de votre choix"
+chat_consent_name_q:
+  en: "How do you want to appear to others?"
+  nl: "Hoe wil je zichtbaar zijn voor anderen?"
+  de: "Wie moechten Sie fuer andere sichtbar sein?"
+  fr: "Comment voulez-vous apparaitre aux autres ?"
+chat_consent_need_name:
+  en: "choose a name first"
+  nl: "kies eerst een naam"
+  de: "waehlen Sie zuerst einen Namen"
+  fr: "choisissez d'abord un nom"
+chat_consent_optional:
+  en: "Without agreeing, the rest of ThetisLink works as usual; only the chat is unavailable."
+  nl: "Zonder akkoord werkt de rest van ThetisLink gewoon; alleen de chat is dan niet beschikbaar."
+  de: "Ohne Zustimmung funktioniert der Rest von ThetisLink wie gewohnt; nur der Chat ist nicht verfuegbar."
+  fr: "Sans accord, le reste de ThetisLink fonctionne normalement ; seule la discussion est indisponible."
+chat_consent_stored:
+  en: "What is kept: the name you choose and your messages, with the time. Messages are removed after 90 days, and sooner if the storage fills up. The administrator can read all messages on the server. Files and photos cannot be shared here - use e-mail for those."
+  nl: "Wat er bewaard wordt: je gekozen naam en je berichten, met het tijdstip. Berichten worden na 90 dagen verwijderd, en eerder als de opslagruimte vol raakt. De beheerder kan alle berichten op de server lezen. Bestanden en foto's kun je hier niet delen; gebruik daarvoor e-mail."
+  de: "Was gespeichert wird: der gewaehlte Name und Ihre Nachrichten mit Zeitstempel. Nachrichten werden nach 90 Tagen geloescht, frueher wenn der Speicher voll ist. Der Administrator kann alle Nachrichten auf dem Server lesen. Dateien und Fotos koennen hier nicht geteilt werden - nutzen Sie dafuer E-Mail."
+  fr: "Ce qui est conserve : le nom choisi et vos messages, avec l'heure. Les messages sont supprimes apres 90 jours, et plus tot si l'espace de stockage est plein. L'administrateur peut lire tous les messages sur le serveur. Les fichiers et photos ne peuvent pas etre partages ici - utilisez le courriel."
+chat_consent_title:
+  en: "Joining the ThetisLink chat"
+  nl: "Meedoen aan de ThetisLink-chat"
+  de: "Am ThetisLink-Chat teilnehmen"
+  fr: "Rejoindre la discussion ThetisLink"
+chat_consent_withdraw:
+  en: "You can withdraw at any time. 'Leave the chat' removes your name; your messages stay without it, so other people's conversations remain readable. If you wrote your callsign into the text of a message it is still there - 'leave and delete my messages' removes those too."
+  nl: "Je kunt dit altijd intrekken. 'Verlaat de chat' verwijdert je naam; je berichten blijven staan zonder die naam, zodat gesprekken van anderen leesbaar blijven. Schreef je je roepletter in de tekst van een bericht, dan staat die er nog - 'verlaat de chat en verwijder mijn berichten' haalt ook die weg."
+  de: "Sie koennen dies jederzeit widerrufen. 'Chat verlassen' entfernt Ihren Namen; Ihre Nachrichten bleiben ohne diesen stehen, damit Gespraeche anderer lesbar bleiben. Steht Ihr Rufzeichen im Text einer Nachricht, bleibt es dort - 'verlassen und meine Nachrichten loeschen' entfernt auch diese."
+  fr: "Vous pouvez retirer votre accord a tout moment. 'Quitter la discussion' supprime votre nom ; vos messages restent sans celui-ci, afin que les conversations des autres restent lisibles. Si vous avez ecrit votre indicatif dans le texte d'un message, il y figure encore - 'quitter et supprimer mes messages' les enleve aussi."
+chat_banned:
+  en: "You have been removed from the chat by the administrator."
+  nl: "Je bent door de beheerder uit de chat verwijderd."
+  de: "Sie wurden vom Administrator aus dem Chat entfernt."
+  fr: "L'administrateur vous a retire de la discussion."
+chat_consent_ban:
+  en: "The administrator can remove a station from the chat if it becomes unworkable. You are told when that happens, what you wrote stays where it is, and it also closes the problem-report channel. A removal is not undone by leaving the chat."
+  nl: "De beheerder kan een station uit de chat verwijderen als het onwerkbaar wordt. Je krijgt dat te horen, wat je geschreven hebt blijft staan, en het sluit ook het melden van problemen af. Verlaat je daarna de chat, dan vervalt de verwijdering niet."
+  de: "Der Administrator kann eine Station aus dem Chat entfernen, wenn es unhaltbar wird. Sie werden darueber informiert, Ihre Beitraege bleiben stehen, und auch die Problemmeldung wird geschlossen. Das Verlassen des Chats hebt eine Entfernung nicht auf."
+  fr: "L'administrateur peut retirer une station de la discussion si la situation devient intenable. Vous en etes informe, ce que vous avez ecrit reste en place, et cela ferme aussi le signalement de problemes. Quitter la discussion n'annule pas un retrait."
+chat_diag_attach:
+  en: "Also send my log and settings"
+  nl: "Stuur ook mijn log en instellingen mee"
+  de: "Log und Einstellungen mitsenden"
+  fr: "Joindre aussi mon journal et mes reglages"
+chat_diag_attach_failed:
+  en: "The log could not be prepared, so nothing is attached. Your description can still be sent."
+  nl: "De log kon niet worden klaargemaakt, dus er gaat niets mee. Je beschrijving kun je nog wel versturen."
+  de: "Das Log konnte nicht vorbereitet werden, es wird nichts angehaengt. Ihre Beschreibung koennen Sie trotzdem senden."
+  fr: "Le journal n'a pas pu etre prepare, rien n'est joint. Votre description peut tout de meme etre envoyee."
+chat_diag_attach_hint:
+  en: "Please do if you can: most problems cannot be worked out from a description alone. You see exactly what goes before anything is sent."
+  nl: "Doe dat als het kan: de meeste problemen zijn niet op te lossen met alleen een beschrijving. Je ziet precies wat er weggaat voordat er iets verstuurd wordt."
+  de: "Bitte tun Sie das, wenn moeglich: die meisten Probleme lassen sich nicht allein aus einer Beschreibung klaeren. Sie sehen genau, was gesendet wird, bevor etwas rausgeht."
+  fr: "Faites-le si possible : la plupart des problemes ne se resolvent pas avec une simple description. Vous voyez exactement ce qui part avant tout envoi."
+chat_diag_attach_shown:
+  en: "This is what goes with it. Read it through - this is your last chance to hold something back. Your password, keys and access codes are not in it, and addresses and names have been removed from the log."
+  nl: "Dit gaat er mee. Lees het even door - dit is je laatste kans om iets tegen te houden. Je wachtwoord, sleutels en toegangscodes zitten er niet in, en adressen en namen zijn uit de log gehaald."
+  de: "Das geht mit. Lesen Sie es durch - das ist Ihre letzte Gelegenheit, etwas zurueckzuhalten. Passwort, Schluessel und Zugangscodes sind nicht dabei, Adressen und Namen wurden aus dem Log entfernt."
+  fr: "Voici ce qui part avec. Lisez-le : c'est votre derniere occasion de retenir quelque chose. Votre mot de passe, vos cles et vos codes d'acces n'y figurent pas, et les adresses et les noms ont ete retires du journal."
+chat_diag_button:
+  en: "Report a problem"
+  nl: "Probleem melden"
+  de: "Problem melden"
+  fr: "Signaler un probleme"
+chat_diag_explain:
+  en: "Describe what is wrong. Everything you write here is sent as you typed it."
+  nl: "Beschrijf wat er mis gaat. Alles wat je hier schrijft gaat mee zoals je het typt."
+  de: "Beschreiben Sie das Problem. Alles, was Sie hier schreiben, wird so gesendet, wie Sie es tippen."
+  fr: "Decrivez le probleme. Tout ce que vous ecrivez ici est envoye tel quel."
+chat_diag_hover:
+  en: "Describe a problem and send it. Nothing leaves your machine until you have read it."
+  nl: "Beschrijf een probleem en stuur het op. Er gaat niets weg voordat je het gelezen hebt."
+  de: "Beschreiben Sie ein Problem und senden Sie es. Nichts verlaesst Ihren Rechner, bevor Sie es gelesen haben."
+  fr: "Decrivez un probleme et envoyez-le. Rien ne quitte votre machine avant que vous ne l'ayez lu."
+chat_diag_note_hint:
+  en: "What were you doing, what did you expect, what happened instead?"
+  nl: "Wat was je aan het doen, wat verwachtte je, en wat gebeurde er in plaats daarvan?"
+  de: "Was haben Sie getan, was haben Sie erwartet, und was geschah stattdessen?"
+  fr: "Que faisiez-vous, qu'attendiez-vous, et que s'est-il passe a la place ?"
+chat_diag_note_label:
+  en: "What is wrong? Describe it in your own words."
+  nl: "Wat gaat er mis? Beschrijf het in je eigen woorden."
+  de: "Was ist das Problem? Beschreiben Sie es in eigenen Worten."
+  fr: "Quel est le probleme ? Decrivez-le avec vos propres mots."
+chat_diag_note_needed:
+  en: "Write down what is wrong first - that is the part nobody else can supply."
+  nl: "Schrijf eerst op wat er mis gaat - dat is het deel dat niemand anders kan invullen."
+  de: "Schreiben Sie zuerst auf, was nicht stimmt - das kann niemand sonst liefern."
+  fr: "Ecrivez d'abord ce qui ne va pas : c'est la partie que personne d'autre ne peut fournir."
+chat_diag_send:
+  en: "Send"
+  nl: "Versturen"
+  de: "Senden"
+  fr: "Envoyer"
+chat_diag_sent:
+  en: "sent"
+  nl: "verstuurd"
+  de: "gesendet"
+  fr: "envoye"
+chat_diag_title:
+  en: "Report a problem"
+  nl: "Probleem melden"
+  de: "Problem melden"
+  fr: "Signaler un probleme"
+chat_empty:
+  en: "Nothing here yet. Say something."
+  nl: "Nog niets. Zeg iets."
+  de: "Noch nichts. Sagen Sie etwas."
+  fr: "Rien pour l'instant. Dites quelque chose."
+chat_input_hint:
+  en: "your message"
+  nl: "je bericht"
+  de: "Ihre Nachricht"
+  fr: "votre message"
+chat_leave:
+  en: "Remove me"
+  nl: "Uitschrijven"
+  de: "Austragen"
+  fr: "Me retirer"
+chat_leave_keep:
+  en: "Remove me, keep my messages"
+  nl: "Uitschrijven, berichten laten staan"
+  de: "Austragen, Nachrichten behalten"
+  fr: "Me retirer, garder mes messages"
+chat_leave_title:
+  en: "Remove yourself from the chat?"
+  nl: "Jezelf uitschrijven uit de chat?"
+  de: "Sich aus dem Chat austragen?"
+  fr: "Vous retirer de la discussion ?"
+chat_leave_explain:
+  en: "This takes your name off everything you wrote. You do not need it to finish for the day - just close this window, you stay in the chat. Your messages can stay without your name, so other people's conversations remain readable, or go with you if your call sign is in the text itself."
+  nl: "Dit haalt je naam van alles wat je schreef. Je hebt het niet nodig om te stoppen voor vandaag - sluit gewoon dit venster, je blijft lid. Je berichten kunnen zonder je naam blijven staan zodat gesprekken van anderen leesbaar blijven, of ze gaan met je mee als je roepletters in de tekst zelf staan."
+  de: "Das nimmt Ihren Namen von allem, was Sie geschrieben haben. Zum Feierabend brauchen Sie es nicht - schliessen Sie einfach dieses Fenster, Sie bleiben im Chat. Ihre Nachrichten koennen ohne Ihren Namen bleiben, damit Gespraeche anderer lesbar bleiben, oder mit Ihnen gehen, wenn Ihr Rufzeichen im Text steht."
+  fr: "Cela retire votre nom de tout ce que vous avez ecrit. Inutile pour terminer votre session : fermez simplement cette fenetre, vous restez dans la discussion. Vos messages peuvent rester sans votre nom afin que les conversations des autres restent lisibles, ou partir avec vous si votre indicatif figure dans le texte."
+chat_leave_delete:
+  en: "Remove me and delete my messages"
+  nl: "Uitschrijven en mijn berichten verwijderen"
+  de: "Austragen und meine Nachrichten loeschen"
+  fr: "Me retirer et supprimer mes messages"
+chat_leave_delete_hover:
+  en: "Also removes everything you wrote - including a callsign inside the text of a message. This cannot be undone."
+  nl: "Verwijdert ook alles wat je schreef - inclusief een roepletter in de tekst van een bericht. Dit kan niet ongedaan gemaakt worden."
+  de: "Entfernt auch alles, was Sie geschrieben haben - einschliesslich eines Rufzeichens im Text. Das laesst sich nicht rueckgaengig machen."
+  fr: "Supprime aussi tout ce que vous avez ecrit - y compris un indicatif dans le texte. Irreversible."
+chat_leave_hover:
+  en: "Takes your name off everything you wrote and returns you to the consent screen. You do not need this to finish for the day - just close the window."
+  nl: "Haalt je naam van alles wat je schreef en zet je terug op het toestemmingsscherm. Je hebt dit niet nodig om te stoppen voor vandaag - sluit gewoon het venster."
+  de: "Nimmt Ihren Namen von allem, was Sie geschrieben haben, und bringt Sie zurueck zum Einwilligungsbildschirm. Zum Feierabend brauchen Sie das nicht - schliessen Sie einfach das Fenster."
+  fr: "Retire votre nom de tout ce que vous avez ecrit et vous ramene a l'ecran de consentement. Inutile pour terminer votre session : fermez simplement la fenetre."
+chat_left_user:
+  en: "a user:"
+  nl: "een gebruiker:"
+  de: "ein Nutzer:"
+  fr: "un utilisateur :"
+chat_send:
+  en: "Send"
+  nl: "Sturen"
+  de: "Senden"
+  fr: "Envoyer"
+chat_diag_without_joining:
+  en: "You do not have to join to report a problem - that goes only to the administrator."
+  nl: "Je hoeft niet mee te doen om een probleem te melden - dat gaat alleen naar de beheerder."
+  de: "Sie muessen nicht teilnehmen, um ein Problem zu melden - das geht nur an den Administrator."
+  fr: "Vous n'avez pas besoin de participer pour signaler un probleme : cela ne va qu'a l'administrateur."
+chat_diag_what_happens:
+  en: "What happens to it: the administrator collects the report onto their own computer and removes it from the server as soon as the problem is settled. Once collected it cannot be withdrawn. Your password, keys and access codes are not in it - only named settings are sent - and addresses have been removed from the log."
+  nl: "Wat ermee gebeurt: de beheerder haalt de melding naar zijn eigen computer en verwijdert hem van de server zodra het probleem opgelost is. Eenmaal opgehaald kun je hem niet meer intrekken. Je wachtwoord, sleutels en toegangscodes zitten er niet in - alleen instellingen die op een vaste lijst staan gaan mee - en adressen zijn uit de log gehaald."
+  de: "Was damit geschieht: der Administrator holt den Bericht auf seinen eigenen Rechner und entfernt ihn vom Server, sobald das Problem geklaert ist. Einmal abgeholt, laesst er sich nicht mehr zurueckziehen. Passwort, Schluessel und Zugangscodes sind nicht dabei - nur benannte Einstellungen werden gesendet - und Adressen wurden aus dem Log entfernt."
+  fr: "Ce qu'il en advient : l'administrateur recupere le rapport sur son propre ordinateur et le retire du serveur des que le probleme est regle. Une fois recupere, il ne peut plus etre retire. Votre mot de passe, vos cles et vos codes d'acces n'y figurent pas - seuls les reglages nommes sont envoyes - et les adresses ont ete retirees du journal."
+chat_diag_read_when:
+  en: "Log and settings read %{age}."
+  nl: "Log en instellingen %{age} ingelezen."
+  de: "Log und Einstellungen %{age} gelesen."
+  fr: "Journal et reglages lus %{age}."
+chat_diag_reread:
+  en: "read again"
+  nl: "opnieuw inlezen"
+  de: "erneut lesen"
+  fr: "relire"
+chat_diag_reread_hover:
+  en: "Read the log again, so what goes is from after the fault you just reproduced."
+  nl: "Lees de log opnieuw, zodat er meegaat wat na het zojuist herhaalde probleem is gebeurd."
+  de: "Liest das Log erneut, damit mitgeht, was nach dem eben nachgestellten Fehler passierte."
+  fr: "Relit le journal, pour que ce qui part vienne d'apres le probleme que vous venez de reproduire."
+chat_diag_age_now:
+  en: "just now"
+  nl: "zojuist"
+  de: "gerade eben"
+  fr: "a l'instant"
+chat_diag_age_min:
+  en: "%{n} min ago"
+  nl: "%{n} min geleden"
+  de: "vor %{n} Min."
+  fr: "il y a %{n} min"
+chat_diag_age_hour:
+  en: "%{n} h ago"
+  nl: "%{n} uur geleden"
+  de: "vor %{n} Std."
+  fr: "il y a %{n} h"
+chat_reply:
+  en: "reply"
+  nl: "antwoord"
+  de: "antworten"
+  fr: "repondre"
+chat_reply_hover:
+  en: "Answer this message, so it is clear what you are replying to."
+  nl: "Antwoord op dit bericht, zodat duidelijk is waar het over gaat."
+  de: "Auf diese Nachricht antworten, damit klar ist, worauf sich das bezieht."
+  fr: "Repondre a ce message, pour qu'on voie de quoi il s'agit."
+chat_edit:
+  en: "edit"
+  nl: "wijzig"
+  de: "aendern"
+  fr: "modifier"
+chat_edit_hover:
+  en: "Correct this message. It stays yours to fix for 15 minutes; after that the conversation owns it."
+  nl: "Verbeter dit bericht. Het is 15 minuten lang van jou om te herstellen; daarna is het van het gesprek."
+  de: "Diese Nachricht korrigieren. 15 Minuten lang aenderbar; danach gehoert sie dem Gespraech."
+  fr: "Corriger ce message. Modifiable pendant 15 minutes ; ensuite il appartient a la conversation."
+chat_editing:
+  en: "editing your message - Send saves the correction"
+  nl: "je wijzigt je bericht - Verstuur bewaart de verbetering"
+  de: "Nachricht wird geaendert - Senden speichert die Korrektur"
+  fr: "modification du message - Envoyer enregistre la correction"
+chat_edit_cancel:
+  en: "Stop editing; the message stays as it was."
+  nl: "Stop met wijzigen; het bericht blijft zoals het was."
+  de: "Aenderung abbrechen; die Nachricht bleibt wie sie war."
+  fr: "Annuler la modification ; le message reste tel quel."
+chat_edited:
+  en: "(edited)"
+  nl: "(gewijzigd)"
+  de: "(geaendert)"
+  fr: "(modifie)"
+chat_reply_cancel:
+  en: "Do not reply to that after all"
+  nl: "Toch niet hierop antwoorden"
+  de: "Doch nicht darauf antworten"
+  fr: "Finalement ne pas y repondre"
+chat_consent_admin:
+  en: "The administrator is Chiron, PA3GHM, reachable at pa3ghm@gmail.com. Ask there for what is kept about you, or to have it removed."
+  nl: "De beheerder is Chiron, PA3GHM, bereikbaar op pa3ghm@gmail.com. Vraag daar wat er over je bewaard wordt, of om het te laten verwijderen."
+  de: "Der Administrator ist Chiron, PA3GHM, erreichbar unter pa3ghm@gmail.com. Fragen Sie dort, was ueber Sie gespeichert ist, oder lassen Sie es entfernen."
+  fr: "L'administrateur est Chiron, PA3GHM, joignable a pa3ghm@gmail.com. Demandez-y ce qui est conserve a votre sujet, ou faites-le supprimer."
+chat_answer_from_admin:
+  en: "Answer to your problem report:"
+  nl: "Antwoord op je probleemmelding:"
+  de: "Antwort auf Ihre Problemmeldung:"
+  fr: "Reponse a votre signalement :"
+chat_answer_dismiss:
+  en: "Put this answer away"
+  nl: "Dit antwoord wegklikken"
+  de: "Diese Antwort ausblenden"
+  fr: "Masquer cette reponse"
+chat_diag_attach_server:
+  en: "Also send the connected server's log and settings"
+  nl: "Stuur ook de log en instellingen van de verbonden server mee"
+  de: "Auch Log und Einstellungen des verbundenen Servers mitsenden"
+  fr: "Joindre aussi le journal et les reglages du serveur connecte"
+chat_diag_server_waiting:
+  en: "asking the server..."
+  nl: "de server wordt gevraagd..."
+  de: "der Server wird gefragt..."
+  fr: "interrogation du serveur..."
+chat_diag_none_left:
+  en: "This station has sent all the reports it may send today. They free up as the administrator collects them, or after a day."
+  nl: "Dit station heeft alle meldingen verstuurd die het vandaag mag sturen. Ze komen weer vrij zodra de beheerder ze ophaalt, of na een dag."
+  de: "Diese Station hat alle Meldungen gesendet, die sie heute senden darf. Sie werden wieder frei, sobald der Administrator sie abholt, oder nach einem Tag."
+  fr: "Cette station a envoye tous les signalements autorises pour aujourd'hui. Ils se liberent quand l'administrateur les recupere, ou apres un jour."
+chat_diag_left:
+  en: "%{n} report(s) left today."
+  nl: "Nog %{n} melding(en) vandaag."
+  de: "Noch %{n} Meldung(en) heute."
+  fr: "Encore %{n} signalement(s) aujourd'hui."
+chat_diag_server_wait_send:
+  en: "The server's log is still on its way - sending waits until it is here (or untick it)."
+  nl: "De serverlog is nog onderweg - versturen wacht tot die er is (of haal het vinkje weg)."
+  de: "Das Server-Log ist noch unterwegs - das Senden wartet, bis es da ist (oder Haken entfernen)."
+  fr: "Le journal du serveur est encore en route - l'envoi attend qu'il arrive (ou decochez la case)."
+chat_diag_server_ready:
+  en: "server log received (%{kb} kB), cleaned on the server itself"
+  nl: "serverlog ontvangen (%{kb} kB), op de server zelf opgeschoond"
+  de: "Server-Log empfangen (%{kb} kB), auf dem Server selbst bereinigt"
+  fr: "journal du serveur recu (%{kb} kB), nettoye sur le serveur meme"
+chat_diag_server_none:
+  en: "the server did not answer - it sends one report per 20 seconds; wait a moment and press read again"
+  nl: "de server antwoordde niet - hij stuurt een rapport per 20 seconden; wacht even en druk opnieuw op lezen"
+  de: "der Server hat nicht geantwortet - er sendet einen Bericht pro 20 Sekunden; kurz warten und erneut lesen"
+  fr: "le serveur n'a pas repondu - il envoie un rapport par 20 secondes ; patientez puis relisez"
+chat_diag_server_failed:
+  en: "only %{have} of %{parts} parts arrived - nothing is attached; try again"
+  nl: "slechts %{have} van %{parts} delen aangekomen - er gaat niets mee; probeer opnieuw"
+  de: "nur %{have} von %{parts} Teilen angekommen - nichts wird angehaengt; erneut versuchen"
+  fr: "seulement %{have} des %{parts} parties recues - rien n'est joint ; reessayez"
+chat_diag_server_shown:
+  en: "And this comes from the server. It was cleaned there, before it was sent here."
+  nl: "En dit komt van de server. Dat is daar opgeschoond, voordat het hierheen ging."
+  de: "Und das kommt vom Server. Es wurde dort bereinigt, bevor es hierher ging."
+  fr: "Et ceci vient du serveur. Cela y a ete nettoye avant d'etre envoye ici."
+chat_consent_age:
+  en: "I am 16 or older"
+  nl: "Ik ben 16 jaar of ouder"
+  de: "Ich bin 16 Jahre oder aelter"
+  fr: "J'ai 16 ans ou plus"
+chat_consent_need_age:
+  en: "Under 16 a parent has to agree - ask them first."
+  nl: "Onder de 16 moet een ouder akkoord geven - vraag het eerst."
+  de: "Unter 16 muss ein Elternteil zustimmen - fragen Sie zuerst."
+  fr: "En dessous de 16 ans, un parent doit donner son accord : demandez d'abord."

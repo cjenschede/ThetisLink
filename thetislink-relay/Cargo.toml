@@ -23,6 +23,10 @@ rand = "0.8"
 # Fase 2 dashboard: admin login password hashing (human password -> slow KDF).
 # argon2 (MIT/Apache-2.0). Relay-only (server side), no Android cross-compile.
 argon2 = "0.5"
+# Chat ticket signing (docs/internal/DESIGN-relay-chat.md §3). The relay signs,
+# the chat verifies, and the two never call each other. hmac + sha2
+# (MIT/Apache-2.0) are already in the workspace lockfile.
+hmac = "0.12"
 # Fase 2 dashboard: admin HTTP API (axum) + JSON (serde). All MIT/Apache-2.0,
 # GPL-2.0-or-later compatible. Relay-only (server side).
 axum = "0.7"

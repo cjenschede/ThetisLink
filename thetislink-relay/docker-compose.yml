@@ -14,6 +14,10 @@ services:
       # PATCH-relay-audio-udp fase 2: bind the kale-UDP audio data path. Audio + PTT
       # travel over UDP (no retransmit); control/spectrum stay on wss via Caddy.
       THETISLINK_RELAY_UDP_LISTEN: 0.0.0.0:443
+      # The relay signs chat tickets with this; the chat verifies with the same
+      # value (design §3.3). Optional: without it the relay simply offers no
+      # ticket, which is a relay with no chat behind it.
+      THETISLINK_CHAT_KEYS: ${THETISLINK_CHAT_KEYS:-}
     volumes:
       - relay-data:/data
     # Internal only over the compose network: 18080 = wss tunnel; 18081 = admin API
@@ -28,6 +32,41 @@ services:
     # Migration aid: uncomment to also serve plain ws:// on the host during the switch.
     # ports:
     #   - "18080:18080"
+
+  # Phase 0 of the chat (docs/internal/DESIGN-relay-chat.md). Its own container,
+  # its own volume and its own route, so `docker compose up -d --build
+  # thetislink-chat` touches nothing else: the relay carries audio and PTT and
+  # must keep running across a chat update. The dependency points one way - the
+  # chat may need the relay, never the reverse - so there is no depends_on here.
+  thetislink-chat:
+    build:
+      context: ../thetislink-chat
+      dockerfile: Dockerfile
+    image: thetislink-chat:dev
+    container_name: thetislink-chat
+    restart: unless-stopped
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      # The key the relay signs tickets with (design §3.3). Never in the repo -
+      # set it in .env next to the relay token. Comma-separated to keep two live
+      # during a rotation, so changing it needs no relay restart.
+      THETISLINK_CHAT_KEYS: ${THETISLINK_CHAT_KEYS:?set THETISLINK_CHAT_KEYS in .env}
+      THETISLINK_CHAT_DB: /data/chat.db
+      # The administrator credential for the diagnosis postbox, separate from any
+      # station ticket (design §1.4). Absent means those paths simply do not
+      # exist, which is a chat with no administrator side rather than an open one.
+      THETISLINK_CHAT_ADMIN_TOKEN: ${THETISLINK_CHAT_ADMIN_TOKEN:-}
+    # Hard limits, not "bounded" (design §2.2). This host has 1.9 GB of RAM and
+    # NO SWAP: when memory runs out the kernel kills the biggest process rather
+    # than slowing down, and that could be the relay. A capped chat gets killed
+    # instead of its neighbour.
+    mem_limit: 256m
+    cpus: 0.5
+    volumes:
+      - chat-data:/data
+    # Internal only: Caddy routes /chat* here. Never published to the host.
+    expose:
+      - "18082"
 
   caddy:
     # Caddyfile is baked into the image (see Dockerfile.caddy) rather than bind-mounted,
@@ -51,5 +90,6 @@ services:
 
 volumes:
   relay-data:
+  chat-data:
   caddy-data:
   caddy-config:

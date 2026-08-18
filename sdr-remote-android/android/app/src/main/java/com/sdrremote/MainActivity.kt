@@ -12,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import android.util.Log
 import com.sdrremote.ui.screens.MainScreen
 import com.sdrremote.ui.theme.SdrRemoteTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Start keeping our own log before anything else runs, so a fault
+        // during start-up is in it too. The system log alone is a ring buffer
+        // shared with the whole phone: on a busy device our lines are gone
+        // within minutes, which is why a fault that only appears on mobile
+        // data could not be read back afterwards at all (2026-08-17).
+        try {
+            uniffi.sdr_remote.initLogging(filesDir.absolutePath)
+        } catch (e: Throwable) {
+            // A phone with no room for it still runs; only the log is missing.
+            Log.w("MainActivity", "no log file: ${e.message}")
+        }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED

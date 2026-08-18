@@ -14,11 +14,27 @@ android {
         applicationId = "com.sdrremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 81
-        versionName = "2.8.0"
+        versionCode = 82
+        versionName = "2.9.0"
     }
 
     buildTypes {
+        debug {
+            // The published APK is produced by assembleDebug. Left at its default
+            // this marks the app debuggable, which lets anyone with a USB cable
+            // read the app's private storage through `adb run-as` - and that
+            // directory holds the relay token, the password and the log file the
+            // manual describes as out of other apps' reach.
+            //
+            // Turning it off costs nothing anyone will notice: the signing key is
+            // unchanged, so this still installs as an update over an existing app.
+            // Moving to a real release key is a separate decision - that one does
+            // force a reinstall.
+            //
+            // Set it back to true temporarily if you ever need to attach a
+            // debugger to a local build.
+            isDebuggable = false
+        }
         release {
             isMinifyEnabled = false
         }

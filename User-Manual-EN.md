@@ -1,4 +1,4 @@
-# ThetisLink v2.8.0 - User Manual
+# ThetisLink v2.9.0 - User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.8.0.apk` | Android client app |
+| `ThetisLink-2.9.0.apk` | Android client app |
 | `Installation.pdf` | Installation guide (English) |
 | `User-Manual-EN.pdf` | User manual (English, this document) |
 | `Technical-Reference.pdf` | Technical reference (English) |
@@ -223,6 +223,87 @@ Whoever hosts the relay has a **web dashboard** for administration, reachable th
 - **Database backup** button ("Backup DB"): downloads a consistent copy of the relay database (via `VACUUM INTO`, so without stopping the relay). Handy for a periodic safeguard. Sensitive admin actions such as this export are noted in the relay log with the requester's IP.
 
 The relay configuration (station keys, admin password) lives in a `.env` file on the VPS. This file contains secrets and must **never** end up public or in a repository — see `Installation.md`.
+
+---
+
+## Chat and reporting a problem (v2.9.0)
+
+If you run through the relay, there is a **Chat** button in the server GUI and in the desktop client, and a **Chat** tab in the Android app. Behind it are two things that work independently: a room for users of the same relay, and a **Report a problem** button that goes straight to the administrator.
+
+Without a relay there is nothing to see: the chat hangs off your relay connection and uses the same ticket. **The relay has to be switched on, not merely filled in** — an address stays in your settings after you turn the relay off, and without a connection there is no ticket and so no chat. The entrance therefore only appears once the relay is in use; a control that leads nowhere is worse than no control. If you do have a relay but no chat runs on it — your own relay, say — the entrance stays and the screen behind it tells you why it is empty. If the chat is down, **everything else carries on** — audio, PTT, spectrum, the radio. The window then says why it is quiet, and that is deliberate: the chat is the least important part of ThetisLink and must never hold anything else up.
+
+### Joining, or not
+
+The first time you get a screen saying what is kept and who the administrator is. You choose the name you appear under. **A callsign is in a public register along with your name and address** — if you would rather not share that, pick a first name or something else.
+
+There are two tickboxes: agreeing, and that you are 16 or older. Under 16 a parent has to agree. Without agreeing, the rest of ThetisLink works as it always did; only the conversation is unavailable.
+
+**You can report a problem without joining.** Somebody who wants no part of the chat can still report a fault — that goes only to the administrator and not to other users.
+
+### What is kept, and for how long
+
+The name you choose and your messages, with the time. Messages go after 90 days, and **sooner if the storage fills up** — oldest first. The administrator can read every message on the server.
+
+You can withdraw at any time. *Leave the chat* removes your name; your messages stay without it, so other people's conversations remain readable. If you wrote your callsign into the **text** of a message it is still there — for that there is *leave the chat and delete my messages*.
+
+To find out what is kept about you, ask the administrator; the address is on the consent screen. **Separately from the chat**, the relay itself also records connection data — which station connected when, and how much traffic there was. That exists with or without the chat and has its own retention; ask the same administrator.
+
+### Messages
+
+One room, no channels and no private messages. Every message carries a time, and **reply** lets you answer one message in particular — it then appears above your answer as a quoted line. One level deep: a conversation stays a list you read from top to bottom.
+
+**A typo is yours to fix for fifteen minutes.** *Edit* on your own message puts the text back in the input field; sending saves the correction, and everyone's copy is brought up to date with *(edited)* next to it. After that quarter of an hour the button is gone: others have answered the text as it stood.
+
+**On Android** the chat is a tab beside *Radio* and *Devices*, with the number of unread messages on it. Everything works as it does on the desktop, with one difference, and the report form says so: **no log travels from the phone** — Android keeps its log in the system log rather than in a file the app can read, so a report from a phone is your description and nothing else. While the chat tab is open the spectrum pauses, exactly as it does on the devices screen.
+
+**Files and photos cannot be shared here**; use e-mail for those. A message is limited to 2000 characters, and that limit has a reason: it keeps log fragments out of a room everybody can read. A log belongs in a problem report, where it is cleaned and only the administrator sees it.
+
+### Removed from the chat
+
+The administrator can remove a station from the chat if it becomes unworkable. It is an order-keeping measure and not a verdict — it can be lifted again just as easily.
+
+**You are told.** Instead of messages you get a line saying the administrator has removed you. That is deliberate: a window that goes quiet without explanation leaves you guessing, and that is worse than the sentence. When the removal is lifted the line disappears by itself as soon as your client is back in touch — you do not have to do anything.
+
+**It closes the whole channel, reporting included.** While you are removed you cannot read, cannot write, and cannot send a problem report either. If you need to reach the administrator in that situation, use the e-mail address on the consent screen.
+
+**What you wrote stays.** A removal does not delete your messages; that is a separate act and it needs a reason of its own.
+
+**Being removed is not the same as withdrawing.** Withdrawing is your decision and takes your name out of the messages. A removal is the administrator's decision and leaves your messages as they stand. Nor do the two cancel out: **leaving the chat does not lift a removal.** If it did, the measure could be undone in two clicks by the person it concerns. The other side of that is that your station number stays on the list even if you have everything else erased — which is why it is on the consent screen too.
+
+### Reporting a problem
+
+The button is in the chat window and works whether or not you joined the conversation.
+
+**Your description is the report.** What you were doing, what you expected and what happened instead is in no log file anywhere, and it is exactly the part nobody else can supply. The send button waits until there is something.
+
+**The log and your settings are an attachment with a tickbox.** It is on, because without it most problems cannot be run down — but it is a tickbox, and while it is off nothing is read from your disk. If you are connected to a server there is a **second tickbox for that server's log and settings**; those are cleaned on the server itself before they reach your client.
+
+Before sending, you see exactly what goes. **Read it through** — it is your last chance to hold something back, and it is the real safeguard. Cleaning is never complete.
+
+What travels:
+
+- the tail of your log file, with addresses, names and anything resembling a key taken out. That covers IP addresses, e-mail addresses and the folder carrying your Windows user name, and also **two names that would otherwise slip through**: the relay's address and the address your own server is reachable on. If you run that on a DDNS name rather than an IP address, the name is replaced too — the port number stays, because that is what explains a problem and the name is not;
+- your settings — the address of your radio, the COM port, the audio devices, radio model and baud rate, and which options are on. Together that is the layout of your station.
+
+**On Android the log comes from two places.** Your phone's system log keeps only a few minutes - that space is shared with the whole device - so since v2.9.0 the app also keeps a log of its own. It lives in the app's private storage where no other app can reach it, is capped at 2 MB with one older copy, and goes when you uninstall the app. It holds **no passwords, no keys and no access codes**. We write your relay address as `<relay>` ourselves, but that is a discipline where *we* compose the text: an address arriving inside an error message from Windows or from the other end can still appear. **It is always removed from the report you send** - there the cleaning is in the path itself. The file goes nowhere by itself - only its last stretch travels, when you send a report with the attachment ticked, and you see it first.
+
+**Your password, your keys and your access codes never travel.** Only settings on a fixed list are sent, and anything else is refused. On both platforms the whole settings file is read and the same list applied afterwards - it is the list that does it, not luck. Anything not on it stays home, and the bottom of the report says how many settings were withheld.
+
+The attachment is read at the moment you tick the box, and the form says how old it is. If you leave the form open while you reproduce the fault, click **read again** — otherwise you send the log from before it happened.
+
+### What happens next
+
+The report sits in a postbox on the relay, not in an archive. The administrator collects it onto their own computer to look into it, and removes it from the server as soon as your problem is settled. Anything not collected disappears by itself after 30 days.
+
+**One thing to know about "gone".** What you have removed here — your name, your messages, a report — goes from the service itself. The machine it runs on also has **automatic backups at the hosting provider**, and how long those are kept is not stated in the plan. Until that has been established: deleting takes it out of the chat and out of the postbox, but it is not a guarantee that no copy exists anywhere. That is more honest than the promise that could have stood here.
+
+The administrator keeps a copy of the answers he sends on his own computer, with the date - filed with the report it answers, so in the same file as what you sent. It is there so he can look up later what he told you - the server deletes a delivered answer after seven days. If you want to know what is held about your reports, or want it removed, ask him. **No automatic retention applies to that copy on his computer** - the periods above are the service's, not those of what he has collected. It is deliberately his working copy, and that is why asking is the route.
+
+**A report already collected is no longer on the server and cannot be withdrawn** — ask the administrator instead.
+
+You get no confirmation that it was read. You do see an **answer** appear at the top of your chat window as soon as one is sent, whether or not you joined the conversation. That answer goes one way and is short; for anything needing a conversation there is the e-mail address on the consent screen.
+
+There is a limit of a hundred reports per station per day. Collected reports do not count, so an emptied postbox gives the allowance straight back.
 
 ---
 

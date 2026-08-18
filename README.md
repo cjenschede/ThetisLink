@@ -1,29 +1,25 @@
 # ThetisLink
 
-> **Current release: [v2.8.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.8.0)** —
-> **The radio's data is there the moment you connect.** Memory channels, tones and EX settings
-> are read **once, when the radio connects**, and every client is served from the server's copy
-> instead of making the radio walk its channels again — that walk took a second on an FT-991A and
-> several on the FTX-1's 405 EX values, with no other CAT command able to get through. **ThetisLink
-> now lets go of PTT when the radio already has**: set a TX time-out timer and it releases just
-> before the limit instead of transmitting into a radio that stopped, and on the FTX-1 it follows
-> the radio's real transmit state, so a fault or the set's own PTT ends the transmission here too.
-> **FTX-1 tones work in practice** — that radio cannot store a tone in a memory channel over CAT,
-> so ThetisLink keeps them in its list and applies the right one each time the radio lands on a
-> channel; writing its memory bank is off until you accept what it costs. The **memory table tells
-> you where the radio is**: green for the channel it is on, amber for the one you left when you
-> tuned into VFO, and one click anywhere in the row brings you back. The **window arranger is now
-> one implementation** shared by the desktop client and the server GUI, which gains the UI scale,
-> the 18×18 grid and five arrangement memories. Three **Android** faults that shipped in v2.7.0 are
-> fixed: a Yaesu stayed silent when switched on, the memory list disappeared behind the EX menu,
-> and the FTX-1's EX settings showed bare numbers. Also: the **V/M button no longer overwrites a
-> memory channel** — it did in every release since v2.0.0, silently — and the EX menu dropdown no
-> longer drops the choices it could not parse, which had left the TX time-out timer unsettable.
-> Illustrated explainers are online — see **Documentation** below.
-> **Backwards-compatible** — TL wire-protocol `VERSION` 3 unchanged and no new control ids;
-> interoperates with v2.7.x. **Stock Thetis v2.10.3.15 suffices — no fork change required** for
-> these features (the PA3GHM fork adds the extended-IQ feature-set).
-> Download `ThetisLink-2.8.0.zip` from the
+> **Current release: [v2.9.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.9.0)** —
+> **A dropout sounds like the band again.** When audio hiccups, ThetisLink fills the gap with
+> noise the way it always claimed to — but concealment had been running on the wrong decoder,
+> so with wideband audio on it produced silence instead, and only the first channel even tried.
+> Every stream now decodes, corrects and conceals in its own format; both radios, both VRX and
+> RX2 conceal at all, which they never did. Opus itself fades within about a quarter of a
+> second — measured — so a longer gap is carried by generated noise at that stream's own noise
+> floor. **A phone that changes network gets its audio back by itself**: switching between WiFi
+> and mobile data used to leave the controls working and the sound gone until the app was
+> killed. **Chat and problem reporting** arrive for stations on a relay — one room shared with
+> the other users of it, and a button that sends a report straight to the administrator with
+> your log attached, cleaned first and shown to you before it goes. Both are optional and
+> neither is needed to operate; without a relay there is nothing new to see and nothing to
+> switch off. Also: the server now says **why a radio is missing** when Windows hands its COM
+> port to another program, and a recording made during a dropout is no longer shorter than what
+> you heard.
+> **Backwards-compatible** — the wire protocol gains two packet types for fetching a connected
+> server's log (`0x35`, `0x36`); an older peer that knows neither simply never asks and never
+> answers. **Stock Thetis v2.10.3.x suffices — no fork change required.**
+> Download `ThetisLink-2.9.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are
@@ -53,6 +49,8 @@ radio control over the network via TCI WebSocket.
 - DX Cluster with spectrum overlay
 - Mandatory password authentication (HMAC-SHA256) with optional TOTP 2FA
 - Smart and Ultra diversity auto-null algorithms
+- Chat and problem reporting for stations on the same relay (see below); both optional,
+  and neither needed to operate
 
 ## Try it over the internet — the PA3GHM test relay
 
@@ -81,6 +79,22 @@ relay is the better answer, and the project supports that fully.
 **Requesting access:** send an email to **PA3GHM@gmail.com** with your callsign and a short
 note about your setup (which radio, and why a direct connection is not an option for you).
 You will receive the connection details and a station key.
+
+**What comes with it, since 2.9.0.** Stations on this relay also get a chat room shared with
+the other users of it, and a **Report a problem** button that goes straight to me with your log
+and settings attached - cleaned first, and you see exactly what travels before it is sent.
+Reporting works whether or not you join the chat; they are separate choices. Both live on the
+relay, so without one there is nothing to see, and everything else in ThetisLink works as it
+always did.
+
+The same applies to these as to the relay itself: they run because I enjoy running them. I may
+decline a request or stop the service, and a no needs no explanation. What is kept, and for how
+long, is on the screen before you agree to anything - and one thing worth knowing in advance: a
+callsign appears in a public register with your name and address, so you can pick any other name
+to appear under.
+
+Running your own relay? The chat service is a separate container and its source is in this
+repository, so you can put it beside your own.
 
 73, PA3GHM
 

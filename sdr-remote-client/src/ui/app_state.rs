@@ -58,6 +58,10 @@ impl SdrRemoteApp {
         let _ = cmd_tx.send(Command::SetTxGain(config.tx_gain));
         let _ = cmd_tx.send(Command::SetVfoAVolume(config.vfo_a_volume));
         let _ = cmd_tx.send(Command::SetPlayVolume(config.play_volume));
+        // Sent once at start too, not only when the panel is touched: a
+        // saved setting that takes effect only after you fiddle with it is
+        // not a saved setting.
+        let _ = cmd_tx.send(Command::SetRogerBeep(config.roger));
         let _ = cmd_tx.send(Command::SetVfoBVolume(config.vfo_b_volume));
         let _ = cmd_tx.send(Command::SetLocalVolume(config.local_volume));
         let _ = cmd_tx.send(Command::SetRx2Volume(config.rx2_volume));
@@ -127,7 +131,8 @@ impl SdrRemoteApp {
             rec_yaesu2: false,
             rec_vrx1: false,
             rec_vrx2: false,
-            last_recorded_path: None,
+            last_recorded: Vec::new(),
+            play_ticked: Vec::new(),
             midi_ptt_toggle_mode: config.midi_ptt_toggle,
             smeter_source: config.smeter_source,
             thetis_autostart: config.thetis_autostart,
@@ -270,6 +275,10 @@ impl SdrRemoteApp {
             spectrum_ref_db: config.spectrum_ref_db,
             spectrum_range_db: config.spectrum_range_db,
             spectrum_zoom: 32.0,
+            // Not read back from anywhere: a new session starts centred. The
+            // pan survives a reconnect, but an offset carried over from days
+            // ago reads as a fault rather than as a setting - it is used far
+            // less often than the zoom, so nobody remembers setting it.
             spectrum_pan: 0.0,
             last_sent_zoom: 32.0,
             last_sent_pan: 0.0,
@@ -345,16 +354,16 @@ impl SdrRemoteApp {
             vrx2_freq_by_bucket: std::collections::HashMap::new(),
             last_vrx1_ddc_center_hz: 0,
             last_vrx2_ddc_center_hz: 0,
-            vrx1_spectrum_zoom: config.vrx1_spectrum_zoom.unwrap_or(32.0),
-            vrx2_spectrum_zoom: config.vrx2_spectrum_zoom.unwrap_or(32.0),
+            vrx1_spectrum_zoom: 32.0,
+            vrx2_spectrum_zoom: 32.0,
             vrx1_ref_db: config.vrx1_ref_db.unwrap_or(-20.0),
             vrx1_range_db: config.vrx1_range_db.unwrap_or(100.0),
             vrx1_wf_contrast: config.vrx1_wf_contrast.unwrap_or(1.0),
-            vrx1_pan: config.vrx1_pan.unwrap_or(0.0),
+            vrx1_pan: 0.0,
             vrx1_auto_ref: config.vrx1_auto_ref.unwrap_or(false),
             // If user has persisted a zoom we trust it; otherwise let
             // first DDC-span arrival pick default_zoom_for_span.
-            vrx1_zoom_initialized: config.vrx1_spectrum_zoom.is_some(),
+            vrx1_zoom_initialized: false,
             vrx1_filter_low_hz: config.vrx1_filter_low_hz.unwrap_or_else(|| {
                 if config.vrx1_mode.unwrap_or(0) == 1 { -3000 } else { 0 }
             }),
@@ -363,15 +372,18 @@ impl SdrRemoteApp {
             }),
             vrx1_high_res_spectrum: config.vrx1_high_res_spectrum.unwrap_or(false),
             vrx1_high_res_last_span_khz: 0,
+            vrx1_last_sent_pan_hz: 0,
+            vrx2_last_sent_pan_hz: 0,
+            vrx_pan_changed_at: None,
             rx1_spectrum: ChannelSpectrum::new(ChannelId::Rx1),
             rx2_spectrum: ChannelSpectrum::new(ChannelId::Rx2),
             vrx1_spectrum: ChannelSpectrum::new(ChannelId::Vrx1),
             vrx2_ref_db: config.vrx2_ref_db.unwrap_or(-20.0),
             vrx2_range_db: config.vrx2_range_db.unwrap_or(100.0),
             vrx2_wf_contrast: config.vrx2_wf_contrast.unwrap_or(1.0),
-            vrx2_pan: config.vrx2_pan.unwrap_or(0.0),
+            vrx2_pan: 0.0,
             vrx2_auto_ref: config.vrx2_auto_ref.unwrap_or(false),
-            vrx2_zoom_initialized: config.vrx2_spectrum_zoom.is_some(),
+            vrx2_zoom_initialized: false,
             vrx2_filter_low_hz: config.vrx2_filter_low_hz.unwrap_or_else(|| {
                 if config.vrx2_mode.unwrap_or(0) == 1 { -3000 } else { 0 }
             }),
@@ -384,6 +396,16 @@ impl SdrRemoteApp {
             vrx1_waterfall_texture: None,
             vrx2_waterfall_texture: None,
             vrx_state_sync_pending: true,
+            rx_zoom_initialized: false,
+            rx2_zoom_initialized: false,
+            subs_differ_seen: 0,
+            session_generation_seen: 0,
+            rx1_logged_freq_hz: 0,
+            rx1_logged_at: None,
+            rx2_logged_at: None,
+            rx2_logged_freq_hz: 0,
+            view_mismatch_at: None,
+            view_sent_at: None,
             active_tab: Tab::Radio,
             last_connect_status: sdr_remote_logic::state::ConnectStatus::Disconnected,
             // PATCH-3: kick off the mDNS browse on app start. Daemon-init failure
@@ -526,6 +548,8 @@ impl SdrRemoteApp {
             rotor_target_x10: 0,
             rotor_available: false,
             yaesu_connected: false,
+            yaesu_port_trouble: 0,
+            yaesu2_port_trouble: 0,
             yaesu_freq_a: 0,
             yaesu_freq_b: 0,
             yaesu_mode: 1,
@@ -610,6 +634,7 @@ impl SdrRemoteApp {
             yaesu_compressor: config.yaesu_compressor,
             yaesu2_compressor: config.yaesu2_compressor,
             yaesu_tx_agc: config.yaesu_tx_agc,
+            roger: config.roger,
             yaesu2_tx_agc: config.yaesu2_tx_agc,
             yaesu_eq_enabled: {
                 // Load active EQ profile from config
@@ -648,6 +673,11 @@ impl SdrRemoteApp {
             tune_step_hz: 1_000,
             yaesu_in_memory_mode: false,
             yaesu_current_mem_ch: None,
+            chat_popout_pos: None,
+            chat_popout_size: None,
+            chat_popout_init_applied: false,
+            chat_open: config.chat_open,
+            chat: sdr_remote_chat::ChatPanel::default(),
             yaesu_mem_active_ch: None,
             yaesu2_mem_active_ch: None,
             yaesu_mem_active_live: false,
@@ -692,6 +722,8 @@ impl SdrRemoteApp {
             dx_spots: Vec::new(),
             smooth_display_center_hz: 0.0,
             rx2_smooth_display_center_hz: 0.0,
+            smooth_vfo_hz: 0.0,
+            rx2_smooth_vfo_hz: 0.0,
             smooth_alpha: 1.0,
             last_frame_time: Instant::now(),
             dx_spots_enabled: true,

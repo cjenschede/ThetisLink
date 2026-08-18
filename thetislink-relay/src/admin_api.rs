@@ -132,25 +132,42 @@ fn client_ip(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+/// EVERY value sent under this name, not the first one.
+///
+/// A browser may hold two cookies with the same name at different paths, and it
+/// sends both with no way to tell them apart. That is not a hypothetical: moving
+/// this session cookie from Path=/admin to Path=/ left the old one in place, the
+/// first one won, and logging in appeared to do nothing at all - the login
+/// succeeded, the very next request looked unauthenticated, and the page went
+/// straight back to asking.
+fn cookie_values(headers: &HeaderMap, name: &str) -> Vec<String> {
+    let Some(raw) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
+        return Vec::new();
+    };
     let prefix = format!("{name}=");
     raw.split(';')
         .map(|p| p.trim())
-        .find_map(|p| p.strip_prefix(&prefix).map(|v| v.to_string()))
+        .filter_map(|p| p.strip_prefix(&prefix).map(|v| v.to_string()))
+        .collect()
 }
 
 /// Validate the session cookie; on success slide the idle TTL and return the CSRF
 /// token for this session. `None` = not authenticated. Never holds the lock across
 /// an await (all work is synchronous).
 fn validate_session(state: &AppState, headers: &HeaderMap) -> Option<String> {
-    let token = cookie_value(headers, COOKIE)?;
+    let tokens = cookie_values(headers, COOKIE);
     let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     sessions.retain(|_, s| s.expires_at > now);
-    let s = sessions.get_mut(&token)?;
-    s.expires_at = now + SESSION_IDLE_TTL;
-    Some(s.csrf.clone())
+    // Whichever of them is real. A stale duplicate from an older path must not
+    // be able to hide a live session behind it.
+    for token in tokens {
+        if let Some(s) = sessions.get_mut(&token) {
+            s.expires_at = now + SESSION_IDLE_TTL;
+            return Some(s.csrf.clone());
+        }
+    }
+    None
 }
 
 fn no_store(mut resp: Response) -> Response {
@@ -195,11 +212,28 @@ async fn login(State(state): State<AppState>, headers: HeaderMap, Json(req): Jso
     );
     log::info!("admin login OK for {ip}");
     let cookie = format!(
-        "{COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age={}",
+        // Path=/ rather than /admin, so the postbox at /chat/admin sees it too
+        // and the administrator - who is one person running both - logs in once.
+        // The chat asks this service whether the session is real; it cannot
+        // decide that for itself, and nothing here changes to let it.
+        //
+        // Still HttpOnly, Secure and SameSite=Strict, so widening the path adds
+        // one recipient on the same origin and no exposure to anyone else.
+        "{COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={}",
         SESSION_IDLE_TTL.as_secs()
     );
     let mut resp = Json(LoginResp { csrf }).into_response();
-    resp.headers_mut().insert(header::SET_COOKIE, cookie.parse().unwrap());
+    // Clear the old path-scoped cookie first, then set the new one. A browser
+    // that still holds the Path=/admin version would otherwise send both, and
+    // the wrong one can win: logging in looks like it does nothing at all.
+    // Harmless once nobody has the old cookie left, and cheap enough to keep.
+    resp.headers_mut().append(
+        header::SET_COOKIE,
+        format!("{COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=0")
+            .parse()
+            .unwrap(),
+    );
+    resp.headers_mut().append(header::SET_COOKIE, cookie.parse().unwrap());
     no_store(resp)
 }
 
@@ -209,12 +243,19 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = require_csrf(&state, &headers) {
         return resp;
     }
-    if let Some(token) = cookie_value(&headers, COOKIE) {
+    // Every session named by any of the cookies, so logging out with a stale
+    // duplicate still ends the live one.
+    for token in cookie_values(&headers, COOKIE) {
         state.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&token);
     }
-    let cookie = format!("{COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=0");
+    // The same path it was set with, or the browser keeps the old one and
+    // logging out does nothing.
+    let cookie = format!("{COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0");
+    // Both paths, or a browser holding the older one stays logged in on it.
+    let old_cookie = format!("{COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=0");
     let mut resp = StatusCode::NO_CONTENT.into_response();
-    resp.headers_mut().insert(header::SET_COOKIE, cookie.parse().unwrap());
+    resp.headers_mut().append(header::SET_COOKIE, old_cookie.parse().unwrap());
+    resp.headers_mut().append(header::SET_COOKIE, cookie.parse().unwrap());
     resp
 }
 
@@ -580,6 +621,10 @@ struct DeviceDto {
     sessions: i64,
     bytes_total: i64,
     last_ip: Option<String>,
+    /// A live peer with this install-id right now. `last_seen` freezes at
+    /// session start, so without this a device that stays connected for days
+    /// reads as long gone.
+    connected_now: bool,
 }
 async fn list_station_devices(
     State(state): State<AppState>,
@@ -595,10 +640,13 @@ async fn list_station_devices(
         .unwrap_or_else(|e| e.into_inner())
         .list_devices(id)
         .unwrap_or_default();
+    // Matched on the full install-id, before it is shortened for display.
+    let live = crate::live_install_ids(&state.rooms, id).await;
     let dto: Vec<DeviceDto> = rows
         .into_iter()
         .map(|r| DeviceDto {
             id: r.id,
+            connected_now: live.contains(&r.install_id),
             install_id: r.install_id.chars().take(12).collect(),
             enroll_seq: r.enroll_seq,
             platform: r.platform,
@@ -742,13 +790,18 @@ const INDEX_HTML: &str = r##"<!doctype html><html lang="nl"><head>
  :root{--bg:#111;--fg:#eee;--card:#1a1a1a;--line:#333;--accent:#2d6cb5;--muted:#999}
  *{box-sizing:border-box}
  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
- header{background:#1b3a5b;padding:14px 16px;font-weight:600;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:5}
+ /* Wraps rather than overflows: this is one row with a title, a spacer and
+    three buttons, and on a narrow screen the last of them - Uitloggen -
+    was pushed past the edge. A logout you cannot reach is a logout that is
+    not there, which is how it was reported (2026-08-16). */
+ header{background:#1b3a5b;padding:14px 16px;font-weight:600;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;position:sticky;top:0;z-index:5}
  header .sub{font-weight:400;font-size:13px;color:#b9cde6}
  main{max-width:820px;margin:0 auto;padding:16px}
- input,button,select{font-size:16px;padding:9px 11px;border-radius:8px;border:1px solid #444;background:#222;color:var(--fg)}
- button{background:var(--accent);color:#fff;border:0;cursor:pointer}
+ input,button,select,a.ghost{font-size:16px;padding:9px 11px;border-radius:8px;border:1px solid #444;background:#222;color:var(--fg)}
+ button,a.ghost{background:var(--accent);color:#fff;border:0;cursor:pointer}
+ a.ghost{text-decoration:none;display:inline-block;line-height:normal}
  button:hover{filter:brightness(1.1)} button:active{filter:brightness(.92)}
- button.danger{background:#8a2f2f} button.ghost{background:#333}
+ button.danger{background:#8a2f2f} .ghost{background:#333}
  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
  .row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
  .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
@@ -775,6 +828,10 @@ const INDEX_HTML: &str = r##"<!doctype html><html lang="nl"><head>
 </style></head><body>
 <header><span>ThetisLink Relay <span class="sub">beheer</span></span>
  <span style="flex:1"></span>
+ <!-- The chat is a separate service in a separate container with its own login;
+      this is a link and nothing more, so a chat that is down or being updated
+      cannot affect this page. -->
+ <a class="ghost" href="/chat/admin/" title="Meldingen en chatbeheer (aparte dienst, zelfde wachtwoord)">Postbus</a>
  <button id="backupbtn" class="ghost" hidden title="Download een volledige kopie van de database (stations, sleutels, verbruik, instellingen)">Backup DB</button>
  <button id="logoutbtn" class="ghost" hidden>Uitloggen</button></header>
 <main>
@@ -882,7 +939,7 @@ function deviceRow(d){
    '<td>'+name+'<div class="muted sm">'+d.sessions+'x - '+esc(d.last_ip||'')+'</div></td>'+
    '<td>'+esc(d.platform||'?')+'</td>'+
    '<td>'+fmtBytes(d.bytes_total)+'</td>'+
-   '<td>'+relTime(d.last_seen)+'</td>'+
+   '<td>'+(d.connected_now?'<span class="badge on">verbonden</span><div class="muted sm">sinds '+relTime(d.last_seen)+'</div>':relTime(d.last_seen))+'</td>'+
    '<td>'+st+'</td>'+
    '<td class="acts sm">'+
    '<button class="ghost" data-act="toggle-device" data-id="'+d.id+'" data-enabled="'+d.enabled+'">'+(d.enabled?'Blokkeer':'Deblokkeer')+'</button>'+
@@ -914,7 +971,9 @@ $('#loginbtn').onclick=async()=>{
   else{$('#loginerr').textContent=r.status===429?'Te veel pogingen, wacht even.':'Onjuist wachtwoord.';}
 };
 $('#pw').addEventListener('keydown',e=>{if(e.key==='Enter')$('#loginbtn').click();});
-$('#logoutbtn').onclick=async()=>{await api('logout',{method:'POST'});csrf=null;refresh();};
+// Logs out of the postbox too. The keep-alive crosses both ways and this did
+// not, so one administration stayed open while the other showed a login.
+$('#logoutbtn').onclick=async()=>{await api('logout',{method:'POST'});try{await fetch('/chat/admin/api/logout',{method:'POST'});}catch(e){}csrf=null;refresh();};
 $('#backupbtn').onclick=async()=>{
   const b=$('#backupbtn'); const old=b.textContent; b.disabled=true; b.textContent='Bezig...';
   try{
@@ -961,8 +1020,30 @@ $('#limclose').onclick=()=>{$('#limmodal').hidden=true;};
 
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/admin/sw.js').catch(()=>{});}
 refresh();
+// Is somebody actually here? Both services slide their idle clock on any
+// request they answer, so a page that polls on a timer keeps itself logged in
+// for ever - and an open tab in an empty room was then an open administration.
+// The lease follows the person instead: any sign of life pushes it forward,
+// and half an hour without one lets both clocks run out on their own.
+// Two hours, not the half hour the services use for their own idle clock:
+// working in another window sends no events here, and being logged out
+// mid-evening is not what a forgotten tab deserves (2026-08-16).
+let lastSeen=Date.now();
+const ACTIVE_FOR=2*60*60*1000;
+['mousemove','mousedown','keydown','wheel','touchstart','scroll','focus'].forEach(
+  (e)=>window.addEventListener(e,()=>{lastSeen=Date.now();},{passive:true}));
+const present=()=>Date.now()-lastSeen<ACTIVE_FOR;
 // Auto-refresh so usage figures stay near-live; pause while a modal is open so
-// it never disturbs editing a secret or the limits form.
-setInterval(()=>{ if($('#secmodal').hidden && $('#limmodal').hidden) refresh(); }, 10000);
+// it never disturbs editing a secret or the limits form, and while nobody is
+// here - this request is authenticated, so polling it is what kept the session
+// awake in the first place.
+setInterval(()=>{ if(present() && $('#secmodal').hidden && $('#limmodal').hidden) refresh(); }, 10000);
+// And keep the postbox's session alive too. Two services, two idle clocks, one
+// administrator - being at work in this page should not let the other one time
+// out behind your back. Same origin, so the cookie travels by itself; a failure
+// is ignored because the postbox being unreachable is not this page's problem.
+// Working in either page is what keeps both alive, which is why this crosses
+// over: arriving at the other one should not ask again.
+setInterval(()=>{ if(present()) fetch('/chat/admin/api/session').catch(()=>{}); }, 60000);
 </script>
 </body></html>"##;

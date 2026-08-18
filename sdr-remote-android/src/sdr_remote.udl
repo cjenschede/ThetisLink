@@ -2,6 +2,14 @@
 
 namespace sdr_remote {
     string version();
+    // Start keeping a log file next to the system log. Called once at app
+    // start with the app's own storage directory; the system log alone is a
+    // ring buffer shared with the whole phone and loses our lines within
+    // minutes.
+    void init_logging(string dir);
+    // The tail of that file, for a problem report. Says why there is nothing
+    // rather than coming back empty.
+    string log_tail();
 };
 
 dictionary BridgeDxSpot {
@@ -12,6 +20,50 @@ dictionary BridgeDxSpot {
     string comment;
     u16 age_seconds;
     u16 expiry_seconds;
+};
+
+dictionary BridgeChatMessage {
+    i64 id;
+    i64 at;
+    string name;
+    string body;
+    string reply_name;
+    string reply_text;
+    boolean edited;
+    boolean mine;
+    boolean can_edit;
+};
+
+dictionary BridgeChatAnswer {
+    i64 id;
+    i64 at;
+    string body;
+};
+
+// The roger beep. One set of numbers and a tick per channel, mirroring
+// `sdr_remote_logic::roger::RogerBeep` - the tone, the rules and the holding of
+// PTT all live in the engine this app already runs, so the phone needs only a
+// way to say what it wants.
+dictionary BridgeRogerBeep {
+    f32 freq_hz;
+    f32 volume;
+    u32 duration_ms;
+    boolean include_fm;
+    boolean on_thetis;
+    boolean on_radio1;
+    boolean on_radio2;
+};
+
+dictionary BridgeChatState {
+    u8 offline_reason;
+    boolean consent_known;
+    boolean consented;
+    string display_name;
+    u32 unread;
+    string error;
+    i64 reports_left;
+    sequence<BridgeChatMessage> messages;
+    sequence<BridgeChatAnswer> answers;
 };
 
 dictionary BridgeRadioState {
@@ -213,6 +265,7 @@ interface SdrBridge {
     void disconnect();
     void set_language(string lang);
     void set_ptt(boolean active);
+    void set_roger_beep(BridgeRogerBeep beep);
     void set_mic_gate_delay_ms(u32 delay_ms);
     void set_playback_mute(boolean mute);
     void set_dx_spots_enabled(boolean enabled);
@@ -305,6 +358,14 @@ interface SdrBridge {
     void yaesu2_eq_enabled(boolean on);
     void server_reboot();
     void server_shutdown();
+    BridgeChatState chat_state(boolean open);
+    void chat_consent(string display_name);
+    void chat_send(string body, i64 reply_to);
+    void chat_edit(i64 id, string body);
+    void chat_leave(boolean delete_messages);
+    void chat_mark_read();
+    string chat_build_attachment(string log, string settings);
+    void chat_report(string note, string attachment);
     BridgeRadioState get_state();
     void shutdown();
 };

@@ -1,10 +1,10 @@
-# ThetisLink v2.8.0 - Installation Guide
+# ThetisLink v2.9.0 - Installation Guide
 
 ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full radio control over the network via TCI WebSocket.
 
 **Compatibility:** ThetisLink talks only to **Thetis** (via TCI WebSocket) and not directly to the SDR hardware. It therefore works with any SDR device supported by **Thetis v2.10.3.15** (official release by ramdor) — both HPSDR Protocol 1 (Hermes, Angelia, Orion) and HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optional: Yaesu FT-991A / FTX-1 as a second radio (via COM port).
 
-**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.8.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
+**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.9.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
 
 **Disclaimer:** This software controls radio transmitters. Use at your own risk. The author is not responsible for damage to equipment, interference or violations of regulations resulting from the use of this software. Verify all safety features (PTT timeout, power limits) before transmitting.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.8.0.apk | ThetisLink Android Client - phone/tablet |
+| ThetisLink-2.9.0.apk | ThetisLink Android Client - phone/tablet |
 | Installation.pdf | Installation guide (English, this document) |
 | User-Manual-EN.pdf | User manual (English) |
 | Technical-Reference.pdf | Technical reference (English) |
@@ -90,7 +90,7 @@ No administrator rights required for the ThetisLink Server or ThetisLink Clients
 
 ### 1.0 Installing the PA3GHM Thetis fork (recommended)
 
-The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.8.0 works best with Thetis-fork build PA3GHM TL2-4** — that build ships the wideband-IQ extension + modulation-filter fan-out that this release relies on. Earlier fork builds also work, with progressively fewer fork-only features available (TL2-3 without wideband, TL2-2 without rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 remains the fallback. Installation:
+The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.9.0 works best with Thetis-fork build PA3GHM TL2-4** — that build ships the wideband-IQ extension + modulation-filter fan-out that this release relies on. Earlier fork builds also work, with progressively fewer fork-only features available (TL2-3 without wideband, TL2-2 without rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 remains the fallback. Installation:
 
 1. First install the official **Thetis v2.10.3.15** using the standard installer (if you have not already done so)
 2. Download `Thetis.exe` from the PA3GHM fork — **release tag `TL2-4`** at [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -272,14 +272,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 ### 4.1 Installing the APK
 
 **Via file manager:**
-1. Copy `ThetisLink-2.8.0.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.9.0.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.8.0.apk
+adb install ThetisLink-2.9.0.apk
 ```
 
 ### 4.2 Connecting — guided setup wizard
@@ -376,7 +376,7 @@ In the ThetisLink Client, use your **public IP address** as the ThetisLink Serve
 
 Port forwarding only works if you have your own public IP address and can change your router. If you have **CGNAT** (many fibre and 4G/5G providers give no public IP) or no access to the router, use the **relay** instead. Both the server (station) and the client then connect **outbound** to a relay server on a VPS — nothing incoming needs to be forwarded. See the user manual, section [Internet remote via relay], for how it works; the setup steps are below.
 
-> **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. Contact PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM). Otherwise, host your own with the steps below.
+> **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. Ask PA3GHM at **pa3ghm@gmail.com** or via [QRZ.com](https://www.qrz.com/db/PA3GHM) - a no is a valid answer. Otherwise, host your own with the steps below.
 
 **A. Hosting the relay (one-time, on a VPS)**
 
@@ -388,6 +388,17 @@ The relay is not a ready-made download but source code + Docker. On a Linux VPS 
 4. The relay then listens on **port 443** (wss for control/spectrum + UDP for audio).
 
 > The full VPS recipe (domain, Caddy, ports, updating) is in `thetislink-relay/DEPLOY-wss.md`. The `.env` file holds secrets and must **never** be made public or committed to a repository.
+
+**A2. Chat and problem reports alongside it (optional, since v2.9.0)**
+
+A second container can run beside the relay, holding the chat and the report
+postbox. It is not needed for the relay to work: without the chat service clients
+show no chat entrance and everything else carries on as before. The source is in
+`thetislink-chat/` and it belongs in the same `docker-compose.yml` as the relay,
+so a chat update cannot take the relay down with it.
+
+If you do not want it, skip this - there is nothing to switch off.
+
 
 **B. Pointing the station (ThetisLink Server) at the relay**
 

@@ -48,16 +48,17 @@ impl log::Log for GuiLogger {
         // Wall-clock time first, matching the server log. Without it a client line
         // cannot be placed next to a server line, which is exactly what is needed
         // to tell which hop is holding a frame.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let secs = now.as_secs() % 86_400;
+        //
+        // Local time, the same as the server writes. It used to be seconds since
+        // the epoch modulo a day - which is UTC, and therefore two hours out
+        // from the server log all summer. The comment above was already right
+        // about why this exists; the code underneath it simply did not do it,
+        // and the two logs in a problem report could not be laid side by side.
+        // It cost an hour of reading a session as two hours long when it had
+        // lasted three minutes (2026-08-15).
         let line = format!(
-            "[{:02}:{:02}:{:02}.{:03} {}] {} - {}",
-            secs / 3600,
-            (secs % 3600) / 60,
-            secs % 60,
-            now.subsec_millis(),
+            "[{} {}] {} - {}",
+            chrono::Local::now().format("%H:%M:%S%.3f"),
             record.level(),
             record.target(),
             record.args()
@@ -284,7 +285,10 @@ fn main() -> Result<()> {
         let monitor = sdr_remote_relay::RelayMonitor::start_threaded_tunnel(relay_cfg, tunnel);
         let status = monitor.status_handle();
         _relay_monitor_keepalive = Some(monitor);
-        info!("Client transport: relay tunnel (via {})", relay_cfg_loaded.relay_url);
+        // The address is deliberately not written: see the same line on the
+        // Android side. The log file it lands in is the one place it would
+        // survive in plain text.
+        info!("Client transport: relay tunnel (via <relay>)");
         (
             Some(sdr_remote_logic::engine::ClientRelayTunnel {
                 uplink_tx,

@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 sdr-remote-core = { path = "../sdr-remote-core" }
 sdr-remote-relay = { path = "../sdr-remote-relay" }
+sdr-remote-chat = { path = "../sdr-remote-chat" }
 sdr-remote-logic = { path = "../sdr-remote-logic" }
 tokio = { workspace = true }
 cpal = { workspace = true }
@@ -54,6 +55,12 @@ windows = { version = "0.58", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# Chat (docs/internal/DESIGN-relay-chat.md). Blocking, on its own thread: the
+# chat may never sit on the audio, PTT or connect path. Already used by
+# sdr-remote-server, so no new crate enters the workspace or the SBOM.
+reqwest = { version = "0.12", features = ["blocking"] }
+serde_json = "1"
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

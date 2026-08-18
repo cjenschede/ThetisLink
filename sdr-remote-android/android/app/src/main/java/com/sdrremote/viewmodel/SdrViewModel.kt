@@ -7,6 +7,10 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.sdrremote.ChatAnswerUi
+import com.sdrremote.ChatMessageUi
+import com.sdrremote.ChatOffline
+import com.sdrremote.ChatUiState
 import com.sdrremote.DxSpotInfo
 import com.sdrremote.SdrUiState
 import com.sdrremote.service.AudioRouting
@@ -19,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.sdr_remote.SdrBridge
 
 private const val TAG = "SdrViewModel"
@@ -50,6 +55,40 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(SdrUiState())
     val state: StateFlow<SdrUiState> = _state.asStateFlow()
+
+    /**
+     * The chat, on its own clock and its own flow.
+     *
+     * Deliberately not part of the 30 fps radio poll: the chat is the least
+     * important thing on this screen and asking for it thirty times a second
+     * would rebuild a message list thirty times a second. Once a second is
+     * plenty - the shared model does its own scheduling behind this (three
+     * seconds while the screen is open, half a minute while it is not, which is
+     * what keeps the unread badge honest).
+     */
+    /** How much of each log a report from a phone carries, in characters.
+     *  Bounded so the preview stays something Compose can lay out. */
+    private val KEPT_LOG_BUDGET = 50_000
+    private val SYSTEM_LOG_BUDGET = 50_000
+
+    /** A hard ceiling on the finished attachment, whatever fed it.
+     *
+     *  The two logs are bounded above, but the settings are not: they come
+     *  from every preference this app has and are filtered afterwards.
+     *  Normally that is a few kilobytes; structurally it is unbounded, and
+     *  the preview has to stay something a phone can lay out - it is the
+     *  same string that gets sent, which is the guarantee (raised in review,
+     *  2026-08-18). Shortening is said out loud, so a short report is never
+     *  mistaken for a complete one. */
+    private val ATTACHMENT_MAX = 150_000
+
+    private val _chatState = MutableStateFlow(ChatUiState())
+    val chatState: StateFlow<ChatUiState> = _chatState.asStateFlow()
+    private var chatPollingJob: Job? = null
+
+    /** Whether the chat screen is the one being looked at. */
+    @Volatile
+    private var chatScreenOpen = false
 
     private var pollingJob: Job? = null
     // Data-besparing: abonneer ALLEEN de geselecteerde, aanwezige Yaesu-radio, en
@@ -119,11 +158,186 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             bridge = SdrBridge(relayEnabled, relayUrl, relayStation, relayToken, relayInstance, deviceName, relayUdpEnabled)
             Log.i(TAG, "SdrBridge created successfully (relay=$relayEnabled, udp=$relayUdpEnabled)")
             startPolling()
+            startChatPolling()
         } catch (e: Exception) {
             initError = e.message ?: "Unknown error"
             Log.e(TAG, "Failed to create SdrBridge", e)
             _state.value = SdrUiState(initError = initError)
         }
+    }
+
+    // ---- the chat ---------------------------------------------------------
+
+    private fun startChatPolling() {
+        chatPollingJob = viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val c = bridge?.chatState(chatScreenOpen)
+                    if (c != null) {
+                        _chatState.value = ChatUiState(
+                            offline = when (c.offlineReason.toInt()) {
+                                1 -> ChatOffline.NoRelay
+                                2 -> ChatOffline.NoTicket
+                                3 -> ChatOffline.Unreachable
+                                else -> ChatOffline.None
+                            },
+                            consentKnown = c.consentKnown,
+                            consented = c.consented,
+                            displayName = c.displayName,
+                            unread = c.unread.toInt(),
+                            error = c.error,
+                            messages = c.messages.map {
+                                ChatMessageUi(
+                                    id = it.id,
+                                    at = it.at,
+                                    name = it.name,
+                                    body = it.body,
+                                    replyName = it.replyName,
+                                    replyText = it.replyText,
+                                    edited = it.edited,
+                                    mine = it.mine,
+                                    canEdit = it.canEdit,
+                                )
+                            },
+                            answers = c.answers.map {
+                                ChatAnswerUi(id = it.id, at = it.at, body = it.body)
+                            },
+                        )
+                    }
+                } catch (e: Exception) {
+                    // A chat that cannot be asked is not a reason to stop asking:
+                    // the relay comes and goes, and so does its ticket.
+                    Log.w(TAG, "chat poll failed: ${e.message}")
+                }
+                delay(1000)
+            }
+        }
+    }
+
+    /** Told by the UI which screen is showing; steers how briskly the chat polls. */
+    fun setChatScreenOpen(open: Boolean) {
+        chatScreenOpen = open
+        if (open) chatMarkRead()
+    }
+
+    fun chatConsent(displayName: String) {
+        viewModelScope.launch(Dispatchers.IO) { bridge?.chatConsent(displayName) }
+    }
+
+    /** `replyTo` 0 means the message answers nothing. */
+    fun chatSend(body: String, replyTo: Long = 0) {
+        viewModelScope.launch(Dispatchers.IO) { bridge?.chatSend(body, replyTo) }
+    }
+
+    fun chatEdit(id: Long, body: String) {
+        viewModelScope.launch(Dispatchers.IO) { bridge?.chatEdit(id, body) }
+    }
+
+    fun chatLeave(deleteMessages: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) { bridge?.chatLeave(deleteMessages) }
+    }
+
+    fun chatMarkRead() {
+        viewModelScope.launch(Dispatchers.IO) { bridge?.chatMarkRead() }
+    }
+
+    /**
+     * Build the attachment for a problem report: this app's own log and its
+     * settings, cleaned by the same rules the desktop uses.
+     *
+     * Read here and handed to the screen rather than gathered at send time,
+     * because what is sent has to be what the reporter read. Returns a line
+     * saying so if there is nothing to attach - a report that explains little
+     * should not look like one that arrived damaged.
+     */
+    suspend fun chatBuildAttachment(): String = withContext(Dispatchers.IO) {
+        // Timed and sized in the log: "the app went slow while I was sending"
+        // is not something anyone can act on, and two numbers are.
+        val started = System.currentTimeMillis()
+        val log = try {
+            // An app may read its own log and no other; that is exactly what is
+            // wanted here, and it needs no permission.
+            //
+            // Filtered to this app's own tags, and not merely to its process.
+            // A process filter alone returns what the Android framework says
+            // about the app - window insets, input method, renderer chatter -
+            // and there is so much of it that our own lines are a rounding
+            // error: the first real Android report came back with a log of
+            // ViewRootImpl messages and not one line from ThetisLink itself
+            // (2026-08-12). `*:S` silences the rest; AndroidRuntime is kept at
+            // error level, because that is where a crash lands.
+            val p = Runtime.getRuntime().exec(
+                arrayOf(
+                    "logcat", "-d", "-v", "time", "--pid=" + android.os.Process.myPid(),
+                    "ThetisLink:V",       // the Rust side (android_logger)
+                    "SdrViewModel:V",     // the bridge and its polling
+                    "MainScreen:V",
+                    "AudioRouting:V",
+                    "MidiController:V",
+                    "ThetisLinkMdns:V",
+                    "AndroidRuntime:E",   // crashes
+                    "*:S",
+                ),
+            )
+            val text = p.inputStream.bufferedReader().use { it.readText() }
+            p.waitFor()
+            text
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read own log: ${e.message}")
+            ""
+        }
+        // The system log holds only what has not been evicted yet, and on a
+        // busy phone that is minutes. Our own file holds the rest, so a fault
+        // reproduced this morning is still in the report this evening. The
+        // system log goes first: what gets trimmed to fit is trimmed from the
+        // front, and the end of our own file is the part worth keeping
+        // (2026-08-17).
+        // Phone-sized, and that is the design. The desktop attaches up to a
+        // megabyte because a desktop can show you a megabyte before you send
+        // it; a phone cannot. The preview IS the safeguard - what you read is
+        // what goes - so the attachment has to stay something a phone can lay
+        // out. Unbounded it froze the app hard enough for Android to offer to
+        // close it, with a real ANR window (2026-08-17).
+        //
+        // Fifty thousand characters is roughly six hundred lines of our own
+        // log: far more than the system log still holds by the time anyone
+        // goes looking.
+        val kept = try {
+            val whole = uniffi.sdr_remote.logTail()
+            if (whole.length > KEPT_LOG_BUDGET) whole.takeLast(KEPT_LOG_BUDGET) else whole
+        } catch (e: Throwable) {
+            "(no log file: ${e.message})"
+        }
+        val trimmed = if (log.length > SYSTEM_LOG_BUDGET) log.takeLast(SYSTEM_LOG_BUDGET) else log
+        val bothLogs = trimmed + "\n---- kept log ----\n" + kept
+
+        val prefs = getApplication<Application>()
+            .getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+        // The same key=value shape the desktop's settings file has, so the one
+        // allowlist on the Rust side can judge both.
+        val settings = prefs.all.entries
+            .sortedBy { it.key }
+            .joinToString("\n") { "${it.key}=${it.value}" }
+        val built = bridge?.chatBuildAttachment(bothLogs, settings) ?: ""
+        val out = if (built.length > ATTACHMENT_MAX) {
+            "(shortened: the first " + ((built.length - ATTACHMENT_MAX) / 1024) +
+                "kB were left out to keep this readable)" + "\n" +
+                built.takeLast(ATTACHMENT_MAX)
+        } else {
+            built
+        }
+        Log.i(TAG, "attachment: " + (out.length / 1024) + "kB from " +
+            (trimmed.length / 1024) + "kB system log + " + (kept.length / 1024) +
+            "kB kept log, in " + (System.currentTimeMillis() - started) + "ms")
+        out
+    }
+
+    /**
+     * Report a problem in your own words, with the attachment that was on
+     * screen (empty when the box was not ticked).
+     */
+    fun chatReport(note: String, attachment: String) {
+        viewModelScope.launch(Dispatchers.IO) { bridge?.chatReport(note, attachment) }
     }
 
     private fun startPolling() {
@@ -527,6 +741,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 bridge?.enableSpectrum(true)
                 bridge?.setSpectrumFps(prefs.getInt("spectrum_fps", 15).toUByte())
                 bridge?.setSpectrumMaxBins(2048u) // anders default (hoge) bin-count → hoge datarate
+                sendSavedRogerBeep()
                 delay(200)
                 bridge?.yaesuEnable(false)
             }
@@ -801,6 +1016,50 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         val target = if (_yaesuMode.value) selectedYaesuPttTarget() else PttTarget.Thetis
         requestPtt(active, target)
     }
+    /// The roger beep, on its way to the shared engine.
+    ///
+    /// Nothing about the tone lives here: the engine holds PTT, makes the tone
+    /// and decides which modes it belongs in. This hands over the settings and
+    /// nothing else.
+    fun setRogerBeep(
+        freqHz: Float,
+        volume: Float,
+        durationMs: Int,
+        includeFm: Boolean,
+        onThetis: Boolean,
+        onRadio1: Boolean,
+        onRadio2: Boolean,
+    ) {
+        bridge?.setRogerBeep(
+            uniffi.sdr_remote.BridgeRogerBeep(
+                freqHz = freqHz,
+                volume = volume,
+                durationMs = durationMs.toUInt(),
+                includeFm = includeFm,
+                onThetis = onThetis,
+                onRadio1 = onRadio1,
+                onRadio2 = onRadio2,
+            )
+        )
+    }
+
+    /// Hand the saved settings over on connect, not only when the panel is
+    /// touched - a saved setting that takes effect after you fiddle with it is
+    /// not a saved setting.
+    private fun sendSavedRogerBeep() {
+        val p = getApplication<Application>()
+            .getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+        setRogerBeep(
+            p.getFloat("roger_freq_hz", 1000f),
+            p.getFloat("roger_volume", 0.25f),
+            p.getInt("roger_duration_ms", 150),
+            p.getBoolean("roger_include_fm", true),
+            p.getBoolean("roger_on_thetis", false),
+            p.getBoolean("roger_on_radio1", false),
+            p.getBoolean("roger_on_radio2", false),
+        )
+    }
+
     fun setDxSpotsEnabled(enabled: Boolean) { bridge?.setDxSpotsEnabled(enabled) }
     fun setRxVolume(volume: Float) { bridge?.setRxVolume(volume) }
     fun setLocalVolume(volume: Float) {
@@ -885,6 +1144,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         pollingJob?.cancel()
+        chatPollingJob?.cancel()
         bridge?.shutdown()
         super.onCleared()
     }

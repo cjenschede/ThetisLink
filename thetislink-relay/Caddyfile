@@ -25,6 +25,18 @@
   # Optional hardening — lock the dashboard to known admin IPs by uncommenting:
   #   @notadmin not remote_ip 203.0.113.5 198.51.100.0/24
   #   abort @notadmin
+  # Chat (design §2.1). Its own route to its own container, and its own limits -
+  # the first bound belongs at the edge, not in the application. A chat message
+  # is 2000 characters; the size here is set by the other thing this route
+  # carries, a problem report with a client log AND a server log in it. At 1 MB
+  # such a report was refused here, before the service could say a word about it
+  # (2026-08-12). 8 MB matches the ceiling the service itself now applies.
+  handle /chat* {
+    request_body {
+      max_size 8MB
+    }
+    reverse_proxy thetislink-chat:18082
+  }
   handle /admin* {
     reverse_proxy thetislink-relay:18081
   }

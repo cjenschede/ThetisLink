@@ -5,6 +5,11 @@ use sdr_remote_core::protocol::ControlId;
 /// Commands sent from UI to engine via mpsc channel.
 /// Replaces SharedState write operations.
 pub enum Command {
+    /// Ask the connected server for its own problem-report attachment, cleaned
+    /// on its side. Answered in numbered parts; the result lands in
+    /// `state.server_report`, or `state.server_report_failed` if parts went
+    /// missing.
+    RequestServerReport,
     Connect(String, Option<String>), // (addr, password)
     SendTotpCode(String),            // 6-digit TOTP code
     Disconnect,
@@ -112,6 +117,10 @@ pub enum Command {
     /// extracted view centered on the VRX freq with the given span.
     /// span_khz=0 with enabled=true defaults to 24 kHz server-side.
     SetVrxHighResSpectrum(u8, bool, u16),
+    /// Where the VRX spectrum window sits relative to the listening
+    /// frequency, in Hz. The server cuts its window there instead of always
+    /// centring, which is what lets VRX pan the way the main spectrum does.
+    SetVrxSpectrumPan(u8, i32),
     // VRX2 (Virtual RX on RX2 IQ + VFO-B)
     SetVrx2Enabled(bool),
     SetVrx2Mode(u8),
@@ -183,7 +192,16 @@ pub enum Command {
     // Audio recording
     StartRecording { rx1: bool, rx2: bool, yaesu: bool, yaesu2: bool, vrx1: bool, vrx2: bool, path: String },
     StopRecording,
-    PlayRecording { path: String },  // play last recorded WAV
+    /// Play the ticked recordings, together.
+    ///
+    /// Comparing two takes one after the other means holding the first in your
+    /// head while the second plays, and memory for audio quality is about two
+    /// seconds long. Together there is nothing to hold. Exactly two go left and
+    /// right, which makes them trivial to tell apart; one plays to both ears
+    /// and more than two are mixed.
+    PlayRecording { paths: Vec<String> },
+    /// The roger beep: one set of settings, a tick per channel.
+    SetRogerBeep(crate::roger::RogerBeep),
     StopPlayback,
     // Server management
     ServerReboot,

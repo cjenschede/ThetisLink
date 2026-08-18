@@ -23,6 +23,10 @@ pub(super) enum PopoutKind {
     /// - the two are mutually exclusive (joined XOR separate) so they share the
     /// one OS window - but has its own `popout_joined_*` geometry slot.
     Joined,
+    /// The chat window (docs/internal/DESIGN-relay-chat.md). Joins the same
+    /// lifecycle as every other detachable window rather than growing its own -
+    /// geometry, focus and persistence come for free, and the arranger sees it.
+    Chat,
 }
 
 impl SdrRemoteApp {
@@ -39,6 +43,7 @@ impl SdrRemoteApp {
             PopoutKind::Yaesu1 => (self.yaesu_popout_pos, self.yaesu_popout_size, self.yaesu_popout_init_applied),
             PopoutKind::Yaesu2 => (self.yaesu2_popout_pos, self.yaesu2_popout_size, self.yaesu2_popout_init_applied),
             PopoutKind::Joined => (self.popout_joined_pos, self.popout_joined_size, self.popout_joined_init_applied),
+            PopoutKind::Chat => (self.chat_popout_pos, self.chat_popout_size, self.chat_popout_init_applied),
         }
     }
 
@@ -51,6 +56,7 @@ impl SdrRemoteApp {
             PopoutKind::Yaesu1 => { self.yaesu_popout_pos = pos; self.yaesu_popout_size = size; }
             PopoutKind::Yaesu2 => { self.yaesu2_popout_pos = pos; self.yaesu2_popout_size = size; }
             PopoutKind::Joined => { self.popout_joined_pos = pos; self.popout_joined_size = size; }
+            PopoutKind::Chat => { self.chat_popout_pos = pos; self.chat_popout_size = size; }
         }
     }
 
@@ -63,6 +69,7 @@ impl SdrRemoteApp {
             PopoutKind::Yaesu1 => self.yaesu_popout_init_applied = v,
             PopoutKind::Yaesu2 => self.yaesu2_popout_init_applied = v,
             PopoutKind::Joined => self.popout_joined_init_applied = v,
+            PopoutKind::Chat => self.chat_popout_init_applied = v,
         }
     }
 
@@ -79,6 +86,7 @@ impl SdrRemoteApp {
             PopoutKind::Yaesu1 => ("yaesu_popout", self.yaesu_window_title(0), [465.0, 335.0]),
             PopoutKind::Yaesu2 => ("yaesu2_popout", self.yaesu_window_title(1), [465.0, 335.0]),
             PopoutKind::Joined => ("spectrum_popout", "ThetisLink - RX1 + RX2".to_string(), [900.0, 900.0]),
+            PopoutKind::Chat => ("chat_popout", "ThetisLink - Chat".to_string(), [520.0, 620.0]),
         }
     }
 
@@ -811,5 +819,45 @@ impl SdrRemoteApp {
         place(&mut self.popout_joined_pos, &mut self.popout_joined_init_applied, 120.0, 120.0);
         self.save_full_config();
         log::info!("Pop-out windows recentered onto main monitor at {:?}", base);
+    }
+}
+
+impl SdrRemoteApp {
+    /// The chat in a window of its own.
+    ///
+    /// The window is the app's business and the contents are the component's:
+    /// `render_body` draws with panels, which needs a viewport, and this is what
+    /// gives it one.
+    pub(super) fn render_chat_popout(&mut self, ctx: &egui::Context) {
+        let files = sdr_remote_chat::ChatFiles {
+            // Per-profile names, so two instances on one PC each report their own.
+            log: super::config::per_profile_file("thetislink-client", "log"),
+            conf: super::config::config_file_name(),
+        };
+        // What the engine has collected from the connected server, if anything.
+        let server = {
+            let st = self.state_rx.borrow();
+            sdr_remote_chat::ServerSide {
+                connected: st.connected,
+                text: st.server_report.clone(),
+                failed: st.server_report_failed,
+            }
+        };
+        self.show_popout(
+            ctx,
+            PopoutKind::Chat,
+            |app, ctx| {
+                app.chat.render_body(ctx, &files, &server);
+                // Asked for by the form, carried out here: the panel knows
+                // nothing of the protocol and should not.
+                if app.chat.take_server_report_request() {
+                    let _ = app.cmd_tx.send(Command::RequestServerReport);
+                }
+            },
+            |app| {
+                app.chat_open = false;
+                app.save_full_config();
+            },
+        );
     }
 }

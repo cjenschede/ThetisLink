@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[package]
+name = "sdr-remote-chat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The chat, once, for every front end that has one.
+#
+# The desktop client and the server GUI are both stations - the server is used
+# on its own next to Thetis just as often as it is used behind a client - so
+# they get the same window rather than two that drift apart. Its texts live
+# here too, in this crate's own locale file, which is what makes them identical
+# by construction instead of by discipline.
+
+# The egui window is a feature, because Android has no use for it: it holds the
+# same `ChatModel` and draws it with Compose. Without `ui` this crate is the
+# chat's rules and its worker thread, and nothing that needs a windowing system
+# to cross-compile.
+[features]
+default = ["ui"]
+ui = ["dep:eframe", "dep:egui"]
+
+[dependencies]
+sdr-remote-core = { path = "../sdr-remote-core" }
+sdr-remote-relay = { path = "../sdr-remote-relay" }
+eframe = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+rust-i18n = "3"
+# rustls with the bundled Mozilla roots, like the relay client next door: the
+# platform TLS stack would mean OpenSSL on Android, and the two halves of one
+# connection should not disagree about which certificates exist.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls-webpki-roots",
+] }
+log = "0.4"
+serde_json = "1"
+chrono = "0.4"

@@ -259,6 +259,8 @@ pub struct ServerConfig {
     pub rf2k_enabled: bool,
     /// Show RF2K-S control window on start (default true)
     pub show_rf2k_window: bool,
+    /// Whether the chat window was open when the GUI last closed.
+    pub show_chat_window: bool,
     /// UltraBeam RCU-06 serial port (e.g. "COM7")
     pub ultrabeam_port: Option<String>,
     pub ultrabeam_enabled: bool,
@@ -300,6 +302,7 @@ pub struct ServerConfig {
     pub amplitec_window_pos: Option<[f32; 2]>,
     pub spe_window_pos: Option<[f32; 2]>,
     pub rf2k_window_pos: Option<[f32; 2]>,
+    pub chat_window_pos: Option<[f32; 2]>,
     pub ultrabeam_window_pos: Option<[f32; 2]>,
     pub rotor_window_pos: Option<[f32; 2]>,
     /// Saved main window position: [x, y]
@@ -316,6 +319,7 @@ pub struct ServerConfig {
     pub amplitec_window_size: Option<[f32; 2]>,
     pub spe_window_size: Option<[f32; 2]>,
     pub rf2k_window_size: Option<[f32; 2]>,
+    pub chat_window_size: Option<[f32; 2]>,
     pub ultrabeam_window_size: Option<[f32; 2]>,
     pub rotor_window_size: Option<[f32; 2]>,
     /// UI theme of the server-GUI: "classic" (default, the original
@@ -406,6 +410,8 @@ impl Default for ServerConfig {
             rf2k_addr: None,
             rf2k_enabled: true,
             show_rf2k_window: true,
+            // Closed until asked for: the chat is the least important thing here.
+            show_chat_window: false,
             ultrabeam_port: None,
             ultrabeam_enabled: true,
             show_ultrabeam_window: true,
@@ -423,6 +429,7 @@ impl Default for ServerConfig {
             amplitec_window_pos: None,
             spe_window_pos: None,
             rf2k_window_pos: None,
+            chat_window_pos: None,
             ultrabeam_window_pos: None,
             rotor_window_pos: None,
             main_window_pos: None,
@@ -434,6 +441,7 @@ impl Default for ServerConfig {
             amplitec_window_size: None,
             spe_window_size: None,
             rf2k_window_size: None,
+            chat_window_size: None,
             ultrabeam_window_size: None,
             rotor_window_size: None,
             theme: "classic".to_string(),
@@ -839,6 +847,29 @@ fn load_unlocked() -> ServerConfig {
                     "rf2k_enabled" => {
                         config.rf2k_enabled = value.trim() != "false";
                     }
+                    "chat_window" => {
+                        config.show_chat_window = value.trim() == "true";
+                    }
+                    "chat_pos_x" => {
+                        if let Ok(v) = value.trim().parse::<f32>() {
+                            config.chat_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                        }
+                    }
+                    "chat_pos_y" => {
+                        if let Ok(v) = value.trim().parse::<f32>() {
+                            config.chat_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                        }
+                    }
+                    "chat_size_w" => {
+                        if let Ok(v) = value.trim().parse::<f32>() {
+                            config.chat_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                        }
+                    }
+                    "chat_size_h" => {
+                        if let Ok(v) = value.trim().parse::<f32>() {
+                            config.chat_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                        }
+                    }
                     "rf2k_window" => {
                         config.show_rf2k_window = value.trim() == "true";
                     }
@@ -1181,7 +1212,7 @@ pub fn save(config: &ServerConfig) {
 fn save_unlocked(config: &ServerConfig) {
     let path = config_path();
     let mut contents = format!(
-        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_ssb_switch_on_ptt={}\nftx1_memory_write_ack={}\nyaesu_audio={}\nyaesu_audio_out={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
+        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_ssb_switch_on_ptt={}\nftx1_memory_write_ack={}\nyaesu_audio={}\nyaesu_audio_out={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nchat_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
         config.tci_addr.as_deref().unwrap_or(""),
         config.thetis_path.as_deref().unwrap_or(""),
         config.yaesu_port.as_deref().unwrap_or(""),
@@ -1201,6 +1232,7 @@ fn save_unlocked(config: &ServerConfig) {
         config.rf2k_addr.as_deref().unwrap_or(""),
         config.rf2k_enabled,
         config.show_rf2k_window,
+        config.show_chat_window,
         config.ultrabeam_port.as_deref().unwrap_or(""),
         config.ultrabeam_enabled,
         config.show_ultrabeam_window,
@@ -1299,6 +1331,9 @@ fn save_unlocked(config: &ServerConfig) {
     if let Some(pos) = config.rf2k_window_pos {
         contents.push_str(&format!("rf2k_pos_x={}\nrf2k_pos_y={}\n", pos[0], pos[1]));
     }
+    if let Some(pos) = config.chat_window_pos {
+        contents.push_str(&format!("chat_pos_x={}\nchat_pos_y={}\n", pos[0], pos[1]));
+    }
     if let Some(pos) = config.ultrabeam_window_pos {
         contents.push_str(&format!("ultrabeam_pos_x={}\nultrabeam_pos_y={}\n", pos[0], pos[1]));
     }
@@ -1334,6 +1369,9 @@ fn save_unlocked(config: &ServerConfig) {
     }
     if let Some(sz) = config.rf2k_window_size {
         contents.push_str(&format!("rf2k_size_w={}\nrf2k_size_h={}\n", sz[0], sz[1]));
+    }
+    if let Some(sz) = config.chat_window_size {
+        contents.push_str(&format!("chat_size_w={}\nchat_size_h={}\n", sz[0], sz[1]));
     }
     if let Some(sz) = config.ultrabeam_window_size {
         contents.push_str(&format!("ultrabeam_size_w={}\nultrabeam_size_h={}\n", sz[0], sz[1]));
@@ -1381,8 +1419,43 @@ fn save_unlocked(config: &ServerConfig) {
     if !config.relay_token.is_empty() {
         contents.push_str(&format!("relay_token={}\n", sdr_remote_core::auth::obfuscate_password(&config.relay_token)));
     }
-    let _ = fs::write(&path, contents);
+    let _ = fs::write(&path, sdr_remote_core::conf_layout::group(&contents, SECTIONS, UNSORTED));
 }
+
+/// The trailing heading for keys this table has no home for. A key landing
+/// here is not an error - it is the reminder that it needs one.
+const UNSORTED: &str = "Not sorted yet";
+
+/// How the server's settings file reads. See `conf_layout`: the longest
+/// matching prefix wins, so `amplitec_pos_x` files under the window headings
+/// while `amplitec_port` stays with its amplifier.
+///
+/// Window geometry is deliberately NOT filed with its own device. Coordinates
+/// are only worth reading against each other - a window that ended up on
+/// another monitor stands out in a column of positions and disappears
+/// entirely when it sits under its own heading.
+const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
+    ("Connection and security", &[
+        "tci", "password", "totp_", "friendly_name", "relay_", "thetis_path", "autostart",
+    ]),
+    ("Receivers", &["rx2_present"]),
+    ("Yaesu radio 1", &["yaesu_", "ftx1_"]),
+    ("Yaesu radio 2", &["yaesu2_"]),
+    ("Amplifiers", &["active_pa", "amplitec_", "spe_", "rf2k_", "ultrabeam_"]),
+    ("Antenna tuners", &["tuner1_", "tuner2_"]),
+    ("Rotor", &["rotor_", "rotor1_", "pstrotator_", "mcp2221_"]),
+    ("DX cluster", &["dxcluster_"]),
+    ("Window positions and sizes", &[
+        "main_pos", "main_size", "tuner_pos", "tuner_size", "amplitec_pos", "amplitec_size",
+        "spe_pos", "spe_size", "rf2k_pos", "rf2k_size", "chat_pos", "chat_size",
+        "ultrabeam_pos", "ultrabeam_size", "rotor_pos", "rotor_size",
+    ]),
+    ("Window visibility", &[
+        "tuner_window", "amplitec_window", "spe_window", "rf2k_window", "chat_window",
+        "ultrabeam_window", "rotor_window", "ultrabeam_show_menu", "mcp2221_section_expanded",
+    ]),
+    ("Appearance", &["theme", "language", "ui_zoom", "layout_grids"]),
+];
 
 /// Format labels as comma-separated string for protocol transmission.
 /// Sends same labels twice (A and B share the same 6 antennas).
@@ -1396,4 +1469,50 @@ pub fn labels_string(config: &ServerConfig) -> String {
         parts.push(l);
     }
     parts.join(",")
+}
+
+#[cfg(test)]
+mod conf_section_tests {
+    use super::{SECTIONS, UNSORTED};
+
+    fn heading_of(key: &str) -> String {
+        let grouped = sdr_remote_core::conf_layout::group(&format!("{key}=x\n"), SECTIONS, UNSORTED);
+        grouped
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim_matches(|c| c == '#' || c == ' ' || c == '-')
+            .to_string()
+    }
+
+    /// Where a window is, versus what the device is set to. Both start with
+    /// the device's name, and only the longer prefix tells them apart.
+    #[test]
+    fn a_window_coordinate_is_not_a_device_setting() {
+        assert_eq!(heading_of("amplitec_pos_x"), "Window positions and sizes");
+        assert_eq!(heading_of("amplitec_size_w"), "Window positions and sizes");
+        assert_eq!(heading_of("amplitec_port"), "Amplifiers");
+        assert_eq!(heading_of("amplitec_window"), "Window visibility");
+    }
+
+    /// A tuner's position in the amplifier chain is not a window position,
+    /// however much the key looks like one.
+    #[test]
+    fn a_tuners_place_in_the_chain_is_not_a_screen_position() {
+        assert_eq!(heading_of("tuner1_amplitec_pos"), "Antenna tuners");
+        assert_eq!(heading_of("tuner_pos_x"), "Window positions and sizes");
+    }
+
+    #[test]
+    fn the_rotor_keeps_its_own_and_its_backend() {
+        assert_eq!(heading_of("rotor1_max_deg"), "Rotor");
+        assert_eq!(heading_of("pstrotator_host"), "Rotor");
+        assert_eq!(heading_of("rotor_pos_y"), "Window positions and sizes");
+    }
+
+    #[test]
+    fn the_two_radios_do_not_share_a_heading() {
+        assert_eq!(heading_of("yaesu_port"), "Yaesu radio 1");
+        assert_eq!(heading_of("yaesu2_port"), "Yaesu radio 2");
+    }
 }

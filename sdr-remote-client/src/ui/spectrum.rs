@@ -241,7 +241,6 @@ pub(crate) fn spectrum_plot(
         let y = plot_rect.min.y + frac * plot_rect.height();
         (Pos2::new(x, y.clamp(plot_rect.min.y, plot_rect.max.y)), frac.clamp(0.0, 1.0))
     }).collect();
-    let points: Vec<Pos2> = points_with_frac.iter().map(|(p, _)| *p).collect();
 
     // ── VFO frequency label (behind spectrum) ──────────────────────────
     // Compute VFO text position first; draw label behind spectrum, line on top with gap
@@ -926,7 +925,19 @@ pub(crate) fn render_vrx_strip(
     } else {
         (full_span_hz as f64 / (zoom as f64).max(1.0)).max(500.0)
     };
-    let pan_hz = pan as f64 * full_span_hz as f64;
+    // Panning is a fraction of what the receiver can see, in both spectrum
+    // windows, so the same slider position means the same travel. In extracted
+    // mode `full_span_hz` is only the window the server cut - a fraction of
+    // that barely moved, which is why this one felt stuck while the main
+    // spectrum did not (2026-08-14). The server is told the same offset and
+    // cuts its window there, so the view stays full of data as it moves.
+    let pan_reference_hz = if extracted_mode {
+        let ddc = ddc_max_hz.saturating_sub(ddc_min_hz) as f64;
+        if ddc > 0.0 { ddc } else { full_span_hz as f64 }
+    } else {
+        full_span_hz as f64
+    };
+    let pan_hz = pan as f64 * pan_reference_hz;
     let view_min_hz = vrx_freq_hz as f64 + pan_hz - view_span_hz / 2.0;
     let view_max_hz = vrx_freq_hz as f64 + pan_hz + view_span_hz / 2.0;
     let full_min_hz = full_center_hz as f64 - full_span_hz as f64 / 2.0;

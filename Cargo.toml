@@ -9,12 +9,14 @@ members = [
     "sdr-remote-android",
     "vrx-rs",
     "thetislink-relay",
+    "thetislink-chat",
     "sdr-remote-relay",
+    "sdr-remote-chat",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "2.8.0"
+version = "2.9.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
 
@@ -39,6 +41,11 @@ midir = "0.10"
 # Optimize dependencies even in dev mode (Opus/rubato are too slow unoptimized)
 [profile.dev.package."*"]
 opt-level = 2
+
+# NOTE: the published binaries must not carry the build machine's home
+# directory. The obvious knob for that, `[profile.release] trim-paths`, is NOT
+# stabilised in this Cargo (1.93.1) and fails the build outright, so the release
+# script does it with --remap-path-prefix instead. See build-release.ps1.
 
 # Local fork of mcp2221-hal: adds `connect_with_serial` and `list_devices` so
 # we can drive two MCP2221A boards (one per StockCorner tuner) from the same

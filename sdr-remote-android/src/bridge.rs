@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::Mutex;
 
-use log::info;
+use log::{info, warn};
 use tokio::sync::{mpsc, watch};
 
 use sdr_remote_core::protocol::ControlId;
@@ -26,6 +26,75 @@ pub struct BridgeDxSpot {
     pub comment: String,
     pub age_seconds: u16,
     pub expiry_seconds: u16,
+}
+
+/// One chat message, as Compose draws it.
+///
+/// The two judgements that need the model to make them - is this ours, and may
+/// it still be corrected - are answered here rather than left to Kotlin, so the
+/// phone and the desktop cannot disagree about whose message it is.
+pub struct BridgeChatMessage {
+    pub id: i64,
+    /// Unix seconds; the UI turns it into local time.
+    pub at: i64,
+    /// Empty for somebody who left the chat: their words stay, they do not.
+    pub name: String,
+    pub body: String,
+    /// The message this one answers, or empty. Its author and first words come
+    /// along, because a client only asks for what is new and cannot look up a
+    /// message it never held.
+    pub reply_name: String,
+    pub reply_text: String,
+    pub edited: bool,
+    pub mine: bool,
+    pub can_edit: bool,
+}
+
+/// One answer from the administrator on a problem report.
+pub struct BridgeChatAnswer {
+    pub id: i64,
+    pub at: i64,
+    pub body: String,
+}
+
+/// The roger beep, as the phone sets it.
+///
+/// A mirror of `sdr_remote_logic::roger::RogerBeep` rather than a re-export,
+/// because UniFFI needs the type declared in this crate. The values are handed
+/// straight over and clamped there, so a phone cannot ask for something the
+/// desktop would refuse.
+pub struct BridgeRogerBeep {
+    pub freq_hz: f32,
+    pub volume: f32,
+    pub duration_ms: u32,
+    pub include_fm: bool,
+    pub on_thetis: bool,
+    pub on_radio1: bool,
+    pub on_radio2: bool,
+}
+
+/// The chat as one screen's worth of state.
+pub struct BridgeChatState {
+    /// 0 = reachable, 1 = no relay configured, 2 = a relay without a chat,
+    /// 3 = nothing answering. Three reasons that need three different things
+    /// from the user; one word covering all of them sends people to the
+    /// maker's mailbox.
+    pub offline_reason: u8,
+    /// The service has said whether this station is in the chat. Until it has,
+    /// neither the consent screen nor the conversation is shown - guessing
+    /// wrong means showing somebody a consent form they already filled in.
+    pub consent_known: bool,
+    pub consented: bool,
+    pub display_name: String,
+    pub unread: u32,
+    /// The service's own words for a refusal, or empty.
+    pub error: String,
+    /// How many problem reports this station may still send today; -1 when the
+    /// service has not said. Known before the form is filled in, because being
+    /// told at the send button is being told after the work.
+    pub reports_left: i64,
+    pub messages: Vec<BridgeChatMessage>,
+    pub answers: Vec<BridgeChatAnswer>,
 }
 
 /// Radio state exposed to Kotlin via uniffi.
@@ -539,6 +608,10 @@ fn make_audio(
 
 /// Bridge between Kotlin/uniffi and the Rust ClientEngine.
 /// Wraps engine lifecycle, command forwarding, and state polling.
+/// The stop handle of the last relay monitor started in this process, so a new
+/// one can put the old one down. See the comment where it is set.
+static PREVIOUS_MONITOR: Mutex<Option<sdr_remote_relay::RelayStopHandle>> = Mutex::new(None);
+
 pub struct SdrBridge {
     cmd_tx: mpsc::UnboundedSender<Command>,
     state_rx: Mutex<watch::Receiver<RadioState>>,
@@ -552,6 +625,14 @@ pub struct SdrBridge {
     /// Fase 3c: relay status handle to surface the transport (UDP / wss-fallback) to the
     /// Compose UI. `None` in direct mode.
     relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
+    /// The relay address this bridge was built with. The chat lives at the same
+    /// host behind its own path, so this is where its endpoint is derived from -
+    /// and it is also the one host a problem report must never carry.
+    relay_url: String,
+    /// The chat, exactly as the desktop holds it. Compose asks for its state on
+    /// a timer and calls the same handful of verbs; the worker thread inside
+    /// does the network, so nothing here can get between an operator and PTT.
+    chat: Mutex<sdr_remote_chat::ChatModel>,
 }
 
 impl SdrBridge {
@@ -612,10 +693,32 @@ impl SdrBridge {
                 inbound_tx,
                 uplink_rx,
             };
-            relay_monitor = Some(sdr_remote_relay::RelayMonitor::start_threaded_tunnel(
-                relay_cfg, tunnel,
-            ));
-            info!("Android transport: relay tunnel (via {})", relay_url);
+            let monitor = sdr_remote_relay::RelayMonitor::start_threaded_tunnel(relay_cfg, tunnel);
+            // Only one relay monitor may live in this process. Android can build
+            // a second bridge while the first is still running - the phone was
+            // seen with two, three seconds apart, after switching network - and
+            // both carry the same install id. The relay hands a returning client
+            // its own slot back and closes the older connection, so two live
+            // monitors evict each other every five seconds for as long as the
+            // app runs. Control traffic squeezes through the gaps, which is why
+            // the S-meter kept working while audio and spectrum never got a
+            // stable path, and why only killing the app helped: that took both
+            // monitors with it (2026-08-17).
+            //
+            // Stopping the older one here rather than trusting the owner of it
+            // to do so: whoever forgets, the invariant holds.
+            if let Some(previous) = PREVIOUS_MONITOR.lock().unwrap().replace(monitor.stop_handle()) {
+                warn!("a relay monitor was still running - stopping it, or the two would evict each other");
+                previous.stop();
+            }
+            relay_monitor = Some(monitor);
+            // Not the address itself. It is the one thing a report must never
+            // carry, and the relay library already writes <relay> in its own
+            // status lines - printing it raw here made the kept log the only
+            // place it appeared in plain text. Which relay is configured tells
+            // nobody anything they can act on anyway: the recipient of a report
+            // sees <relay> either way (2026-08-17).
+            info!("Android transport: relay tunnel (via <relay>)");
             Some(ClientRelayTunnel {
                 uplink_tx,
                 inbound_rx,
@@ -645,6 +748,8 @@ impl SdrBridge {
             ui_language: Mutex::new("en".to_string()),
             _relay_monitor: Mutex::new(relay_monitor),
             relay_status,
+            relay_url,
+            chat: Mutex::new(sdr_remote_chat::ChatModel::default()),
         }
     }
 
@@ -678,6 +783,26 @@ impl SdrBridge {
 
     pub fn set_ptt(&self, active: bool) {
         let _ = self.cmd_tx.send(Command::SetPtt(active));
+    }
+
+    /// Hand the beep settings to the engine.
+    ///
+    /// Everything that makes a roger beep work - the tone, which modes it
+    /// belongs in, holding PTT until it has gone out - is in the engine this
+    /// app already runs. Nothing of it is duplicated here; this is the way in.
+    pub fn set_roger_beep(&self, beep: BridgeRogerBeep) {
+        let _ = self.cmd_tx.send(Command::SetRogerBeep(
+            sdr_remote_logic::roger::RogerBeep {
+                freq_hz: beep.freq_hz,
+                volume: beep.volume,
+                duration_ms: beep.duration_ms,
+                include_fm: beep.include_fm,
+                on_thetis: beep.on_thetis,
+                on_radio1: beep.on_radio1,
+                on_radio2: beep.on_radio2,
+            }
+            .clamped(),
+        ));
     }
 
     pub fn set_mic_gate_delay_ms(&self, delay_ms: u32) {
@@ -1094,6 +1219,141 @@ impl SdrBridge {
         bs
     }
 
+    // ---- the chat ---------------------------------------------------------
+    //
+    // One call does the housekeeping and returns the state, because Compose has
+    // a timer and not a frame loop: `chat_state(open)` ticks the model (which
+    // schedules its own polling) and hands back everything the screen draws.
+    // Everything else is a verb the model already knows.
+
+    /// The chat as it stands. `open` says whether the chat screen is showing:
+    /// while it is, the conversation is polled briskly; while it is not, once
+    /// every half minute, which is what keeps the unread badge honest.
+    pub fn chat_state(&self, open: bool) -> BridgeChatState {
+        let ticket = self
+            .relay_status
+            .as_ref()
+            .and_then(|h| h.snapshot().chat_ticket);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let mut chat = self.chat.lock().unwrap();
+        chat.tick(&self.relay_url, ticket.as_deref(), open);
+        BridgeChatState {
+            offline_reason: match chat.offline {
+                None => 0,
+                Some(sdr_remote_chat::OfflineReason::NoRelay) => 1,
+                Some(sdr_remote_chat::OfflineReason::NoTicket) => 2,
+                Some(sdr_remote_chat::OfflineReason::Unreachable) => 3,
+            },
+            consent_known: chat.consented.is_some(),
+            consented: chat.consented.unwrap_or(false),
+            display_name: chat.display_name.clone(),
+            unread: chat.unread as u32,
+            error: chat.error.clone().unwrap_or_default(),
+            reports_left: chat.reports_left,
+            messages: chat
+                .messages
+                .iter()
+                .map(|m| BridgeChatMessage {
+                    id: m.id,
+                    at: m.at,
+                    // Empty rather than optional: a name that is not there
+                    // belongs to somebody who left, and Compose says so in its
+                    // own words rather than showing a null.
+                    name: m.name.clone().unwrap_or_default(),
+                    body: m.body.clone(),
+                    reply_name: m.reply_name.clone().unwrap_or_default(),
+                    reply_text: m.reply_text.clone().unwrap_or_default(),
+                    edited: m.edited,
+                    mine: chat.is_mine(m),
+                    can_edit: chat.can_edit(m, now),
+                })
+                .collect(),
+            answers: chat
+                .answers
+                .iter()
+                .map(|a| BridgeChatAnswer {
+                    id: a.id,
+                    at: a.at,
+                    body: a.body.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Join, under this name. The service checks the name and the consent-text
+    /// version; this only carries the intent.
+    pub fn chat_consent(&self, display_name: String) {
+        self.chat.lock().unwrap().consent(&display_name);
+    }
+
+    /// Say something. `reply_to` is 0 when it answers nothing - Compose has no
+    /// use for an optional here and 0 is not a message id.
+    pub fn chat_send(&self, body: String, reply_to: i64) {
+        let reply = if reply_to > 0 { Some(reply_to) } else { None };
+        self.chat.lock().unwrap().send(&body, reply);
+    }
+
+    /// Correct one's own message. The service is the judge of "own" and of the
+    /// fifteen-minute window; a refusal comes back as the error in `chat_state`.
+    pub fn chat_edit(&self, id: i64, body: String) {
+        self.chat.lock().unwrap().edit(id, &body);
+    }
+
+    /// Leave the chat, with or without taking one's own messages along.
+    pub fn chat_leave(&self, delete_messages: bool) {
+        self.chat.lock().unwrap().leave(delete_messages);
+    }
+
+    /// The unread badge goes out when the screen has been looked at.
+    pub fn chat_mark_read(&self) {
+        self.chat.lock().unwrap().mark_read();
+    }
+
+    /// Clean a log and a settings dump into the attachment the user then reads.
+    ///
+    /// Android has neither file to point at - the log comes from the system log
+    /// and the settings from the framework's preferences - so both arrive here
+    /// as text the app already holds. The cleaning is the shared one, rules and
+    /// all. Returns the attachment, or a line saying why there is none; either
+    /// way what comes back is what the screen shows and what `chat_report`
+    /// sends, because the preview is the actual safeguard (design 1.3).
+    pub fn chat_build_attachment(&self, log: String, settings: String) -> String {
+        match sdr_remote_core::diagnose::build_attachment_from_text(
+            &log,
+            &settings,
+            &self.relay_url,
+        ) {
+            Ok(a) => a,
+            Err(e) => format!("(no attachment: {e})"),
+        }
+    }
+
+    /// Report a problem, in the reporter's own words, with the attachment the
+    /// reporter saw - or none at all.
+    ///
+    /// `attachment` is passed back exactly as `chat_build_attachment` returned
+    /// it and is deliberately not rebuilt here: what leaves the phone has to be
+    /// what was on the screen. Empty means the box was not ticked. Joining the
+    /// chat is not required (design section 4), so this works for somebody who
+    /// never consented.
+    pub fn chat_report(&self, note: String, attachment: String) {
+        let full = sdr_remote_core::diagnose::describe(
+            &note,
+            &self.relay_url,
+            sdr_remote_core::version_string().as_str(),
+            "android",
+            if attachment.trim().is_empty() {
+                None
+            } else {
+                Some(attachment.as_str())
+            },
+        );
+        self.chat.lock().unwrap().send_diagnosis(&full);
+    }
+
     pub fn shutdown(&self) {
         let mut guard = self.shutdown_tx.lock().unwrap();
         if let Some(tx) = guard.take() {
@@ -1107,6 +1367,7 @@ impl SdrBridge {
         // RECONNECT_DELAY). Stopping the monitor here (ViewModel.onCleared) prevents
         // the zombie connection.
         if let Some(monitor) = self._relay_monitor.lock().unwrap().take() {
+            info!("bridge shutting down - stopping its relay monitor");
             monitor.stop();
         }
     }

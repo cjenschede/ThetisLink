@@ -228,6 +228,9 @@ impl TrackedSocket {
         }
     }
 
+    /// Unused today, kept for the same reason as the rest of this wrapper:
+    /// it stands in for a `UdpSocket` and should answer what one answers.
+    #[allow(dead_code)]
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.inner.local_addr()
     }

@@ -73,15 +73,17 @@ pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
 }
 
 /// Obfuscate a password for storage in config files.
-/// Not true encryption — prevents casual reading of the password.
-/// Uses XOR with a fixed key + base64 encoding.
+/// Not true encryption — prevents casual reading of the password. The key is in
+/// this file, so anyone with the source can reverse it: treat an obfuscated
+/// value as readable, never as protected.
+/// Uses XOR with a fixed key, hex-encoded.
 const OBFUSCATE_KEY: &[u8] = b"ThetisLink-PSK-2026";
 
 pub fn obfuscate_password(password: &str) -> String {
     let bytes: Vec<u8> = password.as_bytes().iter().enumerate()
         .map(|(i, &b)| b ^ OBFUSCATE_KEY[i % OBFUSCATE_KEY.len()])
         .collect();
-    // Simple base64-like encoding using hex
+    // Hex, two characters per byte.
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 

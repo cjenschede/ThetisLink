@@ -158,6 +158,17 @@ pub enum PacketType {
     /// appearing) instead of sticky. Push-on-change + once on (re)connect.
     /// Old clients ignore this unknown type (back-compat by construction).
     YaesuPresence = 0x2E,
+    /// Ask the connected server for its own problem-report attachment
+    /// (client -> server). Header only. Answered with `ServerReportPart`
+    /// packets, or with nothing at all if the server cannot build one.
+    ServerReportRequest = 0x35,
+    /// One numbered part of that attachment (server -> client).
+    ///
+    /// `header(4) + part u16 + parts u16 + len u16 + bytes`. Numbered because
+    /// this is UDP: a log is far too big for one datagram, and a client that
+    /// cannot tell a complete transfer from a lossy one would attach a
+    /// truncated log to a report and call it the server's log.
+    ServerReportPart = 0x36,
 }
 
 impl PacketType {
@@ -602,6 +613,36 @@ pub enum ControlId {
     /// spectrum bandwidth. Default on (server-side default too, so an old client
     /// keeps what it had).
     FullSpectrumEnabled = 0x98,
+    /// VRX1 spectrum pan offset from the listening frequency, in units of
+    /// 10 Hz, as an i16 carried in the u16 value (client -> server).
+    ///
+    /// The server cuts the VRX window around the listening frequency. Without
+    /// this the client could only pan inside the window it had already been
+    /// sent, which is one screen wide - so panning barely moved, while the
+    /// main spectrum pans across the whole receiver. With it the server cuts
+    /// the window where the operator is looking and the two behave alike.
+    ///
+    /// Ten hertz per step reaches +/-327 kHz, which covers half of any DDC
+    /// this runs on, and is finer than a pixel at every zoom that exists here.
+    /// A server that does not know this control ignores it and keeps
+    /// centring on the listening frequency, which is what it did before.
+    VrxSpectrumPan = 0x99,
+    /// VRX2 spectrum pan offset. Same units and reasoning.
+    VrxSpectrumPan2 = 0x9A,
+}
+
+/// Hertz per step of [`ControlId::VrxSpectrumPan`].
+pub const VRX_PAN_STEP_HZ: i32 = 10;
+
+/// Pack a pan offset in Hz into the control value, clamped to what fits.
+pub fn pack_vrx_pan(offset_hz: i32) -> u16 {
+    let steps = (offset_hz / VRX_PAN_STEP_HZ).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    steps as u16
+}
+
+/// Recover the pan offset in Hz from the control value.
+pub fn unpack_vrx_pan(value: u16) -> i32 {
+    (value as i16) as i32 * VRX_PAN_STEP_HZ
 }
 
 impl ControlId {
@@ -1119,6 +1160,74 @@ pub struct HeartbeatAck {
     /// Server runtime-state flags (e.g. TCI_CONNECTED). Forward-compat:
     /// older servers don't send this; client treats absent as `NONE`.
     pub state_flags: ServerStateFlags,
+    /// What the server believes this client is subscribed to, as a bitmask.
+    ///
+    /// Not a command and not an echo of one: it is the server's own answer to
+    /// "what do I think you want", carried on a packet that already goes out
+    /// every second. It exists because the client's wishes are restored on a
+    /// transition - and a transition can be missed, over a transport with no
+    /// acknowledgement, by a UI that samples it. What comes back after such a
+    /// miss is exactly what the server switches on by itself, and what stays
+    /// silent is exactly what the client should have asked for again.
+    ///
+    /// `None` where the server is older than this field. Absent is not the
+    /// same as "nothing subscribed", and reading it as such would report a
+    /// disagreement with every old server.
+    pub subs: Option<SubscriptionMask>,
+}
+
+/// The subscriptions a client can hold, as the server sees them.
+///
+/// Kept as a mask rather than a struct on the wire because it rides along on an
+/// existing packet: two bytes, no extra round trip, nothing on the hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SubscriptionMask(pub u16);
+
+impl SubscriptionMask {
+    pub const RX1_AUDIO: u16 = 1 << 0;
+    pub const RX2_AUDIO: u16 = 1 << 1;
+    pub const RX1_SPECTRUM: u16 = 1 << 2;
+    pub const RX2_SPECTRUM: u16 = 1 << 3;
+    pub const VRX1: u16 = 1 << 4;
+    pub const VRX2: u16 = 1 << 5;
+    pub const VRX1_SPECTRUM: u16 = 1 << 6;
+    pub const VRX2_SPECTRUM: u16 = 1 << 7;
+    pub const YAESU: u16 = 1 << 8;
+    pub const YAESU2: u16 = 1 << 9;
+    pub const FULL_SPECTRUM: u16 = 1 << 10;
+    pub const DX_SPOTS: u16 = 1 << 11;
+
+    pub fn has(&self, bit: u16) -> bool {
+        self.0 & bit != 0
+    }
+
+    pub fn set(&mut self, bit: u16, on: bool) {
+        if on {
+            self.0 |= bit;
+        } else {
+            self.0 &= !bit;
+        }
+    }
+
+    /// The bits that differ, for a line that says what disagrees rather than
+    /// that something does.
+    pub fn names_of(bits: u16) -> Vec<&'static str> {
+        const NAMED: &[(u16, &str)] = &[
+            (SubscriptionMask::RX1_AUDIO, "rx1-audio"),
+            (SubscriptionMask::RX2_AUDIO, "rx2-audio"),
+            (SubscriptionMask::RX1_SPECTRUM, "rx1-spectrum"),
+            (SubscriptionMask::RX2_SPECTRUM, "rx2-spectrum"),
+            (SubscriptionMask::VRX1, "vrx1"),
+            (SubscriptionMask::VRX2, "vrx2"),
+            (SubscriptionMask::VRX1_SPECTRUM, "vrx1-spectrum"),
+            (SubscriptionMask::VRX2_SPECTRUM, "vrx2-spectrum"),
+            (SubscriptionMask::YAESU, "yaesu"),
+            (SubscriptionMask::YAESU2, "yaesu2"),
+            (SubscriptionMask::FULL_SPECTRUM, "full-spectrum"),
+            (SubscriptionMask::DX_SPOTS, "dx-spots"),
+        ];
+        NAMED.iter().filter(|(b, _)| bits & b != 0).map(|(_, n)| *n).collect()
+    }
 }
 
 impl HeartbeatAck {
@@ -1128,6 +1237,9 @@ impl HeartbeatAck {
     pub const SIZE_WITH_CAPS: usize = 16;
     /// Full size including state_flags (v2.0.0-post PATCH-1)
     pub const SIZE: usize = 20;
+    /// With the subscription mask (build 99). Same forward-compatible shape as
+    /// the two growths before it: an older server simply stops at 20 bytes.
+    pub const SIZE_WITH_SUBS: usize = 22;
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         let header = Header::new(PacketType::HeartbeatAck, self.flags);
@@ -1136,6 +1248,16 @@ impl HeartbeatAck {
         buf[8..12].copy_from_slice(&self.echo_time.to_be_bytes());
         buf[12..16].copy_from_slice(&self.capabilities.0.to_be_bytes());
         buf[16..20].copy_from_slice(&self.state_flags.0.to_be_bytes());
+    }
+
+    /// Serialise including the subscription mask. Separate from `serialize`
+    /// so the older, shorter form stays exactly what it was.
+    pub fn serialize_with_subs(&self, buf: &mut [u8; Self::SIZE_WITH_SUBS]) {
+        let mut head = [0u8; Self::SIZE];
+        self.serialize(&mut head);
+        buf[..Self::SIZE].copy_from_slice(&head);
+        let mask = self.subs.unwrap_or_default().0;
+        buf[20..22].copy_from_slice(&mask.to_be_bytes());
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -1159,12 +1281,22 @@ impl HeartbeatAck {
             ServerStateFlags::NONE
         };
 
+        // Absent on a server older than this field, and absent is NOT "nothing
+        // subscribed": reading it that way would report a disagreement against
+        // every older server, every second.
+        let subs = if buf.len() >= Self::SIZE_WITH_SUBS {
+            Some(SubscriptionMask(u16::from_be_bytes(buf[20..22].try_into().unwrap())))
+        } else {
+            None
+        };
+
         Ok(Self {
             flags: header.flags,
             echo_sequence: u32::from_be_bytes(buf[4..8].try_into().unwrap()),
             echo_time: u32::from_be_bytes(buf[8..12].try_into().unwrap()),
             capabilities,
             state_flags,
+            subs,
         })
     }
 }
@@ -2113,19 +2245,41 @@ pub fn radio_model_name(code: u8) -> &'static str {
     }
 }
 
+/// Why a radio's serial port cannot be used right now, as a wire code on
+/// `YaesuPresence`. **Single source of truth** for the codes, like
+/// `radio_model_name` above: the server classifies, every UI only maps a code
+/// to its own words. The distinction matters because the operator's next move
+/// differs per case - and because "port in use by another program" is the
+/// single most common reason a 991A/FTX-1 shows up dead in ThetisLink: other
+/// control software still holding the CAT port in the background.
+pub const PORT_TROUBLE_NONE: u8 = 0;
+/// Windows refused the open with access-denied: another program has the port.
+pub const PORT_TROUBLE_BUSY: u8 = 1;
+/// The COM port does not exist: cable out, or the number changed after a
+/// replug into a different USB socket.
+pub const PORT_TROUBLE_MISSING: u8 = 2;
+
 /// Yaesu radio presence (server→client, broadcast to all clients): per slot whether
-/// there is a connected radio + the model. Decouples the connected-status/selector
-/// from the audio+state subscription so dropping/appearing is dynamic (not
-/// sticky). PATCH-android-yaesu-presence-datasaver.
+/// there is a connected radio + the model + why its port cannot be opened when
+/// it cannot. Decouples the connected-status/selector from the audio+state
+/// subscription so dropping/appearing is dynamic (not sticky).
+/// PATCH-android-yaesu-presence-datasaver.
+///
+/// The two trouble bytes are additive: an old client stops reading after the
+/// model bytes, and an old server's shorter packet reads as trouble = none.
 pub struct YaesuPresencePacket {
     pub slot0_present: bool,
     pub slot0_model: u8,
     pub slot1_present: bool,
     pub slot1_model: u8,
+    pub slot0_trouble: u8,
+    pub slot1_trouble: u8,
 }
 
 impl YaesuPresencePacket {
-    pub const SIZE: usize = Header::SIZE + 4; // 8
+    pub const SIZE: usize = Header::SIZE + 6; // 10
+    /// The pre-trouble size; a packet this short is an old server, not an error.
+    const MIN_SIZE: usize = Header::SIZE + 4; // 8
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         Header::new(PacketType::YaesuPresence, Flags::NONE).serialize(buf);
@@ -2133,6 +2287,8 @@ impl YaesuPresencePacket {
         buf[5] = self.slot0_model;
         buf[6] = self.slot1_present as u8;
         buf[7] = self.slot1_model;
+        buf[8] = self.slot0_trouble;
+        buf[9] = self.slot1_trouble;
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -2140,14 +2296,16 @@ impl YaesuPresencePacket {
         if header.packet_type != PacketType::YaesuPresence {
             bail!("expected YaesuPresence packet, got {:?}", header.packet_type);
         }
-        if buf.len() < Self::SIZE {
-            bail!("YaesuPresence packet too short: {} < {}", buf.len(), Self::SIZE);
+        if buf.len() < Self::MIN_SIZE {
+            bail!("YaesuPresence packet too short: {} < {}", buf.len(), Self::MIN_SIZE);
         }
         Ok(Self {
             slot0_present: buf[4] != 0,
             slot0_model: buf[5],
             slot1_present: buf[6] != 0,
             slot1_model: buf[7],
+            slot0_trouble: buf.get(8).copied().unwrap_or(PORT_TROUBLE_NONE),
+            slot1_trouble: buf.get(9).copied().unwrap_or(PORT_TROUBLE_NONE),
         })
     }
 }
@@ -2188,6 +2346,10 @@ pub enum Packet {
     YaesuState(YaesuStatePacket),
     FrequencyYaesu(FrequencyPacket),
     YaesuMemoryData(String),
+    /// The client is asking for the server's own report attachment.
+    ServerReportRequest,
+    /// (part, parts, bytes) - see `PacketType::ServerReportPart`.
+    ServerReportPart(u16, u16, Vec<u8>),
     // Dual-radio slot 1 (Option B-prime): same payload structs, own packet types.
     AudioYaesu2(AudioPacket),
     YaesuState2(YaesuStatePacket),
@@ -2299,6 +2461,15 @@ impl Packet {
                 let code = String::from_utf8_lossy(&buf[6..6+len]).to_string();
                 Ok(Packet::TotpResponse(code))
             }
+            PacketType::ServerReportRequest => Ok(Packet::ServerReportRequest),
+            PacketType::ServerReportPart => {
+                if buf.len() < 10 { bail!("ServerReportPart too short"); }
+                let part = u16::from_be_bytes(buf[4..6].try_into().unwrap());
+                let parts = u16::from_be_bytes(buf[6..8].try_into().unwrap());
+                let len = u16::from_be_bytes(buf[8..10].try_into().unwrap()) as usize;
+                if buf.len() < 10 + len { bail!("ServerReportPart truncated"); }
+                Ok(Packet::ServerReportPart(part, parts, buf[10..10 + len].to_vec()))
+            }
             PacketType::YaesuMemoryData => {
                 if buf.len() < 6 { bail!("YaesuMemoryData too short"); }
                 let len = u16::from_be_bytes(buf[4..6].try_into().unwrap()) as usize;
@@ -2312,6 +2483,35 @@ impl Packet {
 
 #[cfg(test)]
 mod tests {
+    /// The VRX pan offset is a signed value squeezed through an unsigned field,
+    /// which is the kind of thing that works in one direction and silently
+    /// wraps in the other. Both directions, and the ends.
+    #[test]
+    fn vrx_pan_survives_the_wire_in_both_directions() {
+        for hz in [0i32, 10, -10, 1_000, -1_000, 123_450, -123_450] {
+            let back = super::unpack_vrx_pan(super::pack_vrx_pan(hz));
+            assert_eq!(back, hz, "{hz} Hz did not come back");
+        }
+    }
+
+    /// Beyond what the field holds it must saturate, not wrap - a pan that
+    /// jumped to the far side of the receiver would be worse than one that
+    /// stopped.
+    #[test]
+    fn an_impossible_vrx_pan_stops_at_the_edge() {
+        let far = super::unpack_vrx_pan(super::pack_vrx_pan(50_000_000));
+        assert!(far > 300_000 && far < 400_000, "clamped to {far} Hz");
+        let near = super::unpack_vrx_pan(super::pack_vrx_pan(-50_000_000));
+        assert!(near < -300_000 && near > -400_000, "clamped to {near} Hz");
+    }
+
+    /// Sub-step offsets round towards zero rather than to something else.
+    #[test]
+    fn a_pan_finer_than_a_step_reads_as_no_pan() {
+        assert_eq!(super::unpack_vrx_pan(super::pack_vrx_pan(9)), 0);
+        assert_eq!(super::unpack_vrx_pan(super::pack_vrx_pan(-9)), 0);
+    }
+
     use super::*;
 
     #[test]
@@ -2368,6 +2568,8 @@ mod tests {
             slot0_model: 0,   // FT-991A
             slot1_present: false,
             slot1_model: 1,   // FTX-1
+            slot0_trouble: PORT_TROUBLE_BUSY,
+            slot1_trouble: PORT_TROUBLE_NONE,
         };
         let mut buf = [0u8; YaesuPresencePacket::SIZE];
         pkt.serialize(&mut buf);
@@ -2378,9 +2580,32 @@ mod tests {
                 assert_eq!(p.slot0_model, 0);
                 assert!(!p.slot1_present);
                 assert_eq!(p.slot1_model, 1);
+                assert_eq!(p.slot0_trouble, PORT_TROUBLE_BUSY);
+                assert_eq!(p.slot1_trouble, PORT_TROUBLE_NONE);
             }
             _ => panic!("expected YaesuPresence packet"),
         }
+    }
+
+    #[test]
+    fn yaesu_presence_from_old_server_reads_as_no_trouble() {
+        // An old server sends the 8-byte form; the two trouble bytes must
+        // default to none rather than fail the parse.
+        let pkt = YaesuPresencePacket {
+            slot0_present: true,
+            slot0_model: 1,
+            slot1_present: false,
+            slot1_model: 0,
+            slot0_trouble: PORT_TROUBLE_MISSING, // must NOT survive the truncation
+            slot1_trouble: PORT_TROUBLE_BUSY,
+        };
+        let mut buf = [0u8; YaesuPresencePacket::SIZE];
+        pkt.serialize(&mut buf);
+        let p = YaesuPresencePacket::deserialize(&buf[..8]).unwrap();
+        assert!(p.slot0_present);
+        assert_eq!(p.slot0_model, 1);
+        assert_eq!(p.slot0_trouble, PORT_TROUBLE_NONE);
+        assert_eq!(p.slot1_trouble, PORT_TROUBLE_NONE);
     }
 
     #[test]
@@ -2465,6 +2690,7 @@ mod tests {
             echo_time: 999_999,
             capabilities: Capabilities::NONE.with(Capabilities::WIDEBAND_AUDIO),
             state_flags: ServerStateFlags::NONE.with(ServerStateFlags::TCI_CONNECTED),
+            subs: None,
         };
         let mut buf = [0u8; HeartbeatAck::SIZE];
         ack.serialize(&mut buf);
@@ -2556,6 +2782,7 @@ mod tests {
             echo_time: 0,
             capabilities: Capabilities::NONE,
             state_flags: ServerStateFlags::NONE,
+            subs: None,
         };
         let mut buf = [0u8; HeartbeatAck::SIZE];
         ack.serialize(&mut buf);
@@ -2593,5 +2820,79 @@ mod tests {
         // Truncate: keep header but cut opus data
         buf.truncate(AudioPacket::HEADER_SIZE + 1);
         assert!(AudioPacket::deserialize(&buf).is_err());
+    }
+}
+
+#[cfg(test)]
+mod subscription_mask_tests {
+    use super::*;
+
+    /// The trap this field could fall into: an older server stops at 20 bytes,
+    /// and reading that as "nothing subscribed" would report a disagreement
+    /// against every one of them, once a second, for ever.
+    #[test]
+    fn an_older_server_is_unknown_and_not_empty() {
+        let ack = HeartbeatAck {
+            flags: Flags::NONE,
+            echo_sequence: 1,
+            echo_time: 2,
+            capabilities: Capabilities::NONE,
+            state_flags: ServerStateFlags::NONE,
+            subs: Some(SubscriptionMask(SubscriptionMask::RX1_AUDIO)),
+        };
+        let mut old_buf = [0u8; HeartbeatAck::SIZE];
+        ack.serialize(&mut old_buf);
+        let read = HeartbeatAck::deserialize(&old_buf).unwrap();
+        assert_eq!(read.subs, None, "absent must not read as an empty mask");
+    }
+
+    #[test]
+    fn the_mask_survives_the_wire() {
+        let mine = SubscriptionMask(
+            SubscriptionMask::RX1_AUDIO | SubscriptionMask::VRX2 | SubscriptionMask::YAESU2,
+        );
+        let ack = HeartbeatAck {
+            flags: Flags::NONE,
+            echo_sequence: 7,
+            echo_time: 8,
+            capabilities: Capabilities::NONE,
+            state_flags: ServerStateFlags::NONE,
+            subs: Some(mine),
+        };
+        let mut buf = [0u8; HeartbeatAck::SIZE_WITH_SUBS];
+        ack.serialize_with_subs(&mut buf);
+        let read = HeartbeatAck::deserialize(&buf).unwrap();
+        assert_eq!(read.subs, Some(mine));
+        assert_eq!(read.echo_sequence, 7, "the older fields are untouched");
+    }
+
+    /// A newer client against an older server, and the reverse, must both keep
+    /// reading everything that was there before.
+    #[test]
+    fn the_older_fields_still_read_from_the_longer_packet() {
+        let ack = HeartbeatAck {
+            flags: Flags::NONE,
+            echo_sequence: 42,
+            echo_time: 99,
+            capabilities: Capabilities::NONE.with(Capabilities::REPORTS_STATE_FLAGS),
+            state_flags: ServerStateFlags::NONE.with(ServerStateFlags::TCI_CONNECTED),
+            subs: Some(SubscriptionMask(0)),
+        };
+        let mut buf = [0u8; HeartbeatAck::SIZE_WITH_SUBS];
+        ack.serialize_with_subs(&mut buf);
+        let read = HeartbeatAck::deserialize(&buf).unwrap();
+        assert_eq!(read.echo_time, 99);
+        assert!(read.capabilities.has(Capabilities::REPORTS_STATE_FLAGS));
+        assert!(read.state_flags.has(ServerStateFlags::TCI_CONNECTED));
+        assert_eq!(read.subs, Some(SubscriptionMask(0)), "an explicit empty mask IS a statement");
+    }
+
+    #[test]
+    fn a_difference_is_reported_by_name() {
+        let names = SubscriptionMask::names_of(
+            SubscriptionMask::RX2_AUDIO | SubscriptionMask::VRX1,
+        );
+        assert_eq!(names, vec!["rx2-audio", "vrx1"]);
+        assert!(SubscriptionMask::names_of(0).is_empty());
     }
 }

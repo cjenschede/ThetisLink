@@ -17,6 +17,28 @@ impl eframe::App for SdrRemoteApp {
         // Clear per-frame flags
         ctx.memory_mut(|mem| mem.data.remove::<bool>(egui::Id::new("freq_scroll_consumed")));
 
+        // Chat (docs/internal/DESIGN-relay-chat.md). Everything it does is a
+        // channel send and a try_recv: no network call, no lock held, nothing
+        // this frame can wait on. That is design §2.4 made structural rather
+        // than remembered - a chat service that is down cannot slow this down,
+        // because nothing here ever asks it anything.
+        {
+            let ticket = self
+                .relay_status
+                .as_ref()
+                .and_then(|h| h.snapshot().chat_ticket);
+            let relay_url = self.relay_url.clone();
+            // The relay was switched off while the window was open: close it,
+            // or it stays up with the button that reopens it already gone.
+            if !self.relay_enabled || relay_url.trim().is_empty() {
+                self.chat_open = false;
+            }
+            self.chat.tick(&relay_url, ticket.as_deref(), self.chat_open);
+        }
+        if self.chat_open {
+            self.render_chat_popout(ctx);
+        }
+
         // Base egui visuals per selected theme (step 1). Classic reproduces the original
         // light-grey scheme; Dark is the tuned dark scheme. Colours that read from
         // ui.visuals() follow automatically; hard-coded ones are migrated in later steps.
@@ -610,17 +632,12 @@ impl eframe::App for SdrRemoteApp {
                         && !in_awaiting_totp
                         && !in_connecting;
                     if ui.add_enabled(can_connect, egui::Button::new(rust_i18n::t!("main_connect").to_string())).clicked() {
-                        // Reset span to 0 so first spectrum packet triggers zoom calculation
-                        self.full_spectrum_span_hz = 0;
-                        self.spectrum_pan = 0.0;
-                        self.last_sent_zoom = 0.0;
-                        self.last_sent_pan = 0.0;
-                        self.zoom_pan_changed_at = Some(Instant::now());
-                        self.rx2_full_spectrum_span_hz = 0;
-                        self.rx2_spectrum_pan = 0.0;
-                        self.rx2_last_sent_zoom = 0.0;
-                        self.rx2_last_sent_pan = 0.0;
-                        self.rx2_zoom_pan_changed_at = Some(Instant::now());
+                        // Reset span to 0 so first spectrum packet triggers zoom calculation.
+                        // The bins go with the span. They are the twin of that
+                        // latch: kept, they are a picture of the band the last
+                        // session was on, and the code that decides what to draw
+                        // asks whether they are empty (2026-08-15).
+                        self.reset_view_for_new_session();
                         let pw = if self.password_input.is_empty() { None } else { Some(self.password_input.clone()) };
                         // In relay mode there is no server IP: send a placeholder label
                         // (the Relay transport ignores the address; the engine skips the DNS check).
@@ -1267,6 +1284,7 @@ impl eframe::App for SdrRemoteApp {
                         ui.label("HPSDR / OpenHPSDR Protocol 2");
                         ui.label("WebSDR (PA3FWM) / KiwiSDR - CatSync targets");
                         ui.label("ThetisLink Relay - self-hosted WebSocket + UDP relay (internet remote)");
+                        ui.label("ThetisLink Chat - optional service beside a relay (chat + problem reports)");
 
                         ui.add_space(6.0);
                         ui.label(RichText::new(rust_i18n::t!("main_about_hardware").to_string()).size(13.0).strong());

@@ -134,6 +134,7 @@ fn build_heartbeat_ack_full(
         echo_time: echo_time,
         capabilities: Capabilities::NONE.with(capabilities),
         state_flags: ServerStateFlags::NONE.with(state_flags),
+            subs: None,
     };
     let mut buf = [0u8; HeartbeatAck::SIZE];
     ack.serialize(&mut buf);
@@ -712,6 +713,127 @@ async fn retry_same_target_during_awaiting_totp_is_noop() {
         matches!(cur, ConnectStatus::AwaitingTotp),
         "expected AwaitingTotp to be preserved, got {:?}",
         cur
+    );
+
+    let _ = shutdown_tx.send(true);
+}
+
+/// A server that restarts and comes back INSIDE the connection timeout must
+/// still get the client's subscriptions back.
+///
+/// This is the fault the owner found by ear: the noise from the draining
+/// jitter buffer is the window in which the client still believes it is
+/// connected. Restart inside it and the client re-authenticates without ever
+/// having considered itself away - and the restore block is gated on exactly
+/// that belief, so it was skipped and the server kept the defaults of its
+/// fresh session. RX1 audio is on by default and everything the client has to
+/// ask for is not, which is what "only RX1 comes back" means.
+///
+/// The test drives it the way it happens: authenticate, settle, then send a
+/// SECOND auth challenge with no disconnect in between, and require that the
+/// client asks for its subscriptions again.
+#[tokio::test]
+async fn a_second_authentication_restores_the_subscriptions() {
+    use sdr_remote_core::protocol::{ControlId, ControlPacket};
+
+    let (mut state_rx, cmd_tx, shutdown_tx, _handle) = spawn_engine();
+
+    let fake_server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = fake_server.local_addr().unwrap();
+
+    let (found_tx, mut found_rx) = mpsc::unbounded_channel::<bool>();
+
+    tokio::spawn(async move {
+        let mut buf = [0u8; 1500];
+        let mut client: Option<std::net::SocketAddr> = None;
+
+        // Round one: challenge, accept, and one ack so the client settles into
+        // "connected" and runs its first restore.
+        if let Ok((_n, addr)) = fake_server.recv_from(&mut buf).await {
+            client = Some(addr);
+            let _ = fake_server.send_to(&build_auth_challenge(), addr).await;
+            if fake_server.recv_from(&mut buf).await.is_ok() {
+                let _ = fake_server
+                    .send_to(
+                        &build_auth_result(sdr_remote_core::protocol::AUTH_ACCEPTED),
+                        addr,
+                    )
+                    .await;
+                let _ = fake_server
+                    .send_to(&build_heartbeat_ack_full(0, 0, 0, 0), addr)
+                    .await;
+            }
+        }
+
+        // Drain whatever the first restore sent, briefly.
+        let settle = Instant::now();
+        while settle.elapsed() < Duration::from_millis(600) {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(50),
+                fake_server.recv_from(&mut buf),
+            )
+            .await;
+        }
+
+        // Round two: the restart. A fresh challenge, no disconnect at all -
+        // the client still believes it is connected.
+        let Some(addr) = client else { let _ = found_tx.send(false); return };
+        let _ = fake_server.send_to(&build_auth_challenge(), addr).await;
+        if fake_server.recv_from(&mut buf).await.is_ok() {
+            let _ = fake_server
+                .send_to(
+                    &build_auth_result(sdr_remote_core::protocol::AUTH_ACCEPTED),
+                    addr,
+                )
+                .await;
+            let _ = fake_server
+                .send_to(&build_heartbeat_ack_full(1, 1, 0, 0), addr)
+                .await;
+        }
+
+        // Does it ask for its subscriptions again? Rx1Enable is in the restore
+        // block and is sent unconditionally, so it is the cheapest thing to
+        // look for.
+        let deadline = Instant::now();
+        let mut seen = false;
+        while deadline.elapsed() < Duration::from_secs(3) && !seen {
+            if let Ok(Ok((n, _))) = tokio::time::timeout(
+                Duration::from_millis(100),
+                fake_server.recv_from(&mut buf),
+            )
+            .await
+            {
+                if n >= ControlPacket::SIZE {
+                    if let Ok(c) = ControlPacket::deserialize(&buf[..n]) {
+                        if c.control_id == ControlId::Rx1Enable {
+                            seen = true;
+                        }
+                    }
+                }
+            }
+        }
+        let _ = found_tx.send(seen);
+    });
+
+    cmd_tx
+        .send(Command::Connect(
+            server_addr.to_string(),
+            Some("pw".to_string()),
+        ))
+        .unwrap();
+
+    let _ = wait_for_status(&mut state_rx, 4_000, |s| {
+        matches!(s, ConnectStatus::Connected)
+    })
+    .await;
+
+    let asked_again = tokio::time::timeout(Duration::from_secs(10), found_rx.recv())
+        .await
+        .expect("the fake server should have reported")
+        .unwrap_or(false);
+    assert!(
+        asked_again,
+        "after a second authentication the client must ask for its subscriptions again -          without it the server keeps the defaults of its fresh session and only RX1 returns"
     );
 
     let _ = shutdown_tx.send(true);

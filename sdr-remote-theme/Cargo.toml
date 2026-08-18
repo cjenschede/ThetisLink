@@ -1,0 +1,8 @@
+[package]
+name = "sdr-remote-theme"
+version = "0.1.0"
+edition.workspace = true
+license = "GPL-2.0-or-later"
+
+[dependencies]
+egui = { workspace = true }

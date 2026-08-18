@@ -137,6 +137,10 @@ pub(super) fn read_all_memories(
     // two were already refuted by measurement, so dump the raw bytes at INFO - the
     // probe below sat at DEBUG and this server logs at INFO, which is why it has
     // never recorded a single frame.
+    // Counted so the summary can say it once. Every skip below is a channel the
+    // operator will not see in the list, and eleven separate warnings read as
+    // eleven faults rather than one cause.
+    let mut skipped = 0usize;
     for ch in 1..=117u16 {
         let t0 = Instant::now();
         let response = cat_query(port, &format!("MT{:03};", ch));
@@ -153,6 +157,7 @@ pub(super) fn read_all_memories(
             // one went missing instead of only that the total was one too low.
             warn!("Yaesu: channel {} gave no answer after {} ms - skipped (list will be short)",
                   ch, t0.elapsed().as_millis());
+            skipped += 1;
             continue;
         }
         consec_timeouts = 0;
@@ -160,6 +165,7 @@ pub(super) fn read_all_memories(
         if response.trim().is_empty() {
             warn!("Yaesu: channel {} answered nothing (in {} ms, no timeout) - skipped",
                   ch, t0.elapsed().as_millis());
+            skipped += 1;
             continue;
         }
         if response.contains("?;") {
@@ -172,12 +178,14 @@ pub(super) fn read_all_memories(
             // why a short list showed no warning at all.
             warn!("Yaesu: channel {} answered without an MT frame: [{}] - skipped",
                   ch, response.escape_debug());
+            skipped += 1;
             continue;
         };
         {
             let Some(end) = response[start..].find(';') else {
                 warn!("Yaesu: channel {} answer has no terminator: [{}] - skipped",
                       ch, response.escape_debug());
+            skipped += 1;
                 continue;
             };
             {
@@ -188,6 +196,7 @@ pub(super) fn read_all_memories(
                 if d.len() < 26 {
                     warn!("Yaesu: channel {} answer too short ({} chars, need 26): [{}] - skipped",
                           ch, d.len(), response.escape_debug());
+            skipped += 1;
                     continue;
                 }
 
@@ -216,6 +225,7 @@ pub(super) fn read_all_memories(
                 if freq_hz == 0 {
                     warn!("Yaesu: channel {} has an unreadable frequency [{}] - skipped",
                           ch, &d[3..12]);
+            skipped += 1;
                     continue;
                 }
 
@@ -306,6 +316,16 @@ pub(super) fn read_all_memories(
     for line in &channels {
         out.push_str(line);
         out.push('\n');
+    }
+    // Skipped channels are warned about one by one above, which reads like
+    // eleven small faults rather than one cause. Said once here, with the
+    // reason when there is one.
+    if skipped > 0 {
+        warn!(
+            "Yaesu: {} channel(s) skipped - the radio answered something other than the memory frame that was asked for{}",
+            skipped,
+            super::two_slot_hint()
+        );
     }
     info!("Yaesu: read {} non-empty memory channels out of 117", channels.len());
     Ok(out)
@@ -859,8 +879,15 @@ fn write_memory_tones<P: CatPort + ?Sized>(
             None => warn!("{} tone write: no CN read-back", tag(*ch)),
         }
     }
-    // Put the radio back where the operator left it. From VFO mode the escape is
-    // a VFO-A frequency set - the same mechanism the poll loop uses elsewhere.
+    // Put the radio back where the operator left it.
+    //
+    // This path already leaves and restores the VFO/memory side around the
+    // write itself (`ftx1_leave_memory_mode`), so only the frequency is set
+    // here - but it is set without checking that the radio is on the VFO side
+    // when it happens. Left as it stands rather than changed alongside the read
+    // path: the two get their side back by different routes, and altering an
+    // untested one on the strength of a fault found in the other is how this
+    // project spent a day last week. Flagged in the brief instead.
     if ret.vfo_select == 1 && ret.memory_channel >= 1 {
         let _ = port.query(&recall(ret.memory_channel));
     } else if ret.vfo_a_freq > 0 {
@@ -897,6 +924,36 @@ pub(super) fn read_memory_tones<P: CatPort + ?Sized>(
     // would read tones from wherever the scan happened to be. Same treatment as
     // the write: pause it, do the round, put it back as it was.
     let scan_was = pause_scan(port);
+    // What the operator had set on the VFO, so the walk can hand it back.
+    //
+    // Recalling a memory channel applies that channel's own mode and pre-amp,
+    // and returning to the VFO restores its frequency but nothing else - so a
+    // station left on LSB with IPO came back on USB with AMP1, silently, every
+    // time the tones were read (field report, 2026-08-13). Both are read back
+    // here and put right afterwards.
+    //
+    // MD0; = operating mode and PA0; = pre-amp, both per FT-991A CAT OM
+    // 1711-D (PA: P1 0 fixed, P2 0 = IPO, 1 = AMP 1, 2 = AMP 2).
+    // Which side the operator was on. Walking the channels recalls them, which
+    // puts the radio in memory mode, and handing back a VFO frequency does not
+    // bring it out again - so an FTX-1 that started on the VFO came back in
+    // memory mode every time (field report, 2026-08-14). The write path has had
+    // this pair since it was built; the read path never got it.
+    let vm_was: Option<String> = {
+        let r = port.query("VM0;");
+        r.find("VM").and_then(|i| {
+            let rest = &r[i + 2..];
+            (rest.len() >= 4).then(|| rest[1..3].to_string())
+        })
+    };
+    let mode_was = {
+        let r = port.query("MD0;");
+        r.find("MD0").and_then(|p| r[p + 3..].chars().next()).filter(|c| c.is_ascii_alphanumeric())
+    };
+    let preamp_was = {
+        let r = port.query("PA0;");
+        r.find("PA0").and_then(|p| r[p + 3..].chars().next()).filter(|c| c.is_ascii_digit())
+    };
     let mut ret = ret;
     // Prefer what the radio says over the polled snapshot.
     if ret.vfo_select == 1 {
@@ -964,7 +1021,51 @@ pub(super) fn read_memory_tones<P: CatPort + ?Sized>(
     if ret.vfo_select == 1 && ret.memory_channel >= 1 {
         let _ = port.query(&recall(ret.memory_channel));
     } else if ret.vfo_a_freq > 0 {
+        // Order matters here, and getting it wrong is not cosmetic.
+        //
+        // Side first: a frequency handed to a radio still sitting on a memory
+        // channel does not move it back to the VFO, and everything after would
+        // then be applied to the wrong side.
+        if let Some(ref w) = vm_was {
+            port.send(&format!("VM0{};", w));
+            std::thread::sleep(Duration::from_millis(80));
+            info!("Tone read done: MAIN side put back on {}", w);
+        }
+        // Mode second, before the frequency. On the 991A the dial reading in
+        // SSB sits 700 Hz off the carrier, mirrored per sideband - a property
+        // of the radio that this project deliberately does not correct for
+        // (see the 700 Hz note). Set the frequency while the radio is still in
+        // whatever mode the last walked channel left behind, and the number
+        // lands under that mode's convention; restore the mode afterwards and
+        // it reads 700 Hz out. A station closed on 3.694.000 LSB and came back
+        // on 3.694.700 LSB, every time (field report, 2026-08-14).
+        //
+        // Nothing is compensated for. The frequency is simply set while the
+        // radio is in the mode it belongs to.
+        if let Some(m) = mode_was {
+            let now = {
+                let r = port.query("MD0;");
+                r.find("MD0").and_then(|p| r[p + 3..].chars().next())
+            };
+            if now != Some(m) {
+                port.send(&format!("MD0{};", m));
+                std::thread::sleep(Duration::from_millis(40));
+                info!("Tone read done: mode put back to MD0{}", m);
+            }
+        }
         let _ = port.query(&format!("FA{:09};", ret.vfo_a_freq));
+        // Pre-amp last: it depends on neither of the above, and a channel walk
+        // carries it along the same way the mode is carried.
+        if let Some(p_was) = preamp_was {
+            let now = {
+                let r = port.query("PA0;");
+                r.find("PA0").and_then(|p| r[p + 3..].chars().next())
+            };
+            if now != Some(p_was) {
+                port.send(&format!("PA0{};", p_was));
+                info!("Tone read done: pre-amp put back to PA0{}", p_was);
+            }
+        }
     }
     if let Some(mode) = scan_was {
         port.send(&format!("SC{};", mode));

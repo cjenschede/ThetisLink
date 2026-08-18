@@ -239,4 +239,55 @@
     <string name="dev_port_a">Port A — ANT1 (TX+RX)</string>
     <string name="dev_port_b">Port B — RX2 (RX)</string>
     <string name="dev_digit_tuner_hint">Ziffer tippen = abstimmen · lang drücken = eingeben</string>
+
+    <!-- Chat am Relay -->
+    <string name="main_chat">Chat</string>
+    <string name="chat_left_user">jemand, der gegangen ist</string>
+    <string name="chat_empty">Es wurde noch nichts gesagt.</string>
+    <string name="chat_send">Senden</string>
+    <string name="chat_cancel">Abbrechen</string>
+    <string name="chat_reply">antworten</string>
+    <string name="chat_edit">aendern</string>
+    <string name="chat_edited">(geaendert)</string>
+    <string name="chat_editing">Nachricht wird geaendert - Senden speichert die Korrektur</string>
+    <string name="chat_replying_to">Antwort an %1$s</string>
+    <string name="chat_input_hint">Ihre Nachricht</string>
+    <string name="chat_as_name">Sie sind hier als %1$s</string>
+    <string name="chat_leave">Austragen</string>
+    <string name="chat_leave_title">Sich aus dem Chat austragen?</string>
+    <string name="chat_leave_explain">Das nimmt Ihren Namen von allem, was Sie geschrieben haben. Zum Feierabend brauchen Sie es nicht - wechseln Sie einfach den Tab, Sie bleiben im Chat. Ihre Nachrichten koennen ohne Ihren Namen bleiben, damit Gespraeche anderer lesbar bleiben, oder mit Ihnen gehen, wenn Ihr Rufzeichen im Text steht.</string>
+    <string name="chat_leave_keep">Austragen, Nachrichten behalten</string>
+    <string name="chat_leave_delete">Austragen und loeschen</string>
+    <string name="chat_offline_no_relay">Es ist kein Relay eingerichtet, also gibt es keinen Chat. Der Chat laeuft neben dem Relay, ueber das Sie verbinden.</string>
+    <string name="chat_offline_no_ticket">Dieses Relay bietet keinen Chat.</string>
+    <string name="chat_offline_unreachable">Der Chat antwortet nicht. Audio, PTT und das Funkgeraet sind davon unberuehrt.</string>
+    <string name="chat_answer_title">Eine Antwort auf Ihre Meldung</string>
+    <string name="chat_consent_title">Am Chat teilnehmen</string>
+    <string name="chat_consent_intro">Ein Raum fuer die Nutzer dieses Relays. Teilnehmen heisst, einem Namen zuzustimmen, den andere neben dem sehen, was Sie schreiben.</string>
+    <string name="chat_consent_name_q">Unter welchem Namen?</string>
+    <string name="chat_consent_callsign_warning">Hinweis: ein Rufzeichen steht in einem oeffentlichen Register mit Name und Anschrift. Waehlen Sie einen eigenen Namen, wenn Sie das lieber nicht teilen.</string>
+    <string name="chat_consent_optional">Ohne Zustimmung funktioniert der Rest von ThetisLink wie gewohnt; nur der Chat ist dann nicht verfuegbar.</string>
+    <string name="chat_consent_name_hint">Rufzeichen oder Spitzname</string>
+    <string name="chat_consent_admin">Der Administrator ist PA3GHM, erreichbar unter der Adresse auf der Relay-Seite, fuer Auskunft ueber gespeicherte Daten oder deren Loeschung.</string>
+    <string name="chat_consent_stored">Gespeichert werden: der hier gewaehlte Name, was Sie schreiben, und wann. Sonst nichts, und nichts aus Ihrem Funkgeraet.</string>
+    <string name="chat_consent_withdraw">Sie koennen jederzeit gehen, mit oder ohne Ihre Nachrichten.</string>
+    <string name="chat_consent_ban">Der Administrator kann eine Station aus dem Chat entfernen, wenn es unhaltbar wird. Sie werden informiert, Ihre Beitraege bleiben stehen, und auch die Problemmeldung wird geschlossen. Das Verlassen des Chats hebt eine Entfernung nicht auf.</string>
+    <string name="chat_consent_access">Alle, die mit diesem Relay verbunden sind, koennen mitlesen, was Sie hier schreiben.</string>
+    <string name="chat_consent_age">Ich bin sechzehn oder aelter, oder ein Elternteil stimmt zu.</string>
+    <string name="chat_consent_agree">Ich stimme zu - teilnehmen</string>
+    <string name="chat_report_button">Problem melden</string>
+    <string name="chat_report_title">Problem melden</string>
+    <string name="chat_report_explain">Was haben Sie getan, was haben Sie erwartet, und was ist stattdessen passiert? Ihre Beschreibung ist die Meldung.</string>
+    <string name="chat_report_hint">Was nicht stimmt</string>
+    <string name="chat_report_no_log">Das Log stammt aus dem Systemlog von Android fuer diese App und aus der eigenen Logdatei der App, die Einstellungen aus ihren eigenen Voreinstellungen. Nur der Administrator sieht sie.</string>
+    <string name="chat_report_send">Meldung senden</string>
+    <string name="chat_report_attach">Log und Einstellungen mitsenden</string>
+    <string name="chat_report_reading">Log und Einstellungen werden gelesen...</string>
+    <string name="chat_report_attach_shown">Das geht mit. Lesen Sie es vor dem Senden durch: Adressen, Namen und alles, was nach einem Passwort aussah, wurden entfernt - die letzte Kontrolle liegt bei Ihnen.</string>
+    <string name="settings_roger">Rogerpiep</string>
+    <string name="settings_roger_hint">Ein kurzer Ton am Ende der Aussendung. Der Sender bleibt so lange getastet, damit die Gegenstelle ihn hoert. Nie in Daten- oder Digitalmodi.</string>
+    <string name="settings_roger_radio1">Funkgeraet 1</string>
+    <string name="settings_roger_radio2">Funkgeraet 2</string>
+    <string name="settings_roger_volume">Pegel</string>
+    <string name="settings_roger_fm">Auch in FM</string>
 </resources>

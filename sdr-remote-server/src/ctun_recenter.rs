@@ -64,17 +64,16 @@ impl CtunRecenterState {
         }
     }
 
-    /// Per-RX accessor (rx_index: 0 = RX1, 1 = RX2).
-    pub fn rx_mut(&mut self, rx_index: u8) -> &mut PerRxState {
-        if rx_index == 0 { &mut self.rx1 } else { &mut self.rx2 }
-    }
-
-    pub fn rx(&self, rx_index: u8) -> &PerRxState {
-        if rx_index == 0 { &self.rx1 } else { &self.rx2 }
-    }
 }
 
 /// Trigger-evaluation result for logging + test-hook.
+///
+/// Stored in `last_eval` and not read anywhere yet, which the compiler says
+/// plainly. Kept: this is the observability hook the recentre logic was built
+/// around, and its worth is that it is already being filled in when a question
+/// about a decision finally gets asked. Deleting it would mean rebuilding it
+/// under the pressure of not knowing why the radio just moved.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct TriggerEvalResult {
     pub decision: TriggerDecision,

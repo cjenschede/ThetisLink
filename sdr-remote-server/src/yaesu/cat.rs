@@ -142,9 +142,38 @@ fn cat_query_impl(
 /// Startup probe: read `ID;` once and warn if the connected model does not match
 /// the configured slot model. Normal releases avoid raw CAT dumps; detailed CAT
 /// traces should use debug logging around the specific command path being tested.
-pub(super) fn bringup_probe(port: &mut Box<dyn serialport::SerialPort>, prefix: &str, model: RadioModel) {
-    let id_resp = cat_query(port, "ID;");
-    let id_code = resp_payload("ID", &id_resp);
+/// Returns the model the radio itself reports, when its `ID;` answer names one
+/// this build knows. The caller adopts it: the assumed model is a stand-in for
+/// exactly as long as the radio has not spoken for itself.
+pub(super) fn bringup_probe(
+    port: &mut Box<dyn serialport::SerialPort>,
+    prefix: &str,
+    model: RadioModel,
+) -> Option<RadioModel> {
+    // Drained and asked three times, exactly like `detect_model` does at
+    // startup - and for the same measured reason: the first read after opening
+    // a port routinely comes back empty or partial. Asking once was enough to
+    // lose a whole session. A station with the FTX-1 switched off at server
+    // start (report #12, 2026-08-12) reconnected two minutes later, this probe
+    // read "" on its single attempt, and the radio was driven as an FT-991A
+    // for the rest of the evening: no memory channels, no menu values, V/M and
+    // Mem+/- dead. The port has no conversation in flight at this point, so
+    // draining here is safe (see the note in `cat_query` about why it is NOT
+    // safe there).
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    let mut id_resp = String::new();
+    let mut id_code = String::new();
+    for attempt in 0..3 {
+        id_resp = cat_query(port, "ID;");
+        id_code = resp_payload("ID", &id_resp);
+        if RadioModel::from_id_code(&id_code).is_some() {
+            break;
+        }
+        if attempt < 2 {
+            log::debug!("{} ID; attempt {} gave {:?} - asking again", prefix, attempt + 1, id_resp);
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
     let detected = RadioModel::from_id_code(&id_code);
 
     if id_code.is_empty() {
@@ -152,14 +181,15 @@ pub(super) fn bringup_probe(port: &mut Box<dyn serialport::SerialPort>, prefix: 
     } else if detected.is_none() {
         warn!("{} unknown ID code '{}'; assuming Yaesu-compatible CAT dialect", prefix, id_code);
     } else if detected != Some(model) {
-        // Detected model differs from the configured slot model ->
-        // possible COM/USB enumeration swap. Non-fatal, but loud
-        // so the operator can correct the slot and audio-device assignment.
+        // Detected model differs from the assumed slot model - a radio that was
+        // off during startup detection, or a COM/USB enumeration swap. Loud,
+        // because the audio-device assignment cannot be corrected from here.
         warn!(
-            "{} model mismatch: configured={:?}, radio reports {:?} (ID {}); possible COM/USB enumeration swap",
+            "{} model mismatch: assumed={:?}, radio reports {:?} (ID {}); adopting the radio's own dialect - if the audio sounds wrong, check the slot assignment",
             prefix, model, detected.unwrap(), id_code
         );
     }
+    detected
 }
 
 /// Strip a 2-char CAT command echo + trailing `;` from a response, returning the

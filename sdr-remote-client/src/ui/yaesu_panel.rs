@@ -1511,6 +1511,15 @@ impl SdrRemoteApp {
 
         // Use a horizontal layout so the table can exceed the viewport width
         egui::ScrollArea::both().show(ui, |ui| {
+            // The horizontal scrollbar is drawn over the bottom of the content,
+            // not below it, so on a table too wide to fit it lay across the
+            // last memory channel - the one row an operator scrolling sideways
+            // is most likely to be reading. Reserved at the end of the grid
+            // below; measured here because the value belongs to the scroll
+            // area, not to the table.
+            let bar_space = ui.spacing().scroll.bar_width
+                + ui.spacing().scroll.bar_inner_margin
+                + ui.spacing().scroll.bar_outer_margin;
             let header_style = |t: &str| RichText::new(t).strong().size(11.0);
 
             egui::Grid::new("yaesu_mem_grid")
@@ -1813,6 +1822,9 @@ impl SdrRemoteApp {
                         }
                     }
                 });
+            // Room under the last row for the horizontal scrollbar to sit in
+            // rather than on.
+            ui.add_space(bar_space);
         });
 
         // Execute deferred actions: recall memory channel only.
@@ -1955,6 +1967,23 @@ impl SdrRemoteApp {
         self.render_websdr_controls(ui, target, freq_a, mode);
     }
 
+    /// The line that says WHY a radio is missing, when the server can name it.
+    /// Nothing is drawn for a radio that is present or merely off - a named
+    /// reason exists only when the server's serial open failed in a way it
+    /// recognises.
+    fn render_port_trouble(&self, ui: &mut egui::Ui, trouble: u8, connected: bool) {
+        use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING};
+        if connected {
+            return;
+        }
+        let text = match trouble {
+            PORT_TROUBLE_BUSY => rust_i18n::t!("dev_port_busy").to_string(),
+            PORT_TROUBLE_MISSING => rust_i18n::t!("dev_port_missing").to_string(),
+            _ => return,
+        };
+        ui.colored_label(Color32::from_rgb(255, 170, 40), text);
+    }
+
     pub(super) fn render_device_yaesu(&mut self, ui: &mut egui::Ui, _amber: Color32) {
         let show_radio1 = self.yaesu_connected || self.yaesu_enabled;
         let show_radio2 = self.yaesu2_connected || self.yaesu2_enabled;
@@ -1986,6 +2015,7 @@ impl SdrRemoteApp {
                     self.save_ptt_config();
                 }
             });
+            self.render_port_trouble(ui, self.yaesu_port_trouble, self.yaesu_connected);
             ui.separator();
             self.render_yaesu_compact_status(ui, 0);
         }
@@ -2024,6 +2054,7 @@ impl SdrRemoteApp {
                     self.save_ptt_config();
                 }
             });
+            self.render_port_trouble(ui, self.yaesu2_port_trouble, self.yaesu2_connected);
             ui.separator();
             self.render_yaesu_compact_status(ui, 1);
         } else {

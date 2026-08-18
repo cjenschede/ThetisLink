@@ -57,8 +57,18 @@ pub(super) fn yaesu_reconnect_thread(
     output_stream: Arc<StreamHolder>,
     tx_producer: Arc<Mutex<Option<ringbuf::HeapProd<f32>>>>,
     last_audio_time: Arc<std::sync::atomic::AtomicU64>,
-    model: RadioModel,
-    prefix: String,
+    mut model: RadioModel,
+    // The struct's copy of the model, read by the presence push. Written here
+    // when the radio's own ID; names a different model than was assumed - an
+    // assumption made for a silent port must not outlive the port speaking.
+    model_shared: Arc<std::sync::atomic::AtomicU8>,
+    // False once the owning `YaesuRadio` has been dropped. Checked wherever this
+    // loop would otherwise carry on for the life of the process - it holds a
+    // sender of its own command channel, so a closed channel cannot tell it that
+    // nobody is listening any more.
+    alive: Arc<std::sync::atomic::AtomicBool>,
+    slot: u8,
+    mut prefix: String,
     capture_channel: u8,
 ) {
     info!("{} serial thread started on {}", prefix, port_name);
@@ -76,6 +86,12 @@ pub(super) fn yaesu_reconnect_thread(
     let mut disconnect_logged = false;
 
     loop {
+        // Nobody owns this radio any more: stop, rather than keep a port open
+        // and write log lines about a radio no client can see.
+        if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+            info!("{} no longer in use, stopping", prefix);
+            return;
+        }
         if !first {
             // Drop old audio streams (only meaningful after a successful connect -
             // during cold-start retries there is nothing to drop).
@@ -119,6 +135,24 @@ pub(super) fn yaesu_reconnect_thread(
         {
             Ok(p) => p,
             Err(e) => {
+                // Name the failure while it lasts. A free, existing USB serial
+                // port practically never fails to open, so the two failures
+                // that do happen are worth their own words - above all
+                // access-denied, which means other control software holds the
+                // CAT port (the most common reason a radio "is not there").
+                // Stored in the state so the presence push can carry it to the
+                // client; logged only when the classification changes, because
+                // this loop retries every 3 seconds for as long as it takes.
+                let trouble = classify_open_error(&e);
+                {
+                    let mut s = status.lock().unwrap();
+                    if s.port_trouble != trouble {
+                        s.port_trouble = trouble;
+                        if let Some(text) = port_trouble_log_text(trouble) {
+                            warn!("{} {}: {}", prefix, port_name, text);
+                        }
+                    }
+                }
                 // Pre-connect (cold-start, Yaesu not yet on): silent retry,
                 // no log spam per 3 s tick. One `debug!` for anyone debugging
                 // with RUST_LOG=debug.
@@ -133,6 +167,8 @@ pub(super) fn yaesu_reconnect_thread(
                 continue;
             }
         };
+        // The port opened: whatever named trouble there was is over.
+        status.lock().unwrap().port_trouble = sdr_remote_core::protocol::PORT_TROUBLE_NONE;
 
         // Open succeeded - log the transition and reset the dedup flag for the
         // next possible outage cycle. The connect line contains COM+baud so
@@ -141,6 +177,17 @@ pub(super) fn yaesu_reconnect_thread(
             info!("{} serial reconnected on {} @ {} baud", prefix, port_name, baud);
         } else {
             info!("{} serial connected on {} @ {} baud", prefix, port_name, baud);
+            // Counted so a later symptom can name its likely cause. See
+            // `two_slot_hint`: two ports can be one radio, and then the two
+            // pollers talk over each other.
+            super::ACTIVE_CAT_SLOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            struct SlotGuard;
+            impl Drop for SlotGuard {
+                fn drop(&mut self) {
+                    super::ACTIVE_CAT_SLOTS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            let _slot_guard = SlotGuard;
             ever_connected = true;
         }
         disconnect_logged = false;
@@ -148,22 +195,55 @@ pub(super) fn yaesu_reconnect_thread(
         // Bring-up probe: once after each successful open, dump the
         // raw ID;/IF;/MD0;/FA; + one parse summary. Makes it live
         // visible whether the radio parses as 991A structure or where it deviates.
-        bringup_probe(&mut port, &prefix, model);
+        //
+        // And when the radio names a model this build knows, that names wins over
+        // whatever was assumed. The 991A fallback exists for a radio that was OFF
+        // during startup detection; an FTX-1 switched on later used to be driven
+        // a whole session in the 991A dialect - dead Mem+/Mem-, a memory list of
+        // zero channels - with nothing but a warning nobody sees. Everything
+        // model-specific in this thread reads `model` per iteration, so adopting
+        // here, before the per-connect reads below, corrects all of it.
+        if let Some(detected) = bringup_probe(&mut port, &prefix, model) {
+            if detected != model {
+                model = detected;
+                prefix = model.tag(slot);
+                model_shared.store(model.as_code(), std::sync::atomic::Ordering::Relaxed);
+                info!("{} dialect adopted from the radio's own ID", prefix);
+            }
+        }
+
+        // Is the radio awake? A set on standby keeps its CAT port alive and
+        // answers `PS;` - that is the whole basis of the power button - but
+        // answers nothing else. Asking it anything now returns empty strings
+        // that get logged as failures and stored as zeroes ("max-TX-power EX:
+        // HF=0 50M=0 ...", "snapshot partial (0/4)"), which is worse than not
+        // asking: the session then starts with values nobody can trust.
+        let awake = cat_query(&mut port, "PS;").contains("PS1");
+        if !awake {
+            info!(
+                "{} the radio is on standby - reading nothing from it until it is switched on",
+                prefix
+            );
+            status.lock().unwrap().power_on = false;
+        }
 
         // 991A SSB/AM USB TX routing is session-owned: snapshot only the menus
         // TL may temporarily change, then restore those exact values later. Do
         // not force a factory/default hand-mic state at connect; users may have
         // a custom normal setup (for example a USB microphone on the radio).
-        let ft991a_usb_routing_snapshot = if !matches!(model, RadioModel::Ftx1) {
+        let ft991a_usb_routing_snapshot = if !matches!(model, RadioModel::Ftx1) && awake {
             Some(Ft991aUsbRoutingSnapshot::read(&mut port, &prefix))
         } else {
+            // No snapshot rather than a snapshot of nothing: the restore path
+            // already refuses to put back values it never read, and that is the
+            // right outcome for a radio that was asleep when we looked.
             None
         };
 
         // 991A per-band max TX power from the EX menu (PATCH-yaesu-power-scaling):
         // EX137 HF, EX138 50M, EX139 144M, EX140 430M (watt). Determines the client
         // slider range per band. FTX-1 = phase B (head-max via tx_power_max()).
-        if !matches!(model, RadioModel::Ftx1) {
+        if !matches!(model, RadioModel::Ftx1) && awake {
             let rd = |port: &mut Box<dyn serialport::SerialPort>, ex: u16, name: &str| {
                 read_ex_menu_value(port, &prefix, ex, name)
                     .and_then(|v| v.trim().parse::<u8>().ok())
@@ -264,7 +344,7 @@ pub(super) fn yaesu_reconnect_thread(
         yaesu_poll_loop(
             port, &cmd_rx, &self_tx, &status, &memory_data, &menu_data,
             &audio_device, &output_device, &rx_audio_tx, &capture_stream, &output_stream, &tx_producer, &last_audio_time,
-            model, &prefix, capture_channel, ft991a_usb_routing_snapshot,
+            model, &alive, slot, &prefix, capture_channel, ft991a_usb_routing_snapshot,
         );
 
         {
@@ -291,6 +371,9 @@ fn yaesu_poll_loop(
     tx_producer: &Arc<Mutex<Option<ringbuf::HeapProd<f32>>>>,
     last_audio_time: &Arc<std::sync::atomic::AtomicU64>,
     model: RadioModel,
+    alive: &Arc<std::sync::atomic::AtomicBool>,
+    // Which slot this radio sits in - the key its kept tones are filed under.
+    slot: u8,
     prefix: &str,
     capture_channel: u8,
     ft991a_usb_routing_snapshot: Option<Ft991aUsbRoutingSnapshot>,
@@ -356,6 +439,12 @@ fn yaesu_poll_loop(
     let session_start = Instant::now();
 
     loop {
+        // Same check as the reconnect loop above, for a session already running
+        // when its radio is dropped.
+        if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+            info!("{} no longer in use, closing the port", prefix);
+            return;
+        }
         // Read available serial data
         match port.read(&mut raw_buf) {
             Ok(n) if n > 0 => {
@@ -422,54 +511,64 @@ fn yaesu_poll_loop(
         //                       we can stop just before the radio does instead of
         //                       finding out afterwards. This is the only half that
         //                       covers the FT-991A.
+        //
+        // Armed and disarmed ONLY by the SetPtt handler below (and by the release
+        // here). Deliberately NOT gated on `tx_active`: that field is overwritten
+        // by the radio's own `TX;` answer, and the FT-991A's `TX;` was measured
+        // unreliable - one spurious "TX off" mid-transmission would silently
+        // disarm the only net that radio has. Whether WE are asking for TX is
+        // something we know without asking the radio.
         if let Some(since) = ptt_on_at {
-            let (tot, streak, still_asking) = {
+            let (tot, streak) = {
                 let s = status.lock().unwrap();
-                (s.tot_minutes, s.radio_rx_streak, s.tx_active)
+                (s.tot_minutes, s.radio_rx_streak)
             };
-            if !still_asking {
-                ptt_on_at = None;
-            } else {
-                // A run of four, not one: a single garbled or stale RI answer must
-                // never cut a live transmission. At the 200 ms fast poll that is under
-                // a second, and the radio has already stopped by then anyway.
-                let radio_dropped = matches!(model, RadioModel::Ftx1)
-                    && since.elapsed() >= Duration::from_millis(1500)
-                    && streak >= 4;
-                // Just under the limit rather than on it, so we are first and the
-                // operator hears a clean end instead of a cut.
-                let timer_due = tot > 0
-                    && since.elapsed() >= Duration::from_secs(tot as u64 * 60).saturating_sub(
-                        Duration::from_millis(1500));
-                if radio_dropped || timer_due {
-                    if radio_dropped {
-                        warn!(
-                            concat!(
-                                "{} the radio stopped transmitting on its own (RI P4) - ",
-                                "releasing PTT; a time-out timer, a fault or the set's own ",
-                                "PTT will do this",
-                            ),
-                            prefix,
-                        );
-                    } else {
-                        warn!(
-                            concat!(
-                                "{} the radio's {}-minute TX time-out timer is about to ",
-                                "expire - releasing PTT",
-                            ),
-                            prefix, tot,
-                        );
-                    }
-                    ptt_on_at = None;
-                    // Through the queue, not inline: the release then does everything a
-                    // normal release does.
-                    let _ = self_tx.send(YaesuCmd::SetPtt(false));
+            // A run of four, not one: a single garbled or stale RI answer must
+            // never cut a live transmission. At the 200 ms fast poll that is under
+            // a second, and the radio has already stopped by then anyway.
+            let radio_dropped = matches!(model, RadioModel::Ftx1)
+                && since.elapsed() >= Duration::from_millis(1500)
+                && streak >= 4;
+            // Just under the limit rather than on it, so we are first and the
+            // operator hears a clean end instead of a cut.
+            let timer_due = tot > 0
+                && since.elapsed() >= Duration::from_secs(tot as u64 * 60).saturating_sub(
+                    Duration::from_millis(1500));
+            if radio_dropped || timer_due {
+                if radio_dropped {
+                    warn!(
+                        concat!(
+                            "{} the radio stopped transmitting on its own (RI P4) - ",
+                            "releasing PTT; a time-out timer, a fault or the set's own ",
+                            "PTT will do this",
+                        ),
+                        prefix,
+                    );
+                } else {
+                    warn!(
+                        concat!(
+                            "{} the radio's {}-minute TX time-out timer is about to ",
+                            "expire - releasing PTT",
+                        ),
+                        prefix, tot,
+                    );
                 }
+                ptt_on_at = None;
+                // Through the queue, not inline: the release then does everything a
+                // normal release does.
+                let _ = self_tx.send(YaesuCmd::SetPtt(false));
             }
         }
 
         // Keep the FTX-1's tone in step with the list (see `tone_keeper_last`).
-        if matches!(model, RadioModel::Ftx1) {
+        //
+        // Not while the connect-time reads are still coming in. The list at that
+        // moment is whatever the radio just gave, and for this radio that is
+        // exactly the value it cannot keep - so the keeper would write 100.0 Hz
+        // onto a channel the operator had set to 77.0, moments before the kept
+        // tones arrive and say so (seen at a station on 2026-08-12). Waiting
+        // costs a second; writing the wrong tone costs a repeater contact.
+        if matches!(model, RadioModel::Ftx1) && !auto_read_pending && !auto_tones_pending {
             let (in_memory, ch, tx) = {
                 let st = status.lock().unwrap();
                 (st.vfo_select == 1, st.memory_channel, st.tx_active)
@@ -497,16 +596,27 @@ fn yaesu_poll_loop(
             }
         }
 
-        // Handle commands from the application. The connect-time read is fed in
-        // here as if it were a command, so it goes through exactly the same path
-        // (including the filled-channel list and the stored copy).
+        // Nothing is read from a radio that is in standby, and this is not
+        // politeness - it is what makes the power button work.
+        //
+        // A radio on standby keeps its CAT port alive (that is how `PS1;` can
+        // wake it) but answers nothing else. The connect-time reads then walk
+        // 117 memory channels, 20 tones and 153 menu items into timeouts, which
+        // takes over a minute, and an operator pressing "power on" in that
+        // minute has their command sit in the queue behind it. Measured twice
+        // at a station: click at 22:57:40, radio actually woke at 22:59:01, and
+        // the log in between is nothing but "did not confirm channel N"
+        // (2026-08-12). The reads keep their turn - `power_on` going true is
+        // what releases them.
+        let radio_is_on = status.lock().unwrap().power_on;
         let incoming = if auto_read_pending
+            && radio_is_on
             && session_start.elapsed() >= Duration::from_millis(1500)
         {
             auto_read_pending = false;
             info!("{} reading the memory channels once, now the radio is up", prefix);
             Ok(YaesuCmd::ReadAllMemories)
-        } else if auto_tones_pending && !auto_read_pending {
+        } else if auto_tones_pending && !auto_read_pending && radio_is_on {
             auto_tones_pending = false;
             // Only meaningful if the memory read produced something; the tone walk
             // needs that list to know which channels have a tone mode at all.
@@ -516,7 +626,7 @@ fn yaesu_poll_loop(
             } else {
                 cmd_rx.try_recv()
             }
-        } else if auto_menu_pending && !auto_read_pending && !auto_tones_pending {
+        } else if auto_menu_pending && !auto_read_pending && !auto_tones_pending && radio_is_on {
             auto_menu_pending = false;
             info!("{} reading the EX settings once, now the radio is up", prefix);
             Ok(YaesuCmd::ReadAllMenus)
@@ -615,15 +725,45 @@ fn yaesu_poll_loop(
                                 &mut port, &entries, ret,
                                 matches!(model, RadioModel::Ftx1), &is_tx,
                             );
-                            if !tones.is_empty() {
+                            // What the last session held comes first: for this
+                            // radio the list is the truth, and a tone it cannot
+                            // store is only in that list. The radio's own read
+                            // then fills the gaps (a tone set on the front
+                            // panel, which does work).
+                            let kept = crate::yaesu::tone_store::load(slot, model, prefix);
+                            let blob = if kept.is_empty() {
+                                blob
+                            } else {
+                                crate::yaesu::memory::merge_tones_into_blob(
+                                    &blob, &kept, false, prefix,
+                                )
+                            };
+                            if !tones.is_empty() || !kept.is_empty() {
                                 let merged = crate::yaesu::memory::merge_tones_into_blob(
                                     &blob, &tones, matches!(model, RadioModel::Ftx1), prefix,
                                 );
                                 status.lock().unwrap().last_memory_blob = Some(merged.clone());
                                 // Hand the filled-in list to the client, same route
                                 // as a normal memory read.
-                                *memory_data.lock().unwrap() = Some(merged);
+                                *memory_data.lock().unwrap() = Some(merged.clone());
                                 info!("{} tones merged into the memory list", prefix);
+                                // The set is holding whatever the tone keeper put
+                                // there a moment ago, which was read off a list
+                                // that did not have the kept tones in it yet - so
+                                // the radio sat on 100.0 Hz while the list said
+                                // 77.0 (2026-08-12). Forgetting which channel was
+                                // last done makes the keeper apply this list to
+                                // the channel the radio is on, now that it is the
+                                // right list.
+                                tone_keeper_last = None;
+                                // And keep what the list now holds, so the next
+                                // start begins where this one ended.
+                                crate::yaesu::tone_store::save(
+                                    slot,
+                                    model,
+                                    &crate::yaesu::memory::tones_from_blob(&merged),
+                                    prefix,
+                                );
                             }
                         }
                     }
@@ -681,6 +821,16 @@ fn yaesu_poll_loop(
                     // the tick, a frequency or name edited here lives in the server's
                     // list and not in the radio.
                     adopt_memory_list(&tab_text, &status, &memory_data);
+                    // This list is now the only place these tones exist, so it
+                    // is written down. Without this the operator's work lived
+                    // until the next server restart and no further (the fault
+                    // two problem reports pinned down on 2026-08-12).
+                    crate::yaesu::tone_store::save(
+                        slot,
+                        model,
+                        &crate::yaesu::memory::tones_from_blob(&tab_text),
+                        prefix,
+                    );
                     info!(
                         concat!(
                             "{} the list is now the server's own (its tones are applied ",
@@ -752,9 +902,10 @@ fn yaesu_poll_loop(
                                         "{} no TX time-out timer is set - EX 036 did not read back a ",
                                         "usable value. This radio has no transmit ",
                                         "readback, so nothing will ",
-                                        "release PTT if it stops on its own",
+                                        "release PTT if it stops on its own{}",
                                     ),
                                     prefix,
+                                    super::two_slot_hint(),
                                 );
                             } else {
                                 info!(
@@ -1019,7 +1170,39 @@ fn yaesu_poll_loop(
                             format!("PC{}{:03};", head, v)
                         }
                     }
-                    YaesuCmd::SetPower(on) => format!("PS{};", if on { 1 } else { 0 }),
+                    YaesuCmd::SetPower(on) => {
+                        if on {
+                            // Waking a set in standby has a ritual, and a bare
+                            // PS1; is not it. FT-991A CAT OM (1711-D, PS): the
+                            // power-ON "requires dummy data be initially sent.
+                            // Then after one second and before two seconds the
+                            // command is sent." Without the dummy and the pause
+                            // the radio ignores the command - the operator's
+                            // power button then only works after somebody
+                            // switched the set on by hand once (field report,
+                            // 2026-08-12). The pause blocks this serial thread
+                            // alone, and the radio it talks to is off.
+                            //
+                            // The FTX-1 has no CAT power-ON at all: its PS Set
+                            // documents only P1=0, OFF (CAT OM 2508-C). Say so
+                            // instead of sending a command the set cannot obey.
+                            if matches!(model, RadioModel::Ftx1) {
+                                info!(
+                                    "{} the FTX-1 cannot be switched ON via CAT (PS knows only OFF) - use the set's own switch",
+                                    prefix
+                                );
+                                String::new()
+                            } else {
+                                if let Err(e) = port.write_all(b";") {
+                                    warn!("{} power-on dummy write failed: {}", prefix, e);
+                                }
+                                std::thread::sleep(Duration::from_millis(1500));
+                                "PS1;".to_string()
+                            }
+                        } else {
+                            "PS0;".to_string()
+                        }
+                    }
                     // MC = memory recall. FTX-1: MAIN/SUB prefix + 5-digit channel
                     // (`MC0{ch:05};`, P1=0=MAIN); 991A: 3-digit (`MC{ch:03};`).
                     // Without the correct form, Mem-/Mem+ do nothing on the FTX-1.

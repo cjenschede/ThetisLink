@@ -239,4 +239,55 @@
     <string name="dev_port_a">Poort A — ANT1 (TX+RX)</string>
     <string name="dev_port_b">Poort B — RX2 (RX)</string>
     <string name="dev_digit_tuner_hint">tik cijfer = afstemmen · lang indrukken = invoeren</string>
+
+    <!-- Chat op de relay -->
+    <string name="main_chat">Chat</string>
+    <string name="chat_left_user">iemand die weg is</string>
+    <string name="chat_empty">Er is nog niets gezegd.</string>
+    <string name="chat_send">Verstuur</string>
+    <string name="chat_cancel">Annuleer</string>
+    <string name="chat_reply">antwoord</string>
+    <string name="chat_edit">wijzig</string>
+    <string name="chat_edited">(gewijzigd)</string>
+    <string name="chat_editing">je wijzigt je bericht - Verstuur bewaart de verbetering</string>
+    <string name="chat_replying_to">antwoord op %1$s</string>
+    <string name="chat_input_hint">Je bericht</string>
+    <string name="chat_as_name">Je bent hier als %1$s</string>
+    <string name="chat_leave">Uitschrijven</string>
+    <string name="chat_leave_title">Jezelf uitschrijven uit de chat?</string>
+    <string name="chat_leave_explain">Dit haalt je naam van alles wat je schreef. Je hebt het niet nodig om te stoppen voor vandaag - ga gewoon naar een ander tabblad, je blijft lid. Je berichten kunnen zonder je naam blijven staan zodat gesprekken van anderen leesbaar blijven, of ze gaan met je mee als je roepletters in de tekst zelf staan.</string>
+    <string name="chat_leave_keep">Uitschrijven, berichten laten staan</string>
+    <string name="chat_leave_delete">Uitschrijven en verwijderen</string>
+    <string name="chat_offline_no_relay">Er is geen relay ingesteld, dus er is geen chat. De chat draait naast de relay waarmee je verbindt.</string>
+    <string name="chat_offline_no_ticket">Deze relay biedt geen chat.</string>
+    <string name="chat_offline_unreachable">De chat antwoordt niet. Audio, PTT en de radio staan hier los van.</string>
+    <string name="chat_answer_title">Een antwoord op je melding</string>
+    <string name="chat_consent_title">Meedoen aan de chat</string>
+    <string name="chat_consent_intro">Een ruimte voor de gebruikers van deze relay. Meedoen betekent dat je akkoord gaat met een naam die anderen zien bij wat je schrijft.</string>
+    <string name="chat_consent_name_q">Onder welke naam?</string>
+    <string name="chat_consent_callsign_warning">Let op: een roepletter staat in een openbaar register met naam en adres. Kies een eigen naam als je dat liever niet deelt.</string>
+    <string name="chat_consent_optional">Zonder akkoord werkt de rest van ThetisLink gewoon; alleen de chat is dan niet beschikbaar.</string>
+    <string name="chat_consent_name_hint">Roepletters of bijnaam</string>
+    <string name="chat_consent_admin">De beheerder is PA3GHM, bereikbaar op het adres op de relay-pagina, voor inzage in wat er over je is opgeslagen of voor verwijdering daarvan.</string>
+    <string name="chat_consent_stored">Opgeslagen: de naam die je hier kiest, wat je schrijft, en wanneer. Verder niets, en niets uit je radio.</string>
+    <string name="chat_consent_withdraw">Je kunt op elk moment weggaan, met of zonder je berichten.</string>
+    <string name="chat_consent_ban">De beheerder kan een station uit de chat verwijderen als het onwerkbaar wordt. Je krijgt dat te horen, wat je schreef blijft staan, en het sluit ook het melden van problemen af. De chat verlaten heft een verwijdering niet op.</string>
+    <string name="chat_consent_access">Iedereen die met deze relay verbonden is, kan lezen wat je hier schrijft.</string>
+    <string name="chat_consent_age">Ik ben zestien of ouder, of een ouder gaat akkoord.</string>
+    <string name="chat_consent_agree">Ik ga akkoord - meedoen</string>
+    <string name="chat_report_button">Probleem melden</string>
+    <string name="chat_report_title">Probleem melden</string>
+    <string name="chat_report_explain">Wat was je aan het doen, wat verwachtte je, en wat gebeurde er in plaats daarvan? Jouw beschrijving is de melding.</string>
+    <string name="chat_report_hint">Wat gaat er mis</string>
+    <string name="chat_report_no_log">De log komt uit het systeemlog van Android voor deze app en uit het eigen logbestand van de app, en de instellingen uit de voorkeuren van de app zelf. Alleen de beheerder ziet ze.</string>
+    <string name="chat_report_send">Melding versturen</string>
+    <string name="chat_report_attach">Stuur mijn log en instellingen mee</string>
+    <string name="chat_report_reading">de log en instellingen worden gelezen...</string>
+    <string name="chat_report_attach_shown">Dit gaat er mee. Lees het even door voor je verstuurt: adressen, namen en alles wat op een wachtwoord leek zijn eruit gehaald, maar de laatste controle is aan jou.</string>
+    <string name="settings_roger">Rogerpiep</string>
+    <string name="settings_roger_hint">Een kort toontje aan het eind van je uitzending. De zender blijft zolang aan, zodat het tegenstation hem hoort. Nooit in data- of digitale modes.</string>
+    <string name="settings_roger_radio1">Radio 1</string>
+    <string name="settings_roger_radio2">Radio 2</string>
+    <string name="settings_roger_volume">Niveau</string>
+    <string name="settings_roger_fm">Ook in FM</string>
 </resources>

@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use log::{info, warn};
+use sdr_remote_core::protocol::SubscriptionMask;
 
 /// Conservative server-side default for spectrum max_bins, before a client sends
 /// its own (screen-fitting) value. Safety net so an unconfigured
@@ -646,23 +647,47 @@ impl SessionManager {
         }
     }
 
+    /// The session behind an address, or a line in the log saying what was lost.
+    ///
+    /// A setting for an address with no session is dropped - there is nothing
+    /// to attach it to. Dropping it *quietly* is what made a picture at the
+    /// wrong scale impossible to explain: a client sends its view settings once
+    /// on connect, and if they arrive a moment early the server keeps its own
+    /// defaults while the client draws to its own (2026-08-14).
+    ///
+    /// Build 84 gave that warning to the zoom alone, and the review found the
+    /// shape of it: five setters that can fall silently, one of them told to
+    /// speak up. Zoom and pan go out in the same breath, so if one is dropped
+    /// the other is too - and the client's mismatch check compares the *span*,
+    /// which the pan does not change, so a lost pan is the one thing it can
+    /// never notice by itself. Every view setting goes through here now, which
+    /// is cheaper than remembering to add the warning to the next one
+    /// (2026-08-15).
+    fn view_session_mut(&mut self, addr: SocketAddr, what: &str) -> Option<&mut ClientSession> {
+        let session = self.clients.get_mut(&addr);
+        if session.is_none() {
+            warn!("{} from {} arrived before its session - ignored", what, addr);
+        }
+        session
+    }
+
     /// Set spectrum zoom for a client
     pub fn set_spectrum_zoom(&mut self, addr: SocketAddr, zoom: f32) {
-        if let Some(session) = self.clients.get_mut(&addr) {
+        if let Some(session) = self.view_session_mut(addr, "RX1 spectrum zoom") {
             session.spectrum_zoom = zoom.clamp(1.0, 1024.0);
         }
     }
 
     /// Set spectrum pan for a client
     pub fn set_spectrum_pan(&mut self, addr: SocketAddr, pan: f32) {
-        if let Some(session) = self.clients.get_mut(&addr) {
+        if let Some(session) = self.view_session_mut(addr, "RX1 spectrum pan") {
             session.spectrum_pan = pan.clamp(-0.5, 0.5);
         }
     }
 
     /// Set spectrum max bins for a client (0 = server default)
     pub fn set_spectrum_max_bins(&mut self, addr: SocketAddr, max_bins: u16) {
-        if let Some(session) = self.clients.get_mut(&addr) {
+        if let Some(session) = self.view_session_mut(addr, "RX1 spectrum bin count") {
             session.spectrum_max_bins = if max_bins == 0 {
                 SERVER_DEFAULT_MAX_BINS
             } else {
@@ -799,6 +824,31 @@ impl SessionManager {
         self.clients.get(&addr).map(|s| s.smeter_sources).unwrap_or(0x22)
     }
 
+    /// What this client is subscribed to, as the mask that rides on the
+    /// heartbeat ack.
+    ///
+    /// The server's own answer to "what do I think you want", so a client can
+    /// notice that the two have drifted apart. It is deliberately read here and
+    /// not remembered anywhere: the session IS the truth, and a second copy of
+    /// it would be one more thing that can go stale.
+    pub fn subscription_mask(&self, addr: SocketAddr) -> SubscriptionMask {
+        let mut m = SubscriptionMask::default();
+        let Some(s) = self.clients.get(&addr) else { return m };
+        m.set(SubscriptionMask::RX1_AUDIO, s.rx1_enabled);
+        m.set(SubscriptionMask::RX2_AUDIO, s.rx2_enabled);
+        m.set(SubscriptionMask::RX1_SPECTRUM, s.spectrum_enabled);
+        m.set(SubscriptionMask::RX2_SPECTRUM, s.rx2_spectrum_enabled);
+        m.set(SubscriptionMask::VRX1, s.vrx1_audio_enabled);
+        m.set(SubscriptionMask::VRX2, s.vrx2_audio_enabled);
+        m.set(SubscriptionMask::VRX1_SPECTRUM, s.vrx1_spectrum_enabled);
+        m.set(SubscriptionMask::VRX2_SPECTRUM, s.vrx2_spectrum_enabled);
+        m.set(SubscriptionMask::YAESU, s.yaesu_enabled);
+        m.set(SubscriptionMask::YAESU2, s.yaesu2_enabled);
+        m.set(SubscriptionMask::FULL_SPECTRUM, s.full_spectrum_enabled);
+        m.set(SubscriptionMask::DX_SPOTS, s.dx_spots_enabled);
+        m
+    }
+
     /// Enable/disable the DX-cluster spot-stream for a client. Default ON.
     pub fn set_dx_spots_enabled(&mut self, addr: SocketAddr, enabled: bool) {
         if let Some(session) = self.clients.get_mut(&addr) {
@@ -927,7 +977,7 @@ impl SessionManager {
 
     /// Set RX2 spectrum max bins for a client
     pub fn set_rx2_spectrum_max_bins(&mut self, addr: SocketAddr, max_bins: u16) {
-        if let Some(session) = self.clients.get_mut(&addr) {
+        if let Some(session) = self.view_session_mut(addr, "RX2 spectrum bin count") {
             session.rx2_spectrum_max_bins = if max_bins == 0 {
                 SERVER_DEFAULT_MAX_BINS
             } else {
@@ -938,14 +988,14 @@ impl SessionManager {
 
     /// Set RX2 spectrum zoom for a client
     pub fn set_rx2_spectrum_zoom(&mut self, addr: SocketAddr, zoom: f32) {
-        if let Some(session) = self.clients.get_mut(&addr) {
+        if let Some(session) = self.view_session_mut(addr, "RX2 spectrum zoom") {
             session.rx2_spectrum_zoom = zoom.clamp(1.0, 1024.0);
         }
     }
 
     /// Set RX2 spectrum pan for a client
     pub fn set_rx2_spectrum_pan(&mut self, addr: SocketAddr, pan: f32) {
-        if let Some(session) = self.clients.get_mut(&addr) {
+        if let Some(session) = self.view_session_mut(addr, "RX2 spectrum pan") {
             session.rx2_spectrum_pan = pan.clamp(-0.5, 0.5);
         }
     }

@@ -153,6 +153,219 @@ fn push_blob(
     delivered
 }
 
+/// Build this server's own problem-report attachment and send it to one client.
+///
+/// The cleaning happens HERE, before a byte leaves, and by the same code the
+/// desktop client uses on its own files (`sdr_remote_core::diagnose`). The raw
+/// log never goes on the wire, not even to a client of ours: "it is only going
+/// to my own client" is exactly the reasoning that puts a relay host in
+/// somebody's report.
+///
+/// Sent in numbered parts because this is UDP and a log does not fit in a
+/// datagram. Nothing is retransmitted and nothing is acknowledged: the parts
+/// carry their own numbering, so the client can see that a transfer was
+/// incomplete and ask again. A transfer that silently lost its middle would be
+/// worse than one that failed.
+/// How often one address may ask. Building the attachment reads a 200 kB log,
+/// cleans it line by line and puts a couple of hundred datagrams on the wire;
+/// asking for that in a loop is work the server does instead of carrying audio.
+///
+/// Long enough to be a limit, short enough that a genuine retry after a lossy
+/// transfer does not mean waiting around.
+const REPORT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// When each address was last served, and whether one is being served now.
+///
+/// An authenticated client is trusted to key the transmitter, which is not the
+/// same as being trusted to ask for the same expensive thing without pause. The
+/// in-flight flag matters as much as the clock: two requests arriving in the
+/// same instant would otherwise both get through the cooldown check.
+static REPORT_GUARD: std::sync::Mutex<Option<(std::collections::HashMap<std::net::SocketAddr, std::time::Instant>, bool)>> =
+    std::sync::Mutex::new(None);
+
+/// One radio's list as the report carries it: slot, model code, and the
+/// server's own copy of its memory channels.
+type RadioList = Option<(u8, u8, Option<String>)>;
+
+fn send_own_report(
+    socket: std::sync::Arc<crate::tracked_socket::TrackedSocket>,
+    addr: std::net::SocketAddr,
+    lists: [RadioList; 2],
+) {
+    {
+        let mut g = REPORT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let (seen, busy) = g.get_or_insert_with(|| (std::collections::HashMap::new(), false));
+        if *busy {
+            info!("client {} asked for the server report while one is already going out", addr);
+            return;
+        }
+        if let Some(last) = seen.get(&addr) {
+            if last.elapsed() < REPORT_COOLDOWN {
+                info!(
+                    "client {} asked for the server report again after {:?}; asked to wait",
+                    addr,
+                    last.elapsed()
+                );
+                return;
+            }
+        }
+        // Bounded: one entry per address that ever asked, cleared of anything
+        // older than the cooldown, so a scanner cannot grow this.
+        seen.retain(|_, t| t.elapsed() < REPORT_COOLDOWN * 4);
+        seen.insert(addr, std::time::Instant::now());
+        *busy = true;
+    }
+    let done = ReportInFlight;
+
+    // The expensive half runs on its own thread: building the attachment reads
+    // a 200 kB log and cleans it line by line, and the send paces a couple of
+    // hundred datagrams with deliberate pauses. The loop this is called from is
+    // the one that carries audio and PTT, and it must never wait on a file.
+    // The busy flag above already limits this to one thread at a time; if the
+    // spawn fails, dropping the closure drops the guard and clears the flag.
+    if let Err(e) = std::thread::Builder::new()
+        .name("server-report".into())
+        .spawn(move || {
+            let _done = done;
+            send_own_report_inner(&socket, addr, &lists);
+        })
+    {
+        warn!("client {} asked for the server report, but no thread could be started: {}", addr, e);
+    }
+}
+
+/// Clears the in-flight flag however the send ends, including on a panic.
+struct ReportInFlight;
+/// Which clients have already been reported as sending a control this build
+/// does not know, and when.
+///
+/// Keyed per address, on the same pattern as `REPORT_GUARD` above. It was a
+/// single flag for the whole class to begin with, which damped the flood and
+/// also everything after it: once any client had sent any unknown control, no
+/// other client and no other control was ever mentioned again for the rest of
+/// the run - and these run for days. Damping a class must not mean reporting
+/// one member of it.
+static UNKNOWN_CONTROL_SEEN: std::sync::Mutex<
+    Option<std::collections::HashMap<std::net::SocketAddr, std::time::Instant>>,
+> = std::sync::Mutex::new(None);
+
+/// How long before the same client is worth mentioning again.
+const UNKNOWN_CONTROL_QUIET: Duration = Duration::from_secs(300);
+
+/// Whether this address should be logged now.
+fn unknown_control_worth_logging(addr: std::net::SocketAddr) -> bool {
+    let mut guard = match UNKNOWN_CONTROL_SEEN.lock() {
+        Ok(g) => g,
+        // A poisoned lock must not silence the log it guards.
+        Err(e) => e.into_inner(),
+    };
+    let seen = guard.get_or_insert_with(std::collections::HashMap::new);
+    let now = std::time::Instant::now();
+    match seen.get(&addr) {
+        Some(t) if now.duration_since(*t) < UNKNOWN_CONTROL_QUIET => false,
+        _ => {
+            seen.insert(addr, now);
+            true
+        }
+    }
+}
+
+impl Drop for ReportInFlight {
+    fn drop(&mut self) {
+        if let Ok(mut g) = REPORT_GUARD.lock() {
+            if let Some((_, busy)) = g.as_mut() {
+                *busy = false;
+            }
+        }
+    }
+}
+
+fn send_own_report_inner(
+    socket: &crate::tracked_socket::TrackedSocket,
+    addr: std::net::SocketAddr,
+    lists: &[RadioList; 2],
+) {
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let log = dir.join("thetislink-server.log");
+    let conf = dir.join("thetislink-server.conf");
+    // The relay address is read from the config the same way the GUI does, so
+    // the one host that must never travel is removed here too.
+    let relay_url = crate::config::load().relay_url;
+
+    let text = match sdr_remote_core::diagnose::build_attachment(
+        &log.to_string_lossy(),
+        &conf.to_string_lossy(),
+        &relay_url,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            // Nothing is sent. The client waits, times out, and says the server
+            // log could not be fetched - which is the truth, and better than a
+            // half report labelled as the server's.
+            warn!("client {} asked for the server report, which could not be built: {}", addr, e);
+            return;
+        }
+    };
+
+    // The radios' lists, appended after the cleaned log. Not run through the
+    // redaction: a memory channel is a frequency, a name and a tone, and none
+    // of those is somebody's address or password. It is also the one thing a
+    // report could not answer before - for an FTX-1 the list is where its tones
+    // live, so "the tone is gone" and "the server still has it" are different
+    // faults that looked identical from outside (2026-08-12).
+    let mut text = text;
+    for entry in lists.iter().flatten() {
+        let (slot, model, blob) = entry;
+        let name = sdr_remote_core::protocol::radio_model_name(*model);
+        text.push_str(&format!("\n--- radio {slot} ({name}): the server's memory list ---\n"));
+        match blob {
+            Some(b) if !b.trim().is_empty() => {
+                text.push_str(b);
+                if !b.ends_with('\n') {
+                    text.push('\n');
+                }
+            }
+            // Said rather than left out: an empty list is a fact, and it is
+            // exactly the fact a restart-loses-my-tones report turns on.
+            _ => text.push_str("(the server holds no list for this radio)\n"),
+        }
+    }
+
+    let bytes = text.as_bytes();
+    // Small enough to cross a normal path without IP fragmentation, tunnel
+    // overhead included. The existing blob push uses 60 kB, which is fine on a
+    // LAN and a lottery over the internet.
+    const PART: usize = 1100;
+    let parts = bytes.len().div_ceil(PART).max(1);
+    if parts > u16::MAX as usize {
+        warn!("client {} asked for the server report, which is too large to send", addr);
+        return;
+    }
+    info!("client {}: sending the server report, {} bytes in {} parts", addr, bytes.len(), parts);
+
+    for (i, chunk) in bytes.chunks(PART).enumerate() {
+        let mut buf = Vec::with_capacity(10 + chunk.len());
+        let header = Header::new(PacketType::ServerReportPart, Flags::NONE);
+        let mut hdr = [0u8; 4];
+        header.serialize(&mut hdr);
+        buf.extend_from_slice(&hdr);
+        buf.extend_from_slice(&(i as u16).to_be_bytes());
+        buf.extend_from_slice(&(parts as u16).to_be_bytes());
+        buf.extend_from_slice(&(chunk.len() as u16).to_be_bytes());
+        buf.extend_from_slice(chunk);
+        let _ = socket.try_send_to(&buf, addr);
+        // A pause every so often. Two hundred datagrams sent back to back
+        // overrun a receive buffer, and the ones that get dropped are dropped
+        // for no reason at all: nobody is waiting on this in a hurry.
+        if i % 16 == 15 {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+}
+
 /// Server network service
 pub struct NetworkService {
     socket: Arc<TrackedSocket>,
@@ -957,8 +1170,8 @@ impl NetworkService {
                                 let addrs = session.lock().await.yaesu2_addrs();
                                 if addrs.is_empty() { continue; }
                                 let mut infos: Vec<(u8, u8)> = Vec::new();
-                                if let Some(ref y) = yaesu { infos.push((0, y.model.as_code())); }
-                                if let Some(ref y) = yaesu2 { infos.push((1, y.model.as_code())); }
+                                if let Some(ref y) = yaesu { infos.push((0, y.model_code())); }
+                                if let Some(ref y) = yaesu2 { infos.push((1, y.model_code())); }
                                 for (slot, model) in infos {
                                     let mut buf = [0u8; Header::SIZE + 2];
                                     let mut hdr = [0u8; Header::SIZE];
@@ -1005,7 +1218,7 @@ impl NetworkService {
                 }
                 Some(tokio::spawn(async move {
                     let mut tick = interval(Duration::from_millis(500));
-                    let mut prev: Option<(bool, u8, bool, u8)> = None;
+                    let mut prev: Option<(bool, u8, u8, bool, u8, u8)> = None;
                     let mut sent_addrs: std::collections::HashSet<std::net::SocketAddr> =
                         std::collections::HashSet::new();
                     let mut last_presence_resend = std::time::Instant::now();
@@ -1038,9 +1251,14 @@ impl NetworkService {
                                 }
                                 let present0 = yaesu.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent0;
                                 let present1 = yaesu2.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent1;
-                                let model0 = yaesu.as_ref().map(|y| y.model.as_code()).unwrap_or(0);
-                                let model1 = yaesu2.as_ref().map(|y| y.model.as_code()).unwrap_or(0);
-                                let tuple = (present0, model0, present1, model1);
+                                let model0 = yaesu.as_ref().map(|y| y.model_code()).unwrap_or(0);
+                                let model1 = yaesu2.as_ref().map(|y| y.model_code()).unwrap_or(0);
+                                // Why an absent radio is absent, when the server knows:
+                                // carried with the presence so the client can say "port
+                                // in use by another program" instead of showing nothing.
+                                let trouble0 = yaesu.as_ref().map(|y| y.status().port_trouble).unwrap_or(0);
+                                let trouble1 = yaesu2.as_ref().map(|y| y.status().port_trouble).unwrap_or(0);
+                                let tuple = (present0, model0, trouble0, present1, model1, trouble1);
 
                                 let addrs = session.lock().await.active_addrs();
                                 sent_addrs.retain(|a| addrs.contains(a)); // prune disconnected
@@ -1049,8 +1267,8 @@ impl NetworkService {
                                 let changed = prev != Some(tuple);
                                 if changed {
                                     // L1: value-change-only, incl. number of recipients.
-                                    info!("Yaesu presence push: slot0={}/{} slot1={}/{} -> {} clients",
-                                        present0, model0, present1, model1, addrs.len());
+                                    info!("Yaesu presence push: slot0={}/{}/t{} slot1={}/{}/t{} -> {} clients",
+                                        present0, model0, trouble0, present1, model1, trouble1, addrs.len());
                                     prev = Some(tuple);
                                     sent_addrs.clear(); // everyone gets the new tuple
                                 }
@@ -1058,6 +1276,7 @@ impl NetworkService {
                                 let pkt = YaesuPresencePacket {
                                     slot0_present: present0, slot0_model: model0,
                                     slot1_present: present1, slot1_model: model1,
+                                    slot0_trouble: trouble0, slot1_trouble: trouble1,
                                 };
                                 let mut buf = [0u8; YaesuPresencePacket::SIZE];
                                 pkt.serialize(&mut buf);
@@ -1102,7 +1321,6 @@ impl NetworkService {
             let ultrabeam = self.ultrabeam.clone();
             let rotor = self.rotor.clone();
             let dxcluster = self.dxcluster.clone();
-            let config = self.config.clone();
             let drive_level_shared = self.drive_level_shared.clone();
             let active_pa_shared = self.active_pa_shared.clone();
             let vfo_freq_shared = self.vfo_freq_shared.clone();
@@ -1241,7 +1459,10 @@ impl NetworkService {
                                 let m = vrx_mgr.lock().unwrap();
                                 vrx1_spec_addrs.iter().filter_map(|(a, loss)| {
                                     let span = m.spectrum_span(a, 0);
-                                    let freq = m.target_freq(a, 0);
+                                    // Cut where the operator is looking, not
+                                    // always on the listening frequency.
+                                    let freq = m.target_freq(a, 0)
+                                        .saturating_add_signed(m.spectrum_pan(a, 0) as i64);
                                     (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000, *loss))
                                 }).collect()
                             };
@@ -1251,7 +1472,8 @@ impl NetworkService {
                                 let m = vrx_mgr.lock().unwrap();
                                 vrx2_spec_addrs.iter().filter_map(|(a, loss)| {
                                     let span = m.spectrum_span(a, 1);
-                                    let freq = m.target_freq(a, 1);
+                                    let freq = m.target_freq(a, 1)
+                                        .saturating_add_signed(m.spectrum_pan(a, 1) as i64);
                                     (span > 0 && freq > 0).then_some((*a, freq, span as u32 * 1000, *loss))
                                 }).collect()
                             };
@@ -2679,9 +2901,32 @@ impl NetworkService {
                     let packet = match Packet::deserialize(data) {
                         Ok(p) => p,
                         Err(e) => {
-                            // Unknown packet types from old clients - silently ignore
-                            if !e.to_string().contains("unknown packet type") {
+                            // Unknown packet types from old clients - silently ignore.
+                            //
+                            // An unknown *control id* is the same situation and
+                            // was not covered: a newer client sending a control
+                            // this build does not know would be logged for every
+                            // packet. The VRX pan is the case that made it
+                            // concrete - a control a client can send repeatedly
+                            // while dragging - but the damping belongs to the
+                            // class, not to that one control.
+                            let text = e.to_string();
+                            let expected = text.contains("unknown packet type")
+                                || text.contains("control id");
+                            if !expected {
                                 info!("Invalid packet from {} ({}B): {}", addr, len, e);
+                            } else if !text.contains("unknown packet type")
+                                && unknown_control_worth_logging(addr)
+                            {
+                                // Once per client per five minutes. Knowing a
+                                // client is ahead of this build is worth a line;
+                                // the hundredth buries what else is in the log,
+                                // and silence for every other client would bury
+                                // it just as thoroughly.
+                                info!(
+                                    "Client {} uses a control this build does not know ({}) - ignored",
+                                    addr, e
+                                );
                             }
                             continue;
                         }
@@ -2905,6 +3150,12 @@ impl NetworkService {
                             // so the client knows the state_flags field is authoritative.
                             // Old servers (pre-PATCH-1) leave both at NONE - client must
                             // NOT then assume "TCI down" from an absent flag.
+                            // What this server believes the client is subscribed
+                            // to, on a packet that already leaves every second.
+                            // It carries no instruction: it is there so a client
+                            // can notice that the two have drifted apart after a
+                            // reconnect whose edge it may not have seen.
+                            let subs = self.session.lock().await.subscription_mask(addr);
                             let ack = HeartbeatAck {
                                 flags: Flags::NONE,
                                 echo_sequence: hb.sequence,
@@ -2912,9 +3163,10 @@ impl NetworkService {
                                 capabilities: Capabilities::NONE
                                     .with(Capabilities::REPORTS_STATE_FLAGS),
                                 state_flags,
+                                subs: Some(subs),
                             };
-                            let mut ack_buf = [0u8; HeartbeatAck::SIZE];
-                            ack.serialize(&mut ack_buf);
+                            let mut ack_buf = [0u8; HeartbeatAck::SIZE_WITH_SUBS];
+                            ack.serialize_with_subs(&mut ack_buf);
                             let _ = self.socket.send_to(&ack_buf, addr).await;
                         }
                         Packet::Frequency(freq_pkt) => {
@@ -3245,6 +3497,24 @@ impl NetworkService {
                         | Packet::AmplitecPowerTable(_)
                         | Packet::AuthChallenge(_) | Packet::AuthResponse(_) | Packet::AuthResult(_)
                         | Packet::TotpChallenge | Packet::TotpResponse(_) => {}
+                        // Sent by this server, never received by it.
+                        Packet::ServerReportPart(..) => {}
+                        Packet::ServerReportRequest => {
+                            // Only an authenticated client gets here: everything
+                            // else was dropped at the gate above. That is the
+                            // whole authorisation this needs - somebody who can
+                            // key the transmitter can read the log about it.
+                            // The radios' own lists travel with it. For an FTX-1
+                            // that list IS where its memory tones live, so a
+                            // report without it cannot answer "what does the
+                            // server think channel 5 holds" - which is the
+                            // question a tone that went missing turns into.
+                            let lists = [
+                                self.yaesu.as_ref().map(|y| (0u8, y.model_code(), y.status().last_memory_blob.clone())),
+                                self.yaesu2.as_ref().map(|y| (1u8, y.model_code(), y.status().last_memory_blob.clone())),
+                            ];
+                            send_own_report(self.socket.clone(), addr, lists);
+                        }
                         Packet::YaesuMemoryData(text) => {
                             if text.starts_with("SETMENU:") {
                                 // Direct menu set: "SETMENU:nnn:value"
@@ -3455,6 +3725,11 @@ impl NetworkService {
                                 ControlId::SpectrumPan => {
                                     let pan = ctrl.value as f32 / 10000.0 - 0.5;
                                     self.session.lock().await.set_spectrum_pan(addr, pan);
+                                    // Logged like the zoom beside it. Without this a
+                                    // report about a pan that does nothing cannot say
+                                    // whether the value ever arrived - which is exactly
+                                    // where one such report ran out of evidence.
+                                    info!("Client {} rx1 spectrum pan: {:+.4}", addr, pan);
                                 }
                                 ControlId::FilterLow => {
                                     // Buffer low edge; send combined with high edge
@@ -3595,6 +3870,7 @@ impl NetworkService {
                                 ControlId::Rx2SpectrumPan => {
                                     let pan = ctrl.value as f32 / 10000.0 - 0.5;
                                     self.session.lock().await.set_rx2_spectrum_pan(addr, pan);
+                                    info!("Client {} rx2 spectrum pan: {:+.4}", addr, pan);
                                 }
                                 ControlId::Rx2FilterLow => {
                                     pending_rx2_filter_low = Some(ctrl.value as i16 as i32);
@@ -4226,6 +4502,14 @@ impl NetworkService {
                                     self.session.lock().await.set_vrx_spectrum(addr, 1, on);
                                     self.refresh_spectrum_processors().await;
                                     info!("Client {} VRX2 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
+                                }
+                                ControlId::VrxSpectrumPan => {
+                                    let hz = sdr_remote_core::protocol::unpack_vrx_pan(ctrl.value);
+                                    self.vrx_mgr.lock().unwrap().set_spectrum_pan(addr, 0, hz);
+                                }
+                                ControlId::VrxSpectrumPan2 => {
+                                    let hz = sdr_remote_core::protocol::unpack_vrx_pan(ctrl.value);
+                                    self.vrx_mgr.lock().unwrap().set_spectrum_pan(addr, 1, hz);
                                 }
                                 ControlId::VrxSpectrumSpanKhz => {
                                     let mut m = self.vrx_mgr.lock().unwrap();

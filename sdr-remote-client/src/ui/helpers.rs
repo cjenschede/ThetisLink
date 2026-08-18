@@ -507,3 +507,49 @@ pub(crate) fn rf2k_band_name(band: u8) -> &'static str {
         10 => "160m", _ => "?",
     }
 }
+
+#[cfg(test)]
+mod opening_zoom_tests {
+    use super::default_zoom_for_span;
+
+    /// The width the receivers actually run at here. Both RX1 and RX2 have to
+    /// land on the same figure - RX2 sat on the opening 32x for want of this.
+    #[test]
+    fn the_field_rate_opens_at_eight_times() {
+        assert_eq!(default_zoom_for_span(384_000), 8.0);
+    }
+
+    /// The figure the doc comment is written around.
+    #[test]
+    fn the_widest_ddc_opens_at_thirty_two_times() {
+        assert_eq!(default_zoom_for_span(1_536_000), 32.0);
+    }
+
+    #[test]
+    fn a_narrower_receiver_opens_further_out() {
+        assert_eq!(default_zoom_for_span(192_000), 4.0);
+        assert_eq!(default_zoom_for_span(96_000), 2.0);
+    }
+
+    /// Every width lands on the same visible span, which is the whole point.
+    #[test]
+    fn the_visible_width_comes_out_the_same_either_way() {
+        for span_hz in [96_000u32, 192_000, 384_000, 768_000, 1_536_000] {
+            let visible = span_hz as f32 / default_zoom_for_span(span_hz);
+            assert!((visible - 48_000.0).abs() < 1.0, "{span_hz} Hz gave {visible} Hz");
+        }
+    }
+
+    /// No rate yet. The callers guard on this, but zoom below 1x is not a view.
+    #[test]
+    fn without_a_width_there_is_no_zooming_out_past_one() {
+        assert_eq!(default_zoom_for_span(0), 1.0);
+        assert_eq!(default_zoom_for_span(48_000), 1.0);
+        assert_eq!(default_zoom_for_span(24_000), 1.0);
+    }
+
+    #[test]
+    fn an_absurd_width_stops_at_the_ceiling() {
+        assert_eq!(default_zoom_for_span(u32::MAX), 1024.0);
+    }
+}

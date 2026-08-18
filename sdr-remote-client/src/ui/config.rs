@@ -204,12 +204,9 @@ pub(crate) struct ClientConfig {
     pub(crate) vrx2_enabled: Option<bool>,
     pub(crate) vrx2_freq_hz: Option<u64>,
     pub(crate) vrx2_mode: Option<u8>,
-    pub(crate) vrx1_spectrum_zoom: Option<f32>,
-    pub(crate) vrx2_spectrum_zoom: Option<f32>,
     pub(crate) vrx1_ref_db: Option<f32>,
     pub(crate) vrx1_range_db: Option<f32>,
     pub(crate) vrx1_wf_contrast: Option<f32>,
-    pub(crate) vrx1_pan: Option<f32>,
     pub(crate) vrx1_auto_ref: Option<bool>,
     pub(crate) vrx1_filter_low_hz: Option<i32>,
     pub(crate) vrx1_filter_high_hz: Option<i32>,
@@ -217,11 +214,19 @@ pub(crate) struct ClientConfig {
     pub(crate) vrx2_ref_db: Option<f32>,
     pub(crate) vrx2_range_db: Option<f32>,
     pub(crate) vrx2_wf_contrast: Option<f32>,
-    pub(crate) vrx2_pan: Option<f32>,
     pub(crate) vrx2_auto_ref: Option<bool>,
     pub(crate) vrx2_filter_low_hz: Option<i32>,
     pub(crate) vrx2_filter_high_hz: Option<i32>,
     pub(crate) vrx2_high_res_spectrum: Option<bool>,
+    /// The main receivers' zoom, kept the way VRX has always kept its own.
+    /// `None` means it was never set, and only then is the opening zoom
+    /// derived from the receiver's width on the first connection.
+    ///
+    /// The pan is deliberately not here. It survives a reconnect, because a
+    /// link that drops for a moment should not move the view, but it starts a
+    /// new session at zero: it is used far less often than the zoom, and an
+    /// offset carried over from days ago reads as a fault rather than as a
+    /// setting. The zoom is the one the operator still has in mind.
     pub(crate) wf_contrast_per_band: HashMap<String, f32>,
     pub(crate) rx2_spectrum_ref_db: f32,
     pub(crate) rx2_spectrum_range_db: f32,
@@ -284,6 +289,7 @@ pub(crate) struct ClientConfig {
     pub(crate) midi_encoder_hz: u64,
     pub(crate) ptt_toggle: bool,
     pub(crate) yaesu_ptt_toggle: bool,
+    pub(crate) chat_open: bool,
     pub(crate) midi_ptt_toggle: bool,
     // Dual-radio slot 1 (FTX-1): own enable + PTT mode + volume, persistent.
     pub(crate) yaesu2_enabled: bool,
@@ -307,6 +313,9 @@ pub(crate) struct ClientConfig {
     /// not running. Fires once per client run (see `thetis_autostart_fired`),
     /// so a deliberate shutdown from the Power button stays off.
     pub(crate) thetis_autostart: bool,
+    /// The roger beep. One set of numbers, a tick per channel - see
+    /// `sdr_remote_logic::roger`.
+    pub(crate) roger: sdr_remote_logic::roger::RogerBeep,
     pub(crate) catsync_enabled: bool,
     pub(crate) catsync_url: String,
     /// Per-radio WebSDR URL for the two Yaesu radios (independent of Thetis and
@@ -411,12 +420,9 @@ impl Default for ClientConfig {
             vrx2_enabled: None,
             vrx2_freq_hz: None,
             vrx2_mode: None,
-            vrx1_spectrum_zoom: None,
-            vrx2_spectrum_zoom: None,
             vrx1_ref_db: None,
             vrx1_range_db: None,
             vrx1_wf_contrast: None,
-            vrx1_pan: None,
             vrx1_auto_ref: None,
             vrx1_filter_low_hz: None,
             vrx1_filter_high_hz: None,
@@ -424,7 +430,6 @@ impl Default for ClientConfig {
             vrx2_ref_db: None,
             vrx2_range_db: None,
             vrx2_wf_contrast: None,
-            vrx2_pan: None,
             vrx2_auto_ref: None,
             vrx2_filter_low_hz: None,
             vrx2_filter_high_hz: None,
@@ -476,6 +481,7 @@ impl Default for ClientConfig {
             midi_encoder_hz: 100,
             ptt_toggle: false,
             yaesu_ptt_toggle: false,
+            chat_open: false,
             yaesu2_enabled: false,
             yaesu2_ptt_toggle: false,
             yaesu2_volume: 0.05,
@@ -489,6 +495,7 @@ impl Default for ClientConfig {
             midi_ptt_toggle: true, // MIDI defaults to toggle (existing behavior)
             smeter_source: 1,      // Avg matches pre-multi-source server default
             thetis_autostart: false, // opt-in: powers up the radio without being asked
+            roger: sdr_remote_logic::roger::RogerBeep::default(),
             catsync_enabled: false,
             catsync_url: String::new(),
             catsync_url_y1: String::new(),
@@ -732,12 +739,6 @@ pub(crate) fn load_config() -> ClientConfig {
         } else if let Some(val) = line.strip_prefix("vrx2_mode=") {
             config.vrx2_mode = val.trim().parse().ok();
             has_keys = true;
-        } else if let Some(val) = line.strip_prefix("vrx1_spectrum_zoom=") {
-            config.vrx1_spectrum_zoom = val.trim().parse().ok();
-            has_keys = true;
-        } else if let Some(val) = line.strip_prefix("vrx2_spectrum_zoom=") {
-            config.vrx2_spectrum_zoom = val.trim().parse().ok();
-            has_keys = true;
         } else if let Some(val) = line.strip_prefix("vrx1_ref_db=") {
             config.vrx1_ref_db = val.trim().parse().ok();
             has_keys = true;
@@ -755,10 +756,6 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("vrx2_wf_contrast=") {
             config.vrx2_wf_contrast = val.trim().parse().ok();
-        } else if let Some(val) = line.strip_prefix("vrx1_pan=") {
-            config.vrx1_pan = val.trim().parse().ok();
-        } else if let Some(val) = line.strip_prefix("vrx2_pan=") {
-            config.vrx2_pan = val.trim().parse().ok();
         } else if let Some(val) = line.strip_prefix("vrx1_auto_ref=") {
             config.vrx1_auto_ref = Some(val.trim() == "true");
         } else if let Some(val) = line.strip_prefix("vrx2_auto_ref=") {
@@ -1056,6 +1053,8 @@ pub(crate) fn load_config() -> ClientConfig {
             config.ptt_toggle = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu_ptt_toggle=") {
             config.yaesu_ptt_toggle = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("chat_open=") {
+            config.chat_open = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu2_enabled=") {
             config.yaesu2_enabled = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu2_ptt_toggle=") {
@@ -1078,6 +1077,20 @@ pub(crate) fn load_config() -> ClientConfig {
             config.midi_ptt_toggle = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("thetis_autostart=") {
             config.thetis_autostart = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("roger_freq_hz=") {
+            if let Ok(v) = val.trim().parse() { config.roger.freq_hz = v; }
+        } else if let Some(val) = line.strip_prefix("roger_volume=") {
+            if let Ok(v) = val.trim().parse() { config.roger.volume = v; }
+        } else if let Some(val) = line.strip_prefix("roger_duration_ms=") {
+            if let Ok(v) = val.trim().parse() { config.roger.duration_ms = v; }
+        } else if let Some(val) = line.strip_prefix("roger_include_fm=") {
+            config.roger.include_fm = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("roger_on_thetis=") {
+            config.roger.on_thetis = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("roger_on_radio1=") {
+            config.roger.on_radio1 = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("roger_on_radio2=") {
+            config.roger.on_radio2 = val.trim() == "true";
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("smeter_source=") {
             if let Ok(v) = val.trim().parse::<u8>() {
@@ -1288,12 +1301,9 @@ pub(crate) fn save_config(
     vrx2_enabled_arg: Option<bool>,
     vrx2_freq_hz_arg: Option<u64>,
     vrx2_mode_arg: Option<u8>,
-    vrx1_spectrum_zoom_arg: Option<f32>,
-    vrx2_spectrum_zoom_arg: Option<f32>,
     vrx1_ref_db_arg: Option<f32>,
     vrx1_range_db_arg: Option<f32>,
     vrx1_wf_contrast_arg: Option<f32>,
-    vrx1_pan_arg: Option<f32>,
     vrx1_auto_ref_arg: Option<bool>,
     vrx1_filter_low_hz_arg: Option<i32>,
     vrx1_filter_high_hz_arg: Option<i32>,
@@ -1301,7 +1311,6 @@ pub(crate) fn save_config(
     vrx2_ref_db_arg: Option<f32>,
     vrx2_range_db_arg: Option<f32>,
     vrx2_wf_contrast_arg: Option<f32>,
-    vrx2_pan_arg: Option<f32>,
     vrx2_auto_ref_arg: Option<bool>,
     vrx2_filter_low_hz_arg: Option<i32>,
     vrx2_filter_high_hz_arg: Option<i32>,
@@ -1453,12 +1462,6 @@ pub(crate) fn save_config(
         if let Some(v) = vrx2_mode_arg {
             content.push_str(&format!("vrx2_mode={}\n", v));
         }
-        if let Some(v) = vrx1_spectrum_zoom_arg {
-            content.push_str(&format!("vrx1_spectrum_zoom={:.1}\n", v));
-        }
-        if let Some(v) = vrx2_spectrum_zoom_arg {
-            content.push_str(&format!("vrx2_spectrum_zoom={:.1}\n", v));
-        }
         if let Some(v) = vrx1_ref_db_arg {
             content.push_str(&format!("vrx1_ref_db={:.1}\n", v));
         }
@@ -1476,12 +1479,6 @@ pub(crate) fn save_config(
         }
         if let Some(v) = vrx2_wf_contrast_arg {
             content.push_str(&format!("vrx2_wf_contrast={:.2}\n", v));
-        }
-        if let Some(v) = vrx1_pan_arg {
-            content.push_str(&format!("vrx1_pan={:.4}\n", v));
-        }
-        if let Some(v) = vrx2_pan_arg {
-            content.push_str(&format!("vrx2_pan={:.4}\n", v));
         }
         if let Some(v) = vrx1_auto_ref_arg {
             content.push_str(&format!("vrx1_auto_ref={}\n", v));
@@ -1650,15 +1647,67 @@ pub(crate) fn save_config(
                     || line.starts_with("yaesu_compressor=")
                     || line.starts_with("yaesu2_compressor=")
                     || line.starts_with("yaesu_tx_agc=")
-                    || line.starts_with("yaesu2_tx_agc=") {
+                    || line.starts_with("yaesu2_tx_agc=")
+                    // The roger beep. Written one key at a time like the rest
+                    // of this list, and therefore invisible to the rewrite
+                    // above unless it is named here - which is why the ticks
+                    // were forgotten on restart (2026-08-14). One prefix rather
+                    // than seven lines, so a settings added later cannot be
+                    // half-remembered.
+                    || line.starts_with("roger_") {
                     content.push_str(line);
                     content.push('\n');
                 }
             }
         }
-        let _ = std::fs::write(path, content);
+        let _ = std::fs::write(path, sdr_remote_core::conf_layout::group(&content, SECTIONS, UNSORTED));
     }
 }
+
+/// The trailing heading for keys this table has no home for. A key landing
+/// here is not an error - it is the reminder that it needs one.
+const UNSORTED: &str = "Not sorted yet";
+
+/// How the client's settings file reads. See `conf_layout`: the longest
+/// matching prefix wins, so a specific key beats the family it sits in.
+///
+/// Window geometry is deliberately NOT filed with its own device. Coordinates
+/// are only worth reading against each other - a window that ended up on
+/// another monitor stands out in a column of positions and disappears
+/// entirely when it sits under its own heading.
+const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
+    ("Connection", &["server", "password", "relay_", "successful_connects", "thetis_autostart"]),
+    ("Audio", &[
+        "volume", "play_volume", "tx_gain", "vfo_a_volume", "vfo_b_volume", "local_volume",
+        "rx2_volume", "input_device", "output_device", "agc_enabled", "thetis_wideband_audio",
+        "mic_profile", "mic_gate_delay_", "spike_protection", "roger_",
+    ]),
+    ("PTT", &["ptt_toggle", "midi_ptt_toggle", "yaesu_ptt_toggle", "yaesu2_ptt_toggle"]),
+    ("RX1 spectrum and waterfall", &[
+        "spectrum_", "rx1_", "waterfall_contrast", "wf_contrast_per_band", "auto_ref_enabled",
+        "full_spectrum_enabled", "allow_zoom_below_2x",
+    ]),
+    ("RX2 spectrum and waterfall", &["rx2_"]),
+    ("VRX", &["vrx_", "vrx1_", "vrx2_"]),
+    ("Yaesu radio 1", &["yaesu_"]),
+    ("Yaesu radio 2", &["yaesu2_"]),
+    ("Memories", &["mem", "band_mem_", "layout_mem"]),
+    ("CAT sync", &["catsync_"]),
+    ("MIDI", &["midi_"]),
+    ("Window positions and sizes", &[
+        "window_w", "window_h", "main_window_pos", "spectrum_total_h",
+        "spectrum_popout_pos", "spectrum_popout_size", "rx2_popout_pos", "rx2_popout_size",
+        "vrx_popout_pos", "vrx_popout_size", "vrx2_popout_pos", "vrx2_popout_size",
+        "yaesu_popout_pos", "yaesu_popout_size", "yaesu2_popout_pos", "yaesu2_popout_size",
+        "popout_joined_pos", "popout_joined_size", "yaesu_memories_h", "yaesu2_memories_h",
+    ]),
+    ("Window visibility", &[
+        "spectrum_popout", "yaesu_popout", "yaesu2_popout", "popout_joined", "collapse_",
+        "device_tab", "meter_analog", "bw_breakdown_expanded", "amplitec_power_show",
+        "ub_show_menu",
+    ]),
+    ("Appearance", &["theme", "language", "ui_zoom", "layout_grids"]),
+];
 
 /// Phase A relay monitor: persist relay settings without touching the large
 /// direct-connection config rewrite path.
@@ -1784,6 +1833,21 @@ fn save_single_key(key: &str, value: &str) {
 }
 
 /// Persist the S-meter source choice (0=Sig, 1=Avg, 2=MaxBin) as a single
+/// Write the roger beep back, all seven keys at once.
+///
+/// Seven `save_single_key` calls rather than one combined line, because the
+/// file is a flat list of `key=value` and a reader that only knows some of
+/// these keys must still be able to read the rest.
+pub(crate) fn save_roger(r: &sdr_remote_logic::roger::RogerBeep) {
+    save_single_key("roger_freq_hz", &format!("{:.0}", r.freq_hz));
+    save_single_key("roger_volume", &format!("{:.3}", r.volume));
+    save_single_key("roger_duration_ms", &r.duration_ms.to_string());
+    save_single_key("roger_include_fm", if r.include_fm { "true" } else { "false" });
+    save_single_key("roger_on_thetis", if r.on_thetis { "true" } else { "false" });
+    save_single_key("roger_on_radio1", if r.on_radio1 { "true" } else { "false" });
+    save_single_key("roger_on_radio2", if r.on_radio2 { "true" } else { "false" });
+}
+
 /// `smeter_source=N` line. Called whenever the user changes the source in
 /// the Thetis tab.
 pub(crate) fn save_smeter_source(source: u8) {
@@ -1849,4 +1913,58 @@ pub(crate) fn mark_successful_connect() {
         updated_lines.push(new_line);
     }
     let _ = std::fs::write(path, updated_lines.join("\n") + "\n");
+}
+
+#[cfg(test)]
+mod conf_section_tests {
+    use super::{SECTIONS, UNSORTED};
+
+    /// Which heading a key ends up under.
+    fn heading_of(key: &str) -> String {
+        let grouped = sdr_remote_core::conf_layout::group(&format!("{key}=x\n"), SECTIONS, UNSORTED);
+        grouped
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim_matches(|c| c == '#' || c == ' ' || c == '-')
+            .to_string()
+    }
+
+    /// Each of these matches two prefixes, and would land in the wrong place
+    /// under a first-match rule.
+    #[test]
+    fn the_specific_key_beats_the_family_it_sits_in() {
+        assert_eq!(heading_of("rx2_volume"), "Audio");
+        assert_eq!(heading_of("rx2_spectrum_fft_size_k"), "RX2 spectrum and waterfall");
+        assert_eq!(heading_of("yaesu_ptt_toggle"), "PTT");
+        assert_eq!(heading_of("yaesu_mic_gain"), "Yaesu radio 1");
+        assert_eq!(heading_of("yaesu_memories_h"), "Window positions and sizes");
+    }
+
+    /// The pair that reads almost the same and belongs apart: where a window
+    /// is, versus whether it is open.
+    #[test]
+    fn a_position_is_not_a_visibility() {
+        assert_eq!(heading_of("spectrum_popout_pos"), "Window positions and sizes");
+        assert_eq!(heading_of("spectrum_popout"), "Window visibility");
+        assert_eq!(heading_of("popout_joined_size"), "Window positions and sizes");
+        assert_eq!(heading_of("popout_joined"), "Window visibility");
+    }
+
+    /// Radio 2's keys are not radio 1's keys with a digit in them.
+    #[test]
+    fn the_two_radios_do_not_share_a_heading() {
+        assert_eq!(heading_of("yaesu_enabled"), "Yaesu radio 1");
+        assert_eq!(heading_of("yaesu2_enabled"), "Yaesu radio 2");
+    }
+
+    /// Each receiver's spectrum settings sit with that receiver. The zoom and
+    /// the pan are not among them: they are not written to this file at all,
+    /// so that a restart always opens the same way.
+    #[test]
+    fn the_receivers_view_sits_with_its_receiver() {
+        assert_eq!(heading_of("spectrum_ref_db"), "RX1 spectrum and waterfall");
+        assert_eq!(heading_of("rx1_enabled"), "RX1 spectrum and waterfall");
+        assert_eq!(heading_of("rx2_spectrum_ref_db"), "RX2 spectrum and waterfall");
+    }
 }

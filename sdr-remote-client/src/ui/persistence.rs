@@ -15,6 +15,7 @@ impl SdrRemoteApp {
                 content = content.lines()
                     .filter(|l| !l.starts_with("ptt_toggle=") && !l.starts_with("midi_ptt_toggle=")
                         && !l.starts_with("yaesu_ptt_toggle=")
+                        && !l.starts_with("chat_open=")
                         && !l.starts_with("yaesu2_enabled=") && !l.starts_with("yaesu2_ptt_toggle=")
                         && !l.starts_with("yaesu2_popout=")
                         && !l.starts_with("yaesu_mic_gain=") && !l.starts_with("yaesu2_mic_gain=")
@@ -22,7 +23,8 @@ impl SdrRemoteApp {
                         && !l.starts_with("yaesu_tx_agc=") && !l.starts_with("yaesu2_tx_agc="))
                     .collect::<Vec<_>>().join("\n");
                 content.push_str(&format!(
-                    "\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\n",
+                    "\nchat_open={}\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\n",
+                    self.chat_open,
                     self.ptt_toggle_mode, self.yaesu_ptt_toggle_mode, self.midi_ptt_toggle_mode,
                     self.yaesu2_enabled, self.yaesu2_ptt_toggle_mode,
                     self.yaesu2_popout, self.yaesu_mic_gain, self.yaesu2_mic_gain,
@@ -117,12 +119,9 @@ impl SdrRemoteApp {
             Some(self.vrx2_enabled),
             Some(self.vrx2_freq_hz),
             Some(self.vrx2_mode),
-            Some(self.vrx1_spectrum_zoom),
-            Some(self.vrx2_spectrum_zoom),
             Some(self.vrx1_ref_db),
             Some(self.vrx1_range_db),
             Some(self.vrx1_wf_contrast),
-            Some(self.vrx1_pan),
             Some(self.vrx1_auto_ref),
             Some(self.vrx1_filter_low_hz),
             Some(self.vrx1_filter_high_hz),
@@ -130,7 +129,6 @@ impl SdrRemoteApp {
             Some(self.vrx2_ref_db),
             Some(self.vrx2_range_db),
             Some(self.vrx2_wf_contrast),
-            Some(self.vrx2_pan),
             Some(self.vrx2_auto_ref),
             Some(self.vrx2_filter_low_hz),
             Some(self.vrx2_filter_high_hz),

@@ -528,6 +528,9 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             },
             dxSpotsEnabled = state.dxSpotsEnabled,
             onDxSpotsEnabledChange = { viewModel.setDxSpotsEnabled(it) },
+            onRogerChange = { f, v, ms, fm, t, r1, r2 ->
+                viewModel.setRogerBeep(f, v, ms, fm, t, r1, r2)
+            },
             onReboot = { viewModel.serverReboot() },
             onShutdown = { viewModel.serverShutdown() },
             onDismiss = { showSettings = false },
@@ -560,6 +563,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Text("HPSDR / OpenHPSDR Protocol 2", fontSize = 11.sp)
                     Text("WebSDR (PA3FWM) / KiwiSDR - CatSync", fontSize = 11.sp)
                     Text("ThetisLink Relay - WS + UDP (internet remote)", fontSize = 11.sp)
+                    Text("ThetisLink Chat - optional service beside a relay", fontSize = 11.sp)
                     Spacer(Modifier.height(6.dp))
                     Text(stringResource(R.string.main_about_hardware), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     for ((dev, iface) in listOf(
@@ -627,17 +631,46 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // server-broadcast tunerState directly.
 
     var showDevices by rememberSaveable { mutableStateOf(false) }
+    var showChat by rememberSaveable { mutableStateOf(false) }
     var deviceSubTab by rememberSaveable { mutableIntStateOf(0) }
+
+    // The chat lives on the relay, so a station without one has no chat at all -
+    // and most stations will not have one. The tab is therefore only offered to
+    // stations that go through a relay; an unexplained dead control is worse
+    // than no control, and on a phone it would cost a third of the tab row for
+    // something that can never answer. A relay that turns out to carry no chat
+    // is a different case: the tab stays, and the screen behind it says why it
+    // is empty (2026-08-17).
+    //
+    // Read on every recomposition rather than remembered: the relay is
+    // configured elsewhere in this app, and a tab that only appears after a
+    // restart would look like it does not work.
+    val relayConfigured = prefs.getBoolean("relay_enabled", false) &&
+        (prefs.getString("relay_url", "") ?: "").isNotBlank()
+
+    // The chat, on its own flow and its own clock (see the ViewModel): asked for
+    // once a second rather than with the radio's 30 fps, because it is the least
+    // important thing on this screen and must stay that way.
+    val chat by viewModel.chatState.collectAsStateWithLifecycle()
+    // Told which screen is showing, so it polls briskly while it is read and
+    // sparingly while it is not - which is what keeps the unread badge honest.
+    LaunchedEffect(showChat) { viewModel.setChatScreenOpen(showChat) }
 
     // Auto-switch to Devices when Yaesu is activated
     LaunchedEffect(yaesuActive) {
-        if (yaesuActive) showDevices = true
+        if (yaesuActive) { showDevices = true; showChat = false }
+    }
+
+    // The relay was switched off while the chat was open: leave it, or the
+    // screen would stay up with no way back to it.
+    LaunchedEffect(relayConfigured) {
+        if (!relayConfigured) showChat = false
     }
 
     // Data-besparing: abonneer alleen op de Yaesu-radio's als het Yaesu-window open is
     // (devices-scherm zichtbaar en Yaesu-tab (id 6) geselecteerd). Buiten dit window blijft
     // alleen een actief-beluisterde radio geabonneerd (zie ViewModel.updateYaesuSubscriptions).
-    val yaesuWindowOpen = showDevices && deviceSubTab == 6
+    val yaesuWindowOpen = showDevices && !showChat && deviceSubTab == 6
     LaunchedEffect(yaesuWindowOpen) {
         viewModel.setYaesuWindowOpen(yaesuWindowOpen)
     }
@@ -649,14 +682,17 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     //  - Yaesu actief      -> spectrum uit (geen grace).
     //  - op hoofdscherm     -> spectrum aan (+ FPS-restore).
     //  - hoofdscherm >30 s verlaten -> spectrum uit; binnen 30 s terug = effect cancelt.
-    LaunchedEffect(showDevices, yaesuActive, connected, spectrumEnabled) {
+    // Het chat-scherm telt hier als "hoofdscherm verlaten": er staat geen
+    // spectrum op, dus de grace hoort te lopen zoals bij het devices-scherm.
+    val radioScreenVisible = !showDevices && !showChat
+    LaunchedEffect(radioScreenVisible, yaesuActive, connected, spectrumEnabled) {
         if (!connected) return@LaunchedEffect
         when {
             // Spectrum alleen streamen als de gebruiker het ook aan heeft staan; de
             // grace regelt daarbovenop het data-besparen bij scherm-wissel. Zonder
             // deze gate liep spectrum al bij connect (toggle uit) -> hoge datarate.
             yaesuActive || !spectrumEnabled -> viewModel.setSpectrumActive(false)
-            !showDevices -> {
+            radioScreenVisible -> {
                 android.util.Log.i("MainScreen", "grace cancelled -> spectrum on")
                 viewModel.setSpectrumActive(true)
             }
@@ -683,6 +719,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     .padding(top = 12.dp),
             ) {
                 item {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -706,6 +743,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                 Text(
                                     text = "ThetisLink v${version()}",
                                     fontSize = 16.sp,
+                                    maxLines = 1,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                 )
                             }
@@ -721,22 +759,61 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                 }
                             }
                         }
-                        SingleChoiceSegmentedButtonRow {
+                    }
+                        // The tabs get their own line. Three of them no longer fit
+                        // beside the version line on a phone: squeezed in there,
+                        // the version wrapped one letter per line (seen on a
+                        // 1080-wide screen the moment the third tab appeared).
+                        val tabCount = if (relayConfigured) 3 else 2
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        ) {
                             SegmentedButton(
-                                selected = !showDevices,
-                                onClick = { showDevices = false },
-                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                selected = !showDevices && !showChat,
+                                onClick = { showDevices = false; showChat = false },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = tabCount),
                             ) { Text(stringResource(R.string.main_radio), fontSize = 12.sp) }
                             SegmentedButton(
-                                selected = showDevices,
-                                onClick = { showDevices = true },
-                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                selected = showDevices && !showChat,
+                                onClick = { showDevices = true; showChat = false },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = tabCount),
                             ) { Text(stringResource(R.string.main_devices), fontSize = 12.sp) }
+                            if (relayConfigured) {
+                                SegmentedButton(
+                                    selected = showChat,
+                                    onClick = { showChat = true },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = tabCount),
+                                ) {
+                                    // The number is the point of the tab: without it
+                                    // nobody opens a chat to find out whether anything
+                                    // was said (design section 1.7).
+                                    Text(
+                                        if (chat.unread > 0) {
+                                            stringResource(R.string.main_chat) + " (" + chat.unread + ")"
+                                        } else {
+                                            stringResource(R.string.main_chat)
+                                        },
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
 
-                if (showDevices) {
+                if (showChat) {
+                    item {
+                        ChatScreen(
+                            state = chat,
+                            onConsent = { viewModel.chatConsent(it) },
+                            onSend = { body, replyTo -> viewModel.chatSend(body, replyTo) },
+                            onEdit = { id, body -> viewModel.chatEdit(id, body) },
+                            onLeave = { viewModel.chatLeave(it) },
+                            onReport = { note, attachment -> viewModel.chatReport(note, attachment) },
+                            buildAttachment = { viewModel.chatBuildAttachment() },
+                        )
+                    }
+                } else if (showDevices) {
                     item {
                         ExternalDevicesScreen(
                             state = state,

@@ -366,6 +366,9 @@ fn main() -> Result<()> {
             show_spe_window: false, // no GUI in CLI mode
             rf2k_addr: rf2k_addr.or(defaults.rf2k_addr),
             show_rf2k_window: false, // no GUI in CLI mode
+            show_chat_window: false, // no GUI in CLI mode
+            chat_window_pos: None,
+            chat_window_size: None,
             ultrabeam_port: defaults.ultrabeam_port,
             show_ultrabeam_window: false, // no GUI in CLI mode
             rotor_addr: defaults.rotor_addr,
@@ -932,14 +935,21 @@ pub async fn run_server_async(
     // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime). The 2nd radio
     // is created here from config (works in both GUI and headless mode). Model is
     // per-port autodetected via `ID;` (detect_model) -> every combination 2×991A /
-    // 2×FTX1 / mix works; if detect fails (radio off) -> FTX1-assumption label, bring-up
-    // will log the real ID later. Slot 0 stays completely untouched.
+    // 2×FTX1 / mix works; if detect fails (radio off) -> 991A assumption, and the
+    // serial thread adopts the radio's real dialect the moment it answers `ID;`
+    // (bring-up probe). Slot 0 stays completely untouched.
     yaesu::log_input_devices();
     let yaesu2_prebuilt: Option<Arc<yaesu::YaesuRadio>> = if config.yaesu2_enabled {
         if let Some(ref port) = config.yaesu2_port {
             let baud = config.yaesu2_baud;
+            // 991A and not FTX-1, matching slot 0 and matching what
+            // `from_id_code` documents: an unknown radio degrades to the shared
+            // 991A-compatible dialect. Assuming an FTX-1 here meant a radio that
+            // never answered was driven with a parser that a 991A cannot follow
+            // - no memory channels, no menu values, and an IF frame read as
+            // gibberish.
             let (model, det_baud) = yaesu::detect_model(port, baud)
-                .unwrap_or((yaesu::RadioModel::Ftx1, baud));
+                .unwrap_or((yaesu::RadioModel::Ft991a, baud));
             info!("[radio1] slot 1 enabled: {} @ {} baud, model={:?}", port, det_baud, model);
             let audio = config.yaesu2_audio_device.clone();
             let audio_out = config.yaesu2_audio_output_device.clone();

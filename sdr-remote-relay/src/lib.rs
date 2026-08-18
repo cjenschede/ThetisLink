@@ -96,6 +96,57 @@ fn encode_tlu1(client_id: u8, seq: u32, token_hex: &str, payload: &[u8]) -> Vec<
 
 /// Extract `udp_token=<hex>` from the relay ready-reply (fase 0). The token is the
 /// last field, so trimming the remainder is enough.
+/// The chat ticket from a relay line, if one is offered.
+///
+/// Two lines carry it: the ready-reply at registration, and the periodic
+/// `chat-ticket-rotate` push. Both are read the same way - by name, so a line
+/// that gains another field later still parses, and a relay that offers no
+/// ticket at all (no chat behind it) simply yields `None`.
+/// Where the chat lives, given a relay address.
+///
+/// The relay is reached over `wss://`; the chat is the same host over `https://`
+/// behind a `/chat` route. Kept here rather than in either front end, because
+/// both need it and two spellings of the same host is how one of them ends up
+/// talking to nothing.
+pub fn chat_endpoint(relay_url: &str) -> Option<String> {
+    let t = relay_url.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let host = t
+        .strip_prefix("wss://")
+        .or_else(|| t.strip_prefix("ws://"))
+        .or_else(|| t.strip_prefix("https://"))
+        .or_else(|| t.strip_prefix("http://"))
+        .unwrap_or(t);
+    let host = host.split('/').next().unwrap_or(host).trim();
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!("https://{host}/chat"))
+}
+
+fn parse_chat_ticket(line: &str) -> Option<String> {
+    line.split("chat_ticket=")
+        .nth(1)
+        .map(|s| s.split_whitespace().next().unwrap_or("").to_string())
+        // Shape check only: `<hex>.<hex>`. The signature is the chat's business,
+        // not ours - this client never verifies it, it only carries it.
+        .filter(|t| {
+            let mut parts = t.split('.');
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some(p), Some(sig), None) => {
+                    !p.is_empty()
+                        && !sig.is_empty()
+                        && p.len() % 2 == 0
+                        && p.chars().all(|c| c.is_ascii_hexdigit())
+                        && sig.chars().all(|c| c.is_ascii_hexdigit())
+                }
+                _ => false,
+            }
+        })
+}
+
 fn parse_udp_token(ready: &str) -> Option<String> {
     ready
         .split("udp_token=")
@@ -490,6 +541,15 @@ pub struct RelayStatus {
     /// Fase 3c: true while audio is on the wss TCP-fallback (UDP degraded/blocked); false
     /// on the normal low-latency UDP path. Drives the client transport indicator.
     pub transport_fallback: bool,
+    /// The chat ticket the relay last handed out, if it offers one at all.
+    ///
+    /// Carried here rather than in a channel of its own because that is exactly
+    /// what it is: a fact about the current relay connection, refreshed while it
+    /// lasts and meaningless without it. `None` means a relay with no chat
+    /// behind it, which is a normal state and not an error.
+    ///
+    /// This client never verifies it - only the chat service does (design §3).
+    pub chat_ticket: Option<String>,
 }
 
 impl RelayStatus {
@@ -504,6 +564,7 @@ impl RelayStatus {
             binary: None,
             generation: 0,
             transport_fallback: false,
+            chat_ticket: None,
         }
     }
 
@@ -652,6 +713,31 @@ impl RelayMonitor {
         let _ = self.config_tx.send(config);
     }
 
+    pub fn stop(&self) {
+        let _ = self.shutdown_tx.send(true);
+    }
+
+    /// A handle that can stop this monitor from somewhere it is not owned.
+    ///
+    /// One process must never run two of these against the same station: the
+    /// relay gives a returning client its own slot back and closes the older
+    /// connection, so two live monitors sharing an install id take turns
+    /// evicting each other every reconnect delay, for as long as the app runs.
+    /// The caller that creates monitors keeps the previous handle and stops it
+    /// (2026-08-17).
+    pub fn stop_handle(&self) -> RelayStopHandle {
+        RelayStopHandle { shutdown_tx: self.shutdown_tx.clone() }
+    }
+}
+
+/// Stops a monitor without owning it. Cloning it is cheap and stopping twice is
+/// harmless.
+#[derive(Clone)]
+pub struct RelayStopHandle {
+    shutdown_tx: watch::Sender<bool>,
+}
+
+impl RelayStopHandle {
     pub fn stop(&self) {
         let _ = self.shutdown_tx.send(true);
     }
@@ -872,6 +958,10 @@ async fn run_connection(
     let mut udp_token: Option<String>;
     match first {
         Message::Text(text) if text.starts_with("OK ") => {
+            // A relay with a chat behind it offers a ticket here; one without
+            // simply does not, and that is a normal state (design §2.4 - the
+            // chat being absent may never disturb anything else).
+            set_chat_ticket(status, parse_chat_ticket(&text));
             udp_token = parse_udp_token(&text);
             set_status(
                 status,
@@ -993,7 +1083,17 @@ async fn run_connection(
                         // one hits its hard TTL. Swap it in for outgoing TLU1; the old
                         // token stays valid during the relay's short overlap, so no audio
                         // drops. Relay-infrastructure message -> not peer activity.
-                        if text.starts_with("udp-token-rotate") {
+                        if text.starts_with("chat-ticket-rotate") {
+                            // Refreshed well inside the ticket's own lifetime, so
+                            // the chat window never finds itself holding an
+                            // expired one. Relay infrastructure, not peer
+                            // activity - so it does not count as the peer being
+                            // alive, exactly like the token rotation below.
+                            if let Some(t) = parse_chat_ticket(&text) {
+                                set_chat_ticket(&status, Some(t));
+                                log::debug!("Relay chat ticket refreshed");
+                            }
+                        } else if text.starts_with("udp-token-rotate") {
                             if let Some(t) = parse_udp_token(&text) {
                                 udp_token = Some(t);
                                 log::debug!("Relay UDP token rotated");
@@ -1718,6 +1818,18 @@ fn set_relay_transport(handle: &RelayStatusHandle, fallback: bool) {
         .transport_fallback = fallback;
 }
 
+/// Store the chat ticket the relay just handed out.
+///
+/// Mutates only that field, so it survives the next `set_status` refresh - same
+/// reason as the transport flag above.
+fn set_chat_ticket(handle: &RelayStatusHandle, ticket: Option<String>) {
+    handle
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .chat_ticket = ticket;
+}
+
 fn set_peer_rtt(
     handle: &RelayStatusHandle,
     message: String,
@@ -2006,5 +2118,59 @@ mod tests {
         let (id, out) = parse_tlt1(&frame).expect("leeg payload moet parsen");
         assert_eq!(id, 3);
         assert!(out.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod chat_ticket_tests {
+    use super::parse_chat_ticket;
+
+    /// The ready-reply carries both fields. Reading by name means neither cares
+    /// about the order, or about a field added later.
+    #[test]
+    fn the_ready_reply_yields_the_ticket() {
+        let line = format!(
+            "OK relay-ready udp_token={} chat_ticket=616263.646566",
+            "a".repeat(64)
+        );
+        assert_eq!(parse_chat_ticket(&line).as_deref(), Some("616263.646566"));
+    }
+
+    #[test]
+    fn the_rotation_push_yields_it_too() {
+        assert_eq!(
+            parse_chat_ticket("chat-ticket-rotate chat_ticket=616263.646566").as_deref(),
+            Some("616263.646566")
+        );
+    }
+
+    /// A relay with no chat behind it offers none, and that is not an error.
+    #[test]
+    fn a_line_without_one_is_simply_none() {
+        assert!(parse_chat_ticket("OK relay-ready udp_token=abc").is_none());
+        assert!(parse_chat_ticket("").is_none());
+    }
+
+    /// Shape only - the signature is the chat's business. But rubbish should not
+    /// travel: a malformed ticket would be refused later with a confusing reason.
+    #[test]
+    fn something_that_is_not_a_ticket_is_refused_here() {
+        for junk in [
+            "chat_ticket=notatoken",
+            "chat_ticket=.",
+            "chat_ticket=abc.",
+            "chat_ticket=.abc",
+            "chat_ticket=zz.zz",
+            "chat_ticket=abc.def.ghi",
+            "chat_ticket=abcd", // no dot at all
+        ] {
+            assert!(parse_chat_ticket(junk).is_none(), "{junk}");
+        }
+    }
+
+    /// Odd-length payload hex cannot be bytes, so it cannot be a payload.
+    #[test]
+    fn an_odd_payload_length_is_refused() {
+        assert!(parse_chat_ticket("chat_ticket=abc.abcd").is_none());
     }
 }

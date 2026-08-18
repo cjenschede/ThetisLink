@@ -15,6 +15,7 @@ impl ServerApp {
         config.amplitec_window_pos = self.amplitec_window_pos;
         config.spe_window_pos = self.spe_window_pos;
         config.rf2k_window_pos = self.rf2k_window_pos;
+        config.chat_window_pos = self.chat_window_pos;
         config.ultrabeam_window_pos = self.ultrabeam_window_pos;
         config.rotor_window_pos = self.rotor_window_pos;
         config.main_window_pos = self.main_window_pos;
@@ -23,6 +24,8 @@ impl ServerApp {
         config.amplitec_window_size = self.amplitec_window_size;
         config.spe_window_size = self.spe_window_size;
         config.rf2k_window_size = self.rf2k_window_size;
+        config.chat_window_size = self.chat_window_size;
+        config.show_chat_window = self.show_chat_window;
         config.ultrabeam_window_size = self.ultrabeam_window_size;
         config.rotor_window_size = self.rotor_window_size;
         config.layout_grids = sdr_remote_layout::layout_grids_to_config(&self.layout_grid_per_monitor);

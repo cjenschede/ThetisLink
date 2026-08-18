@@ -16,6 +16,9 @@ path = "src/bin/uniffi-bindgen.rs"
 sdr-remote-core = { path = "../sdr-remote-core" }
 sdr-remote-logic = { path = "../sdr-remote-logic" }
 sdr-remote-relay = { path = "../sdr-remote-relay" }
+# The chat, without its egui window: Android holds the same model and draws it
+# with Compose, so the rules of the conversation cannot drift between the two.
+sdr-remote-chat = { path = "../sdr-remote-chat", default-features = false }
 tokio = { workspace = true }
 ringbuf = { workspace = true }
 log = { workspace = true }
@@ -24,6 +27,7 @@ uniffi = { version = "0.28", features = ["cli"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 oboe = { version = "0.6", features = ["java-interface"] }
+chrono = "0.4"
 android_logger = "0.14"
 
 [build-dependencies]

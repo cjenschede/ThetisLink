@@ -8,6 +8,7 @@ mod macros_ui;
 mod spe;
 mod rf2k;
 mod ultrabeam;
+mod chat_window;
 mod status_panel;
 mod window_placement;
 mod update;
@@ -283,6 +284,14 @@ pub struct ServerApp {
     ultrabeam_window_size: Option<[f32; 2]>,
     rotor_window_size: Option<[f32; 2]>,
     show_about: bool,
+    // Chat and problem reporting (docs/internal/DESIGN-relay-chat.md), the same
+    // component the desktop client draws. The server is a station in its own
+    // right, so it gets the same window rather than a smaller one.
+    pub(crate) chat: sdr_remote_chat::ChatPanel,
+    show_chat_window: bool,
+    chat_window_pos: Option<[f32; 2]>,
+    chat_window_size: Option<[f32; 2]>,
+    chat_window_init_applied: bool,
     /// PATCH-2: shared Status-panel probes - `Some` while a server is running,
     /// `None` before start_server / after Settings teardown.
     status_panel_state: Option<crate::audio_stats::StatusPanelShared>,

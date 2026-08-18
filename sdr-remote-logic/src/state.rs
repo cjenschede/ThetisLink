@@ -211,7 +211,15 @@ pub struct RadioState {
     pub other_tx: bool,
     pub recording: bool,
     pub playing: bool,
-    pub last_recorded_path: Option<String>,
+    /// The recordings the last Start made, as (source name, file path).
+    ///
+    /// A list and not one path. Recording two sources at once wrote two files
+    /// correctly and then offered a Play button bound to whichever was created
+    /// last, so an operator recording both radios could only ever hear the
+    /// second one and reasonably concluded the first had not been recorded
+    /// (2026-08-13). The file was there the whole time; there was no way to
+    /// ask for it.
+    pub last_recorded: Vec<(String, String)>,
     pub thetis_swr_x100: u16,
     pub filter_low_hz: i32,
     pub filter_high_hz: i32,
@@ -227,6 +235,23 @@ pub struct RadioState {
 
     // DX-cluster spot stream — toggle for metered-link data-saving
     pub dx_spots_enabled: bool,
+    /// Goes up by one on every successful authentication.
+    ///
+    /// A COUNTER and not a flag, because the thing it replaces was a flank:
+    /// "connected went false" only exists at an instant, it reaches the UI
+    /// through a watch channel that keeps just the latest value, and the UI
+    /// reads that once a frame. A short interruption therefore never happened
+    /// as far as the UI was concerned - and the work that hangs off it, the
+    /// VRX and Yaesu re-subscriptions, was simply skipped. A number that
+    /// differs from the one you last acted on cannot be missed however slowly
+    /// you look (2026-08-16).
+    pub session_generation: u64,
+    /// What the SERVER says this client is subscribed to, from the heartbeat.
+    ///
+    /// Not a wish and not a command: the other side's answer, put here so both
+    /// the engine and the UI can hold it against their own. `None` against a
+    /// server that predates the field - which is not the same as "nothing".
+    pub server_subs: Option<sdr_remote_core::protocol::SubscriptionMask>,
     /// Whether the server still sends the full-DDC spectrum row next to the
     /// extracted view. Off = the RX waterfall is built from the view alone,
     /// like VRX, at roughly half the spectrum bandwidth per receiver.
@@ -468,12 +493,27 @@ pub struct RadioState {
     /// two never arrived close together - since both are pushed on connect they do,
     /// and the second silently replaced the first before the UI ever saw it.
     pub yaesu_menu_data: Option<String>,
+    /// The server's own problem-report attachment, once every numbered part has
+    /// arrived. `None` while nothing has been asked for, or while a transfer is
+    /// still running.
+    pub server_report: Option<String>,
+    /// How a transfer ended when it did not end with a report: the parts that
+    /// arrived and the parts expected. Shown to the operator rather than
+    /// swallowed - a report missing its middle must not be attachable.
+    pub server_report_failed: Option<(u16, u16)>,
     // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror of the slot-0
     // Yaesu fields above. `*_model` = wire-code from RadioInfo (0=991A,
     // 1=FTX1) for panel naming. yaesu2_connected becomes true once a
     // YaesuState2 packet arrives → the UI then shows the 2nd panel.
     pub yaesu_model: u8,
     pub yaesu2_model: u8,
+    /// Why an absent radio is absent, when the server can name it - the
+    /// `PORT_TROUBLE_*` wire codes from the presence push. 0 when the radio is
+    /// there or the server has nothing to say. The UI turns a non-zero code
+    /// into words next to the radio selector; the most common one is "the COM
+    /// port is held by another control program".
+    pub yaesu_port_trouble: u8,
+    pub yaesu2_port_trouble: u8,
     pub yaesu2_connected: bool,
     pub yaesu2_freq_a: u64,
     pub yaesu2_freq_b: u64,
@@ -589,7 +629,7 @@ impl Default for RadioState {
             other_tx: false,
             recording: false,
             playing: false,
-            last_recorded_path: None,
+            last_recorded: Vec::new(),
             thetis_swr_x100: 100,
             filter_low_hz: 0,
             filter_high_hz: 0,
@@ -599,6 +639,8 @@ impl Default for RadioState {
             mon_on: false,
             tx_profile_names: Vec::new(),
             dx_spots_enabled: true,
+            session_generation: 0,
+            server_subs: None,
             full_spectrum_enabled: true,
             rx1_enabled: true,
             rx2_enabled: false,
@@ -777,8 +819,12 @@ impl Default for RadioState {
             yaesu_memory_channel: 0,
             yaesu_memory_data: None,
             yaesu_menu_data: None,
+            server_report: None,
+            server_report_failed: None,
             yaesu_model: 0,
             yaesu2_model: 1,
+            yaesu_port_trouble: 0,
+            yaesu2_port_trouble: 0,
             yaesu2_connected: false,
             yaesu2_freq_a: 0,
             yaesu2_freq_b: 0,
@@ -838,5 +884,26 @@ impl Default for RadioState {
             ddc_sample_rate_rx2: 0,
             diversity_autonull_result: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod recording_list_tests {
+    use super::RadioState;
+
+    /// Two sources recorded at once must both be reachable afterwards. When
+    /// this was one path instead of a list, the second source overwrote the
+    /// first and the Play button could only ever offer the last one - which an
+    /// operator recording both radios read as "the first one did not record".
+    #[test]
+    fn every_started_recording_stays_reachable() {
+        let mut s = RadioState::default();
+        s.last_recorded.push(("Radio 1".to_string(), "/tmp/Yaesu1_x.wav".to_string()));
+        s.last_recorded.push(("Radio 2".to_string(), "/tmp/Yaesu2_x.wav".to_string()));
+
+        assert_eq!(s.last_recorded.len(), 2);
+        let names: Vec<&str> = s.last_recorded.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["Radio 1", "Radio 2"]);
+        assert!(s.last_recorded.iter().all(|(_, p)| !p.is_empty()));
     }
 }

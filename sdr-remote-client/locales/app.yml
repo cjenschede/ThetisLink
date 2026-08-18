@@ -352,6 +352,46 @@ screen_station_placeholder:
   nl: "(station)"
   de: "(Station)"
   fr: "(station)"
+screen_roger:
+  en: "Roger beep:"
+  nl: "Rogerpiep:"
+  de: "Rogerpiep:"
+  fr: "Bip de fin:"
+screen_roger_duration_tooltip:
+  en: "How long the tone lasts. The transmitter stays keyed for this long after you let go of PTT."
+  nl: "Hoe lang de toon duurt. De zender blijft zolang aan nadat je de PTT loslaat."
+  de: "Wie lange der Ton dauert. Der Sender bleibt so lange getastet, nachdem Sie PTT loslassen."
+  fr: "Duree de la tonalite. L'emetteur reste en emission pendant ce temps apres le relachement du PTT."
+screen_roger_fm:
+  en: "also in FM"
+  nl: "ook in FM"
+  de: "auch in FM"
+  fr: "aussi en FM"
+screen_roger_fm_tooltip:
+  en: "SSB and AM always beep. Data and digital modes never do, whatever this says - a tone on top of data is interference."
+  nl: "SSB en AM piepen altijd. Data- en digitale modes nooit, wat hier ook staat - een toon over data heen is storing."
+  de: "SSB und AM piepen immer. Daten- und Digitalmodi nie, egal was hier steht - ein Ton ueber Daten ist Stoerung."
+  fr: "SSB et AM emettent toujours le bip. Les modes data et numeriques jamais, quoi qu'il soit coche - une tonalite sur des donnees est du brouillage."
+screen_roger_freq_tooltip:
+  en: "Pitch of the tone. Keep it inside your transmit filter, or the far end hears only part of it."
+  nl: "Toonhoogte. Houd hem binnen je zendfilter, anders hoort de tegenstation er maar een deel van."
+  de: "Tonhoehe. Halten Sie sie innerhalb Ihres Sendefilters, sonst hoert die Gegenstelle nur einen Teil."
+  fr: "Hauteur de la tonalite. Gardez-la dans votre filtre d'emission, sinon le correspondant n'en entend qu'une partie."
+screen_roger_note:
+  en: "sent while still transmitting"
+  nl: "gaat mee terwijl je nog zendt"
+  de: "wird noch waehrend der Aussendung gesendet"
+  fr: "emis pendant que vous emettez encore"
+screen_roger_on:
+  en: "Beep on:"
+  nl: "Piep op:"
+  de: "Piep bei:"
+  fr: "Bip sur :"
+screen_roger_volume:
+  en: "vol"
+  nl: "vol"
+  de: "Pegel"
+  fr: "niv"
 screen_server:
   en: "Server:"
   nl: "Server:"
@@ -622,6 +662,11 @@ screen_play_icon:
   nl: "▶ Afspelen"
   de: "▶ Wiedergabe"
   fr: "▶ Lecture"
+screen_play_none_ticked:
+  en: "Tick at least one recording to play"
+  nl: "Vink minstens een opname aan om af te spelen"
+  de: "Mindestens eine Aufnahme zum Abspielen ankreuzen"
+  fr: "Cochez au moins un enregistrement a lire"
 screen_play_volume_tooltip:
   en: "WAV playback level (Play). 1.00 = recorded level. Lower = quieter, to avoid overmodulation on a loud recording."
   nl: "WAV-afspeelniveau (Afspelen). 1.00 = opgenomen niveau. Lager = zachter, om overmodulatie bij een luide opname te voorkomen."
@@ -1456,6 +1501,16 @@ dev_offline:
   nl: "Offline"
   de: "Offline"
   fr: "Hors ligne"
+dev_port_busy:
+  en: "The radio's COM port is in use by another program on the server PC - close other CAT/control software there"
+  nl: "De COM-poort van de radio is in gebruik door een ander programma op de server-PC - sluit daar andere CAT/bedieningssoftware af"
+  de: "Der COM-Port des Funkgeraets wird von einem anderen Programm auf dem Server-PC benutzt - dort andere CAT/Steuersoftware schliessen"
+  fr: "Le port COM de la radio est utilise par un autre programme sur le PC serveur - fermez-y l'autre logiciel CAT/de commande"
+dev_port_missing:
+  en: "The radio's COM port does not exist on the server PC - check the USB cable and the COM number in Device Manager"
+  nl: "De COM-poort van de radio bestaat niet op de server-PC - controleer de USB-kabel en het COM-nummer in Apparaatbeheer"
+  de: "Der COM-Port des Funkgeraets existiert auf dem Server-PC nicht - USB-Kabel und COM-Nummer im Geraete-Manager pruefen"
+  fr: "Le port COM de la radio n'existe pas sur le PC serveur - verifiez le cable USB et le numero COM dans le gestionnaire de peripheriques"
 dev_amplitec_title:
   en: "Amplitec 6/2 Antenna Switch"
   nl: "Amplitec 6/2 antenneschakelaar"
@@ -2196,6 +2251,31 @@ dev_mem_offset_readonly:
   nl: "Alleen-lezen. De grootte van de shift staat bij geen van beide radio's in het geheugenkanaal - daar staat alleen de richting; de grootte is een menu-instelling per band (FT-991A 80-83, FTX-1 EX 010316-010319). De getoonde waarde is zend- min ontvangfrequentie."
   de: "Nur Anzeige. Die Groesse des Shifts steht bei keinem der beiden Geraete im Speicherkanal - dort steht nur die Richtung; die Groesse ist eine Menueeinstellung pro Band (FT-991A 80-83, FTX-1 EX 010316-010319). Angezeigt wird Sende- minus Empfangsfrequenz."
   fr: "Lecture seule. La taille du decalage n'est stockee dans la memoire sur aucun des deux postes - la memoire ne retient que le sens ; la taille est un reglage de menu par bande (FT-991A 80-83, FTX-1 EX 010316-010319). La valeur affichee est la frequence d'emission moins celle de reception."
+chat_offline_no_relay:
+  en: "The chat runs on the relay, and no relay is set up here. Everything else keeps working."
+  nl: "De chat draait op de relay, en die is hier niet ingesteld. De rest werkt gewoon door."
+  de: "Der Chat laeuft ueber das Relay, und hier ist keines eingerichtet. Alles andere funktioniert weiter."
+  fr: "La discussion passe par le relais, et aucun n'est configure ici. Le reste continue de fonctionner."
+chat_offline_no_ticket:
+  en: "This relay offers no chat, or has not admitted this client yet. Reconnecting usually settles it."
+  nl: "Deze relay biedt geen chat, of heeft deze client nog niet toegelaten. Opnieuw verbinden helpt meestal."
+  de: "Dieses Relay bietet keinen Chat oder hat diesen Client noch nicht zugelassen. Neu verbinden hilft meist."
+  fr: "Ce relais ne propose pas de discussion, ou n'a pas encore admis ce client. Se reconnecter suffit generalement."
+chat_offline_unreachable:
+  en: "The chat is not answering right now. Everything else keeps working."
+  nl: "De chat geeft nu geen antwoord. De rest werkt gewoon door."
+  de: "Der Chat antwortet gerade nicht. Alles andere funktioniert weiter."
+  fr: "La discussion ne repond pas pour le moment. Le reste continue de fonctionner."
+chat_unread_hint:
+  en: "new messages"
+  nl: "nieuwe berichten"
+  de: "neue Nachrichten"
+  fr: "nouveaux messages"
+chat_window_button:
+  en: "Chat"
+  nl: "Chat"
+  de: "Chat"
+  fr: "Chat"
 dev_mem_click_to_recall:
   en: "Click to put the radio on this channel, double-click to edit the row. Green = the radio is here now, amber = the channel you left when you tuned into VFO."
   nl: "Klik om de radio op dit kanaal te zetten, dubbelklik om de rij te bewerken. Groen = de radio staat hier nu, oranje = het kanaal dat je verliet toen je naar VFO ging."

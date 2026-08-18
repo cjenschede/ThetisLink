@@ -59,6 +59,16 @@ srv_none:
   nl: "(Geen)"
   de: "(Keine)"
   fr: "(Aucun)"
+srv_port_busy:
+  en: "The COM port is in use by another program - close other CAT/control software for this radio"
+  nl: "De COM-poort is in gebruik door een ander programma - sluit andere CAT/bedieningssoftware voor deze radio af"
+  de: "Der COM-Port wird von einem anderen Programm benutzt - andere CAT/Steuersoftware fuer dieses Geraet schliessen"
+  fr: "Le port COM est utilise par un autre programme - fermez l'autre logiciel CAT/de commande de cette radio"
+srv_port_missing:
+  en: "The COM port does not exist - check the USB cable and the COM number in Device Manager"
+  nl: "De COM-poort bestaat niet - controleer de USB-kabel en het COM-nummer in Apparaatbeheer"
+  de: "Der COM-Port existiert nicht - USB-Kabel und COM-Nummer im Geraete-Manager pruefen"
+  fr: "Le port COM n'existe pas - verifiez le cable USB et le numero COM dans le gestionnaire de peripheriques"
 srv_tci_addr:
   en: "Thetis TCI address (e.g. 127.0.0.1:40001):"
   nl: "Thetis TCI adres (bijv. 127.0.0.1:40001):"
@@ -829,3 +839,13 @@ srv_name_empty:
   nl: "naam mag niet leeg zijn"
   de: "der Name darf nicht leer sein"
   fr: "le nom ne peut pas être vide"
+srv_chat:
+  en: "Chat"
+  nl: "Chat"
+  de: "Chat"
+  fr: "Chat"
+srv_chat_hover:
+  en: "Reach other ThetisLink users, and report a problem with your log and settings."
+  nl: "Andere ThetisLink-gebruikers bereiken, en een probleem melden met je log en instellingen."
+  de: "Andere ThetisLink-Nutzer erreichen und ein Problem mit Log und Einstellungen melden."
+  fr: "Joindre d'autres utilisateurs de ThetisLink et signaler un probleme avec votre journal et vos reglages."

@@ -138,6 +138,7 @@ fn build_heartbeat_ack() -> Vec<u8> {
         state_flags: ServerStateFlags::NONE.with(
             ServerStateFlags::THETIS_CONFIGURED | ServerStateFlags::TCI_CONNECTED,
         ),
+        subs: None,
     };
     let mut buf = [0u8; HeartbeatAck::SIZE];
     ack.serialize(&mut buf);
@@ -210,6 +211,8 @@ fn build_yaesu_presence(slot0_model: u8, slot1_model: u8) -> Vec<u8> {
         slot0_model,
         slot1_present: true,
         slot1_model,
+        slot0_trouble: 0,
+        slot1_trouble: 0,
     };
     let mut buf = [0u8; YaesuPresencePacket::SIZE];
     pkt.serialize(&mut buf);

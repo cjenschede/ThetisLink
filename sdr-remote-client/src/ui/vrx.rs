@@ -553,8 +553,8 @@ impl SdrRemoteApp {
                     zoom_min..=1024.0, (zoom_cur as f64 * 0.1).max(1.0));
                 if resp.changed() || scrolled {
                     match ch {
-                        VrxChannel::Vrx1 => { let mp = (0.5 - 0.5 / self.vrx1_spectrum_zoom) * 0.05; self.vrx1_pan = self.vrx1_pan.clamp(-mp, mp); self.vrx1_zoom_initialized = true; }
-                        VrxChannel::Vrx2 => { let mp = (0.5 - 0.5 / self.vrx2_spectrum_zoom) * 0.05; self.vrx2_pan = self.vrx2_pan.clamp(-mp, mp); self.vrx2_zoom_initialized = true; }
+                        VrxChannel::Vrx1 => { let mp = crate::ui::tuning::max_pan_fraction(self.vrx1_spectrum_zoom); self.vrx1_pan = self.vrx1_pan.clamp(-mp, mp); self.vrx1_zoom_initialized = true; }
+                        VrxChannel::Vrx2 => { let mp = crate::ui::tuning::max_pan_fraction(self.vrx2_spectrum_zoom); self.vrx2_pan = self.vrx2_pan.clamp(-mp, mp); self.vrx2_zoom_initialized = true; }
                     }
                     changed = true;
                 }
@@ -573,7 +573,7 @@ impl SdrRemoteApp {
                 }
                 ui.label(rust_i18n::t!("main_pan_label").to_string());
                 let zoom_now = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
-                let max_pan = if zoom_now > 1.01 { (0.5 - 0.5 / zoom_now) * 0.05 } else { 0.0 };
+                let max_pan = crate::ui::tuning::max_pan_fraction(zoom_now);
                 let pan_resp = ui.add(egui::Slider::new(
                         match ch { VrxChannel::Vrx1 => &mut self.vrx1_pan, VrxChannel::Vrx2 => &mut self.vrx2_pan },
                         -max_pan..=max_pan).custom_formatter(|v, _| format!("{:+.2}", v)))

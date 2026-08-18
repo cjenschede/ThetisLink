@@ -267,6 +267,17 @@ impl JitterBuffer {
         self.buffer.get(&seq).map(|f| f.opus_data.as_slice())
     }
 
+    /// Peek at a frame's payload together with its format.
+    ///
+    /// Error correction rebuilds a lost frame from redundancy carried inside the
+    /// NEXT packet, so it has to decode in that packet's format - and
+    /// `peek_opus_data` drops exactly that. It handed back only the bytes, so
+    /// every caller had to guess the width, and every caller guessed narrowband
+    /// (2026-08-16).
+    pub fn peek_frame(&self, seq: u32) -> Option<(&[u8], bool)> {
+        self.buffer.get(&seq).map(|f| (f.opus_data.as_slice(), f.wideband))
+    }
+
     /// Peek at the next expected sequence number (for FEC look-ahead).
     pub fn next_seq_peek(&self) -> Option<u32> {
         self.next_seq

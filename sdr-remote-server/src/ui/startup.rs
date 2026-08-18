@@ -51,6 +51,9 @@ impl ServerApp {
             rf2k_addr: if rf2k_addr_str.is_empty() { None } else { Some(rf2k_addr_str.clone()) },
             rf2k_enabled: self.rf2k_enabled,
             show_rf2k_window: self.show_rf2k_window,
+            show_chat_window: self.show_chat_window,
+            chat_window_pos: self.chat_window_pos,
+            chat_window_size: self.chat_window_size,
             ultrabeam_port: if ub_port.is_empty() { None } else { Some(ub_port.clone()) },
             ultrabeam_enabled: self.ultrabeam_enabled,
             show_ultrabeam_window: self.show_ultrabeam_window,
@@ -121,7 +124,16 @@ impl ServerApp {
         };
         crate::config::save(&config);
 
-        let com_timeout = Duration::from_secs(5);
+        // Long enough for what it actually starts. `detect_model` may walk seven
+        // baud rates, three attempts each, before it gives up - about six
+        // seconds on a port that exists but stays silent, which is precisely the
+        // case of a radio that is switched off. At five seconds that work was
+        // still running when this gave up, and the radio it eventually built was
+        // thrown away: no FT-991A for the whole session, while its orphaned
+        // thread went on writing `[radio0/991A]` lines into the log (2026-08-12).
+        // This is a guard against a driver that hangs, not a deadline for a
+        // radio to answer, so it should sit well past the slow-but-normal case.
+        let com_timeout = Duration::from_secs(20);
 
         // Create Yaesu FT-991A serial connection
         if !yaesu_port_str.is_empty() && self.yaesu_enabled {
@@ -135,7 +147,8 @@ impl ServerApp {
             // Slot-0 model per-port autodetect (dual-radio): this way every
             // combination works incl. an FTX-1 as the primary radio. Detect + open
             // run in the timeout thread (does not block the UI thread).
-            // If detect fails (radio off) -> 991A-assumed label; bring-up logs the real ID.
+            // If detect fails (radio off) -> 991A assumed; the serial thread
+            // adopts the radio's real dialect once it answers `ID;` (bring-up).
             let ssb_on_ptt = config.yaesu_ssb_switch_on_ptt;
             let mem_write_ack = config.ftx1_memory_write_ack;
             match with_timeout(com_timeout, move || {
@@ -153,7 +166,13 @@ impl ServerApp {
                     self.yaesu = Some(Arc::new(radio));
                 }
                 Err(e) => {
-                    log::warn!("Yaesu init failed: {}", e);
+                    // Loud, and specific about what it costs: this slot is gone
+                    // for the session, and a client will show no radio there
+                    // however well the port behaves afterwards.
+                    log::warn!(
+                        "Yaesu slot 0 on {} was not created: {} - this radio will not appear until the server is restarted",
+                        port_log, e
+                    );
                 }
             }
         }

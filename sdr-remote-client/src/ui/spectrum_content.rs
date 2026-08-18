@@ -69,7 +69,7 @@ impl SdrRemoteApp {
             let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.spectrum_zoom, zoom_min..=1024.0, zoom_step);
             let zoom_changed = zoom_resp.changed() || zoom_scrolled;
             if zoom_changed {
-                let max_pan = (0.5 - 0.5 / self.spectrum_zoom) * 0.05;
+                let max_pan = crate::ui::tuning::max_pan_fraction(self.spectrum_zoom);
                 self.spectrum_pan = self.spectrum_pan.clamp(-max_pan, max_pan);
             }
             // TL2-1 ctun-auto-recenter setup checkbox. Persist + push to server on toggle.
@@ -85,7 +85,7 @@ impl SdrRemoteApp {
                 ));
             }
             ui.label(rust_i18n::t!("main_pan_label").to_string());
-            let max_pan = if self.spectrum_zoom > 1.01 { (0.5 - 0.5 / self.spectrum_zoom) * 0.05 } else { 0.0 };
+            let max_pan = crate::ui::tuning::max_pan_fraction(self.spectrum_zoom);
             let pan_resp = ui.add(egui::Slider::new(&mut self.spectrum_pan, -max_pan..=max_pan)
                 .custom_formatter(|v, _| format!("{:+.2}", v))
             ).on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
@@ -166,10 +166,12 @@ impl SdrRemoteApp {
                 if zoom_diff > 0.01 {
                     let _ = self.cmd_tx.send(Command::SetSpectrumZoom(self.spectrum_zoom));
                     self.last_sent_zoom = self.spectrum_zoom;
+                    self.view_sent_at = Some(Instant::now());
                 }
                 if pan_diff > 0.001 {
                     let _ = self.cmd_tx.send(Command::SetSpectrumPan(self.spectrum_pan));
                     self.last_sent_pan = self.spectrum_pan;
+                    self.view_sent_at = Some(Instant::now());
                 }
                 // Dynamic bins: screen_width × zoom, capped at MAX_SPECTRUM_SEND_BINS
                 let pixel_width = ui.available_width().max(100.0) as u32;
@@ -187,9 +189,8 @@ impl SdrRemoteApp {
         // Smooth display center: interpolate toward target for smooth tuning
         let target_center = Self::spectrum_target_center_hz(
             self.frequency_hz,
-            self.full_spectrum_span_hz,
+            self.rx1_full_span_hz(),
             self.spectrum_pan,
-            self.spectrum_center_hz,
         );
         let rx1_tuning_active = Self::tuning_latch_active(
             self.rx1_force_full_tuning,
@@ -215,9 +216,102 @@ impl SdrRemoteApp {
             self.smooth_display_center_hz = target_center;
         }
         let smooth_center = self.smooth_display_center_hz as u64;
-        // VFO marker follows the smooth center (minus pan offset) - stays perfectly stationary
-        let smooth_vfo = (self.smooth_display_center_hz
-            - self.spectrum_pan as f64 * self.full_spectrum_span_hz as f64) as u64;
+        // The VFO marker is the VFO, smoothed on the same clock as the centre so
+        // the two travel together while tuning. It used to be worked out as
+        // "centre minus the pan offset", which is the VFO only while the full
+        // span is known - and that value is filled in only once the full-band
+        // row has been on. Without it the marker landed on the middle of the
+        // view and stayed there while the spectrum panned underneath it.
+        //
+        // The marker is the VFO. Always, with no second case - and the way the
+        // second case came back is worth the paragraph.
+        //
+        // Build 80 read the marker off the view instead while retuning, on the
+        // reasoning that the marker must not run ahead of the picture: the
+        // server cuts the view around the VFO, the cut arrives a few frames
+        // later, and in between a marker at the new frequency sits on top of
+        // the old bins. Sound reasoning about the wrong half. What actually
+        // moved apart was the marker and the *axis*, because the axis centre
+        // was taken from the server and the marker from here.
+        //
+        // That branch could not run at the time - without a full-band row the
+        // target centre was, by definition, the server's centre, so the jump
+        // was measured as zero and the latch never engaged. Build 82 made the
+        // target centre VFO-derived, which is the whole fix, and in doing so
+        // opened this branch for the first time. Found in review (2026-08-15):
+        // a repair from two days earlier, activated by the repair that replaced
+        // it, putting back the very construction it removed - the axis from the
+        // VFO, the marker from the server, one round trip apart.
+        //
+        // Both now come from the VFO and travel together. The bins still arrive
+        // late; they slide in under a marker that has not moved relative to the
+        // scale, which reads as the picture catching up rather than as the line
+        // stepping out and snapping back.
+        let vfo_target = self.frequency_hz as f64;
+        // What the picture is made of, when the latch flips. Two attempts at
+        // this were reasoned out and both were wrong; these are the numbers
+        // that decide it.
+        // Written down when the frequency moves, not when the tuning latch
+        // flips.
+        //
+        // It hung off the latch, and the latch only engages on a jump bigger
+        // than eight kilohertz (`should_force_full_tuning`). Tuning by scrolling
+        // the spectrum moves a kilohertz at a time, so it never engaged, the
+        // line never appeared, and a session in which the operator had tuned
+        // plenty looked like one in which nothing had happened (2026-08-15).
+        // The same gate is why the repair in build 80 could have no effect
+        // whatever on that way of tuning: it was all inside the latch.
+        //
+        // A kilohertz of movement is the smallest step there is, so this fires
+        // on any real tuning and on nothing else.
+        // A kilohertz of movement AND at most one line a second: the gate on
+        // its own turned a knob spin into two hundred lines a minute.
+        let rx1_quiet_enough = self
+            .rx1_logged_at
+            .map(|t| t.elapsed() >= std::time::Duration::from_secs(1))
+            .unwrap_or(true);
+        if rx1_quiet_enough && self.frequency_hz.abs_diff(self.rx1_logged_freq_hz) >= 1_000 {
+            self.rx1_logged_freq_hz = self.frequency_hz;
+            self.rx1_logged_at = Some(Instant::now());
+            // `width from` is the whole point of this line. The fault lived in
+            // there being two regimes, entered by a race nobody could see, so a
+            // session that behaves is only evidence if it also says which
+            // regime it was in. "DDC" means the full-band row never arrived -
+            // the case that used to be broken, and the one worth proving.
+            // Two centres, and the difference between them is the fault.
+            // `drawn` is what this client puts in the middle of the picture -
+            // the number build 82 rewrote. `server` is what came back in the
+            // packet. Only `server` was logged, so a session in which the fix
+            // works read exactly like one in which the client computes the
+            // wrong centre and the server happens to agree (2026-08-15).
+            log::info!(
+                "RX1 view: tuning={} vfo={} Hz, drawn centre={} server centre={} span={} Hz, zoom={:.1} pan={:.4}, width={} Hz from {}",
+                rx1_tuning_active,
+                self.frequency_hz,
+                self.smooth_display_center_hz as u64,
+                self.spectrum_center_hz,
+                self.spectrum_span_hz,
+                self.spectrum_zoom,
+                self.spectrum_pan,
+                self.rx1_full_span_hz(),
+                // Four states, and which one it is has to be derived the same
+                // way the width itself is - see `full_span_source`.
+                Self::full_span_source(
+                    self.ddc_sample_rate_rx1,
+                    self.full_spectrum_span_hz,
+                    self.full_spectrum_enabled,
+                ),
+            );
+        }
+        if self.pending_freq.is_some() || self.smooth_vfo_hz == 0.0 {
+            self.smooth_vfo_hz = vfo_target;
+        } else {
+            self.smooth_vfo_hz += (vfo_target - self.smooth_vfo_hz) * alpha;
+        }
+        if (self.smooth_vfo_hz - vfo_target).abs() < 1.0 {
+            self.smooth_vfo_hz = vfo_target;
+        }
+        let smooth_vfo = self.smooth_vfo_hz as u64;
 
         // Spectrum + waterfall area sizing.
         // - Popout: fills the popout window (dynamic from available_height).

@@ -97,6 +97,8 @@ pub struct VrxRuntime {
     channelizer: Option<VrxChannelizer>,
     current_mode: VrxMode,
     opus: Option<VrxOpusEncoder>,
+    /// Last verdict from the server: (protect, percent to budget for).
+    loss_protection: (bool, u8),
     opus_input_buf: Vec<i16>,
     sequence: u32,
     wav: Option<RollingWavWriter>,
@@ -143,6 +145,7 @@ impl VrxRuntime {
             channelizer: None,
             current_mode: VrxMode::Usb,
             opus: None,
+            loss_protection: (false, 0),
             opus_input_buf: Vec::with_capacity(640),
             sequence: 0,
             wav,
@@ -157,6 +160,23 @@ impl VrxRuntime {
     }
 
     /// Output sample rate (8000 for NB, 16000 for WB). Const after construction.
+    /// Pass a packet-loss verdict down to the Opus encoder.
+    ///
+    /// Remembered even when there is no encoder yet - one is made lazily on the
+    /// first audio, and a runtime that starts on a bad link should not have to
+    /// wait for the next verdict to be protected.
+    pub fn set_loss_protection(&mut self, on: bool, loss_pct: u8) {
+        self.loss_protection = (on, loss_pct);
+        if let Some(enc) = self.opus.as_mut() {
+            if enc.set_loss_protection(on, loss_pct).is_err() {
+                warn!(
+                    "VRX{} runtime: encoder refused the error-correction change - keeping its previous setting",
+                    self.opts_vrx_id + 1
+                );
+            }
+        }
+    }
+
     pub fn output_rate_hz(&self) -> u32 {
         self.output_rate_hz
     }
@@ -388,7 +408,16 @@ impl VrxRuntime {
         // enabled runtime never instantiates one).
         if self.opus.is_none() {
             match VrxOpusEncoder::new_with_rate(self.output_rate_hz) {
-                Ok(e) => self.opus = Some(e),
+                Ok(mut e) => {
+                    let (on, pct) = self.loss_protection;
+                    if e.set_loss_protection(on, pct).is_err() {
+                        warn!(
+                            "VRX{} runtime: new encoder refused the error-correction setting",
+                            self.opts_vrx_id + 1
+                        );
+                    }
+                    self.opus = Some(e);
+                }
                 Err(e) => {
                     warn!(
                         "VRX{} runtime: Opus encoder init failed: {} — audio frames dropped",

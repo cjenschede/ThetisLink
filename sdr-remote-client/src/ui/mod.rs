@@ -228,7 +228,12 @@ pub struct SdrRemoteApp {
     rec_yaesu2: bool,
     rec_vrx1: bool,
     rec_vrx2: bool,
-    last_recorded_path: Option<String>,
+    /// The files the last Start wrote, as (source name, path), and which of
+    /// them the Play button refers to.
+    last_recorded: Vec<(String, String)>,
+    /// Which of `last_recorded` the Play button will sound, one flag per
+    /// entry. Everything ticked plays together.
+    play_ticked: Vec<bool>,
     midi_ptt_toggle_mode: bool,  // independent MIDI PTT mode
     /// Diagnostic CAT monitor toggle (server logs every radio frame). Session
     /// state on purpose: it is for one investigation, not a saved preference.
@@ -549,6 +554,13 @@ pub struct SdrRemoteApp {
     vrx1_high_res_spectrum: bool,
     /// Last span (kHz) sent to server; resend on change to avoid spam.
     vrx1_high_res_last_span_khz: u16,
+    /// Last VRX pan offset in Hz handed to the server, per channel. The server
+    /// cuts its window there; resending an unchanged value every frame would
+    /// be a packet per frame for nothing.
+    vrx1_last_sent_pan_hz: i32,
+    vrx2_last_sent_pan_hz: i32,
+    /// When the VRX pan last moved, so the send can wait for it to settle.
+    vrx_pan_changed_at: Option<Instant>,
     /// VRX1's independent channel spectrum: own bins/center/span, waterfall,
     /// s-meter and auto-ref derivation — all from its own data stream. Replaces
     /// the separate `vrx1_extracted_*` / `vrx1_hr_waterfall` / `vrx1_smeter_*` /
@@ -581,6 +593,42 @@ pub struct SdrRemoteApp {
     /// after the first successful connect, then stay quiet until user
     /// interacts. Reset to false on disconnect so a reconnect re-syncs.
     vrx_state_sync_pending: bool,
+    /// Whether the main spectrum's zoom has been matched to the receiver's
+    /// width this session. VRX has had this since it was written; RX1 waited
+    /// for the full-band spectrum to arrive, which never happens if it is off.
+    rx_zoom_initialized: bool,
+    /// The same for RX2. It had no flag of its own and used "the full-band
+    /// span just went from nothing to something" instead, which says nothing
+    /// about whether the zoom was ever matched - and fires again after every
+    /// reset that puts that span back to zero, over an operator's own setting.
+    rx2_zoom_initialized: bool,
+    /// Which subscription bits last disagreed with the server, so the line is
+    /// written when it changes instead of once a frame.
+    subs_differ_seen: u16,
+    /// The session number this client last re-subscribed for. A counter rather
+    /// than a flank, so a short interruption cannot slip past between frames.
+    session_generation_seen: u64,
+    /// The frequency the view numbers were last written down at, so tuning
+    /// leaves a trail without a line per frame.
+    rx1_logged_freq_hz: u64,
+    /// When that trail last wrote a line. A kilohertz is the smallest step
+    /// there is, so spinning a knob produced a line every thirty
+    /// milliseconds - two hundred in a minute, which crowds out the hour
+    /// before the fault in a report that carries only the last megabyte.
+    /// One a second is still every step worth seeing.
+    rx1_logged_at: Option<Instant>,
+    rx2_logged_at: Option<Instant>,
+    /// The same for RX2, which had no view line at all. Its zoom could only be
+    /// read off a slider, so the build that gave RX2 its width could not be
+    /// checked the way RX1's was.
+    rx2_logged_freq_hz: u64,
+    /// When the view was last found to disagree with what this client asked
+    /// for, so putting it right cannot turn into a packet per frame.
+    view_mismatch_at: Option<Instant>,
+    /// When zoom or pan was last sent. Between that and the packet that
+    /// reflects it the two ends legitimately differ, and calling that a
+    /// disagreement is crying wolf at the operator's own zoom slider.
+    view_sent_at: Option<Instant>,
     // Devices screen
     active_tab: Tab,
     /// PATCH-1 smoke-test fix (2026-05-13): track the previous frame's
@@ -741,6 +789,12 @@ pub struct SdrRemoteApp {
     rotor_available: bool,
     // Yaesu FT-991A
     yaesu_connected: bool,
+    /// Why an absent radio is absent (PORT_TROUBLE_* wire code, 0 = nothing to
+    /// say). Shown as a line under the radio in the devices tab - the most
+    /// common value names the most common field problem: another control
+    /// program holding the radio's COM port.
+    yaesu_port_trouble: u8,
+    yaesu2_port_trouble: u8,
     yaesu_freq_a: u64,
     yaesu_freq_b: u64,
     yaesu_mode: u8,
@@ -847,6 +901,9 @@ pub struct SdrRemoteApp {
     yaesu_compressor: u8,
     yaesu2_compressor: u8,
     yaesu_tx_agc: bool,
+    /// The roger beep, as shown in the Server tab. One set of numbers, a tick
+    /// per channel.
+    roger: sdr_remote_logic::roger::RogerBeep,
     yaesu2_tx_agc: bool,
     yaesu_eq_enabled: bool,
     yaesu_eq_gains: [f32; 5], // -12..+12 dB per band
@@ -890,6 +947,17 @@ pub struct SdrRemoteApp {
     /// than a row index - the two lists are different lengths, so an index means a
     /// different channel in each. Sticky: it survives tuning away into VFO, which is
     /// what makes "the one you left" findable.
+    // ---- chat (docs/internal/DESIGN-relay-chat.md) ----
+    chat_popout_pos: Option<egui::Pos2>,
+    chat_popout_size: Option<egui::Vec2>,
+    chat_popout_init_applied: bool,
+    pub(crate) chat_open: bool,
+    /// The chat and problem reporting, shared with the server GUI.
+    ///
+    /// A component rather than two dozen fields, because the server needs the
+    /// same window and painting it twice is how two consent texts end up saying
+    /// different things.
+    pub(crate) chat: sdr_remote_chat::ChatPanel,
     yaesu_mem_active_ch: Option<u16>,
     yaesu2_mem_active_ch: Option<u16>,
     /// Whether the radio is on that channel right now (as opposed to having left it).
@@ -950,6 +1018,16 @@ pub struct SdrRemoteApp {
     // Smooth tuning: display center interpolates toward VFO for smooth visual scroll
     smooth_display_center_hz: f64,   // RX1 smoothed display center
     rx2_smooth_display_center_hz: f64, // RX2 smoothed display center
+    /// The VFO marker's own smoothed position, per receiver.
+    ///
+    /// Smoothed on the same clock as the centre so the marker and the trace
+    /// move together while tuning, but derived from the VFO itself rather than
+    /// from `centre - pan x full_span`. That subtraction is only the VFO while
+    /// the full span is known, and it is known only once the full-band row has
+    /// been on: with it zero the marker collapsed onto the middle of the view
+    /// and sat there while the spectrum panned underneath it (2026-08-13).
+    smooth_vfo_hz: f64,
+    rx2_smooth_vfo_hz: f64,
     smooth_alpha: f64,               // shared smoothing alpha for current frame
     last_frame_time: Instant,
     // DX-cluster spot stream - data-saving toggle (Server-tab)

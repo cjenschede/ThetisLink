@@ -17,6 +17,14 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request as HsRequest, Re
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_hdr_async, connect_async};
 
+mod chat_ticket;
+
+/// A one-time id for a ticket, so the same one cannot post twice.
+fn new_jti() -> String {
+    use rand::Rng;
+    let bytes: [u8; 12] = rand::thread_rng().gen();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
 mod admin_api;
 mod store;
 
@@ -159,6 +167,10 @@ impl Room {
 
 pub(crate) type Rooms = Arc<Mutex<HashMap<String, Room>>>;
 
+/// Serial for the next wss connection. Only ever compared for equality, so
+/// wrapping after 2^64 connections is not a concern anyone needs to have.
+static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
+
 /// Fase 0 (PATCH-relay-audio-udp): a live UDP audio session, keyed by its capability
 /// token. Issued on the wss handshake (S1), bound to the peer's identity (S2), valid
 /// only while the wss session lives (S3 lease) and until its TTL (S4). The UDP data
@@ -170,6 +182,17 @@ struct UdpSession {
     station_id: Option<i64>,
     client_id: Option<u8>,
     role: Role,
+    /// Which wss connection issued this token.
+    ///
+    /// Revoking used to match on (room, role, client_id), and a client id is
+    /// deliberately reused: a returning client reclaims its own slot. On a
+    /// network change both connections are briefly alive, the new one takes the
+    /// id, and when the old socket finally times out its cleanup revoked the
+    /// tokens of the connection that had just taken over - so a phone that had
+    /// switched networks kept its control channel and lost its audio, with
+    /// nothing in any log saying why. A serial per connection cannot be reused
+    /// (2026-08-17).
+    conn: u64,
     expires_at: Instant,
     /// Learned from the first valid datagram; later datagrams must match (S5).
     src: Option<SocketAddr>,
@@ -180,6 +203,16 @@ struct UdpSession {
     /// existing periodic/disconnect flush (swap(0)) - no per-packet DB write (hot-path
     /// write guard). Uplink counts against the sender client, downlink against the target.
     bytes: Arc<AtomicU64>,
+}
+
+/// Drop every UDP token issued by one wss connection, and say how many are left.
+///
+/// By connection, not by client id. A client id is reused on purpose - a
+/// returning client reclaims its own slot - so matching on it let a dying
+/// connection revoke the tokens of the one that had just taken its place.
+fn revoke_tokens_of(toks: &mut HashMap<String, UdpSession>, conn: u64) -> usize {
+    toks.retain(|_, s| s.conn != conn);
+    toks.len()
 }
 
 // --- Fase 1 (PATCH-relay-audio-udp): relay UDP data path ---
@@ -768,6 +801,10 @@ async fn handle_connection(
         }
     });
 
+    // This connection's serial, stamped on every token it issues so that only
+    // this connection can revoke them (see UdpSession::conn).
+    let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
+
     // Fase 0: issue a UDP capability token bound to this session (S1-S4) and hand it to
     // the peer in the ready-reply (over the TLS wss channel). Revoked on disconnect
     // below (S3 lease). The token is never logged in full (S11).
@@ -783,6 +820,7 @@ async fn handle_connection(
                 station_id,
                 client_id,
                 role,
+                conn,
                 expires_at: now + UDP_TOKEN_TTL,
                 src: None,
                 last_seq: None,
@@ -792,8 +830,21 @@ async fn handle_connection(
         toks.len()
     };
 
+    // The chat ticket rides along on the ready-reply (design §3). Additive by
+    // construction: an older client looks for `udp_token=` by name and never
+    // sees this, so it keeps working exactly as before. Absent when no key is
+    // configured, which is simply a relay with no chat behind it.
+    let chat_ticket = chat_ticket::signing_key_from_env().and_then(|key| {
+        station_id.map(|sid| {
+            chat_ticket::issue(&key, sid, &station, &new_jti(), unix_now().max(0) as u64)
+        })
+    });
+    let chat_field = match &chat_ticket {
+        Some(t) => format!(" chat_ticket={t}"),
+        None => String::new(),
+    };
     let _ = out_tx.send(Message::Text(
-        format!("OK relay-ready udp_token={udp_token}").into(),
+        format!("OK relay-ready udp_token={udp_token}{chat_field}").into(),
     ));
     info!(
         "{addr} registered station={station} role={} id={client_id:?} ip={client_ip} inst={inst_label}{name_label} (clients now {}, udp sessions {udp_session_count})",
@@ -814,6 +865,11 @@ async fn handle_connection(
     // its own deadline regardless of message load.
     let mut current_udp_token = udp_token.clone();
     let mut udp_rotate = interval(UDP_TOKEN_ROTATE);
+    // Comfortably inside the ticket's own lifetime, so a client is never left
+    // holding an expired one between rotations.
+    let mut chat_rotate = tokio::time::interval(
+        Duration::from_secs(chat_ticket::TICKET_TTL_SECS / 2),
+    );
     udp_rotate.tick().await; // discard the immediate first tick
     loop {
         tokio::select! {
@@ -849,6 +905,23 @@ async fn handle_connection(
                 // Prod the peer; a live one answers with Pong (or keeps sending frames).
                 let _ = out_tx.send(Message::Ping(Vec::new()));
             }
+            _ = chat_rotate.tick() => {
+                // A ticket lasts a quarter of an hour (design §3.2), so a fresh one
+                // goes out well before that. Same shape as the UDP rotation above,
+                // and additive in the same way: a client that does not know this
+                // line ignores it, exactly as it ignores any text it was not
+                // written for.
+                if let (Some(key), Some(sid)) =
+                    (chat_ticket::signing_key_from_env(), station_id)
+                {
+                    let t = chat_ticket::issue(
+                        &key, sid, &station, &new_jti(), unix_now().max(0) as u64,
+                    );
+                    let _ = out_tx.send(Message::Text(
+                        format!("chat-ticket-rotate chat_ticket={t}").into(),
+                    ));
+                }
+            }
             _ = udp_rotate.tick() => {
                 // S4: mint a fresh UDP token and hand it over wss BEFORE the current one
                 // reaches its hard TTL, so an active session never loses a valid
@@ -873,6 +946,7 @@ async fn handle_connection(
                             station_id,
                             client_id,
                             role,
+                            conn,
                             expires_at: now + UDP_TOKEN_TTL,
                             src: None,
                             last_seq: None,
@@ -931,10 +1005,7 @@ async fn handle_connection(
     // initially-issued value.
     let udp_session_count = {
         let mut toks = udp_tokens.lock().unwrap_or_else(|e| e.into_inner());
-        toks.retain(|_, s| {
-            !(s.room_key == room_key && s.role == role && s.client_id == client_id)
-        });
-        toks.len()
+        revoke_tokens_of(&mut toks, conn)
     };
     info!(
         "{addr} disconnected station={station} role={} id={client_id:?} inst={inst_label}{name_label} (clients now {}, udp sessions {udp_session_count})",
@@ -1059,6 +1130,34 @@ async fn unregister_peer(
 /// than only on its next reconnect. The peer's slot is freed when its read loop sees
 /// the close and falls through to `unregister_peer`. Returns how many peers were
 /// closed. Called by the admin API.
+/// The install-ids with a live peer in a station's room - the station itself
+/// and its clients alike. Feeds the dashboard's per-device "connected" mark:
+/// `last_seen` freezes at session start, so a server that stays connected for
+/// days reads as "1 connection, last seen 56 hours ago" - true, and exactly
+/// the kind of true that looks like a fault to whoever administers it.
+pub(crate) async fn live_install_ids(
+    rooms: &Rooms,
+    station_id: i64,
+) -> std::collections::HashSet<String> {
+    let key = format!("db:{station_id}");
+    let rooms = rooms.lock().await;
+    let Some(room) = rooms.get(&key) else {
+        return Default::default();
+    };
+    let mut out = std::collections::HashSet::new();
+    if let Some(station) = &room.station {
+        if let Some(i) = &station.instance {
+            out.insert(i.clone());
+        }
+    }
+    for peer in room.clients.values() {
+        if let Some(i) = &peer.instance {
+            out.insert(i.clone());
+        }
+    }
+    out
+}
+
 pub(crate) async fn kick_device(rooms: &Rooms, station_id: i64, install_id: &str) -> usize {
     let key = format!("db:{station_id}");
     let rooms = rooms.lock().await;
@@ -1660,6 +1759,60 @@ fn positional_id(args: &[String], from: usize) -> Result<i64> {
 }
 
 #[cfg(test)]
+mod udp_lease_tests {
+    use super::*;
+
+    fn client_session(conn: u64, client_id: u8) -> UdpSession {
+        UdpSession {
+            room_key: "db:1".into(),
+            station_id: Some(1),
+            client_id: Some(client_id),
+            role: Role::Client,
+            conn,
+            expires_at: Instant::now() + Duration::from_secs(60),
+            src: None,
+            last_seq: None,
+            bytes: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// The fault a phone showed after switching between WiFi and mobile data:
+    /// the control channel kept working and audio never came back, with nothing
+    /// in any log saying why.
+    ///
+    /// Both connections are briefly alive after a network change. The new one
+    /// reclaims the same client id - deliberately, so a device cannot pile up
+    /// slots - and then the old socket times out. Its cleanup must not take the
+    /// live connection's token with it.
+    #[test]
+    fn a_dying_connection_does_not_revoke_the_token_that_replaced_it() {
+        let mut toks: HashMap<String, UdpSession> = HashMap::new();
+        toks.insert("old".into(), client_session(7, 2)); // on the old network
+        toks.insert("new".into(), client_session(8, 2)); // took the id over
+
+        let left = revoke_tokens_of(&mut toks, 7);
+
+        assert_eq!(left, 1, "the live token should have survived");
+        assert!(toks.contains_key("new"), "the live connection lost its token");
+        assert!(!toks.contains_key("old"), "the dead connection kept its token");
+    }
+
+    /// And a connection does clean up after itself: every token it issued goes,
+    /// not just the current one. Rotation leaves a superseded token alive for
+    /// the length of its overlap window.
+    #[test]
+    fn a_connection_takes_all_of_its_own_tokens_with_it() {
+        let mut toks: HashMap<String, UdpSession> = HashMap::new();
+        toks.insert("current".into(), client_session(3, 0));
+        toks.insert("superseded".into(), client_session(3, 0));
+        toks.insert("someone else".into(), client_session(4, 1));
+
+        assert_eq!(revoke_tokens_of(&mut toks, 3), 1);
+        assert!(toks.contains_key("someone else"));
+    }
+}
+
+#[cfg(test)]
 mod auth_tests {
     use super::*;
 
@@ -1804,6 +1957,22 @@ mod auth_tests {
     }
 
     #[tokio::test]
+    async fn live_install_ids_sees_station_and_clients_of_the_right_room() {
+        let rooms = Rooms::default();
+        let (stx, _srx) = mpsc::unbounded_channel();
+        register_peer(&rooms, "db:7", Role::Station, stx, Some("srv-dev".into()), zero(), MAX_CLIENTS).await;
+        let (ctx, _crx) = mpsc::unbounded_channel();
+        register_peer(&rooms, "db:7", Role::Client, ctx, Some("cli-dev".into()), zero(), MAX_CLIENTS).await;
+
+        let live = live_install_ids(&rooms, 7).await;
+        assert!(live.contains("srv-dev"), "the station's own session counts too");
+        assert!(live.contains("cli-dev"));
+        assert_eq!(live.len(), 2);
+        // Another station's room is another station's business.
+        assert!(live_install_ids(&rooms, 8).await.is_empty());
+    }
+
+    #[tokio::test]
     async fn kick_device_closes_only_matching_peer() {
         let rooms = Rooms::default();
         let key = "db:7"; // station_id 7 -> kick_device builds this same key
@@ -1906,7 +2075,7 @@ mod auth_tests {
                 token_hex(&station_tok),
                 UdpSession {
                     room_key: "db:1".into(), station_id: Some(1), client_id: None,
-                    role: Role::Station, expires_at: Instant::now() + Duration::from_secs(60),
+                    role: Role::Station, conn: 1, expires_at: Instant::now() + Duration::from_secs(60),
                     src: Some(station_addr), last_seq: None,
                     bytes: Arc::new(AtomicU64::new(0)),
                 },
@@ -1915,7 +2084,7 @@ mod auth_tests {
                 token_hex(&client_tok),
                 UdpSession {
                     room_key: "db:1".into(), station_id: Some(1), client_id: Some(0),
-                    role: Role::Client, expires_at: Instant::now() + Duration::from_secs(60),
+                    role: Role::Client, conn: 2, expires_at: Instant::now() + Duration::from_secs(60),
                     src: None, last_seq: None,
                     bytes: client_bytes.clone(),
                 },

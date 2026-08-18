@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.8.0 — Gebruikershandleiding
+﻿# ThetisLink v2.9.0 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.8.0.apk` | Android client app |
+| `ThetisLink-2.9.0.apk` | Android client app |
 | `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -223,6 +223,83 @@ Wie de relay host, heeft een **web-dashboard** voor beheer, bereikbaar via de re
 - **Database-backup** knop ("Backup DB"): downloadt een consistente kopie van de relay-database (via `VACUUM INTO`, dus zonder de relay te stoppen). Handig voor een periodieke veiligstelling. Gevoelige beheeracties zoals deze export worden met het IP van de aanvrager in het relay-log genoteerd.
 
 De relay-configuratie (stationsleutels, beheerderswachtwoord) staat in een `.env`-bestand op de VPS. Dit bestand bevat geheimen en hoort **nooit** publiek of in een repository terecht te komen — zie `Installatie.md`.
+
+---
+
+## Chat en probleem melden (v2.9.0)
+
+Draai je via de relay, dan zit er een knop **Chat** in de server-GUI en in de desktop-client, en een tabblad **Chat** in de Android-app. Daarachter zitten twee dingen die los van elkaar werken: een gespreksruimte voor gebruikers van dezelfde relay, en een knop **Probleem melden** die rechtstreeks naar de beheerder gaat.
+
+Zonder relay is er niets te zien: de chat hangt aan je relay-verbinding en gebruikt hetzelfde kaartje. **De relay moet ook aan staan, niet alleen ingevuld** — een adres blijft in je instellingen staan nadat je de relay uitzet, en zonder verbinding is er geen kaartje en dus geen chat. Die ingang wordt daarom pas getoond als de relay in gebruik is; een knop die nergens toe leidt is vervelender dan geen knop. Heb je wél een relay maar draait daar geen chat op — bijvoorbeeld je eigen relay — dan blijft de ingang staan en zegt het scherm erachter waarom het leeg is. Ligt de chat plat, dan blijft **al het andere gewoon werken** — audio, PTT, spectrum, de radio. Het venster zegt dan waarom het stil is, en dat is opzet: de chat is het minst belangrijke onderdeel van ThetisLink en mag nooit iets anders ophouden.
+
+### Meedoen, of niet
+
+De eerste keer krijg je een scherm met wat er bewaard wordt en wie de beheerder is. Je kiest zelf onder welke naam je verschijnt. **Een roepletter staat in een openbaar register met je naam en adres** — wil je dat niet delen, kies dan een voornaam of iets anders.
+
+Er zijn twee vinkjes: akkoord, en dat je 16 jaar of ouder bent. Onder de 16 moet een ouder akkoord geven. Zonder akkoord werkt de rest van ThetisLink gewoon; alleen het gesprek is dan niet beschikbaar.
+
+**Melden kan zonder mee te doen.** Wie de chat niet wil, kan nog steeds een probleem melden — dat gaat alleen naar de beheerder en niet naar andere gebruikers.
+
+### Wat er bewaard wordt, en hoe lang
+
+Je gekozen naam en je berichten, met het tijdstip. Berichten verdwijnen na 90 dagen, en **eerder als de opslagruimte vol raakt** — dan gaan de oudste het eerst. De beheerder kan alle berichten op de server lezen.
+
+Je kunt het altijd intrekken. *Verlaat de chat* haalt je naam weg; je berichten blijven staan zonder naam, zodat gesprekken van anderen leesbaar blijven. Schreef je je roepletter in de **tekst** van een bericht, dan staat die er nog — daarvoor is *verlaat de chat en verwijder mijn berichten*.
+
+Wil je weten wat er over je bewaard wordt, vraag het de beheerder; zijn adres staat op het toestemmingsscherm. **Los van de chat** houdt de relay zelf ook gegevens bij over verbindingen — welk station wanneer verbond en hoeveel verkeer er liep. Dat staat er ook zonder chat en heeft een eigen bewaartermijn; vraag het bij dezelfde beheerder.
+
+### Berichten
+
+Eén ruimte, geen kanalen en geen privéberichten. Elk bericht heeft een tijd, en met **antwoord** kun je op één bepaald bericht reageren — dat verschijnt er dan boven als geciteerde regel. Eén niveau diep: een gesprek blijft een lijst die je van boven naar beneden leest.
+
+**Bestanden en foto's kun je hier niet delen**; gebruik daarvoor e-mail. Een bericht is begrensd op 2000 tekens, en die grens heeft een reden: hij houdt logfragmenten uit een ruimte die iedereen leest. Een log hoort in een probleemmelding, waar hij wordt opgeschoond en alleen de beheerder hem ziet.
+
+### Uit de chat verwijderd
+
+De beheerder kan een station uit de chat verwijderen als het onwerkbaar wordt. Dat is een ordemaatregel en geen oordeel — hij kan hem net zo goed weer opheffen.
+
+**Je krijgt het te horen.** In plaats van berichten verschijnt er een regel dat je door de beheerder bent verwijderd. Dat is met opzet zo: een venster dat stilvalt zonder uitleg laat je raden, en dat is erger dan de mededeling. Wordt de verwijdering opgeheven, dan verdwijnt die regel vanzelf zodra je client weer contact maakt — je hoeft niets te doen.
+
+**Het geldt voor het hele kanaal, ook voor melden.** Zolang je verwijderd bent kun je niet meelezen, niet schrijven en ook geen probleem melden. Wil je in die situatie iets kwijt aan de beheerder, gebruik dan het e-mailadres van het toestemmingsscherm.
+
+**Wat je geschreven hebt blijft staan.** Een verwijdering wist je berichten niet; dat is een aparte handeling en die vraagt om een aparte reden.
+
+**Verwijderd worden is niet hetzelfde als zelf intrekken.** Bij intrekken beslis jij, en je naam gaat uit de berichten. Bij een verwijdering beslist de beheerder, en je berichten blijven zoals ze staan. Ze werken ook niet tegen elkaar weg: **de chat verlaten heft een verwijdering niet op.** Zou dat wel zo zijn, dan was de maatregel met twee klikken te omzeilen door wie hem betreft. De keerzijde is dat je stationsnummer op die lijst blijft staan, ook als je verder alles laat wissen — daarom staat het ook op het toestemmingsscherm.
+
+### Probleem melden
+
+De knop zit in het chatvenster en werkt ook als je niet meedoet aan het gesprek.
+
+**Je beschrijving is de melding.** Wat je aan het doen was, wat je verwachtte en wat er in plaats daarvan gebeurde — dat staat in geen enkel logbestand en is precies het deel dat niemand anders kan invullen. De verstuurknop wacht tot er iets staat.
+
+**De log en je instellingen zijn een bijlage met een vinkje.** Dat staat aan, want zonder bijlage zijn de meeste problemen niet te achterhalen — maar het is een vinkje, en zolang het uit staat wordt er niets van je schijf gelezen. Ben je met een server verbonden, dan is er een **tweede vinkje voor de log en instellingen van die server**; die worden op de server zelf opgeschoond voordat ze naar je client komen.
+
+Vóór verzending zie je precies wat er weggaat. **Lees dat na** — het is je laatste kans om iets tegen te houden, en het is de eigenlijke waarborg. Opschonen is nooit volledig.
+
+Wat er meegaat:
+
+- het laatste stuk van je logbestand, met adressen, namen en alles wat op een sleutel lijkt eruit gehaald. Dat geldt voor IP-adressen, e-mailadressen en de map met je Windows-gebruikersnaam, en ook voor **twee namen die er anders doorheen glippen**: het adres van de relay en het adres waarop jouw eigen server bereikbaar is. Draai je die op een DDNS-naam in plaats van een IP-adres, dan wordt ook die naam vervangen — het poortnummer blijft staan, want dát verklaart een probleem en de naam niet;
+- je instellingen — het adres van je radio, de COM-poort, de geluidsapparaten, radiomodel en baudrate, en welke vinkjes aanstaan. Samen is dat de opstelling van je station.
+
+**Op Android komt de log uit twee bronnen.** De systeemlog van je telefoon bewaart maar een paar minuten — die ruimte wordt gedeeld met de hele telefoon — en daarom houdt de app sinds v2.9.0 daarnaast zijn eigen logbestand bij. Dat staat in de eigen opslag van de app, waar geen andere app bij kan, is begrensd op 2 MB met één oudere kopie, en verdwijnt als je de app verwijdert. Er staan **geen wachtwoorden, sleutels of toegangscodes** in. Het adres van je relay schrijven wij zelf als `<relay>`, maar dat is een afspraak op de plekken waar wíj de tekst opstellen: komt een adres binnen in een foutmelding van Windows of van de tegenpartij, dan kan het er wel in staan. **Uit de melding die je verstuurt wordt het altijd geschrapt** — daar zit de opschoning wel in het pad zelf. Het bestand gaat nergens heen uit zichzelf — alleen het laatste stuk gaat mee als je zelf een melding verstuurt met het bijlage-vinkje aan, en dan zie je het eerst.
+
+**Je wachtwoord, je sleutels en je toegangscodes gaan nooit mee.** Alleen instellingen die op een vaste lijst staan worden verstuurd; wat daar niet op staat wordt geweigerd. Op beide platformen wordt het hele instellingenbestand ingelezen en daarna dezelfde lijst toegepast — het is de lijst die het doet, en niet het toeval. Wat daar niet op staat blijft thuis, en onderaan zie je hoeveel instellingen zijn achtergehouden.
+
+De bijlage wordt ingelezen op het moment dat je het vinkje zet, en het formulier zegt hoe oud hij is. Laat je het formulier openstaan terwijl je het probleem opnieuw uitlokt, klik dan op **opnieuw inlezen** — anders stuur je de log van vóór dat moment mee.
+
+### Wat er daarna gebeurt
+
+De melding staat in een postbus op de relay, niet in een archief. De beheerder haalt hem naar zijn eigen computer om hem te onderzoeken en verwijdert hem daar van de server zodra je probleem is opgelost. Wat hij niet ophaalt, verdwijnt vanzelf na 30 dagen.
+
+**Eén ding dat je moet weten over "weg".** Wat je hier laat verwijderen — je naam, je berichten, een melding — gaat weg uit de dienst zelf. De server waarop die dienst draait maakt daarnaast **automatische back-ups bij de hostingpartij**, en hoe lang die bewaard blijven staat niet in de voorwaarden van het pakket. Zolang dat niet is uitgezocht geldt: wissen haalt het uit de chat en uit de postbus, maar het is geen garantie dat er nergens meer een kopie ligt. Dat is eerlijker dan de belofte die hier eerst had kunnen staan.
+
+Van de antwoorden die de beheerder stuurt bewaart hij een kopie op zijn eigen computer, met de datum erbij — bij de melding waar het antwoord bij hoort, dus in hetzelfde bestand als wat jij stuurde. Dat is er zodat hij later nog kan nazoeken wat hij je verteld heeft — de server wist een bezorgd antwoord namelijk na zeven dagen. Wil je weten wat daar over jouw meldingen staat, of wil je dat het weg gaat, vraag het hem. **Voor die kopie op zijn computer geldt geen automatische bewaartermijn** — de termijnen hierboven gelden voor de dienst, niet voor wat hij heeft opgehaald. Dat is met opzet zijn werkkopie, en het is de reden dat vragen de weg is.
+
+**Een melding die hij al heeft opgehaald staat niet meer op de server en kun je niet meer intrekken** — vraag het hem dan.
+
+Je krijgt geen bevestiging dat hij is gelezen. Wél zie je een **antwoord** verschijnen bovenaan je chatvenster zodra hij er een stuurt, ook als je niet meedoet aan het gesprek. Dat antwoord gaat één kant op en is kort; voor alles wat een gesprek nodig heeft is er het e-mailadres op het toestemmingsscherm.
+
+Er geldt een grens van honderd meldingen per station per dag. Opgehaalde meldingen tellen niet mee, dus een geleegde postbus geeft de ruimte meteen terug.
 
 ---
 

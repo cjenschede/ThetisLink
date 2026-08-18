@@ -200,6 +200,24 @@ impl eframe::App for ServerApp {
                                 }
                             });
                     });
+                    // Why the port cannot be opened, when the server knows - straight
+                    // under the dropdown where the port was chosen. The busy case is
+                    // the classic one: other CAT software still holding the port in
+                    // the background while its window is long closed.
+                    if let Some(ref y) = self.yaesu {
+                        use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING};
+                        let st = y.status();
+                        if !st.connected {
+                            let text = match st.port_trouble {
+                                PORT_TROUBLE_BUSY => Some(rust_i18n::t!("srv_port_busy").to_string()),
+                                PORT_TROUBLE_MISSING => Some(rust_i18n::t!("srv_port_missing").to_string()),
+                                _ => None,
+                            };
+                            if let Some(text) = text {
+                                ui.colored_label(egui::Color32::from_rgb(255, 170, 40), text);
+                            }
+                        }
+                    }
                     // TX/output device: separately selectable so the transmit audio always
                     // goes to the right codec (PATCH-yaesu-output-device). Empty = same as
                     // the input; choose this when the capture/render endpoints have different names.
@@ -530,7 +548,10 @@ impl eframe::App for ServerApp {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.relay_url)
                                 .desired_width(260.0)
-                                .hint_text("ws://relay.example.com:18080"),
+                                // wss://, not ws:// - the relay sits behind TLS
+                                // on 443, and the first real user copied this
+                                // hint verbatim and could not connect.
+                                .hint_text("wss://relay.example.com"),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -630,6 +651,7 @@ impl eframe::App for ServerApp {
                             if ui.small_button(rust_i18n::t!("srv_about").to_string()).clicked() {
                                 self.show_about = !self.show_about;
                             }
+                            self.render_chat_button(ui);
                         });
                     });
                     // UI scale, next to the arrange button: the two belong together -
@@ -735,7 +757,14 @@ impl eframe::App for ServerApp {
                         if let Some(tx) = self.shutdown_tx.take() {
                             let _ = tx.send(true);
                         }
-                        self.yaesu = None;
+                        // Dropping the radio is what runs its restore: the USB
+                        // transmit routing goes back the way the operator had
+                        // it. Written as take-and-drop rather than an
+                        // assignment because that is what it is - as a plain
+                        // `= None` before `exit` it reads as a dead store, and
+                        // the next person to tidy one away would leave a 991A
+                        // in USB mode after every shutdown.
+                        drop(self.yaesu.take());
                         std::thread::sleep(std::time::Duration::from_millis(500));
                         std::process::exit(0);
                     }
@@ -1319,6 +1348,10 @@ impl eframe::App for ServerApp {
                 }
             }
         }
+
+        // Chat and problem reporting. Ticked every frame - cheap and
+        // idempotent - and drawn only while its window is open.
+        self.chat_tick_and_render(ctx);
 
         // About window
         if self.show_about {

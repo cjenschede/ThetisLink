@@ -5,5 +5,7 @@ pub mod commands;
 pub mod engine;
 pub mod eq;
 pub mod i18n;
+pub mod roger;
+pub mod rx_stream;
 pub mod state;
 pub mod wav;

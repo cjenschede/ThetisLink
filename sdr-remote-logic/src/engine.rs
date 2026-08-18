@@ -10,13 +10,14 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
 use tokio::time::{interval, Duration};
 
-use sdr_remote_core::codec::{OpusDecoder, OpusDecoderWideband, OpusEncoderWideband};
+use sdr_remote_core::codec::OpusEncoderWideband;
 use sdr_remote_core::jitter::{BufferedFrame, JitterBuffer, JitterResult};
 use sdr_remote_core::protocol::*;
 use sdr_remote_core::{FRAME_SAMPLES, FRAME_SAMPLES_WIDEBAND, MAX_PACKET_SIZE, NETWORK_SAMPLE_RATE, NETWORK_SAMPLE_RATE_WIDEBAND};
 
 use crate::audio::AudioBackend;
 use crate::commands::Command;
+use crate::rx_stream::{channel_opus, recover_or_conceal, Decoded, RxStream};
 use crate::state::RadioState;
 
 /// Phase C: channels that connect the client engine to the relay monitor when the
@@ -83,6 +84,10 @@ impl ClientTransport {
         }
     }
 
+    /// Unused today. Part of the deliberate mirror of `UdpSocket`'s surface
+    /// described above - a wrapper missing one method of the API it stands in
+    /// for is a trap for the next call site, not a saving.
+    #[allow(dead_code)]
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
         match self {
             ClientTransport::Direct(s) => s.local_addr(),
@@ -109,6 +114,8 @@ pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePack
     state.yaesu2_connected = p.slot1_present;
     state.yaesu_model = p.slot0_model;
     state.yaesu2_model = p.slot1_model;
+    state.yaesu_port_trouble = p.slot0_trouble;
+    state.yaesu2_port_trouble = p.slot1_trouble;
     // An absent radio cannot report high SWR. Without this an old
     // hi_swr flag stays set and the other radio keeps the alarm alive
     // again with every state push.
@@ -271,33 +278,25 @@ impl ClientEngine {
 
         // Codec - wideband Opus (16kHz) for TX, stereo (8kHz) for RX decode
         let mut encoder = OpusEncoderWideband::new()?;
-        // Per-channel mono decoders for multi-channel audio
-        let mut dec_rx1 = OpusDecoder::new()?;
-        let mut dec_bin_r = OpusDecoder::new()?;
-        let mut dec_rx2 = OpusDecoder::new()?;
-        // Wideband parallel-decoders. Used as soon as a
-        // multi-channel packet arrives with `Flags::AUDIO_WIDEBAND`
-        // (opt-in via Settings → Audio). Default unused; no
-        // runtime impact as long as the server streams NB.
-        let mut dec_rx1_wb = OpusDecoderWideband::new()?;
-        let mut dec_bin_r_wb = OpusDecoderWideband::new()?;
-        let mut dec_rx2_wb = OpusDecoderWideband::new()?;
+        // One RxStream per receive channel. It owns both decoders and both
+        // resamplers, so no call site can pair a wideband frame with the
+        // narrowband path or conceal on a decoder that holds no history -
+        // the two halves of the fault found on 2026-08-16. Wideband is opt-in
+        // (Settings → Audio); as long as the server streams narrowband the
+        // wideband half sits idle at no cost.
+        let mut st_rx1 = RxStream::new(playback_rate, "RX1")?;
+        let mut st_bin_r = RxStream::new(playback_rate, "BinR")?;
+        let mut st_rx2 = RxStream::new(playback_rate, "RX2")?;
 
         // Yaesu (FT-991A) codec + jitter buffer - independent third audio channel.
         // RX bandwidth follows the Thetis wideband toggle (build 122): per packet
         // the AUDIO_WIDEBAND flag determines whether we decode NB (8 kHz) or WB (16 kHz).
-        // Both decoders/resamplers stay active; `*_last_wb` remembers the last
-        // format for PLC (Missing frames carry no flag).
-        let mut yaesu_decoder_nb = OpusDecoder::new()?;
-        let mut yaesu_decoder_wb = OpusDecoderWideband::new()?;
-        let mut yaesu_last_wb = false;
+        let mut st_yaesu = RxStream::new(playback_rate, "Yaesu")?;
         let mut yaesu_jitter_buf = JitterBuffer::new(3, 40);
         let mut yaesu_logged_first = false;
         // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — own independent
         // channel, exact mirror of slot 0.
-        let mut yaesu2_decoder_nb = OpusDecoder::new()?;
-        let mut yaesu2_decoder_wb = OpusDecoderWideband::new()?;
-        let mut yaesu2_last_wb = false;
+        let mut st_yaesu2 = RxStream::new(playback_rate, "Yaesu2")?;
         let mut yaesu2_jitter_buf = JitterBuffer::new(3, 40);
         let mut yaesu2_logged_first = false;
 
@@ -332,27 +331,6 @@ impl ClientEngine {
             interpolation: rubato::SincInterpolationType::Cubic,
             window: rubato::WindowFunction::Blackman,
         };
-        let mut res_rx1_out = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mk_sinc(), FRAME_SAMPLES, 1,
-        ).context("RX1 8k->device resampler")?;
-        let mut res_bin_r_out = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mk_sinc(), FRAME_SAMPLES, 1,
-        ).context("BinR 8k->device resampler")?;
-        let mut res_rx2_out = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mk_sinc(), FRAME_SAMPLES, 1,
-        ).context("RX2 8k->device resampler")?;
-        // Wideband (16 kHz → playback_rate) parallel-resamplers for the
-        // opt-in WB Thetis-audio path. Idle as long as no WB-tagged packet
-        // arrives.
-        let mut res_rx1_out_wb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
-        ).context("RX1 16k->device WB resampler")?;
-        let mut res_bin_r_out_wb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
-        ).context("BinR 16k->device WB resampler")?;
-        let mut res_rx2_out_wb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
-        ).context("RX2 16k->device WB resampler")?;
         // Dedicated WAV playback resamplers. Do not share RX1 live resampler state;
         // recordings played through the Server tab must sound like the file on disk.
         let mut wav_res_out = rubato::SincFixedIn::<f32>::new(
@@ -362,33 +340,21 @@ impl ClientEngine {
             playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
         ).context("WAV 16k->device resampler")?;
 
-        // Yaesu RX resamplers per format (NB 8k→device, WB 16k→device); chosen per packet
-        // on the wideband flag (build 122). SincInterpolationParameters is not
-        // Clone → closure that makes a fresh literal per use.
-        let mk_yaesu_sinc = || rubato::SincInterpolationParameters {
-            sinc_len: 32, f_cutoff: 0.90, oversampling_factor: 32,
-            interpolation: rubato::SincInterpolationType::Cubic,
-            window: rubato::WindowFunction::Blackman,
-        };
-        let mut yaesu_res_nb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mk_yaesu_sinc(), FRAME_SAMPLES, 1,
-        ).context("create Yaesu NB resampler")?;
-        let mut yaesu_res_wb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_yaesu_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
-        ).context("create Yaesu WB resampler")?;
-        let mut yaesu2_res_nb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mk_yaesu_sinc(), FRAME_SAMPLES, 1,
-        ).context("create Yaesu2 NB resampler")?;
-        let mut yaesu2_res_wb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mk_yaesu_sinc(), FRAME_SAMPLES_WIDEBAND, 1,
-        ).context("create Yaesu2 WB resampler")?;
-
-        // VRX1 + VRX2 — each is a separate jitter buf + 8 kHz NB Opus
-        // decoder + resampler. Server-side FFT-channelizers feed these
-        // streams; both get mixed into the main playback alongside
-        // RX1/RX2/Yaesu. VRX1 listens on RX1 IQ + VFO-A, VRX2 on RX2
-        // IQ + VFO-B.
-        let mut vrx1_decoder = OpusDecoder::new()?;
+        // VRX1 + VRX2 — each is a separate jitter buf plus its own RxStream.
+        // Server-side FFT-channelizers feed these streams; both get mixed into
+        // the main playback alongside RX1/RX2/Yaesu. VRX1 listens on RX1 IQ +
+        // VFO-A, VRX2 on RX2 IQ + VFO-B.
+        let mut st_vrx1 = RxStream::new(playback_rate, "VRX1")?;
+        let mut st_vrx2 = RxStream::new(playback_rate, "VRX2")?;
+        // Which auxiliary streams the operator has switched on. A stream that is
+        // ON and receiving nothing is a dropout and should be concealed; a stream
+        // that was switched OFF has simply stopped and must go quiet at once.
+        // The two look identical from the jitter buffer, which is why this is
+        // tracked from what the client asked for rather than guessed from timing.
+        let mut vrx1_wanted = false;
+        let mut vrx2_wanted = false;
+        let mut yaesu_wanted = false;
+        let mut yaesu2_wanted = false;
         // When each VRX was switched on, so the wait for its first packet can be
         // reported as a number instead of estimated by ear.
         let mut vrx1_enable_at: Option<Instant> = None;
@@ -399,51 +365,9 @@ impl ClientEngine {
         // the client only sends the stored VRX volume on connect. Starting at 1.0
         // gave a hard audio peak at startup until that command arrived.
         let mut vrx1_volume: f32 = 0.0;
-        let mut vrx2_decoder = OpusDecoder::new()?;
         let mut vrx2_jitter_buf = JitterBuffer::new(3, 40);
         let mut vrx2_logged_first = false;
         let mut vrx2_volume: f32 = 0.0; // start muted — see vrx1_volume
-        let mk_sinc_params_vrx = || rubato::SincInterpolationParameters {
-            sinc_len: 32, f_cutoff: 0.90, oversampling_factor: 32,
-            interpolation: rubato::SincInterpolationType::Cubic,
-            window: rubato::WindowFunction::Blackman,
-        };
-        let mut vrx1_resampler_out = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64,
-            1.0,
-            mk_sinc_params_vrx(),
-            FRAME_SAMPLES,
-            1,
-        )
-        .context("create VRX1 8k->device resampler")?;
-        let mut vrx2_resampler_out = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE as f64,
-            1.0,
-            mk_sinc_params_vrx(),
-            FRAME_SAMPLES,
-            1,
-        )
-        .context("create VRX2 8k->device resampler")?;
-        // Wideband VRX path (16 kHz Opus). Switched per-frame based on
-        // VrxAudioPacket.wideband flag.
-        let mut vrx1_decoder_wb = OpusDecoderWideband::new()?;
-        let mut vrx2_decoder_wb = OpusDecoderWideband::new()?;
-        let mut vrx1_resampler_out_wb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64,
-            1.0,
-            mk_sinc_params_vrx(),
-            FRAME_SAMPLES_WIDEBAND,
-            1,
-        )
-        .context("create VRX1 16k->device resampler")?;
-        let mut vrx2_resampler_out_wb = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64,
-            1.0,
-            mk_sinc_params_vrx(),
-            FRAME_SAMPLES_WIDEBAND,
-            1,
-        )
-        .context("create VRX2 16k->device resampler")?;
 
         // Anti-alias parameters for the TX-capture decimation 48 → 16 kHz.
         // Since build 29: identical to yaesu_tx_resampler — wide USB mics
@@ -479,9 +403,24 @@ impl ClientEngine {
         let mut connect_started_at: Option<Instant> = None;
         let mut connect_timeout_secs: u32 = 5;
         let mut connect_any_reply_seen: bool = false;
+        // What was last said about each of these four streams, so an unchanged
+        // repeat is not announced again. The server re-pushes the lists every
+        // twenty seconds or so; saying "received 2024B" each time is not an
+        // event, and eight such lines per push filled three quarters of a quiet
+        // log - and with it three quarters of the tail a problem report carries
+        // (2026-08-16).
+        let mut said_yaesu_mem: Option<usize> = None;
+        let mut said_yaesu_menu: Option<usize> = None;
+        let mut said_yaesu2_mem: Option<usize> = None;
+        let mut said_yaesu2_menu: Option<usize> = None;
         let mut yaesu_mem_data_clear_at: Option<Instant> = None;
         let mut yaesu2_mem_data_clear_at: Option<Instant> = None;
         let mut yaesu_menu_data_clear_at: Option<Instant> = None;
+        // The server's report, arriving in numbered parts. Empty between
+        // transfers; the deadline turns a transfer that stalled into a stated
+        // failure instead of a wait with no end.
+        let mut server_report_parts: Vec<Option<Vec<u8>>> = Vec::new();
+        let mut server_report_deadline: Option<Instant> = None;
         let mut yaesu2_menu_data_clear_at: Option<Instant> = None;
         let mut tx_sequence: u32 = 0;
         let mut hb_sequence: u32 = 0;
@@ -497,6 +436,15 @@ impl ClientEngine {
         let mut last_capture_ptt = false;
         let mut last_hb_sent = Instant::now();
         let mut last_hb_ack_time: Option<Instant> = None;
+        // While RX1 is being concealed: when it started, the first peak, how many
+        // frames, and when it was last said out loud.
+        let mut conceal_since: Option<Instant> = None;
+        let mut conceal_first_peak: f32 = 0.0;
+        let mut conceal_frames: u32 = 0;
+        let mut conceal_said = Instant::now();
+        // Which bits last disagreed, so the line is written when it changes
+        // rather than every second.
+        let mut last_subs_differ: u16 = 0;
         let mut last_hb_ack_rtt: u16 = 0;
         let mut was_connected = false;
         let mut logged_first_rx = false;
@@ -541,6 +489,23 @@ impl ClientEngine {
         let mut playback_wav_rate: u32 = NETWORK_SAMPLE_RATE;
         let mut playback_pos: usize = 0;
         let mut playback_is_tx: bool = false;
+        // The roger beep. `roger_tone` holds the tone being played and which
+        // channel it belongs to; while it runs, that channel's PTT stays keyed
+        // and its microphone is not sent - a beep with the operator's chair
+        // creaking under it is not a beep.
+        let mut roger_cfg = crate::roger::RogerBeep::default();
+        let mut roger_tone: Option<(crate::roger::RogerTone, u8, Instant)> = None;
+        // Everything ticked beyond the first, each with its own position and
+        // its own resamplers - those carry state between calls, so streams
+        // taking turns through one would smear into each other.
+        struct ExtraPlayback {
+            samples: Vec<i16>,
+            rate: u32,
+            pos: usize,
+            res_nb: rubato::SincFixedIn<f32>,
+            res_wb: rubato::SincFixedIn<f32>,
+        }
+        let mut playback_extra: Vec<ExtraPlayback> = Vec::new();
         // True as long as we have turned off the Thetis TXEQ for a WAV-playback to the
         // main radio (to restore on stop/PTT-release/end).
         let mut thetis_txeq_bypassed: bool = false;
@@ -655,25 +620,30 @@ impl ClientEngine {
                         interpolation: rubato::SincInterpolationType::Cubic,
                         window: rubato::WindowFunction::Blackman,
                     };
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx1_out = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_bin_r_out = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { res_rx2_out = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu_res_nb = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu_res_wb = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { yaesu2_res_nb = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { yaesu2_res_wb = r; }
                     if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { resampler_in = r; }
                     if let Ok(r) = rubato::SincFixedIn::new(NETWORK_SAMPLE_RATE_WIDEBAND as f64 / capture_rate as f64, 1.0, mksp_aa(), capture_frame_samples, 1) { yaesu_tx_resampler = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx1_out_wb = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_bin_r_out_wb = r; }
-                    if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { res_rx2_out_wb = r; }
                     if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1) { wav_res_out = r; }
                     if let Ok(r) = rubato::SincFixedIn::new(playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1) { wav_res_out_wb = r; }
+                    // Every receive stream at once. This list used to be sixteen
+                    // separate resamplers and it forgot the four VRX ones, which
+                    // on a 44.1 kHz headset kept producing 48 kHz worth of
+                    // samples - eight percent too many every second, heard as
+                    // stuttering while RX1 beside it stayed clean (2026-08-14).
+                    // A stream is one thing now, so this is one line per stream.
+                    for s in [&mut st_rx1, &mut st_bin_r, &mut st_rx2,
+                              &mut st_yaesu, &mut st_yaesu2,
+                              &mut st_vrx1, &mut st_vrx2] {
+                        s.set_playback_rate(playback_rate);
+                    }
                     info!("Resamplers rebuilt: capture {}Hz, playback {}Hz", capture_rate, playback_rate);
                 }
                 // Reset the jitter buffers to prevent stale frame buildup across the switch.
                 jitter_buf.reset();
                 yaesu_jitter_buf.reset();
+                // Same reason, same omission: what the old rate left in these is
+                // no more use than what it left in the others.
+                vrx1_jitter_buf.reset();
+                vrx2_jitter_buf.reset();
             }};
         }
 
@@ -899,6 +869,39 @@ impl ClientEngine {
                         audio.set_playback_mute(v);
                     }
                     Command::SetPtt(v) => {
+                        // Releasing PTT does not release it yet when a beep is
+                        // due: the tone has to travel before the transmitter
+                        // stops, or nobody hears it. The release below runs
+                        // when the tone has finished.
+                        // Keyed again while the beep is going out: the
+                        // operator has more to say and wins. Without this the
+                        // tone would finish and release a PTT that is being
+                        // held down.
+                        // The decision lives in `roger::ptt_verdict`, where it can
+                        // be tested - every one of the four faults this feature
+                        // shipped with was a wrong answer here, and none was
+                        // reachable from a test while it sat inline.
+                        let beeping = roger_tone.as_ref().map(|(_, c, _)| *c);
+                        match crate::roger::ptt_verdict(
+                            &roger_cfg, beeping, 0, v, thetis_ptt, state.mode,
+                        ) {
+                            crate::roger::PttVerdict::Ignore => continue,
+                            crate::roger::PttVerdict::HoldForBeep => {
+                                info!("Roger beep: Thetis, {} Hz for {} ms - PTT held until it has gone",
+                                    roger_cfg.freq_hz, roger_cfg.duration_ms);
+                                roger_tone = Some((
+                                    crate::roger::RogerTone::new(NETWORK_SAMPLE_RATE_WIDEBAND, &roger_cfg),
+                                    0,
+                                    Instant::now(),
+                                ));
+                                continue;
+                            }
+                            crate::roger::PttVerdict::Proceed => {
+                                if beeping == Some(0) {
+                                    roger_tone = None;
+                                }
+                            }
+                        }
                         thetis_ptt = v;
                         ptt = thetis_ptt;
                         if !v {
@@ -939,6 +942,15 @@ impl ClientEngine {
                     Command::SetTxGain(v) => {
                         tx_gain = v;
                     }
+                    Command::SetRogerBeep(cfg) => {
+                        roger_cfg = cfg.clamped();
+                        info!(
+                            "Roger beep: {} Hz, {} ms, volume {:.2}, FM {}, channels Thetis={} radio1={} radio2={}",
+                            roger_cfg.freq_hz, roger_cfg.duration_ms, roger_cfg.volume,
+                            if roger_cfg.include_fm { "included" } else { "excluded" },
+                            roger_cfg.on_thetis, roger_cfg.on_radio1, roger_cfg.on_radio2,
+                        );
+                    }
                     Command::SetPlayVolume(v) => {
                         play_volume = v.clamp(0.0, 4.0);
                     }
@@ -973,6 +985,11 @@ impl ClientEngine {
                         // Track audio mode for per-channel volume
                         if id == ControlId::AudioMode {
                             audio_mode = value;
+                        }
+                        // Slot 0 goes through the generic control; slot 1, VRX1 and
+                        // VRX2 have commands of their own further down.
+                        if id == ControlId::YaesuEnable {
+                            yaesu_wanted = value != 0;
                         }
                         // Locally update power state immediately so UI reflects the
                         // change even if the server is unreachable (e.g. after ZZBY shutdown).
@@ -1069,6 +1086,11 @@ impl ClientEngine {
                     }
                     Command::SetSpectrumPan(pan) => {
                         spectrum_pan = pan;
+                        // Said on this side too, so a report shows both ends of the
+                        // same value: sent here, received there. A pan that moves the
+                        // scale but not the trace is one of those two going missing,
+                        // and until now neither end wrote it down.
+                        log::info!("Spectrum pan sent: {:+.4}", pan);
                         if let Some(ref addr) = server_addr {
                             if was_connected {
                                 let ctrl = ControlPacket {
@@ -1486,6 +1508,7 @@ impl ClientEngine {
                         use std::path::Path;
                         let base = Path::new(&path);
                         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                        state.last_recorded.clear();
                         // WAV rate is set by the first write_samples() call; each
                         // source can therefore follow NB/WB decoder rate independently.
                         if rx1 {
@@ -1493,7 +1516,7 @@ impl ClientEngine {
                             match crate::wav::WavWriter::new(&p) {
                                 Ok(w) => {
                                     info!("Recording RX1 to {}", p.display());
-                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    state.last_recorded.push(("RX1".to_string(), p.to_string_lossy().to_string()));
                                     rec_rx1 = Some(w);
                                 }
                                 Err(e) => warn!("Failed to start RX1 recording: {}", e),
@@ -1504,7 +1527,7 @@ impl ClientEngine {
                             match crate::wav::WavWriter::new(&p) {
                                 Ok(w) => {
                                     info!("Recording RX2 to {}", p.display());
-                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    state.last_recorded.push(("RX2".to_string(), p.to_string_lossy().to_string()));
                                     rec_rx2 = Some(w);
                                 }
                                 Err(e) => warn!("Failed to start RX2 recording: {}", e),
@@ -1515,7 +1538,7 @@ impl ClientEngine {
                             match crate::wav::WavWriter::new(&p) {
                                 Ok(w) => {
                                     info!("Recording Yaesu radio 1 to {}", p.display());
-                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    state.last_recorded.push(("Radio 1".to_string(), p.to_string_lossy().to_string()));
                                     rec_yaesu = Some(w);
                                 }
                                 Err(e) => warn!("Failed to start Yaesu radio 1 recording: {}", e),
@@ -1526,7 +1549,7 @@ impl ClientEngine {
                             match crate::wav::WavWriter::new(&p) {
                                 Ok(w) => {
                                     info!("Recording Yaesu radio 2 to {}", p.display());
-                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    state.last_recorded.push(("Radio 2".to_string(), p.to_string_lossy().to_string()));
                                     rec_yaesu2 = Some(w);
                                 }
                                 Err(e) => warn!("Failed to start Yaesu radio 2 recording: {}", e),
@@ -1537,7 +1560,7 @@ impl ClientEngine {
                             match crate::wav::WavWriter::new(&p) {
                                 Ok(w) => {
                                     info!("Recording VRX1 to {}", p.display());
-                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    state.last_recorded.push(("VRX1".to_string(), p.to_string_lossy().to_string()));
                                     rec_vrx1 = Some(w);
                                 }
                                 Err(e) => warn!("Failed to start VRX1 recording: {}", e),
@@ -1548,7 +1571,7 @@ impl ClientEngine {
                             match crate::wav::WavWriter::new(&p) {
                                 Ok(w) => {
                                     info!("Recording VRX2 to {}", p.display());
-                                    state.last_recorded_path = Some(p.to_string_lossy().to_string());
+                                    state.last_recorded.push(("VRX2".to_string(), p.to_string_lossy().to_string()));
                                     rec_vrx2 = Some(w);
                                 }
                                 Err(e) => warn!("Failed to start VRX2 recording: {}", e),
@@ -1589,7 +1612,37 @@ impl ClientEngine {
                         }
                         state.recording = false;
                     }
-                    Command::PlayRecording { path } => {
+                    Command::PlayRecording { paths } => {
+                        // Everything after the first, loaded first, so a file
+                        // that will not read leaves the others playing instead
+                        // of turning a working playback into nothing.
+                        playback_extra.clear();
+                        for extra in paths.iter().skip(1) {
+                            match crate::wav::read_wav(std::path::Path::new(extra)) {
+                                Ok((rate, samples)) if matches!(rate, NETWORK_SAMPLE_RATE | NETWORK_SAMPLE_RATE_WIDEBAND) => {
+                                    let mksp = || rubato::SincInterpolationParameters {
+                                        sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
+                                        interpolation: rubato::SincInterpolationType::Cubic,
+                                        window: rubato::WindowFunction::Blackman,
+                                    };
+                                    let nb = rubato::SincFixedIn::<f32>::new(
+                                        playback_rate as f64 / NETWORK_SAMPLE_RATE as f64, 1.0, mksp(), FRAME_SAMPLES, 1);
+                                    let wb = rubato::SincFixedIn::<f32>::new(
+                                        playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0, mksp(), FRAME_SAMPLES_WIDEBAND, 1);
+                                    match (nb, wb) {
+                                        (Ok(res_nb), Ok(res_wb)) => {
+                                            info!("Playback: also playing {} ({:.1}s, {} Hz)",
+                                                extra, samples.len() as f32 / rate.max(1) as f32, rate);
+                                            playback_extra.push(ExtraPlayback { samples, rate, pos: 0, res_nb, res_wb });
+                                        }
+                                        _ => warn!("Playback: no resampler for {} - left out", extra),
+                                    }
+                                }
+                                Ok((other, _)) => warn!("Playback: {} has an unsupported rate ({} Hz) - left out", extra, other),
+                                Err(e) => warn!("Playback: {} could not be read ({}) - left out", extra, e),
+                            }
+                        }
+                        let path = paths.first().cloned().unwrap_or_default();
                         match crate::wav::read_wav(std::path::Path::new(&path)) {
                             Ok((rate, samples)) => match rate {
                                 NETWORK_SAMPLE_RATE | NETWORK_SAMPLE_RATE_WIDEBAND => {
@@ -1613,6 +1666,7 @@ impl ClientEngine {
                     Command::StopPlayback => {
                         playback_wav = None;
                         playback_pos = 0;
+                        playback_extra.clear();
                         playback_is_tx = false;
                         state.playing = false;
                         info!("Playback stopped");
@@ -1735,6 +1789,24 @@ impl ClientEngine {
                             let _ = send_tx!(&send_buf, addr.as_str());
                         }
                     }
+                    Command::RequestServerReport => {
+                        if let Some(ref addr) = server_addr {
+                            state.server_report = None;
+                            state.server_report_failed = None;
+                            server_report_parts = Vec::new();
+                            // Nothing has arrived yet, so nothing knows how many
+                            // parts to expect; the deadline is set here so a
+                            // request that is never answered at all still ends.
+                            server_report_deadline =
+                                Some(Instant::now() + Duration::from_secs(20));
+                            let header = sdr_remote_core::protocol::Header::new(
+                                sdr_remote_core::protocol::PacketType::ServerReportRequest,
+                                sdr_remote_core::protocol::Flags::NONE);
+                            let mut buf = [0u8; 4];
+                            header.serialize(&mut buf);
+                            let _ = send_tx!(&buf, addr.as_str());
+                        }
+                    }
                     Command::WriteYaesuMemories(tab_text) => {
                         if let Some(ref addr) = server_addr {
                             // Send tab data as YaesuMemoryData packet
@@ -1814,6 +1886,31 @@ impl ClientEngine {
                         }
                     }
                     Command::SetYaesuPtt(on) => {
+                        // The decision lives in `roger::ptt_verdict`, where it can
+                        // be tested - every one of the four faults this feature
+                        // shipped with was a wrong answer here, and none was
+                        // reachable from a test while it sat inline.
+                        let beeping = roger_tone.as_ref().map(|(_, c, _)| *c);
+                        match crate::roger::ptt_verdict(
+                            &roger_cfg, beeping, 1, on, yaesu_ptt, state.yaesu_mode,
+                        ) {
+                            crate::roger::PttVerdict::Ignore => continue,
+                            crate::roger::PttVerdict::HoldForBeep => {
+                                info!("Roger beep: radio 1, {} Hz for {} ms - PTT held until it has gone",
+                                    roger_cfg.freq_hz, roger_cfg.duration_ms);
+                                roger_tone = Some((
+                                    crate::roger::RogerTone::new(NETWORK_SAMPLE_RATE_WIDEBAND, &roger_cfg),
+                                    1,
+                                    Instant::now(),
+                                ));
+                                continue;
+                            }
+                            crate::roger::PttVerdict::Proceed => {
+                                if beeping == Some(1) {
+                                    roger_tone = None;
+                                }
+                            }
+                        }
                         yaesu_ptt = on;
                         // Send Yaesu PTT immediately; mic capture opens through
                         // the shared delayed gate below.
@@ -1832,6 +1929,7 @@ impl ClientEngine {
                     // --- Dual-radio slot 1 commands (PATCH-dual-radio-991a-ftx1) ---
                     Command::SetYaesu2Enable(on) => {
                         if let Some(ref addr) = server_addr {
+                            yaesu2_wanted = on;
                             let ctrl = ControlPacket { control_id: ControlId::Yaesu2Enable, value: on as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
                             ctrl.serialize(&mut buf);
@@ -1843,6 +1941,31 @@ impl ClientEngine {
                         yaesu2_volume = v;
                     }
                     Command::SetYaesu2Ptt(on) => {
+                        // The decision lives in `roger::ptt_verdict`, where it can
+                        // be tested - every one of the four faults this feature
+                        // shipped with was a wrong answer here, and none was
+                        // reachable from a test while it sat inline.
+                        let beeping = roger_tone.as_ref().map(|(_, c, _)| *c);
+                        match crate::roger::ptt_verdict(
+                            &roger_cfg, beeping, 2, on, yaesu2_ptt, state.yaesu2_mode,
+                        ) {
+                            crate::roger::PttVerdict::Ignore => continue,
+                            crate::roger::PttVerdict::HoldForBeep => {
+                                info!("Roger beep: radio 2, {} Hz for {} ms - PTT held until it has gone",
+                                    roger_cfg.freq_hz, roger_cfg.duration_ms);
+                                roger_tone = Some((
+                                    crate::roger::RogerTone::new(NETWORK_SAMPLE_RATE_WIDEBAND, &roger_cfg),
+                                    2,
+                                    Instant::now(),
+                                ));
+                                continue;
+                            }
+                            crate::roger::PttVerdict::Proceed => {
+                                if beeping == Some(2) {
+                                    roger_tone = None;
+                                }
+                            }
+                        }
                         yaesu2_ptt = on;
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::Yaesu2Ptt, value: on as u16 };
@@ -1876,6 +1999,7 @@ impl ClientEngine {
                     }
                     Command::SetVrxEnabled(on) => {
                         if let Some(ref addr) = server_addr {
+                            vrx1_wanted = on;
                             let ctrl = ControlPacket { control_id: ControlId::VrxEnable, value: on as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
                             ctrl.serialize(&mut buf);
@@ -1912,6 +2036,7 @@ vrx1_enable_at = if on { Some(Instant::now()) } else { None };
                     }
                     Command::SetVrx2Enabled(on) => {
                         if let Some(ref addr) = server_addr {
+                            vrx2_wanted = on;
                             let ctrl = ControlPacket { control_id: ControlId::VrxEnable2, value: on as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
                             ctrl.serialize(&mut buf);
@@ -1990,6 +2115,21 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             lo_pkt.serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
                             hi_pkt.serialize(&mut buf);
+                            let _ = send_tx!(&buf, addr.as_str());
+                        }
+                    }
+                    Command::SetVrxSpectrumPan(vrx_id, offset_hz) => {
+                        if let Some(ref addr) = server_addr {
+                            let ctrl = ControlPacket {
+                                control_id: if vrx_id == 0 {
+                                    ControlId::VrxSpectrumPan
+                                } else {
+                                    ControlId::VrxSpectrumPan2
+                                },
+                                value: sdr_remote_core::protocol::pack_vrx_pan(offset_hz),
+                            };
+                            let mut buf = [0u8; ControlPacket::SIZE];
+                            ctrl.serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
                         }
                     }
@@ -2283,6 +2423,44 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
 
                             state.rtt_ms = last_hb_ack_rtt;
 
+                            // What the server thinks we are subscribed to, held
+                            // against what we want. MEASUREMENT ONLY: nothing is
+                            // corrected here on purpose. The repair - sending the
+                            // difference back - is not built until this line has
+                            // shown that the difference is real and when it
+                            // appears (2026-08-16, onderzoek reconnect).
+                            //
+                            // Only on a change, so a disagreement is one line and
+                            // not one a second.
+                            state.server_subs = ack.subs;
+                            if let Some(theirs) = ack.subs {
+                                use sdr_remote_core::protocol::SubscriptionMask as M;
+                                let mut ours = M::default();
+                                ours.set(M::RX1_AUDIO, state.rx1_enabled);
+                                ours.set(M::RX2_AUDIO, state.rx2_enabled);
+                                ours.set(M::RX2_SPECTRUM, state.rx2_spectrum_enabled);
+                                ours.set(M::FULL_SPECTRUM, state.full_spectrum_enabled);
+                                ours.set(M::DX_SPOTS, state.dx_spots_enabled);
+                                // Only the bits this side actually knows about:
+                                // VRX and Yaesu live in the desktop UI, and
+                                // comparing them here would report a difference
+                                // that means nothing.
+                                const KNOWN: u16 = M::RX1_AUDIO | M::RX2_AUDIO
+                                    | M::RX2_SPECTRUM | M::FULL_SPECTRUM | M::DX_SPOTS;
+                                let differ = (ours.0 ^ theirs.0) & KNOWN;
+                                if differ != last_subs_differ {
+                                    last_subs_differ = differ;
+                                    if differ == 0 {
+                                        info!("subscriptions agree again");
+                                    } else {
+                                        warn!(
+                                            "subscriptions disagree on {:?}: we want {:#06x}, the server has {:#06x}",
+                                            M::names_of(differ), ours.0 & KNOWN, theirs.0 & KNOWN
+                                        );
+                                    }
+                                }
+                            }
+
                             // PATCH-1 review finding (B3): only trust state_flags
                             // when the server explicitly advertises REPORTS_STATE_FLAGS.
                             // Old servers (pre-PATCH-1, e.g. v2.0.0 release tag) leave
@@ -2377,9 +2555,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     info!("Connected to server (rtt={}ms, ring={})", rtt, audio.playback_buffer_level());
                                     // Reset jitter buffer and codec state on (re)connect so audio starts fresh
                                     jitter_buf.reset();
-                                    dec_rx1 = OpusDecoder::new()?;
-                                    dec_bin_r = OpusDecoder::new()?;
-                                    dec_rx2 = OpusDecoder::new()?;
+                                    // Both formats, which the three separate lines
+                                    // this replaces did not do: only the narrowband
+                                    // decoders were rebuilt, so a wideband stream
+                                    // carried its old history into the new session.
+                                    st_rx1.reset();
+                                    st_bin_r.reset();
+                                    st_rx2.reset();
                                     logged_first_rx = false;
                                                 // Clear stale spectrum data on (re)connect
                                     state.spectrum_bins.clear();
@@ -2582,6 +2764,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         }
                         // RX2 packets
                         Ok(Packet::AudioMultiCh(pkt)) => {
+                            if let Some(started) = conceal_since.take() {
+                                info!(
+                                    "concealing ended after {:.1}s and {} frame(s), first peak {:.4}",
+                                    started.elapsed().as_secs_f32(), conceal_frames, conceal_first_peak
+                                );
+                            }
                             if !logged_first_rx {
                                 info!("RX: first multi-ch audio ({} channels, seq={})",
                                     pkt.channels.len(), pkt.sequence);
@@ -2690,6 +2878,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         Ok(Packet::Heartbeat(_)) => {}
                         Ok(Packet::Control(ctrl)) => {
                             match ctrl.control_id {
+                                // Client to server only; a server has no reason
+                                // to tell a client where its own view sits.
+                                ControlId::VrxSpectrumPan | ControlId::VrxSpectrumPan2 => {}
                                 ControlId::PowerOnOff => {
                                     // Ignore stale server broadcasts briefly after we sent
                                     // a power command (prevents race with shutdown sequence)
@@ -3198,17 +3389,55 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 _ => {}
                             }
                         }
+                        Ok(Packet::ServerReportPart(part, parts, bytes)) => {
+                            // Collected by number, so a gap is a fact rather
+                            // than a shorter report. Only when every part is in
+                            // does anything become visible to the UI.
+                            if parts == 0 || parts as usize > 4096 {
+                                // Nonsense: refuse rather than allocate on it.
+                                continue;
+                            }
+                            if server_report_parts.len() != parts as usize {
+                                server_report_parts = vec![None; parts as usize];
+                                server_report_deadline =
+                                    Some(Instant::now() + Duration::from_secs(20));
+                            }
+                            if let Some(slot) = server_report_parts.get_mut(part as usize) {
+                                *slot = Some(bytes);
+                            }
+                            let have = server_report_parts.iter().filter(|p| p.is_some()).count();
+                            if have == parts as usize {
+                                let mut all = Vec::new();
+                                for p in server_report_parts.iter().flatten() {
+                                    all.extend_from_slice(p);
+                                }
+                                info!("Server report received: {} bytes in {} parts", all.len(), parts);
+                                state.server_report =
+                                    Some(String::from_utf8_lossy(&all).to_string());
+                                state.server_report_failed = None;
+                                server_report_parts = Vec::new();
+                                server_report_deadline = None;
+                            }
+                        }
+                        Ok(Packet::ServerReportRequest) => {}
+                        // (the deadline is checked below, outside the read)
                         Ok(Packet::YaesuMemoryData(text)) => {
                             // One packet type carries two payloads, told apart by the
                             // prefix. They go into separate fields: both are pushed when
                             // a client subscribes, so they arrive in the same instant and
                             // a shared field loses one of them.
                             if text.starts_with("MENU:") {
-                                info!("Received Yaesu EX settings ({}B)", text.len());
+                                if said_yaesu_menu != Some(text.len()) {
+                                    said_yaesu_menu = Some(text.len());
+                                    info!("Received Yaesu EX settings ({}B)", text.len());
+                                }
                                 state.yaesu_menu_data = Some(text);
                                 yaesu_menu_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
                             } else {
-                                info!("Received Yaesu memory data ({}B)", text.len());
+                                if said_yaesu_mem != Some(text.len()) {
+                                    said_yaesu_mem = Some(text.len());
+                                    info!("Received Yaesu memory data ({}B)", text.len());
+                                }
                                 state.yaesu_memory_data = Some(text);
                                 yaesu_mem_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
                             }
@@ -3218,12 +3447,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             if yaesu_logged_first && pkt.sequence == 0 {
                                 info!("Yaesu: stream reset detected, resetting jitter buffer");
                                 yaesu_jitter_buf.reset();
-                                yaesu_decoder_nb = OpusDecoder::new().unwrap_or_else(|e| {
-                                    warn!("Yaesu decoder reset failed: {}", e);
-                                    OpusDecoder::new().unwrap()
-                                });
-                                yaesu_decoder_wb = OpusDecoderWideband::new()
-                                    .unwrap_or_else(|_| OpusDecoderWideband::new().unwrap());
+                                st_yaesu.reset();
                             }
                             if !yaesu_logged_first {
                                 info!("Yaesu: first audio packet (seq={}, {}B)", pkt.sequence, pkt.opus_data.len());
@@ -3276,12 +3500,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             if yaesu2_logged_first && pkt.sequence == 0 {
                                 info!("[radio1] stream reset detected, resetting jitter buffer");
                                 yaesu2_jitter_buf.reset();
-                                yaesu2_decoder_nb = OpusDecoder::new().unwrap_or_else(|e| {
-                                    warn!("[radio1] decoder reset failed: {}", e);
-                                    OpusDecoder::new().unwrap()
-                                });
-                                yaesu2_decoder_wb = OpusDecoderWideband::new()
-                                    .unwrap_or_else(|_| OpusDecoderWideband::new().unwrap());
+                                st_yaesu2.reset();
                             }
                             if !yaesu2_logged_first {
                                 info!("[radio1] first audio packet (seq={}, {}B)", pkt.sequence, pkt.opus_data.len());
@@ -3323,11 +3542,17 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         Ok(Packet::FrequencyYaesu2(_)) => {} // client→server only
                         Ok(Packet::YaesuMemoryData2(text)) => {
                             if text.starts_with("MENU:") {
-                                info!("[radio1] received EX settings ({}B)", text.len());
+                                if said_yaesu2_menu != Some(text.len()) {
+                                    said_yaesu2_menu = Some(text.len());
+                                    info!("[radio1] received EX settings ({}B)", text.len());
+                                }
                                 state.yaesu2_menu_data = Some(text);
                                 yaesu2_menu_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
                             } else {
-                                info!("[radio1] received memory data ({}B)", text.len());
+                                if said_yaesu2_mem != Some(text.len()) {
+                                    said_yaesu2_mem = Some(text.len());
+                                    info!("[radio1] received memory data ({}B)", text.len());
+                                }
                                 state.yaesu2_memory_data = Some(text);
                                 yaesu2_mem_data_clear_at = Some(Instant::now() + Duration::from_millis(500));
                             }
@@ -3365,6 +3590,44 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     state.auth_rejected = false;
                                     state.totp_required = false;
                                     state.connect_status = crate::state::ConnectStatus::Connected;
+                                    // Having to authenticate means the other side does
+                                    // not know us any more, so "we are connected" is not
+                                    // true whatever this side still believed.
+                                    //
+                                    // Without this, a server that restarted and came back
+                                    // INSIDE the connection timeout - which needs both the
+                                    // heartbeat and the audio to stay away for
+                                    // max(6s, rtt*8) - left `was_connected` standing. The
+                                    // restore block below is gated on `!was_connected`, so
+                                    // it was skipped entirely: no re-subscription, and the
+                                    // server kept the defaults of its fresh session. RX1
+                                    // audio is on by default and everything the client has
+                                    // to ask for is not, which is exactly the reported
+                                    // "only RX1 comes back". It repaired itself a
+                                    // timeout later, on the next authentication, which is
+                                    // the seventeen to twenty seconds in the log.
+                                    //
+                                    // The owner found the tell: the noise from the
+                                    // draining jitter buffer IS that window. Restart
+                                    // inside the noise and the client never noticed it had
+                                    // been away (2026-08-16).
+                                    //
+                                    // Idempotent on a first connect, where it is already
+                                    // false.
+                                    was_connected = false;
+                                    // And a number the UI can compare against,
+                                    // because clearing the flag above removed the
+                                    // only way it used to hear about this at all:
+                                    // `state.connected` goes false in the timeout
+                                    // path, and that path is exactly what this fix
+                                    // makes unnecessary. Fixing the engine's own
+                                    // restore while leaving the UI's on a flank
+                                    // traded one half-restore for another - RX2
+                                    // came back and VRX stopped coming back at all
+                                    // (2026-08-16, seen in the field within the
+                                    // hour).
+                                    state.session_generation =
+                                        state.session_generation.wrapping_add(1);
                                 }
                                 sdr_remote_core::protocol::AUTH_TOTP_REQUIRED => {
                                     info!("Password OK, TOTP required");
@@ -3522,165 +3785,148 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     break;
                                 }
 
-                                // Pull multi-channel frame from jitter buffer.
-                                // Tuple payload `(blob, wideband)` so the decoder knows on
-                                // pop which path the frame belongs to (WB = 16 kHz
-                                // Opus instead of 8 kHz). Default false for frames that
-                                // are filled by FEC/PLC — those paths stay NB.
-                                let frame_data: Option<(Vec<u8>, bool)> = match jitter_buf.pull() {
+                                // Pull one multi-channel frame. Whatever comes back -
+                                // received, rebuilt from the redundancy in the next
+                                // packet, or filled in - arrives in the same shape and
+                                // has already been through the resampler that matches
+                                // its own format. The routing below cannot tell them
+                                // apart, which is the point: the concealed frame used
+                                // to be written straight into the playback buffers,
+                                // skipping the audio-mode routing, the recorders and
+                                // the level meters (2026-08-16).
+                                let mut rx1_d: Option<Decoded> = None;
+                                let mut bin_r_d: Option<Decoded> = None;
+                                let mut rx2_d: Option<Decoded> = None;
+                                let mut nothing_arriving = false;
+
+                                match jitter_buf.pull() {
                                     JitterResult::Frame(frame) => {
                                         frames_this_tick += 1;
-                                        if !frame.opus_data.is_empty() { Some((frame.opus_data, frame.wideband)) } else { None }
+                                        let wb = frame.wideband;
+                                        let blob = &frame.opus_data;
+                                        if !blob.is_empty() {
+                                            rx1_d = channel_opus(blob, 0).and_then(|o| st_rx1.decode(o, wb));
+                                            bin_r_d = channel_opus(blob, 1).and_then(|o| st_bin_r.decode(o, wb));
+                                            rx2_d = channel_opus(blob, 2).and_then(|o| st_rx2.decode(o, wb));
+                                        }
                                     }
                                     JitterResult::Missing => {
                                         frames_this_tick += 1;
-                                        // FEC recovery: peek at the NEXT frame's CH0 opus data
-                                        // to reconstruct the lost frame via in-band FEC.
-                                        let next_seq = jitter_buf.next_seq_peek();
-                                        let fec_data = next_seq.and_then(|s| jitter_buf.peek_opus_data(s));
-                                        let rx1_fec_opus = fec_data.and_then(|blob| {
-                                            // Extract CH0 opus from multi-channel blob
-                                            if blob.is_empty() { return None; }
-                                            let ch_count = blob[0] as usize;
-                                            let mut pos = 1usize;
-                                            for _ in 0..ch_count {
-                                                if pos + 3 > blob.len() { break; }
-                                                let ch_id = blob[pos];
-                                                let len = u16::from_be_bytes([blob[pos+1], blob[pos+2]]) as usize;
-                                                if ch_id == 0 && pos + 3 + len <= blob.len() {
-                                                    return Some(&blob[pos+3..pos+3+len]);
-                                                }
-                                                pos += 3 + len;
-                                            }
-                                            None
-                                        });
-
-                                        let pcm = if let Some(fec_opus) = rx1_fec_opus {
-                                            dec_rx1.decode_fec(fec_opus).ok()
-                                        } else {
-                                            dec_rx1.decode_plc().ok()
-                                        };
-                                        if let Some(pcm) = pcm {
-                                            let resampled = resample_to_device(&mut res_rx1_out, &pcm);
-                                            let mut dev = resampled;
-                                            apply_volume(&mut dev, rx_volume * vfo_a_volume * local_volume);
-                                            if !ptt { playback_buf.extend_from_slice(&dev); bin_r_buf.extend_from_slice(&dev); }
-                                        }
-                                        None
+                                        // One frame lost out of a stream that is still
+                                        // arriving. Every channel is asked, so no
+                                        // decoder is left without its call on a gap -
+                                        // only channel 0 used to get one, and the other
+                                        // two picked their history up again mid-stream.
+                                        let next = jitter_buf
+                                            .next_seq_peek()
+                                            .and_then(|seq| jitter_buf.peek_frame(seq));
+                                        rx1_d = recover_or_conceal(&mut st_rx1, next, 0);
+                                        bin_r_d = recover_or_conceal(&mut st_bin_r, next, 1);
+                                        rx2_d = recover_or_conceal(&mut st_rx2, next, 2);
                                     }
                                     JitterResult::NotReady => {
+                                        // Nothing arriving at all. Conceal for as long
+                                        // as the link still counts as up: Opus itself
+                                        // is inaudible after about 260 ms and the
+                                        // comfort noise carries the rest, so a dropout
+                                        // sounds like the band rather than like the
+                                        // audio stopping.
                                         if was_connected && logged_first_rx {
-                                            if let Ok(pcm) = dec_rx1.decode_plc() {
-                                                let resampled = resample_to_device(&mut res_rx1_out, &pcm);
-                                                let mut dev = resampled;
-                                                apply_volume(&mut dev, rx_volume * vfo_a_volume * local_volume);
-                                                if !ptt { playback_buf.extend_from_slice(&dev); bin_r_buf.extend_from_slice(&dev); }
-                                            }
+                                            rx1_d = st_rx1.conceal();
+                                            bin_r_d = st_bin_r.conceal();
+                                            rx2_d = st_rx2.conceal();
                                         }
-                                        break;
+                                        nothing_arriving = true;
                                     }
-                                };
+                                }
 
-                                if let Some((blob, is_wb)) = frame_data {
-                                    // Deserialize multi-channel blob
-                                    let mut rx1_pcm: Option<Vec<i16>> = None;
-                                    let mut bin_r_pcm: Option<Vec<i16>> = None;
-                                    let mut rx2_pcm: Option<Vec<i16>> = None;
-
-                                    if !blob.is_empty() {
-                                        let ch_count = blob[0] as usize;
-                                        let mut pos = 1usize;
-                                        for _ in 0..ch_count {
-                                            if pos + 3 > blob.len() { break; }
-                                            let ch_id = blob[pos];
-                                            let opus_len = u16::from_be_bytes([blob[pos+1], blob[pos+2]]) as usize;
-                                            if pos + 3 + opus_len > blob.len() { break; }
-                                            let opus = &blob[pos+3..pos+3+opus_len];
-                                            // Decoder-path choice based on this packet's WB flag.
-                                            // Yaesu-RX has its own jitter-buf (no WB path there).
-                                            match ch_id {
-                                                0 => {
-                                                    rx1_pcm = if is_wb {
-                                                        dec_rx1_wb.decode(opus).ok()
-                                                    } else {
-                                                        dec_rx1.decode(opus).ok()
-                                                    };
-                                                }
-                                                1 => {
-                                                    bin_r_pcm = if is_wb {
-                                                        dec_bin_r_wb.decode(opus).ok()
-                                                    } else {
-                                                        dec_bin_r.decode(opus).ok()
-                                                    };
-                                                }
-                                                2 => {
-                                                    rx2_pcm = if is_wb {
-                                                        dec_rx2_wb.decode(opus).ok()
-                                                    } else {
-                                                        dec_rx2.decode(opus).ok()
-                                                    };
-                                                }
-                                                _ => {}
-                                            }
-                                            pos += 3 + opus_len;
+                                if rx1_d.is_some() || bin_r_d.is_some() || rx2_d.is_some() {
+                                    let concealed = rx1_d.as_ref().map(|d| d.concealed).unwrap_or(false);
+                                    if concealed {
+                                        let peak = rx1_d.as_ref()
+                                            .map(|d| d.dev.iter().fold(0.0f32, |m, x| m.max(x.abs())))
+                                            .unwrap_or(0.0);
+                                        if conceal_since.is_none() {
+                                            conceal_since = Some(Instant::now());
+                                            conceal_first_peak = peak;
+                                            conceal_frames = 0;
+                                            conceal_said = Instant::now();
+                                        }
+                                        conceal_frames += 1;
+                                        // One line a second while a gap lasts. The two
+                                        // peaks side by side are the shape of the
+                                        // hand-over: Opus starts at the level of the
+                                        // last real frame and fades, the comfort noise
+                                        // comes up underneath it, and the pair should
+                                        // stay in the same neighbourhood rather than
+                                        // walking down to nothing.
+                                        if conceal_said.elapsed() >= Duration::from_secs(1) {
+                                            conceal_said = Instant::now();
+                                            info!(
+                                                "concealing: {} frame(s) {}, peak {:.4} -> {:.4}, ring={}",
+                                                conceal_frames,
+                                                if st_rx1.wideband() { "wideband" } else { "narrowband" },
+                                                conceal_first_peak, peak,
+                                                audio.playback_buffer_level()
+                                            );
                                         }
                                     }
 
-                                    // Write decoded 8kHz PCM to WAV recorders
-                                    let rec_rate = if is_wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
-                                    if let Some(ref mut w) = rec_rx1 {
-                                        if let Some(ref pcm) = rx1_pcm {
-                                            let _ = w.write_samples(pcm, rec_rate);
-                                        }
+                                    // Recorders get the audio at the rate it was
+                                    // decoded at, concealed frames included: a
+                                    // recording that skips them is shorter than what
+                                    // was heard and drifts against the clock.
+                                    if let (Some(w), Some(d)) = (rec_rx1.as_mut(), rx1_d.as_ref()) {
+                                        let _ = w.write_samples(&d.pcm, d.rate);
                                     }
-                                    if let Some(ref mut w) = rec_rx2 {
-                                        if let Some(ref pcm) = rx2_pcm {
-                                            let _ = w.write_samples(pcm, rec_rate);
-                                        }
+                                    if let (Some(w), Some(d)) = (rec_rx2.as_mut(), rx2_d.as_ref()) {
+                                        let _ = w.write_samples(&d.pcm, d.rate);
                                     }
 
-                                    // Resample and route based on audio_mode.
-                                    // Per channel we pick the right resampler based on
-                                    // the WB-flag path (16k vs 8k input). Output is
-                                    // always at playback_rate.
-                                    // RX1 → always L
-                                    let mut left_dev = if let Some(pcm) = rx1_pcm {
-                                        let mut dev = if is_wb {
-                                            resample_to_device(&mut res_rx1_out_wb, &pcm)
-                                        } else {
-                                            resample_to_device(&mut res_rx1_out, &pcm)
-                                        };
+                                    // RX1 -> always L
+                                    let mut left_dev = if let Some(d) = rx1_d {
+                                        let concealed = d.concealed;
+                                        let mut dev = d.dev;
                                         // Level BEFORE volume: the meter answers "is
                                         // this stream carrying audio", which must not
                                         // move when the operator turns the volume down.
-                                        let sq: f32 = dev.iter().map(|s| s*s).sum();
-                                        rx1_level_accum += sq;
-                                        rx1_level_count += dev.len();
-                                        rx1_pre_sq = sq;
-                                        rx1_pre_len = dev.len();
+                                        //
+                                        // And concealed audio is not arriving audio, so
+                                        // it is deliberately left out. The bar is the
+                                        // instrument for "is anything still coming in" -
+                                        // it is how the VRX start-up problem was finally
+                                        // pinned down - and comfort noise on a dead link
+                                        // would have it claiming signal for as long as
+                                        // the concealment lasts.
+                                        if !concealed {
+                                            let sq: f32 = dev.iter().map(|s| s*s).sum();
+                                            rx1_level_accum += sq;
+                                            rx1_level_count += dev.len();
+                                            rx1_pre_sq = sq;
+                                            rx1_pre_len = dev.len();
+                                        }
                                         apply_volume(&mut dev, rx_volume * vfo_a_volume * local_volume);
                                         dev
                                     } else { Vec::new() };
 
-                                    // Resample RX2 once if available (reused in Mono, BIN, Split)
-                                    let rx2_dev = if let Some(pcm) = &rx2_pcm {
-                                        let mut dev = if is_wb {
-                                            resample_to_device(&mut res_rx2_out_wb, pcm)
-                                        } else {
-                                            resample_to_device(&mut res_rx2_out, pcm)
-                                        };
-                                        let sq: f32 = dev.iter().map(|s| s*s).sum();
-                                        rx2_level_accum += sq;
-                                        rx2_level_count += dev.len();
+                                    // RX2 once (reused in Mono, BIN, Split)
+                                    let rx2_dev = rx2_d.map(|d| {
+                                        let concealed = d.concealed;
+                                        let mut dev = d.dev;
+                                        if !concealed {
+                                            let sq: f32 = dev.iter().map(|s| s*s).sum();
+                                            rx2_level_accum += sq;
+                                            rx2_level_count += dev.len();
+                                        }
                                         let rx2_vol = rx2_volume * vfo_b_volume * local_volume;
                                         apply_volume(&mut dev, rx2_vol);
-                                        Some(dev)
-                                    } else { None };
+                                        dev
+                                    });
 
                                     // RX1 audio can be deliberately off (Rx1Enable, phase 3a):
                                     // then left_dev is empty. RX2 is mixed additively into L
                                     // (Mono/BIN) and the output-gate only writes if L
-                                    // is not empty — so without this seed RX2 audio drops out
+                                    // is not empty - so without this seed RX2 audio drops out
                                     // while the level bar (measured before the mix) does move.
                                     // Seed L with silence at RX2 length so RX2 stays audible
                                     // without RX1 audio. VRX has its own mix path (unaffected).
@@ -3702,20 +3948,22 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     }
 
                                     let mut right_dev = if !stereo_output || audio_mode == 0 {
-                                        // Android or Mono: L only → both ears
+                                        // Android or Mono: L only -> both ears
                                         Vec::new()
                                     } else if audio_mode == 1 {
-                                        // BIN: R = binaural right (ch1), volume = RX1
-                                        if let Some(pcm) = bin_r_pcm {
-                                            let mut dev = if is_wb {
-                                                resample_to_device(&mut res_bin_r_out_wb, &pcm)
-                                            } else {
-                                                resample_to_device(&mut res_bin_r_out, &pcm)
-                                            };
+                                        // BIN: R = binaural right (ch1), volume = RX1.
+                                        // Concealed frames land here too, so the stereo
+                                        // image no longer collapses to a copy of L for
+                                        // the length of every gap.
+                                        if let Some(d) = bin_r_d {
+                                            let concealed = d.concealed;
+                                            let mut dev = d.dev;
                                             // Pre-volume, and before RX2 is mixed in below:
                                             // this bar is the pure RX1-R channel.
-                                            bin_r_level_accum += dev.iter().map(|s| s * s).sum::<f32>();
-                                            bin_r_level_count += dev.len();
+                                            if !concealed {
+                                                bin_r_level_accum += dev.iter().map(|s| s * s).sum::<f32>();
+                                                bin_r_level_count += dev.len();
+                                            }
                                             apply_volume(&mut dev, rx_volume * vfo_a_volume * local_volume);
                                             dev
                                         } else {
@@ -3749,7 +3997,14 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                             bin_r_buf.extend_from_slice(&right_dev);
                                         }
                                     }
-                                } // if let Some(blob)
+                                }
+
+                                // Nothing in the buffer: one concealed frame per tick is
+                                // all that helps - pulling again would only add latency
+                                // for audio that is not there.
+                                if nothing_arriving {
+                                    break;
+                                }
                             }
 
                             // RX1 level (measured per-channel before mono mix)
@@ -3772,7 +4027,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             if !(yaesu_logged_first && yaesu_jitter_buf.depth() > 0) {
                                 decay_level(&mut state.playback_level_yaesu);
                             }
-                            if yaesu_logged_first && yaesu_jitter_buf.depth() > 0 {
+                            // `|| concealing`: a dry buffer used to skip this block
+                            // entirely, so a switched-on stream had no way to conceal a
+                            // dropout - only a gap with real frames on both sides.
+                            if yaesu_logged_first
+                                && (yaesu_jitter_buf.depth() > 0 || (was_connected && yaesu_wanted)) {
                                 // If no RX1 audio, create silence buffer for Yaesu-only playback
                                 let target_samples = if playback_buf.is_empty() {
                                     let frame_size = (playback_rate as usize * 20) / 1000; // 20ms
@@ -3783,49 +4042,37 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 };
                                 let mut yaesu_buf: Vec<f32> = Vec::with_capacity(target_samples);
                                 while yaesu_buf.len() < target_samples {
-                                    // (pcm, wideband) — format per frame from the flag; PLC
-                                    // uses the last-known format (yaesu_last_wb).
-                                    let decoded: Option<(Vec<i16>, bool)> = match yaesu_jitter_buf.pull() {
+                                    let decoded = match yaesu_jitter_buf.pull() {
                                         JitterResult::Frame(frame) => {
-                                            if !frame.opus_data.is_empty() {
-                                                yaesu_last_wb = frame.wideband;
-                                                let r = if frame.wideband {
-                                                    yaesu_decoder_wb.decode(&frame.opus_data)
-                                                } else {
-                                                    yaesu_decoder_nb.decode(&frame.opus_data)
-                                                };
-                                                match r {
-                                                    Ok(pcm) => Some((pcm, frame.wideband)),
-                                                    Err(e) => { warn!("Yaesu decode error: {}", e); None }
-                                                }
-                                            } else { None }
-                                        }
-                                        JitterResult::Missing => {
-                                            let r = if yaesu_last_wb {
-                                                yaesu_decoder_wb.decode_plc()
+                                            if frame.opus_data.is_empty() {
+                                                None
                                             } else {
-                                                yaesu_decoder_nb.decode_plc()
-                                            };
-                                            match r { Ok(pcm) => Some((pcm, yaesu_last_wb)), Err(_) => None }
+                                                st_yaesu.decode(&frame.opus_data, frame.wideband)
+                                            }
                                         }
-                                        JitterResult::NotReady => None,
+                                        JitterResult::Missing => st_yaesu.conceal(),
+                                        // Nothing arriving at all. Same rule as RX1:
+                                        // conceal while the stream is switched on and
+                                        // the link still counts as up.
+                                        JitterResult::NotReady => {
+                                            if was_connected && yaesu_wanted { st_yaesu.conceal() } else { None }
+                                        }
                                     };
                                     match decoded {
-                                        Some((pcm, wb)) => {
+                                        Some(d) => {
                                             if let Some(ref mut w) = rec_yaesu {
-                                                let rate = if wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
-                                                let _ = w.write_samples(&pcm, rate);
+                                                let _ = w.write_samples(&d.pcm, d.rate);
                                             }
-                                            let mut resampled = if wb {
-                                                resample_to_device(&mut yaesu_res_wb, &pcm)
-                                            } else {
-                                                resample_to_device(&mut yaesu_res_nb, &pcm)
-                                            };
+                                            let concealed = d.concealed;
+                                            let mut resampled = d.dev;
                                             // Pre-volume energy: the Yaesu volume carries a
                                             // x20 make-up factor, which would otherwise dominate
-                                            // the bar instead of the received signal.
-                                            yaesu_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
-                                            yaesu_level_count += resampled.len();
+                                            // the bar instead of the received signal. Concealed
+                                            // frames stay out of it - see RX1.
+                                            if !concealed {
+                                                yaesu_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                                yaesu_level_count += resampled.len();
+                                            }
                                             // (calibrated to the Thetis RX path below)
                                             apply_volume(&mut resampled,
                                                 yaesu_volume * yaesu_rx_meter_cal(state.yaesu_model) * local_volume);
@@ -3856,7 +4103,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             if !(yaesu2_logged_first && yaesu2_jitter_buf.depth() > 0) {
                                 decay_level(&mut state.playback_level_yaesu2);
                             }
-                            if yaesu2_logged_first && yaesu2_jitter_buf.depth() > 0 {
+                            if yaesu2_logged_first
+                                && (yaesu2_jitter_buf.depth() > 0 || (was_connected && yaesu2_wanted)) {
                                 let target_samples = if playback_buf.is_empty() {
                                     let frame_size = (playback_rate as usize * 20) / 1000;
                                     playback_buf.resize(frame_size, 0.0);
@@ -3866,44 +4114,30 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 };
                                 let mut yaesu2_buf: Vec<f32> = Vec::with_capacity(target_samples);
                                 while yaesu2_buf.len() < target_samples {
-                                    let decoded: Option<(Vec<i16>, bool)> = match yaesu2_jitter_buf.pull() {
+                                    let decoded = match yaesu2_jitter_buf.pull() {
                                         JitterResult::Frame(frame) => {
-                                            if !frame.opus_data.is_empty() {
-                                                yaesu2_last_wb = frame.wideband;
-                                                let r = if frame.wideband {
-                                                    yaesu2_decoder_wb.decode(&frame.opus_data)
-                                                } else {
-                                                    yaesu2_decoder_nb.decode(&frame.opus_data)
-                                                };
-                                                match r {
-                                                    Ok(pcm) => Some((pcm, frame.wideband)),
-                                                    Err(e) => { warn!("[radio1] decode error: {}", e); None }
-                                                }
-                                            } else { None }
-                                        }
-                                        JitterResult::Missing => {
-                                            let r = if yaesu2_last_wb {
-                                                yaesu2_decoder_wb.decode_plc()
+                                            if frame.opus_data.is_empty() {
+                                                None
                                             } else {
-                                                yaesu2_decoder_nb.decode_plc()
-                                            };
-                                            match r { Ok(pcm) => Some((pcm, yaesu2_last_wb)), Err(_) => None }
+                                                st_yaesu2.decode(&frame.opus_data, frame.wideband)
+                                            }
                                         }
-                                        JitterResult::NotReady => None,
+                                        JitterResult::Missing => st_yaesu2.conceal(),
+                                        JitterResult::NotReady => {
+                                            if was_connected && yaesu2_wanted { st_yaesu2.conceal() } else { None }
+                                        }
                                     };
                                     match decoded {
-                                        Some((pcm, wb)) => {
+                                        Some(d) => {
                                             if let Some(ref mut w) = rec_yaesu2 {
-                                                let rate = if wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
-                                                let _ = w.write_samples(&pcm, rate);
+                                                let _ = w.write_samples(&d.pcm, d.rate);
                                             }
-                                            let mut resampled = if wb {
-                                                resample_to_device(&mut yaesu2_res_wb, &pcm)
-                                            } else {
-                                                resample_to_device(&mut yaesu2_res_nb, &pcm)
-                                            };
-                                            yaesu2_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
-                                            yaesu2_level_count += resampled.len();
+                                            let concealed = d.concealed;
+                                            let mut resampled = d.dev;
+                                            if !concealed {
+                                                yaesu2_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                                yaesu2_level_count += resampled.len();
+                                            }
                                             apply_volume(&mut resampled,
                                                 yaesu2_volume * yaesu_rx_meter_cal(state.yaesu2_model) * local_volume);
                                             yaesu2_buf.extend_from_slice(&resampled);
@@ -3934,7 +4168,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             if !(vrx1_logged_first && vrx1_jitter_buf.depth() > 0) {
                                 decay_level(&mut state.playback_level_vrx1);
                             }
-                            if vrx1_logged_first && vrx1_jitter_buf.depth() > 0 {
+                            if vrx1_logged_first
+                                && (vrx1_jitter_buf.depth() > 0 || (was_connected && vrx1_wanted)) {
                                 let target_samples = if playback_buf.is_empty() {
                                     let frame_size = (playback_rate as usize * 20) / 1000;
                                     playback_buf.resize(frame_size, 0.0);
@@ -3944,41 +4179,34 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 };
                                 let mut vrx_buf: Vec<f32> = Vec::with_capacity(target_samples);
                                 while vrx_buf.len() < target_samples {
-                                    let decoded: Option<(Vec<i16>, bool)> = match vrx1_jitter_buf.pull() {
+                                    let decoded = match vrx1_jitter_buf.pull() {
                                         JitterResult::Frame(frame) => {
-                                            if !frame.opus_data.is_empty() {
-                                                let res = if frame.wideband {
-                                                    vrx1_decoder_wb.decode(&frame.opus_data)
-                                                } else {
-                                                    vrx1_decoder.decode(&frame.opus_data)
-                                                };
-                                                match res {
-                                                    Ok(pcm) => Some((pcm, frame.wideband)),
-                                                    Err(e) => { warn!("VRX1 decode error: {}", e); None }
-                                                }
-                                            } else { None }
-                                        }
-                                        JitterResult::Missing => {
-                                            match vrx1_decoder.decode_plc() {
-                                                Ok(pcm) => Some((pcm, false)),
-                                                Err(_) => None,
+                                            if frame.opus_data.is_empty() {
+                                                None
+                                            } else {
+                                                st_vrx1.decode(&frame.opus_data, frame.wideband)
                                             }
                                         }
-                                        JitterResult::NotReady => None,
+                                        // Concealment used to run on the narrowband
+                                        // decoder here and then hand the frame on marked
+                                        // narrowband, so on a wideband VRX both the
+                                        // decoder and the resampler after it were wrong.
+                                        JitterResult::Missing => st_vrx1.conceal(),
+                                        JitterResult::NotReady => {
+                                            if was_connected && vrx1_wanted { st_vrx1.conceal() } else { None }
+                                        }
                                     };
                                     match decoded {
-                                        Some((pcm, is_wb)) => {
+                                        Some(d) => {
                                             if let Some(ref mut w) = rec_vrx1 {
-                                                let rate = if is_wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
-                                                let _ = w.write_samples(&pcm, rate);
+                                                let _ = w.write_samples(&d.pcm, d.rate);
                                             }
-                                            let mut resampled = if is_wb {
-                                                resample_to_device(&mut vrx1_resampler_out_wb, &pcm)
-                                            } else {
-                                                resample_to_device(&mut vrx1_resampler_out, &pcm)
-                                            };
-                                            vrx1_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
-                                            vrx1_level_count += resampled.len();
+                                            let concealed = d.concealed;
+                                            let mut resampled = d.dev;
+                                            if !concealed {
+                                                vrx1_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                                vrx1_level_count += resampled.len();
+                                            }
                                             apply_volume(&mut resampled, vrx1_volume * local_volume);
                                             vrx_buf.extend_from_slice(&resampled);
                                         }
@@ -4004,7 +4232,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             if !(vrx2_logged_first && vrx2_jitter_buf.depth() > 0) {
                                 decay_level(&mut state.playback_level_vrx2);
                             }
-                            if vrx2_logged_first && vrx2_jitter_buf.depth() > 0 {
+                            if vrx2_logged_first
+                                && (vrx2_jitter_buf.depth() > 0 || (was_connected && vrx2_wanted)) {
                                 let target_samples = if playback_buf.is_empty() {
                                     let frame_size = (playback_rate as usize * 20) / 1000;
                                     playback_buf.resize(frame_size, 0.0);
@@ -4014,41 +4243,34 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 };
                                 let mut vrx_buf: Vec<f32> = Vec::with_capacity(target_samples);
                                 while vrx_buf.len() < target_samples {
-                                    let decoded: Option<(Vec<i16>, bool)> = match vrx2_jitter_buf.pull() {
+                                    let decoded = match vrx2_jitter_buf.pull() {
                                         JitterResult::Frame(frame) => {
-                                            if !frame.opus_data.is_empty() {
-                                                let res = if frame.wideband {
-                                                    vrx2_decoder_wb.decode(&frame.opus_data)
-                                                } else {
-                                                    vrx2_decoder.decode(&frame.opus_data)
-                                                };
-                                                match res {
-                                                    Ok(pcm) => Some((pcm, frame.wideband)),
-                                                    Err(e) => { warn!("VRX2 decode error: {}", e); None }
-                                                }
-                                            } else { None }
-                                        }
-                                        JitterResult::Missing => {
-                                            match vrx2_decoder.decode_plc() {
-                                                Ok(pcm) => Some((pcm, false)),
-                                                Err(_) => None,
+                                            if frame.opus_data.is_empty() {
+                                                None
+                                            } else {
+                                                st_vrx2.decode(&frame.opus_data, frame.wideband)
                                             }
                                         }
-                                        JitterResult::NotReady => None,
+                                        // Concealment used to run on the narrowband
+                                        // decoder here and then hand the frame on marked
+                                        // narrowband, so on a wideband VRX both the
+                                        // decoder and the resampler after it were wrong.
+                                        JitterResult::Missing => st_vrx2.conceal(),
+                                        JitterResult::NotReady => {
+                                            if was_connected && vrx2_wanted { st_vrx2.conceal() } else { None }
+                                        }
                                     };
                                     match decoded {
-                                        Some((pcm, is_wb)) => {
+                                        Some(d) => {
                                             if let Some(ref mut w) = rec_vrx2 {
-                                                let rate = if is_wb { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE };
-                                                let _ = w.write_samples(&pcm, rate);
+                                                let _ = w.write_samples(&d.pcm, d.rate);
                                             }
-                                            let mut resampled = if is_wb {
-                                                resample_to_device(&mut vrx2_resampler_out_wb, &pcm)
-                                            } else {
-                                                resample_to_device(&mut vrx2_resampler_out, &pcm)
-                                            };
-                                            vrx2_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
-                                            vrx2_level_count += resampled.len();
+                                            let concealed = d.concealed;
+                                            let mut resampled = d.dev;
+                                            if !concealed {
+                                                vrx2_level_accum += resampled.iter().map(|s| s * s).sum::<f32>();
+                                                vrx2_level_count += resampled.len();
+                                            }
                                             apply_volume(&mut resampled, vrx2_volume * local_volume);
                                             vrx_buf.extend_from_slice(&resampled);
                                         }
@@ -4078,15 +4300,46 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
 
                             // WAV speaker playback (when not TX)
                             if !playback_is_tx && playback_wav.is_some() {
-                                let wav = playback_wav.as_ref().unwrap();
+                                // Two frames while the ring is low, one when it
+                                // is not - the same catch-up the receive path
+                                // above gives itself, and for the same reason.
+                                //
+                                // This used to write exactly one twenty
+                                // millisecond frame per twenty millisecond
+                                // tick, always. That is the right average and
+                                // no cushion at all: the ring hovers at nothing,
+                                // every late tick or long device callback
+                                // empties it, and there is no mechanism to
+                                // catch back up because one frame per tick is
+                                // also the ceiling. Playback through the client
+                                // broke up while the same file played cleanly
+                                // in any ordinary player (2026-08-14), which is
+                                // exactly the shape of a ring with no slack.
+                                let frames_now = if ring_level < target_ring_low { 2 } else { 1 };
                                 let samples_per_tick = if playback_wav_rate == NETWORK_SAMPLE_RATE_WIDEBAND {
                                     FRAME_SAMPLES_WIDEBAND
                                 } else {
                                     FRAME_SAMPLES
                                 };
-                                let remaining = wav.len() - playback_pos;
-                                let to_read = samples_per_tick.min(remaining);
-                                if to_read > 0 {
+                                playback_buf.clear();
+                                bin_r_buf.clear();
+                                let mut finished = false;
+                                // Exactly two ticked go hard left and hard right,
+                                // which makes them trivial to tell apart. One
+                                // plays to both ears as it always did, and more
+                                // than two are mixed - there are only two ears.
+                                let split = playback_extra.len() == 1;
+                                for _ in 0..frames_now {
+                                    let wav = match playback_wav.as_ref() {
+                                        Some(w) => w,
+                                        None => break,
+                                    };
+                                    let remaining = wav.len().saturating_sub(playback_pos);
+                                    if remaining == 0 {
+                                        finished = true;
+                                        break;
+                                    }
+                                    let to_read = samples_per_tick.min(remaining);
                                     let mut pcm: Vec<i16> = wav[playback_pos..playback_pos + to_read].to_vec();
                                     if pcm.len() < samples_per_tick {
                                         pcm.resize(samples_per_tick, 0);
@@ -4096,23 +4349,64 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     } else {
                                         resample_to_device(&mut wav_res_out, &pcm)
                                     };
-                                    let target = resampled.len();
-                                    playback_buf.clear();
-                                    bin_r_buf.clear();
-                                    playback_buf.resize(target, 0.0);
-                                    bin_r_buf.resize(target, 0.0);
+                                    // Each extra stream runs out on its own
+                                    // schedule: recordings of the same test are
+                                    // rarely the same length, and the short ones
+                                    // should fall silent rather than cut the rest
+                                    // short.
+                                    let extras: Vec<Vec<f32>> = playback_extra
+                                        .iter_mut()
+                                        .map(|e| {
+                                            let per_tick = if e.rate == NETWORK_SAMPLE_RATE_WIDEBAND {
+                                                FRAME_SAMPLES_WIDEBAND
+                                            } else {
+                                                FRAME_SAMPLES
+                                            };
+                                            let rem = e.samples.len().saturating_sub(e.pos);
+                                            if rem == 0 {
+                                                return Vec::new();
+                                            }
+                                            let take = per_tick.min(rem);
+                                            let mut pr: Vec<i16> = e.samples[e.pos..e.pos + take].to_vec();
+                                            if pr.len() < per_tick {
+                                                pr.resize(per_tick, 0);
+                                            }
+                                            e.pos += take;
+                                            if e.rate == NETWORK_SAMPLE_RATE_WIDEBAND {
+                                                resample_to_device(&mut e.res_wb, &pr)
+                                            } else {
+                                                resample_to_device(&mut e.res_nb, &pr)
+                                            }
+                                        })
+                                        .collect();
                                     for (i, &s) in resampled.iter().enumerate() {
                                         // play_volume slider on speaker playback too.
-                                        let sample = (s * local_volume * play_volume).clamp(-1.0, 1.0);
-                                        playback_buf[i] = sample;
-                                        bin_r_buf[i] = sample;
+                                        let scale = local_volume * play_volume;
+                                        let left = (s * scale).clamp(-1.0, 1.0);
+                                        if split {
+                                            let r = extras[0].get(i).copied().unwrap_or(0.0);
+                                            playback_buf.push(left);
+                                            bin_r_buf.push((r * scale).clamp(-1.0, 1.0));
+                                        } else {
+                                            let mixed: f32 = s + extras.iter()
+                                                .map(|e| e.get(i).copied().unwrap_or(0.0))
+                                                .sum::<f32>();
+                                            let both = (mixed * scale).clamp(-1.0, 1.0);
+                                            playback_buf.push(both);
+                                            bin_r_buf.push(both);
+                                        }
                                     }
                                     playback_pos += to_read;
+                                    if playback_pos >= wav.len() {
+                                        finished = true;
+                                        break;
+                                    }
                                 }
-                                if playback_pos >= wav.len() {
+                                if finished {
                                     info!("WAV speaker playback finished");
                                     playback_wav = None;
                                     playback_pos = 0;
+                                    playback_extra.clear();
                                     playback_is_tx = false;
                                     state.playing = false;
                                 }
@@ -4154,6 +4448,22 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         if Instant::now() >= clear_at {
                             state.yaesu_menu_data = None;
                             yaesu_menu_data_clear_at = None;
+                        }
+                    }
+                    // A server-report transfer that stopped halfway says so.
+                    // Silence would leave the tickbox waiting for ever and, worse,
+                    // invite a second attempt that quietly reuses whatever
+                    // arrived the first time.
+                    if let Some(t) = server_report_deadline {
+                        if Instant::now() >= t {
+                            let parts = server_report_parts.len() as u16;
+                            let have =
+                                server_report_parts.iter().filter(|p| p.is_some()).count() as u16;
+                            warn!("Server report incomplete: {} of {} parts", have, parts);
+                            state.server_report_failed = Some((have, parts));
+                            state.server_report = None;
+                            server_report_parts = Vec::new();
+                            server_report_deadline = None;
                         }
                     }
                     if let Some(clear_at) = yaesu2_menu_data_clear_at {
@@ -4534,6 +4844,26 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 yaesu_tx_accum.extend_from_slice(&read_buf[..read]);
                             }
                         }
+                        // A roger beep is written into a frame, and the frames
+                        // come from the microphone - so a quiet, muted, gated
+                        // or absent microphone meant no frame and therefore no
+                        // beep at all, which is what happened the moment the
+                        // tone moved into this loop (2026-08-14). Keep the
+                        // accumulator topped up while a tone is running. The
+                        // tone overwrites the frame anyway, so silence is the
+                        // right filler, and real capture still sets the pace
+                        // whenever there is any.
+                        if let Some((_, ch, _)) = roger_tone {
+                            let have = if ch == 0 { accum_buf.len() } else { yaesu_tx_accum.len() };
+                            let want = capture_frame_samples.saturating_sub(have);
+                            if want > 0 {
+                                if ch == 0 {
+                                    accum_buf.resize(have + want, 0.0);
+                                } else {
+                                    yaesu_tx_accum.resize(have + want, 0.0);
+                                }
+                            }
+                        }
                     }
 
                     // Process complete frames from accumulation buffer
@@ -4553,11 +4883,30 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             continue;
                         }
 
+                        // The roger beep takes this frame instead of the
+                        // microphone, and is paced by the same clock. It used
+                        // to be sent from its own block once per timer tick,
+                        // which is not the sound card's clock and does not
+                        // pretend to be: the beep stuttered and came out short
+                        // (2026-08-14). Here it inherits the pacing that speech
+                        // has always had.
+                        //
+                        // Past the AGC and the gain trim on purpose. Those
+                        // exist to even out a voice; a fixed tone handed to
+                        // them comes out swelling, and what is set in the panel
+                        // is what should go out.
+                        let mut roger_here = false;
+                        if let Some((ref mut tone, 0, _)) = roger_tone {
+                            tone.fill(&mut pcm_8k, roger_cfg.volume);
+                            roger_here = true;
+                        }
+
                         // Meter = what is encoded: after AGC, with tx_gain applied.
-                        state.capture_level = peak_scaled(&pcm_8k, tx_gain);
+                        let level_gain = if roger_here { 1.0 } else { tx_gain };
+                        state.capture_level = peak_scaled(&pcm_8k, level_gain);
                         let pcm_i16: Vec<i16> = pcm_8k
                             .iter()
-                            .map(|&s| (s * tx_gain * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                            .map(|&s| (s * level_gain * 32767.0).clamp(-32768.0, 32767.0) as i16)
                             .collect();
 
                         if pcm_i16.len() >= FRAME_SAMPLES_WIDEBAND {
@@ -4600,6 +4949,71 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         warn!("Capture accumulator overflow ({}), draining", accum_buf.len());
                         let keep = accum_buf.len() - capture_frame_samples;
                         accum_buf.drain(..keep);
+                    }
+
+                    // The beep is sent above, in the loop that paces speech.
+                    // What is left here is the release it was holding back.
+                    // Done, or long past the point where it should have been.
+                    // A tone that cannot be played would otherwise hold the
+                    // transmitter and the slot for ever, and take every other
+                    // channel's beep down with it - which is precisely what a
+                    // stuck one did.
+                    let roger_over = match roger_tone {
+                        Some((ref t, _, started)) => {
+                            let over = crate::roger::beep_is_over(
+                                t.finished(),
+                                started.elapsed().as_millis() as u64,
+                                roger_cfg.duration_ms,
+                                crate::roger::OVERDUE_MARGIN_MS,
+                            );
+                            if over && !t.finished() {
+                                warn!("Roger beep did not play out in time - releasing PTT anyway");
+                            }
+                            over
+                        }
+                        None => false,
+                    };
+                    if roger_over {
+                        let channel = match roger_tone {
+                            Some((_, c, _)) => c,
+                            None => 0,
+                        };
+                        match channel {
+                            0 => {
+                                thetis_ptt = false;
+                                ptt = false;
+                                state.ptt_denied = false;
+                                if let Some(ref addr) = server_addr {
+                                    if audio_mode == 1 && last_sent_bin != Some(1) {
+                                        let ctrl = ControlPacket { control_id: ControlId::Binaural, value: 1 };
+                                        let mut buf = [0u8; ControlPacket::SIZE];
+                                        ctrl.serialize(&mut buf);
+                                        let _ = send_tx!(&buf, addr.as_str());
+                                        last_sent_bin = Some(1);
+                                    }
+                                }
+                            }
+                            1 => {
+                                yaesu_ptt = false;
+                                if let Some(ref addr) = server_addr {
+                                    let ctrl = ControlPacket { control_id: ControlId::YaesuPtt, value: 0 };
+                                    let mut buf = [0u8; ControlPacket::SIZE];
+                                    ctrl.serialize(&mut buf);
+                                    let _ = send_tx!(&buf, addr.as_str());
+                                }
+                            }
+                            _ => {
+                                yaesu2_ptt = false;
+                                if let Some(ref addr) = server_addr {
+                                    let ctrl = ControlPacket { control_id: ControlId::Yaesu2Ptt, value: 0 };
+                                    let mut buf = [0u8; ControlPacket::SIZE];
+                                    ctrl.serialize(&mut buf);
+                                    let _ = send_tx!(&buf, addr.as_str());
+                                }
+                            }
+                        }
+                        info!("Roger beep done - PTT released");
+                        roger_tone = None;
                     }
 
                     // PTT burst: send empty PTT-only packets for reliability
@@ -4662,9 +5076,28 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     }
                                 }
                             }
+                            // The roger beep takes this frame instead of the
+                            // microphone, paced by the same clock - see the
+                            // Thetis path above for why that matters. It skips
+                            // the EQ, compressor and AGC that ran above by
+                            // being written over their output, and skips the
+                            // gain trim by scaling at unity.
+                            let mut roger_here = false;
+                            if let Some((ref mut tone, ch, _)) = roger_tone {
+                                if ch == 1 || ch == 2 {
+                                    tone.fill(&mut resampled, roger_cfg.volume);
+                                    roger_here = true;
+                                }
+                            }
                             // Live mic gets the 4x quiet-mic boost; WAV-playback goes at
                             // line level (only mic_gain, no 4x) so it does not clip.
-                            let final_scale = if playback_is_tx { mic_gain } else { mic_gain * 4.0 };
+                            let final_scale = if roger_here {
+                                1.0
+                            } else if playback_is_tx {
+                                mic_gain
+                            } else {
+                                mic_gain * 4.0
+                            };
                             let desired_bitrate = yaesu_tx_bitrate_for_mode(if yaesu2_ptt { state.yaesu2_mode } else { state.yaesu_mode });
                             if desired_bitrate != yaesu_tx_bitrate_bps {
                                 match yaesu_tx_encoder.set_bitrate_bps(desired_bitrate) {
@@ -4695,7 +5128,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         yaesu_tx_sequence = yaesu_tx_sequence.wrapping_add(1);
                                         let mut buf = Vec::with_capacity(256);
                                         // Slot-1 PTT → AudioYaesu2, otherwise slot-0 AudioYaesu.
-                                        let tx_ptype = if yaesu2_ptt {
+                                        let to_slot1 = match roger_tone {
+                                            Some((_, ch, _)) => ch == 2,
+                                            None => yaesu2_ptt,
+                                        };
+                                        let tx_ptype = if to_slot1 {
                                             PacketType::AudioYaesu2
                                         } else {
                                             PacketType::AudioYaesu
@@ -4725,7 +5162,10 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             let mut cbuf = [0u8; ControlPacket::SIZE];
                             ctrl.serialize(&mut cbuf);
                             let _ = send_tx!(&cbuf, addr.as_str());
-                            thetis_txeq_bypassed = false;
+                            // The flag is not set back here: nothing reads it
+                            // after this point, and a write that only the
+                            // compiler notices is a question for whoever reads
+                            // this next.
                             info!("Thetis TXEQ restored (shutdown)");
                         }
                         let mut buf = [0u8; DisconnectPacket::SIZE];
@@ -4885,7 +5325,7 @@ mod tests {
 
         // Both present → both connected, models adopted, both changed.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1,
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
         });
         assert!(c0 && c1);
         assert!(state.yaesu_connected && state.yaesu2_connected);
@@ -4895,7 +5335,7 @@ mod tests {
         // Slot 0 drops out → connected flips to false (core of the dynamics),
         // slot 1 unchanged (no change flag).
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1,
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
         });
         assert!(c0 && !c1);
         assert!(!state.yaesu_connected);
@@ -4903,7 +5343,7 @@ mod tests {
 
         // Idempotent: same presence again → no change flags.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1,
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
         });
         assert!(!c0 && !c1);
     }
@@ -4915,21 +5355,21 @@ mod tests {
     fn presence_absence_clears_hi_swr() {
         let mut state = RadioState::default();
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1,
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
         });
         state.yaesu_hi_swr = true;
         state.yaesu2_hi_swr = true;
 
         // Slot 1 disappears → only its flag is cleared.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1,
+            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
         });
         assert!(state.yaesu_hi_swr, "aanwezige radio houdt zijn vlag");
         assert!(!state.yaesu2_hi_swr, "afwezige radio verliest zijn vlag");
 
         // Slot 0 disappears too → nothing remains to feed the alarm.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1,
+            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
         });
         assert!(!state.yaesu_hi_swr && !state.yaesu2_hi_swr);
     }
