@@ -1207,15 +1207,6 @@ impl NetworkService {
             let session = self.session.clone();
             let mut shutdown = self.shutdown.clone();
             if yaesu.is_some() || yaesu2.is_some() {
-                // Diagnostic sim of radio absence without disconnecting.
-                // THETISLINK_SIM_YAESU_ABSENT=0 | 1 | 0,1 forces those slot(s) "absent"
-                // (read path only, low-risk). Read once at server start.
-                let sim = std::env::var("THETISLINK_SIM_YAESU_ABSENT").unwrap_or_default();
-                let sim_absent0 = sim.split(',').any(|s| s.trim() == "0");
-                let sim_absent1 = sim.split(',').any(|s| s.trim() == "1");
-                if sim_absent0 || sim_absent1 {
-                    info!("Yaesu presence SIM active: forcing absent slot0={} slot1={}", sim_absent0, sim_absent1);
-                }
                 Some(tokio::spawn(async move {
                     let mut tick = interval(Duration::from_millis(500));
                     let mut prev: Option<(bool, u8, u8, bool, u8, u8)> = None;
@@ -1249,8 +1240,8 @@ impl NetworkService {
                                         logged_addrs.clear();
                                     }
                                 }
-                                let present0 = yaesu.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent0;
-                                let present1 = yaesu2.as_ref().map(|y| y.status().connected).unwrap_or(false) && !sim_absent1;
+                                let present0 = yaesu.as_ref().map(|y| y.status().connected).unwrap_or(false);
+                                let present1 = yaesu2.as_ref().map(|y| y.status().connected).unwrap_or(false);
                                 let model0 = yaesu.as_ref().map(|y| y.model_code()).unwrap_or(0);
                                 let model1 = yaesu2.as_ref().map(|y| y.model_code()).unwrap_or(0);
                                 // Why an absent radio is absent, when the server knows:

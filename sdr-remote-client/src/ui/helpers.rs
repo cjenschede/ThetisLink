@@ -105,6 +105,13 @@ pub(crate) fn freq_to_band(hz: u64) -> Option<String> {
     match hz {
         1_800_000..=2_000_000 => Some("160m".to_string()),
         3_500_000..=3_800_000 => Some("80m".to_string()),
+        // Wide on purpose: 60m is channelised and the channels differ per
+        // country (WRC-15 gives 5351.5-5366.5, the US has five discrete ones
+        // from 5330.5 to 5403.5). This range covers every one of them. It labels
+        // and keys local preferences - it does not decide what is transmitted.
+        // `dxcluster::freq_to_band` on the server is a separate function with the
+        // same name that gates DX spots; keep the two in step.
+        5_250_000..=5_450_000 => Some("60m".to_string()),
         7_000_000..=7_200_000 => Some("40m".to_string()),
         10_100_000..=10_150_000 => Some("30m".to_string()),
         14_000_000..=14_350_000 => Some("20m".to_string()),
@@ -122,6 +129,7 @@ pub(crate) fn band_label(hz: u64) -> &'static str {
     match hz {
         1_800_000..=1_999_999 => "160m",
         3_500_000..=3_999_999 => "80m",
+        5_250_000..=5_449_999 => "60m",   // see the note in `freq_to_band`
         7_000_000..=7_299_999 => "40m",
         10_100_000..=10_149_999 => "30m",
         14_000_000..=14_349_999 => "20m",

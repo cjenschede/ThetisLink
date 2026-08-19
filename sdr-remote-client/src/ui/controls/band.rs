@@ -23,7 +23,10 @@ use crate::ui::helpers::band_label;
 pub(crate) const BANDS: &[(&str, u64)] = &[
     ("160m", 1_900_000),
     ("80m", 3_700_000),
-    ("60m", 5_351_000),
+    // 5.354 MHz: inside the WRC-15 allocation (5351.5-5366.5) and on its
+    // all-modes part, matching the phone-segment spot every other band uses.
+    // The old 5.351 sat 500 Hz below the band.
+    ("60m", 5_354_000),
     ("40m", 7_100_000),
     ("30m", 10_120_000),
     ("20m", 14_200_000),

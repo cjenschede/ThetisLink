@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.9.0 — Gebruikershandleiding
+﻿# ThetisLink v2.9.1 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,14 +48,17 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.9.0.apk` | Android client app |
-| `Installatie.pdf` | Installatiehandleiding (Nederlands) |
-| `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
-| `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
-| `Installation.pdf` | Installation guide (English) |
-| `User-Manual-EN.pdf` | User manual (English) |
-| `Technical-Reference.pdf` | Technical reference (English) |
+| `ThetisLink-2.9.1.apk` | Android client app |
+| `Installatie.md` | Installatiehandleiding (Nederlands) |
+| `User-Manual.md` | Gebruikershandleiding (Nederlands, dit document) |
+| `Technische-Referentie.md` | Technische referentie (Nederlands) |
+| `Installation.md` | Installation guide (English) |
+| `User-Manual-EN.md` | User manual (English) |
+| `Technical-Reference.md` | Technical reference (English) |
+| `CHANGELOG.md` | Wat er per versie is veranderd |
 | `LICENSE` | Licentie (GPL-2.0-or-later) |
+| `NOTICE.md`, `ATTRIBUTION.md` | Licentie- en bronvermeldingen |
+| `thetislink-relay-source.tar.gz` | Broncode van de relay-server |
 | `SHA256SUMS.txt` | SHA-256 checksums voor verificatie van de binaries |
 
 > **Configuratiebestanden:** `thetislink-server.conf` en `thetislink-client.conf` zijn niet bijgesloten. Ze worden automatisch aangemaakt met standaardwaarden bij de eerste start van respectievelijk server en client (in dezelfde map als de exe).
@@ -1126,6 +1129,8 @@ Als het spectrum (lijn) en de waterval niet synchroon lopen bij het pannen, hers
 
 | Versie | Hoogtepunten |
 |---|---|
+| **2.9.1** | **Een gat is de codec weer, en audio uitzetten is stil.** 2.9.0 voegde een ruisgenerator toe die er nooit had gezeten; die maakte een wegval harder en scherper dan de band waarvoor hij inviel. Eruit. Wat een gat vult is de eigen verhulling van de codec en niets erbovenop, zoals sinds het begin. **Audio uitzetten is meteen stil** - dat was nooit de generator maar de poort: audio uitzetten stopt de stroom aan de serverkant, de client las dat als een wegval en bleef de stilte vullen. **Een stroom die je uitzet vergeet wat hij hoorde**, op alle zes de kanalen en ook bij een herverbinding. **Een station dat alleen naar een radio luistert houdt zijn verbinding** net zo goed als elk ander: audio uit een radio telde niet mee als levensteken, waardoor die controle aan de hartslag alleen hing. **60m is weer een band**: de knop bleef grijs, 60m kon geen bandgeheugen houden, en de knop landde 500 Hz onder de band - nu op 5.354 MHz. De server schrijft bij het opstarten de schermindeling in zijn log. Wire-protocol ongewijzigd t.o.v. 2.9.0; stock Thetis v2.10.3.x volstaat. |
+| **2.9.0** | **Een onderbreking klinkt weer als de band, een telefoon overleeft een netwerkwissel, en chat + probleem melden.** Verhulling liep altijd door de smalbandige decoder, dus met breedbandige audio kwam er stilte in plaats van ruis - en alleen kanaal 0 probeerde het uberhaupt. Elke stroom decodeert, corrigeert en verhult nu in zijn eigen formaat; beide radio's, beide VRX en RX2 verhullen nu ook. **Netwerkwissel**: wisselen tussen WiFi en mobiel liet de bediening werken en het geluid weg, tot de app werd afgeschoten - twee fouten, een aan elke kant. **Chat en probleem melden** voor stations op een relay: een ruimte gedeeld met de andere gebruikers, en een meldknop die rechtstreeks naar de beheerder gaat met de log erbij, opgeschoond en zichtbaar voordat hij weggaat. Beide optioneel. **Android houdt een eigen logbestand bij** - de systeemlog rolt binnen minuten weg. De app is niet langer debugbaar, dus `adb run-as` werkt niet meer. De server zegt **waarom een radio ontbreekt** als Windows de COM-poort aan een ander programma gaf. Backwards-compatible met 2.8.x; stock Thetis v2.10.3.x volstaat. |
 | **2.8.0** | **De gegevens van de radio staan er zodra je verbindt, PTT wordt losgelaten als de radio dat al heeft, en de FTX-1-tonen werken in de praktijk.** Geheugenkanalen, tonen en EX-instellingen worden **eenmalig bij het verbinden van de radio** gelezen en door de server bewaard; elke client wordt daarna uit die kopie bediend in plaats van de radio opnieuw zijn kanalen te laten langslopen. **Time-out timer:** heeft de radio er een ingesteld, dan laat ThetisLink de PTT net vóór die grens zelf los in plaats van door te zenden terwijl de set al gestopt is; de FTX-1 meldt bovendien zijn werkelijke zendtoestand, zodat ook een storing of de PTT op de set zelf de uitzending hier beëindigt. **FTX-1-tonen:** die radio kan een toon niet opslaan in een geheugenkanaal via CAT, dus ThetisLink bewaart ze in zijn eigen lijst en zet de juiste toon telkens als de radio op een kanaal landt — schrijven naar het geheugen van die radio staat standaard uit en vraagt eerst om een akkoord. De **geheugentabel toont waar de radio staat**: groen voor het kanaal waar hij op staat, oranje voor het kanaal dat je verliet toen je naar VFO ging, en één klik ergens in de rij brengt je terug; dubbelklikken opent de bewerkvelden. De **vensterschikker is één implementatie** geworden, gedeeld door de desktopclient en de server-GUI, die daarmee de UI-schaal, het 18×18-raster en vijf schikgeheugens krijgt. Opgelost: de **V/M-knop overschreef een geheugenkanaal** (in elke uitgave sinds 2.0.0, zonder bevestiging en zonder logregel), de FTX-1 verliet de geheugenmodus niet bij een frequentiewijziging, de EX-menu-keuzelijst liet keuzes vallen (waardoor de TX-time-out niet instelbaar was), en drie **Android**-fouten die in de uitgebrachte 2.7.0-APK zaten: een Yaesu bleef stil zodra je hem aanzette, de geheugenlijst verdween achter het EX-menu, en de EX-instellingen van de FTX-1 toonden kale nummers. Wire-protocol blijft **VERSION 3** en er zijn **geen nieuwe control-ids**; backwards-compatible met 2.7.x. Stock Thetis v2.10.3.15 volstaat. |
 | **2.7.0** | **VRX-audio betrouwbaar, CTCSS/DCS vanuit de client, herbouwde niveaumeters en een gedeelde volbandspectrumrij.** VRX-audio start nu betrouwbaar en blijft schoon na afstemmen — drie losse oorzaken zaten onder één symptoom — en een VRX blijft binnen de DDC-band met een spectrum dat de bandrand eerlijk tekent. **CTCSS en DCS per geheugenkanaal** te lezen en te schrijven op de FT-991A (alle 104 DCS-codes; *Tonen uitlezen* loopt de kanalen langs, pauzeert een lopende scan en keert terug naar waar de radio stond). De **niveaubalken meten de verbinding** in plaats van de volumeschuif, vallen binnen een halve seconde terug naar nul als een stroom stopt, en het **Yaesu-ontvangstpad is per model geijkt**. De **volbandspectrumrij wordt gedeeld** door het RX-venster en de VRX op dezelfde DDC, met een vinkje om hem uit te zetten. Wire-protocol blijft **VERSION 3** (drie additieve control-ids); backwards-compatible met 2.6.x. |
 | **2.6.0** | **Vensters-schikken omgebouwd tot matrixplaatser, ook in de server-GUI, en een meertalige server.** Rasterkiezer tot 12×12, cellen schilderen met spanning, rechthoek-sleepselectie in één beweging, hoofdvenster meeschikbaar, per monitor. De **server-GUI kreeg dezelfde schikker** plus vertalingen (EN/NL/DE/FR). De **analoge S-meter is herzien** (vaste verhouding, strak om de schaal) en de audioniveaubalken kregen een **peak-hold-streepje**. Opgelost: het aanzetten van een 991A duurde niet meer tientallen seconden, geheugens lezen betrouwbaar in en laden automatisch, uitklappijltjes onthouden hun stand. Wire-protocol blijft **VERSION 3**; backwards-compatible met 2.5.x. |

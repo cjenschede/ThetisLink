@@ -635,7 +635,7 @@ impl SdrRemoteApp {
         });
         if self.thetis_configured {
             // Only show when RX1 audio is subscribed (rx1_enabled). NOT on
-            // playback_level: comfort noise keeps it > 0, which left RX1 showing.
+            // playback_level: concealed audio keeps it > 0, which left RX1 showing.
             if self.rx1_enabled {
                 if self.binaural && self.playback_level_bin_r > 0.0 {
                     ui.horizontal(|ui| {

@@ -276,7 +276,7 @@ sdr-remote/
 │       ├── protocol.rs         # Packet format, ControlId, serialisatie, deserialisatie
 │       ├── codec.rs            # Opus encode/decode wrapper
 │       ├── jitter.rs           # Adaptieve jitter buffer
-│       ├── stream.rs           # Per stroom: beide decoders, formaat, verhulling + comfortruis
+│       ├── stream.rs           # Per stroom: beide decoders, formaat, verhulling
 │       ├── diagnose.rs         # Probleemmelding opschonen (denylist log / allowlist instellingen)
 │       ├── conf_layout.rs      # .conf-bestanden groeperen bij het schrijven
 │       └── auth.rs             # HMAC-SHA256 authenticatie + TOTP
@@ -2016,9 +2016,32 @@ achterhaald:
   Decoder, herbemonsteraar en de breedbandvlag horen bij één type per stroom
   (`RxStream`). Verhulling en foutcorrectie liepen tot 2.9.0 altijd door de
   smalbandige decoder, ongeacht wat er binnenkwam.
-- **Verhulling houdt het niet vol op eigen kracht.** Opus is onhoorbaar na
-  ongeveer 260 ms (gemeten); daarna vult zelf gemaakte ruis het gat op de
-  ruisvloer van die stroom, 3 dB eronder, tot de verbinding verloren heet.
+- **Een gat is de codec, en niets dat erbij gemaakt wordt.** Opus extrapoleert
+  uit het signaal van de stroom zelf, en daarom klinkt een wegval als je eigen
+  ontvanger. Op bandruis dooft hij niet uit - over vier seconden gemeten houdt hij
+  het niveau - dus er hoeft niets bovenop. (2.9.0 maakte er kort wel ruis bij;
+  2.9.1 heeft dat weggehaald. De 260 ms fade die daarvoor werd aangehaald geldt
+  voor spraak.)
+- **Verhulling volgt het abonnement.** Een kanaal dat de operator heeft uitgezet
+  wordt niet verhuld, en bij uitzetten vergeet die decoder zijn geschiedenis - op
+  alle zes de stromen, de twee radioplekken erbij. Bij een herverbinding worden
+  ook alle zes gewist; tot 2.9.1 gebeurde dat alleen bij de drie Thetis-stromen.
+- **Een gat vroeg in een luistersessie is stil.** De codec moet eerst een tijd
+  gedecodeerd hebben voordat er iets is om uit te extrapoleren, en de twee
+  formaten zijn aparte decoders - omschakelen begint de andere vanaf niets.
+  **De twee doen er niet even lang over.** Smalband draagt de band binnen enkele
+  seconden alweer; breedband heeft veel langer nodig. Daardoor geeft dezelfde
+  proef op hetzelfde kanaal een ander antwoord, afhankelijk van welk formaat er
+  loopt. Op het gehoor gemeten door een radiostroom tegen RX1 te zetten en alleen
+  het formaat te wisselen.
+- **Bandlabels zijn ruimer dan de toewijzing van welk land dan ook.**
+  `band_label` en `freq_to_band` benoemen een frequentie en sleutelen
+  voorkeuren per band; ze bepalen niets dat de lucht in gaat, dus een
+  gekanaliseerde band als 60m is in zijn geheel gedekt (5.250-5.450 MHz) in
+  plaats van per regio. `dxcluster::freq_to_band` op de server is een aparte
+  functie met dezelfde naam die DX-spots filtert - houd die twee gelijk.
+- **Na acht seconden stopt de verhulling.** Ze is er om een hapering te
+  overbruggen, niet om een verbinding te vervangen die weg is.
 
 
 ---

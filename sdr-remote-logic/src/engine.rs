@@ -990,6 +990,13 @@ impl ClientEngine {
                         // VRX2 have commands of their own further down.
                         if id == ControlId::YaesuEnable {
                             yaesu_wanted = value != 0;
+                            // Same as the main path: keeping the decoder history
+                            // across a switch-off lets a gap in a later session be
+                            // concealed from audio that belonged to this one. The
+                            // server does start its sequence over when the last
+                            // subscriber leaves, and the seq==0 arm below resets on
+                            // that - but only on that edge, so do not depend on it.
+                            if !yaesu_wanted { st_yaesu.reset(); }
                         }
                         // Locally update power state immediately so UI reflects the
                         // change even if the server is unreachable (e.g. after ZZBY shutdown).
@@ -1715,6 +1722,13 @@ impl ClientEngine {
                     }
                     Command::SetRx1Enabled(enabled) => {
                         state.rx1_enabled = enabled;
+                        // Switching off ends this stream. Keeping the decoder history
+                        // would let a gap minutes later be concealed from audio that
+                        // belongs to another listening session. The cost is that a gap
+                        // shortly after switching on is silent instead of sounding like
+                        // the band - deliberate; the table in `StreamDecoder::conceal`
+                        // measures how long that lasts.
+                        if !enabled { st_rx1.reset(); st_bin_r.reset(); }
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::Rx1Enable, value: enabled as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
@@ -1725,6 +1739,7 @@ impl ClientEngine {
                     }
                     // RX2 / VFO-B commands
                     Command::SetRx2Enabled(enabled) => {
+                        if !enabled { st_rx2.reset(); }
                         state.rx2_enabled = enabled;
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::Rx2Enable, value: enabled as u16 };
@@ -1928,6 +1943,8 @@ impl ClientEngine {
                     }
                     // --- Dual-radio slot 1 commands (PATCH-dual-radio-991a-ftx1) ---
                     Command::SetYaesu2Enable(on) => {
+                        // Outside the guard, same reason as VRX1 above.
+                        if !on { st_yaesu2.reset(); }
                         if let Some(ref addr) = server_addr {
                             yaesu2_wanted = on;
                             let ctrl = ControlPacket { control_id: ControlId::Yaesu2Enable, value: on as u16 };
@@ -1998,7 +2015,19 @@ impl ClientEngine {
                         yaesu2_eq.set_enabled(on);
                     }
                     Command::SetVrxEnabled(on) => {
+                        // Outside the server_addr guard, like RX1/RX2: switching a
+                        // channel off has to forget that decoder whether or not there
+                        // is a server to tell about it.
+                        if !on { st_vrx1.reset(); }
                         if let Some(ref addr) = server_addr {
+                            // Still inside the guard, unlike the reset above: moving it
+                            // changes when a subscription is sent, which is the path
+                            // behind the VRX start-up trouble. The cost is that
+                            // switching off while disconnected leaves this true, so the
+                            // concealment gate is open for a channel the operator turned
+                            // off - harmless only because the reset above just emptied
+                            // that decoder. The gate is correct by its neighbour, not by
+                            // itself.
                             vrx1_wanted = on;
                             let ctrl = ControlPacket { control_id: ControlId::VrxEnable, value: on as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
@@ -2035,6 +2064,8 @@ vrx1_enable_at = if on { Some(Instant::now()) } else { None };
                         vrx1_volume = v.max(0.0);
                     }
                     Command::SetVrx2Enabled(on) => {
+                        // Outside the guard, same reason as VRX1 above.
+                        if !on { st_vrx2.reset(); }
                         if let Some(ref addr) = server_addr {
                             vrx2_wanted = on;
                             let ctrl = ControlPacket { control_id: ControlId::VrxEnable2, value: on as u16 };
@@ -2562,6 +2593,22 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     st_rx1.reset();
                                     st_bin_r.reset();
                                     st_rx2.reset();
+                                    // The other four for the same reason. The price is
+                                    // that the first gap after this is silent until the
+                                    // codec has decoded for a while - deliberate; the
+                                    // table in `StreamDecoder::conceal` measures it, and
+                                    // the switch-off arms pay the same price for the
+                                    // same reason. VRX had no
+                                    // route at all that cleared a decoder except the
+                                    // operator's own button - its seq==0 arm resets
+                                    // only the jitter buffer - and the Yaesu slots had
+                                    // one that depends on the server restarting its
+                                    // sequence, which it only does on the edge from no
+                                    // subscribers to some. Do not lean on that here.
+                                    st_vrx1.reset();
+                                    st_vrx2.reset();
+                                    st_yaesu.reset();
+                                    st_yaesu2.reset();
                                     logged_first_rx = false;
                                                 // Clear stale spectrum data on (re)connect
                                     state.spectrum_bins.clear();
@@ -3443,6 +3490,15 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
                         }
                         Ok(Packet::AudioYaesu(pkt)) => {
+                            // Audio arriving is a sign of life, and the
+                            // timeout is an AND of two independent signals so
+                            // that neither alone can drop a good link. Without
+                            // this a Yaesu-only station (Thetis RX off, radio
+                            // audio on - an arrangement the manual describes)
+                            // has audio flowing while audio_timed_out stays
+                            // true, leaving the connection hanging on the
+                            // heartbeat alone.
+                            last_audio_received = Some(Instant::now());
                             // Detect stream reset (server resets seq to 0 on re-enable)
                             if yaesu_logged_first && pkt.sequence == 0 {
                                 info!("Yaesu: stream reset detected, resetting jitter buffer");
@@ -3497,6 +3553,15 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.yaesu2_memory_channel = ys.memory_channel;
                         }
                         Ok(Packet::AudioYaesu2(pkt)) => {
+                            // Audio arriving is a sign of life, and the
+                            // timeout is an AND of two independent signals so
+                            // that neither alone can drop a good link. Without
+                            // this a Yaesu-only station (Thetis RX off, radio
+                            // audio on - an arrangement the manual describes)
+                            // has audio flowing while audio_timed_out stays
+                            // true, leaving the connection hanging on the
+                            // heartbeat alone.
+                            last_audio_received = Some(Instant::now());
                             if yaesu2_logged_first && pkt.sequence == 0 {
                                 info!("[radio1] stream reset detected, resetting jitter buffer");
                                 yaesu2_jitter_buf.reset();
@@ -3826,15 +3891,47 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     }
                                     JitterResult::NotReady => {
                                         // Nothing arriving at all. Conceal for as long
-                                        // as the link still counts as up: Opus itself
-                                        // is inaudible after about 260 ms and the
-                                        // comfort noise carries the rest, so a dropout
+                                        // as the link still counts as up, so a dropout
                                         // sounds like the band rather than like the
-                                        // audio stopping.
+                                        // audio stopping. That sound is Opus' own
+                                        // concealment and nothing else: it extrapolates
+                                        // the operator's signal, which is why it passes
+                                        // for their own receiver. On band noise it does
+                                        // not fade - measured across four seconds it
+                                        // holds the level.
+                                        // ...but only for a channel the operator
+                                        // still wants. Switching audio off stops the
+                                        // stream at the server, which arrives here as
+                                        // the same silence a dropout makes - so the
+                                        // concealer kept filling it and muting stayed
+                                        // audible. Before the eight-second backstop
+                                        // existed it never stopped at all: the session
+                                        // is alive while muted, so it ran for minutes.
+                                        //
+                                        // The loss meter below already knows this
+                                        // ("absence is then not loss" - it stops
+                                        // counting 100% loss for a VRX-only client).
+                                        // The same fact simply never reached the
+                                        // concealer. The auxiliary streams gate on
+                                        // their own _wanted flags for exactly this;
+                                        // the main path was the one that did not.
+                                        //
+                                        // NOTE: these flags are not the operator's
+                                        // alone - the server echoes Rx1Enable/Rx2Enable
+                                        // back into them, and a fresh server session
+                                        // defaults rx2_enabled to false. So an echo can
+                                        // switch RX2 concealment off while the operator's
+                                        // button still reads on. That is coherent (no
+                                        // subscription, no audio to conceal) but it is
+                                        // not only the button.
                                         if was_connected && logged_first_rx {
-                                            rx1_d = st_rx1.conceal();
-                                            bin_r_d = st_bin_r.conceal();
-                                            rx2_d = st_rx2.conceal();
+                                            if state.rx1_enabled {
+                                                rx1_d = st_rx1.conceal();
+                                                bin_r_d = st_bin_r.conceal();
+                                            }
+                                            if state.rx2_enabled {
+                                                rx2_d = st_rx2.conceal();
+                                            }
                                         }
                                         nothing_arriving = true;
                                     }
@@ -3854,12 +3951,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         }
                                         conceal_frames += 1;
                                         // One line a second while a gap lasts. The two
-                                        // peaks side by side are the shape of the
-                                        // hand-over: Opus starts at the level of the
-                                        // last real frame and fades, the comfort noise
-                                        // comes up underneath it, and the pair should
-                                        // stay in the same neighbourhood rather than
-                                        // walking down to nothing.
+                                        // peaks side by side are the shape of the gap:
+                                        // where it started and where it is now. They
+                                        // should stay in the same neighbourhood rather
+                                        // than walking down to nothing - a gap that
+                                        // fades is the tell that concealment is running
+                                        // on a decoder without the history.
                                         if conceal_said.elapsed() >= Duration::from_secs(1) {
                                             conceal_said = Instant::now();
                                             info!(
@@ -3895,7 +3992,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         // it is deliberately left out. The bar is the
                                         // instrument for "is anything still coming in" -
                                         // it is how the VRX start-up problem was finally
-                                        // pinned down - and comfort noise on a dead link
+                                        // pinned down - and concealment on a dead link
                                         // would have it claiming signal for as long as
                                         // the concealment lasts.
                                         if !concealed {

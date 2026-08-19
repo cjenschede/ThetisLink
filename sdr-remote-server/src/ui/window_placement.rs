@@ -143,3 +143,41 @@ pub(crate) fn system_ppp() -> f32 {
 pub(crate) fn system_ppp() -> f32 {
     1.0
 }
+
+/// Write the monitor layout to the log, once, at start-up.
+///
+/// A window that comes up blank, or off-screen, or on the wrong monitor is
+/// always a question about coordinates - and the log travels with a problem
+/// report, so the answer should already be in it. It was not: a report about a
+/// blank window cost a round of guessing about which screen was where, and the
+/// guess was wrong. One line at start-up settles that for every report after
+/// this one.
+///
+/// Work-areas are virtual-desktop pixels, so a monitor left of or above the
+/// primary shows negative values - which is exactly what such a report needs to
+/// say. Nothing here identifies a person or a place; it is screen geometry.
+pub(crate) fn log_monitor_layout() {
+    match monitor_work_areas_px() {
+        Some(areas) if !areas.is_empty() => {
+            let list: Vec<String> = areas
+                .iter()
+                .map(|a| {
+                    format!(
+                        "[{},{} {}x{}]",
+                        a.left,
+                        a.top,
+                        a.right - a.left,
+                        a.bottom - a.top
+                    )
+                })
+                .collect();
+            log::info!(
+                "Monitor layout: {} screen(s), work areas in virtual-desktop pixels: {} (scale {:.2}x)",
+                areas.len(),
+                list.join(" "),
+                system_ppp()
+            );
+        }
+        _ => log::info!("Monitor layout: could not be queried on this platform"),
+    }
+}

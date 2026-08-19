@@ -5206,7 +5206,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-android"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -5224,7 +5224,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-chat"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "chrono",
  "eframe",
@@ -5239,7 +5239,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-client"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5273,7 +5273,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-core"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "anyhow",
  "audiopus",
@@ -5296,7 +5296,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-logic"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5310,7 +5310,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-relay"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "futures-util",
  "log",
@@ -5321,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-server"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "anyhow",
  "bytemuck",

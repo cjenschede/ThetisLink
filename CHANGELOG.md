@@ -16,6 +16,80 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.9.1] — 2026-08-20 (A gap is the codec again, and muting is silent)
+
+> **Who this release changes things for.** Everyone who noticed a hiss in 2.9.0 —
+> and **anyone whose only incoming audio is a radio**: a Yaesu without Thetis, or a
+> Thetis station with its own audio switched off. That second group gets a
+> connection-stability fix that has nothing to do with the hiss — and anyone who
+> works **60m**, which the band buttons never properly recognised. See below.
+>
+> **Safe to install.** The wire protocol is unchanged from 2.9.0, so a client and
+> a server on either version still talk to each other. Stock Thetis v2.10.3.x
+> suffices — no fork change is required. Nothing needs reinstalling or
+> reconfiguring: the binaries replace the previous ones and the Android app
+> updates over the one you have.
+
+### Fixed
+
+- **The noise that appeared in 2.9.0 is gone.** 2.9.0 added a noise generator
+  that had never been part of ThetisLink. It arrived in the same change that
+  brought concealment to every channel — only the second of those was intended —
+  and it is what made a gap louder and harder-edged than the band it stands in
+  for. Removed.
+
+  What fills a gap is the codec's own concealment and nothing added to it, as it
+  has been since the first build: extrapolated from your own signal, which is why
+  it sounds like your own receiver rather than like noise. Everything 2.9.0 got
+  right stays — every stream conceals in its own format, on every channel.
+
+- **Switching a channel off is quiet at once, and switching it back on starts
+  silent.** This is what made muting audible, and it was never the generator:
+  turning audio off stops the stream at the server, the client read that as a
+  dropout, and it kept filling the silence. It did so in every earlier version —
+  before 2.9.0 for as long as the session lasted. A channel you have switched off
+  is now simply off, and switching it back on starts cleanly instead of with a
+  hiss.
+
+- **A stream you switch off forgets what it heard.** Without that, a gap in a
+  later listening session could be concealed from audio belonging to the previous
+  one. Now applies to all six streams — RX1, RX2, both VRX and both radio slots —
+  and to both ways into a later session: the audio button and a reconnect.
+
+- **A station listening only to a radio holds its connection as well as any
+  other.** Dropping the link needs two independent signals to agree — a silent
+  heartbeat *and* silent audio — but audio arriving from a radio was not counted
+  as a sign of life. Whenever a radio was the only thing playing, that left the
+  check hanging on the heartbeat alone, so a noisy moment could drop a connection
+  that would otherwise have held. It affects a Yaesu without Thetis, and equally a
+  Thetis station whose own audio is switched off. Both radio slots now count.
+
+- **60m is a band again.** Clicking it moved the frequency but left the button
+  grey, and the reason reached further than the colour: the table that says which
+  band a frequency is in skipped straight from 80m to 40m, so nothing remembered
+  per band — the band memory, the waterfall contrast — could be kept for 60m
+  either. The button also landed 500 Hz below where the band starts; it now goes
+  to 5.354 MHz, inside the allocation and at the start of its all-modes segment.
+  The range recognised as 60m is deliberately wide, because the channels differ
+  per country. Android carries the label too.
+
+### Known and deliberate
+
+- **A gap early in a listening session sounds like silence rather than like the
+  band.** The codec needs to have decoded for a while before its concealment
+  has anything to extrapolate from, and narrowband and wideband are separate
+  decoders — so switching between them starts the other one from nothing. The two
+  do not take equally long: narrowband is carrying the band again within seconds,
+  wideband needs far longer. A station left running is past it either way. Nothing
+  on this side estimates a level, so this is the codec's own behaviour, as it was
+  before 2.9.0; closing it would mean feeding an idle decoder frames it never
+  received.
+
+- **A gap longer than eight seconds falls silent.** Concealment is meant to carry
+  a hiccup, not to stand in for a link that is gone. Unchanged from 2.9.0.
+
+---
+
 ## [2.9.0] — 2026-08-18 (A dropout sounds like the band again · surviving a network change · chat and problem reports on a relay)
 
 > **Who this release changes things for.** Read this bit and skip the rest if it

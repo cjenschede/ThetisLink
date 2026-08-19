@@ -275,7 +275,7 @@ sdr-remote/
 │       ├── protocol.rs         # Packet format, ControlId, serialization, deserialization
 │       ├── codec.rs            # Opus encode/decode wrapper
 │       ├── jitter.rs           # Adaptive jitter buffer
-│       ├── stream.rs           # Per stream: both decoders, format, concealment + comfort noise
+│       ├── stream.rs           # Per stream: both decoders, format, concealment
 │       ├── diagnose.rs         # Cleaning a problem report (log denylist / settings allowlist)
 │       ├── conf_layout.rs      # Grouping .conf files as they are written
 │       └── auth.rs             # HMAC-SHA256 authentication + TOTP
@@ -2020,9 +2020,30 @@ This section described the v0.6.5 model, which is out of date in three ways:
   out.** Decoder, resampler and the wideband flag belong to one type per stream
   (`RxStream`). Until 2.9.0 concealment and error correction always ran through
   the narrowband decoder, whatever arrived.
-- **Concealment does not last on its own.** Opus is inaudible after about
-  260 ms (measured); after that, generated noise fills the gap at that stream's
-  own noise floor, three decibels under it, until the link counts as lost.
+- **A gap is the codec, and nothing added to it.** Opus extrapolates from the
+  stream's own signal, which is why a dropout sounds like your own receiver. On
+  band noise it does not fade - measured across four seconds it holds the level -
+  so nothing needs to be generated on top. (2.9.0 briefly did generate noise and
+  2.9.1 removed it; the 260 ms fade figure quoted for that applies to speech.)
+- **Concealment follows the subscription.** A channel the operator has switched
+  off is not concealed, and switching it off forgets that decoder's history - on
+  all six streams, the two radio slots included. A reconnect clears all six too,
+  which until 2.9.1 only the three Thetis streams did.
+- **A gap early in a listening session is silent.** The codec needs to have
+  decoded for a while before it has anything to extrapolate from, and the two
+  formats are separate decoders - so switching between them starts the other from
+  nothing. **The two do not take equally long.** Narrowband is carrying the band
+  again within seconds; wideband needs far longer, which is why the same test on
+  the same channel gives a different answer depending on which format is running.
+  Measured by ear on a radio stream against RX1, switching only the format.
+- **Band labels are wider than any one country's allocation.** `band_label` and
+  `freq_to_band` name a frequency and key per-band preferences; they decide
+  nothing that is transmitted, so a channelised band like 60m is covered in full
+  (5.250-5.450 MHz) rather than per region. `dxcluster::freq_to_band` on the
+  server is a separate function with the same name that gates DX spots - keep
+  the two in step.
+- **Concealment stops after eight seconds.** It is there to carry a hiccup, not
+  to stand in for a link that is gone.
 
 
 ---

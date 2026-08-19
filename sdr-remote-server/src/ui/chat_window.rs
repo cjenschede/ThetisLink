@@ -67,6 +67,17 @@ impl ServerApp {
                 vb = vb.with_position(egui::pos2(pos[0] / z, pos[1] / z));
             }
             self.chat_window_init_applied = true;
+            // Written down because a blank chat window has been reported and the
+            // difference between a good opening and a blank one is invisible from
+            // the outside. This is every number that goes into creating it; the
+            // log travels with a problem report, so a next occurrence arrives
+            // already measured instead of needing a round of questions.
+            log::info!(
+                "Chat window: creating at pos {:?}, size {:?} (system points), zoom {:.2}x",
+                self.chat_window_pos,
+                sz,
+                z
+            );
         }
         let mut closed = false;
         ctx.show_viewport_immediate(

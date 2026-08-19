@@ -322,7 +322,11 @@ pub fn freq_to_band(freq_hz: u64) -> u16 {
     match khz {
         1800..=2000 => 160,
         3500..=3800 => 80,
-        5351..=5367 => 60,
+        // Same range the client labels as 60m. The band is channelised and the
+        // channels differ per country - on a US channel outside 5351-5367 this
+        // returned 0, so a VFO parked there matched no spot at all while the
+        // client's own display called it 60m.
+        5250..=5450 => 60,
         7000..=7300 => 40,
         10100..=10150 => 30,
         14000..=14350 => 20,
@@ -379,5 +383,12 @@ mod tests {
         assert_eq!(freq_to_band(7_074_000), 40);
         assert_eq!(freq_to_band(3_500_000), 80);
         assert_eq!(freq_to_band(100_000), 0);
+        // 60m, the band this table used to read narrower than the client did.
+        // 5.354 is where the band button lands, 5.3305 and 5.4035 are US
+        // channels outside the WRC-15 allocation - a VFO parked on one of those
+        // used to match no spot at all while the display already said 60m.
+        assert_eq!(freq_to_band(5_354_000), 60);
+        assert_eq!(freq_to_band(5_330_500), 60);
+        assert_eq!(freq_to_band(5_403_500), 60);
     }
 }

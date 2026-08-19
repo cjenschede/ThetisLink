@@ -15,37 +15,30 @@
 //! `recover` and `conceal`. There is no way to ask it to conceal without it
 //! knowing which decoder holds the history.
 //!
-//! It also generates the comfort noise. Opus concealment is built to bridge a
-//! lost packet, not a lost link: measured, it is inaudible after about 260 ms
-//! (see `codec::tests::plc_fades_and_this_is_how_fast`). A short dropout should
-//! stay audible as band noise for as long as the link is still considered up,
-//! so once the codec's own concealment fades this fills the rest in at the
-//! stream's own noise floor.
+//! It generates nothing. A gap is filled by Opus' own concealment and by
+//! nothing else, which is what makes it sound like the operator's own receiver:
+//! it is extrapolated from their signal. That has been true since the first
+//! build in February. A synthetic noise generator lived here from 2026-08-16 to
+//! 2026-08-19 and was removed - it arrived in the same commit as the extension
+//! to every channel, though only the extension had been asked for, and it made
+//! a gap louder and sharper than the band it stands in for.
+//!
+//! The premise it was built on does not hold either. `plc_fades_and_this_is_how_fast`
+//! measures the fade on SPEECH; on band noise Opus does not fade at all -
+//! measured across four seconds it holds the level of the band. There was
+//! therefore nothing for a top-up to do, which is why lowering its level had no
+//! audible effect.
 
 use anyhow::Result;
 
 use crate::codec::{OpusDecoder, OpusDecoderWideband};
 
-/// How long concealment keeps making noise before it gives up and goes quiet.
+/// How long a gap keeps being filled before concealment gives up and goes quiet.
 /// The connection is declared lost after 6 s, so this only ever runs out when
 /// something else is stuck - it is a backstop, not a timer anyone waits for.
 const CONCEAL_MAX_FRAMES: u32 = 400; // 8 s at 20 ms
 
-/// Slow rise of the noise-floor estimate. Falls instantly, rises over seconds,
-/// so a burst of speech does not drag the comfort noise up with it.
-const FLOOR_RISE: f32 = 0.001;
-
-/// How loud the comfort noise sits against the band noise it stands in for.
-///
-/// Matching the floor exactly is the honest choice on paper and the wrong one
-/// by ear: a gap then announces itself instead of passing for the band, because
-/// generated noise is steadier than the real thing and steadiness is what the
-/// ear picks out. Three decibels under, asked for after listening to it
-/// (2026-08-17).
-const COMFORT_LEVEL: f32 = 0.708; // -3 dB
-
-/// One receive stream: both decoders, the format of the last real frame, and
-/// the noise floor that the comfort noise is generated at.
+/// One receive stream: both decoders and the format of the last real frame.
 pub struct StreamDecoder {
     nb: OpusDecoder,
     wb: OpusDecoderWideband,
@@ -55,13 +48,9 @@ pub struct StreamDecoder {
     /// False until a real frame has been decoded. Concealing before that would
     /// be silence anyway; returning nothing says so honestly.
     has_history: bool,
-    /// Quietest recent frame, in i16 units - the band noise under the signal.
-    floor_rms: f32,
     conceal_frames: u32,
     /// The invariant below is said once per stream, not once per frame.
     said_silent: bool,
-    noise_seed: u32,
-    noise_lp: f32,
 }
 
 impl StreamDecoder {
@@ -71,11 +60,8 @@ impl StreamDecoder {
             wb: OpusDecoderWideband::new()?,
             last_wb: false,
             has_history: false,
-            floor_rms: 0.0,
             conceal_frames: 0,
             said_silent: false,
-            noise_seed: 0x5eed_1234,
-            noise_lp: 0.0,
         })
     }
 
@@ -92,13 +78,17 @@ impl StreamDecoder {
     /// Drop all history. Used on reconnect: the far side starts a new stream and
     /// the old history would be extrapolated into the new one.
     pub fn reset(&mut self) -> Result<()> {
-        self.nb = OpusDecoder::new()?;
-        self.wb = OpusDecoderWideband::new()?;
+        // Flags first, decoders second. Building a decoder can fail, and `?`
+        // would leave a stream carrying an old decoder while still claiming
+        // history - so `conceal()` would go on extrapolating from the session
+        // this call was meant to end. Cleared up front, a failure leaves a
+        // stream that believes it is empty: silence, not the wrong audio.
         self.last_wb = false;
         self.has_history = false;
-        self.floor_rms = 0.0;
         self.conceal_frames = 0;
         self.said_silent = false;
+        self.nb = OpusDecoder::new()?;
+        self.wb = OpusDecoderWideband::new()?;
         Ok(())
     }
 
@@ -127,45 +117,70 @@ impl StreamDecoder {
                 self.last_wb = wideband;
                 self.has_history = true;
                 self.conceal_frames = 0;
-                let rms = rms_of(&pcm);
-                if !self.has_floor() || rms < self.floor_rms {
-                    self.floor_rms = rms;
-                } else {
-                    self.floor_rms += (rms - self.floor_rms) * FLOOR_RISE;
-                }
                 Some(pcm)
             }
             Err(_) => None,
         }
     }
 
-    fn has_floor(&self) -> bool {
-        self.floor_rms > 0.0
-    }
-
-    /// Fill a gap. Uses the decoder that holds the history, then tops the result
-    /// up to the stream's noise floor so the gap keeps sounding like the band
-    /// instead of falling silent once the codec's own concealment has faded.
+    /// Fill a gap, using the decoder that holds the history. Opus' own
+    /// concealment and nothing else.
+    ///
+    /// A generator that added synthetic noise on top lived here between
+    /// 2026-08-16 and 2026-08-19. It arrived in the same commit that brought
+    /// concealment to every channel, although only the second of those had been
+    /// asked for, and it is what made a gap sound louder and sharper than the
+    /// band it stands in for. What this project has called comfort noise since
+    /// February is what the codec produces: extrapolated from the operator's own
+    /// signal, so it sounds like their own receiver.
     ///
     /// Returns nothing when this stream has never carried audio, or when the gap
     /// has gone on so long that something else is wrong.
+    ///
+    /// KNOWN AND DELIBERATELY NOT FIXED: a gap early in a listening session
+    /// sounds like silence rather than like the band. Opus needs to have decoded
+    /// for a while before its concealment has anything to extrapolate from, and
+    /// the two formats are separate decoders with separate history - so
+    /// switching between narrowband and wideband starts the other one from
+    /// nothing.
+    ///
+    /// Measured by the operator on 2026-08-19, one variable at a time:
+    ///
+    /// | after                        | a two-second gap sounds like |
+    /// |------------------------------|------------------------------|
+    /// | audio just switched on       | silence                      |
+    /// | a minute of narrowband       | the band, at its level       |
+    /// | switching to wideband        | silence again                |
+    /// | minutes of wideband          | the band, at its level       |
+    ///
+    /// Measured again on 2026-08-19, switching only the format on one channel:
+    /// **the two run-ins are not the same length.** Narrowband carries the band
+    /// again after seconds; wideband needs far longer. So the same test on the
+    /// same channel answers differently depending on which format is running,
+    /// and a narrowband stream (a radio) sounds unlike a wideband one (RX1 with
+    /// wideband on) with everything else equal. That is the codec, not the
+    /// channel - the two were compared by putting RX1 on narrowband, where it
+    /// behaved like the radio.
+    ///
+    /// A warning for whoever measures this next: staged packet loss at this end
+    /// makes the client report loss, and the server answers by switching error
+    /// correction on for about twenty seconds (`LossProtection` in
+    /// `audio_loops.rs`). A gap inside that window is filled by the correction
+    /// and not by this function, which reads as a wildly inconsistent result.
+    /// One gap per observation, and leave the link alone in between.
+    ///
+    /// Nothing on this side estimates a level any more, so the run-in is the
+    /// codec's own state. It costs nothing in practice - a station left running
+    /// is past it, in seconds on narrowband and rather longer on wideband - and
+    /// closing it would mean feeding the idle decoder frames it never received.
     pub fn conceal(&mut self) -> Option<Vec<i16>> {
         if !self.has_history || self.conceal_frames >= CONCEAL_MAX_FRAMES {
             return None;
         }
         self.conceal_frames += 1;
         let r = if self.last_wb { self.wb.decode_plc() } else { self.nb.decode_plc() };
-        let mut pcm = r.ok()?;
-
-        // What the CODEC produced, measured before anything is added to it.
-        //
-        // The order is the whole point and it is easy to lose: the check wants a
-        // noise floor to exist, and where one exists the comfort noise has
-        // already filled the frame - so measured afterwards it can never fire.
-        // The test below fails if these two lines ever swap.
-        let bare = rms_of(&pcm);
-        self.add_comfort_noise(&mut pcm);
-        self.note_if_codec_went_silent(bare);
+        let pcm = r.ok()?;
+        self.note_if_codec_went_silent(rms_of(&pcm));
         Some(pcm)
     }
 
@@ -175,55 +190,16 @@ impl StreamDecoder {
     /// silence. That is what being on the wrong decoder looks like from the
     /// outside, and it is what nothing was watching for.
     ///
-    /// `bare` is the codec's own output, measured before the comfort noise.
     /// Said once per stream, because a broken gap makes fifty of these a second.
-    fn note_if_codec_went_silent(&mut self, bare: f32) {
-        if self.said_silent || !self.has_floor() || bare > 0.0 {
+    fn note_if_codec_went_silent(&mut self, level: f32) {
+        if self.said_silent || !self.has_history || level > 0.0 {
             return;
         }
         self.said_silent = true;
         log::warn!(
-            "concealment produced silence on a stream that has carried audio              (wideband={}, floor {:.1}) - the decoder that conceals is not the              one holding the history",
-            self.last_wb, self.floor_rms
+            "concealment produced silence on a stream that has carried audio (wideband={}) - the decoder that conceals is not the one holding the history",
+            self.last_wb
         );
-    }
-
-    /// Top the frame up to the noise floor. Energy is added, never removed: while
-    /// Opus is still extrapolating something real it stays dominant, and the
-    /// generated part fades in underneath it as the codec fades out. No step at
-    /// the hand-over, because the sum is held constant rather than the parts.
-    fn add_comfort_noise(&mut self, pcm: &mut [i16]) {
-        if !self.has_floor() || pcm.is_empty() {
-            return;
-        }
-        let have = rms_of(pcm);
-        let want = self.floor_rms * COMFORT_LEVEL;
-        if have >= want {
-            return;
-        }
-        // Missing energy, not missing amplitude: uncorrelated sources add in
-        // power, so this is what brings the sum to the floor.
-        let deficit = (want * want - have * have).max(0.0).sqrt();
-
-        // White noise with a gentle tilt sounds like band noise; flat white is
-        // hissier than anything a receiver produces.
-        let n = pcm.len();
-        let mut noise = Vec::with_capacity(n);
-        for _ in 0..n {
-            self.noise_seed = self.noise_seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-            let white = ((self.noise_seed >> 16) as i16) as f32 / 32_768.0;
-            self.noise_lp += (white - self.noise_lp) * 0.55;
-            noise.push(self.noise_lp);
-        }
-        let noise_rms = (noise.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
-        if noise_rms <= 0.0 {
-            return;
-        }
-        let gain = deficit / (noise_rms * 32_768.0);
-        for (s, ns) in pcm.iter_mut().zip(noise.iter()) {
-            let v = *s as f32 + ns * 32_768.0 * gain;
-            *s = v.clamp(-32_768.0, 32_767.0) as i16;
-        }
     }
 }
 
@@ -304,43 +280,64 @@ mod tests {
         assert!(s.conceal().is_none());
     }
 
-    /// The measured fault: Opus concealment fades within about 260 ms, but a
-    /// dropout stays audible for as long as the link is still up. The comfort
-    /// noise fills the rest in - so seconds into a gap there is still band
-    /// noise, at the level the band had.
+    /// A gap does not fade to nothing.
+    ///
+    /// This is the property the whole feature rests on, and the reason no
+    /// generated noise is needed: on band noise Opus keeps extrapolating instead
+    /// of decaying, so a dropout still sounds like the band. (The often-quoted
+    /// fade within about 260 ms is a speech figure and does not apply here.)
+    ///
+    /// Stated as a comparison of the gap against ITSELF - early against late -
+    /// because there is no fair absolute reference. Concealment finds its own
+    /// level rather than holding the loudness of the last real frame, so
+    /// measuring it against that frame would measure the signal, not the fade.
     #[test]
     fn concealment_stays_audible_for_seconds() {
         let mut enc = OpusEncoderWideband::new_rx_continuous().unwrap();
         let mut s = StreamDecoder::new().unwrap();
         let mut seed = 99u32;
-
         for _ in 0..50 {
             let pcm = band_noise(FRAME_SAMPLES_WIDEBAND, &mut seed, 4000);
             let packet = enc.encode(&pcm).unwrap();
             s.decode(&packet, true).unwrap();
         }
-        let floor = s.floor_rms;
-        assert!(floor > 0.0, "band noise should set a floor");
 
-        // Three seconds of gap - well past the point where Opus alone is gone.
-        for frame in 0..150 {
-            let hidden = s.conceal().expect("still concealing");
-            let level = rms_of(&hidden);
-            // Against the level it is meant to sit at, not merely "above
-            // nothing": the point is that a gap keeps sounding like the band,
-            // three decibels under it.
-            assert!(
-                level > floor * COMFORT_LEVEL * 0.8,
-                "frame {} at {:.1} fell away from the comfort level ({:.1} of floor {:.1})",
-                frame, level, floor * COMFORT_LEVEL, floor
-            );
-        }
+        let mean_over = |n: usize, s: &mut StreamDecoder| {
+            let mut sum = 0.0f64;
+            for _ in 0..n {
+                sum += rms_of(&s.conceal().expect("still concealing")) as f64;
+            }
+            (sum / n as f64) as f32
+        };
+
+        // Half a second in, once the codec has settled into filling the gap.
+        let _ = mean_over(25, &mut s);
+        let early = mean_over(25, &mut s);
+        assert!(early > 0.0, "concealment went silent immediately");
+
+        // Three seconds in.
+        let _ = mean_over(75, &mut s);
+        let late = mean_over(25, &mut s);
+
+        // One-sided, deliberately, and worth knowing: nothing in this file can
+        // fail on "too loud" any more, and "too loud" was the complaint that
+        // started this. There is no honest upper bound left to assert - the
+        // level is entirely Opus' now, so a ceiling would pin a codec property
+        // rather than a choice of ours. `level_over_a_gap` is the instrument if
+        // the question comes back.
+        assert!(
+            late > early * 0.5,
+            "a gap faded away: {early:.1} at half a second, {late:.1} at three seconds"
+        );
     }
 
-    /// It does not hiss forever. If a gap outlives every timeout the stream goes
-    /// quiet rather than generating noise for the rest of the session.
+
+
+
+    /// It does not run forever. If a gap outlives every timeout the stream goes
+    /// quiet rather than concealing for the rest of the session.
     #[test]
-    fn comfort_noise_gives_up_eventually() {
+    fn concealment_gives_up_eventually() {
         let mut enc = OpusEncoder::new_rx_continuous().unwrap();
         let mut s = StreamDecoder::new().unwrap();
         let mut seed = 3u32;
@@ -377,89 +374,67 @@ mod tests {
         assert!(s.conceal().is_some(), "a real frame should reopen the budget");
     }
 
-    /// Comfort noise is generated at the quietest recent level, not the loudest.
-    /// Otherwise a gap that starts during speech would hiss at speech level.
+
+
+
+    /// What the invariant is worth, measured through the route that runs.
+    ///
+    /// `note_if_codec_went_silent` only fires on EXACTLY zero, and the only
+    /// measurement of how likely that is went out with the generator: in the
+    /// DECODE branch Opus turns digital silence into 0.1, not 0. Nobody had ever
+    /// measured the PLC branch, so the one self-reporting check in the audio path
+    /// was of unknown value. This measures it.
+    ///
+    /// It also drives `conceal()` rather than calling the check directly, which
+    /// is the difference between testing the branch that runs and the branch you
+    /// just wrote - a distinction review caught twice in three days.
     #[test]
-    fn the_floor_follows_the_quiet_parts() {
-        let mut enc = OpusEncoder::new_rx_continuous().unwrap();
+    fn a_decoder_without_history_conceals_exact_silence() {
         let mut s = StreamDecoder::new().unwrap();
-        let mut seed = 13u32;
+        // What being on the wrong decoder looks like: the stream is believed to
+        // have carried audio, but this decoder has never seen a frame of it.
+        s.has_history = true;
 
-        for _ in 0..20 {
-            let packet = enc.encode(&band_noise(FRAME_SAMPLES, &mut seed, 500)).unwrap();
-            s.decode(&packet, false).unwrap();
-        }
-        let quiet_floor = s.floor_rms;
-
-        // Now something loud, as a burst of speech would be.
-        for _ in 0..20 {
-            let packet = enc.encode(&band_noise(FRAME_SAMPLES, &mut seed, 20000)).unwrap();
-            s.decode(&packet, false).unwrap();
-        }
-        assert!(
-            s.floor_rms < quiet_floor * 3.0,
-            "loud audio dragged the floor from {:.1} to {:.1}",
-            quiet_floor, s.floor_rms
+        let hidden = s.conceal().expect("conceal returns a frame");
+        let level = rms_of(&hidden);
+        assert_eq!(
+            level, 0.0,
+            "PLC on a decoder with no history returned {level:.3}, not exact zero -              the invariant below tests `level > 0.0` and can therefore never fire"
         );
+        assert!(s.said_silent, "the invariant did not report it");
     }
 
-    /// The invariant, through the real route rather than by calling the check.
+    /// Not a check - a measurement, kept because reading it is what found the
+    /// fault. It was removed with the generator and put back, because the level
+    /// in a gap is now entirely Opus' and nothing here pins it: see the note on
+    /// `concealment_stays_audible_for_seconds`.
     ///
-    /// The repair for this was written once and never landed - the patch that
-    /// carried it failed on its second half and wrote nothing, and the tests
-    /// that "proved" it called the helper directly, so they passed against code
-    /// that still measured after the noise. A test of the branch you just wrote
-    /// instead of the branch that runs. Found by review, twice in three days
-    /// (2026-08-18).
+    /// The reference changed with the generator: dB here is now relative to the
+    /// last real frame, where it used to be relative to the estimated noise
+    /// floor. A run from before that removal is not comparable with one from
+    /// after it.
     ///
-    /// So this drives `conceal()` itself. A decoder with no history conceals
-    /// silence - that is `plc_on_a_fresh_decoder_is_silent` - and with a floor
-    /// set, the comfort noise then fills the frame. If the check runs after the
-    /// noise it sees a full frame and stays quiet; only measuring first can
-    /// notice. The two assertions together can only both hold in the right
-    /// order.
+    /// `cargo test -p sdr-remote-core --lib level_over_a_gap -- --ignored --nocapture`
     #[test]
-    fn conceal_notices_a_silent_codec_even_though_the_noise_fills_the_frame() {
+    #[ignore]
+    fn level_over_a_gap() {
+        let mut enc = OpusEncoderWideband::new_rx_continuous().unwrap();
         let mut s = StreamDecoder::new().unwrap();
-        // As a stream that has carried band noise would look, with a decoder
-        // that has nothing to extrapolate - which is the fault being watched for.
-        s.has_history = true;
-        s.floor_rms = 500.0;
-
-        let out = s.conceal().expect("a stream with history conceals");
-
-        assert!(
-            s.said_silent,
-            "the codec produced silence and nothing noticed - the check is              measuring the finished frame again"
-        );
-        assert!(
-            peak(&out) > 0,
-            "and the comfort noise should still have filled the gap"
-        );
-    }
-
-    /// The invariant has to be able to fire, and for a while it could not: it
-    /// ran on the finished frame, and where a noise floor exists the comfort
-    /// noise has already filled that frame. The repair had removed the symptom
-    /// and the detector with it - which is the shape of the fault this whole
-    /// module exists to prevent, one layer up (found in review 2026-08-18).
-    ///
-    /// So the check is tested on its own terms: silence from the codec trips
-    /// it, anything else does not, and it speaks once.
-    #[test]
-    fn the_silence_check_fires_on_what_the_codec_produced() {
-        let mut s = StreamDecoder::new().unwrap();
-        s.has_history = true;
-        s.floor_rms = 500.0; // as a stream carrying band noise would have
-
-        s.note_if_codec_went_silent(0.0);
-        assert!(s.said_silent, "silence from the codec must be noticed");
-
-        let mut again = StreamDecoder::new().unwrap();
-        again.has_history = true;
-        again.floor_rms = 500.0;
-        again.note_if_codec_went_silent(12.0);
-        assert!(!again.said_silent, "a codec that produced something is not a fault");
+        let mut seed = 0x51ee_d00du32;
+        let mut live = 0.0f32;
+        for _ in 0..80 {
+            let pcm = band_noise(FRAME_SAMPLES_WIDEBAND, &mut seed, 4000);
+            live = rms_of(&s.decode(&enc.encode(&pcm).unwrap(), true).unwrap());
+        }
+        println!("last real frame = {live:.1}");
+        for i in 0..200 {
+            let f = s.conceal().expect("concealing");
+            if i % 10 == 0 {
+                let lvl = rms_of(&f);
+                println!("  frame {:3} ({:4} ms): {:8.1}  = {:+5.1} dB vs the last real frame",
+                         i, i * 20, lvl, 20.0 * (lvl / live).log10());
+            }
+        }
     }
 
     /// Said once, not fifty times a second for as long as the gap lasts.
@@ -467,7 +442,6 @@ mod tests {
     fn the_silence_check_speaks_once_per_stream() {
         let mut s = StreamDecoder::new().unwrap();
         s.has_history = true;
-        s.floor_rms = 500.0;
         s.note_if_codec_went_silent(0.0);
         assert!(s.said_silent);
         // A second silent frame must not reset or repeat it; the flag is the

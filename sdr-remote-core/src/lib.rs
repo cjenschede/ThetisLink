@@ -9,7 +9,7 @@ pub mod protocol;
 pub mod stream;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.9.0";
+pub const VERSION: &str = "2.9.1";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).

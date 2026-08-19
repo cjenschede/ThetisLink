@@ -1,4 +1,4 @@
-# ThetisLink v2.9.0 - User Manual
+# ThetisLink v2.9.1 - User Manual
 
 ## Table of Contents
 
@@ -48,15 +48,18 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.9.0.apk` | Android client app |
-| `Installation.pdf` | Installation guide (English) |
-| `User-Manual-EN.pdf` | User manual (English, this document) |
-| `Technical-Reference.pdf` | Technical reference (English) |
-| `Installatie.pdf` | Installatiehandleiding (Nederlands) |
-| `User-Manual.pdf` | Gebruikershandleiding (Nederlands) |
-| `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
-| `LICENSE` | License (GPL-2.0-or-later) |
-| `SHA256SUMS.txt` | SHA-256 checksums for binary verification |
+| `ThetisLink-2.9.1.apk` | Android client app |
+| `Installatie.md` | Installation guide (Dutch) |
+| `User-Manual.md` | User manual (Dutch) |
+| `Technische-Referentie.md` | Technical reference (Dutch) |
+| `Installation.md` | Installation guide (English) |
+| `User-Manual-EN.md` | User manual (English, this document) |
+| `Technical-Reference.md` | Technical reference (English) |
+| `CHANGELOG.md` | What changed in each version |
+| `LICENSE` | Licence (GPL-2.0-or-later) |
+| `NOTICE.md`, `ATTRIBUTION.md` | Licence and attribution notices |
+| `thetislink-relay-source.tar.gz` | Relay server source |
+| `SHA256SUMS.txt` | SHA-256 checksums to verify the binaries |
 
 > **Configuration files:** `thetislink-server.conf` and `thetislink-client.conf` are not bundled. They are created automatically with default values on the first start of the server and client (in the same folder as the exe).
 
@@ -1128,6 +1131,8 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
+| **2.9.1** | **A gap is the codec again, and switching audio off is silent.** 2.9.0 added a noise generator that had never been part of ThetisLink; it is what made a dropout louder and harder-edged than the band it stood in for. Removed. What fills a gap is the codec's own concealment and nothing added to it, as it has been since the first build. **Switching audio off is quiet at once** - never the generator but the gate: turning audio off stops the stream at the server, the client read that as a dropout and kept filling the silence. **A stream you switch off forgets what it heard**, on all six channels and on a reconnect too. **A station listening only to a radio holds its connection** as well as any other: audio from a radio was not counted as a sign of life, so the check hung on the heartbeat alone. **60m is a band again**: the button stayed grey, 60m could hold no band memory, and the button landed 500 Hz below the band - now 5.354 MHz. The server writes the screen layout to its log at start-up. Wire protocol unchanged from 2.9.0; stock Thetis v2.10.3.x suffices. |
+| **2.9.0** | **A dropout sounds like the band again, a phone survives a network change, and chat + problem reporting.** Concealment always ran through the narrowband decoder, so with wideband audio it produced silence instead of noise - and only channel 0 tried at all. Every stream now decodes, corrects and conceals in its own format; both radios, both VRX and RX2 conceal at all. **Network change**: switching between WiFi and mobile data left the controls working and the sound gone until the app was killed - two faults, one on each side. **Chat and problem reporting** for stations on a relay: a room shared with the other users, and a report button that goes straight to the administrator with the log attached, cleaned first and shown to you before it goes. Both optional. **Android keeps its own log file** - the system log rolls away within minutes. The app is no longer debuggable, so `adb run-as` no longer works. The server says **why a radio is missing** when Windows hands its COM port to another program. Backwards-compatible with 2.8.x; stock Thetis v2.10.3.x suffices. |
 | **2.8.0** | **The radio's data is there the moment you connect, PTT is released when the radio already has, and the FTX-1's tones work in practice.** Memory channels, tones and EX settings are read **once, when the radio connects**, and every client is served from the server's copy instead of making the radio walk its channels again. **Time-out timer:** if the radio has one set, ThetisLink releases PTT just before that limit rather than transmitting on while the set has stopped; the FTX-1 also reports its real transmit state, so a fault or the set's own PTT ends the transmission here too. **FTX-1 tones:** that radio cannot store a tone in a memory channel over CAT, so ThetisLink keeps them in its own list and applies the right one each time the radio lands on a channel - writing to its memory bank is off by default and asks you to accept the cost first. The **memory table shows where the radio is**: green for the channel it is on, amber for the one you left when you tuned into VFO, and one click anywhere in the row brings you back; double-click opens the edit fields. The **window arranger is now one implementation** shared by the desktop client and the server GUI, which gains the UI scale, the 18×18 grid and five arrangement memories. Fixed: the **V/M button overwrote a memory channel** (in every release since 2.0.0, with no confirmation and nothing in the log), the FTX-1 did not actually leave memory mode on a frequency change, the EX menu dropdown dropped choices it could not parse (leaving the TX time-out unsettable), and three **Android** faults that shipped in the 2.7.0 APK: a Yaesu stayed silent when switched on, the memory list disappeared behind the EX menu, and the FTX-1's EX settings showed bare numbers. Wire protocol stays **VERSION 3** with **no new control ids**; backwards-compatible with 2.7.x. Stock Thetis v2.10.3.15 suffices. |
 | **2.7.0** | **VRX audio reliability, CTCSS/DCS from the client, rebuilt level meters and a shared full-band spectrum row.** VRX audio now starts reliably and stays clean after retuning - three independent causes sat under one symptom - and a VRX stays inside the DDC band with the spectrum drawing the edge honestly. **CTCSS and DCS can be read and written per memory channel** on the FT-991A (all 104 DCS codes; *Read tones* walks the channels, pauses a running scan and returns to where the radio was). The **level bars measure the link** rather than the volume slider, fall back to zero within about half a second once a stream stops, and the **Yaesu receive path is calibrated per radio model**. The **full-band spectrum row is shared** by the RX window and the VRX on the same DDC, with a checkbox to switch it off. Wire protocol stays **VERSION 3** (three additive control ids); backwards-compatible with 2.6.x. |
 | **2.6.0** | **The window arranger became a matrix placer, reached the server GUI, and the server went multilingual.** Grid picker up to 12×12, cell painting with spanning, rectangle drag-selection in one motion, the main window included, per monitor. The **server GUI gained the same arranger** plus translations (EN/NL/DE/FR). The **analogue S-meter was reworked** (fixed aspect, tight around the scale) and the audio level bars gained a **peak-hold marker**. Fixed: switching on a 991A no longer took tens of seconds, memories load reliably and automatically, and the expander arrows remember their state. Wire protocol stays **VERSION 3**; backwards-compatible with 2.5.x. |

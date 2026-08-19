@@ -411,6 +411,9 @@ private fun formatFrequency(hz: Long): String {
 private fun bandLabel(hz: Long): String = when (hz) {
     in 1_800_000..1_999_999 -> "160m"
     in 3_500_000..3_999_999 -> "80m"
+    // Wide on purpose, and the same range the desktop uses: 60m is channelised
+    // and the channels differ per country. Label only.
+    in 5_250_000..5_449_999 -> "60m"
     in 7_000_000..7_299_999 -> "40m"
     in 10_100_000..10_149_999 -> "30m"
     in 14_000_000..14_349_999 -> "20m"

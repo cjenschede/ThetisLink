@@ -1034,16 +1034,30 @@ async fn run_connection(
     // Test hook (client only): THETISLINK_TEST_DROP_UDP=<secs> drops inbound UDP audio for
     // the first N seconds after ready, simulating a UDP-blocked network so the fallback +
     // recovery cycle can be exercised deterministically (no OS-firewall fight). 0 = off.
+    // Capped at 60s: while it runs, audio falls back to wss and stays there, so a mistyped
+    // value (3600 for 36) would cost latency for an hour on a variable nobody notices is set.
     let test_drop_udp_secs: u64 = if config.role == RelayRole::Client {
         std::env::var("THETISLINK_TEST_DROP_UDP")
             .ok()
-            .and_then(|v| v.trim().parse().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
             .unwrap_or(0)
+            .min(60)
     } else {
         0
     };
     if test_drop_udp_secs > 0 {
-        log::warn!("TEST HOOK: dropping inbound UDP audio for the first {test_drop_udp_secs}s");
+        let asked: u64 = std::env::var("THETISLINK_TEST_DROP_UDP")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        if asked > test_drop_udp_secs {
+            log::warn!(
+                "TEST HOOK: dropping inbound UDP audio for the first {test_drop_udp_secs}s \
+                 (asked for {asked}s, capped at 60)"
+            );
+        } else {
+            log::warn!("TEST HOOK: dropping inbound UDP audio for the first {test_drop_udp_secs}s");
+        }
     }
     let mut last_udp_audio: Option<Instant> = None; // last inbound audio frame over UDP
     // Last inbound audio frame over ANY path. A quiet UDP socket only means the
