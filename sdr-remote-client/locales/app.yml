@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # ThetisLink desktop-client translations (rust-i18n v2).
 # Base = English (fallback). Add a language = add its key under each entry.
 # Ham abbreviations / mode names / product names stay identical across languages.
@@ -492,6 +493,16 @@ screen_audio_over_udp_tooltip:
   nl: "Stuur audio + PTT over kale UDP (poort 443) in plaats van de wss-tunnel: geen retransmit, lagere en stabielere latency. Zowel deze client als de server moeten dit aan hebben. Wordt actief na herstart."
   de: "Audio + PTT über reines UDP (Port 443) statt über den wss-Tunnel leiten: keine erneute Übertragung, niedrigere und stabilere Latenz. Sowohl dieser Client als auch der Server müssen es aktiviert haben. Wird nach Neustart wirksam."
   fr: "Acheminer l'audio + PTT via UDP brut (port 443) au lieu du tunnel wss : pas de retransmission, latence plus faible et plus stable. Ce client et le serveur doivent tous deux l'activer. Prend effet au redémarrage."
+screen_audio_over_udp_off_tooltip:
+  en: "Only applies once Connect via relay is on. Switching that on brings this with it."
+  nl: "Geldt pas als Verbinden via relay aan staat. Dat aanzetten neemt dit mee."
+  de: "Gilt erst, wenn Verbindung über Relay aktiv ist. Das einzuschalten nimmt dies mit."
+  fr: "Ne s'applique qu'avec la connexion par relais active. L'activer active aussi ceci."
+screen_rec_needs_audio:
+  en: "Switch this channel's audio on first. Recording writes what this client receives, so a channel it is not listening to would give an empty file."
+  nl: "Zet eerst de audio van dit kanaal aan. Opnemen schrijft weg wat deze client ontvangt, dus een kanaal waar hij niet naar luistert levert een leeg bestand op."
+  de: "Schalten Sie zuerst den Ton dieses Kanals ein. Die Aufnahme schreibt mit, was dieser Client empfängt - ein Kanal, den er nicht hört, ergäbe eine leere Datei."
+  fr: "Activez d'abord l'audio de ce canal. L'enregistrement écrit ce que ce client reçoit ; un canal qu'il n'écoute pas donnerait un fichier vide."
 screen_status:
   en: "Status:"
   nl: "Status:"
@@ -2251,21 +2262,10 @@ dev_mem_offset_readonly:
   nl: "Alleen-lezen. De grootte van de shift staat bij geen van beide radio's in het geheugenkanaal - daar staat alleen de richting; de grootte is een menu-instelling per band (FT-991A 80-83, FTX-1 EX 010316-010319). De getoonde waarde is zend- min ontvangfrequentie."
   de: "Nur Anzeige. Die Groesse des Shifts steht bei keinem der beiden Geraete im Speicherkanal - dort steht nur die Richtung; die Groesse ist eine Menueeinstellung pro Band (FT-991A 80-83, FTX-1 EX 010316-010319). Angezeigt wird Sende- minus Empfangsfrequenz."
   fr: "Lecture seule. La taille du decalage n'est stockee dans la memoire sur aucun des deux postes - la memoire ne retient que le sens ; la taille est un reglage de menu par bande (FT-991A 80-83, FTX-1 EX 010316-010319). La valeur affichee est la frequence d'emission moins celle de reception."
-chat_offline_no_relay:
-  en: "The chat runs on the relay, and no relay is set up here. Everything else keeps working."
-  nl: "De chat draait op de relay, en die is hier niet ingesteld. De rest werkt gewoon door."
-  de: "Der Chat laeuft ueber das Relay, und hier ist keines eingerichtet. Alles andere funktioniert weiter."
-  fr: "La discussion passe par le relais, et aucun n'est configure ici. Le reste continue de fonctionner."
-chat_offline_no_ticket:
-  en: "This relay offers no chat, or has not admitted this client yet. Reconnecting usually settles it."
-  nl: "Deze relay biedt geen chat, of heeft deze client nog niet toegelaten. Opnieuw verbinden helpt meestal."
-  de: "Dieses Relay bietet keinen Chat oder hat diesen Client noch nicht zugelassen. Neu verbinden hilft meist."
-  fr: "Ce relais ne propose pas de discussion, ou n'a pas encore admis ce client. Se reconnecter suffit generalement."
-chat_offline_unreachable:
-  en: "The chat is not answering right now. Everything else keeps working."
-  nl: "De chat geeft nu geen antwoord. De rest werkt gewoon door."
-  de: "Der Chat antwortet gerade nicht. Alles andere funktioniert weiter."
-  fr: "La discussion ne repond pas pour le moment. Le reste continue de fonctionner."
+# The chat_offline_* texts used to live here and never appeared: the label that
+# reads them is compiled in sdr-remote-chat, which resolves against its OWN
+# locales/app.yml, so both GUIs printed the bare key `chat_offline_no_relay`
+# instead (measured 2026-08-20). They now sit with the code that asks for them.
 chat_unread_hint:
   en: "new messages"
   nl: "nieuwe berichten"

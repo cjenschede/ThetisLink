@@ -115,6 +115,14 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
             .data_bits(serialport::DataBits::Eight)
             .stop_bits(serialport::StopBits::One)
             .parity(serialport::Parity::None)
+            // Hardware flow control, exactly as the serial thread opens it.
+            // Without it the FT-991A's CAT port never answers: its RTS stays
+            // down and the radio stays silent. That was invisible for as long as
+            // this existed, because a failed detection falls back to assuming a
+            // 991A - and on a 991A that guess is right. It surfaced the moment
+            // the settings screen started asking the port honestly and reported
+            // "nothing answered" on a radio that was on and working (2026-08-20).
+            .flow_control(serialport::FlowControl::Hardware)
             .timeout(Duration::from_millis(100))
             .open()
         {
@@ -164,6 +172,13 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
         }
         // Nothing recognisable on this baud -> port is dropped here, next baud.
     }
+    // The silent path used to leave no trace at all, so a log could only show
+    // this as the ABSENCE of a line - and the caller's fallback then made the
+    // result look like a detection.
+    log::warn!(
+        "{}: opened, but nothing answered ID; on any supported baud rate -          the model cannot be detected and the caller will have to assume one",
+        port_name
+    );
     None
 }
 
@@ -449,6 +464,11 @@ pub struct YaesuState {
     /// Whether an FTX-1 memory write is allowed at all - see `ftx1_memory_write_ack`
     /// in config.rs for what it costs. Never consulted for the FT-991A.
     pub ftx1_memory_write_ack: bool,
+    /// The operator's choice of FTX-1 capture channel (0=L, 1=R, 2=mix). Held
+    /// here rather than frozen into the audio thread, so that a radio which
+    /// adopts its real model late still gets the right one - see
+    /// `effective_capture_channel`.
+    pub audio_channel: u8,
 }
 
 impl Default for YaesuState {
@@ -497,6 +517,7 @@ impl Default for YaesuState {
             radio_rx_streak: 0,
             tot_minutes: 0,
             ftx1_memory_write_ack: false,
+            audio_channel: 2,
         }
     }
 }
@@ -635,7 +656,10 @@ impl YaesuRadio {
         output_device: Option<&str>,
         model: RadioModel,
         slot: u8,
-        capture_channel: u8,
+        // This slot's capture-channel choice. NOT necessarily the channel this
+        // radio will use: whether it means anything follows the model, and is
+        // worked out per stream build.
+        audio_channel: u8,
         // 991A SSB/AM USB routing: true = per-PTT (radio normal outside TX), false =
         // presence-based routing. FTX-1 keeps its internal auto source selection.
         ssb_switch_on_ptt: bool,
@@ -672,6 +696,7 @@ impl YaesuRadio {
         let status = Arc::new(Mutex::new(YaesuState::default()));
         status.lock().unwrap().ssb_switch_on_ptt = ssb_switch_on_ptt;
         status.lock().unwrap().ftx1_memory_write_ack = ftx1_memory_write_ack;
+        status.lock().unwrap().audio_channel = audio_channel;
         let model_shared = Arc::new(std::sync::atomic::AtomicU8::new(model.as_code()));
         let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -710,6 +735,7 @@ impl YaesuRadio {
             let seed_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
             last_audio_time.store(seed_ms, std::sync::atomic::Ordering::Relaxed);
+            let capture_channel = crate::yaesu::poll::effective_capture_channel(model, &status);
             match build_capture_stream(dev, rx_audio_tx.clone(), last_audio_time.clone(), &prefix, capture_channel) {
                 Ok((stream, rate)) => {
                     capture_stream.set(Some(stream));
@@ -799,7 +825,7 @@ impl YaesuRadio {
                     cmd_rx, self_tx, status, memory_data, menu_data,
                     port_name, baud, audio_device, output_device,
                     rx_audio_tx, capture_stream, output_stream, tx_producer,
-                    last_audio_time_clone, model, model_shared, alive, slot, prefix, capture_channel,
+                    last_audio_time_clone, model, model_shared, alive, slot, prefix,
                 );
             });
         }
@@ -832,6 +858,47 @@ impl YaesuRadio {
 
     pub fn send_command(&self, cmd: YaesuCmd) {
         let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Write one EX/menu setting, in the CAT dialect THIS radio speaks.
+    ///
+    /// The 991A addresses its menu by number (`EX012...`), the FTX-1 by a
+    /// six-digit address (`EX010316...`). Which of the two applies is a property
+    /// of the radio, never of the slot it happens to sit in - and that is
+    /// precisely what was wrong: both packet handlers decided by slot, so slot 0
+    /// always spoke 991A and slot 1 always spoke FTX-1. Put an FTX-1 in slot 1
+    /// and no EX setting could be written at all; a 991A in slot 2 likewise. The
+    /// reading side had this right long ago (`poll.rs` dispatches on
+    /// `RadioModel`); the writing side had not (2026-08-20).
+    ///
+    /// Returns the key as it will appear in a log line, or why it was refused.
+    pub fn set_menu_entry(&self, key: &str, value: &str) -> Result<String, String> {
+        let key = key.trim();
+        if self.model_code() == RadioModel::Ftx1.as_code() {
+            if key.len() != 6 || !key.chars().all(|c| c.is_ascii_digit()) {
+                return Err(format!(
+                    "'{}' is not a six-digit FTX-1 EX address",
+                    key
+                ));
+            }
+            self.send_command(YaesuCmd::RawCat(format!("EX{}{};", key, value)));
+            // Six-digit key here, three on the 991A - the scan writes them that
+            // way, so the server's copy is patched with the same key.
+            self.note_menu_value(key, value);
+            Ok(format!("EX {}", key))
+        } else {
+            // A six-digit FTX-1 address would parse as a number here and then
+            // format into a malformed three-digit EX command, so the range is
+            // checked as well as the parse.
+            match key.parse::<u16>() {
+                Ok(num) if (1..=999).contains(&num) => {
+                    self.send_command(YaesuCmd::SetMenu(num, value.to_string()));
+                    self.note_menu_value(&format!("{:03}", num), value);
+                    Ok(format!("menu {:03}", num))
+                }
+                _ => Err(format!("'{}' is not a menu number this radio has", key)),
+            }
+        }
     }
 
     /// Record a menu value WE just wrote, in the server's copy, and publish it.

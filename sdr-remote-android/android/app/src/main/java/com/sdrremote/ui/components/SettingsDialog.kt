@@ -59,10 +59,20 @@ fun SettingsDialog(
     smeterSource: Int = 1,
     onSmeterSourceChange: (Int) -> Unit = {},
     dxSpotsEnabled: Boolean = true,
+    dxClusterAvailable: Boolean = true,
     onDxSpotsEnabledChange: (Boolean) -> Unit = {},
     // The roger beep: pitch, length, level, whether FM counts, and a tick per
     // channel. The tone and the rules live in the shared engine this app
     // already runs; this is only the way to say what it should do.
+    // Which beep channels this station actually has. A beep is a thing you
+    // put ON something, so a channel that is not there gets no tick, and
+    // with none of them the whole section goes.
+    rogerThetisPresent: Boolean = true,
+    rogerRadio1Present: Boolean = true,
+    rogerRadio2Present: Boolean = true,
+    // Named by the shared rule on the Rust side, never guessed here.
+    radio1Label: String = "Yaesu 1",
+    radio2Label: String = "Yaesu 2",
     onRogerChange: (Float, Float, Int, Boolean, Boolean, Boolean, Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
     onReboot: () -> Unit,
     onShutdown: () -> Unit,
@@ -148,7 +158,15 @@ fun SettingsDialog(
                 )
                 // Dynamic restart notice: appears when the current relay config differs
                 // from what is active this session (turning it on OR off).
-                val relayConfiguredNow = relayEnabled && relayUrl.isNotBlank() && relayStation.isNotBlank()
+                // Asked of the shared rule rather than worked out here: it counts
+                // the token too, and leaving it out meant this notice stayed away
+                // at the moment the relay actually became usable.
+                // Remembered per set of values: this crosses into the native
+                // library, and it sits in a composable that redraws on every
+                // keystroke in the four fields above it.
+                val relayConfiguredNow = remember(relayEnabled, relayUrl, relayStation, relayToken) {
+                    uniffi.sdr_remote.relayIsConfigured(relayEnabled, relayUrl, relayStation, relayToken)
+                }
                 if (relayConfiguredNow != relayActiveSession) {
                     Text(
                         if (relayActiveSession) stringResource(R.string.settings_relay_saved_stop)
@@ -254,68 +272,82 @@ fun SettingsDialog(
                 }
                 Text(stringResource(R.string.settings_volume_keys_hint), fontSize = 11.sp, color = Color.Gray)
 
-                // DX-cluster spot stream — data-saving toggle voor metered links
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.settings_dx_spots), fontSize = 14.sp)
-                    Spacer(Modifier.weight(1f))
-                    Switch(
-                        checked = dxSpotsEnabled,
-                        onCheckedChange = { onDxSpotsEnabledChange(it) },
-                    )
+                // DX-cluster spot stream - data-saving toggle voor metered links.
+                // Only where there is a cluster to switch off: a server with no
+                // callsign, or with the cluster off, can never send a spot, and
+                // the switch sat there ON regardless - promising a stream that
+                // could not come (owner, 2026-08-20).
+                if (dxClusterAvailable) {
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.settings_dx_spots), fontSize = 14.sp)
+                        Spacer(Modifier.weight(1f))
+                        Switch(
+                            checked = dxSpotsEnabled,
+                            onCheckedChange = { onDxSpotsEnabledChange(it) },
+                        )
+                    }
+                    Text(stringResource(R.string.settings_dx_spots_hint), fontSize = 11.sp, color = Color.Gray)
                 }
-                Text(stringResource(R.string.settings_dx_spots_hint), fontSize = 11.sp, color = Color.Gray)
 
                 // Roger beep - a tone at the end of a transmission, sent while
                 // the transmitter is still keyed. Releasing PTT holds it for the
                 // length set here, so the far end actually hears it.
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
-                Text(stringResource(R.string.settings_roger), fontSize = 14.sp)
-                Text(stringResource(R.string.settings_roger_hint), fontSize = 11.sp, color = Color.Gray)
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Thetis", fontSize = 13.sp)
-                    Switch(checked = rogerThetis, onCheckedChange = {
-                        rogerThetis = it; saveRoger()
-                    })
-                    Spacer(Modifier.weight(1f))
-                    Text(stringResource(R.string.settings_roger_radio1), fontSize = 13.sp)
-                    Switch(checked = rogerRadio1, onCheckedChange = {
-                        rogerRadio1 = it; saveRoger()
-                    })
-                    Spacer(Modifier.weight(1f))
-                    Text(stringResource(R.string.settings_roger_radio2), fontSize = 13.sp)
-                    Switch(checked = rogerRadio2, onCheckedChange = {
-                        rogerRadio2 = it; saveRoger()
-                    })
-                }
-                Text("${rogerFreq.toInt()} Hz", fontSize = 12.sp, color = Color.Gray)
-                Slider(
-                    value = rogerFreq,
-                    onValueChange = { rogerFreq = it; saveRoger() },
-                    valueRange = 300f..2700f,
-                )
-                Text("${rogerMs} ms", fontSize = 12.sp, color = Color.Gray)
-                Slider(
-                    value = rogerMs.toFloat(),
-                    onValueChange = { rogerMs = it.toInt(); saveRoger() },
-                    valueRange = 50f..1500f,
-                )
-                Text(stringResource(R.string.settings_roger_volume) + " " +
-                     String.format("%.2f", rogerVol), fontSize = 12.sp, color = Color.Gray)
-                Slider(
-                    value = rogerVol,
-                    onValueChange = { rogerVol = it; saveRoger() },
-                    valueRange = 0f..1f,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.settings_roger_fm), fontSize = 13.sp)
-                    Spacer(Modifier.weight(1f))
-                    Switch(checked = rogerFm, onCheckedChange = { rogerFm = it; saveRoger() })
+                if (rogerThetisPresent || rogerRadio1Present || rogerRadio2Present) {
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.settings_roger), fontSize = 14.sp)
+                    Text(stringResource(R.string.settings_roger_hint), fontSize = 11.sp, color = Color.Gray)
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (rogerThetisPresent) {
+                            Text("Thetis", fontSize = 13.sp)
+                            Switch(checked = rogerThetis, onCheckedChange = {
+                                rogerThetis = it; saveRoger()
+                            })
+                            Spacer(Modifier.weight(1f))
+                        }
+                        if (rogerRadio1Present) {
+                            Text(radio1Label, fontSize = 13.sp)
+                            Switch(checked = rogerRadio1, onCheckedChange = {
+                                rogerRadio1 = it; saveRoger()
+                            })
+                            Spacer(Modifier.weight(1f))
+                        }
+                        if (rogerRadio2Present) {
+                            Text(radio2Label, fontSize = 13.sp)
+                            Switch(checked = rogerRadio2, onCheckedChange = {
+                                rogerRadio2 = it; saveRoger()
+                            })
+                        }
+                    }
+                    Text("${rogerFreq.toInt()} Hz", fontSize = 12.sp, color = Color.Gray)
+                    Slider(
+                        value = rogerFreq,
+                        onValueChange = { rogerFreq = it; saveRoger() },
+                        valueRange = 300f..2700f,
+                    )
+                    Text("${rogerMs} ms", fontSize = 12.sp, color = Color.Gray)
+                    Slider(
+                        value = rogerMs.toFloat(),
+                        onValueChange = { rogerMs = it.toInt(); saveRoger() },
+                        valueRange = 50f..1500f,
+                    )
+                    Text(stringResource(R.string.settings_roger_volume) + " " +
+                         String.format("%.2f", rogerVol), fontSize = 12.sp, color = Color.Gray)
+                    Slider(
+                        value = rogerVol,
+                        onValueChange = { rogerVol = it; saveRoger() },
+                        valueRange = 0f..1f,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.settings_roger_fm), fontSize = 13.sp)
+                        Spacer(Modifier.weight(1f))
+                        Switch(checked = rogerFm, onCheckedChange = { rogerFm = it; saveRoger() })
+                    }
                 }
 
                 // Audio routing

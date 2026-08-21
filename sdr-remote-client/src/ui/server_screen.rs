@@ -6,6 +6,34 @@
 
 use super::*;
 
+/// One tick in the recording row.
+///
+/// Three states, and the middle one is the point. A channel this station does
+/// not have is not shown at all. A channel that exists but whose audio is off
+/// is shown **greyed**, not hidden: recording writes what this client receives,
+/// so a channel it is not listening to would produce an empty file - and a
+/// control that simply vanishes tells the operator nothing about why. The
+/// tooltip on the disabled box says what to switch on.
+///
+/// This is where a present FT-991A or FTX-1 went missing from the row: it was
+/// gated on the audio subscription alone, so a radio that was there but muted
+/// left no trace at all (owner, 2026-08-20).
+fn rec_source(ui: &mut egui::Ui, exists: bool, audio_on: bool, on: &mut bool, label: &str) {
+    if !exists {
+        *on = false;
+        return;
+    }
+    if !audio_on {
+        // Never leave a tick standing on a channel that cannot deliver: the
+        // Rec button reads these straight out.
+        *on = false;
+    }
+    ui.add_enabled_ui(audio_on, |ui| {
+        ui.checkbox(on, label)
+            .on_disabled_hover_text(rust_i18n::t!("screen_rec_needs_audio").to_string());
+    });
+}
+
 impl SdrRemoteApp {
     pub(super) fn render_server_screen(&mut self, ui: &mut egui::Ui) {
         // Repaint at 30fps when connected (live audio levels), slow when idle
@@ -117,12 +145,23 @@ impl SdrRemoteApp {
         ui.collapsing(rust_i18n::t!("screen_relay_connection").to_string(), |ui| {
             // All fields save immediately on change (no separate "Apply" button anymore).
             let mut relay_changed = false;
-            relay_changed |= ui
+            // Audio over UDP comes along with the relay switch, the way the
+            // server's does. It is the lower-latency route and decides nothing
+            // at all while the relay is off, so leaving it as a second step
+            // only costs latency when it is forgotten - and both ends have to
+            // have it on for it to be used. It stays a real checkbox below: a
+            // firewall that drops UDP 443 is a good reason to turn it off, and
+            // that choice holds until this switch is next touched.
+            if ui
                 .checkbox(
                     &mut self.relay_enabled,
                     rust_i18n::t!("screen_connect_via_relay").to_string(),
                 )
-                .changed();
+                .changed()
+            {
+                relay_changed = true;
+                self.relay_udp_enabled = self.relay_enabled;
+            }
             ui.horizontal(|ui| {
                 ui.label(rust_i18n::t!("screen_relay_url").to_string());
                 relay_changed |= ui
@@ -174,19 +213,32 @@ impl SdrRemoteApp {
                 }
             });
             ui.horizontal(|ui| {
-                if ui
-                    .checkbox(&mut self.relay_udp_enabled, rust_i18n::t!("screen_audio_over_udp").to_string())
-                    .on_hover_text(rust_i18n::t!("screen_audio_over_udp_tooltip").to_string())
-                    .changed()
-                {
-                    super::config::save_relay_config(
-                        self.relay_enabled,
-                        &self.relay_url,
-                        &self.relay_station,
-                        &self.relay_token,
-                        self.relay_udp_enabled,
-                    );
-                }
+                // Greyed while the relay is off: it applies to relay traffic and
+                // nothing else, so an operator toggling it there is changing a
+                // setting that does nothing yet. The tooltip says so.
+                let on = self.relay_enabled;
+                ui.add_enabled_ui(on, |ui| {
+                    if ui
+                        .checkbox(
+                            &mut self.relay_udp_enabled,
+                            rust_i18n::t!("screen_audio_over_udp").to_string(),
+                        )
+                        .on_hover_text(if on {
+                            rust_i18n::t!("screen_audio_over_udp_tooltip").to_string()
+                        } else {
+                            rust_i18n::t!("screen_audio_over_udp_off_tooltip").to_string()
+                        })
+                        .changed()
+                    {
+                        super::config::save_relay_config(
+                            self.relay_enabled,
+                            &self.relay_url,
+                            &self.relay_station,
+                            &self.relay_token,
+                            self.relay_udp_enabled,
+                        );
+                    }
+                });
             });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(rust_i18n::t!("screen_status").to_string()).strong());
@@ -250,7 +302,7 @@ impl SdrRemoteApp {
 
         // PATCH-1: language from client config (set via `language=nl|en` in
         // thetislink-client.conf). Defaults to English when unset.
-        let lang = if self.ui_language == "nl" { Lang::Nl } else { Lang::En };
+        let lang = Lang::from_code(&self.ui_language);
 
         // PATCH-1 smoke-test fix (2026-05-12 #2): show the TOTP input + Verify
         // button in BOTH AwaitingTotp AND Failed(WrongTotp) states. Without
@@ -327,45 +379,43 @@ impl SdrRemoteApp {
 
         // Chat, with the unread count on it (design §1.7): without a number
         // where people already look, nobody opens the window - and one channel
-        // nobody opens is as empty as two were. Shown only with a relay
-        // configured, because the chat lives on it; without one there is nothing
-        // behind this button and an unexplained dead control is worse than none.
+        // nobody opens is as empty as two were.
         //
-        // Switched ON as well as filled in: the chat needs the ticket the relay
-        // hands out on connecting, so an address that is saved but not in use
-        // has no more chat behind it than no address at all. An address stays
-        // in the settings after the relay is switched off, so checking only the
-        // address left exactly the dead button this rule exists to avoid
-        // (2026-08-17).
-        if self.relay_enabled && !self.relay_url.trim().is_empty() {
-            ui.horizontal(|ui| {
-                let label = if self.chat.unread() > 0 {
-                    format!("{} ({})", rust_i18n::t!("chat_window_button"), self.chat.unread())
-                } else {
-                    rust_i18n::t!("chat_window_button").to_string()
-                };
-                let btn = egui::Button::new(RichText::new(label).strong());
-                // Toggled-on gets the fill, per the house rule; a momentary
-                // action would not.
-                let btn = if self.chat_open {
-                    btn.fill(Color32::from_rgb(70, 110, 170))
-                } else {
-                    btn
-                };
-                if ui.add(btn).clicked() {
-                    self.chat_open = !self.chat_open;
-                    self.save_full_config();
-                }
-                if self.chat.unread() > 0 {
-                    ui.label(
-                        RichText::new(rust_i18n::t!("chat_unread_hint").to_string())
-                            .small()
-                            .color(ui.visuals().weak_text_color()),
-                    );
-                }
-            });
-            ui.separator();
-        }
+        // Shown whether or not a relay is set up. From 2026-08-17 it was hidden
+        // without one, because the window could then only say "no chat here" and
+        // an unexplained dead control is worse than none. That reason is gone:
+        // the window now explains what the chat is, that it needs a relay that
+        // offers one, and how to reach one. So the button is the way in - the
+        // people who would benefit from the relay are exactly the ones who click
+        // out of curiosity, and they are the ones the feedback comes from
+        // (owner, 2026-08-20).
+        ui.horizontal(|ui| {
+            let label = if self.chat.unread() > 0 {
+                format!("{} ({})", rust_i18n::t!("chat_window_button"), self.chat.unread())
+            } else {
+                rust_i18n::t!("chat_window_button").to_string()
+            };
+            let btn = egui::Button::new(RichText::new(label).strong());
+            // Toggled-on gets the fill, per the house rule; a momentary
+            // action would not.
+            let btn = if self.chat_open {
+                btn.fill(Color32::from_rgb(70, 110, 170))
+            } else {
+                btn
+            };
+            if ui.add(btn).clicked() {
+                self.chat_open = !self.chat_open;
+                self.save_full_config();
+            }
+            if self.chat.unread() > 0 {
+                ui.label(
+                    RichText::new(rust_i18n::t!("chat_unread_hint").to_string())
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+        });
+        ui.separator();
 
         // UI language: English base + choice of NL/DE/FR. Applies immediately
         // (rust_i18n::set_locale) and persists (language= in the client conf).
@@ -690,52 +740,79 @@ impl SdrRemoteApp {
             }
         }
 
-        ui.separator();
-
         // The roger beep. One place for the sound of it, and a tick per
         // channel - an operator wants one beep of their own, not three that
         // differ by accident.
-        let roger_before = self.roger;
-        ui.horizontal(|ui| {
-            ui.label(rust_i18n::t!("screen_roger").to_string());
-            ui.add(
-                egui::DragValue::new(&mut self.roger.freq_hz)
-                    .speed(10.0)
-                    .range(sdr_remote_logic::roger::FREQ_MIN_HZ..=sdr_remote_logic::roger::FREQ_MAX_HZ)
-                    .suffix(" Hz"),
-            )
-            .on_hover_text(rust_i18n::t!("screen_roger_freq_tooltip").to_string());
-            ui.add(
-                egui::DragValue::new(&mut self.roger.duration_ms)
-                    .speed(10.0)
-                    .range(sdr_remote_logic::roger::DURATION_MIN_MS..=sdr_remote_logic::roger::DURATION_MAX_MS)
-                    .suffix(" ms"),
-            )
-            .on_hover_text(rust_i18n::t!("screen_roger_duration_tooltip").to_string());
-            ui.label(rust_i18n::t!("screen_roger_volume").to_string());
-            let resp = ui.add(egui::Slider::new(&mut self.roger.volume, 0.0..=1.0).fixed_decimals(2));
-            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.roger.volume, 0.0..=1.0, 0.05);
-            let _ = scrolled;
-            ui.checkbox(&mut self.roger.include_fm, rust_i18n::t!("screen_roger_fm").to_string())
-                .on_hover_text(rust_i18n::t!("screen_roger_fm_tooltip").to_string());
-        });
-        ui.horizontal(|ui| {
-            ui.label(rust_i18n::t!("screen_roger_on").to_string());
-            ui.checkbox(&mut self.roger.on_thetis, "Thetis");
+        //
+        // Only channels that exist get a tick, and with none of them the whole
+        // section goes: a beep is a thing you put ON something. The row used to
+        // list Thetis, "Yaesu 1: 991A" and "Yaesu 2: FTX1" on every station,
+        // including one with no radio at all - and those two names were startup
+        // guesses, not anything a server had said (owner, 2026-08-20).
+        //
+        // The stored choices are deliberately NOT cleared while a channel is
+        // away, unlike the recording ticks above: recording is a thing you start
+        // now, the beep is a setting, and a radio that comes back should bring
+        // its setting with it rather than a silent default.
+        // Presence, not the audio subscription. The beep rides out on the
+        // TRANSMIT path - the tone goes while the transmitter is still keyed -
+        // so whether this client happens to be listening to the radio has
+        // nothing to do with it. Gating it on the audio toggle hid a connected
+        // FTX-1 from the row entirely (owner, 2026-08-20). Recording is the
+        // opposite case and keeps its own rule: see `rec_source`.
+        let roger_thetis = self.thetis_configured;
+        let roger_radio1 = self.yaesu_present_last;
+        let roger_radio2 = self.yaesu2_present_last;
+        if roger_thetis || roger_radio1 || roger_radio2 {
+            ui.separator();
+            let roger_before = self.roger;
+            ui.horizontal(|ui| {
+                ui.label(rust_i18n::t!("screen_roger").to_string());
+                ui.add(
+                    egui::DragValue::new(&mut self.roger.freq_hz)
+                        .speed(10.0)
+                        .range(sdr_remote_logic::roger::FREQ_MIN_HZ..=sdr_remote_logic::roger::FREQ_MAX_HZ)
+                        .suffix(" Hz"),
+                )
+                .on_hover_text(rust_i18n::t!("screen_roger_freq_tooltip").to_string());
+                ui.add(
+                    egui::DragValue::new(&mut self.roger.duration_ms)
+                        .speed(10.0)
+                        .range(sdr_remote_logic::roger::DURATION_MIN_MS..=sdr_remote_logic::roger::DURATION_MAX_MS)
+                        .suffix(" ms"),
+                )
+                .on_hover_text(rust_i18n::t!("screen_roger_duration_tooltip").to_string());
+                ui.label(rust_i18n::t!("screen_roger_volume").to_string());
+                let resp = ui.add(egui::Slider::new(&mut self.roger.volume, 0.0..=1.0).fixed_decimals(2));
+                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.roger.volume, 0.0..=1.0, 0.05);
+                let _ = scrolled;
+                ui.checkbox(&mut self.roger.include_fm, rust_i18n::t!("screen_roger_fm").to_string())
+                    .on_hover_text(rust_i18n::t!("screen_roger_fm_tooltip").to_string());
+            });
             let l1 = self.yaesu_slot_label(0);
             let l2 = self.yaesu_slot_label(1);
-            ui.checkbox(&mut self.roger.on_radio1, l1);
-            ui.checkbox(&mut self.roger.on_radio2, l2);
-            ui.label(
-                RichText::new(rust_i18n::t!("screen_roger_note").to_string())
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-            );
-        });
-        if self.roger != roger_before {
-            self.roger = self.roger.clamped();
-            super::config::save_roger(&self.roger);
-            let _ = self.cmd_tx.send(Command::SetRogerBeep(self.roger));
+            ui.horizontal(|ui| {
+                ui.label(rust_i18n::t!("screen_roger_on").to_string());
+                if roger_thetis {
+                    ui.checkbox(&mut self.roger.on_thetis, "Thetis");
+                }
+                if roger_radio1 {
+                    ui.checkbox(&mut self.roger.on_radio1, l1);
+                }
+                if roger_radio2 {
+                    ui.checkbox(&mut self.roger.on_radio2, l2);
+                }
+                ui.label(
+                    RichText::new(rust_i18n::t!("screen_roger_note").to_string())
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            });
+            if self.roger != roger_before {
+                self.roger = self.roger.clamped();
+                super::config::save_roger(&self.roger);
+                let _ = self.cmd_tx.send(Command::SetRogerBeep(self.roger));
+            }
         }
 
         // Audio recording
@@ -752,36 +829,26 @@ impl SdrRemoteApp {
                     self.recording = false;
                 }
             } else {
-                if self.thetis_configured && self.rx1_enabled {
-                    ui.checkbox(&mut self.rec_rx1, "RX1");
-                } else {
-                    self.rec_rx1 = false;
-                }
-                if self.thetis_configured && self.rx2_enabled {
-                    ui.checkbox(&mut self.rec_rx2, "RX2");
-                } else {
-                    self.rec_rx2 = false;
-                }
-                if self.yaesu_enabled {
-                    ui.checkbox(&mut self.rec_yaesu, rec_yaesu_label.as_str());
-                } else {
-                    self.rec_yaesu = false;
-                }
-                if self.yaesu2_enabled {
-                    ui.checkbox(&mut self.rec_yaesu2, rec_yaesu2_label.as_str());
-                } else {
-                    self.rec_yaesu2 = false;
-                }
-                if self.thetis_configured && self.vrx1_enabled {
-                    ui.checkbox(&mut self.rec_vrx1, "VRX1");
-                } else {
-                    self.rec_vrx1 = false;
-                }
-                if self.thetis_configured && self.vrx2_enabled {
-                    ui.checkbox(&mut self.rec_vrx2, "VRX2");
-                } else {
-                    self.rec_vrx2 = false;
-                }
+                let thetis = self.thetis_configured;
+                let both_rx = thetis && self.rx2_present;
+                rec_source(ui, thetis, self.rx1_enabled, &mut self.rec_rx1, "RX1");
+                rec_source(ui, both_rx, self.rx2_enabled, &mut self.rec_rx2, "RX2");
+                rec_source(
+                    ui,
+                    self.yaesu_present_last,
+                    self.yaesu_enabled,
+                    &mut self.rec_yaesu,
+                    rec_yaesu_label.as_str(),
+                );
+                rec_source(
+                    ui,
+                    self.yaesu2_present_last,
+                    self.yaesu2_enabled,
+                    &mut self.rec_yaesu2,
+                    rec_yaesu2_label.as_str(),
+                );
+                rec_source(ui, thetis, self.vrx1_enabled, &mut self.rec_vrx1, "VRX1");
+                rec_source(ui, both_rx, self.vrx2_enabled, &mut self.rec_vrx2, "VRX2");
                 let any = self.rec_rx1 || self.rec_rx2 || self.rec_yaesu
                     || self.rec_yaesu2 || self.rec_vrx1 || self.rec_vrx2;
                 if ui.add_enabled(any, egui::Button::new("Rec")).clicked() {
@@ -1011,11 +1078,17 @@ impl SdrRemoteApp {
 
         if self.thetis_configured {
             // Data-saving toggle: disables the DX-cluster spot stream on metered links.
-            ui.add_space(4.0);
-            let mut dx_spots = self.dx_spots_enabled;
-            if ui.checkbox(&mut dx_spots, rust_i18n::t!("screen_receive_dx_spots").to_string()).changed() {
-                self.dx_spots_enabled = dx_spots;
-                let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetDxSpotsEnabled(dx_spots));
+            // Only where there is a cluster to switch off. A server with no
+            // callsign, or with the cluster off, will never send a spot, and the
+            // tick sat there ON regardless - promising a stream that could not
+            // come (owner, 2026-08-20).
+            if self.dx_cluster_available {
+                ui.add_space(4.0);
+                let mut dx_spots = self.dx_spots_enabled;
+                if ui.checkbox(&mut dx_spots, rust_i18n::t!("screen_receive_dx_spots").to_string()).changed() {
+                    self.dx_spots_enabled = dx_spots;
+                    let _ = self.cmd_tx.send(sdr_remote_logic::commands::Command::SetDxSpotsEnabled(dx_spots));
+                }
             }
 
             // Second spectrum row per receiver chain, shared by RX1+VRX1 and

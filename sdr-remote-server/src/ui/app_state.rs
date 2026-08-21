@@ -31,6 +31,12 @@ impl ServerApp {
             0
         };
 
+        let (probe_tx, probe_rx) = std::sync::mpsc::channel();
+        let probe_port = [
+            config.yaesu_port.clone().unwrap_or_default(),
+            config.yaesu2_port.clone().unwrap_or_default(),
+        ];
+
         Self {
             tci_addr: config.tci_addr.unwrap_or_default(),
             rx2_present: config.rx2_present,
@@ -39,8 +45,16 @@ impl ServerApp {
             yaesu_audio_device: config.yaesu_audio_device.unwrap_or_default(),
             yaesu_audio_output_device: config.yaesu_audio_output_device.unwrap_or_default(),
             yaesu_enabled: config.yaesu_enabled,
-            yaesu_ssb_switch_on_ptt: config.yaesu_ssb_switch_on_ptt,
-            ftx1_memory_write_ack: config.ftx1_memory_write_ack,
+            ssb_switch_on_ptt: [config.yaesu_ssb_switch_on_ptt, config.yaesu2_ssb_switch_on_ptt],
+            memory_write_ack: [config.yaesu_memory_write_ack, config.yaesu2_memory_write_ack],
+            audio_channel: [config.yaesu_audio_channel, config.yaesu2_audio_channel],
+            probe_model: [config.yaesu_model_last, config.yaesu2_model_last],
+            probe_busy: [false; 2],
+            probe_attempted: [false; 2],
+            probe_silent: [false; 2],
+            probe_port,
+            probe_tx,
+            probe_rx,
             yaesu2_port: config.yaesu2_port.clone().unwrap_or_default(),
             yaesu2_audio_device: config.yaesu2_audio_device.clone().unwrap_or_default(),
             yaesu2_audio_output_device: config.yaesu2_audio_output_device.clone().unwrap_or_default(),
@@ -163,7 +177,18 @@ impl ServerApp {
             ultrabeam_window_size: config.ultrabeam_window_size,
             rotor_window_size: config.rotor_window_size,
             show_about: false,
-            chat: sdr_remote_chat::ChatPanel::default(),
+            show_memory_condition: None,
+            chat: {
+                // What was folded away last session comes back folded away.
+                let mut panel = sdr_remote_chat::ChatPanel::default();
+                let ids: Vec<i64> = config
+                    .chat_answers_seen
+                    .split(',')
+                    .filter_map(|p| p.trim().parse::<i64>().ok())
+                    .collect();
+                panel.restore_seen(&ids);
+                panel
+            },
             show_chat_window: config.show_chat_window,
             chat_window_pos: config.chat_window_pos,
             chat_window_size: config.chat_window_size,

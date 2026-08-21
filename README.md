@@ -1,37 +1,39 @@
 # ThetisLink
 
-> **Current release: [v2.9.1](https://github.com/cjenschede/ThetisLink/releases/tag/v2.9.1)** —
-> **A dropout sounds like the band again, and switching audio off is silent.** When audio
-> hiccups, ThetisLink fills the gap the way it always claimed to — but concealment had been
-> running on the wrong decoder, so with wideband audio on it produced silence instead, and only
-> the first channel even tried. Every stream now decodes, corrects and conceals in its own
-> format; both radios, both VRX and RX2 conceal at all, which they never did. That sound is the
-> codec's own concealment and nothing added to it: extrapolated from your signal, which is why
-> it passes for your own receiver — though the codec needs to have been decoding for a while
-> before it can fill a gap at all, so early in a session a dropout is silence instead. See the
-> changelog. And switching a channel off with the audio button is quiet
-> at once — it never was, in any earlier version.
-> **A phone that changes network gets its audio back by itself**: switching between WiFi and
-> mobile data used to leave the controls working and the sound gone until the app was killed.
-> **Chat and problem reporting** arrive for stations on a relay — one room shared with the
-> other users of it, and a button that sends a report straight to the administrator with
-> your log attached, cleaned first and shown to you before it goes. Both are optional and
-> neither is needed to operate; without a relay there is nothing new to see and nothing to
-> switch off. Also: the server now says **why a radio is missing** when Windows hands its COM
-> port to another program, and a recording made during a dropout is no longer shorter than what
-> you heard. A station whose **only incoming audio is a radio** also holds its connection
-> better — a Yaesu without Thetis, or a Thetis station with its own audio switched off: audio
-> from a radio now counts as a sign of life, which it did not before. And **60m** is
-> recognised as a band at last — the button stayed grey, and 60m could not hold a band
-> memory of its own.
-> **Coming from 2.8.x?** Read the 2.9.0 section of the changelog as well — it contains the one
-> change in this line that takes something away: the Android app is no longer debuggable, so
-> reading its log with `adb run-as` no longer works. The app keeps its own log file instead.
+> **Current release: [v2.10.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.10.0)** —
+> **A first start on the server claims nothing, and two radios of the same type stay apart.** With no
+> configuration file yet, the server opens bare: every optional device off, the second
+> receiver off, no windows opening by themselves. You switch on what you have connected
+> instead of switching off what you do not. It opens in the display language of the machine
+> where ThetisLink has that translation — Dutch, German or French — and in English otherwise,
+> and that applies to a first start only: once there is a configuration file, the language in
+> it is yours and stays. German and French also reach the connect screen, the wizard and the
+> status line under them, which were English whatever you had chosen.
+> **Two Yaesu radios can now hold different settings.** Three of them — switch to SSB on PTT,
+> permission to write memory channels, which side of the USB audio to take — were stored once
+> and applied to both, so granting a permission on one radio granted it on the other for good.
+> They are per radio now, and ThetisLink works out *what* a radio is by asking the port rather
+> than by which slot it sits in: an FTX-1 in the first slot used to get an FT-991A's menu.
+> Also: **rows that do not apply are no longer shown** — the roger beep lists only the channels
+> this station has, the DX spots switch is gone where the server has no cluster, and a radio
+> slot is called "Yaesu 1" until the server says what it is instead of showing a model name
+> that was a startup guess. The **chat** now explains what a relay does and is reachable
+> whether or not you have one; it says plainly that whoever runs a relay may refuse and may
+> stop. **An answer from the administrator that you click away stays away** — remembered per
+> machine, so putting one aside on the phone leaves it standing in the server window. And the
+> strip that shows those answers is bounded and scrolls, so it no longer takes the whole
+> window: it had no limit and no scrollbar, and a few unread answers hid the chat and the
+> report button behind them.
+> And **a settings file that cannot be read is no longer overwritten** — locked by a
+> backup or a virus scanner, it used to read as "nothing has ever been configured here".
+> **Upgrading keeps your configuration**: the three settings that were shared hand their answer
+> to both radios. **Stepping back to 2.9.1 does not** — it does not know the per-radio keys, so
+> keep a copy of your `.conf` if you want that option.
 > **Backwards-compatible** — since 2.9.0 the wire protocol gains two packet types for fetching
 > a connected server's log (`0x35`, `0x36`); an older peer that knows neither simply never asks
-> and never answers. 2.9.1 changes nothing on the wire. **Stock Thetis v2.10.3.x suffices — no
-> fork change required.**
-> Download `ThetisLink-2.9.1.zip` from the
+> and never answers. 2.9.1 and 2.10.0 change nothing on the wire. **Stock Thetis v2.10.3.x
+> suffices — no fork change required.**
+> Download `ThetisLink-2.10.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are

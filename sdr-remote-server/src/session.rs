@@ -1048,6 +1048,20 @@ impl SessionManager {
             .collect()
     }
 
+    /// Is this client still in the opening seconds of its connection?
+    ///
+    /// A client sends its whole state as soon as it is admitted, so everything
+    /// that arrives in that window restates what it came with rather than
+    /// reporting a change. Callers use it to keep that dump out of the log at
+    /// INFO. An unknown address counts as NOT opening: something arriving
+    /// without a session is not a snapshot.
+    pub fn opening_burst(&self, addr: SocketAddr) -> bool {
+        self.clients
+            .get(&addr)
+            .map(|c| c.connected_since.elapsed() < std::time::Duration::from_secs(3))
+            .unwrap_or(false)
+    }
+
     /// Get spectrum clients: (addr, zoom, pan, max_bins)
     pub fn spectrum_clients(&self) -> Vec<(SocketAddr, f32, f32, u16)> {
         self.clients.values()
@@ -1284,6 +1298,20 @@ mod connect_generation_tests {
         let settled = m.connect_generation();
         m.update_heartbeat(a, 397, 0, 0, 0);
         assert_eq!(m.connect_generation(), settled);
+    }
+
+    /// The opening window covers a client that has just arrived, and nothing
+    /// else. An address with no session at all is not "opening" - it has sent
+    /// no snapshot, so whatever it sends is a real event and belongs in the log.
+    #[test]
+    fn only_a_client_that_just_arrived_is_opening() {
+        let mut m = SessionManager::new(Some("secret".into()), None);
+        let a: std::net::SocketAddr = A.parse().unwrap();
+        assert!(!m.opening_burst(a), "no session yet is not an opening burst");
+        let _ = m.create_challenge(a);
+        assert!(m.opening_burst(a), "a client that just knocked is opening");
+        let b: std::net::SocketAddr = "10.0.0.9:1234".parse().unwrap();
+        assert!(!m.opening_burst(b), "another address is not covered by it");
     }
 
     /// Knocking is not joining. Issuing a challenge must not move the number: anyone

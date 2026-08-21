@@ -235,6 +235,11 @@ pub struct RadioState {
 
     // DX-cluster spot stream — toggle for metered-link data-saving
     pub dx_spots_enabled: bool,
+    /// Whether the server has a DX cluster at all (callsign set and switched
+    /// on). `true` until a server says otherwise, which is also what an older
+    /// server that cannot say means. A client with this `false` hides the spot
+    /// toggle rather than offering a subscription that can never deliver.
+    pub dx_cluster_available: bool,
     /// Goes up by one on every successful authentication.
     ///
     /// A COUNTER and not a flag, because the thing it replaces was a flank:
@@ -639,6 +644,7 @@ impl Default for RadioState {
             mon_on: false,
             tx_profile_names: Vec::new(),
             dx_spots_enabled: true,
+            dx_cluster_available: true,
             session_generation: 0,
             server_subs: None,
             full_spectrum_enabled: true,

@@ -942,6 +942,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -971,6 +979,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_consent(`ptr`: Pointer,`displayName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_dismiss_answer(`ptr`: Pointer,`id`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_edit(`ptr`: Pointer,`id`: Long,`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_leave(`ptr`: Pointer,`deleteMessages`: Byte,uniffi_out_err: UniffiRustCallStatus,
@@ -979,6 +989,10 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_report(`ptr`: Pointer,`note`: RustBuffer.ByValue,`attachment`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_restore_seen(`ptr`: Pointer,`ids`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_seen_ids(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_send(`ptr`: Pointer,`body`: RustBuffer.ByValue,`replyTo`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_chat_state(`ptr`: Pointer,`open`: Byte,uniffi_out_err: UniffiRustCallStatus,
@@ -1187,6 +1201,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_sdr_remote_android_fn_func_log_tail(uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_func_relay_is_configured(`enabled`: Byte,`url`: RustBuffer.ByValue,`station`: RustBuffer.ByValue,`token`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
     fun uniffi_sdr_remote_android_fn_func_version(uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun ffi_sdr_remote_android_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
@@ -1305,11 +1321,15 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_sdr_remote_android_checksum_func_log_tail(
     ): Short
+    fun uniffi_sdr_remote_android_checksum_func_relay_is_configured(
+    ): Short
     fun uniffi_sdr_remote_android_checksum_func_version(
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_build_attachment(
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_consent(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_dismiss_answer(
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_edit(
     ): Short
@@ -1318,6 +1338,10 @@ internal interface UniffiLib : Library {
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_mark_read(
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_report(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_restore_seen(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_seen_ids(
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_send(
     ): Short
@@ -1548,6 +1572,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_sdr_remote_android_checksum_func_log_tail() != 33477.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_sdr_remote_android_checksum_func_relay_is_configured() != 28854.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_sdr_remote_android_checksum_func_version() != 61161.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1555,6 +1582,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_consent() != 44210.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_dismiss_answer() != 33477.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_edit() != 12058.toShort()) {
@@ -1567,6 +1597,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_report() != 46330.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_restore_seen() != 2934.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_seen_ids() != 49652.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_send() != 32064.toShort()) {
@@ -2357,6 +2393,8 @@ public interface SdrBridgeInterface {
 
     fun `chatConsent`(`displayName`: kotlin.String)
 
+    fun `chatDismissAnswer`(`id`: kotlin.Long)
+
     fun `chatEdit`(`id`: kotlin.Long, `body`: kotlin.String)
 
     fun `chatLeave`(`deleteMessages`: kotlin.Boolean)
@@ -2364,6 +2402,10 @@ public interface SdrBridgeInterface {
     fun `chatMarkRead`()
 
     fun `chatReport`(`note`: kotlin.String, `attachment`: kotlin.String)
+
+    fun `chatRestoreSeen`(`ids`: List<kotlin.Long>)
+
+    fun `chatSeenIds`(): List<kotlin.Long>
 
     fun `chatSend`(`body`: kotlin.String, `replyTo`: kotlin.Long)
 
@@ -2683,6 +2725,17 @@ open class SdrBridge: Disposable, AutoCloseable, SdrBridgeInterface {
 
 
 
+    override fun `chatDismissAnswer`(`id`: kotlin.Long)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_sdrbridge_chat_dismiss_answer(
+        it, FfiConverterLong.lower(`id`),_status)
+}
+    }
+
+
+
     override fun `chatEdit`(`id`: kotlin.Long, `body`: kotlin.String)
         =
     callWithPointer {
@@ -2725,6 +2778,29 @@ open class SdrBridge: Disposable, AutoCloseable, SdrBridgeInterface {
 }
     }
 
+
+
+    override fun `chatRestoreSeen`(`ids`: List<kotlin.Long>)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_sdrbridge_chat_restore_seen(
+        it, FfiConverterSequenceLong.lower(`ids`),_status)
+}
+    }
+
+
+
+    override fun `chatSeenIds`(): List<kotlin.Long> {
+            return FfiConverterSequenceLong.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_sdrbridge_chat_seen_ids(
+        it, _status)
+}
+    }
+    )
+    }
 
 
     override fun `chatSend`(`body`: kotlin.String, `replyTo`: kotlin.Long)
@@ -4122,6 +4198,9 @@ data class BridgeRadioState (
     var `downKbps`: kotlin.UInt,
     var `upKbps`: kotlin.UInt,
     var `dxSpotsEnabled`: kotlin.Boolean,
+    var `dxClusterAvailable`: kotlin.Boolean,
+    var `yaesuLabel`: kotlin.String,
+    var `yaesu2Label`: kotlin.String,
     var `captureLevel`: kotlin.Float,
     var `yaesuMicLevel`: kotlin.Float,
     var `playbackLevel`: kotlin.Float,
@@ -4322,6 +4401,9 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterFloat.read(buf),
@@ -4515,6 +4597,9 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUInt.allocationSize(value.`downKbps`) +
             FfiConverterUInt.allocationSize(value.`upKbps`) +
             FfiConverterBoolean.allocationSize(value.`dxSpotsEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`dxClusterAvailable`) +
+            FfiConverterString.allocationSize(value.`yaesuLabel`) +
+            FfiConverterString.allocationSize(value.`yaesu2Label`) +
             FfiConverterFloat.allocationSize(value.`captureLevel`) +
             FfiConverterFloat.allocationSize(value.`yaesuMicLevel`) +
             FfiConverterFloat.allocationSize(value.`playbackLevel`) +
@@ -4707,6 +4792,9 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUInt.write(value.`downKbps`, buf)
             FfiConverterUInt.write(value.`upKbps`, buf)
             FfiConverterBoolean.write(value.`dxSpotsEnabled`, buf)
+            FfiConverterBoolean.write(value.`dxClusterAvailable`, buf)
+            FfiConverterString.write(value.`yaesuLabel`, buf)
+            FfiConverterString.write(value.`yaesu2Label`, buf)
             FfiConverterFloat.write(value.`captureLevel`, buf)
             FfiConverterFloat.write(value.`yaesuMicLevel`, buf)
             FfiConverterFloat.write(value.`playbackLevel`, buf)
@@ -4989,6 +5077,34 @@ public object FfiConverterSequenceUShort: FfiConverterRustBuffer<List<kotlin.USh
 /**
  * @suppress
  */
+public object FfiConverterSequenceLong: FfiConverterRustBuffer<List<kotlin.Long>> {
+    override fun read(buf: ByteBuffer): List<kotlin.Long> {
+        val len = buf.getInt()
+        return List<kotlin.Long>(len) {
+            FfiConverterLong.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.Long>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterLong.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.Long>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterLong.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -5106,6 +5222,15 @@ public object FfiConverterSequenceTypeBridgeDxSpot: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_log_tail(
         _status)
+}
+    )
+    }
+
+ fun `relayIsConfigured`(`enabled`: kotlin.Boolean, `url`: kotlin.String, `station`: kotlin.String, `token`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_relay_is_configured(
+        FfiConverterBoolean.lower(`enabled`),FfiConverterString.lower(`url`),FfiConverterString.lower(`station`),FfiConverterString.lower(`token`),_status)
 }
     )
     }

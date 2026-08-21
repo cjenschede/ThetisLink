@@ -16,4 +16,11 @@ rand = "0.8"
 totp-lite = "2.0"
 base32 = "0.5"
 
+# `oslang`: the OS display language for a first start (GetUserDefaultUILanguage).
+# Same crate + version the server and client already pull in, so no new crate
+# enters the workspace or the SBOM. Target-gated, so the Android build of this
+# crate is untouched.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Globalization"] }
+
 [dev-dependencies]

@@ -188,6 +188,10 @@ impl SdrRemoteApp {
             &self.ui_language,
             self.yaesu_present_last,
             self.yaesu2_present_last,
+            // The live values: whatever the server last told us, or the seed we
+            // opened with while no server has answered yet.
+            self.thetis_configured,
+            self.rx2_present,
         );
     }
 

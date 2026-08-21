@@ -1,5 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+/// A control a client sent: an event at INFO, unless it is part of the state
+/// dump that arrives right after connecting.
+///
+/// That dump restates what the client already had - 35, 32 and 25 lines inside
+/// a single second in one operator's log, 184 of 627 lines in total. It is one
+/// event, and forty lines is not how you write one down. Same rule as the TCI
+/// state notifications and the squelch gate: log the change, not the state.
+macro_rules! ctrl_log {
+    ($opening:expr, $($arg:tt)*) => {
+        if $opening { log::debug!($($arg)*) } else { log::info!($($arg)*) }
+    };
+}
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -3136,6 +3149,16 @@ impl NetworkService {
                                 state_flags = state_flags
                                     .with(sdr_remote_core::protocol::ServerStateFlags::SINGLE_RECEIVER);
                             }
+                            // No DX cluster here: switched off, or no callsign to
+                            // log in with - the cluster stays offline without one.
+                            // Inverted flag, so an older server keeps the spot
+                            // toggle visible exactly as before.
+                            if !self.config.dxcluster_enabled
+                                || self.config.dxcluster_callsign.trim().is_empty()
+                            {
+                                state_flags = state_flags
+                                    .with(sdr_remote_core::protocol::ServerStateFlags::NO_DX_CLUSTER);
+                            }
 
                             // PATCH-1 review finding (B3): advertise REPORTS_STATE_FLAGS
                             // so the client knows the state_flags field is authoritative.
@@ -3507,15 +3530,14 @@ impl NetworkService {
                             send_own_report(self.socket.clone(), addr, lists);
                         }
                         Packet::YaesuMemoryData(text) => {
-                            if text.starts_with("SETMENU:") {
-                                // Direct menu set: "SETMENU:nnn:value"
+                            if let Some(rest) = text.strip_prefix("SETMENU:") {
+                                // "SETMENU:<key>:<value>". The key's shape follows
+                                // the radio, not the slot - see `set_menu_entry`.
                                 if let Some(ref yaesu) = yaesu {
-                                    let parts: Vec<&str> = text[8..].splitn(2, ':').collect();
-                                    if parts.len() == 2 {
-                                        if let Ok(num) = parts[0].parse::<u16>() {
-                                            info!("Client {} set menu {:03} = {}", addr, num, parts[1]);
-                                            yaesu.send_command(crate::yaesu::YaesuCmd::SetMenu(num, parts[1].to_string()));
-                                            yaesu.note_menu_value(&format!("{:03}", num), parts[1]);
+                                    if let Some((key, value)) = rest.split_once(':') {
+                                        match yaesu.set_menu_entry(key, value) {
+                                            Ok(what) => info!("Client {} [radio0] set {} = {}", addr, what, value),
+                                            Err(why) => warn!("Client {} [radio0] EX set refused: {}", addr, why),
                                         }
                                     }
                                 }
@@ -3601,19 +3623,14 @@ impl NetworkService {
                         // latch until Yaesu2WriteMemories (UDP-reorder-safe, like slot 0).
                         Packet::YaesuMemoryData2(text) => {
                             if let Some(rest) = text.strip_prefix("SETMENU:") {
-                                // FTX-1 EX-write: "SETMENU:p1p2p3:value" -> EX{p1p2p3}{value};
+                                // Same handler shape as slot 0: the radio decides
+                                // which EX dialect its key is in.
                                 if let Some(ref yaesu) = yaesu2 {
-                                    let parts: Vec<&str> = rest.splitn(2, ':').collect();
-                                    if parts.len() == 2 && parts[0].len() == 6
-                                        && parts[0].chars().all(|c| c.is_ascii_digit())
-                                    {
-                                        info!("Client {} [radio1] set EX {} = {}", addr, parts[0], parts[1]);
-                                        yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(
-                                            format!("EX{}{};", parts[0], parts[1])));
-                                        // Six-digit key here, three on the 991A - the
-                                        // scan writes them that way, so the copy is
-                                        // patched with the same key.
-                                        yaesu.note_menu_value(parts[0], parts[1]);
+                                    if let Some((key, value)) = rest.split_once(':') {
+                                        match yaesu.set_menu_entry(key, value) {
+                                            Ok(what) => info!("Client {} [radio1] set {} = {}", addr, what, value),
+                                            Err(why) => warn!("Client {} [radio1] EX set refused: {}", addr, why),
+                                        }
                                     }
                                 }
                             } else if yaesu2_write_armed {
@@ -3641,6 +3658,14 @@ impl NetworkService {
                             // remaining-client-zoom-change will trigger eval.
                         }
                         Packet::Control(ctrl) => {
+                            // A client sends its whole state right after it
+                            // connects - forty controls restating what it
+                            // arrived with. That is one event, not forty, so
+                            // during the opening seconds these go to debug.
+                            let opening = {
+                                let sess = self.session.lock().await;
+                                sess.opening_burst(addr)
+                            };
                             let mut ptt = self.ptt.lock().await;
                             match ctrl.control_id {
                                 ControlId::Rx1AfGain => {
@@ -3656,7 +3681,7 @@ impl NetworkService {
                                 ControlId::PowerOnOff => {
                                     if ctrl.value == 2 {
                                         // Shutdown Thetis via TCI (v2.10.3.13+)
-                                        info!("Client {} requested Thetis shutdown", addr);
+                                        ctrl_log!(opening, "Client {} requested Thetis shutdown", addr);
                                         ptt.send_cat("shutdown_ex;").await;
                                     } else {
                                         ptt.set_power(ctrl.value != 0).await;
@@ -3690,14 +3715,14 @@ impl NetworkService {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_spectrum_enabled(addr, enabled);
                                     self.refresh_spectrum_processors().await;
-                                    info!("Client {} spectrum: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} spectrum: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::SpectrumFps => {
                                     let fps = (ctrl.value as u8).clamp(5, 30);
                                     self.session.lock().await.set_spectrum_fps(addr, fps);
                                     let max_fps = self.session.lock().await.spectrum_max_fps();
                                     self.spectrum.lock().await.set_fps(max_fps);
-                                    info!("Client {} spectrum fps: {}", addr, fps);
+                                    ctrl_log!(opening, "Client {} spectrum fps: {}", addr, fps);
                                 }
                                 ControlId::SpectrumZoom => {
                                     let zoom = ctrl.value as f32 / 10.0;
@@ -3720,7 +3745,7 @@ impl NetworkService {
                                     // report about a pan that does nothing cannot say
                                     // whether the value ever arrived - which is exactly
                                     // where one such report ran out of evidence.
-                                    info!("Client {} rx1 spectrum pan: {:+.4}", addr, pan);
+                                    ctrl_log!(opening, "Client {} rx1 spectrum pan: {:+.4}", addr, pan);
                                 }
                                 ControlId::FilterLow => {
                                     // Buffer low edge; send combined with high edge
@@ -3730,7 +3755,7 @@ impl NetworkService {
                                     let high = ctrl.value as i16 as i32;
                                     let low = pending_filter_low.take()
                                         .unwrap_or(ptt.filter_low_hz());
-                                    info!("Client {} filter: {} .. {} Hz", addr, low, high);
+                                    ctrl_log!(opening, "Client {} filter: {} .. {} Hz", addr, low, high);
                                     ptt.set_filter(low, high).await;
                                 }
                                 ControlId::TxFilterLow => {
@@ -3748,7 +3773,7 @@ impl NetworkService {
                                     let lo = low.clamp(0, 8000);
                                     let hi = high.clamp(0, 8000);
                                     let (lo, hi) = (lo.min(hi), lo.max(hi));
-                                    info!("Client {} TX filter: {} .. {} Hz", addr, lo, hi);
+                                    ctrl_log!(opening, "Client {} TX filter: {} .. {} Hz", addr, lo, hi);
                                     ptt.set_tx_filter_band(lo, hi).await;
                                 }
                                 ControlId::ThetisStarting => {} // server->client only
@@ -3775,7 +3800,7 @@ impl NetworkService {
                                         pkt.serialize_as_type(&mut buf, PacketType::ModeRx2);
                                         let _ = self.socket.try_send_to(&buf, addr);
                                     }
-                                    info!("Client {} RX2: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} RX2: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::Rx2AfGain => {
                                     let val = ctrl.value.min(100);
@@ -3804,7 +3829,7 @@ impl NetworkService {
                                         pkt.serialize_as_type(&mut buf, PacketType::ModeRx2);
                                         let _ = self.socket.try_send_to(&buf, addr);
                                     }
-                                    info!("Client {} RX2 spectrum: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} RX2 spectrum: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::Rx2SpectrumFps => {
                                     let fps = (ctrl.value as u8).clamp(5, 30);
@@ -3840,28 +3865,28 @@ impl NetworkService {
                                 }
                                 ControlId::SmeterSources => {
                                     let mask = ctrl.value;
-                                    info!("Client {} S-meter sources mask: 0x{:02x}", addr, mask);
+                                    ctrl_log!(opening, "Client {} S-meter sources mask: 0x{:02x}", addr, mask);
                                     self.session.lock().await.set_smeter_sources(addr, mask);
                                 }
                                 ControlId::DxSpotsEnabled => {
                                     let enabled = ctrl.value != 0;
-                                    info!("Client {} DX spots: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} DX spots: {}", addr, if enabled { "ON" } else { "OFF" });
                                     self.session.lock().await.set_dx_spots_enabled(addr, enabled);
                                 }
                                 ControlId::FullSpectrumEnabled => {
                                     let enabled = ctrl.value != 0;
-                                    info!("Client {} full-spectrum row: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} full-spectrum row: {}", addr, if enabled { "ON" } else { "OFF" });
                                     self.session.lock().await.set_full_spectrum_enabled(addr, enabled);
                                 }
                                 ControlId::ThetisWidebandAudio => {
                                     let on = ctrl.value != 0;
-                                    info!("Client {} Thetis wideband audio: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} Thetis wideband audio: {}", addr, if on { "ON" } else { "OFF" });
                                     self.session.lock().await.set_thetis_wideband(addr, on);
                                 }
                                 ControlId::Rx2SpectrumPan => {
                                     let pan = ctrl.value as f32 / 10000.0 - 0.5;
                                     self.session.lock().await.set_rx2_spectrum_pan(addr, pan);
-                                    info!("Client {} rx2 spectrum pan: {:+.4}", addr, pan);
+                                    ctrl_log!(opening, "Client {} rx2 spectrum pan: {:+.4}", addr, pan);
                                 }
                                 ControlId::Rx2FilterLow => {
                                     pending_rx2_filter_low = Some(ctrl.value as i16 as i32);
@@ -3870,13 +3895,13 @@ impl NetworkService {
                                     let high = ctrl.value as i16 as i32;
                                     let low = pending_rx2_filter_low.take()
                                         .unwrap_or(ptt.filter_rx2_low_hz());
-                                    info!("Client {} RX2 filter: {} .. {} Hz", addr, low, high);
+                                    ctrl_log!(opening, "Client {} RX2 filter: {} .. {} Hz", addr, low, high);
                                     ptt.set_rx2_filter(low, high).await;
                                 }
                                 ControlId::VfoSync => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_vfo_sync(addr, enabled);
-                                    info!("Client {} VFO sync: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VFO sync: {}", addr, if enabled { "ON" } else { "OFF" });
                                     // Delay before sending ZZSY to let frequencies settle
                                     tokio::time::sleep(Duration::from_millis(200)).await;
                                     ptt.set_vfo_sync_thetis(enabled).await;
@@ -3884,7 +3909,7 @@ impl NetworkService {
                                 ControlId::MonitorOn => {
                                     let on = ctrl.value != 0;
                                     ptt.set_mon(on).await;
-                                    info!("Client {} MON: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} MON: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::Rx2NoiseReduction => {
                                     ptt.set_rx2_nr(ctrl.value.min(4) as u8).await;
@@ -3945,7 +3970,7 @@ impl NetworkService {
                                     ptt.set_agc_auto(1, ctrl.value != 0).await;
                                 }
                                 ControlId::AudioMode => {
-                                    info!("Client {} audio mode: {}", addr, ctrl.value);
+                                    ctrl_log!(opening, "Client {} audio mode: {}", addr, ctrl.value);
                                     self.session.lock().await.set_audio_mode(addr, ctrl.value as u8);
                                 }
                                 ControlId::VfoSwap => {
@@ -3953,11 +3978,11 @@ impl NetworkService {
                                 }
                                 ControlId::ThetisTune => {
                                     let on = ctrl.value != 0;
-                                    info!("Client {} Thetis TUNE {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} Thetis TUNE {}", addr, if on { "ON" } else { "OFF" });
                                     ptt.set_tune(on).await;
                                 }
                                 ControlId::DiversityRead => {
-                                    info!("Client {} reading diversity state", addr);
+                                    ctrl_log!(opening, "Client {} reading diversity state", addr);
                                     let ptt = self.ptt.clone();
                                     let socket = self.socket.clone();
                                     tokio::spawn(async move {
@@ -3992,29 +4017,29 @@ impl NetworkService {
                                 }
                                 // --- New TCI controls (v2.10.3.13) ---
                                 ControlId::AgcMode => {
-                                    info!("Client {} AGC mode: {}", addr, ctrl.value);
+                                    ctrl_log!(opening, "Client {} AGC mode: {}", addr, ctrl.value);
                                     ptt.set_agc_mode(ctrl.value.min(5) as u8).await;
                                 }
                                 ControlId::AgcGain => {
-                                    info!("Client {} AGC gain: {}", addr, ctrl.value);
+                                    ctrl_log!(opening, "Client {} AGC gain: {}", addr, ctrl.value);
                                     ptt.set_agc_gain(ctrl.value.min(120) as u8).await;
                                 }
                                 ControlId::RitEnable => {
-                                    info!("Client {} RIT: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} RIT: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_rit_enable(ctrl.value != 0).await;
                                 }
                                 ControlId::RitOffset => {
                                     ptt.set_rit_offset(ctrl.value as i16 as i32).await;
                                 }
                                 ControlId::XitEnable => {
-                                    info!("Client {} XIT: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} XIT: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_xit_enable(ctrl.value != 0).await;
                                 }
                                 ControlId::XitOffset => {
                                     ptt.set_xit_offset(ctrl.value as i16 as i32).await;
                                 }
                                 ControlId::SqlEnable => {
-                                    info!("Client {} SQL: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} SQL: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_sql_enable(ctrl.value != 0).await;
                                 }
                                 ControlId::SqlLevel => {
@@ -4024,26 +4049,26 @@ impl NetworkService {
                                 }
                                 ControlId::NoiseBlanker => {
                                     let level = ctrl.value.min(2) as u8;
-                                    info!("Client {} NB: {}", addr, match level { 0 => "OFF", 1 => "NB1", _ => "NB2" });
+                                    ctrl_log!(opening, "Client {} NB: {}", addr, match level { 0 => "OFF", 1 => "NB1", _ => "NB2" });
                                     ptt.set_nb(level).await;
                                 }
                                 ControlId::CwKeyerSpeed => {
-                                    info!("Client {} CW speed: {} WPM", addr, ctrl.value);
+                                    ctrl_log!(opening, "Client {} CW speed: {} WPM", addr, ctrl.value);
                                     ptt.set_cw_keyer_speed(ctrl.value.clamp(1, 60) as u8).await;
                                 }
                                 ControlId::CwKey => {
                                     let pressed = (ctrl.value & 1) != 0;
                                     let duration_ms = ctrl.value >> 1;
                                     let dur = if duration_ms > 0 { Some(duration_ms) } else { None };
-                                    info!("Client {} CW key: {} dur={:?}", addr, if pressed { "DOWN" } else { "UP" }, dur);
+                                    ctrl_log!(opening, "Client {} CW key: {} dur={:?}", addr, if pressed { "DOWN" } else { "UP" }, dur);
                                     ptt.cw_key(pressed, dur).await;
                                 }
                                 ControlId::CwMacroStop => {
-                                    info!("Client {} CW macro stop", addr);
+                                    ctrl_log!(opening, "Client {} CW macro stop", addr);
                                     ptt.cw_macro_stop().await;
                                 }
                                 ControlId::VfoLock => {
-                                    info!("Client {} VFO Lock: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VFO Lock: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_vfo_lock(ctrl.value != 0).await;
                                 }
                                 ControlId::Binaural => {
@@ -4054,29 +4079,29 @@ impl NetworkService {
                                     let new_on = ctrl.value != 0;
                                     let cur_on = ptt.binaural();
                                     if new_on != cur_on {
-                                        info!("Client {} BIN: {}", addr, if new_on { "ON" } else { "OFF" });
+                                        ctrl_log!(opening, "Client {} BIN: {}", addr, if new_on { "ON" } else { "OFF" });
                                     }
                                     ptt.set_binaural(new_on).await;
                                 }
                                 ControlId::ApfEnable => {
-                                    info!("Client {} APF: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} APF: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_apf_enable(ctrl.value != 0).await;
                                 }
                                 ControlId::Mute => {
-                                    info!("Client {} MUTE: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} MUTE: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_mute(ctrl.value != 0).await;
                                 }
                                 ControlId::RxMute => {
-                                    info!("Client {} RX MUTE: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} RX MUTE: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_rx_mute(ctrl.value != 0).await;
                                 }
                                 ControlId::ManualNotchFilter => {
-                                    info!("Client {} NF: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} NF: {}", addr, if ctrl.value != 0 { "ON" } else { "OFF" });
                                     ptt.set_nf_enable(ctrl.value != 0).await;
                                 }
                                 ControlId::RxBalance => {
                                     let val = ctrl.value as i16 as i8;
-                                    info!("Client {} RX Balance: {}", addr, val);
+                                    ctrl_log!(opening, "Client {} RX Balance: {}", addr, val);
                                     ptt.set_rx_balance(val).await;
                                 }
                                 // --- RX2 TCI controls ---
@@ -4109,12 +4134,12 @@ impl NetworkService {
                                     ptt.set_rx2_nf_enable(ctrl.value != 0).await;
                                 }
                                 ControlId::TuneDrive => {
-                                    info!("Client {} Tune drive: {}%", addr, ctrl.value);
+                                    ctrl_log!(opening, "Client {} Tune drive: {}%", addr, ctrl.value);
                                     ptt.set_tune_drive(ctrl.value.min(100) as u8).await;
                                 }
                                 ControlId::MonitorVolume => {
                                     let db = ctrl.value as i16 as i8;
-                                    info!("Client {} Mon volume: {} dB", addr, db);
+                                    ctrl_log!(opening, "Client {} Mon volume: {} dB", addr, db);
                                     ptt.set_mon_volume(db).await;
                                 }
                                 // --- Diversity controls (Thetis CAT) ---
@@ -4145,7 +4170,7 @@ impl NetworkService {
                                 ControlId::YaesuEnable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_yaesu_enabled(addr, enabled);
-                                    info!("Client {} Yaesu audio: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} Yaesu audio: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::YaesuStateEnable => {
                                     let enabled = ctrl.value != 0;
@@ -4160,7 +4185,7 @@ impl NetworkService {
                                     let radio = if slot1 { &yaesu2 } else { &yaesu };
                                     if let Some(r) = radio {
                                         r.send_command(crate::yaesu::YaesuCmd::ReadMemoryTones);
-                                        info!("Client {} read memory tones (radio {})",
+                                        ctrl_log!(opening, "Client {} read memory tones (radio {})",
                                             addr, if slot1 { 2 } else { 1 });
                                     }
                                 }
@@ -4175,14 +4200,14 @@ impl NetworkService {
                                     if let Some(ref yaesu) = yaesu {
                                         let on = ctrl.value != 0;
                                         yaesu.send_command(crate::yaesu::YaesuCmd::SetPower(on));
-                                        info!("Client {} Yaesu power: {}", addr, if on { "ON" } else { "OFF" });
+                                        ctrl_log!(opening, "Client {} Yaesu power: {}", addr, if on { "ON" } else { "OFF" });
                                     }
                                 }
                                 ControlId::Yaesu2PowerOnOff => {
                                     if let Some(ref yaesu2) = yaesu2 {
                                         let on = ctrl.value != 0;
                                         yaesu2.send_command(crate::yaesu::YaesuCmd::SetPower(on));
-                                        info!("Client {} Yaesu2 power: {}", addr, if on { "ON" } else { "OFF" });
+                                        ctrl_log!(opening, "Client {} Yaesu2 power: {}", addr, if on { "ON" } else { "OFF" });
                                     }
                                 }
                                 ControlId::YaesuPtt => {
@@ -4196,7 +4221,7 @@ impl NetworkService {
                                         yaesu.send_command(crate::yaesu::YaesuCmd::SetPtt(on));
                                         yaesu_ptt_active = on;
                                         self.yaesu_ptt_flag.store(on, Ordering::Relaxed);
-                                        info!("Client {} Yaesu PTT: {}", addr, if on { "TX" } else { "RX" });
+                                        ctrl_log!(opening, "Client {} Yaesu PTT: {}", addr, if on { "TX" } else { "RX" });
                                     }
                                 }
                                 ControlId::YaesuFreq => {} // handled via FrequencyYaesu packet
@@ -4205,12 +4230,12 @@ impl NetworkService {
                                     // Kept only for older clients that still send this control.
                                     let gain = ctrl.value as f32 / 100.0;
                                     yaesu_mic_gain.store(gain.to_bits(), Ordering::Relaxed);
-                                    info!("Client {} Yaesu legacy server gain: {:.2}x", addr, gain);
+                                    ctrl_log!(opening, "Client {} Yaesu legacy server gain: {:.2}x", addr, gain);
                                 }
                                 ControlId::YaesuMode => {
                                     if let Some(ref yaesu) = yaesu {
                                         yaesu.send_command(crate::yaesu::YaesuCmd::SetMode(ctrl.value as u8));
-                                        info!("Client {} Yaesu mode: {}", addr, ctrl.value);
+                                        ctrl_log!(opening, "Client {} Yaesu mode: {}", addr, ctrl.value);
                                     }
                                 }
                                 ControlId::YaesuReadMemories => {
@@ -4229,25 +4254,25 @@ impl NetworkService {
                                         // fail (radio in standby, FTX-1 cold scan). Fall back to
                                         // a real read in that case.
                                         if ctrl.value == 1 && yaesu.status().last_memory_blob.is_some() {
-                                            info!("Client {} will get the Yaesu memories from the server's copy", addr);
+                                            ctrl_log!(opening, "Client {} will get the Yaesu memories from the server's copy", addr);
                                         } else {
                                             if ctrl.value == 1 {
                                                 warn!("Client {} wanted the server's copy of the Yaesu memories, but there is none - reading the radio", addr);
                                             }
-                                            info!("Client {} requested Yaesu memory read", addr);
+                                            ctrl_log!(opening, "Client {} requested Yaesu memory read", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
                                         }
                                     }
                                 }
                                 ControlId::YaesuRecallMemory => {
                                     if let Some(ref yaesu) = yaesu {
-                                        info!("Client {} Yaesu recall memory {}", addr, ctrl.value);
+                                        ctrl_log!(opening, "Client {} Yaesu recall memory {}", addr, ctrl.value);
                                         yaesu.send_command(crate::yaesu::YaesuCmd::RecallMemory(ctrl.value));
                                     }
                                 }
                                 ControlId::YaesuSelectVfo => {
                                     if let Some(ref yaesu) = yaesu {
-                                        info!("Client {} Yaesu VFO: {}", addr, match ctrl.value { 0 => "A", 1 => "B", _ => "swap" });
+                                        ctrl_log!(opening, "Client {} Yaesu VFO: {}", addr, match ctrl.value { 0 => "A", 1 => "B", _ => "swap" });
                                         yaesu.send_command(crate::yaesu::YaesuCmd::SelectVfo(ctrl.value as u8));
                                     }
                                 }
@@ -4290,7 +4315,7 @@ impl NetworkService {
                                             _ => "",
                                         };
                                         if !cat.is_empty() {
-                                            info!("Client {} Yaesu button {}: {}", addr, ctrl.value, cat);
+                                            ctrl_log!(opening, "Client {} Yaesu button {}: {}", addr, ctrl.value, cat);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(cat.to_string()));
                                         }
                                         // Memory channel up/down: jump to the next/previous NON-EMPTY
@@ -4304,7 +4329,7 @@ impl NetworkService {
                                             let cur = st.memory_channel;
                                             let filled = st.filled_memory_channels;
                                             let next = next_memory_channel(&filled, cur, ctrl.value == 9, 117);
-                                            info!("Client {} Yaesu Mem: {} -> {} (skip empty, {} filled)", addr, cur, next, filled.len());
+                                            ctrl_log!(opening, "Client {} Yaesu Mem: {} -> {} (skip empty, {} filled)", addr, cur, next, filled.len());
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RecallMemory(next));
                                         }
                                     }
@@ -4315,12 +4340,12 @@ impl NetworkService {
                                         // server's copy is fine, which the subscriber
                                         // push already delivers. 0 = walk the radio now.
                                         if ctrl.value == 1 && yaesu.status().last_menu_blob.is_some() {
-                                            info!("Client {} will get the EX settings from the server's copy", addr);
+                                            ctrl_log!(opening, "Client {} will get the EX settings from the server's copy", addr);
                                         } else {
                                             if ctrl.value == 1 {
                                                 warn!("Client {} wanted the server's copy of the EX settings, but there is none - reading the radio", addr);
                                             }
-                                            info!("Client {} requested Yaesu menu read", addr);
+                                            ctrl_log!(opening, "Client {} requested Yaesu menu read", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMenus);
                                         }
                                     }
@@ -4329,17 +4354,23 @@ impl NetworkService {
                                     // value encodes menu number; P2 data arrives via YaesuMemoryData packet
                                     if let Some(ref yaesu) = yaesu {
                                         if let Some(text) = yaesu_write_pending.take() {
-                                            // text format: "nnn:value"
-                                            if let Some((num_str, val)) = text.split_once(':') {
-                                                if let Ok(num) = num_str.parse::<u16>() {
-                                                    info!("Client {} Yaesu set menu {:03} = {}", addr, num, val);
-                                                    yaesu.send_command(crate::yaesu::YaesuCmd::SetMenu(num, val.to_string()));
-                                                    // Patch the server's copy right away and let
-                                                    // it push. Waiting for a re-scan would mean
-                                                    // seconds of occupied CAT for one value, and
-                                                    // until then every other client would hold
-                                                    // the old one.
-                                                    yaesu.note_menu_value(&format!("{:03}", num), val);
+                                            // text format: "<key>:value". No client
+                                            // in this tree sends this control any
+                                            // more - the SETMENU packet replaced it -
+                                            // but it decides the EX dialect, so it
+                                            // asks the radio like every other writer
+                                            // rather than being a second place that
+                                            // assumes a 991A.
+                                            if let Some((key, val)) = text.split_once(':') {
+                                                // `set_menu_entry` also patches the
+                                                // server's copy and lets it push:
+                                                // waiting for a re-scan would occupy
+                                                // CAT for seconds over one value, and
+                                                // until then every other client would
+                                                // hold the old one.
+                                                match yaesu.set_menu_entry(key, val) {
+                                                    Ok(what) => ctrl_log!(opening, "Client {} [radio0] set {} = {}", addr, what, val),
+                                                    Err(why) => warn!("Client {} [radio0] EX set refused: {}", addr, why),
                                                 }
                                             }
                                         }
@@ -4353,21 +4384,21 @@ impl NetworkService {
                                     // the data lands. See `yaesu_write_armed` decl above.
                                     if let Some(ref yaesu) = yaesu {
                                         if let Some(text) = yaesu_write_pending.take() {
-                                            info!("Client {} writing Yaesu memories", addr);
+                                            ctrl_log!(opening, "Client {} writing Yaesu memories", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::WriteAllMemories(text));
                                         } else {
-                                            info!("Client {} write memories: data not yet received, arming latch", addr);
+                                            ctrl_log!(opening, "Client {} write memories: data not yet received, arming latch", addr);
                                             yaesu_write_armed = true;
                                         }
                                     }
                                 }
                                 ControlId::SpectrumMaxBins => {
                                     self.session.lock().await.set_spectrum_max_bins(addr, ctrl.value);
-                                    info!("Client {} spectrum max_bins: {}", addr, ctrl.value);
+                                    ctrl_log!(opening, "Client {} spectrum max_bins: {}", addr, ctrl.value);
                                 }
                                 ControlId::Rx2SpectrumMaxBins => {
                                     self.session.lock().await.set_rx2_spectrum_max_bins(addr, ctrl.value);
-                                    info!("Client {} RX2 spectrum max_bins: {}", addr, ctrl.value);
+                                    ctrl_log!(opening, "Client {} RX2 spectrum max_bins: {}", addr, ctrl.value);
                                 }
                                 ControlId::SpectrumFftSize => {
                                     self.spectrum.lock().await.set_fft_size(ctrl.value);
@@ -4399,7 +4430,7 @@ impl NetworkService {
                                     let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
                                     ctl.lock().unwrap().enabled = on;
                                     self.session.lock().await.set_vrx_audio(addr, 0, on);
-                                    info!("Client {} VRX1 enable: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VRX1 enable: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxMode => {
                                     let mode = match ctrl.value {
@@ -4409,20 +4440,20 @@ impl NetworkService {
                                     };
                                     let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
                                     ctl.lock().unwrap().mode = mode;
-                                    info!("Client {} VRX1 mode: {:?}", addr, mode);
+                                    ctrl_log!(opening, "Client {} VRX1 mode: {:?}", addr, mode);
                                 }
                                 ControlId::VrxVolume => {
                                     let v = (ctrl.value as f32 / 100.0).clamp(0.0, 4.0);
                                     let ctl = self.vrx_mgr.lock().unwrap().control(addr, 0);
                                     ctl.lock().unwrap().volume = v;
-                                    info!("Client {} VRX1 volume: {:.2}", addr, v);
+                                    ctrl_log!(opening, "Client {} VRX1 volume: {:.2}", addr, v);
                                 }
                                 ControlId::VrxEnable2 => {
                                     let on = ctrl.value != 0;
                                     let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
                                     ctl.lock().unwrap().enabled = on;
                                     self.session.lock().await.set_vrx_audio(addr, 1, on);
-                                    info!("Client {} VRX2 enable: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VRX2 enable: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxMode2 => {
                                     let mode = match ctrl.value {
@@ -4432,13 +4463,13 @@ impl NetworkService {
                                     };
                                     let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
                                     ctl.lock().unwrap().mode = mode;
-                                    info!("Client {} VRX2 mode: {:?}", addr, mode);
+                                    ctrl_log!(opening, "Client {} VRX2 mode: {:?}", addr, mode);
                                 }
                                 ControlId::VrxVolume2 => {
                                     let v = (ctrl.value as f32 / 100.0).clamp(0.0, 4.0);
                                     let ctl = self.vrx_mgr.lock().unwrap().control(addr, 1);
                                     ctl.lock().unwrap().volume = v;
-                                    info!("Client {} VRX2 volume: {:.2}", addr, v);
+                                    ctrl_log!(opening, "Client {} VRX2 volume: {:.2}", addr, v);
                                 }
                                 ControlId::VrxFilterLow => {
                                     let hz = ctrl.value as i16 as i32;
@@ -4453,7 +4484,7 @@ impl NetworkService {
                                         s.filter_high_hz = hz;
                                         (s.filter_low_hz, s.filter_high_hz)
                                     };
-                                    info!("Client {} VRX1 filter: {} .. {} Hz", addr, lo, hi);
+                                    ctrl_log!(opening, "Client {} VRX1 filter: {} .. {} Hz", addr, lo, hi);
                                 }
                                 ControlId::VrxFilterLow2 => {
                                     let hz = ctrl.value as i16 as i32;
@@ -4468,7 +4499,7 @@ impl NetworkService {
                                         s.filter_high_hz = hz;
                                         (s.filter_low_hz, s.filter_high_hz)
                                     };
-                                    info!("Client {} VRX2 filter: {} .. {} Hz", addr, lo, hi);
+                                    ctrl_log!(opening, "Client {} VRX2 filter: {} .. {} Hz", addr, lo, hi);
                                 }
                                 ControlId::VrxSpectrumEnable => {
                                     let on = ctrl.value != 0;
@@ -4481,7 +4512,7 @@ impl NetworkService {
                                     // VRX1 reads from the RX1 processor: it must be on, even if
                                     // nobody wants the regular RX1 spectrum.
                                     self.refresh_spectrum_processors().await;
-                                    info!("Client {} VRX1 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VRX1 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxSpectrumEnable2 => {
                                     let on = ctrl.value != 0;
@@ -4492,7 +4523,7 @@ impl NetworkService {
                                     }
                                     self.session.lock().await.set_vrx_spectrum(addr, 1, on);
                                     self.refresh_spectrum_processors().await;
-                                    info!("Client {} VRX2 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VRX2 high-res spectrum: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxSpectrumPan => {
                                     let hz = sdr_remote_core::protocol::unpack_vrx_pan(ctrl.value);
@@ -4518,13 +4549,13 @@ impl NetworkService {
                                 ControlId::VrxAudioRate => {
                                     // VRX1 rate (0=NB,1=WB,2=Auto). Old clients send only this.
                                     self.vrx_mgr.lock().unwrap().set_rate_mode(addr, 0, (ctrl.value & 0xFF) as u8);
-                                    info!("Client {} VRX1 audio-rate: {}", addr,
+                                    ctrl_log!(opening, "Client {} VRX1 audio-rate: {}", addr,
                                         match ctrl.value { 0 => "NB", 1 => "WB", _ => "Auto" });
                                 }
                                 ControlId::VrxAudioRate2 => {
                                     // VRX2 rate; new clients send this for independent per-VRX rate.
                                     self.vrx_mgr.lock().unwrap().set_rate_mode(addr, 1, (ctrl.value & 0xFF) as u8);
-                                    info!("Client {} VRX2 audio-rate: {}", addr,
+                                    ctrl_log!(opening, "Client {} VRX2 audio-rate: {}", addr,
                                         match ctrl.value { 0 => "NB", 1 => "WB", _ => "Auto" });
                                 }
                                 ControlId::VrxSamAutoTune => {
@@ -4534,12 +4565,12 @@ impl NetworkService {
                                     // client never flips another client's AFC.
                                     let on = ctrl.value != 0;
                                     self.session.lock().await.set_vrx_autotune(addr, 0, on);
-                                    info!("Client {} VRX1 SAM auto-tune: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VRX1 SAM auto-tune: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 ControlId::VrxSamAutoTune2 => {
                                     let on = ctrl.value != 0;
                                     self.session.lock().await.set_vrx_autotune(addr, 1, on);
-                                    info!("Client {} VRX2 SAM auto-tune: {}", addr, if on { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} VRX2 SAM auto-tune: {}", addr, if on { "ON" } else { "OFF" });
                                 }
                                 // --- Dual-radio slot 1 controls (Option B-prime) ---
                                 // Mirror of the slot-0 Yaesu controls, routed to yaesu2.
@@ -4547,21 +4578,21 @@ impl NetworkService {
                                 ControlId::Yaesu2Enable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_yaesu2_enabled(addr, enabled);
-                                    info!("Client {} [radio1]: {}", addr, if enabled { "ON" } else { "OFF" });
+                                    ctrl_log!(opening, "Client {} [radio1]: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::Yaesu2Ptt => {
                                     if let Some(ref yaesu) = yaesu2 {
                                         let on = ctrl.value != 0;
                                         yaesu.send_command(crate::yaesu::YaesuCmd::SetPtt(on));
                                         yaesu2_ptt_active = on;
-                                        info!("Client {} [radio1] PTT: {}", addr, if on { "TX" } else { "RX" });
+                                        ctrl_log!(opening, "Client {} [radio1] PTT: {}", addr, if on { "TX" } else { "RX" });
                                     }
                                 }
                                 ControlId::Yaesu2Freq => {} // handled via FrequencyYaesu2 packet
                                 ControlId::Yaesu2MicGain => {
                                     let gain = ctrl.value as f32 / 100.0;
                                     yaesu2_mic_gain.store(gain.to_bits(), Ordering::Relaxed);
-                                    info!("Client {} [radio1] legacy server gain: {:.2}x", addr, gain);
+                                    ctrl_log!(opening, "Client {} [radio1] legacy server gain: {:.2}x", addr, gain);
                                 }
                                 ControlId::Yaesu2Mode => {
                                     if let Some(ref yaesu) = yaesu2 {
@@ -4626,7 +4657,7 @@ impl NetworkService {
                                             _ => "",
                                         };
                                         if !cat.is_empty() {
-                                            info!("Client {} [radio1] Yaesu button {}: {}", addr, ctrl.value, cat);
+                                            ctrl_log!(opening, "Client {} [radio1] Yaesu button {}: {}", addr, ctrl.value, cat);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RawCat(cat.to_string()));
                                         }
                                         // Same empty-channel skip as slot 0, via the filled-channel
@@ -4637,7 +4668,7 @@ impl NetworkService {
                                             let cur = st.memory_channel;
                                             let filled = st.filled_memory_channels;
                                             let next = next_memory_channel(&filled, cur, ctrl.value == 9, 99);
-                                            info!("Client {} [radio1] Yaesu Mem: {} -> {} (skip empty, {} filled)", addr, cur, next, filled.len());
+                                            ctrl_log!(opening, "Client {} [radio1] Yaesu Mem: {} -> {} (skip empty, {} filled)", addr, cur, next, filled.len());
                                             yaesu.send_command(crate::yaesu::YaesuCmd::RecallMemory(next));
                                         }
                                     }
@@ -4648,12 +4679,12 @@ impl NetworkService {
                                         // Same rule as slot 0, including the fall-back when
                                         // the server has no copy yet.
                                         if ctrl.value == 1 && yaesu.status().last_memory_blob.is_some() {
-                                            info!("Client {} [radio1] will get the memories from the server's copy", addr);
+                                            ctrl_log!(opening, "Client {} [radio1] will get the memories from the server's copy", addr);
                                         } else {
                                             if ctrl.value == 1 {
                                                 warn!("Client {} [radio1] wanted the server's copy of the memories, but there is none - reading the radio", addr);
                                             }
-                                            info!("Client {} [radio1] requested memory read", addr);
+                                            ctrl_log!(opening, "Client {} [radio1] requested memory read", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
                                         }
                                     }
@@ -4661,10 +4692,10 @@ impl NetworkService {
                                 ControlId::Yaesu2WriteMemories => {
                                     if let Some(ref yaesu) = yaesu2 {
                                         if let Some(text) = yaesu2_write_pending.take() {
-                                            info!("Client {} [radio1] writing memories", addr);
+                                            ctrl_log!(opening, "Client {} [radio1] writing memories", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::WriteAllMemories(text));
                                         } else {
-                                            info!("Client {} [radio1] write memories: data not yet received, arming latch", addr);
+                                            ctrl_log!(opening, "Client {} [radio1] write memories: data not yet received, arming latch", addr);
                                             yaesu2_write_armed = true;
                                         }
                                     }
@@ -4675,12 +4706,12 @@ impl NetworkService {
                                 ControlId::Yaesu2ReadMenus => {
                                     if let Some(ref yaesu) = yaesu2 {
                                         if ctrl.value == 1 && yaesu.status().last_menu_blob.is_some() {
-                                            info!("Client {} [radio1] will get the EX settings from the server's copy", addr);
+                                            ctrl_log!(opening, "Client {} [radio1] will get the EX settings from the server's copy", addr);
                                         } else {
                                             if ctrl.value == 1 {
                                                 warn!("Client {} [radio1] wanted the server's copy of the EX settings, but there is none - reading the radio", addr);
                                             }
-                                            info!("Client {} [radio1] requested EX menu read", addr);
+                                            ctrl_log!(opening, "Client {} [radio1] requested EX menu read", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMenus);
                                         }
                                     }

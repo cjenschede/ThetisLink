@@ -1787,10 +1787,10 @@ impl ClientEngine {
                             warn!("Yaesu freq -> {} Hz DROPPED: not connected (server_addr=None)", hz);
                         }
                     }
-                    Command::SetYaesuMenu(menu_num, p2_value) => {
+                    Command::SetYaesuMenu(menu_key, p2_value) => {
                         if let Some(ref addr) = server_addr {
                             // Send menu data as YaesuMemoryData packet with "SETMENU:" prefix
-                            let text = format!("SETMENU:{}:{}", menu_num, p2_value);
+                            let text = format!("SETMENU:{}:{}", menu_key, p2_value);
                             let text_bytes = text.as_bytes();
                             let mut send_buf = Vec::with_capacity(6 + text_bytes.len());
                             let header = sdr_remote_core::protocol::Header::new(
@@ -2525,6 +2525,25 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 state.rx2_present = !ack.state_flags.has(
                                     sdr_remote_core::protocol::ServerStateFlags::SINGLE_RECEIVER,
                                 );
+                                // Same inverted shape: a server with no cluster
+                                // says so, and anything that cannot say counts as
+                                // having one.
+                                state.dx_cluster_available = !ack.state_flags.has(
+                                    sdr_remote_core::protocol::ServerStateFlags::NO_DX_CLUSTER,
+                                );
+                                // A server with no cluster can never send a spot,
+                                // so the subscription comes off. Here rather than
+                                // in each front end: the desktop had its own copy
+                                // of this rule and the phone had none, which is
+                                // why the phone showed the tick ON against a
+                                // server with no cluster at all (owner,
+                                // 2026-08-20). It also lands BEFORE the
+                                // just-connected re-send below, which then carries
+                                // the corrected value - so the server is told
+                                // without a packet of its own.
+                                if !state.dx_cluster_available {
+                                    state.dx_spots_enabled = false;
+                                }
                                 if !thetis_configured {
                                     if matches!(
                                         state.connect_status,

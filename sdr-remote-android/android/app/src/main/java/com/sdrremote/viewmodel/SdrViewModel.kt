@@ -12,6 +12,7 @@ import com.sdrremote.ChatMessageUi
 import com.sdrremote.ChatOffline
 import com.sdrremote.ChatUiState
 import com.sdrremote.DxSpotInfo
+import com.sdrremote.R
 import com.sdrremote.SdrUiState
 import com.sdrremote.service.AudioRouting
 import com.sdrremote.service.AudioService
@@ -153,10 +154,22 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             // (mirrors the bridge condition below). The settings dialog compares the
             // live toggle against this to show a "restart to apply" notice - symmetric
             // for turning the relay on AND off.
-            val relayActiveSession = relayEnabled && relayUrl.isNotBlank() && relayStation.isNotBlank()
+            val relayActiveSession =
+                uniffi.sdr_remote.relayIsConfigured(relayEnabled, relayUrl, relayStation, relayToken)
             prefs.edit().putBoolean("relay_active_session", relayActiveSession).apply()
             bridge = SdrBridge(relayEnabled, relayUrl, relayStation, relayToken, relayInstance, deviceName, relayUdpEnabled)
-            Log.i(TAG, "SdrBridge created successfully (relay=$relayEnabled, udp=$relayUdpEnabled)")
+            // The few strings the Rust side produces (the connect status line) must
+            // match the strings.xml Android already resolved, so we read the language
+            // out of that same file rather than guessing from the system locale: if
+            // Android fell back to the English resources, this reads "en" too.
+            val uiLang = getApplication<Application>().getString(R.string.ui_language_code)
+            bridge?.setLanguage(uiLang)
+            // What was folded away last session comes back folded away.
+            val seen = (prefs.getString("chat_answers_seen", "") ?: "")
+                .split(',')
+                .mapNotNull { it.trim().toLongOrNull() }
+            if (seen.isNotEmpty()) bridge?.chatRestoreSeen(seen)
+            Log.i(TAG, "SdrBridge created successfully (relay=$relayEnabled, udp=$relayUdpEnabled, lang=$uiLang)")
             startPolling()
             startChatPolling()
         } catch (e: Exception) {
@@ -336,6 +349,17 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      * Report a problem in your own words, with the attachment that was on
      * screen (empty when the box was not ticked).
      */
+    /** Fold an administrator answer away, and remember it across restarts. */
+    fun chatDismissAnswer(id: Long) {
+        val b = bridge ?: return
+        b.chatDismissAnswer(id)
+        getApplication<Application>()
+            .getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+            .edit()
+            .putString("chat_answers_seen", b.chatSeenIds().joinToString(","))
+            .apply()
+    }
+
     fun chatReport(note: String, attachment: String) {
         viewModelScope.launch(Dispatchers.IO) { bridge?.chatReport(note, attachment) }
     }
@@ -386,6 +410,9 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         downKbps = s.downKbps.toInt(),
                         upKbps = s.upKbps.toInt(),
                         dxSpotsEnabled = s.dxSpotsEnabled,
+                        dxClusterAvailable = s.dxClusterAvailable,
+                        yaesuLabel = s.yaesuLabel,
+                        yaesu2Label = s.yaesu2Label,
                         captureLevel = s.captureLevel,
                         yaesuMicLevel = s.yaesuMicLevel,
                         playbackLevel = s.playbackLevel,

@@ -25,8 +25,20 @@ impl ServerApp {
             thetis_path: if thetis.is_empty() { None } else { Some(thetis) },
             yaesu_port: if yaesu_port_str.is_empty() { None } else { Some(yaesu_port_str.clone()) },
             yaesu_enabled: self.yaesu_enabled,
-            yaesu_ssb_switch_on_ptt: self.yaesu_ssb_switch_on_ptt,
-            ftx1_memory_write_ack: self.ftx1_memory_write_ack,
+            yaesu_ssb_switch_on_ptt: self.ssb_switch_on_ptt[0],
+            yaesu2_ssb_switch_on_ptt: self.ssb_switch_on_ptt[1],
+            yaesu_memory_write_ack: self.memory_write_ack[0],
+            yaesu2_memory_write_ack: self.memory_write_ack[1],
+            // What the settings screen detected, so the next launch offers the
+            // right controls without probing the port again.
+            // Carried through rather than rebuilt: Save & Start assembles a
+            // fresh config from the screen, and anything not named here is
+            // silently replaced by its default. This one is not on the screen.
+            chat_answers_seen: crate::config::load().chat_answers_seen,
+            yaesu_model_last: self.probe_model[0],
+            yaesu2_model_last: self.probe_model[1],
+            yaesu_audio_channel: self.audio_channel[0],
+            yaesu2_audio_channel: self.audio_channel[1],
             yaesu_baud: 38400,
             yaesu_audio_device: if self.yaesu_audio_device.is_empty() { None } else { Some(self.yaesu_audio_device.clone()) },
             yaesu_audio_output_device: if self.yaesu_audio_output_device.is_empty() { None } else { Some(self.yaesu_audio_output_device.clone()) },
@@ -37,7 +49,6 @@ impl ServerApp {
             yaesu2_baud: crate::config::load().yaesu2_baud,
             yaesu2_audio_device: if self.yaesu2_audio_device.is_empty() { None } else { Some(self.yaesu2_audio_device.clone()) },
             yaesu2_audio_output_device: if self.yaesu2_audio_output_device.is_empty() { None } else { Some(self.yaesu2_audio_output_device.clone()) },
-            yaesu2_audio_channel: crate::config::load().yaesu2_audio_channel,
             amplitec_port: if amp_port.is_empty() { None } else { Some(amp_port.clone()) },
             amplitec_enabled: self.amplitec_enabled,
             amplitec_labels: self.amplitec_labels.clone(),
@@ -150,11 +161,24 @@ impl ServerApp {
             // If detect fails (radio off) -> 991A assumed; the serial thread
             // adopts the radio's real dialect once it answers `ID;` (bring-up).
             let ssb_on_ptt = config.yaesu_ssb_switch_on_ptt;
-            let mem_write_ack = config.ftx1_memory_write_ack;
+            let mem_write_ack = config.yaesu_memory_write_ack;
+            let ftx1_channel = config.yaesu_audio_channel;
             match with_timeout(com_timeout, move || {
-                let (model, det_baud) = crate::yaesu::detect_model(&port, baud)
-                    .unwrap_or((crate::yaesu::RadioModel::Ft991a, baud));
-                crate::yaesu::YaesuRadio::new_with_model(&port, det_baud, audio_dev_opt.as_deref(), audio_out_opt.as_deref(), model, 0, 0, ssb_on_ptt, mem_write_ack)
+                // Same as slot 1: name which of the two this is.
+                let (model, det_baud) = match crate::yaesu::detect_model(&port, baud) {
+                    Some((m, b)) => {
+                        log::info!("[radio0] slot 0: {} detected on {} @ {} baud", m.label(), port, b);
+                        (m, b)
+                    }
+                    None => {
+                        log::warn!(
+                            "[radio0] slot 0: nothing answered on {} - ASSUMING an FT-991A dialect",
+                            port
+                        );
+                        (crate::yaesu::RadioModel::Ft991a, baud)
+                    }
+                };
+                crate::yaesu::YaesuRadio::new_with_model(&port, det_baud, audio_dev_opt.as_deref(), audio_out_opt.as_deref(), model, 0, ftx1_channel, ssb_on_ptt, mem_write_ack)
             }) {
                 Ok(radio) => {
                     // YaesuRadio is fail-soft: the underlying serial open

@@ -21,6 +21,46 @@ chat_connecting:
   nl: "Even geduld..."
   de: "Einen Moment..."
   fr: "Un instant..."
+
+# Why there is no conversation on the screen. One line for which of the three
+# states this is, then the same two paragraphs for all of them: what the chat
+# actually is, and how to get to one. The state line alone left the reader to
+# guess whether something was broken, whether it was theirs to fix, and what it
+# would have been for.
+chat_offline_no_relay:
+  en: "The chat runs on a relay, and no relay is set up here."
+  nl: "De chat draait op een relay, en die is hier niet ingesteld."
+  de: "Der Chat laeuft ueber ein Relay, und hier ist keines eingerichtet."
+  fr: "La discussion passe par un relais, et aucun n'est configure ici."
+chat_offline_no_ticket:
+  en: "This relay offers no chat, or has not admitted you yet. Reconnecting usually settles it."
+  nl: "Deze relay biedt geen chat, of heeft je nog niet toegelaten. Opnieuw verbinden helpt meestal."
+  de: "Dieses Relay bietet keinen Chat oder hat Sie noch nicht zugelassen. Neu verbinden hilft meist."
+  fr: "Ce relais ne propose pas de discussion, ou ne vous a pas encore admis. Se reconnecter suffit generalement."
+chat_offline_unreachable:
+  en: "The chat is not answering right now."
+  nl: "De chat geeft nu geen antwoord."
+  de: "Der Chat antwortet gerade nicht."
+  fr: "La discussion ne repond pas pour le moment."
+# A blank line here is a paragraph break on screen; the spacing itself is set
+# in panel.rs, so all four languages break in the same places. Keep the
+# paragraphs short - this is the one screen a curious operator reads cold.
+chat_offline_what_it_is:
+  en: "The chat is a service on the relay, not a part of ThetisLink itself.\n\nIt needs two things at once: this station runs through a relay, and that relay has a chat service behind it. If either is missing, there is nothing to open here.\n\nEverything else in ThetisLink works exactly as it always did. The same goes for Report a problem - that travels over the relay too."
+  nl: "De chat is een dienst op de relay, geen onderdeel van ThetisLink zelf.\n\nEr zijn twee dingen tegelijk voor nodig: dit station loopt via een relay, en die relay heeft ook een chatdienst draaien. Ontbreekt een van beide, dan valt hier niets te openen.\n\nDe rest van ThetisLink werkt precies zoals altijd. Hetzelfde geldt voor Probleem melden - dat gaat ook over de relay."
+  de: "Der Chat ist ein Dienst auf dem Relay und kein Teil von ThetisLink selbst.\n\nZwei Dinge muessen gleichzeitig zutreffen: diese Station laeuft ueber ein Relay, und dieses Relay hat einen Chatdienst dahinter. Fehlt eines von beiden, gibt es hier nichts zu oeffnen.\n\nAlles andere in ThetisLink funktioniert genau wie zuvor. Dasselbe gilt fuer Problem melden - das geht ebenfalls ueber das Relay."
+  fr: "La discussion est un service du relais, pas une partie de ThetisLink lui-meme.\n\nIl faut deux choses a la fois : que cette station passe par un relais, et que ce relais heberge un service de discussion. S'il en manque une, il n'y a rien a ouvrir ici.\n\nTout le reste de ThetisLink fonctionne comme avant. Il en va de meme pour Signaler un probleme - cela passe aussi par le relais."
+chat_offline_what_a_relay_is:
+  en: "A relay is worth knowing about on its own.\n\nReaching your station over the internet normally means letting a connection in from outside: a port forwarded on the router, and an address that does not change.\n\nThrough a relay, both sides make an outgoing connection instead - to a meeting point that pairs them. That is the kind of connection a router already allows.\n\nSo your network at home stops being critical. In most cases nothing on the router has to change, and it works where an incoming connection is not possible at all: behind CGNAT, or on mobile data."
+  nl: "Een relay is op zichzelf al de moeite waard om te kennen.\n\nJe station over internet bereiken betekent normaal dat er van buitenaf een verbinding naar binnen moet: een poort doorgezet op de router, en een adres dat niet verandert.\n\nVia een relay maken beide kanten juist een uitgaande verbinding - naar een ontmoetingspunt dat ze aan elkaar knoopt. Dat is het soort verbinding dat een router al toestaat.\n\nJe netwerk thuis is daarmee niet langer kritisch. Meestal hoeft er aan de router niets gewijzigd te worden, en het werkt ook waar een inkomende verbinding helemaal niet kan: achter CGNAT, of op mobiel internet."
+  de: "Ein Relay ist schon fuer sich genommen wissenswert.\n\nDie eigene Station ueber das Internet zu erreichen heisst normalerweise, eine Verbindung von aussen hereinzulassen: eine im Router weitergeleitete Portnummer und eine Adresse, die sich nicht aendert.\n\nUeber ein Relay bauen stattdessen beide Seiten eine ausgehende Verbindung auf - zu einem Treffpunkt, der sie zusammenfuehrt. Das ist die Art Verbindung, die ein Router ohnehin erlaubt.\n\nDamit ist das Netz zu Hause nicht mehr kritisch. Meist muss am Router gar nichts geaendert werden, und es funktioniert auch dort, wo eine eingehende Verbindung schlicht unmoeglich ist: hinter CGNAT oder im Mobilfunk."
+  fr: "Un relais vaut la peine d'etre connu en soi.\n\nJoindre sa station par internet suppose normalement de laisser entrer une connexion depuis l'exterieur : un port redirige sur le routeur, et une adresse qui ne change pas.\n\nAvec un relais, les deux cotes etablissent au contraire une connexion sortante - vers un point de rendez-vous qui les apparie. C'est le genre de connexion qu'un routeur autorise deja.\n\nLe reseau domestique cesse donc d'etre critique. Le plus souvent rien n'a besoin d'etre modifie sur le routeur, et cela fonctionne la ou une connexion entrante est tout simplement impossible : derriere un CGNAT, ou en donnees mobiles."
+chat_offline_get_access:
+  en: "You can run a relay yourself. The source ships with every release, the manual walks through it, and the chat is a separate container you can put beside it.\n\nPA3GHM also runs one, with this chat room and the Report a problem button. You can be added to it on request.\n\nIt is an experimental setup with a limited number of places, run as a hobby beside the project, with no guarantee of availability or continuity. Whoever runs a relay may decline a request or stop the service, and a no needs no explanation.\n\nEmail PA3GHM@gmail.com with your callsign and a short note about your setup."
+  nl: "Je kunt zelf een relay draaien. De broncode zit bij elke release, de handleiding loopt hem door, en de chat is een aparte container die je ernaast zet.\n\nPA3GHM draait er ook een, met deze chatruimte en de knop Probleem melden. Je kunt daar op verzoek bij komen.\n\nHet is een experimentele opzet met een beperkt aantal plaatsen, als hobby naast het project gedraaid, zonder garantie op beschikbaarheid of continuiteit. Wie een relay draait mag een verzoek weigeren of ermee stoppen, en een nee hoeft niet toegelicht te worden.\n\nMail PA3GHM@gmail.com met je call en een korte toelichting op je opstelling."
+  de: "Sie koennen selbst ein Relay betreiben. Der Quelltext liegt jeder Version bei, das Handbuch fuehrt hindurch, und der Chat ist ein eigener Container daneben.\n\nPA3GHM betreibt ebenfalls eines, mit diesem Chatraum und der Schaltflaeche Problem melden. Auf Anfrage koennen Sie dort aufgenommen werden.\n\nEs ist ein experimenteller Aufbau mit begrenzter Platzzahl, als Hobby neben dem Projekt betrieben, ohne Garantie auf Verfuegbarkeit oder Fortbestand. Wer ein Relay betreibt, darf eine Anfrage ablehnen oder den Dienst einstellen, und ein Nein braucht keine Begruendung.\n\nSchreiben Sie an PA3GHM@gmail.com mit Ihrem Rufzeichen und einer kurzen Notiz zu Ihrer Station."
+  fr: "Vous pouvez heberger un relais vous-meme. La source accompagne chaque version, le manuel l'explique, et la discussion est un conteneur separe a placer a cote.\n\nPA3GHM en fait tourner un aussi, avec ce salon et le bouton Signaler un probleme. Vous pouvez y etre ajoute sur demande.\n\nC'est un montage experimental au nombre de places limite, tenu comme un loisir a cote du projet, sans garantie de disponibilite ni de continuite. Qui heberge un relais peut refuser une demande ou arreter le service, et un non n'a pas a etre explique.\n\nEcrivez a PA3GHM@gmail.com avec votre indicatif et une courte note sur votre installation."
+
 chat_consent_access:
   en: "Want to know what is kept about you? Just ask. What ThetisLink already records about connections, apart from the chat, is in the manual."
   nl: "Wil je weten wat er over je bewaard wordt? Vraag het. Wat ThetisLink zelf al over verbindingen bijhoudt - los van de chat - staat in de handleiding."

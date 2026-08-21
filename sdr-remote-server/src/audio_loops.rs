@@ -111,26 +111,26 @@ impl VrxDumpState {
 // `tci_iq_consumer` instantiates a `VrxRuntime` per VRX channel
 // and passes each IQ batch on via `feed()`.
 
-// â"€â"€ Resampling helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ---- Resampling helpers ----
 
-/// Resample i16 8kHz â†' f32 device rate
+/// Resample i16 8kHz -> f32 device rate
 pub fn resample_to_device(resampler: &mut impl rubato::Resampler<f32>, pcm_i16: &[i16]) -> Vec<f32> {
     let input_f32: Vec<f32> = pcm_i16.iter().map(|&s| s as f32 / 32768.0).collect();
     match resampler.process(&[input_f32], None) {
         Ok(result) => result.into_iter().next().unwrap_or_default(),
         Err(e) => {
-            warn!("resample 8kâ†'device error: {}", e);
+            warn!("resample 8k->device error: {}", e);
             Vec::new()
         }
     }
 }
 
-/// Resample f32 device rate â†' f32 8kHz
+/// Resample f32 device rate -> f32 8kHz
 pub fn resample_to_network(resampler: &mut impl rubato::Resampler<f32>, pcm_f32: &[f32]) -> Vec<f32> {
     match resampler.process(&[pcm_f32.to_vec()], None) {
         Ok(result) => result.into_iter().next().unwrap_or_default(),
         Err(e) => {
-            warn!("resample deviceâ†'8k error: {}", e);
+            warn!("resample device->8k error: {}", e);
             Vec::new()
         }
     }
@@ -404,7 +404,7 @@ pub async fn tci_multichannel_audio_loop(
         }
 
         tokio::select! {
-            // Wait for tick or shutdown â€" audio is drained non-blocking below
+            // Wait for tick or shutdown -- audio is drained non-blocking below
             _ = tick.tick() => {
                 let work_started = Instant::now();
                 // Drain ALL channels non-blocking to prevent select! bias
@@ -807,7 +807,7 @@ pub async fn tci_multichannel_audio_loop(
     Ok(())
 }
 
-// â"€â"€ Yaesu audio loop â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ---- Yaesu audio loop ----
 
 /// Yaesu USB audio TX loop: receives from cpal, encodes Opus, sends to clients.
 pub async fn yaesu_audio_loop(
@@ -979,11 +979,17 @@ pub async fn yaesu_audio_loop(
                     }
                 }
                 gate_gain = end_g;
-                // Observability: log only the fade-edges (no per-frame spam).
+                // Debug, not info. "Only the fade-edges, no per-frame spam" was
+                // right about the frames and wrong about the rate: this gate
+                // follows the signal, so on a busy channel it flips several
+                // times a SECOND - 62 ms between two edges in one operator's
+                // log, 52 lines out of 627 from this one pair. What the gate is
+                // doing is not an event; the radio's own squelch state is, and
+                // that is logged separately and rarely (`squelch: OPEN (BUSY)`).
                 if start_g > 0.0 && end_g == 0.0 {
-                    log::info!("Yaesu squelch: gate closed - audio muted");
+                    log::debug!("Yaesu squelch: gate closed - audio muted");
                 } else if start_g == 0.0 && end_g > 0.0 {
-                    log::info!("Yaesu squelch: gate open - audio resumed");
+                    log::debug!("Yaesu squelch: gate open - audio resumed");
                 }
 
                 let need_wb = subs.iter().any(|(_, wb)| *wb);
@@ -1044,7 +1050,7 @@ pub async fn yaesu_audio_loop(
     Ok(())
 }
 
-// â"€â"€ TCI IQ consumer â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ---- TCI IQ consumer ----
 
 /// Drains IQ channels from TCI and feeds spectrum processors (RX1 + RX2).
 /// Also runs the VRX channelizer on the RX1 IQ stream and emits VrxAudioPacket

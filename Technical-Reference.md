@@ -26,9 +26,46 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.8.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.10.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.10.0 highlights
+
+**A first start on the server claims nothing, and two radios of the same type stay apart.**
+Compatible with v2.9.x - wire `VERSION` is unchanged and there are no new control ids. While
+there is no `thetislink-server.conf`, the server starts bare: every device, the second receiver
+and every open-window-at-startup tick off; the language then comes from the Windows display
+language (NL/DE/FR, English otherwise) and only then. Three settings that were **shared** are
+now **per slot** (`yaesu_/yaesu2_ssb_switch_on_ptt`, `_memory_write_ack`, `_audio_channel`);
+the old shared keys - including `ftx1_memory_write_ack` and `yaesu2_audio_channel`, which was
+the shared one despite its name - seed both slots on read. A radio's model is **asked of the
+port** when the COM port is picked rather than derived from the slot number; that decides the
+EX menu dialect, the capture channel and which controls are shown. The ack flags gain
+`NO_DX_CLUSTER` (inverted, so an older server keeps behaving as before), on which the client
+drops its spot subscription. Going back to v2.9.1 is **not** symmetric: it does not know the
+per-slot keys.
+
+### v2.9.1 highlights
+
+**A gap is the codec again, and switching audio off is silent.** Wire protocol unchanged from
+v2.9.0. The noise generator that came along in v2.9.0 is removed; what fills a gap is the
+codec's own concealment. A stream that is switched off resets its decoder - on all six channels
+and on a reconnect - so a later gap is not filled from a previous session. Audio from a radio
+counts as a sign of life in the connection check, which had been costing a station without
+Thetis audio its connection. 60m is in both band tables.
+
+### v2.9.0 highlights
+
+**Concealment on every channel, recovery after a network change, and chat + problem reporting
+on a relay.** Wire `VERSION` unchanged, with two new packet types for fetching the server log
+(`0x35`, `0x36`); an older peer that knows neither never asks and never answers. Concealment
+and error correction had until then always run through the narrowband decoder, wideband audio
+or not, and only on the first channel; from here every stream decodes in its own format. A
+phone that changes between WiFi and mobile data gets its audio back by itself. The chat is a
+separate container beside the relay, with a report button that attaches the log - cleaned, and
+shown to you before it goes. The Android APK is no longer debuggable; the app keeps its own
+log file instead.
 
 ### v2.8.0 highlights
 

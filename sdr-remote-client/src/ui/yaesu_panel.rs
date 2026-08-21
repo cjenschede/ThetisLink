@@ -588,8 +588,8 @@ impl SdrRemoteApp {
             self.save_full_config();
         }
         if self.collapse_yaesu_menu {
-            ui.indent("yaesu_menu_body", |ui| {
-                self.render_yaesu_menu(ui);
+            ui.indent(("ex_menu_body", 0u8), |ui| {
+                self.render_ex_menu(ui, 0);
             });
         }
     }
@@ -609,10 +609,46 @@ impl SdrRemoteApp {
         sdr_remote_core::protocol::radio_model_name(code)
     }
 
+    /// Has the server said which radio this slot is?
+    ///
+    /// Before it has, the client holds `RADIO_MODEL_UNKNOWN` and must not put a
+    /// type name on screen: the two names it used to open with were guesses.
+    /// Is the radio in this slot an FTX-1? False for a 991A and for a slot the
+    /// server has not named yet - the numbered menu is the safer of the two to
+    /// show for an unknown radio, because it is the one that degrades to "?"
+    /// rather than to nothing.
+    pub(super) fn yaesu_is_ftx1(&self, slot: u8) -> bool {
+        let code = if slot == 0 { self.yaesu_model } else { self.yaesu2_model };
+        code == 1
+    }
+
+    pub(super) fn yaesu_model_known(&self, slot: u8) -> bool {
+        sdr_remote_core::protocol::radio_model_known(self.yaesu_model_code(slot))
+    }
+
+    /// The server-reported model byte for a slot, or `RADIO_MODEL_UNKNOWN`.
+    pub(super) fn yaesu_model_code(&self, slot: u8) -> u8 {
+        if slot == 0 { self.yaesu_model } else { self.yaesu2_model }
+    }
+
+    /// Short channel name for the chips on the main screen: the model once the
+    /// server has named it, and the slot's own name until then.
+    pub(super) fn yaesu_short_label(&self, slot: u8) -> String {
+        if self.yaesu_model_known(slot) {
+            self.yaesu_type_name(slot).to_string()
+        } else {
+            format!("Yaesu {}", slot + 1)
+        }
+    }
+
     /// Consistent slot display: "Yaesu 1: 991A" / "Yaesu 2: FTX1". Slot number +
     /// the active type from the server config (RadioInfo). Everywhere in the server tab.
+    ///
+    /// With no answer from the server there is no type to add, and it is simply
+    /// "Yaesu 1" - naming the slot, which is true, rather than a model, which
+    /// would be a guess.
     pub(super) fn yaesu_slot_label(&self, slot: u8) -> String {
-        format!("Yaesu {}: {}", slot + 1, self.yaesu_type_name(slot))
+        sdr_remote_core::protocol::radio_slot_label(slot, self.yaesu_model_code(slot))
     }
 
     /// Name for a packet type in the bitstream/data-usage breakdown. For the
@@ -1172,8 +1208,8 @@ impl SdrRemoteApp {
             // lower bound so it stays usable in a small window).
             self.render_memories_scroll_and_handle(ui, 1);
         }
-        // Radio Settings (EX Menu) - FTX-1 hierarchical. C1: raw address/value list
-        // to verify the server scan; C3 turns it into a P1>P2>P3 browser.
+        // Radio settings (EX menu). Which of the two shapes gets drawn follows
+        // the radio in this slot, not the slot number - see `render_ex_menu`.
         if super::helpers::chevron_label(ui, self.collapse_yaesu2_menu,
             RichText::new(rust_i18n::t!("dev_radio_settings").to_string()).strong().size(14.0)).clicked()
         {
@@ -1181,36 +1217,77 @@ impl SdrRemoteApp {
             self.save_full_config();
         }
         if self.collapse_yaesu2_menu {
-            ui.indent("yaesu2_menu_body", |ui| self.render_yaesu2_ex_menu(ui));
+            ui.indent(("ex_menu_body", 1u8), |ui| self.render_ex_menu(ui, 1));
         }
     }
 
     /// FTX-1 EX-menu browser (Phase C3). Groups the live-scanned EX values by
     /// group > subgroup with labels from the chart (Table 3); per item a value field
     /// + Set. Addresses/values = ground truth radio; labels = chart (cosmetic).
-    pub(super) fn render_yaesu2_ex_menu(&mut self, ui: &mut egui::Ui) {
+    /// Which control asks THIS slot's radio to re-read its menu. The transport
+    /// is per slot; only the shape of what comes back is per model.
+    fn read_menus_control(slot: u8) -> sdr_remote_core::protocol::ControlId {
+        if slot == 0 {
+            sdr_remote_core::protocol::ControlId::YaesuReadMenus
+        } else {
+            sdr_remote_core::protocol::ControlId::Yaesu2ReadMenus
+        }
+    }
+
+    /// Write one EX value to a slot. Returns whether the command went out, so a
+    /// caller only updates what it shows after the send actually succeeded.
+    ///
+    /// The key travels as text; the server asks the radio which dialect that is
+    /// (`YaesuRadio::set_menu_entry`).
+    fn send_menu_set(&self, slot: u8, key: &str, value: &str) -> bool {
+        self.cmd_tx.send(Self::menu_set_cmd(slot, key, value)).is_ok()
+    }
+
+    /// The same command as an associated function, for the renderer that is
+    /// already holding its list mutably and so cannot lend out `self` as well.
+    fn menu_set_cmd(slot: u8, key: &str, value: &str) -> Command {
+        if slot == 0 {
+            Command::SetYaesuMenu(key.to_string(), value.to_string())
+        } else {
+            Command::SetYaesu2Menu(key.to_string(), value.to_string())
+        }
+    }
+
+    /// The radio-settings menu for a slot, drawn in the shape that slot's radio
+    /// speaks. This is the whole fix: the choice is the MODEL's, and it used to
+    /// be the slot number's.
+    pub(super) fn render_ex_menu(&mut self, ui: &mut egui::Ui, slot: u8) {
+        if self.yaesu_is_ftx1(slot) {
+            self.render_addressed_menu(ui, slot);
+        } else {
+            self.render_numbered_menu(ui, slot);
+        }
+    }
+
+    /// The FTX-1 shape: six-digit EX addresses, grouped by the chart.
+    pub(super) fn render_addressed_menu(&mut self, ui: &mut egui::Ui, slot: u8) {
         use super::ftx1_ex_chart;
+        let s = slot as usize;
         ui.horizontal(|ui| {
             if ui.button(rust_i18n::t!("dev_read_radio").to_string()).clicked() {
-                self.yaesu2_menu_received = false;
                 let _ = self.cmd_tx.send(Command::SetControl(
-                    sdr_remote_core::protocol::ControlId::Yaesu2ReadMenus, 0));
+                    Self::read_menus_control(slot), 0));
             }
-            let n = self.yaesu2_menu_entries.len();
+            let n = self.menu_entries[s].len();
             ui.label(rust_i18n::t!("dev_settings_count", n = n).to_string());
             ui.separator();
             ui.label(rust_i18n::t!("dev_filter").to_string());
-            ui.add(egui::TextEdit::singleline(&mut self.yaesu2_menu_filter).desired_width(120.0));
-            if !self.yaesu2_menu_filter.is_empty() && ui.button("x").clicked() {
-                self.yaesu2_menu_filter.clear();
+            ui.add(egui::TextEdit::singleline(&mut self.menu_filter[s]).desired_width(120.0));
+            if !self.menu_filter[s].is_empty() && ui.button("x").clicked() {
+                self.menu_filter[s].clear();
             }
         });
 
         // Build the grouped view locally (no self-borrow during render).
         // Item = (addr, group, sub, name+desc, current value).
-        let filt = self.yaesu2_menu_filter.to_lowercase();
+        let filt = self.menu_filter[s].to_lowercase();
         let mut groups: Vec<(String, Vec<(String, String, String, String)>)> = Vec::new();
-        for (addr, val) in &self.yaesu2_menu_entries {
+        for (addr, val) in &self.menu_entries[s] {
             let (group, sub, desc) = match ftx1_ex_chart::lookup(addr) {
                 Some((g, s, d)) => (g.to_string(), s.to_string(), d.to_string()),
                 None => (rust_i18n::t!("dev_other").to_string(), String::new(), addr.clone()),
@@ -1231,12 +1308,15 @@ impl SdrRemoteApp {
         let avail = ui.available_height().max(150.0);
         let mut to_set: Option<(String, String)> = None; // (addr, value)
         egui::ScrollArea::vertical()
-            .id_salt("yaesu2_menu_scroll")
+            .id_salt(("ex_menu_scroll_addressed", slot))
             .max_height(avail)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (group, items) in &groups {
                     egui::CollapsingHeader::new(RichText::new(group).strong())
+                        // Group names repeat across slots once both can draw
+                        // this shape; the slot keeps their open/closed state apart.
+                        .id_salt(("ex_group", slot, group))
                         .default_open(!filt.is_empty())
                         .show(ui, |ui| {
                             let mut last_sub = String::new();
@@ -1249,7 +1329,7 @@ impl SdrRemoteApp {
                                 }
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(desc).size(11.0));
-                                    let buf = self.yaesu2_menu_edits
+                                    let buf = self.menu_edits[s]
                                         .entry(addr.clone()).or_insert_with(|| val.clone());
                                     ui.add(egui::TextEdit::singleline(buf)
                                         .desired_width(70.0)
@@ -1270,9 +1350,9 @@ impl SdrRemoteApp {
             // thinking the old value is still in the radio. As a result
             // "Set" no longer appears when you set it back to the original.
             // Only update if the command was actually sent.
-            if self.cmd_tx.send(Command::SetYaesu2Menu(addr.clone(), value.clone())).is_ok() {
+            if self.send_menu_set(slot, &addr, &value) {
                 if let Some(entry) =
-                    self.yaesu2_menu_entries.iter_mut().find(|(a, _)| *a == addr)
+                    self.menu_entries[s].iter_mut().find(|(a, _)| *a == addr)
                 {
                     entry.1 = value;
                 }
@@ -1280,24 +1360,25 @@ impl SdrRemoteApp {
         }
     }
 
-    pub(super) fn render_yaesu_menu(&mut self, ui: &mut egui::Ui) {
+    /// The FT-991A shape: menu numbers with names from `MENU_DEFS`.
+    pub(super) fn render_numbered_menu(&mut self, ui: &mut egui::Ui, slot: u8) {
         use super::yaesu_menu;
+        let s = slot as usize;
 
         ui.horizontal(|ui| {
             if ui.button(rust_i18n::t!("dev_read_radio").to_string()).clicked() {
-                self.yaesu_menu_received = false;
                 let _ = self.cmd_tx.send(Command::SetControl(
-                    sdr_remote_core::protocol::ControlId::YaesuReadMenus, 0));
+                    Self::read_menus_control(slot), 0));
             }
         });
 
-        if self.yaesu_menu_items.is_empty() {
+        if self.menu_items[s].is_empty() {
             ui.label(rust_i18n::t!("dev_click_read_radio_153").to_string());
             return;
         }
 
-        egui::ScrollArea::vertical().max_height(300.0).id_salt("yaesu_menu_scroll").show(ui, |ui| {
-            egui::Grid::new("yaesu_menu_grid")
+        egui::ScrollArea::vertical().max_height(300.0).id_salt(("ex_menu_scroll_numbered", slot)).show(ui, |ui| {
+            egui::Grid::new(("ex_menu_grid", slot))
                 .striped(true)
                 .num_columns(4)
                 .min_col_width(30.0)
@@ -1309,7 +1390,10 @@ impl SdrRemoteApp {
                     ui.label(RichText::new("").strong());
                     ui.end_row();
 
-                    for item in &mut self.yaesu_menu_items {
+                    // Cloned out of `self` before the list is borrowed mutably:
+                    // the loop edits the items in place while it sends.
+                    let tx = self.cmd_tx.clone();
+                    for item in &mut self.menu_items[s] {
                         let def = yaesu_menu::MENU_DEFS.iter()
                             .find(|d| d.number == item.number);
 
@@ -1329,13 +1413,13 @@ impl SdrRemoteApp {
                         } else if yaesu_menu::is_enum(encoding) {
                             let options = yaesu_menu::parse_enum_options(encoding);
                             let display = yaesu_menu::format_value(&item.raw_value, encoding);
-                            egui::ComboBox::from_id_salt(format!("exm_{}", item.number))
+                            egui::ComboBox::from_id_salt(("exm", slot, item.number))
                                 .width(100.0)
                                 .selected_text(&display)
                                 .show_ui(ui, |ui| {
                                     for (code, label) in &options {
                                         if ui.selectable_label(item.raw_value == *code, label).clicked() {
-                                            let _ = self.cmd_tx.send(Command::SetYaesuMenu(item.number, code.clone()));
+                                            let _ = tx.send(Self::menu_set_cmd(slot, &item.number.to_string(), &code));
                                             item.raw_value = code.clone();
                                         }
                                     }
@@ -1345,7 +1429,7 @@ impl SdrRemoteApp {
                             let resp = ui.add(egui::TextEdit::singleline(&mut item.raw_value)
                                 .desired_width(60.0).font(egui::FontId::monospace(11.0)));
                             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                let _ = self.cmd_tx.send(Command::SetYaesuMenu(item.number, item.raw_value.clone()));
+                                let _ = tx.send(Self::menu_set_cmd(slot, &item.number.to_string(), &item.raw_value));
                             }
                         }
 

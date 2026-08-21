@@ -46,6 +46,14 @@ data class SdrUiState(
     val downKbps: Int = 0,
     val upKbps: Int = 0,
     val dxSpotsEnabled: Boolean = true,
+    /// Whether the server has a DX cluster at all. True until it says
+    /// otherwise, which is also what an older server implies.
+    val dxClusterAvailable: Boolean = true,
+    /// How each Yaesu slot is named: "Yaesu 1: FTX1" once the server has said
+    /// what it is, plain "Yaesu 1" until then. Composed by the shared rule on
+    /// the Rust side, so this screen never invents a model name.
+    val yaesuLabel: String = "Yaesu 1",
+    val yaesu2Label: String = "Yaesu 2",
     val captureLevel: Float = 0f,
     /// TX level of the Yaesu chain. The Thetis capture level is a different
     /// meter and reads silence while a Yaesu is keyed.

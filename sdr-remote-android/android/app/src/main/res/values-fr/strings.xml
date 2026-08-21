@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Traduction française. Les abréviations radioamateur / noms de mode / noms de produit restent en anglais. -->
 <resources>
+    <!-- La langue dans laquelle Android a resolu ce fichier. Transmise au cote Rust,
+         afin que les rares textes qui en proviennent (la ligne d'etat de connexion)
+         soient dans la meme langue que le reste. -->
+    <string name="ui_language_code">fr</string>
     <!-- Common / shared -->
     <string name="common_connect">Connexion</string>
     <string name="common_disconnect">Déconnexion</string>
@@ -258,10 +262,14 @@
     <string name="chat_leave_explain">Cela retire votre nom de tout ce que vous avez ecrit. Inutile pour terminer votre session : changez simplement d\'onglet, vous restez dans la discussion. Vos messages peuvent rester sans votre nom afin que les conversations des autres restent lisibles, ou partir avec vous si votre indicatif figure dans le texte.</string>
     <string name="chat_leave_keep">Me retirer, garder les messages</string>
     <string name="chat_leave_delete">Me retirer et supprimer</string>
+    <string name="chat_report_needs_relay">Signaler un probleme passe aussi par le relais, il en faut donc un egalement.</string>
+    <string name="chat_offline_what_a_relay_is">Un relais vaut la peine d\'etre connu en soi. Joindre sa station par internet suppose normalement de laisser entrer une connexion depuis l\'exterieur : un port redirige sur le routeur, et une adresse qui ne change pas.\n\nAvec un relais, les deux cotes etablissent au contraire une connexion sortante, vers un point de rendez-vous qui les apparie. Le reseau domestique cesse donc d\'etre critique : le plus souvent rien n\'a besoin d\'etre modifie sur le routeur, et cela fonctionne derriere un CGNAT ou en donnees mobiles.</string>
+    <string name="chat_offline_get_access">Vous pouvez heberger un relais vous-meme : la source accompagne chaque version. PA3GHM en fait tourner un aussi, avec ce salon et le bouton Signaler un probleme, auquel vous pouvez etre ajoute sur demande. Un montage experimental au nombre de places limite, tenu comme un loisir, sans garantie de disponibilite ni de continuite. Qui heberge un relais peut refuser une demande ou arreter le service, et un non n\'a pas a etre explique. Ecrivez a PA3GHM@gmail.com avec votre indicatif et une courte note sur votre installation.</string>
     <string name="chat_offline_no_relay">Aucun relais n\'est configure, donc pas de chat. Le chat tourne a cote du relais par lequel vous vous connectez.</string>
     <string name="chat_offline_no_ticket">Ce relais ne propose pas de chat.</string>
     <string name="chat_offline_unreachable">Le chat ne repond pas. L\'audio, le PTT et la radio n\'en dependent pas.</string>
     <string name="chat_answer_title">Une reponse a votre signalement</string>
+    <string name="chat_answer_dismiss">Masquer</string>
     <string name="chat_consent_title">Rejoindre le chat</string>
     <string name="chat_consent_intro">Un salon pour les utilisateurs de ce relais. Rejoindre signifie accepter un nom que les autres voient a cote de ce que vous ecrivez.</string>
     <string name="chat_consent_name_q">Sous quel nom ?</string>
@@ -286,8 +294,6 @@
     <string name="chat_report_attach_shown">Voici ce qui part avec. Relisez-le avant d\'envoyer : adresses, noms et tout ce qui ressemblait a un mot de passe ont ete retires, mais la derniere verification vous revient.</string>
     <string name="settings_roger">Bip de fin</string>
     <string name="settings_roger_hint">Une breve tonalite a la fin de votre emission. L\'emetteur reste en emission le temps voulu, pour que le correspondant l\'entende. Jamais en modes data ou numeriques.</string>
-    <string name="settings_roger_radio1">Radio 1</string>
-    <string name="settings_roger_radio2">Radio 2</string>
     <string name="settings_roger_volume">Niveau</string>
     <string name="settings_roger_fm">Aussi en FM</string>
 </resources>

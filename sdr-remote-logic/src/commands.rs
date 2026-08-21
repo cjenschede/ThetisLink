@@ -90,7 +90,11 @@ pub enum Command {
     SetYaesuPtt(bool),
     SetYaesuFreq(u64),
     SetYaesuMode(u8),
-    SetYaesuMenu(u16, String), // (menu number, P2 value)
+    /// Slot-0 EX write: (key, value). The key is a STRING because its shape is
+    /// the radio's, not the slot's - a menu number on an FT-991A, a six-digit
+    /// address on an FTX-1. It travels as text either way; typing it as `u16`
+    /// here is what made an FTX-1 in slot 1 unwritable (2026-08-20).
+    SetYaesuMenu(String, String),
     // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror of the slot-0
     // Yaesu commands, routed to radio 1 (Yaesu2*-controls / FrequencyYaesu2).
     SetYaesu2Enable(bool),

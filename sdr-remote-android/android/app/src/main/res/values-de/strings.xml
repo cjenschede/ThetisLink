@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Deutsche Übersetzung. Ham-Abkürzungen/Modus-/Produktnamen bleiben Englisch. -->
 <resources>
+    <!-- Die Sprache, in der Android diese Datei aufgeloest hat. Wird an die Rust-Seite
+         gereicht, damit die wenigen Texte von dort (die Verbindungsstatus-Zeile) in
+         derselben Sprache stehen wie alles andere. -->
+    <string name="ui_language_code">de</string>
     <!-- Common / shared -->
     <string name="common_connect">Verbinden</string>
     <string name="common_disconnect">Trennen</string>
@@ -258,10 +262,14 @@
     <string name="chat_leave_explain">Das nimmt Ihren Namen von allem, was Sie geschrieben haben. Zum Feierabend brauchen Sie es nicht - wechseln Sie einfach den Tab, Sie bleiben im Chat. Ihre Nachrichten koennen ohne Ihren Namen bleiben, damit Gespraeche anderer lesbar bleiben, oder mit Ihnen gehen, wenn Ihr Rufzeichen im Text steht.</string>
     <string name="chat_leave_keep">Austragen, Nachrichten behalten</string>
     <string name="chat_leave_delete">Austragen und loeschen</string>
+    <string name="chat_report_needs_relay">Ein Problem zu melden laeuft ebenfalls ueber das Relay, also wird auch dafuer eines gebraucht.</string>
+    <string name="chat_offline_what_a_relay_is">Ein Relay ist schon fuer sich genommen wissenswert. Die eigene Station ueber das Internet zu erreichen heisst normalerweise, eine Verbindung von aussen hereinzulassen: eine im Router weitergeleitete Portnummer und eine Adresse, die sich nicht aendert.\n\nUeber ein Relay bauen stattdessen beide Seiten eine ausgehende Verbindung auf - zu einem Treffpunkt, der sie zusammenfuehrt. Das Netz zu Hause ist damit nicht mehr kritisch: meist muss am Router nichts geaendert werden, und es funktioniert auch hinter CGNAT oder im Mobilfunk.</string>
+    <string name="chat_offline_get_access">Sie koennen selbst ein Relay betreiben - der Quelltext liegt jeder Version bei. PA3GHM betreibt ebenfalls eines, mit diesem Chatraum und der Schaltflaeche Problem melden, zu dem Sie auf Anfrage hinzugefuegt werden koennen: ein experimenteller Aufbau mit begrenzter Platzzahl, als Hobby betrieben, ohne Garantie auf Verfuegbarkeit oder Fortbestand. Wer ein Relay betreibt, darf eine Anfrage ablehnen oder den Dienst einstellen, und ein Nein braucht keine Begruendung. Schreiben Sie an PA3GHM@gmail.com mit Ihrem Rufzeichen und einer kurzen Notiz zu Ihrer Station.</string>
     <string name="chat_offline_no_relay">Es ist kein Relay eingerichtet, also gibt es keinen Chat. Der Chat laeuft neben dem Relay, ueber das Sie verbinden.</string>
     <string name="chat_offline_no_ticket">Dieses Relay bietet keinen Chat.</string>
     <string name="chat_offline_unreachable">Der Chat antwortet nicht. Audio, PTT und das Funkgeraet sind davon unberuehrt.</string>
     <string name="chat_answer_title">Eine Antwort auf Ihre Meldung</string>
+    <string name="chat_answer_dismiss">Ausblenden</string>
     <string name="chat_consent_title">Am Chat teilnehmen</string>
     <string name="chat_consent_intro">Ein Raum fuer die Nutzer dieses Relays. Teilnehmen heisst, einem Namen zuzustimmen, den andere neben dem sehen, was Sie schreiben.</string>
     <string name="chat_consent_name_q">Unter welchem Namen?</string>
@@ -286,8 +294,6 @@
     <string name="chat_report_attach_shown">Das geht mit. Lesen Sie es vor dem Senden durch: Adressen, Namen und alles, was nach einem Passwort aussah, wurden entfernt - die letzte Kontrolle liegt bei Ihnen.</string>
     <string name="settings_roger">Rogerpiep</string>
     <string name="settings_roger_hint">Ein kurzer Ton am Ende der Aussendung. Der Sender bleibt so lange getastet, damit die Gegenstelle ihn hoert. Nie in Daten- oder Digitalmodi.</string>
-    <string name="settings_roger_radio1">Funkgeraet 1</string>
-    <string name="settings_roger_radio2">Funkgeraet 2</string>
     <string name="settings_roger_volume">Pegel</string>
     <string name="settings_roger_fm">Auch in FM</string>
 </resources>

@@ -1177,7 +1177,14 @@ impl TciConnection {
                 }
             }
             TciNotification::TxProfilesEx { names } => {
-                info!("TCI: TX profiles: {:?}", names);
+                // Thetis sends the list on connect and again after START, so the
+                // same ten names went into the log twice per session. Only a list
+                // that actually differs is news.
+                if self.tx_profile_names != names {
+                    info!("TCI: TX profiles: {:?}", names);
+                } else {
+                    log::debug!("TCI: TX profiles unchanged ({} entries)", names.len());
+                }
                 self.tx_profile_names = names;
                 // Recalculate active index if we already have a profile name
                 if !self.tx_profile_name.is_empty() {
@@ -1202,16 +1209,24 @@ impl TciConnection {
             TciNotification::CtunEx { receiver, enabled } => {
                 // Per-RX cache update - used by ctun-auto-recenter to check on a VFO-event
                 // whether CTUN is ON, and if not to force it first.
-                match receiver {
-                    0 => self.ctun = enabled,
-                    1 => self.ctun_rx2 = enabled,
-                    _ => {}
+                let changed = match receiver {
+                    0 => { let p = self.ctun; self.ctun = enabled; p != enabled }
+                    1 => { let p = self.ctun_rx2; self.ctun_rx2 = enabled; p != enabled }
+                    _ => false,
+                };
+                if changed {
+                    info!("TCI: CTUN RX{} = {}", receiver + 1, enabled);
+                } else {
+                    log::debug!("TCI: CTUN RX{} = {} (unchanged)", receiver + 1, enabled);
                 }
-                info!("TCI: CTUN RX{} = {}", receiver + 1, enabled);
             }
             TciNotification::VfoSyncEx { enabled } => {
-                self.vfo_sync_on = enabled;
-                info!("TCI: VFO sync = {}", enabled);
+                if self.vfo_sync_on != enabled {
+                    self.vfo_sync_on = enabled;
+                    info!("TCI: VFO sync = {}", enabled);
+                } else {
+                    log::debug!("TCI: VFO sync = {} (unchanged)", enabled);
+                }
             }
             TciNotification::FmDeviationEx { receiver, hz } => {
                 self.fm_deviation = if hz >= 5000 { 1 } else { 0 };
@@ -1317,8 +1332,22 @@ impl TciConnection {
                 }
             }
             TciNotification::DiversityEnableEx { enabled } => {
-                self.diversity_enabled = enabled;
-                info!("TCI: Diversity = {}", enabled);
+                // Log the edge, not the state - and for the phase/gain values
+                // below, not even the edge while diversity is switched OFF. On a
+                // station that never uses it, Thetis still pushes a phase and
+                // two gains at every connect, and a number describing a feature
+                // that is not running is not information. `Diversity = true`
+                // here is what says the values start mattering. Thetis pushes its whole diversity
+                // block on connect and again after START, so a station that has
+                // never used diversity still got "Diversity = false" six times
+                // per session - a line that reports nothing happening. Same rule
+                // as the gain handler below, which already had it.
+                if self.diversity_enabled != enabled {
+                    self.diversity_enabled = enabled;
+                    info!("TCI: Diversity = {}", enabled);
+                } else {
+                    log::debug!("TCI: Diversity = {} (unchanged)", enabled);
+                }
             }
             TciNotification::RxOnlyEx { rx_only } => {
                 // Dedup: TL2-3 fork pushes on every transition AND the SET-handler
@@ -1332,12 +1361,21 @@ impl TciConnection {
                 }
             }
             TciNotification::DiversityRefEx { rx1_ref } => {
-                self.diversity_ref = if rx1_ref { 0 } else { 1 };
-                info!("TCI: Diversity ref = RX{}", if rx1_ref { 1 } else { 2 });
+                let next = if rx1_ref { 0 } else { 1 };
+                if self.diversity_ref != next {
+                    self.diversity_ref = next;
+                    info!("TCI: Diversity ref = RX{}", if rx1_ref { 1 } else { 2 });
+                } else {
+                    log::debug!("TCI: Diversity ref = RX{} (unchanged)", if rx1_ref { 1 } else { 2 });
+                }
             }
             TciNotification::DiversitySourceEx { source } => {
-                self.diversity_source = source as u8;
-                info!("TCI: Diversity source = {}", source);
+                if self.diversity_source != source as u8 {
+                    self.diversity_source = source as u8;
+                    info!("TCI: Diversity source = {}", source);
+                } else {
+                    log::debug!("TCI: Diversity source = {} (unchanged)", source);
+                }
             }
             TciNotification::DiversityGainEx { receiver, gain } => {
                 // Thetis pushes this on every diversity tick (~10-20 Hz),
@@ -1353,7 +1391,7 @@ impl TciConnection {
                     self.diversity_gain_rx2 = gain;
                     prev != gain
                 };
-                if changed {
+                if changed && self.diversity_enabled {
                     info!("TCI: Diversity gain RX{} = {}", receiver + 1, gain);
                 } else {
                     log::debug!("TCI: Diversity gain RX{} = {} (unchanged)", receiver + 1, gain);
@@ -1362,7 +1400,7 @@ impl TciConnection {
             TciNotification::DiversityGainMultiEx { multi } => {
                 let prev = self.diversity_gain_multi;
                 self.diversity_gain_multi = multi;
-                if prev != multi {
+                if prev != multi && self.diversity_enabled {
                     info!("TCI: Diversity GainMulti = {} (= {:.2}x)", multi, (multi as f32) / 100.0);
                 } else {
                     log::debug!("TCI: Diversity GainMulti = {} (unchanged)", multi);
@@ -1372,14 +1410,25 @@ impl TciConnection {
                 // TL2-1 fork per-RX echo. Overrides whatever the global iq_samplerate
                 // (which sets both rx fields equal) just wrote, so we end up with the
                 // actual per-RX state.
-                if receiver == 0 { self.ddc_sample_rate_rx1 = rate_hz; }
-                else { self.ddc_sample_rate_rx2 = rate_hz; }
-                info!("TCI: ddc_sample_rate_ex RX{} = {} Hz", receiver + 1, rate_hz);
+                let changed = if receiver == 0 {
+                    let p = self.ddc_sample_rate_rx1;
+                    self.ddc_sample_rate_rx1 = rate_hz;
+                    p != rate_hz
+                } else {
+                    let p = self.ddc_sample_rate_rx2;
+                    self.ddc_sample_rate_rx2 = rate_hz;
+                    p != rate_hz
+                };
+                if changed {
+                    info!("TCI: ddc_sample_rate_ex RX{} = {} Hz", receiver + 1, rate_hz);
+                } else {
+                    log::debug!("TCI: ddc_sample_rate_ex RX{} = {} Hz (unchanged)", receiver + 1, rate_hz);
+                }
             }
             TciNotification::DiversityPhaseEx { phase } => {
                 let prev = self.diversity_phase;
                 self.diversity_phase = phase;
-                if prev != phase {
+                if prev != phase && self.diversity_enabled {
                     info!("TCI: Diversity phase = {}", phase);
                 } else {
                     log::debug!("TCI: Diversity phase = {} (unchanged)", phase);

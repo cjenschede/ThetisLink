@@ -38,6 +38,31 @@ fn adopt_memory_list(
     *memory_data.lock().unwrap() = Some(tab_text.to_string());
 }
 
+/// Which capture channel this radio's audio should be taken from, for the model
+/// as it is CURRENTLY known.
+///
+/// A property of the radio type, not of the slot. Only the FTX-1 offers a stereo
+/// capture endpoint - 2 channels against a 991A's 1, carrying its two receivers
+/// separately - and it does so in whichever slot it sits. Before this, slot 1 was hardwired to L and only
+/// slot 2 could choose - so the same radio had the setting in one slot and not
+/// in the other.
+///
+/// Worked out at every stream (re)build and not frozen at construction: a radio
+/// that is switched off when the server starts is assumed to be a 991A and
+/// adopts its real model when it finally answers `ID;`. An FTX-1 that arrived
+/// that way would otherwise keep the 991A's channel for the rest of the session.
+pub(super) fn effective_capture_channel(
+    model: RadioModel,
+    status: &Arc<Mutex<YaesuState>>,
+) -> u8 {
+    if matches!(model, RadioModel::Ftx1) {
+        status.lock().unwrap().audio_channel
+    } else {
+        // One channel on the endpoint; the capture code takes it as-is.
+        0
+    }
+}
+
 pub(super) fn yaesu_reconnect_thread(
     cmd_rx: mpsc::Receiver<YaesuCmd>,
     // The loop's own way back into the command queue. The PTT watchdog uses it to
@@ -69,7 +94,6 @@ pub(super) fn yaesu_reconnect_thread(
     alive: Arc<std::sync::atomic::AtomicBool>,
     slot: u8,
     mut prefix: String,
-    capture_channel: u8,
 ) {
     info!("{} serial thread started on {}", prefix, port_name);
 
@@ -291,6 +315,7 @@ pub(super) fn yaesu_reconnect_thread(
             // Initial delay: USB audio device may appear after serial port
             std::thread::sleep(Duration::from_secs(1));
 
+            let capture_channel = effective_capture_channel(model, &status);
             match build_capture_stream(dev, rx_audio_tx.clone(), last_audio_time.clone(), &prefix, capture_channel) {
                 Ok((stream, _rate)) => {
                     capture_stream.set(Some(stream));
@@ -344,7 +369,7 @@ pub(super) fn yaesu_reconnect_thread(
         yaesu_poll_loop(
             port, &cmd_rx, &self_tx, &status, &memory_data, &menu_data,
             &audio_device, &output_device, &rx_audio_tx, &capture_stream, &output_stream, &tx_producer, &last_audio_time,
-            model, &alive, slot, &prefix, capture_channel, ft991a_usb_routing_snapshot,
+            model, &alive, slot, &prefix, ft991a_usb_routing_snapshot,
         );
 
         {
@@ -375,7 +400,6 @@ fn yaesu_poll_loop(
     // Which slot this radio sits in - the key its kept tones are filed under.
     slot: u8,
     prefix: &str,
-    capture_channel: u8,
     ft991a_usb_routing_snapshot: Option<Ft991aUsbRoutingSnapshot>,
 ) {
     let mut read_buf = String::new();
@@ -395,6 +419,11 @@ fn yaesu_poll_loop(
     let mut last_smeter_poll = Instant::now();
     let mut last_response = Instant::now();
     let mut last_output_retry = Instant::now();
+    // Whether the operator has been told, once, that this radio cannot transmit.
+    // The retry itself is silent on repeat - but silence about a dead TX path is
+    // worse than noise, and the log used to manage both at once: 119 repeats of
+    // an intermediate fallback notice, and not one line saying what it cost.
+    let mut output_failure_reported = false;
     // Warn-once guards: prevent 500 ms-poll log spam while they
     // remove the current silent defaults. `warned_modes` = unknown MD codes
     // (one warn per unique char); `warned_short_if` = deviating IF length (one warn).
@@ -1436,6 +1465,7 @@ fn yaesu_poll_loop(
                         // Reset timestamp to prevent repeated rebuilds - give new stream 10s to start
                         let future_ms = now_ms + 10_000;
                         last_audio_time.store(future_ms, std::sync::atomic::Ordering::Relaxed);
+                        let capture_channel = effective_capture_channel(model, &status);
                         match build_capture_stream(dev, rx_audio_tx.clone(), last_audio_time.clone(), prefix, capture_channel) {
                             Ok((stream, _rate)) => {
                                 capture_stream.set(Some(stream));
@@ -1469,12 +1499,68 @@ fn yaesu_poll_loop(
                     Ok((stream, _rate)) => {
                         output_stream.set(Some(stream));
                         info!("{} audio output recovered (device free)", prefix);
+                        output_failure_reported = false;
                     }
-                    Err(e) => log::debug!("{} audio output retry failed: {}", prefix, e),
+                    Err(e) => {
+                        if !output_failure_reported {
+                            output_failure_reported = true;
+                            // Said once, and said in terms of what it costs: no
+                            // transmit audio through this radio until the device
+                            // turns up. A configured output that names a capture
+                            // endpoint - a microphone - is the usual cause, and
+                            // it can never match, so this retries forever.
+                            warn!(
+                                "{} NO TRANSMIT AUDIO: cannot open output device '{}' ({}). \
+                                 Retrying every 5 s. Check the TX audio device in the server \
+                                 settings - it must be a playback device, not a microphone.",
+                                prefix, out_dev, e
+                            );
+                        } else {
+                            log::debug!("{} audio output retry failed: {}", prefix, e);
+                        }
+                    }
                 }
             }
         }
 
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+mod capture_channel_tests {
+    use super::{effective_capture_channel, RadioModel, YaesuState};
+    use std::sync::{Arc, Mutex};
+
+    fn state_with(channel: u8) -> Arc<Mutex<YaesuState>> {
+        let st = YaesuState::default();
+        let st = Arc::new(Mutex::new(st));
+        st.lock().unwrap().audio_channel = channel;
+        st
+    }
+
+    /// The choice belongs to the radio type. An FTX-1 gets it in EITHER slot -
+    /// slot 1 used to be hardwired to L, so the same radio had the setting in
+    /// one slot and not in the other (2026-08-20).
+    #[test]
+    fn an_ftx1_gets_the_operators_choice() {
+        for channel in [0u8, 1, 2] {
+            assert_eq!(
+                effective_capture_channel(RadioModel::Ftx1, &state_with(channel)),
+                channel
+            );
+        }
+    }
+
+    /// A 991A reports a single channel, so there is nothing to choose and the
+    /// setting must not reach it - not even to ask for a "mix" of one channel.
+    #[test]
+    fn a_991a_takes_the_only_channel_it_has() {
+        for channel in [0u8, 1, 2] {
+            assert_eq!(
+                effective_capture_channel(RadioModel::Ft991a, &state_with(channel)),
+                0
+            );
+        }
     }
 }

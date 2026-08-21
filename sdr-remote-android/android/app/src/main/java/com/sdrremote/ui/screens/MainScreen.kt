@@ -527,6 +527,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 viewModel.setControl(0x64, mask)
             },
             dxSpotsEnabled = state.dxSpotsEnabled,
+            dxClusterAvailable = state.dxClusterAvailable,
+            rogerThetisPresent = state.thetisConfigured,
+            rogerRadio1Present = state.yaesuConnected,
+            rogerRadio2Present = state.yaesu2Connected,
+            radio1Label = state.yaesuLabel,
+            radio2Label = state.yaesu2Label,
             onDxSpotsEnabledChange = { viewModel.setDxSpotsEnabled(it) },
             onRogerChange = { f, v, ms, fm, t, r1, r2 ->
                 viewModel.setRogerBeep(f, v, ms, fm, t, r1, r2)
@@ -645,8 +651,6 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Read on every recomposition rather than remembered: the relay is
     // configured elsewhere in this app, and a tab that only appears after a
     // restart would look like it does not work.
-    val relayConfigured = prefs.getBoolean("relay_enabled", false) &&
-        (prefs.getString("relay_url", "") ?: "").isNotBlank()
 
     // The chat, on its own flow and its own clock (see the ViewModel): asked for
     // once a second rather than with the radio's 30 fps, because it is the least
@@ -661,11 +665,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         if (yaesuActive) { showDevices = true; showChat = false }
     }
 
-    // The relay was switched off while the chat was open: leave it, or the
-    // screen would stay up with no way back to it.
-    LaunchedEffect(relayConfigured) {
-        if (!relayConfigured) showChat = false
-    }
+    // The chat screen stays reachable without a relay: it is where it explains
+    // that the chat runs on one, and how to get to one. Kicking the operator out
+    // of it the moment the relay is off would take away the explanation along
+    // with the chat (2026-08-20).
 
     // Data-besparing: abonneer alleen op de Yaesu-radio's als het Yaesu-window open is
     // (devices-scherm zichtbaar en Yaesu-tab (id 6) geselecteerd). Buiten dit window blijft
@@ -764,7 +767,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         // beside the version line on a phone: squeezed in there,
                         // the version wrapped one letter per line (seen on a
                         // 1080-wide screen the moment the third tab appeared).
-                        val tabCount = if (relayConfigured) 3 else 2
+                        // Three, always. The chat tab used to appear only with a
+                        // relay configured - the same rule the desktop dropped on
+                        // 2026-08-20, and for the same reason: with the window
+                        // explaining what the chat is and how to reach one, the
+                        // tab is the way in rather than a dead end.
+                        val tabCount = 3
                         SingleChoiceSegmentedButtonRow(
                             modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                         ) {
@@ -778,7 +786,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                 onClick = { showDevices = true; showChat = false },
                                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = tabCount),
                             ) { Text(stringResource(R.string.main_devices), fontSize = 12.sp) }
-                            if (relayConfigured) {
+                            run {
                                 SegmentedButton(
                                     selected = showChat,
                                     onClick = { showChat = true },
@@ -810,6 +818,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             onEdit = { id, body -> viewModel.chatEdit(id, body) },
                             onLeave = { viewModel.chatLeave(it) },
                             onReport = { note, attachment -> viewModel.chatReport(note, attachment) },
+                            onDismissAnswer = { viewModel.chatDismissAnswer(it) },
                             buildAttachment = { viewModel.chatBuildAttachment() },
                         )
                     }
@@ -1247,6 +1256,16 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     )
                 }
 
+
+                } // end of !yaesuActive
+
+                // App-navigation, NOT Thetis content - so it sits outside the
+                // block above. It used to be inside it, and on a server without
+                // Thetis the whole row went with it: no Settings, no MIDI, no
+                // About, no Wizard. The settings behind that first button hold
+                // the relay and the server address - exactly what you need when
+                // there is nothing to connect to. The one door that locked
+                // itself from the inside (owner, 2026-08-20).
                 item {
                     Spacer(Modifier.height(8.dp))
                     HorizontalDivider()
@@ -1275,8 +1294,6 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         }
                     }
                 }
-
-                } // end of !yaesuActive
                 } // end of !showDevices (radio screen)
             }
 

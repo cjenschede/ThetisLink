@@ -5,11 +5,12 @@ pub mod codec;
 pub mod conf_layout;
 pub mod diagnose;
 pub mod jitter;
+pub mod oslang;
 pub mod protocol;
 pub mod stream;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.9.1";
+pub const VERSION: &str = "2.10.0";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).

@@ -128,8 +128,34 @@ pub struct ServerApp {
     yaesu_audio_device: String,
     yaesu_audio_output_device: String,
     yaesu_enabled: bool,
-    yaesu_ssb_switch_on_ptt: bool,
-    ftx1_memory_write_ack: bool,
+    // Per slot, indexed by it. Only meaningful on one model each, but the value
+    // is a choice about one radio and two radios of the same type can be
+    // attached - so it belongs to the slot, not to the type.
+    ssb_switch_on_ptt: [bool; 2],
+    memory_write_ack: [bool; 2],
+    audio_channel: [u8; 2],
+    /// What model is on each slot's port, as far as the settings screen knows:
+    /// remembered from last time, refreshed by a probe when a port is picked.
+    /// `None` means nobody has answered on that port yet, and then the screen
+    /// offers no model-specific control at all - it cannot honestly say which
+    /// radio the setting would be for.
+    probe_model: [Option<u8>; 2],
+    /// A probe is out on this slot. It opens the port and may walk seven baud
+    /// rates, so it runs on its own thread and this is what the screen shows
+    /// meanwhile.
+    probe_busy: [bool; 2],
+    /// This slot's port has been asked once this session. Without it the
+    /// auto-probe below would fire again every frame on a radio that is off.
+    probe_attempted: [bool; 2],
+    /// The last probe on this port got no answer, while a model from an earlier
+    /// session is still on screen. Switching a radio off must not take away the
+    /// settings it had.
+    probe_silent: [bool; 2],
+    /// The port each `probe_model` belongs to, so a changed selection invalidates
+    /// the answer instead of describing the previous radio.
+    probe_port: [String; 2],
+    probe_tx: std::sync::mpsc::Sender<(u8, String, Option<u8>)>,
+    probe_rx: std::sync::mpsc::Receiver<(u8, String, Option<u8>)>,
     // Dual-radio slot 1 (radio 2) - now also in the settings GUI instead of conf-only.
     yaesu2_port: String,
     yaesu2_audio_device: String,
@@ -284,6 +310,11 @@ pub struct ServerApp {
     ultrabeam_window_size: Option<[f32; 2]>,
     rotor_window_size: Option<[f32; 2]>,
     show_about: bool,
+    /// The FTX-1 memory-write condition window is open. Set by the checkbox in
+    /// the settings screen and by the "read the condition" button; the Accept
+    /// button inside it is what actually grants `memory_write_ack` - for the
+    /// slot it was opened from, which is why this carries one.
+    show_memory_condition: Option<u8>,
     // Chat and problem reporting (docs/internal/DESIGN-relay-chat.md), the same
     // component the desktop client draws. The server is a station in its own
     // right, so it gets the same window rather than a smaller one.

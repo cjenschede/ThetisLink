@@ -217,9 +217,10 @@ pub struct ChatPanel {
     /// it goes, and cancellable, and the two exclude each other - one input
     /// field, one intent.
     editing: Option<i64>,
-    /// Answers the reader has folded away. Ids and not a flag, so a new answer
-    /// still shows after an older one was put aside.
-    answers_seen: std::collections::HashSet<i64>,
+
+    /// An answer was folded away this frame, so the ids want writing down.
+    /// Taken by the host, which is the side that owns a config file.
+    answers_seen_changed: bool,
 
     /// The relay address this was last ticked with. Kept so the report knows
     /// which host must never appear in a log.
@@ -265,7 +266,7 @@ impl Default for ChatPanel {
             leave_open: false,
             replying_to: None,
             editing: None,
-            answers_seen: std::collections::HashSet::new(),
+            answers_seen_changed: false,
             relay_url: String::new(),
             diag_open: false,
             diag_note: String::new(),
@@ -330,19 +331,28 @@ impl ChatPanel {
         }
     }
 
-    fn render_answers(&mut self, ctx: &egui::Context) {
-        let unread: Vec<crate::worker::ChatAnswer> = self
-            .m
-            .answers
-            .iter()
-            .filter(|a| !self.answers_seen.contains(&a.id))
-            .cloned()
-            .collect();
+    fn render_answers(&mut self, ctx: &egui::Context) -> Option<i64> {
+        let unread = self.m.unread_answers();
         if unread.is_empty() {
-            return;
+            return None;
         }
+        let mut dismissed = None;
+        // Bounded and scrollable, because this used to be neither: a plain loop
+        // over every unread answer in a top panel, which after a restart meant
+        // EVERY answer - the folding away was not remembered - and the panel
+        // then took the whole window. The conversation and the report button
+        // were squeezed to nothing underneath it and there was no scrollbar, so
+        // a reader with a few answers could no longer read the chat and could
+        // not report that either (two users, 2026-08-20). A third of the chat
+        // window at most, clamped. Note what this does NOT do: it is a fraction
+        // of the total height, so nothing reserves a minimum for the
+        // conversation - in a small window the header, the input line and this
+        // together still take nearly everything. Bounded is not the same as
+        // guaranteed room, and the comment used to claim the second.
+        let max_h = (ctx.screen_rect().height() / 3.0).clamp(80.0, 260.0);
         egui::TopBottomPanel::top("chat_answers").show(ctx, |ui| {
             ui.add_space(4.0);
+            egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
             for a in unread {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
@@ -361,18 +371,39 @@ impl ChatPanel {
                         .on_hover_text(rust_i18n::t!("chat_answer_dismiss").to_string())
                         .clicked()
                     {
-                        self.answers_seen.insert(a.id);
+                        dismissed = Some(a.id);
                     }
                 });
                 ui.label(drawable(&a.body));
                 ui.add_space(4.0);
             }
+            });
             ui.separator();
         });
+        dismissed
+    }
+
+    /// The folded-away ids, for the host to write down.
+    pub fn seen_ids(&self) -> Vec<i64> {
+        self.m.seen_ids()
+    }
+
+    /// Take back what the host had written down, at startup.
+    pub fn restore_seen(&mut self, ids: &[i64]) {
+        self.m.restore_seen(ids);
+    }
+
+    /// Have the folded-away ids changed since last asked? Taken, not read: the
+    /// host writes them once per change rather than on every frame.
+    pub fn take_answers_seen_changed(&mut self) -> bool {
+        std::mem::take(&mut self.answers_seen_changed)
     }
 
     pub fn render_body(&mut self, ctx: &egui::Context, files: &ChatFiles, server: &ServerSide) {
-        self.render_answers(ctx);
+        if let Some(id) = self.render_answers(ctx) {
+            self.m.dismiss_answer(id);
+            self.answers_seen_changed = true;
+        }
         // Drawn first and on every screen: a problem report needs a valid ticket
         // and nothing else, so somebody who never joined the chat - or cannot
         // reach it - can still send one.
@@ -393,15 +424,51 @@ impl ChatPanel {
                 // from the reader - and one word covering all three is the fault
                 // this project keeps finding in its own reviews.
                 ui.add_space(12.0);
-                let key = match why {
-                    OfflineReason::NoRelay => "chat_offline_no_relay",
-                    OfflineReason::NoTicket => "chat_offline_no_ticket",
-                    OfflineReason::Unreachable => "chat_offline_unreachable",
+                // Each arm names its own key inside `t!` rather than handing a
+                // variable to one call. It reads no worse, and it is what lets
+                // the test below see which keys this file asks for - the three
+                // that went missing were exactly the ones hidden behind a
+                // variable.
+                let line = match why {
+                    OfflineReason::NoRelay => rust_i18n::t!("chat_offline_no_relay"),
+                    OfflineReason::NoTicket => rust_i18n::t!("chat_offline_no_ticket"),
+                    OfflineReason::Unreachable => rust_i18n::t!("chat_offline_unreachable"),
                 };
-                ui.label(
-                    RichText::new(rust_i18n::t!(key).to_string())
-                        .color(ui.visuals().weak_text_color()),
-                );
+                // What it is, what a relay does for you, and where to get one -
+                // in the same words for all three states rather than three
+                // copies drifting apart. One line saying "no chat here" left the
+                // reader to guess whether something was broken, whether it was
+                // theirs to fix, and what it would have been for. This is the
+                // one screen a curious operator reaches on a station with no
+                // relay at all, so it is also where the relay itself gets
+                // explained rather than assumed.
+                //
+                // Scrolled: four paragraphs do fit the default window, but not a
+                // window somebody has dragged smaller, and text that is silently
+                // cut off is worse here than anywhere else.
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.label(line.to_string());
+                    // Written out one by one, not looped over an array of key
+                    // names: the test in lib.rs only sees keys that appear as a
+                    // literal inside `t!`, and a loop would hide these three from
+                    // it exactly the way the offline texts were hidden before.
+                    let dim = ui.visuals().weak_text_color();
+                    for text in [
+                        rust_i18n::t!("chat_offline_what_it_is"),
+                        rust_i18n::t!("chat_offline_what_a_relay_is"),
+                        rust_i18n::t!("chat_offline_get_access"),
+                    ] {
+                        // A blank line in the translation is a paragraph break,
+                        // and the gap is set here rather than in the text: the
+                        // four languages then break in the same places and space
+                        // them the same way, and a translator cannot make one
+                        // read tighter than another by counting newlines.
+                        for para in text.split("\n\n") {
+                            ui.add_space(14.0);
+                            ui.label(RichText::new(para).color(dim));
+                        }
+                    }
+                });
                 return;
             }
             match self.m.consented {

@@ -393,6 +393,9 @@ pub struct SdrRemoteApp {
     /// receiver? Default true; false = server set to single-receiver -> RX2 +
     /// VRX2 shown nowhere (VRX1 hangs off RX1 and stays).
     rx2_present: bool,
+    /// Does this server have a DX cluster at all? Server-reported; `true` until
+    /// told otherwise, which is what an older server implies.
+    dx_cluster_available: bool,
     thetis_starting: bool,
     // Spectrum + waterfall
     spectrum_enabled: bool,
@@ -997,21 +1000,38 @@ pub struct SdrRemoteApp {
     yaesu2_mem_radio_received: bool,
     yaesu2_mem_blob_hash: Option<u64>,
     yaesu_mem_active_slot: u8,
-    yaesu_menu_items: Vec<yaesu_menu::MenuItem>,
-    yaesu_menu_received: bool,
+    // ── The EX / radio-settings menu, per radio slot ──────────────────────
+    //
+    // Indexed by SLOT, shaped by MODEL. Which of the two shapes a slot carries
+    // follows the radio that is in it, not the slot number: an FT-991A addresses
+    // its menu by number, an FTX-1 by a six-digit address. These used to be two
+    // separate sets of fields, one per slot, each hard-wired to one shape - so
+    // an FTX-1 in slot 1 was read with the 991A parser (a third of its settings
+    // silently dropped, the rest shown in the wrong view) and a 991A in slot 2
+    // came out empty (2026-08-20).
+    //
+    // Exactly one of `menu_items` / `menu_entries` is filled for a given slot;
+    // the parser clears the other, so there is never a stale second answer to
+    // "what is in this menu".
+    /// FT-991A shape: menu numbers 1..153, laid out by `yaesu_menu::MENU_DEFS`.
+    menu_items: [Vec<yaesu_menu::MenuItem>; 2],
+    /// FTX-1 shape: six-digit EX addresses, laid out by `ftx1_ex_chart`.
+    menu_entries: [Vec<(String, String)>; 2],
     /// Hash of the last EX list taken from the server, per slot - same reason as
     /// the memory list: these are PUSHED, so "have I seen this" is a question
     /// about the content, not a one-shot latch.
-    yaesu_menu_blob_hash: Option<u64>,
-    // Slot-1 (FTX-1) EX-menu (Phase C). Hierarchical: address = "p1p2p3" (6 digits).
-    // C1 = raw (address,value) list; C3 turns it into a P1>P2>P3 browser.
-    yaesu2_menu_entries: Vec<(String, String)>,
-    yaesu2_menu_received: bool,
-    yaesu2_menu_blob_hash: Option<u64>,
+    menu_blob_hash: [Option<u64>; 2],
+    /// The model code the current parse was made with.
+    ///
+    /// The blob and the model arrive on their own schedules, and the blob can be
+    /// first. Without this the wrong-shaped parse would be cached and the hash
+    /// would then say "already seen" forever, so the menu stayed wrong even
+    /// after the radio had named itself.
+    menu_parsed_as: [u8; 2],
+    /// Editable value buffers per EX key (lazily filled on render).
+    menu_edits: [std::collections::HashMap<String, String>; 2],
+    menu_filter: [String; 2],
     collapse_yaesu2_menu: bool,
-    /// Editable value buffers per EX-address (lazily filled on render).
-    yaesu2_menu_edits: std::collections::HashMap<String, String>,
-    yaesu2_menu_filter: String,
     rotor_goto_input: String,
     // DX Cluster spots
     dx_spots: Vec<sdr_remote_logic::state::DxSpotInfo>,

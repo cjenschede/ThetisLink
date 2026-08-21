@@ -16,6 +16,132 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.10.0] — 2026-08-20 (A first start on the server claims nothing, and two radios stay apart)
+
+> **Who this release changes things for.** **Anyone installing ThetisLink for the
+> first time** — the server used to open in Dutch with half a dozen devices
+> ticked, so the first thing you did was switch off things you do not own. And
+> **anyone running two Yaesu radios**, because until now the two could not hold
+> different settings: granting a permission on one granted it on the other, for
+> good. If you run one radio and have had ThetisLink for a while, the visible
+> changes are small — but see the last entry under *Fixed*, which is about not
+> losing your settings file.
+>
+> **Safe to install.** The wire protocol is unchanged from 2.9.1, so a client and
+> a server on either version still talk to each other. Stock Thetis v2.10.3.x
+> suffices — no fork change is required. Your existing configuration is read as
+> it stands: three settings that used to apply to both radios at once are now per
+> radio, and an older file hands its answer to both of them. Nothing needs
+> reinstalling or reconfiguring: the binaries replace the previous ones and the
+> Android app updates over the one you have.
+>
+> **Going back to 2.9.1 is not symmetric.** Once this version has saved your
+> configuration, 2.9.1 does not know the per-radio keys and falls back to its
+> defaults for those three settings. Keep a copy of your `.conf` if you want to
+> be able to step back.
+
+### Added
+
+- **A first start on the server opens bare, and in the language of the machine.** With no
+  configuration file yet, every optional device is off — Amplitec, the tuners,
+  SPE, RF2K-S, UltraBeam, the rotor, the DX cluster, the second receiver, and
+  every "open this window at startup" tick. You switch on what you have actually
+  connected rather than switching off what you do not. The interface opens in the
+  Windows display language where ThetisLink has that translation (Dutch, German,
+  French) and in English otherwise. This applies to a *first* start only: once
+  there is a configuration file, the language in it is your choice and is never
+  overwritten.
+
+- **German and French reach the screens you see before connecting.** Both
+  translations existed, but the connect screen, the wizard and the status line
+  under them were English regardless. They are not any more — on the desktop, and
+  on Android, where that line now follows the phone as the rest of the app
+  already did.
+
+- **The settings screen asks the port which radio is on it.** Pick a COM port and
+  ThetisLink asks the radio what it is, then shows the settings that belong to
+  that model instead of guessing from which slot it sits in. It remembers the
+  answer, so the next start offers the same controls without opening the port
+  again.
+
+- **The FT-991A memory-write condition is a window you can read.** It was a line
+  of small print next to a tick box; it is now a window with the text and an
+  Accept button.
+
+### Fixed
+
+- **Two radios of the same type can hold different settings.** Three settings —
+  switch to SSB on PTT, permission to write memory channels, and which side of
+  the USB audio to take — were stored once and applied to both slots. Granting
+  memory-write on one radio granted it on the other, permanently, and the two
+  could never differ. They are per radio now, and an existing configuration hands
+  its answer to both.
+
+- **The EX menu, the audio channel and the model-specific controls follow the
+  radio, not the slot.** ThetisLink worked out what kind of radio you had from
+  *which* slot it was in rather than from what the radio said it was, so an FTX-1
+  in the first slot got an FT-991A's menu structure. Found in five places.
+
+- **An FT-991A on a port ThetisLink had to identify was never recognised.** The
+  identification opened the port without hardware flow control, which that radio
+  requires, so it stayed silent and ThetisLink fell back to a guess that happened
+  to look the same in the log.
+
+- **No modulation when the transmit device was left on "same as the input".**
+  ThetisLink matched the name of the capture endpoint, which is a different
+  device from the playback endpoint on the same radio. It now looks for the
+  radio's own output.
+
+- **Rows that do not apply are not shown.** The roger beep lists only the
+  channels this station has, and disappears entirely when there are none. The DX
+  spots switch is gone where the server has no cluster — it promised a stream
+  that could never arrive, and the subscription now comes off by itself.
+  Diversity is hidden on a single-receiver radio. And the two radio slots are
+  named honestly: "Yaesu 1" until the server says what it is, rather than a model
+  name that was a startup guess.
+
+- **The chat explains what it is, and the button is always there.** Without a
+  relay configured the window used to say little and the button was easy to miss;
+  it now says what a relay does — that your home network stops being the critical
+  part, that it usually needs no router change, and that it works from a mobile
+  connection or behind carrier-grade NAT — and it says plainly that the person
+  running a relay may refuse and may stop. "Report a problem" needs a relay and
+  now says so instead of failing quietly. And a relay address left in your
+  settings with the tick switched off is no longer described as "this relay
+  offers no chat": there is no relay configured, and that is what it says.
+
+- **Android: the settings row is reachable without Thetis**, the chat tab is
+  there whether or not a relay is configured, and the version display shows the
+  build again.
+
+- **The server log says a thing once.** Settings that were not switched on
+  reported their values continuously, a retry loop repeated the same warning over
+  a hundred times, and a connecting client produced a burst of lines that read
+  like changes. What is logged now is the change, not the state.
+
+- **An answer you put aside stays aside, and no longer takes the whole window.**
+  When the administrator answers a problem report, the answer appears above the
+  chat. Clicking it away worked until the next start, and then every answer was
+  back — the folding away was never written down. Worse, the strip that shows
+  them had no limit and no scrollbar, so with a few answers unread it took the
+  whole window: the conversation and the "Report a problem" button were squeezed
+  to nothing underneath it, and there was no way to scroll to them. Two people
+  reported it, one of whom could no longer read the chat at all. The strip is
+  bounded and scrolls now, on the desktop, on the server and on the phone —
+  which also gains a way to put an answer aside, which it never had. Folding
+  away is remembered per machine: put one aside on the phone and it is still
+  there in the server window, because each keeps its own note of what it has
+  seen.
+
+- **A settings file that cannot be read is no longer overwritten.** If the file
+  is there but locked — by another program, a backup, a virus scanner — ThetisLink
+  used to treat that as "nothing has ever been configured here" and could write a
+  fresh, empty configuration over it. On the client that could happen at the first
+  successful connect and left a file with a single line in it. Both now refuse to
+  write a file they could not read, and the server says so on screen instead of
+  only in the log.
+
+
 ## [2.9.1] — 2026-08-20 (A gap is the codec again, and muting is silent)
 
 > **Who this release changes things for.** Everyone who noticed a hiss in 2.9.0 —

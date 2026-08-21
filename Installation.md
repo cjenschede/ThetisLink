@@ -1,10 +1,10 @@
-# ThetisLink v2.9.1 - Installation Guide
+# ThetisLink v2.10.0 - Installation Guide
 
 ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full radio control over the network via TCI WebSocket.
 
 **Compatibility:** ThetisLink talks only to **Thetis** (via TCI WebSocket) and not directly to the SDR hardware. It therefore works with any SDR device supported by **Thetis v2.10.3.15** (official release by ramdor) — both HPSDR Protocol 1 (Hermes, Angelia, Orion) and HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optional: Yaesu FT-991A / FTX-1 as a second radio (via COM port).
 
-**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.9.1 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
+**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.10.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
 
 **Disclaimer:** This software controls radio transmitters. Use at your own risk. The author is not responsible for damage to equipment, interference or violations of regulations resulting from the use of this software. Verify all safety features (PTT timeout, power limits) before transmitting.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.9.1.apk | ThetisLink Android Client - phone/tablet |
+| ThetisLink-2.10.0.apk | ThetisLink Android Client - phone/tablet |
 | Installation.md | Installation guide (English, this document) |
 | User-Manual-EN.md | User manual (English) |
 | Technical-Reference.md | Technical reference (English) |
@@ -29,7 +29,7 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 | thetislink-relay-source.tar.gz | Relay server source |
 | SHA256SUMS.txt | Checksums for verification |
 
-> **Configuration files:** `thetislink-server.conf` and `thetislink-client.conf` are **not bundled**. They are created automatically with default values on the first start of the server and client (in the same folder as the exe). This is consistent with v2.0.2 — existing users retain their own settings.
+> **Configuration files:** `thetislink-server.conf` and `thetislink-client.conf` are **not bundled**. They are created when you click **Save & Start** in the server, and when the client first saves its settings (in the same folder as the exe). Until then there is no file, which is what makes the bare first start possible. This is consistent with v2.0.2 — existing users retain their own settings.
 
 ---
 
@@ -93,7 +93,7 @@ No administrator rights required for the ThetisLink Server or ThetisLink Clients
 
 ### 1.0 Installing the PA3GHM Thetis fork (recommended)
 
-The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.9.1 works best with Thetis-fork build PA3GHM TL2-4** — that build ships the wideband-IQ extension + modulation-filter fan-out that this release relies on. Earlier fork builds also work, with progressively fewer fork-only features available (TL2-3 without wideband, TL2-2 without rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 remains the fallback. Installation:
+The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.10.0 works best with Thetis-fork build PA3GHM TL2-4** — that build ships the wideband-IQ extension + modulation-filter fan-out that this release relies on. Earlier fork builds also work, with progressively fewer fork-only features available (TL2-3 without wideband, TL2-2 without rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 remains the fallback. Installation:
 
 1. First install the official **Thetis v2.10.3.15** using the standard installer (if you have not already done so)
 2. Download `Thetis.exe` from the PA3GHM fork — **release tag `TL2-4`** at [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -136,7 +136,9 @@ With the PA3GHM Thetis fork, on the same tab:
 
 Copy `ThetisLink-Server.exe` to a folder on the Thetis PC. Double-click to start - no installation or administrator rights required.
 
-On first start, a `thetislink-server.conf` is automatically created with default values. The ThetisLink Server opens a GUI window where you configure everything.
+The ThetisLink Server opens a GUI window where you configure everything. While there is no `thetislink-server.conf` yet, it starts **bare**: every device (Amplitec, tuners, SPE, RF2K-S, UltraBeam, rotor, DX cluster), the second receiver and all "open window at startup" boxes are off. So there is nothing to switch off — you only switch on what you have actually connected. The **language** on that first start follows the Windows display language if ThetisLink has it (NL/DE/FR), and English otherwise.
+
+Nothing is written at startup: the config file appears the moment you click **Save & Start**. One thing is required before that — without a **password** the server will not start and refuses every client. It is the only setting you must fill in to be able to connect; see 2.6.
 
 ### 2.2 Configuring the connection to Thetis
 
@@ -222,9 +224,20 @@ When connecting, the ThetisLink Client first enters the password, after which a 
 
 ### 2.7 Configuration file
 
-All settings are automatically saved in `thetislink-server.conf` next to the exe. This file is created on first start and updated with every change in the GUI.
+All settings live in `thetislink-server.conf` next to the exe. That file appears only when you click **Save & Start**; click it again to keep later changes.
 
 ---
+
+### 2.8 Save and start
+
+This is the step that actually starts the server, and nothing has been written to disk before it.
+
+1. Fill in a password under **2.6**. Without one the server will not start and refuses every client.
+2. Click **Save & Start**.
+
+Only now does `thetislink-server.conf` appear next to the exe, and only now does the server accept connections. If all you have done is double-click the exe, the server is ready but not running - so do not move on to step 3 before doing this.
+
+Later changes to the server settings are kept by clicking **Save & Start** again.
 
 ## Step 3: Installing the ThetisLink Desktop Client (Windows)
 
@@ -275,14 +288,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 ### 4.1 Installing the APK
 
 **Via file manager:**
-1. Copy `ThetisLink-2.9.1.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.10.0.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.9.1.apk
+adb install ThetisLink-2.10.0.apk
 ```
 
 ### 4.2 Connecting — guided setup wizard

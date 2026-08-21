@@ -27,16 +27,34 @@ impl eframe::App for SdrRemoteApp {
                 .relay_status
                 .as_ref()
                 .and_then(|h| h.snapshot().chat_ticket);
-            let relay_url = self.relay_url.clone();
-            // The relay was switched off while the window was open: close it,
-            // or it stays up with the button that reopens it already gone.
-            if !self.relay_enabled || relay_url.trim().is_empty() {
-                self.chat_open = false;
-            }
+            // The address only counts as a relay once the relay is actually set
+            // up; an address left behind in the settings with the tick off is not
+            // one, and saying "this relay offers no chat" about it blames a relay
+            // that was never contacted.
+            let relay_url = sdr_remote_relay::chat_relay_url(
+                self.relay_enabled,
+                &self.relay_url,
+                &self.relay_station,
+                &self.relay_token,
+            )
+            .to_string();
+            // This used to slam the window shut whenever no relay was set up,
+            // because back then the button that reopens it was hidden in the
+            // same case and a window nothing could reopen would have been a
+            // trap. The button is now always there, so the rule became the bug:
+            // clicking it set `chat_open`, and this closed it again in the same
+            // frame - a button that did nothing at all (2026-08-20). Without a
+            // relay the window opens and says what the chat is, which is the
+            // whole reason the button stayed.
             self.chat.tick(&relay_url, ticket.as_deref(), self.chat_open);
         }
         if self.chat_open {
             self.render_chat_popout(ctx);
+        }
+        // An answer folded away is written down straight away. Only when it
+        // changed, so this costs nothing on an ordinary frame.
+        if self.chat.take_answers_seen_changed() {
+            super::config::save_chat_answers_seen(&self.chat.seen_ids());
         }
 
         // Base egui visuals per selected theme (step 1). Classic reproduces the original
@@ -52,11 +70,7 @@ impl eframe::App for SdrRemoteApp {
         // rest of update() - none of the regular UI panes are valid
         // until the wizard exits.
         if self.wizard_state.is_some() {
-            let lang = if self.ui_language == "nl" {
-                sdr_remote_logic::i18n::Lang::Nl
-            } else {
-                sdr_remote_logic::i18n::Lang::En
-            };
+            let lang = sdr_remote_logic::i18n::Lang::from_code(&self.ui_language);
             let outcome = egui::CentralPanel::default()
                 .show(ctx, |ui| {
                     let st = self.wizard_state.as_mut().expect("checked above");
@@ -579,8 +593,9 @@ impl eframe::App for SdrRemoteApp {
                 // follows automatically from the presence gate.
                 if self.yaesu_present_last {
                     let full = self.yaesu_slot_label(0);
+                    let short = self.yaesu_short_label(0);
                     let (en_click, win_click) = Self::channel_sub_chips(
-                        ui, self.yaesu_type_name(0), self.yaesu_enabled, self.yaesu_popout,
+                        ui, &short, self.yaesu_enabled, self.yaesu_popout,
                         &rust_i18n::t!("main_hover_yaesu_audio", label = &full).to_string(),
                         &rust_i18n::t!("main_hover_yaesu_window", label = &full).to_string());
                     if en_click { self.toggle_yaesu_audio(0); }
@@ -593,8 +608,9 @@ impl eframe::App for SdrRemoteApp {
                 }
                 if self.yaesu2_present_last {
                     let full = self.yaesu_slot_label(1);
+                    let short = self.yaesu_short_label(1);
                     let (en_click, win_click) = Self::channel_sub_chips(
-                        ui, self.yaesu_type_name(1), self.yaesu2_enabled, self.yaesu2_popout,
+                        ui, &short, self.yaesu2_enabled, self.yaesu2_popout,
                         &rust_i18n::t!("main_hover_yaesu_audio", label = &full).to_string(),
                         &rust_i18n::t!("main_hover_yaesu_window", label = &full).to_string());
                     if en_click { self.toggle_yaesu_audio(1); }
@@ -683,7 +699,7 @@ impl eframe::App for SdrRemoteApp {
                     use sdr_remote_logic::i18n::{connect_status_text, Lang};
                     use sdr_remote_logic::state::ConnectStatus;
                     let connect_status = self.state_rx.borrow().connect_status.clone();
-                    let lang = if self.ui_language == "nl" { Lang::Nl } else { Lang::En };
+                    let lang = Lang::from_code(&self.ui_language);
                     // PATCH-1 smoke-test fix (2026-05-13): top-bar headline 16pt bold
                     // so it stands out - operator feedback: was smaller than other UI.
                     match &connect_status {
@@ -1069,22 +1085,27 @@ impl eframe::App for SdrRemoteApp {
                 }
             });
 
-            // Diversity
-            ui.separator();
-            if helpers::chevron_label(
-                ui,
-                self.collapse_diversity,
-                RichText::new(rust_i18n::t!("main_diversity").to_string()).strong().size(14.0),
-            )
-            .clicked()
-            {
-                self.collapse_diversity = !self.collapse_diversity;
-                self.save_full_config();
-            }
-            if self.collapse_diversity {
-                ui.indent("diversity_body", |ui| {
-                    self.render_diversity(ui);
-                });
+            // Diversity: two receivers phased into one. On a radio with a single
+            // receiver there is nothing to combine, so the section goes rather
+            // than sit there doing nothing - the same signal that already hides
+            // RX2 and VRX2 everywhere (the server's SINGLE_RECEIVER flag).
+            if self.rx2_present {
+                ui.separator();
+                if helpers::chevron_label(
+                    ui,
+                    self.collapse_diversity,
+                    RichText::new(rust_i18n::t!("main_diversity").to_string()).strong().size(14.0),
+                )
+                .clicked()
+                {
+                    self.collapse_diversity = !self.collapse_diversity;
+                    self.save_full_config();
+                }
+                if self.collapse_diversity {
+                    ui.indent("diversity_body", |ui| {
+                        self.render_diversity(ui);
+                    });
+                }
             }
 
             }); // end of Radio-tab ScrollArea

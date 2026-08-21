@@ -14,6 +14,7 @@
 //! only drains what it sends back, so a chat service that is down or slow
 //! cannot get between an operator and their PTT.
 
+use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -72,7 +73,18 @@ pub struct ChatModel {
     /// at the send button is being told after the work.
     pub reports_left: i64,
     /// What the administrator has answered on this station's problem reports.
-    pub answers: Vec<ChatAnswer>,
+    ///
+    /// The service is the authority and hands back the whole list on every
+    /// poll, so anything a reader folds away has to be remembered on this side
+    /// or it returns within seconds. That memory lives HERE and not in a front
+    /// end: it used to sit in the desktop chat panel, which meant it was gone
+    /// on the next start and never existed on the phone at all (two users,
+    /// 2026-08-20).
+    pub(crate) answers: Vec<ChatAnswer>,
+    /// Answers the reader has folded away, by id. Ids rather than a high-water
+    /// mark, so putting one aside does not hide an older one that is still
+    /// unread - and a new answer always shows.
+    answers_seen: HashSet<i64>,
     /// A report reached the postbox and nobody has been told yet.
     ///
     /// Taken rather than read (see [`Self::take_diagnosis_sent`]), because the
@@ -103,6 +115,7 @@ impl Default for ChatModel {
             error: None,
             reports_left: -1,
             answers: Vec::new(),
+            answers_seen: HashSet::new(),
             diagnosis_sent: false,
         }
     }
@@ -307,6 +320,41 @@ impl ChatModel {
     ///
     /// Taken, not read: the form closes on it, and a flag that stays set would
     /// close the next form the moment it opens.
+    /// The answers the reader has not folded away yet.
+    ///
+    /// What both front ends draw. Everything else about an answer - that it
+    /// exists, when it came - is the service's business; whether it is still on
+    /// screen is this side's.
+    pub fn unread_answers(&self) -> Vec<ChatAnswer> {
+        self.answers
+            .iter()
+            .filter(|a| !self.answers_seen.contains(&a.id))
+            .cloned()
+            .collect()
+    }
+
+    /// Fold one away. Idempotent.
+    pub fn dismiss_answer(&mut self, id: i64) {
+        self.answers_seen.insert(id);
+    }
+
+    /// The ids to write down, so a restart does not undo the folding away.
+    ///
+    /// The model cannot reach a file - it runs the same on a desktop with a
+    /// config file and on a phone with preferences - so it hands the ids over
+    /// and takes them back. Sorted, so what gets written is stable and a config
+    /// file does not churn.
+    pub fn seen_ids(&self) -> Vec<i64> {
+        let mut ids: Vec<i64> = self.answers_seen.iter().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Take back what was written down, at startup.
+    pub fn restore_seen(&mut self, ids: &[i64]) {
+        self.answers_seen.extend(ids.iter().copied());
+    }
+
     pub fn take_diagnosis_sent(&mut self) -> bool {
         std::mem::take(&mut self.diagnosis_sent)
     }
@@ -520,6 +568,65 @@ mod tests {
         m.apply(ChatEvent::Messages { new, edited: vec![] });
         assert_eq!(m.messages.len(), MAX_HELD);
         assert_eq!(m.messages[0].id, 21, "the oldest go first");
+    }
+
+    /// Folding an answer away has to survive the service handing the whole
+    /// list back on the next poll, AND a restart. It survived neither: the set
+    /// lived in the desktop chat panel and was built empty every time, so the
+    /// answer returned within seconds of a restart - and the panel that shows
+    /// them covered the conversation, which is what made it more than an
+    /// annoyance (two users, 2026-08-20/21).
+    #[test]
+    fn a_folded_away_answer_survives_a_poll_and_a_restart() {
+        use crate::worker::ChatAnswer;
+        let three = || {
+            vec![
+                ChatAnswer { id: 1, at: 100, body: "first".into() },
+                ChatAnswer { id: 2, at: 200, body: "second".into() },
+                ChatAnswer { id: 3, at: 300, body: "third".into() },
+            ]
+        };
+        let mut m = ChatModel::default();
+        m.apply(ChatEvent::Answers(three()));
+        assert_eq!(m.unread_answers().len(), 3);
+
+        m.dismiss_answer(2);
+        assert_eq!(
+            m.unread_answers().iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![1, 3],
+            "the folded-away one is still on screen"
+        );
+
+        // The service is the authority and hands the whole list back every
+        // poll. That must not undo the folding away.
+        m.apply(ChatEvent::Answers(three()));
+        assert_eq!(
+            m.unread_answers().iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![1, 3],
+            "a poll brought the folded-away answer back"
+        );
+
+        // And a restart: the ids are written down and taken back.
+        let written = m.seen_ids();
+        assert_eq!(written, vec![2], "nothing was written down to restore from");
+        let mut fresh = ChatModel::default();
+        fresh.restore_seen(&written);
+        fresh.apply(ChatEvent::Answers(three()));
+        assert_eq!(
+            fresh.unread_answers().iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![1, 3],
+            "a restart brought the folded-away answer back"
+        );
+
+        // A NEW answer still shows - that is why ids are kept and not a
+        // high-water mark.
+        let mut with_new = three();
+        with_new.push(ChatAnswer { id: 4, at: 400, body: "fourth".into() });
+        fresh.apply(ChatEvent::Answers(with_new));
+        assert!(
+            fresh.unread_answers().iter().any(|a| a.id == 4),
+            "a new answer must still arrive on screen"
+        );
     }
 
     /// A refusal that has been lifted must leave the screen on its own.

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 use std::fs;
+use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// Cosmetic alias for a StockCorner tuner - JC-3s and JC-4s share the same
@@ -157,9 +159,9 @@ pub struct ServerConfig {
     pub tci_addr: Option<String>,
     pub spectrum_enabled: bool,
     /// Whether the configured Thetis radio hardware has a second receiver (RX2).
-    /// Default `true` (most ANAN models). Set to `false` for single-receiver
-    /// radios; the server then advertises `SINGLE_RECEIVER` so clients hide
-    /// RX2 + VRX2 everywhere. Only affects display/subscription, not the radio.
+    /// Set to `false` for single-receiver radios; the server then advertises
+    /// `SINGLE_RECEIVER` so clients hide RX2 + VRX2 everywhere. Only affects
+    /// display/subscription, not the radio.
     pub rx2_present: bool,
     /// Path to Thetis.exe for auto-launch (None = disabled)
     pub thetis_path: Option<String>,
@@ -179,13 +181,22 @@ pub struct ServerConfig {
     /// On = switch the 991A USB modulation source only during TX, then restore
     /// on PTT-off. FTX-1 keeps its internal auto source selection and is not driven here.
     pub yaesu_ssb_switch_on_ptt: bool,
+    /// Same choice for slot 1. Per SLOT and not per model, because two radios of
+    /// the same type can be attached (`detect_model` assigns per port: 2x 991A,
+    /// 2x FTX-1 or a mix) and this is an operator's choice about ONE radio. The
+    /// model decides only whether it means anything - a 991A thing.
+    pub yaesu2_ssb_switch_on_ptt: bool,
     /// Permission to write the FTX-1's memory bank. Off by default, and deliberately
     /// so: on this radio `MW` resets the channel's CTCSS tone to 100.0 Hz, and there
     /// is no CAT route to put it back (measured from both sides). So a write costs
     /// the operator every tone stored in the radio itself. The server GUI explains
     /// that and asks for it to be accepted; without acceptance an FTX-1 memory write
     /// is refused. The FT-991A is unaffected - it stores tones fine.
-    pub ftx1_memory_write_ack: bool,
+    pub yaesu_memory_write_ack: bool,
+    /// Same permission for slot 1, and separate on purpose: the cost lands on
+    /// the tones stored in THAT radio, so granting it for one must not grant it
+    /// for the other.
+    pub yaesu2_memory_write_ack: bool,
     // -- Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) --
     // Second independent radio (e.g. FTX-1). The existing `yaesu_*`-keys
     // above = slot 0 (back-compat); these `yaesu2_*`-keys = slot 1. Both
@@ -200,9 +211,42 @@ pub struct ServerConfig {
     /// Slot-1 USB audio OUTPUT (TX) device pattern. `None`/empty -> input pattern
     /// (PATCH-yaesu-output-device).
     pub yaesu2_audio_output_device: Option<String>,
-    /// Slot-1 capture-channel choice for dual-RX radios (FTX-1 = 2 physical
-    /// receivers on L/R). 0 = L (hardware-RX 1), 1 = R (hardware-RX 2),
-    /// 2 = mix (both summed). Default 2. Mono radios (991A) ignore this.
+    /// Which channel of the FTX-1's stereo USB capture endpoint to take:
+    /// 0 = L, 1 = R, 2 = mix (the AVERAGE of both, so a silent R costs 6 dB).
+    /// Default 2.
+    ///
+    /// A property of the RADIO TYPE, not of a slot: this applies to an FTX-1 in
+    /// whichever slot it sits, and to a 991A never - that one reports a single
+    /// channel and the choice does not arise. It used to exist for slot 2 only,
+    /// with slot 1 hardwired to L, so the same radio had a choice in one slot
+    /// and not in the other (2026-08-20).
+    ///
+    /// Established by listening, on the radio, 2026-08-20: L and R really do
+    /// carry the FTX-1's TWO RECEIVERS, separately. Switch on both receivers and
+    /// `0` gives one, `1` gives the other, `2` gives both at once. The manual
+    /// does not say so - it confirms a sub band exists and stops there - so this
+    /// is an operator measurement, not a documented fact.
+    ///
+    /// `2` is the default because it cannot lose a receiver: whatever is on,
+    /// you hear it. With one receiver active both channels carry the same thing
+    /// and mix sounds like that receiver - measured that way on the radio.
+    ///
+    /// (An earlier note here claimed mix would then be 6 dB down, since mixing
+    /// is an average. That only holds if the other channel is SILENT, and this
+    /// radio appears to duplicate instead. Not measured either way - do not
+    /// rely on it.)
+    pub yaesu_audio_channel: u8,
+    /// The radio model last detected on this slot's port, remembered so the
+    /// settings screen knows which model-specific controls to offer without
+    /// re-probing on every launch. `None` = never detected, and then the screen
+    /// offers none of them: it cannot honestly say which radio they are for.
+    /// Ids of administrator answers folded away in the server's chat window,
+    /// comma-separated. Without this the server forgot them on every restart -
+    /// the desktop client and the phone remember, and the server did not.
+    pub chat_answers_seen: String,
+    pub yaesu_model_last: Option<u8>,
+    pub yaesu2_model_last: Option<u8>,
+    /// Same choice for slot 1. Two FTX-1s can reasonably want different channels.
     pub yaesu2_audio_channel: u8,
     /// Amplitec 6/2 serial port (e.g. "COM3")
     pub amplitec_port: Option<String>,
@@ -225,7 +269,7 @@ pub struct ServerConfig {
     /// safety-net for Thetis-direct PTT (spacebar) and is independent
     /// of the power-cap drive-down mechanism.
     pub amplitec_tx_blocked: [bool; 6],
-    /// Show Amplitec control window on start (default true)
+    /// Show Amplitec control window on start.
     pub show_amplitec_window: bool,
     /// Per-slot StockCorner tuner configuration. Index 0 = tuner 1, index 1 =
     /// tuner 2. Each slot is independently enabled, has its own model alias
@@ -241,7 +285,7 @@ pub struct ServerConfig {
     /// Slot-index is 0-based internally; UI-labels and config-keys number
     /// from 1 (`tuner1_*`, `tuner2_*`, ...).
     pub tuners: Vec<TunerConfig>,
-    /// Show tuner control window on start (default true)
+    /// Show tuner control window on start.
     pub show_tuner_window: bool,
     /// Per-slot Yaesu-rotor configuration (PATCH-yaesu-rotor-mcp2221).
     /// One entry per MCP2221A-board with `rot_` USB-serial prefix; up to
@@ -252,24 +296,24 @@ pub struct ServerConfig {
     /// SPE Expert 1.3K-FA serial port (e.g. "COM6")
     pub spe_port: Option<String>,
     pub spe_enabled: bool,
-    /// Show SPE Expert control window on start (default true)
+    /// Show SPE Expert control window on start.
     pub show_spe_window: bool,
     /// RF2K-S Raspberry Pi address (e.g. "192.168.1.50:8080")
     pub rf2k_addr: Option<String>,
     pub rf2k_enabled: bool,
-    /// Show RF2K-S control window on start (default true)
+    /// Show RF2K-S control window on start.
     pub show_rf2k_window: bool,
     /// Whether the chat window was open when the GUI last closed.
     pub show_chat_window: bool,
     /// UltraBeam RCU-06 serial port (e.g. "COM7")
     pub ultrabeam_port: Option<String>,
     pub ultrabeam_enabled: bool,
-    /// Show UltraBeam control window on start (default true)
+    /// Show UltraBeam control window on start.
     pub show_ultrabeam_window: bool,
     /// EA7HG Visual Rotor UDP address (e.g. "192.168.1.60:3010")
     pub rotor_addr: Option<String>,
     pub rotor_enabled: bool,
-    /// Show Rotor control window on start (default true)
+    /// Show Rotor control window on start.
     pub show_rotor_window: bool,
     /// Which rotor-backend is active: `"ea7hg"` (Visual Rotor, default) or
     /// `"pstrotator"` (XML over UDP to an external PstRotator). Empty or
@@ -375,6 +419,13 @@ pub struct ServerConfig {
     pub relay_udp_enabled: bool,
 }
 
+/// The value a key gets when an **existing** config file does not mention it.
+///
+/// That is the only thing this is for, and it is why several devices are on
+/// here: a key missing from a real file means the file predates the key, and
+/// switching a device off underneath an operator who has been using it is not
+/// a default, it is a regression. A machine with no config file at all is a
+/// different case entirely - see [`ServerConfig::first_run`].
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -386,7 +437,9 @@ impl Default for ServerConfig {
             yaesu_enabled: false,
             yaesu_baud: 38400,
             yaesu_ssb_switch_on_ptt: false,
-            ftx1_memory_write_ack: false,
+            yaesu2_ssb_switch_on_ptt: false,
+            yaesu_memory_write_ack: false,
+            yaesu2_memory_write_ack: false,
             yaesu_audio_device: None,
             yaesu_audio_output_device: None,
             yaesu2_port: None,
@@ -394,7 +447,12 @@ impl Default for ServerConfig {
             yaesu2_baud: 38400,
             yaesu2_audio_device: None,
             yaesu2_audio_output_device: None,
-            yaesu2_audio_channel: 2, // mix (both receivers) as a safe default
+            // Mix: the choice that cannot lose a receiver (see the field docs).
+            yaesu_audio_channel: 2,
+            chat_answers_seen: String::new(),
+            yaesu_model_last: None,
+            yaesu2_model_last: None,
+            yaesu2_audio_channel: 2,
             amplitec_port: None,
             amplitec_enabled: true,
             amplitec_labels: default_labels("Ant"),
@@ -468,6 +526,48 @@ impl Default for ServerConfig {
             relay_station: String::new(),
             relay_token: String::new(),
             relay_udp_enabled: true,
+        }
+    }
+}
+
+impl ServerConfig {
+    /// What the server starts as on a machine that has never run it: no config
+    /// file exists yet.
+    ///
+    /// Everything optional is off. The first start is then a bare server that
+    /// a client can connect to and nothing else - no amplifier, no tuner, no
+    /// rotor, no cluster, no second receiver, and no windows opening for
+    /// hardware that is not there. The operator switches on what is actually
+    /// attached, one thing at a time, and every one of those is a checkbox
+    /// that was off a moment ago.
+    ///
+    /// Note what this is *not*: it is not [`Default`], which fills in keys an
+    /// existing file happens to lack. Both are "the default" in English and
+    /// they mean opposite things here, which is why they are two functions.
+    pub fn first_run() -> Self {
+        Self {
+            // Read the OS display language once, here. From the next start on,
+            // `language=` in the file is the operator's own choice.
+            language: sdr_remote_core::oslang::detect_ui_language().to_string(),
+            rx2_present: false,
+            amplitec_enabled: false,
+            show_amplitec_window: false,
+            show_tuner_window: false,
+            spe_enabled: false,
+            show_spe_window: false,
+            rf2k_enabled: false,
+            show_rf2k_window: false,
+            ultrabeam_enabled: false,
+            show_ultrabeam_window: false,
+            rotor_enabled: false,
+            show_rotor_window: false,
+            dxcluster_enabled: false,
+            // Off with the rest, even though it is the lower-latency route:
+            // the relay itself is off on a first run, so this decides nothing
+            // yet, and a first screen where every box is clear is worth more
+            // than a setting that only starts mattering two steps later.
+            relay_udp_enabled: false,
+            ..Self::default()
         }
     }
 }
@@ -619,556 +719,731 @@ fn config_path() -> PathBuf {
 /// holds the lock.
 pub fn load() -> ServerConfig {
     let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    load_unlocked()
+    load_unlocked().0
 }
 
-fn load_unlocked() -> ServerConfig {
+/// Where a loaded config came from. The three are kept apart because two of
+/// them look identical from the outside and are not the same thing at all.
+#[derive(Debug, PartialEq, Eq)]
+enum ConfigSource {
+    /// Read and parsed.
+    File,
+    /// There is no file: nothing has ever been configured on this machine, and
+    /// this is the only case that may hand out the bare-server defaults.
+    FirstRun,
+    /// There IS a file and it could not be read - locked by another process,
+    /// permissions, a failing disk. The operator's settings are still in it, so
+    /// nothing derived from this may be written back.
+    Unreadable,
+}
+
+/// Classify the result of reading the config file.
+///
+/// Split off so the difference between "absent" and "unreadable" can be tested
+/// without arranging a real unreadable file, which is awkward on Windows and
+/// impossible in CI.
+fn classify_read(read: &Result<String, io::Error>) -> ConfigSource {
+    match read {
+        Ok(_) => ConfigSource::File,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => ConfigSource::FirstRun,
+        Err(_) => ConfigSource::Unreadable,
+    }
+}
+
+/// The config, plus whether it is safe to write back.
+///
+/// The second half exists because `modify_config` is load-mutate-save over the
+/// WHOLE file. Treating an unreadable file as a first run therefore does not
+/// mean "the server starts bare" but "the operator's configuration is gone":
+/// one failed read during normal use - the rotor storing its park position, an
+/// Active tick - would replace ports, tuners, password and relay token with a
+/// bare config. On Windows a sharing violation on a file next to the exe is the
+/// realistic trigger. Found in review, 2026-08-20; the path predates this
+/// release, but this release is the one that made the fallback emptier.
+fn load_unlocked() -> (ServerConfig, bool) {
     let path = config_path();
+    let read = fs::read_to_string(&path);
+    let source = classify_read(&read);
+    // The flag is process-wide and is cleared by any load that succeeds or that
+    // confirms the file is absent. Nothing else clears it, and after startup only
+    // `modify_config` still loads - so an unreadable file at start means this
+    // process will not write until it is restarted. That is deliberate, and the
+    // log line says so.
+    LOAD_FAILED.store(source == ConfigSource::Unreadable, Ordering::Relaxed);
+    match &source {
+        ConfigSource::FirstRun => log::info!(
+            "No {} yet - first run: UI language from the OS, all optional devices off",
+            path.display()
+        ),
+        ConfigSource::Unreadable => log::error!(
+            "Cannot read {} ({}). The file is still there, so its settings are NOT lost -              but this run will not write to it, to avoid replacing them with defaults.              Close whatever is holding the file and restart.",
+            path.display(),
+            read.as_ref()
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown error".to_string())
+        ),
+        ConfigSource::File => {}
+    }
+    config_from_source(source, read.ok().as_deref())
+}
+
+/// Which config a classified read yields, and whether it may be written back.
+///
+/// Split from the reading and the logging because this mapping is what actually
+/// broke: the defect was never in telling absent from unreadable, it was in
+/// giving an unreadable file the bare first-run values AND permission to
+/// overwrite. A test on the classifier alone stayed green through exactly that
+/// (review finding, 2026-08-20).
+fn config_from_source(source: ConfigSource, text: Option<&str>) -> (ServerConfig, bool) {
+    match source {
+        ConfigSource::File => (parse_conf(text.unwrap_or("")), true),
+        // Nothing has ever been configured here, so the bare values are right
+        // and writing them is right.
+        ConfigSource::FirstRun => (ServerConfig::first_run(), true),
+        // The settings are still in the file. Hand out something harmless and
+        // forbid the write - NOT `first_run()`, which would put a bare server on
+        // screen and, at the first save, in the file.
+        ConfigSource::Unreadable => (ServerConfig::default(), false),
+    }
+}
+
+/// Set when the config file exists but could not be read. Guards every write:
+/// the settings screen keeps its own copy of the config and saves that, so
+/// skipping the save in `modify_config` alone would still leave Save & Start
+/// able to overwrite a file this process never managed to read.
+static LOAD_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// Turn the text of a config file into a `ServerConfig`.
+///
+/// Split out from `load_unlocked` so the migration of older files can be
+/// tested on a string instead of on whatever happens to be on this machine's
+/// disk - the same reason `render_conf` was split off from saving.
+fn parse_conf(contents: &str) -> ServerConfig {
     let mut config = ServerConfig::default();
 
-    if let Ok(contents) = fs::read_to_string(&path) {
-        for line in contents.lines() {
-            let line = line.trim();
-            if let Some((key, value)) = line.split_once('=') {
-                match key.trim() {
-                    "tci" => {
-                        let v = value.trim().to_string();
-                        config.tci_addr = if v.is_empty() { None } else { Some(v) };
-                    }
-                    // Legacy keys (ignored, kept for backward compat with old config files)
-                    "input" | "input2" | "output" | "anan_interface" => {}
-                    "rx2_present" => {
-                        // Default true; only an explicit "false" disables RX2.
-                        config.rx2_present = value.trim() != "false";
-                    }
-                    "thetis_path" => {
-                        let v = value.trim().to_string();
-                        if v.is_empty() {
-                            config.thetis_path = None;
-                        } else {
-                            config.thetis_path = Some(v);
-                        }
-                    }
-                    "yaesu_port" => {
-                        let v = value.trim().to_string();
-                        config.yaesu_port = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "yaesu_enabled" => {
-                        config.yaesu_enabled = value.trim() != "false";
-                    }
-                    "ftx1_memory_write_ack" => {
-                        // Absent key -> false: an older conf must not silently grant it.
-                        config.ftx1_memory_write_ack = value.trim() == "true";
-                    }
-                    "yaesu_ssb_switch_on_ptt" => {
-                        config.yaesu_ssb_switch_on_ptt = value.trim() != "false";
-                    }
-                    "yaesu_baud" => {
-                        if let Ok(v) = value.trim().parse::<u32>() {
-                            config.yaesu_baud = v;
-                        }
-                    }
-                    "yaesu_audio" => {
-                        let v = value.trim().to_string();
-                        config.yaesu_audio_device = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "yaesu_audio_out" => {
-                        let v = value.trim().to_string();
-                        config.yaesu_audio_output_device = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "yaesu2_port" => {
-                        let v = value.trim().to_string();
-                        config.yaesu2_port = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "yaesu2_enabled" => {
-                        config.yaesu2_enabled = value.trim() != "false";
-                    }
-                    "yaesu2_baud" => {
-                        if let Ok(v) = value.trim().parse::<u32>() {
-                            config.yaesu2_baud = v;
-                        }
-                    }
-                    "yaesu2_audio" => {
-                        let v = value.trim().to_string();
-                        config.yaesu2_audio_device = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "yaesu2_audio_out" => {
-                        let v = value.trim().to_string();
-                        config.yaesu2_audio_output_device = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "yaesu2_audio_channel" => {
-                        // Tolerant: accept a digit (0/1/2) or L/R/MIX (case-insensitive).
-                        let v = value.trim().to_lowercase();
-                        config.yaesu2_audio_channel = match v.as_str() {
-                            "0" | "l" | "left" => 0,
-                            "1" | "r" | "right" => 1,
-                            _ => 2, // "2"/"mix"/unknown -> mix
-                        };
-                    }
-                    "amplitec_port" => {
-                        let v = value.trim().to_string();
-                        config.amplitec_port = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "amplitec_enabled" => {
-                        config.amplitec_enabled = value.trim() != "false";
-                    }
-                    k if k.starts_with("amplitec_label") => {
-                        if let Some(idx) = k.strip_prefix("amplitec_label").and_then(|s| s.parse::<usize>().ok()) {
-                            if idx >= 1 && idx <= 6 {
-                                config.amplitec_labels[idx - 1] = value.trim().to_string();
-                            }
-                        }
-                    }
-                    // Backward compat: read old amplitec_aN keys as shared labels
-                    k if k.starts_with("amplitec_a") => {
-                        if let Some(idx) = k.strip_prefix("amplitec_a").and_then(|s| s.parse::<usize>().ok()) {
-                            if idx >= 1 && idx <= 6 {
-                                config.amplitec_labels[idx - 1] = value.trim().to_string();
-                            }
-                        }
-                    }
-                    k if k.starts_with("amplitec_b") => {
-                        // Old amplitec_bN keys: ignore (same antennas)
-                    }
-                    "amplitec_window" => {
-                        config.show_amplitec_window = value.trim() == "true";
-                    }
-                    k if k.starts_with("amplitec_max_w_a") => {
-                        if let Some(idx) = k
-                            .strip_prefix("amplitec_max_w_a")
-                            .and_then(|s| s.parse::<usize>().ok())
-                        {
-                            if (1..=6).contains(&idx) {
-                                let v = value.trim();
-                                // Empty string OR "0" = no cap (None). A
-                                // configured 0 W cap is functionally not
-                                // usable (the cap-loop would fire continuously on
-                                // every fwd>0) and not what the operator intends.
-                                config.amplitec_max_w[idx - 1] = match v.parse::<u16>() {
-                                    Ok(0) => None,
-                                    Ok(n) => Some(n),
-                                    Err(_) => None,
-                                };
-                            }
-                        }
-                    }
-                    k if k.starts_with("amplitec_tx_blocked_a") => {
-                        if let Some(idx) = k
-                            .strip_prefix("amplitec_tx_blocked_a")
-                            .and_then(|s| s.parse::<usize>().ok())
-                        {
-                            if (1..=6).contains(&idx) {
-                                config.amplitec_tx_blocked[idx - 1] = value.trim() == "true";
-                            }
-                        }
-                    }
-                    // Legacy v2.0.2 keys silently ignored on load (multi-tuner
-                    // runtime supersedes the single serial-port flow):
-                    //   `tuner_port`           - COM-port no longer used
-                    //   `tuner_enabled`        - replaced by per-slot enable
-                    //   `tuner_assume_tuned`   - assume-tuned pad retired
-                    "tuner_port" => {}
-                    "tuner_enabled" => {
-                        // Honour the legacy global toggle one last time so
-                        // owners upgrading from v2.0.2 do not lose their
-                        // slot-0 enable state: mirror into tuners[0].enabled.
-                        let v = value.trim() != "false";
-                        ensure_tuner_slot(&mut config.tuners, 0);
-                        config.tuners[0].enabled = v;
-                    }
-                    "tuner_assume_tuned" => {}
-                    // Per-slot keys: `tuner<N>_FIELD=value` with N=1..MAX_TUNERS.
-                    // Auto-grow the Vec to index N-1 so old config-files
-                    // (two slots) and new ones (1..6 slots) both work.
-                    k if parse_tuner_slot_prefix(k).is_some() => {
-                        if let Some((slot0_idx, sub)) = parse_tuner_slot_prefix(k) {
-                            ensure_tuner_slot(&mut config.tuners, slot0_idx);
-                            parse_tuner_key(&mut config.tuners[slot0_idx], sub, value.trim());
-                        }
-                    }
-                    // Per-slot rotor-keys: `rotor<N>_FIELD=value` with N=1..MAX_ROTORS.
-                    // PATCH-yaesu-rotor-mcp2221 phase 1.
-                    k if parse_rotor_slot_prefix(k).is_some() => {
-                        if let Some((slot0_idx, sub)) = parse_rotor_slot_prefix(k) {
-                            ensure_rotor_slot(&mut config.rotors, slot0_idx);
-                            parse_rotor_key(&mut config.rotors[slot0_idx], sub, value.trim());
-                        }
-                    }
-                    "tuner_window" => {
-                        config.show_tuner_window = value.trim() == "true";
-                    }
-                    "tuner_safe_drive" => {
-                        // Legacy key, ignored
-                    }
-                    "tuner_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.tuner_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "tuner_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.tuner_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "amplitec_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.amplitec_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "amplitec_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.amplitec_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "spe_port" => {
-                        let v = value.trim().to_string();
-                        config.spe_port = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "spe_enabled" => {
-                        config.spe_enabled = value.trim() != "false";
-                    }
-                    "spe_window" => {
-                        config.show_spe_window = value.trim() == "true";
-                    }
-                    "spe_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.spe_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "spe_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.spe_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "rf2k_addr" => {
-                        let v = value.trim().to_string();
-                        config.rf2k_addr = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "rf2k_enabled" => {
-                        config.rf2k_enabled = value.trim() != "false";
-                    }
-                    "chat_window" => {
-                        config.show_chat_window = value.trim() == "true";
-                    }
-                    "chat_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.chat_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "chat_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.chat_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "chat_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.chat_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "chat_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.chat_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "rf2k_window" => {
-                        config.show_rf2k_window = value.trim() == "true";
-                    }
-                    "rf2k_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rf2k_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "rf2k_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rf2k_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "ultrabeam_port" => {
-                        let v = value.trim().to_string();
-                        config.ultrabeam_port = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "ultrabeam_enabled" => {
-                        config.ultrabeam_enabled = value.trim() != "false";
-                    }
-                    "ultrabeam_window" => {
-                        config.show_ultrabeam_window = value.trim() == "true";
-                    }
-                    "ultrabeam_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.ultrabeam_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "ultrabeam_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.ultrabeam_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "rotor_addr" => {
-                        let v = value.trim().to_string();
-                        config.rotor_addr = if v.is_empty() { None } else { Some(v) };
-                    }
-                    "rotor_enabled" => {
-                        config.rotor_enabled = value.trim() != "false";
-                    }
-                    "rotor_window" => {
-                        config.show_rotor_window = value.trim() == "true";
-                    }
-                    "rotor_backend" => {
-                        // Accept the three valid backends; anything else
-                        // falls back to "ea7hg" for backwards-compat.
-                        let v = value.trim().to_lowercase();
-                        config.rotor_backend = match v.as_str() {
-                            "pstrotator" => "pstrotator".to_string(),
-                            "mcp2221_yaesu" => "mcp2221_yaesu".to_string(),
-                            _ => "ea7hg".to_string(),
-                        };
-                    }
-                    "pstrotator_host" => {
-                        config.pstrotator_host = value.trim().to_string();
-                    }
-                    "pstrotator_port" => {
-                        if let Ok(v) = value.trim().parse::<u16>() {
-                            if v > 0 { config.pstrotator_port = v; }
-                        }
-                    }
-                    "pstrotator_feedback_port" => {
-                        if let Ok(v) = value.trim().parse::<u16>() {
-                            if v > 0 { config.pstrotator_feedback_port = v; }
-                        }
-                    }
-                    "pstrotator_has_elevation" => {
-                        config.pstrotator_has_elevation = value.trim() == "true";
-                    }
-                    "pstrotator_listen_enabled" => {
-                        config.pstrotator_listen_enabled = value.trim() == "true";
-                    }
-                    "pstrotator_listen_port" => {
-                        if let Ok(v) = value.trim().parse::<u16>() {
-                            if v > 0 { config.pstrotator_listen_port = v; }
-                        }
-                    }
-                    "rotor_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rotor_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "rotor_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rotor_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "layout_grids" => {
-                        config.layout_grids = value.trim().to_string();
-                    }
-                    "ui_zoom" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.ui_zoom = v.clamp(0.5, 2.0);
-                        }
-                    }
-                    // layout_mem<N> = <name>|<key:x,y,w,h>...   N is 1-based.
-                    k if k.starts_with("layout_mem") => {
-                        if let Ok(i) = k["layout_mem".len()..].trim().parse::<usize>() {
-                            if (1..=64).contains(&i) {
-                                if config.layout_memories.len() < i {
-                                    config.layout_memories.resize(i, String::new());
-                                }
-                                config.layout_memories[i - 1] = value.trim().to_string();
-                            }
-                        }
-                    }
-                    "main_pos_x" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.main_window_pos.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "main_pos_y" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.main_window_pos.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "main_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.main_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "main_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.main_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "tuner_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.tuner_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "tuner_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.tuner_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "amplitec_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.amplitec_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "amplitec_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.amplitec_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "spe_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.spe_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "spe_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.spe_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "rf2k_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rf2k_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "rf2k_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rf2k_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "ultrabeam_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.ultrabeam_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "ultrabeam_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.ultrabeam_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "rotor_size_w" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rotor_window_size.get_or_insert([0.0, 0.0])[0] = v;
-                        }
-                    }
-                    "rotor_size_h" => {
-                        if let Ok(v) = value.trim().parse::<f32>() {
-                            config.rotor_window_size.get_or_insert([0.0, 0.0])[1] = v;
-                        }
-                    }
-                    "theme" => {
-                        config.theme = value.trim().to_string();
-                    }
-                    "theme_custom" => {
-                        config.theme_custom = value.trim().to_string();
-                    }
-                    "language" => {
-                        // Accept only languages with a locale (en/nl/de/fr); otherwise nl.
-                        config.language = match value.trim() {
-                            "en" | "nl" | "de" | "fr" => value.trim().to_string(),
-                            _ => "nl".to_string(),
-                        };
-                    }
-                    "autostart" => {
-                        config.autostart = value.trim() == "true";
-                    }
-                    "active_pa" => {
-                        config.active_pa = value.trim().parse().unwrap_or(0);
-                    }
-                    "rf2k_saved_drive" => {
-                        let v = value.trim();
-                        config.rf2k_saved_drive = if v.is_empty() { None } else { v.parse().ok() };
-                    }
-                    "spe_saved_drive" => {
-                        let v = value.trim();
-                        config.spe_saved_drive = if v.is_empty() { None } else { v.parse().ok() };
-                    }
-                    "ultrabeam_show_menu" => {
-                        config.ultrabeam_show_menu = value.trim() == "true";
-                    }
-                    "mcp2221_section_expanded" => {
-                        config.mcp2221_section_expanded = value.trim() != "false";
-                    }
-                    "dxcluster_server" => {
-                        let v = value.trim().to_string();
-                        if !v.is_empty() { config.dxcluster_server = v; }
-                    }
-                    "dxcluster_callsign" => {
-                        let v = value.trim().to_string();
-                        if !v.is_empty() { config.dxcluster_callsign = v; }
-                    }
-                    "dxcluster_enabled" => {
-                        config.dxcluster_enabled = value.trim() != "false";
-                    }
-                    "dxcluster_expiry_min" => {
-                        if let Ok(v) = value.trim().parse::<u16>() {
-                            config.dxcluster_expiry_min = v.max(1);
-                        }
-                    }
-                    "password" => {
-                        let v = value.trim();
-                        if !v.is_empty() {
-                            // Try deobfuscate first; if it fails, treat as plaintext (first time)
-                            config.password = Some(
-                                sdr_remote_core::auth::deobfuscate_password(v)
-                                    .unwrap_or_else(|| v.to_string())
-                            );
-                        }
-                    }
-                    "totp_secret" => {
-                        let v = value.trim();
-                        if !v.is_empty() {
-                            config.totp_secret = Some(
-                                sdr_remote_core::auth::deobfuscate_password(v)
-                                    .unwrap_or_else(|| v.to_string())
-                            );
-                        }
-                    }
-                    "totp_enabled" => {
-                        config.totp_enabled = value.trim() == "true";
-                    }
-                    "friendly_name" => {
-                        let v = value.trim();
-                        if !v.is_empty() {
-                            config.friendly_name = Some(v.to_string());
-                        }
-                    }
-                    "relay_enabled" => {
-                        config.relay_enabled = value.trim() == "true";
-                    }
-                    "relay_udp_enabled" => {
-                        config.relay_udp_enabled = value.trim() == "true";
-                    }
-                    "relay_url" => {
-                        config.relay_url = value.trim().to_string();
-                    }
-                    "relay_station" => {
-                        config.relay_station = value.trim().to_string();
-                    }
-                    "relay_token" => {
-                        let v = value.trim();
-                        if !v.is_empty() {
-                            config.relay_token = sdr_remote_core::auth::deobfuscate_password(v)
-                                .unwrap_or_else(|| v.to_string());
-                        }
-                    }
-                    _ => {}
+    // Three settings that used to be one value for both radios. They are per
+    // slot now - two radios of the same type can be attached, and each of these
+    // is a choice about ONE radio. Collected as options so the old shared key
+    // can seed a slot that has no key of its own, and never overrule one that
+    // has (2026-08-20).
+    let mut slot_ssb: [Option<bool>; 2] = [None; 2];
+    let mut slot_mem_ack: [Option<bool>; 2] = [None; 2];
+    let mut slot_channel: [Option<u8>; 2] = [None; 2];
+    let mut shared_mem_ack: Option<bool> = None;
+    let mut shared_channel: Option<u8> = None;
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if let Some((key, value)) = line.split_once('=') {
+            match key.trim() {
+                "tci" => {
+                    let v = value.trim().to_string();
+                    config.tci_addr = if v.is_empty() { None } else { Some(v) };
                 }
+                // Legacy keys (ignored, kept for backward compat with old config files)
+                "input" | "input2" | "output" | "anan_interface" => {}
+                "rx2_present" => {
+                    // Default true; only an explicit "false" disables RX2.
+                    config.rx2_present = value.trim() != "false";
+                }
+                "thetis_path" => {
+                    let v = value.trim().to_string();
+                    if v.is_empty() {
+                        config.thetis_path = None;
+                    } else {
+                        config.thetis_path = Some(v);
+                    }
+                }
+                "yaesu_port" => {
+                    let v = value.trim().to_string();
+                    config.yaesu_port = if v.is_empty() { None } else { Some(v) };
+                }
+                "yaesu_enabled" => {
+                    config.yaesu_enabled = value.trim() != "false";
+                }
+                // Absent key -> false: an older conf must not silently grant it.
+                "yaesu_memory_write_ack" => {
+                    slot_mem_ack[0] = Some(value.trim() == "true");
+                }
+                "yaesu2_memory_write_ack" => {
+                    slot_mem_ack[1] = Some(value.trim() == "true");
+                }
+                // The old shared name. Applied to BOTH slots below, but only
+                // where that slot has no key of its own, so an upgrade keeps
+                // the permission the operator actually gave.
+                "ftx1_memory_write_ack" => {
+                    shared_mem_ack = Some(value.trim() == "true");
+                }
+                "yaesu_ssb_switch_on_ptt" => {
+                    slot_ssb[0] = Some(value.trim() != "false");
+                }
+                "yaesu2_ssb_switch_on_ptt" => {
+                    slot_ssb[1] = Some(value.trim() != "false");
+                }
+                "yaesu_baud" => {
+                    if let Ok(v) = value.trim().parse::<u32>() {
+                        config.yaesu_baud = v;
+                    }
+                }
+                "yaesu_audio" => {
+                    let v = value.trim().to_string();
+                    config.yaesu_audio_device = if v.is_empty() { None } else { Some(v) };
+                }
+                "yaesu_audio_out" => {
+                    let v = value.trim().to_string();
+                    config.yaesu_audio_output_device = if v.is_empty() { None } else { Some(v) };
+                }
+                "yaesu2_port" => {
+                    let v = value.trim().to_string();
+                    config.yaesu2_port = if v.is_empty() { None } else { Some(v) };
+                }
+                "yaesu2_enabled" => {
+                    config.yaesu2_enabled = value.trim() != "false";
+                }
+                "yaesu2_baud" => {
+                    if let Ok(v) = value.trim().parse::<u32>() {
+                        config.yaesu2_baud = v;
+                    }
+                }
+                "yaesu2_audio" => {
+                    let v = value.trim().to_string();
+                    config.yaesu2_audio_device = if v.is_empty() { None } else { Some(v) };
+                }
+                "yaesu2_audio_out" => {
+                    let v = value.trim().to_string();
+                    config.yaesu2_audio_output_device = if v.is_empty() { None } else { Some(v) };
+                }
+                "chat_answers_seen" => {
+                    config.chat_answers_seen = value.trim().to_string();
+                }
+                "yaesu_model_last" => {
+                    config.yaesu_model_last = value.trim().parse::<u8>().ok();
+                }
+                "yaesu2_model_last" => {
+                    config.yaesu2_model_last = value.trim().parse::<u8>().ok();
+                }
+                // Three names for what is now two settings. `ftx1_audio_channel`
+                // never shipped in a release - it was the shared name for a
+                // handful of development builds - and `yaesu2_audio_channel` was
+                // the SHARED setting up to and including 2.9.1, despite the "2"
+                // in it. Both seed a slot that has no key of its own.
+                "yaesu_audio_channel" | "yaesu2_audio_channel" | "ftx1_audio_channel" => {
+                    // Tolerant: accept a digit (0/1/2) or L/R/MIX (case-insensitive).
+                    let v = value.trim().to_lowercase();
+                    let parsed = match v.as_str() {
+                        "0" | "l" | "left" => 0,
+                        "1" | "r" | "right" => 1,
+                        _ => 2, // "2"/"mix"/unknown -> mix
+                    };
+                    match key.trim() {
+                        "yaesu_audio_channel" => slot_channel[0] = Some(parsed),
+                        "yaesu2_audio_channel" => slot_channel[1] = Some(parsed),
+                        _ => shared_channel = Some(parsed),
+                    }
+                }
+                "amplitec_port" => {
+                    let v = value.trim().to_string();
+                    config.amplitec_port = if v.is_empty() { None } else { Some(v) };
+                }
+                "amplitec_enabled" => {
+                    config.amplitec_enabled = value.trim() != "false";
+                }
+                k if k.starts_with("amplitec_label") => {
+                    if let Some(idx) = k.strip_prefix("amplitec_label").and_then(|s| s.parse::<usize>().ok()) {
+                        if idx >= 1 && idx <= 6 {
+                            config.amplitec_labels[idx - 1] = value.trim().to_string();
+                        }
+                    }
+                }
+                // Backward compat: read old amplitec_aN keys as shared labels
+                k if k.starts_with("amplitec_a") => {
+                    if let Some(idx) = k.strip_prefix("amplitec_a").and_then(|s| s.parse::<usize>().ok()) {
+                        if idx >= 1 && idx <= 6 {
+                            config.amplitec_labels[idx - 1] = value.trim().to_string();
+                        }
+                    }
+                }
+                k if k.starts_with("amplitec_b") => {
+                    // Old amplitec_bN keys: ignore (same antennas)
+                }
+                "amplitec_window" => {
+                    config.show_amplitec_window = value.trim() == "true";
+                }
+                k if k.starts_with("amplitec_max_w_a") => {
+                    if let Some(idx) = k
+                        .strip_prefix("amplitec_max_w_a")
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        if (1..=6).contains(&idx) {
+                            let v = value.trim();
+                            // Empty string OR "0" = no cap (None). A
+                            // configured 0 W cap is functionally not
+                            // usable (the cap-loop would fire continuously on
+                            // every fwd>0) and not what the operator intends.
+                            config.amplitec_max_w[idx - 1] = match v.parse::<u16>() {
+                                Ok(0) => None,
+                                Ok(n) => Some(n),
+                                Err(_) => None,
+                            };
+                        }
+                    }
+                }
+                k if k.starts_with("amplitec_tx_blocked_a") => {
+                    if let Some(idx) = k
+                        .strip_prefix("amplitec_tx_blocked_a")
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        if (1..=6).contains(&idx) {
+                            config.amplitec_tx_blocked[idx - 1] = value.trim() == "true";
+                        }
+                    }
+                }
+                // Legacy v2.0.2 keys silently ignored on load (multi-tuner
+                // runtime supersedes the single serial-port flow):
+                //   `tuner_port`           - COM-port no longer used
+                //   `tuner_enabled`        - replaced by per-slot enable
+                //   `tuner_assume_tuned`   - assume-tuned pad retired
+                "tuner_port" => {}
+                "tuner_enabled" => {
+                    // Honour the legacy global toggle one last time so
+                    // owners upgrading from v2.0.2 do not lose their
+                    // slot-0 enable state: mirror into tuners[0].enabled.
+                    let v = value.trim() != "false";
+                    ensure_tuner_slot(&mut config.tuners, 0);
+                    config.tuners[0].enabled = v;
+                }
+                "tuner_assume_tuned" => {}
+                // Per-slot keys: `tuner<N>_FIELD=value` with N=1..MAX_TUNERS.
+                // Auto-grow the Vec to index N-1 so old config-files
+                // (two slots) and new ones (1..6 slots) both work.
+                k if parse_tuner_slot_prefix(k).is_some() => {
+                    if let Some((slot0_idx, sub)) = parse_tuner_slot_prefix(k) {
+                        ensure_tuner_slot(&mut config.tuners, slot0_idx);
+                        parse_tuner_key(&mut config.tuners[slot0_idx], sub, value.trim());
+                    }
+                }
+                // Per-slot rotor-keys: `rotor<N>_FIELD=value` with N=1..MAX_ROTORS.
+                // PATCH-yaesu-rotor-mcp2221 phase 1.
+                k if parse_rotor_slot_prefix(k).is_some() => {
+                    if let Some((slot0_idx, sub)) = parse_rotor_slot_prefix(k) {
+                        ensure_rotor_slot(&mut config.rotors, slot0_idx);
+                        parse_rotor_key(&mut config.rotors[slot0_idx], sub, value.trim());
+                    }
+                }
+                "tuner_window" => {
+                    config.show_tuner_window = value.trim() == "true";
+                }
+                "tuner_safe_drive" => {
+                    // Legacy key, ignored
+                }
+                "tuner_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.tuner_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "tuner_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.tuner_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "amplitec_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.amplitec_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "amplitec_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.amplitec_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "spe_port" => {
+                    let v = value.trim().to_string();
+                    config.spe_port = if v.is_empty() { None } else { Some(v) };
+                }
+                "spe_enabled" => {
+                    config.spe_enabled = value.trim() != "false";
+                }
+                "spe_window" => {
+                    config.show_spe_window = value.trim() == "true";
+                }
+                "spe_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.spe_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "spe_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.spe_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "rf2k_addr" => {
+                    let v = value.trim().to_string();
+                    config.rf2k_addr = if v.is_empty() { None } else { Some(v) };
+                }
+                "rf2k_enabled" => {
+                    config.rf2k_enabled = value.trim() != "false";
+                }
+                "chat_window" => {
+                    config.show_chat_window = value.trim() == "true";
+                }
+                "chat_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.chat_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "chat_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.chat_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "chat_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.chat_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "chat_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.chat_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "rf2k_window" => {
+                    config.show_rf2k_window = value.trim() == "true";
+                }
+                "rf2k_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rf2k_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "rf2k_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rf2k_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "ultrabeam_port" => {
+                    let v = value.trim().to_string();
+                    config.ultrabeam_port = if v.is_empty() { None } else { Some(v) };
+                }
+                "ultrabeam_enabled" => {
+                    config.ultrabeam_enabled = value.trim() != "false";
+                }
+                "ultrabeam_window" => {
+                    config.show_ultrabeam_window = value.trim() == "true";
+                }
+                "ultrabeam_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.ultrabeam_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "ultrabeam_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.ultrabeam_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "rotor_addr" => {
+                    let v = value.trim().to_string();
+                    config.rotor_addr = if v.is_empty() { None } else { Some(v) };
+                }
+                "rotor_enabled" => {
+                    config.rotor_enabled = value.trim() != "false";
+                }
+                "rotor_window" => {
+                    config.show_rotor_window = value.trim() == "true";
+                }
+                "rotor_backend" => {
+                    // Accept the three valid backends; anything else
+                    // falls back to "ea7hg" for backwards-compat.
+                    let v = value.trim().to_lowercase();
+                    config.rotor_backend = match v.as_str() {
+                        "pstrotator" => "pstrotator".to_string(),
+                        "mcp2221_yaesu" => "mcp2221_yaesu".to_string(),
+                        _ => "ea7hg".to_string(),
+                    };
+                }
+                "pstrotator_host" => {
+                    config.pstrotator_host = value.trim().to_string();
+                }
+                "pstrotator_port" => {
+                    if let Ok(v) = value.trim().parse::<u16>() {
+                        if v > 0 { config.pstrotator_port = v; }
+                    }
+                }
+                "pstrotator_feedback_port" => {
+                    if let Ok(v) = value.trim().parse::<u16>() {
+                        if v > 0 { config.pstrotator_feedback_port = v; }
+                    }
+                }
+                "pstrotator_has_elevation" => {
+                    config.pstrotator_has_elevation = value.trim() == "true";
+                }
+                "pstrotator_listen_enabled" => {
+                    config.pstrotator_listen_enabled = value.trim() == "true";
+                }
+                "pstrotator_listen_port" => {
+                    if let Ok(v) = value.trim().parse::<u16>() {
+                        if v > 0 { config.pstrotator_listen_port = v; }
+                    }
+                }
+                "rotor_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rotor_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "rotor_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rotor_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "layout_grids" => {
+                    config.layout_grids = value.trim().to_string();
+                }
+                "ui_zoom" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.ui_zoom = v.clamp(0.5, 2.0);
+                    }
+                }
+                // layout_mem<N> = <name>|<key:x,y,w,h>...   N is 1-based.
+                k if k.starts_with("layout_mem") => {
+                    if let Ok(i) = k["layout_mem".len()..].trim().parse::<usize>() {
+                        if (1..=64).contains(&i) {
+                            if config.layout_memories.len() < i {
+                                config.layout_memories.resize(i, String::new());
+                            }
+                            config.layout_memories[i - 1] = value.trim().to_string();
+                        }
+                    }
+                }
+                "main_pos_x" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.main_window_pos.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "main_pos_y" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.main_window_pos.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "main_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.main_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "main_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.main_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "tuner_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.tuner_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "tuner_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.tuner_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "amplitec_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.amplitec_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "amplitec_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.amplitec_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "spe_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.spe_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "spe_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.spe_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "rf2k_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rf2k_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "rf2k_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rf2k_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "ultrabeam_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.ultrabeam_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "ultrabeam_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.ultrabeam_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "rotor_size_w" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rotor_window_size.get_or_insert([0.0, 0.0])[0] = v;
+                    }
+                }
+                "rotor_size_h" => {
+                    if let Ok(v) = value.trim().parse::<f32>() {
+                        config.rotor_window_size.get_or_insert([0.0, 0.0])[1] = v;
+                    }
+                }
+                "theme" => {
+                    config.theme = value.trim().to_string();
+                }
+                "theme_custom" => {
+                    config.theme_custom = value.trim().to_string();
+                }
+                "language" => {
+                    // Accept only languages with a locale (en/nl/de/fr); otherwise nl.
+                    config.language = match value.trim() {
+                        "en" | "nl" | "de" | "fr" => value.trim().to_string(),
+                        _ => "nl".to_string(),
+                    };
+                }
+                "autostart" => {
+                    config.autostart = value.trim() == "true";
+                }
+                "active_pa" => {
+                    config.active_pa = value.trim().parse().unwrap_or(0);
+                }
+                "rf2k_saved_drive" => {
+                    let v = value.trim();
+                    config.rf2k_saved_drive = if v.is_empty() { None } else { v.parse().ok() };
+                }
+                "spe_saved_drive" => {
+                    let v = value.trim();
+                    config.spe_saved_drive = if v.is_empty() { None } else { v.parse().ok() };
+                }
+                "ultrabeam_show_menu" => {
+                    config.ultrabeam_show_menu = value.trim() == "true";
+                }
+                "mcp2221_section_expanded" => {
+                    config.mcp2221_section_expanded = value.trim() != "false";
+                }
+                "dxcluster_server" => {
+                    let v = value.trim().to_string();
+                    if !v.is_empty() { config.dxcluster_server = v; }
+                }
+                "dxcluster_callsign" => {
+                    let v = value.trim().to_string();
+                    if !v.is_empty() { config.dxcluster_callsign = v; }
+                }
+                "dxcluster_enabled" => {
+                    config.dxcluster_enabled = value.trim() != "false";
+                }
+                "dxcluster_expiry_min" => {
+                    if let Ok(v) = value.trim().parse::<u16>() {
+                        config.dxcluster_expiry_min = v.max(1);
+                    }
+                }
+                "password" => {
+                    let v = value.trim();
+                    if !v.is_empty() {
+                        // Try deobfuscate first; if it fails, treat as plaintext (first time)
+                        config.password = Some(
+                            sdr_remote_core::auth::deobfuscate_password(v)
+                                .unwrap_or_else(|| v.to_string())
+                        );
+                    }
+                }
+                "totp_secret" => {
+                    let v = value.trim();
+                    if !v.is_empty() {
+                        config.totp_secret = Some(
+                            sdr_remote_core::auth::deobfuscate_password(v)
+                                .unwrap_or_else(|| v.to_string())
+                        );
+                    }
+                }
+                "totp_enabled" => {
+                    config.totp_enabled = value.trim() == "true";
+                }
+                "friendly_name" => {
+                    let v = value.trim();
+                    if !v.is_empty() {
+                        config.friendly_name = Some(v.to_string());
+                    }
+                }
+                "relay_enabled" => {
+                    config.relay_enabled = value.trim() == "true";
+                }
+                "relay_udp_enabled" => {
+                    config.relay_udp_enabled = value.trim() == "true";
+                }
+                "relay_url" => {
+                    config.relay_url = value.trim().to_string();
+                }
+                "relay_station" => {
+                    config.relay_station = value.trim().to_string();
+                }
+                "relay_token" => {
+                    let v = value.trim();
+                    if !v.is_empty() {
+                        config.relay_token = sdr_remote_core::auth::deobfuscate_password(v)
+                            .unwrap_or_else(|| v.to_string());
+                    }
+                }
+                _ => {}
             }
         }
     }
 
+    // `yaesu2_audio_channel` is the one old key whose name lies: up to and
+    // including 2.9.1 it was the SHARED channel setting, applied to whichever
+    // slot held an FTX-1, and only the "2" in it suggests otherwise. A config
+    // this build writes always carries both channel keys, so slot 2's key
+    // standing alone can only mean an older file - and there it has to seed slot
+    // 1 as well, or an operator with an FTX-1 in slot 1 silently loses the
+    // channel they chose.
+
+    if slot_channel[0].is_none() && shared_channel.is_none() {
+        shared_channel = slot_channel[1];
+    }
+
+    // A slot's own key wins; otherwise the old shared key, which an upgrading
+    // config still carries; otherwise the default already in place.
+    let shared_ssb = if slot_ssb[0].is_some() { slot_ssb[0] } else { None };
+    config.yaesu_ssb_switch_on_ptt = slot_ssb[0].unwrap_or(config.yaesu_ssb_switch_on_ptt);
+    config.yaesu2_ssb_switch_on_ptt = slot_ssb[1]
+        .or(shared_ssb)
+        .unwrap_or(config.yaesu2_ssb_switch_on_ptt);
+    config.yaesu_memory_write_ack = slot_mem_ack[0]
+        .or(shared_mem_ack)
+        .unwrap_or(config.yaesu_memory_write_ack);
+    config.yaesu2_memory_write_ack = slot_mem_ack[1]
+        .or(shared_mem_ack)
+        .unwrap_or(config.yaesu2_memory_write_ack);
+    config.yaesu_audio_channel = slot_channel[0]
+        .or(shared_channel)
+        .unwrap_or(config.yaesu_audio_channel);
+    config.yaesu2_audio_channel = slot_channel[1]
+        .or(shared_channel)
+        .unwrap_or(config.yaesu2_audio_channel);
+
     config
 }
+
 
 /// Atomic load-modify-save helper. All read-modify-write helpers funnel
 /// through here so the CONFIG_LOCK guarantees no other writer slips in
 /// between the load and the save.
 pub fn modify_config(f: impl FnOnce(&mut ServerConfig)) {
     let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut config = load_unlocked();
+    let (mut config, may_write) = load_unlocked();
     f(&mut config);
-    save_unlocked(&config);
+    if !may_write {
+        // The load fell back because the file could not be READ. Writing now
+        // would put that fallback where the operator's settings are.
+        log::error!("Not saving: the config file could not be read, so this would overwrite it");
+        return;
+    }
+    let _ = save_unlocked(&config);
 }
 
 /// Read-modify-write helper for the `active_pa` config key. Used when the
@@ -1204,22 +1479,59 @@ pub fn save_mcp2221_section_expanded(value: bool) {
 /// Public save: takes the global CONFIG_LOCK so writes are serialised with
 /// reads and other writes. Internal `save_unlocked` is for `modify_config`
 /// which already holds the lock.
-pub fn save(config: &ServerConfig) {
+/// Save, and say whether it actually happened.
+///
+/// The return value exists because the refusal below is otherwise invisible: an
+/// operator whose config file was locked at startup would fill in a whole
+/// settings screen, press Save & Start, watch the server run correctly for that
+/// session, and find nothing saved - with not a word on screen (review finding,
+/// 2026-08-20).
+pub fn save(config: &ServerConfig) -> bool {
     let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    save_unlocked(config);
+    save_unlocked(config)
 }
 
-fn save_unlocked(config: &ServerConfig) {
+/// Could this process write the config file if it were asked to now?
+///
+/// False while the file exists but an earlier read of it failed. That lasts
+/// until a load succeeds, and after startup only `modify_config` still loads -
+/// so in practice it lasts until the server is restarted.
+pub fn may_write() -> bool {
+    !LOAD_FAILED.load(Ordering::Relaxed) || !config_path().exists()
+}
+
+fn save_unlocked(config: &ServerConfig) -> bool {
     let path = config_path();
+    // The settings screen holds its own copy and saves that, so this guard has
+    // to sit at the write itself rather than only in `modify_config`: Save &
+    // Start would otherwise still replace a file we never managed to read.
+    if LOAD_FAILED.load(Ordering::Relaxed) && path.exists() {
+        log::error!(
+            "Not writing {}: it exists but could not be read, and overwriting it              would replace the settings that are still in it",
+            path.display()
+        );
+        return false;
+    }
+    fs::write(&path, render_conf(config)).is_ok()
+}
+
+/// The whole config file as text, without touching the disk.
+///
+/// Split off from the write so what lands in the file can be asserted on. It
+/// needed to be: slot 0's memory permission was written under the OLD shared key
+/// name while slot 1 used its own, and since the shared name seeds BOTH slots on
+/// load, the two could never differ - grant it on one radio and the other had it
+/// too, for ever. A test over this string is what catches that (2026-08-20).
+fn render_conf(config: &ServerConfig) -> String {
     let mut contents = format!(
-        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_ssb_switch_on_ptt={}\nftx1_memory_write_ack={}\nyaesu_audio={}\nyaesu_audio_out={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nchat_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
+        "tci={}\nthetis_path={}\nyaesu_port={}\nyaesu_enabled={}\nyaesu_baud={}\nyaesu_ssb_switch_on_ptt={}\nyaesu_memory_write_ack={}\nyaesu_audio={}\nyaesu_audio_out={}\namplitec_port={}\namplitec_enabled={}\namplitec_window={}\ntuner_window={}\nspe_port={}\nspe_enabled={}\nspe_window={}\nrf2k_addr={}\nrf2k_enabled={}\nrf2k_window={}\nchat_window={}\nultrabeam_port={}\nultrabeam_enabled={}\nultrabeam_window={}\nrotor_addr={}\nrotor_enabled={}\nrotor_window={}\n",
         config.tci_addr.as_deref().unwrap_or(""),
         config.thetis_path.as_deref().unwrap_or(""),
         config.yaesu_port.as_deref().unwrap_or(""),
         config.yaesu_enabled,
         config.yaesu_baud,
         config.yaesu_ssb_switch_on_ptt,
-        config.ftx1_memory_write_ack,
+        config.yaesu_memory_write_ack,
         config.yaesu_audio_device.as_deref().unwrap_or(""),
         config.yaesu_audio_output_device.as_deref().unwrap_or(""),
         config.amplitec_port.as_deref().unwrap_or(""),
@@ -1249,7 +1561,18 @@ fn save_unlocked(config: &ServerConfig) {
     contents.push_str(&format!("yaesu2_baud={}\n", config.yaesu2_baud));
     contents.push_str(&format!("yaesu2_audio={}\n", config.yaesu2_audio_device.as_deref().unwrap_or("")));
     contents.push_str(&format!("yaesu2_audio_out={}\n", config.yaesu2_audio_output_device.as_deref().unwrap_or("")));
+    if let Some(m) = config.yaesu_model_last {
+        contents.push_str(&format!("yaesu_model_last={}\n", m));
+    }
+    if let Some(m) = config.yaesu2_model_last {
+        contents.push_str(&format!("yaesu2_model_last={}\n", m));
+    }
+    contents.push_str(&format!("yaesu_audio_channel={}\n", config.yaesu_audio_channel));
+    contents.push_str(&format!("chat_answers_seen={}
+", config.chat_answers_seen));
     contents.push_str(&format!("yaesu2_audio_channel={}\n", config.yaesu2_audio_channel));
+    contents.push_str(&format!("yaesu2_ssb_switch_on_ptt={}\n", config.yaesu2_ssb_switch_on_ptt));
+    contents.push_str(&format!("yaesu2_memory_write_ack={}\n", config.yaesu2_memory_write_ack));
     // Rotor backend choice + PstRotator-fields. Blocked separately so the
     // existing EA7HG-config-format stays unchanged on upgrade.
     contents.push_str(&format!("rotor_backend={}\n", config.rotor_backend));
@@ -1419,7 +1742,7 @@ fn save_unlocked(config: &ServerConfig) {
     if !config.relay_token.is_empty() {
         contents.push_str(&format!("relay_token={}\n", sdr_remote_core::auth::obfuscate_password(&config.relay_token)));
     }
-    let _ = fs::write(&path, sdr_remote_core::conf_layout::group(&contents, SECTIONS, UNSORTED));
+    sdr_remote_core::conf_layout::group(&contents, SECTIONS, UNSORTED)
 }
 
 /// The trailing heading for keys this table has no home for. A key landing
@@ -1439,6 +1762,9 @@ const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
         "tci", "password", "totp_", "friendly_name", "relay_", "thetis_path", "autostart",
     ]),
     ("Receivers", &["rx2_present"]),
+    // Each radio's settings under its own slot, including the three that only
+    // MEAN anything on one model: the value is a choice about that radio, and
+    // two radios of the same type can be attached.
     ("Yaesu radio 1", &["yaesu_", "ftx1_"]),
     ("Yaesu radio 2", &["yaesu2_"]),
     ("Amplifiers", &["active_pa", "amplitec_", "spe_", "rf2k_", "ultrabeam_"]),
@@ -1469,6 +1795,274 @@ pub fn labels_string(config: &ServerConfig) -> String {
         parts.push(l);
     }
     parts.join(",")
+}
+
+#[cfg(test)]
+mod per_slot_conf_tests {
+    use super::{classify_read, config_from_source, parse_conf, render_conf, ConfigSource, ServerConfig};
+
+    /// Each slot writes its OWN key. Slot 0's memory permission went out under
+    /// the old shared name `ftx1_memory_write_ack`, and that name seeds BOTH
+    /// slots when the file is read back - so granting it for one radio granted
+    /// it for the other, permanently, and the two settings could never differ.
+    /// The operator spotted it as "both radios always show the same ticks".
+
+    /// What a 2.9.1 config carried for these three settings. Deliberately the
+    /// old spellings, including the one that lies: `yaesu2_audio_channel` was
+    /// the SHARED channel there, not slot 2's.
+    const OLD_CONF: &str = "yaesu_port=COM13
+yaesu_enabled=true
+yaesu_ssb_switch_on_ptt=false
+ftx1_memory_write_ack=true
+yaesu2_audio_channel=1
+";
+
+    /// An upgrading config must arrive with the operator's own answers on BOTH
+    /// slots. The three keys were one setting each until 2.9.1, so the honest
+    /// reading of an old file is "this applied to whatever radio was there".
+
+    /// An absent file and an unreadable one look the same to a caller that only
+    /// checks `is_err()`, and they are opposites: the first has nothing to
+    /// preserve, the second still holds everything the operator set up. The
+    /// load path used to treat both as a first run, and because `modify_config`
+    /// is load-mutate-save over the whole file, one failed read during normal
+    /// use would have written a bare config over a full one.
+
+    /// The half that actually broke. Classifying the read correctly is not the
+    /// point: the damage came from what the classification was mapped ONTO. Put
+    /// the unreadable arm back on `(first_run(), true)` and this test fails,
+    /// where a test on the classifier alone stays green.
+    #[test]
+    fn an_unreadable_file_yields_no_write_permission_and_no_bare_config() {
+        let (config, may_write) = config_from_source(ConfigSource::Unreadable, None);
+        assert!(!may_write, "an unreadable file must never be written back");
+        // Not the first-run values: those are what would land in the file.
+        let bare = ServerConfig::first_run();
+        let plain = ServerConfig::default();
+        assert_eq!(config.rx2_present, plain.rx2_present);
+        assert_eq!(config.dxcluster_enabled, plain.dxcluster_enabled);
+        assert!(
+            config.rx2_present != bare.rx2_present
+                || config.dxcluster_enabled != bare.dxcluster_enabled,
+            "the unreadable case handed out the bare first-run config"
+        );
+
+        // And the two cases that MAY write really may.
+        let (first, may_write) = config_from_source(ConfigSource::FirstRun, None);
+        assert!(may_write);
+        assert_eq!(first.rx2_present, bare.rx2_present);
+        let (parsed, may_write) = config_from_source(ConfigSource::File, Some("yaesu_port=COM7
+"));
+        assert!(may_write);
+        assert_eq!(parsed.yaesu_port.as_deref(), Some("COM7"));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_not_the_same_as_no_file() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            classify_read(&Ok("tci=127.0.0.1:40001
+".to_string())),
+            ConfigSource::File
+        );
+        assert_eq!(
+            classify_read(&Err(Error::from(ErrorKind::NotFound))),
+            ConfigSource::FirstRun
+        );
+        // Everything else is a file that IS there. Permission, a lock held by
+        // another process, a failing disk - none of them mean "nothing has been
+        // configured here".
+        for kind in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::Other,
+            ErrorKind::InvalidData,
+        ] {
+            assert_eq!(
+                classify_read(&Err(Error::from(kind))),
+                ConfigSource::Unreadable,
+                "{kind:?} was taken for a first run"
+            );
+        }
+    }
+
+    /// The old shared key really does seed BOTH slots. The two assertions that
+    /// only check the old names are gone from the written file cannot fail by
+    /// construction; this is the path that is the actual reason the migration
+    /// branch exists.
+    #[test]
+    fn the_old_shared_channel_key_seeds_both_slots() {
+        let c = parse_conf("ftx1_audio_channel=0
+");
+        assert_eq!(c.yaesu_audio_channel, 0);
+        assert_eq!(c.yaesu2_audio_channel, 0);
+        // And a slot with a key of its own is not overruled by it.
+        let c = parse_conf("ftx1_audio_channel=0
+yaesu2_audio_channel=1
+");
+        assert_eq!(c.yaesu_audio_channel, 0, "slot 1 should still take the shared key");
+        assert_eq!(c.yaesu2_audio_channel, 1, "slot 2's own key must win");
+    }
+
+    #[test]
+    fn an_old_config_seeds_both_slots() {
+        let c = parse_conf(OLD_CONF);
+        assert!(!c.yaesu_ssb_switch_on_ptt, "slot 1 lost the SSB choice");
+        assert!(!c.yaesu2_ssb_switch_on_ptt, "slot 2 lost the SSB choice");
+        assert!(c.yaesu_memory_write_ack, "slot 1 lost the memory permission");
+        assert!(c.yaesu2_memory_write_ack, "slot 2 lost the memory permission");
+        // The one that would have been silently dropped: an FTX-1 in slot 1
+        // whose operator picked the left channel would have got mix back.
+        assert_eq!(c.yaesu_audio_channel, 1, "slot 1 lost the audio channel");
+        assert_eq!(c.yaesu2_audio_channel, 1, "slot 2 lost the audio channel");
+        // And nothing else in the file was disturbed.
+        assert_eq!(c.yaesu_port.as_deref(), Some("COM13"));
+    }
+
+    /// A file this build wrote carries both channel keys, and then slot 2's key
+    /// is slot 2's own - it must NOT be taken as the old shared value and
+    /// copied over slot 1.
+    #[test]
+    fn a_current_config_keeps_the_two_slots_apart() {
+        let mut c = ServerConfig::default();
+        c.yaesu_audio_channel = 0;
+        c.yaesu2_audio_channel = 1;
+        c.yaesu_memory_write_ack = true;
+        c.yaesu2_memory_write_ack = false;
+        c.yaesu_ssb_switch_on_ptt = true;
+        c.yaesu2_ssb_switch_on_ptt = false;
+        let back = parse_conf(&render_conf(&c));
+        assert_eq!(back.yaesu_audio_channel, 0);
+        assert_eq!(back.yaesu2_audio_channel, 1);
+        assert!(back.yaesu_memory_write_ack);
+        assert!(!back.yaesu2_memory_write_ack);
+        assert!(back.yaesu_ssb_switch_on_ptt);
+        assert!(!back.yaesu2_ssb_switch_on_ptt);
+    }
+
+    /// Reading an old file and writing it back must not leave the old names
+    /// behind: that is what kept both slots tied together for a release.
+    #[test]
+    fn an_old_config_is_written_back_in_the_new_shape() {
+        let text = render_conf(&parse_conf(OLD_CONF));
+        for legacy in ["ftx1_memory_write_ack", "ftx1_audio_channel"] {
+            assert!(!text.contains(legacy), "the old key {legacy} is still written");
+        }
+        assert!(text.contains("yaesu_audio_channel=1"));
+        assert!(text.contains("yaesu2_audio_channel=1"));
+    }
+
+    #[test]
+    fn the_two_slots_write_their_own_keys() {
+        let mut c = ServerConfig::default();
+        c.yaesu_memory_write_ack = true;
+        c.yaesu2_memory_write_ack = false;
+        c.yaesu_ssb_switch_on_ptt = true;
+        c.yaesu2_ssb_switch_on_ptt = false;
+        c.yaesu_audio_channel = 0;
+        c.yaesu2_audio_channel = 2;
+        let text = render_conf(&c);
+
+        for line in [
+            "yaesu_memory_write_ack=true",
+            "yaesu2_memory_write_ack=false",
+            "yaesu_ssb_switch_on_ptt=true",
+            "yaesu2_ssb_switch_on_ptt=false",
+            "yaesu_audio_channel=0",
+            "yaesu2_audio_channel=2",
+        ] {
+            assert!(text.contains(line), "missing from the config file: {line}");
+        }
+
+        // The shared names are read for migration and must never be WRITTEN
+        // again - writing one is what made the two slots inseparable.
+        for legacy in ["ftx1_memory_write_ack", "ftx1_audio_channel"] {
+            assert!(
+                !text.contains(legacy),
+                "the old shared key {legacy} is still being written"
+            );
+        }
+    }
+
+    /// And what is written comes back the same way round. A slot-0-only value
+    /// must not arrive on slot 1.
+    #[test]
+    fn a_setting_on_one_slot_stays_on_that_slot() {
+        let mut c = ServerConfig::default();
+        c.yaesu_memory_write_ack = true;
+        c.yaesu2_memory_write_ack = false;
+        let text = render_conf(&c);
+        let line_of = |key: &str| {
+            text.lines()
+                .find(|l| l.starts_with(&format!("{key}=")))
+                .unwrap_or_else(|| panic!("{key} not in the file"))
+                .to_string()
+        };
+        assert_eq!(line_of("yaesu_memory_write_ack"), "yaesu_memory_write_ack=true");
+        assert_eq!(line_of("yaesu2_memory_write_ack"), "yaesu2_memory_write_ack=false");
+    }
+}
+
+#[cfg(test)]
+mod first_run_tests {
+    use super::ServerConfig;
+
+    /// A first start is a bare server: a client can connect, and nothing else
+    /// is switched on. Every field here is a checkbox in the settings screen
+    /// that has to be clear before the operator has touched anything.
+    #[test]
+    fn nothing_optional_is_on_at_a_first_start() {
+        let c = ServerConfig::first_run();
+        assert!(!c.rx2_present, "second receiver");
+        assert!(!c.amplitec_enabled, "Amplitec");
+        assert!(!c.spe_enabled, "SPE Expert");
+        assert!(!c.rf2k_enabled, "RF2K-S");
+        assert!(!c.ultrabeam_enabled, "UltraBeam");
+        assert!(!c.rotor_enabled, "rotor");
+        assert!(!c.dxcluster_enabled, "DX cluster");
+        assert!(!c.relay_enabled, "relay");
+        assert!(!c.relay_udp_enabled, "audio over UDP");
+        assert!(!c.yaesu_enabled, "radio 1");
+        assert!(!c.yaesu2_enabled, "radio 2");
+        assert!(!c.autostart, "autostart");
+        for (what, open) in [
+            ("Amplitec", c.show_amplitec_window),
+            ("tuner", c.show_tuner_window),
+            ("SPE", c.show_spe_window),
+            ("RF2K-S", c.show_rf2k_window),
+            ("UltraBeam", c.show_ultrabeam_window),
+            ("rotor", c.show_rotor_window),
+            ("chat", c.show_chat_window),
+        ] {
+            assert!(!open, "{what} window opens at start");
+        }
+        assert!(c.tuners.is_empty());
+        assert!(c.rotors.is_empty());
+    }
+
+    /// And the other default must NOT follow it there. It fills in keys an
+    /// existing file happens to lack, so turning a device off in it would
+    /// switch that device off underneath an operator already using it.
+    #[test]
+    fn an_existing_file_missing_a_key_keeps_its_device() {
+        let d = ServerConfig::default();
+        assert!(d.rx2_present);
+        assert!(d.amplitec_enabled);
+        assert!(d.spe_enabled);
+        assert!(d.rf2k_enabled);
+        assert!(d.ultrabeam_enabled);
+        assert!(d.rotor_enabled);
+        assert!(d.dxcluster_enabled);
+    }
+
+    /// Whatever the OS answered, the first-run language is one the GUI can set.
+    #[test]
+    fn the_first_run_language_is_one_we_ship() {
+        let lang = ServerConfig::first_run().language;
+        assert!(
+            sdr_remote_core::oslang::UI_LANGUAGES.contains(&lang.as_str()),
+            "first-run language {lang} is not translated"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1514,5 +2108,16 @@ mod conf_section_tests {
     fn the_two_radios_do_not_share_a_heading() {
         assert_eq!(heading_of("yaesu_port"), "Yaesu radio 1");
         assert_eq!(heading_of("yaesu2_port"), "Yaesu radio 2");
+    }
+
+    /// The three settings that only mean something on one model are still per
+    /// SLOT, and file under their slot: an operator looking for the FTX-1's
+    /// audio channel with that radio in slot 2 must find it under radio 2.
+    #[test]
+    fn a_model_specific_setting_still_files_under_its_own_slot() {
+        for key in ["audio_channel", "memory_write_ack", "ssb_switch_on_ptt"] {
+            assert_eq!(heading_of(&format!("yaesu_{key}")), "Yaesu radio 1");
+            assert_eq!(heading_of(&format!("yaesu2_{key}")), "Yaesu radio 2");
+        }
     }
 }

@@ -17,6 +17,19 @@ pub fn version() -> String {
     sdr_remote_core::version_string()
 }
 
+/// Is this relay actually set up to run?
+///
+/// The same rule the bridge uses to decide whether to build the tunnel, handed
+/// to Compose rather than recomputed there. It was recomputed there, with three
+/// of the four fields: with a relay switched on, an address and a station name
+/// filled in but the token still empty, Kotlin called it configured while the
+/// Rust side did not - so filling in the token afterwards changed nothing on
+/// screen and the "restart to apply" notice never appeared, at exactly the
+/// moment the relay started working (review finding, 2026-08-20).
+pub fn relay_is_configured(enabled: bool, url: String, station: String, token: String) -> bool {
+    sdr_remote_relay::is_configured(enabled, &url, &station, &token)
+}
+
 /// DX cluster spot exposed to Kotlin via uniffi.
 pub struct BridgeDxSpot {
     pub callsign: String,
@@ -126,6 +139,17 @@ pub struct BridgeRadioState {
     pub down_kbps: u32,
     pub up_kbps: u32,
     pub dx_spots_enabled: bool,
+    /// Does this server have a DX cluster at all? False only when the server
+    /// says so, so an older server that cannot say still counts as having one.
+    /// The toggle is hidden without one: a switch that promises a stream the
+    /// server can never send is worse than no switch.
+    pub dx_cluster_available: bool,
+    /// How each Yaesu slot is named on screen: "Yaesu 1: FTX1" once the
+    /// server has said what it is, plain "Yaesu 1" until then. Composed here
+    /// from the shared rule rather than in Compose, so the phone and the
+    /// desktop cannot end up naming the same radio differently.
+    pub yaesu_label: String,
+    pub yaesu2_label: String,
     pub capture_level: f32,
     /// TX level of the Yaesu chain - measured on the frame as encoded, so EQ,
     /// compressor and AGC are included. One field for both radios: only the
@@ -382,6 +406,9 @@ impl From<RadioState> for BridgeRadioState {
             down_kbps: s.down_kbps,
             up_kbps: s.up_kbps,
             dx_spots_enabled: s.dx_spots_enabled,
+            dx_cluster_available: s.dx_cluster_available,
+            yaesu_label: sdr_remote_core::protocol::radio_slot_label(0, s.yaesu_model),
+            yaesu2_label: sdr_remote_core::protocol::radio_slot_label(1, s.yaesu2_model),
             capture_level: s.capture_level,
             yaesu_mic_level: s.yaesu_mic_level,
             playback_level: s.playback_level,
@@ -616,8 +643,10 @@ pub struct SdrBridge {
     cmd_tx: mpsc::UnboundedSender<Command>,
     state_rx: Mutex<watch::Receiver<RadioState>>,
     shutdown_tx: Mutex<Option<watch::Sender<bool>>>,
-    /// PATCH-1: UI language for connect-status / connect-error rendering in
-    /// `get_state()`. Set via `set_language("nl" | "en")`. Defaults to "en".
+    /// UI language for connect-status / connect-error rendering in `get_state()`.
+    /// Set via `set_language`, which the app calls once at startup with the language
+    /// Android resolved `strings.xml` to, so this side cannot drift from that one.
+    /// Defaults to "en" for the window before that call.
     ui_language: Mutex<String>,
     /// Phase C: houdt de relay-monitor in leven zolang de bridge bestaat (draait op
     /// een eigen thread). `None` in direct-modus.
@@ -625,10 +654,20 @@ pub struct SdrBridge {
     /// Fase 3c: relay status handle to surface the transport (UDP / wss-fallback) to the
     /// Compose UI. `None` in direct mode.
     relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
-    /// The relay address this bridge was built with. The chat lives at the same
-    /// host behind its own path, so this is where its endpoint is derived from -
-    /// and it is also the one host a problem report must never carry.
+    /// The relay address this bridge was built with, exactly as configured -
+    /// including when the relay is switched off. Used for redaction: the one host
+    /// a problem report must never carry is the one that is written down, whether
+    /// or not it is in use.
     relay_url: String,
+    /// The relay address the chat may work with: the same one, but empty unless
+    /// the relay is actually running this session.
+    ///
+    /// The two are separate because an address that is merely written down is not
+    /// a relay. Deriving the chat endpoint from `relay_url` meant that a phone
+    /// with the relay switched off but an address still in its settings was told
+    /// "this relay offers no chat" - blaming a relay it was not talking to -
+    /// where the honest answer is that no relay is configured.
+    chat_relay_url: String,
     /// The chat, exactly as the desktop holds it. Compose asks for its state on
     /// a timer and calls the same handful of verbs; the worker thread inside
     /// does the network, so nothing here can get between an operator and PTT.
@@ -661,11 +700,12 @@ impl SdrBridge {
         // (mobiel achter CGNAT). Is de relay-config compleet, dan tunnel + monitor
         // (rol Client) opzetten; anders direct-UDP (default, byte-identiek).
         let mut relay_monitor: Option<sdr_remote_relay::RelayMonitor> = None;
-        let relay_tunnel = if relay_enabled
-            && !relay_url.trim().is_empty()
-            && !relay_station.trim().is_empty()
-            && !relay_token.trim().is_empty()
-        {
+        // One condition, read twice: it decides both whether the tunnel is built
+        // and whether the chat has a relay to reach. Splitting them is how the
+        // chat came to blame a relay that was switched off.
+        let relay_active =
+            sdr_remote_relay::is_configured(relay_enabled, &relay_url, &relay_station, &relay_token);
+        let relay_tunnel = if relay_active {
             let (uplink_tx, uplink_rx) = mpsc::unbounded_channel();
             let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
             // Placeholder server-adres (display-label; genegeerd door de Relay-transport).
@@ -748,22 +788,31 @@ impl SdrBridge {
             ui_language: Mutex::new("en".to_string()),
             _relay_monitor: Mutex::new(relay_monitor),
             relay_status,
+            chat_relay_url: if relay_active {
+                relay_url.clone()
+            } else {
+                String::new()
+            },
             relay_url,
             chat: Mutex::new(sdr_remote_chat::ChatModel::default()),
         }
     }
 
-    /// PATCH-1: set the UI language used for connect-status / connect-error
-    /// text in `get_state()`. Accepts "nl" or "en"; any other value falls
-    /// back to "en". Compose UI should call this once from SharedPreferences
-    /// on startup.
+    /// Set the UI language used for connect-status / connect-error text in
+    /// `get_state()`. Accepts any code `Lang::from_code` knows - "en", "nl",
+    /// "de", "fr" - and stores English for anything else. Compose should call
+    /// this once on startup with the language it is itself rendering in.
+    ///
+    /// It used to keep only "nl" and flatten everything else to "en", so a
+    /// German or French phone kept getting English connect text even once
+    /// those translations existed (2026-08-20).
+    ///
+    /// The app calls it once at startup with the language Android resolved
+    /// `strings.xml` to, so this side cannot drift from the strings around it.
     pub fn set_language(&self, lang: String) {
-        let normalized = if lang.to_lowercase() == "nl" {
-            "nl".to_string()
-        } else {
-            "en".to_string()
-        };
-        *self.ui_language.lock().unwrap() = normalized;
+        *self.ui_language.lock().unwrap() = sdr_remote_logic::i18n::Lang::from_code(&lang)
+            .code()
+            .to_string();
     }
 
     pub fn connect(&self, addr: String, password: String) {
@@ -1206,11 +1255,7 @@ impl SdrBridge {
         let rx = self.state_rx.lock().unwrap();
         let state = rx.borrow().clone();
         let lang_str = self.ui_language.lock().unwrap().clone();
-        let lang = if lang_str == "nl" {
-            sdr_remote_logic::i18n::Lang::Nl
-        } else {
-            sdr_remote_logic::i18n::Lang::En
-        };
+        let lang = sdr_remote_logic::i18n::Lang::from_code(&lang_str);
         let mut bs = bridge_state_from_radio_state(state, lang);
         // Fase 3c: report the live relay transport (UDP vs wss-fallback) to the UI.
         if let Some(h) = &self.relay_status {
@@ -1239,7 +1284,7 @@ impl SdrBridge {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let mut chat = self.chat.lock().unwrap();
-        chat.tick(&self.relay_url, ticket.as_deref(), open);
+        chat.tick(&self.chat_relay_url, ticket.as_deref(), open);
         BridgeChatState {
             offline_reason: match chat.offline {
                 None => 0,
@@ -1271,8 +1316,10 @@ impl SdrBridge {
                     can_edit: chat.can_edit(m, now),
                 })
                 .collect(),
+            // Only what has not been folded away. The whole list is what the
+            // service holds; what is still on screen is this side's business.
             answers: chat
-                .answers
+                .unread_answers()
                 .iter()
                 .map(|a| BridgeChatAnswer {
                     id: a.id,
@@ -1339,6 +1386,26 @@ impl SdrBridge {
     /// what was on the screen. Empty means the box was not ticked. Joining the
     /// chat is not required (design section 4), so this works for somebody who
     /// never consented.
+    /// Fold an administrator answer away.
+    ///
+    /// The phone had no way to do this at all, and the answers sat unbounded
+    /// above the conversation - so a reader with a few of them could not read
+    /// the chat any more (two users, 2026-08-20). The remembering lives in the
+    /// shared model, so both front ends agree on what has been put aside.
+    pub fn chat_dismiss_answer(&self, id: i64) {
+        self.chat.lock().unwrap().dismiss_answer(id);
+    }
+
+    /// The folded-away ids, for the app to keep in its preferences.
+    pub fn chat_seen_ids(&self) -> Vec<i64> {
+        self.chat.lock().unwrap().seen_ids()
+    }
+
+    /// Take back what the app had kept, at startup.
+    pub fn chat_restore_seen(&self, ids: Vec<i64>) {
+        self.chat.lock().unwrap().restore_seen(&ids);
+    }
+
     pub fn chat_report(&self, note: String, attachment: String) {
         let full = sdr_remote_core::diagnose::describe(
             &note,
@@ -1369,6 +1436,100 @@ impl SdrBridge {
         if let Some(monitor) = self._relay_monitor.lock().unwrap().take() {
             info!("bridge shutting down - stopping its relay monitor");
             monitor.stop();
+        }
+    }
+}
+
+#[cfg(test)]
+mod relay_rule_tests {
+    //! The bridge's own view of the relay rule. The rule itself is tested in
+    //! `sdr-remote-relay`, and nothing said that the function Compose actually
+    //! calls hands the same answer through - so a review went looking for a
+    //! test on `relay_is_configured` and found none.
+
+    #[test]
+    fn the_bridge_hands_through_the_shared_rule() {
+        let (u, s, t) = ("wss://relay.example/ws", "pa0xyz", "secret");
+        for (enabled, url, station, token) in [
+            (true, u, s, t),
+            (false, u, s, t),
+            (true, "", s, t),
+            (true, u, "", t),
+            // The one the phone got wrong: everything but the token.
+            (true, u, s, ""),
+        ] {
+            assert_eq!(
+                super::relay_is_configured(
+                    enabled,
+                    url.to_string(),
+                    station.to_string(),
+                    token.to_string()
+                ),
+                sdr_remote_relay::is_configured(enabled, url, station, token),
+                "the bridge disagrees with the shared rule for {url:?}/{station:?}/{token:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod language_resource_tests {
+    //! The app hands the Rust side its language by reading `ui_language_code` out
+    //! of the very `strings.xml` Android resolved. That only works while every
+    //! locale file declares it, and declares its own language - a copy-paste that
+    //! left `nl` in the German file would silently put one line in the wrong
+    //! language, which is exactly the sort of thing nobody notices by looking.
+
+    use std::path::PathBuf;
+
+    fn res_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("android/app/src/main/res")
+    }
+
+    fn declared_code(dir: &str) -> String {
+        let path = res_dir().join(dir).join("strings.xml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let open = "<string name=\"ui_language_code\">";
+        let start = text
+            .find(open)
+            .unwrap_or_else(|| panic!("{dir}/strings.xml does not declare ui_language_code"))
+            + open.len();
+        let end = start
+            + text[start..]
+                .find("</string>")
+                .expect("unterminated ui_language_code");
+        text[start..end].trim().to_string()
+    }
+
+    #[test]
+    fn every_locale_declares_its_own_language() {
+        for (dir, expected) in [
+            ("values", "en"),
+            ("values-nl", "nl"),
+            ("values-de", "de"),
+            ("values-fr", "fr"),
+        ] {
+            assert_eq!(
+                declared_code(dir),
+                expected,
+                "{dir}/strings.xml declares the wrong language"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rust_side_recognises_every_declared_language() {
+        use sdr_remote_logic::i18n::Lang;
+        for dir in ["values", "values-nl", "values-de", "values-fr"] {
+            let code = declared_code(dir);
+            let lang = Lang::from_code(&code);
+            assert_eq!(
+                lang.code(),
+                code,
+                "{dir} declares {code}, which the Rust side quietly turns into {}",
+                lang.code()
+            );
         }
     }
 }

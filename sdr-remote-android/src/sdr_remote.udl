@@ -10,6 +10,9 @@ namespace sdr_remote {
     // The tail of that file, for a problem report. Says why there is nothing
     // rather than coming back empty.
     string log_tail();
+    // The one rule for "is this relay set up", so the front ends read it
+    // instead of each doing their own sum.
+    boolean relay_is_configured(boolean enabled, string url, string station, string token);
 };
 
 dictionary BridgeDxSpot {
@@ -91,6 +94,9 @@ dictionary BridgeRadioState {
     u32 down_kbps;
     u32 up_kbps;
     boolean dx_spots_enabled;
+    boolean dx_cluster_available;
+    string yaesu_label;
+    string yaesu2_label;
     f32 capture_level;
     f32 yaesu_mic_level;
     f32 playback_level;
@@ -264,6 +270,9 @@ interface SdrBridge {
     void send_totp_code(string code);
     void disconnect();
     void set_language(string lang);
+    void chat_dismiss_answer(i64 id);
+    sequence<i64> chat_seen_ids();
+    void chat_restore_seen(sequence<i64> ids);
     void set_ptt(boolean active);
     void set_roger_beep(BridgeRogerBeep beep);
     void set_mic_gate_delay_ms(u32 delay_ms);

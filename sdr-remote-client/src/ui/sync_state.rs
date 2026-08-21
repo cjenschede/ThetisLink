@@ -449,28 +449,47 @@ impl SdrRemoteApp {
             self.play_ticked = vec![true; self.last_recorded.len()];
         }
         self.thetis_swr_x100 = state.thetis_swr_x100;
-        self.thetis_configured = state.thetis_configured;
-        // Single-receiver radio (server set to 1): show RX2 + VRX2 nowhere. On the
-        // true->false transition disable the subscriptions once so the server
-        // sends nothing more and the server-tab rows drain. VRX1 stays (on RX1).
-        let was_rx2_present = self.rx2_present;
-        self.rx2_present = state.rx2_present;
-        if was_rx2_present && !self.rx2_present {
-            if self.rx2_enabled {
-                self.rx2_enabled = false;
-                // Client-initiated off (RX2 receiver gone): mark pending so the reconcile
-                // below confirms it and does not hold a stale optimistic "on".
-                self.rx2_enabled_pending = Some((Instant::now(), false));
-                let _ = self.cmd_tx.send(Command::SetRx2Enabled(false));
+        // Only a server that is answering may change these two. Between
+        // sessions the shared RadioState still carries its constructor default
+        // - both `true` - so copying them while disconnected would overwrite
+        // the remembered values on the very first frame, put the optimistic
+        // display straight back, and then persist the lie. Only the heartbeat
+        // ack sets them for real (engine.rs), and that cannot arrive before
+        // `connected`.
+        if self.connected {
+            let was_thetis_configured = self.thetis_configured;
+            self.thetis_configured = state.thetis_configured;
+            // Single-receiver radio (server set to 1): show RX2 + VRX2 nowhere. On the
+            // true->false transition disable the subscriptions once so the server
+            // sends nothing more and the server-tab rows drain. VRX1 stays (on RX1).
+            let was_rx2_present = self.rx2_present;
+            self.rx2_present = state.rx2_present;
+            self.dx_cluster_available = state.dx_cluster_available;
+            if was_rx2_present && !self.rx2_present {
+                if self.rx2_enabled {
+                    self.rx2_enabled = false;
+                    // Client-initiated off (RX2 receiver gone): mark pending so the reconcile
+                    // below confirms it and does not hold a stale optimistic "on".
+                    self.rx2_enabled_pending = Some((Instant::now(), false));
+                    let _ = self.cmd_tx.send(Command::SetRx2Enabled(false));
+                }
+                if self.rx2_spectrum_enabled {
+                    self.rx2_spectrum_enabled = false;
+                    let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
+                }
+                self.rx2_popout = false;
+                if self.vrx2_enabled { self.toggle_vrx_audio(VrxChannel::Vrx2); }
+                if self.vrx2_high_res_spectrum { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
+                self.save_full_config();
             }
-            if self.rx2_spectrum_enabled {
-                self.rx2_spectrum_enabled = false;
-                let _ = self.cmd_tx.send(Command::EnableRx2Spectrum(false));
+            // Both of these seed the next start's pre-connect display, so they are
+            // written the moment the server changes our mind about them. Hanging it
+            // on the change and not on some later unrelated save is the difference
+            // between "usually remembered" and remembered: connect, close the
+            // window, and nothing else would have triggered a write.
+            if was_thetis_configured != self.thetis_configured || was_rx2_present != self.rx2_present {
+                self.save_full_config();
             }
-            self.rx2_popout = false;
-            if self.vrx2_enabled { self.toggle_vrx_audio(VrxChannel::Vrx2); }
-            if self.vrx2_high_res_spectrum { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
-            self.save_full_config();
         }
         // Once user changes filter locally, client is authoritative until mode changes.
         // filter_changed_at is cleared on mode change (above), so new mode values are accepted.
@@ -1183,38 +1202,11 @@ impl SdrRemoteApp {
         if slot1_in_memory && state.yaesu2_memory_channel > 0 {
             self.yaesu2_mem_active_ch = Some(state.yaesu2_memory_channel);
         }
-        // Incoming Yaesu EX settings. Own field, own comparison - the memory list
-        // below is a separate stream that arrives in the same instant on connect.
-        if let Some(ref text) = state.yaesu_menu_data {
-            // Content-compared, like the memory list: the EX values are pushed now
-            // (once per subscriber, then on change), so a later push must be accepted
-            // while an unchanged repeat must not re-parse every frame.
-            if self.yaesu_menu_blob_hash != Some(blob_hash(text)) {
-                self.yaesu_menu_blob_hash = Some(blob_hash(text));
-                self.yaesu_menu_received = true;
-                let menu_text = text.strip_prefix("MENU:").unwrap_or(text);
-                let mut items = Vec::new();
-                for line in menu_text.lines() {
-                    if let Some((num_str, val)) = line.split_once(':') {
-                        if let Ok(num) = num_str.trim().parse::<u16>() {
-                            items.push(yaesu_menu::MenuItem { number: num, raw_value: val.to_string() });
-                        }
-                    }
-                }
-                log::info!("Received {} menu items from radio", items.len());
-                self.yaesu_menu_items = items;
-            }
-        } else {
-            self.yaesu_menu_received = false;
-            // The hash deliberately stays. The engine holds a blob for half a
-            // second and then drops it, so this branch runs between every push -
-            // and clearing the hash here made the NEXT identical push look new.
-            // The result was the same list parsed again every twenty seconds and
-            // eight identical lines in the log each time, which is three quarters
-            // of a quiet session and three quarters of what a problem report
-            // carries. A changed blob still differs from this hash and is still
-            // accepted; nothing is lost by remembering (2026-08-16).
-        }
+        // Incoming EX settings, both slots. Which parser runs follows the MODEL
+        // in that slot and not the slot number - see the `menu_*` fields.
+        let blob0 = state.yaesu_menu_data.clone();
+        self.absorb_menu_blob(0, blob0.as_deref());
+
         // Incoming Yaesu memory list.
         //
         // An open edit wins. The list is pushed now - on connect, on change, and
@@ -1290,31 +1282,9 @@ impl SdrRemoteApp {
             // carries. A changed blob still differs from this hash and is still
             // accepted; nothing is lost by remembering (2026-08-16).
         }
-        // Slot-1 (FTX-1) EX values: own field, own comparison - same split as slot 0.
-        if let Some(ref text) = state.yaesu2_menu_data {
-            let menu_body = text.strip_prefix("MENU:").unwrap_or(text);
-            if self.yaesu2_menu_blob_hash != Some(blob_hash(menu_body)) {
-                self.yaesu2_menu_blob_hash = Some(blob_hash(menu_body));
-                self.yaesu2_menu_received = true;
-                self.yaesu2_menu_entries = menu_body.lines()
-                    .filter_map(|l| l.split_once(':')
-                        .map(|(a, v)| (a.trim().to_string(), v.trim().to_string())))
-                    .filter(|(a, _)| a.len() == 6)
-                    .collect();
-                self.yaesu2_menu_edits.clear(); // fresh values -> reset edit buffers
-                log::info!("[radio1] received {} EX menu values", self.yaesu2_menu_entries.len());
-            }
-        } else {
-            self.yaesu2_menu_received = false;
-            // The hash deliberately stays. The engine holds a blob for half a
-            // second and then drops it, so this branch runs between every push -
-            // and clearing the hash here made the NEXT identical push look new.
-            // The result was the same list parsed again every twenty seconds and
-            // eight identical lines in the log each time, which is three quarters
-            // of a quiet session and three quarters of what a problem report
-            // carries. A changed blob still differs from this hash and is still
-            // accepted; nothing is lost by remembering (2026-08-16).
-        }
+        let blob1 = state.yaesu2_menu_data.clone();
+        self.absorb_menu_blob(1, blob1.as_deref());
+
         // Slot-1 (FTX-1) memory dump -> yaesu2_mem_channels (Phase B). Same rule as
         // slot 0: unsaved edits win over an incoming push, and nothing else does.
         // This is the radio the rule mattered most for: its tones live in the
@@ -1376,6 +1346,11 @@ impl SdrRemoteApp {
         self.dx_spots = state.dx_spots.clone();
 
         // RX2 / VFO-B
+        // Against a server with no cluster this already arrives as false: the
+        // engine takes the subscription off the moment the ack says so, and the
+        // just-connected re-send carries that value to the server. This used to be
+        // a rule of its own here, which meant the phone - which does not run this
+        // file - never got it.
         self.dx_spots_enabled = state.dx_spots_enabled;
         // RX1/RX2 audio enable: optimistic client value, server-authoritative with a
         // grace window (see reconcile_audio_enable). Same path for both so they behave
@@ -1464,5 +1439,128 @@ impl SdrRemoteApp {
             }
         }
         // (rx2_pending_freq already cleared above, before frequency acceptance)
+    }
+}
+
+impl SdrRemoteApp {
+    /// Take in one slot's EX blob, parsed in the shape its radio speaks.
+    ///
+    /// Two shapes: the FT-991A numbers its menu (`012:value`), the FTX-1
+    /// addresses it (`010316:value`). The parser follows the MODEL in the slot,
+    /// which is what the server has always done when reading the radio
+    /// (`poll.rs` dispatches on `RadioModel`) and what this side did not: slot 0
+    /// always used the numbered parser and slot 1 always the addressed one.
+    ///
+    /// What that cost, measured: an FTX-1 in slot 1 had its six-digit addresses
+    /// pushed through `parse::<u16>()`, where 298 of its 440 settings happen to
+    /// fit and **142 silently vanish** - and the survivors were then drawn in the
+    /// 991A's numbered grid, matching no definition, so every name read "?". A
+    /// 991A in slot 2 fared worse: that parser keeps only six-character keys, so
+    /// `1:` .. `153:` left nothing at all and the menu came out empty
+    /// (2026-08-20).
+    pub(super) fn absorb_menu_blob(&mut self, slot: u8, blob: Option<&str>) {
+        let s = slot as usize;
+        let Some(text) = blob else {
+            // The hash deliberately stays. The engine holds a blob for half a
+            // second and then drops it, so this branch runs between every push -
+            // and clearing the hash here made the NEXT identical push look new.
+            // The result was the same list parsed again every twenty seconds and
+            // eight identical lines in the log each time. A changed blob still
+            // differs from this hash and is still accepted; nothing is lost by
+            // remembering (2026-08-16).
+            return;
+        };
+        let body = text.strip_prefix("MENU:").unwrap_or(text);
+        let model = if slot == 0 { self.yaesu_model } else { self.yaesu2_model };
+        // The model is part of "have I seen this". A blob can arrive before the
+        // radio has named itself; without this the wrong-shaped parse would be
+        // cached and the hash would answer "already seen" for the rest of the
+        // session.
+        if self.menu_blob_hash[s] == Some(blob_hash(body)) && self.menu_parsed_as[s] == model {
+            return;
+        }
+        self.menu_blob_hash[s] = Some(blob_hash(body));
+        self.menu_parsed_as[s] = model;
+        // Edit buffers belong to the values that were on screen; fresh values
+        // means fresh buffers, whichever shape they are in.
+        self.menu_edits[s].clear();
+        if model == 1 {
+            self.menu_items[s].clear();
+            self.menu_entries[s] = parse_addressed_menu(body);
+            log::info!(
+                "[radio{}] received {} EX menu values",
+                slot,
+                self.menu_entries[s].len()
+            );
+        } else {
+            self.menu_entries[s].clear();
+            self.menu_items[s] = parse_numbered_menu(body);
+            log::info!(
+                "[radio{}] received {} menu items",
+                slot,
+                self.menu_items[s].len()
+            );
+        }
+    }
+}
+
+/// The FTX-1 shape: `010316:value`, one per line, six-digit key.
+fn parse_addressed_menu(body: &str) -> Vec<(String, String)> {
+    body.lines()
+        .filter_map(|l| l.split_once(':'))
+        .map(|(a, v)| (a.trim().to_string(), v.trim().to_string()))
+        .filter(|(a, _)| a.len() == 6 && a.chars().all(|c| c.is_ascii_digit()))
+        .collect()
+}
+
+/// The FT-991A shape: `012:value`, one per line, key is a menu number.
+fn parse_numbered_menu(body: &str) -> Vec<yaesu_menu::MenuItem> {
+    body.lines()
+        .filter_map(|l| l.split_once(':'))
+        .filter_map(|(n, v)| {
+            n.trim()
+                .parse::<u16>()
+                .ok()
+                .map(|number| yaesu_menu::MenuItem { number, raw_value: v.to_string() })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod ex_menu_shape_tests {
+    use super::{parse_addressed_menu, parse_numbered_menu};
+
+    const FTX1: &str = "010316:1
+070101:0
+010317:25
+123456:7";
+    const FT991A: &str = "1:0
+12:250
+153:1";
+
+    /// Each parser reads its own radio whole.
+    #[test]
+    fn each_shape_is_read_by_its_own_parser() {
+        assert_eq!(parse_addressed_menu(FTX1).len(), 4);
+        assert_eq!(parse_numbered_menu(FT991A).len(), 3);
+    }
+
+    /// The defect, pinned. An FTX-1 blob through the 991A parser does not fail -
+    /// it QUIETLY loses whatever does not fit a u16 and mislabels the rest.
+    /// "070101" and "123456" are past 65535 and vanish; the other two survive as
+    /// nonsense menu numbers that match no definition, which is why every name
+    /// on screen read "?" (2026-08-20).
+    #[test]
+    fn the_wrong_parser_loses_settings_without_saying_so() {
+        let wrong = parse_numbered_menu(FTX1);
+        assert_eq!(wrong.len(), 2, "silently dropped, not refused");
+        assert!(wrong.iter().all(|i| i.number > 153), "and the survivors are not menu numbers");
+    }
+
+    /// The other way round is worse: nothing survives at all, so the operator
+    /// gets an empty menu rather than a wrong one.
+    #[test]
+    fn the_other_way_round_leaves_nothing() {
+        assert!(parse_addressed_menu(FT991A).is_empty());
     }
 }

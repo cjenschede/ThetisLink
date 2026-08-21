@@ -172,19 +172,33 @@ impl eframe::App for ServerApp {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.yaesu_enabled, rust_i18n::t!("srv_yaesu_radio1").to_string());
                         ui.label("CAT:");
+                        // The choice is taken out of the combo first: asking the
+                        // port which radio it has needs `&mut self`, and the list
+                        // is borrowed while it is open.
+                        let mut picked_port: Option<String> = None;
                         egui::ComboBox::from_id_salt("yaesu_port")
                             .selected_text(if self.yaesu_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu_port.clone() })
                             .width(120.0)
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.yaesu_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
-                                    self.yaesu_port.clear();
+                                    picked_port = Some(String::new());
                                 }
                                 for port in &self.serial_ports {
                                     if ui.selectable_label(*port == self.yaesu_port, port).clicked() {
-                                        self.yaesu_port = port.clone();
+                                        picked_port = Some(port.clone());
                                     }
                                 }
                             });
+                        if let Some(p) = picked_port {
+                            if p != self.yaesu_port {
+                                self.yaesu_port = p;
+                                // A different port is a different radio until it
+                                // says otherwise.
+                                self.probe_model[0] = None;
+                                self.probe_attempted[0] = false;
+                                self.start_model_probe(0);
+                            }
+                        }
                         ui.label(rust_i18n::t!("srv_audio_in").to_string());
                         egui::ComboBox::from_id_salt("yaesu_audio")
                             .selected_text(if self.yaesu_audio_device.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu_audio_device.clone() })
@@ -240,43 +254,41 @@ impl eframe::App for ServerApp {
 
                     ui.add_space(4.0);
 
-                    // 991A SSB/AM USB routing mode. Off (default): routing stays active while a client
-                    // is connected, then restores ~2 s after disconnect. On: switch only during PTT.
-                    // FTX-1 keeps its internal auto source selection either way.
-                    ui.checkbox(&mut self.yaesu_ssb_switch_on_ptt, rust_i18n::t!("srv_991a_ptt_switch").to_string())
-                        .on_hover_text(rust_i18n::t!("srv_991a_ptt_switch_hover").to_string());
+                    self.render_radio_model_settings(ui, 0);
 
-                    // FTX-1 memory write permission. Costs the tones stored in the radio,
-                    // so the condition is spelled out next to the box rather than hidden in
-                    // a tooltip - a hover text is not where you put something irreversible.
-                    ui.checkbox(&mut self.ftx1_memory_write_ack, rust_i18n::t!("srv_ftx1_mem_write_ack").to_string())
-                        .on_hover_text(rust_i18n::t!("srv_ftx1_mem_write_ack_hover").to_string());
-                    ui.indent("ftx1_mem_write_note", |ui| {
-                        ui.label(
-                            egui::RichText::new(rust_i18n::t!("srv_ftx1_mem_write_note").to_string())
-                                .small()
-                                .color(ui.visuals().weak_text_color()),
-                        );
-                    });
-                    ui.add_space(4.0);
+                    ui.add_space(8.0);
 
                     // Dual-radio slot 1 (radio 2) - same setup as radio 1.
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.yaesu2_enabled, rust_i18n::t!("srv_yaesu_radio2").to_string());
                         ui.label("CAT:");
+                        // The choice is taken out of the combo first: asking the
+                        // port which radio it has needs `&mut self`, and the list
+                        // is borrowed while it is open.
+                        let mut picked_port: Option<String> = None;
                         egui::ComboBox::from_id_salt("yaesu2_port")
                             .selected_text(if self.yaesu2_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu2_port.clone() })
                             .width(120.0)
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.yaesu2_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
-                                    self.yaesu2_port.clear();
+                                    picked_port = Some(String::new());
                                 }
                                 for port in &self.serial_ports {
                                     if ui.selectable_label(*port == self.yaesu2_port, port).clicked() {
-                                        self.yaesu2_port = port.clone();
+                                        picked_port = Some(port.clone());
                                     }
                                 }
                             });
+                        if let Some(p) = picked_port {
+                            if p != self.yaesu2_port {
+                                self.yaesu2_port = p;
+                                // A different port is a different radio until it
+                                // says otherwise.
+                                self.probe_model[1] = None;
+                                self.probe_attempted[1] = false;
+                                self.start_model_probe(1);
+                            }
+                        }
                         ui.label(rust_i18n::t!("srv_audio_in").to_string());
                         egui::ComboBox::from_id_salt("yaesu2_audio")
                             .selected_text(if self.yaesu2_audio_device.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu2_audio_device.clone() })
@@ -308,6 +320,7 @@ impl eframe::App for ServerApp {
                                 }
                             });
                     });
+                    self.render_radio_model_settings(ui, 1);
                     ui.label(egui::RichText::new(rust_i18n::t!("srv_radio2_note").to_string()).size(10.0).color(Color32::GRAY));
 
                     ui.add_space(8.0);
@@ -540,9 +553,27 @@ impl eframe::App for ServerApp {
 
                     ui.add_space(8.0);
                     ui.heading("Relay");
-                    ui.checkbox(&mut self.relay_enabled, rust_i18n::t!("srv_relay_enable").to_string());
-                    ui.checkbox(&mut self.relay_udp_enabled, rust_i18n::t!("srv_relay_udp").to_string())
-                        .on_hover_text(rust_i18n::t!("srv_relay_udp_hover").to_string());
+                    // Audio over UDP follows the relay switch. It is the lower-latency
+                    // route and decides nothing at all while the relay is off, so it
+                    // comes along when the relay is switched on rather than sitting
+                    // there as a second step that costs latency when forgotten. It
+                    // stays a real checkbox underneath: a firewall that drops UDP 443
+                    // is a good reason to turn it off again, and that choice holds
+                    // until the relay switch itself is next touched.
+                    if ui
+                        .checkbox(&mut self.relay_enabled, rust_i18n::t!("srv_relay_enable").to_string())
+                        .changed()
+                    {
+                        self.relay_udp_enabled = self.relay_enabled;
+                    }
+                    ui.add_enabled_ui(self.relay_enabled, |ui| {
+                        ui.checkbox(&mut self.relay_udp_enabled, rust_i18n::t!("srv_relay_udp").to_string())
+                            .on_hover_text(if self.relay_enabled {
+                                rust_i18n::t!("srv_relay_udp_hover").to_string()
+                            } else {
+                                rust_i18n::t!("srv_relay_udp_off_hover").to_string()
+                            });
+                    });
                     ui.horizontal(|ui| {
                         ui.label(rust_i18n::t!("srv_relay_url").to_string());
                         ui.add(
@@ -584,6 +615,15 @@ impl eframe::App for ServerApp {
                             .desired_width(150.0).password(true)
                             .hint_text(rust_i18n::t!("srv_required_hint").to_string()));
                     });
+                    // Said here rather than only in the log: a locked config file
+                    // means everything on this screen is thrown away at Save &
+                    // Start, and that was invisible.
+                    if !crate::config::may_write() {
+                        ui.colored_label(
+                            egui::Color32::RED,
+                            rust_i18n::t!("srv_config_unwritable").to_string(),
+                        );
+                    }
                     if self.password.is_empty() {
                         ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_password_required").to_string());
                     } else if let Err(msg) = sdr_remote_core::auth::validate_password_strength(&self.password) {
@@ -1351,6 +1391,9 @@ impl eframe::App for ServerApp {
 
         // Chat and problem reporting. Ticked every frame - cheap and
         // idempotent - and drawn only while its window is open.
+        // Answers from the model probes on the settings screen.
+        self.drain_model_probes();
+
         self.chat_tick_and_render(ctx);
 
         // About window
@@ -1423,12 +1466,309 @@ impl eframe::App for ServerApp {
                 });
         }
 
+        // The FTX-1 memory-write condition, at a size it can be read at. The
+        // Accept button here - not the checkbox in the settings list - is what
+        // grants the permission, so closing the window without it leaves the
+        // box exactly as it was.
+        if let Some(cond_slot) = self.show_memory_condition {
+            egui::Window::new(rust_i18n::t!("srv_ftx1_mem_write_title").to_string())
+                .collapsible(false)
+                .resizable(true)
+                .default_width(560.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(340.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    rust_i18n::t!("srv_ftx1_mem_write_note").to_string(),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        // Already accepted: only a way out. Offering "Accept"
+                        // again would suggest the permission had lapsed.
+                        if !self.memory_write_ack[cond_slot as usize]
+                            && ui
+                                .button(rust_i18n::t!("srv_ftx1_mem_write_accept").to_string())
+                                .on_hover_text(
+                                    rust_i18n::t!("srv_ftx1_mem_write_accept_hover").to_string(),
+                                )
+                                .clicked()
+                        {
+                            self.memory_write_ack[cond_slot as usize] = true;
+                            self.show_memory_condition = None;
+                        }
+                        if ui.button(rust_i18n::t!("srv_close").to_string()).clicked() {
+                            self.show_memory_condition = None;
+                        }
+                    });
+                });
+        }
+
+        // The memory-write condition belongs to the settings screen. Without
+        // this it survived Save & Start and hung over the running server,
+        // asking about a slot that was by then already going (2026-08-20).
+        if !matches!(self.mode, Mode::Settings) {
+            self.show_memory_condition = None;
+        }
+
         // "Vensters schikken" matrix. Only meaningful in Running mode (the popouts
         // exist only then); on returning to Settings the window closes.
         if matches!(self.mode, Mode::Running) {
             self.render_layout_arranger(ctx);
         } else {
             self.show_layout_arranger = false;
+        }
+    }
+}
+
+impl ServerApp {
+    /// The three settings that describe ONE radio but only mean something on one
+    /// model, drawn inside that radio's own block.
+    ///
+    /// Per slot, because two radios of the same type can be attached - the model
+    /// is assigned per port, so 2x 991A and 2x FTX-1 are both real setups - and
+    /// each of these is a choice about one radio. The memory permission is the
+    /// clearest case: what it costs lands on the tones stored in THAT radio, so
+    /// granting it for one must not grant it for the other.
+    ///
+    /// The label names the model, because the settings screen cannot know which
+    /// radio is in the slot: the server learns that from `ID;` when it starts.
+    /// At runtime the model decides whether the setting does anything at all.
+    fn render_radio_model_settings(&mut self, ui: &mut egui::Ui, slot: u8) {
+        let s = slot as usize;
+        let port = if slot == 0 { self.yaesu_port.clone() } else { self.yaesu2_port.clone() };
+
+        // Nothing to show until something has answered on this port. A bare
+        // install has no radio and therefore no model-specific settings; the
+        // moment a port is picked the probe runs and the right ones appear.
+        if port.trim().is_empty() {
+            self.probe_model[s] = None;
+            return;
+        }
+        // An existing config has a port but, until this version, nothing about
+        // the radio on it. Ask once, by itself, rather than making the operator
+        // press a button to learn what the server works out on its own at start.
+        // Once per session and per port: a radio that is off must not put this
+        // into a loop.
+        if self.probe_model[s].is_none() && !self.probe_busy[s] && !self.probe_attempted[s] {
+            self.start_model_probe(slot);
+        }
+        if self.probe_busy[s] {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.label(
+                    egui::RichText::new(rust_i18n::t!("srv_probe_busy").to_string())
+                        .size(11.0)
+                        .color(Color32::GRAY),
+                );
+            });
+            return;
+        }
+        let Some(model) = self.probe_model[s] else {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(rust_i18n::t!("srv_probe_none").to_string())
+                        .size(11.0)
+                        .color(Color32::from_rgb(220, 160, 40)),
+                );
+                if ui.small_button(rust_i18n::t!("srv_probe_retry").to_string()).clicked() {
+                    self.start_model_probe(slot);
+                }
+            });
+            return;
+        };
+        let is_ftx1 = model == 1;
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(rust_i18n::t!(
+                    "srv_probe_found",
+                    model = sdr_remote_core::protocol::radio_model_name(model)
+                ).to_string())
+                .size(11.0)
+                .color(Color32::GRAY),
+            );
+            if ui.small_button(rust_i18n::t!("srv_probe_retry").to_string()).clicked() {
+                self.start_model_probe(slot);
+            }
+        });
+        if self.probe_silent[s] {
+            ui.label(
+                egui::RichText::new(rust_i18n::t!("srv_probe_silent").to_string())
+                    .size(11.0)
+                    .color(Color32::from_rgb(220, 160, 40)),
+            );
+        }
+
+        // 991A SSB/AM USB routing mode. Off (default): routing stays active while a
+        // client is connected, then restores ~2 s after disconnect. On: switch only
+        // during PTT. An FTX-1 keeps its internal auto source selection either way,
+        // so on that radio this control has nothing to do and is not drawn.
+        if !is_ftx1 {
+            ui.checkbox(&mut self.ssb_switch_on_ptt[s], rust_i18n::t!("srv_991a_ptt_switch").to_string())
+                .on_hover_text(rust_i18n::t!("srv_991a_ptt_switch_hover").to_string());
+        }
+
+        // Which channel of an FTX-1's stereo capture endpoint to take. L and R
+        // carry its two receivers separately (heard on the radio, 2026-08-20);
+        // a 991A reports one channel and never sees this.
+        if is_ftx1 {
+        ui.horizontal(|ui| {
+            ui.label(rust_i18n::t!("srv_ftx1_audio_channel").to_string());
+            let names = [
+                rust_i18n::t!("srv_ftx1_channel_left").to_string(),
+                rust_i18n::t!("srv_ftx1_channel_right").to_string(),
+                rust_i18n::t!("srv_ftx1_channel_mix").to_string(),
+            ];
+            let current = self.audio_channel[s].min(2) as usize;
+            egui::ComboBox::from_id_salt(("ftx1_channel", slot))
+                .selected_text(names[current].clone())
+                .width(150.0)
+                .show_ui(ui, |ui| {
+                    for (i, name) in names.iter().enumerate() {
+                        if ui.selectable_label(current == i, name).clicked() {
+                            self.audio_channel[s] = i as u8;
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(rust_i18n::t!("srv_ftx1_audio_channel_hover").to_string());
+        });
+        }
+
+        // FTX-1 memory write permission. Costs the tones stored in the radio, so
+        // the condition is spelled out rather than hidden in a tooltip - a hover
+        // text is not where you put something irreversible. The box does not set
+        // itself: ticking it opens the condition at reading size, and the Accept
+        // button in that window grants it for THIS slot. Unticking is immediate.
+        if !is_ftx1 {
+            return;
+        }
+        let mut ack_shown = self.memory_write_ack[s];
+        if ui
+            .checkbox(&mut ack_shown, rust_i18n::t!("srv_ftx1_mem_write_ack").to_string())
+            .on_hover_text(rust_i18n::t!("srv_ftx1_mem_write_ack_hover").to_string())
+            .clicked()
+        {
+            if self.memory_write_ack[s] {
+                self.memory_write_ack[s] = false;
+            } else {
+                self.show_memory_condition = Some(slot);
+            }
+        }
+        ui.indent(("mem_write_note", slot), |ui| {
+            if ui
+                .small_button(rust_i18n::t!("srv_ftx1_mem_write_read").to_string())
+                .on_hover_text(rust_i18n::t!("srv_ftx1_mem_write_read_hover").to_string())
+                .clicked()
+            {
+                self.show_memory_condition = Some(slot);
+            }
+        });
+    }
+}
+
+impl ServerApp {
+    /// Ask the port which radio is on it, on its own thread.
+    ///
+    /// `detect_model` opens the port and may walk seven baud rates with three
+    /// attempts each - about six seconds on a port that exists but stays silent,
+    /// which is exactly a radio that is switched off. That cannot run on the UI
+    /// thread, so the answer comes back over a channel and the screen shows a
+    /// spinner until it does.
+    ///
+    /// The port is free here: the settings screen only exists while the server is
+    /// stopped. Should a probe still be finishing when Save & Start opens the
+    /// same port, the radio's own reconnect loop picks it up a moment later - it
+    /// already handles a port that is briefly busy.
+    fn start_model_probe(&mut self, slot: u8) {
+        let s = slot as usize;
+        let port = if slot == 0 { self.yaesu_port.clone() } else { self.yaesu2_port.clone() };
+        if port.trim().is_empty() {
+            self.probe_model[s] = None;
+            self.probe_port[s] = String::new();
+            return;
+        }
+        let baud = if slot == 0 { 38400 } else { crate::config::load().yaesu2_baud };
+        self.probe_busy[s] = true;
+        self.probe_attempted[s] = true;
+        self.probe_silent[s] = false;
+        self.probe_port[s] = port.clone();
+        let tx = self.probe_tx.clone();
+        std::thread::Builder::new()
+            .name(format!("model-probe-{slot}"))
+            .spawn(move || {
+                let found = crate::yaesu::detect_model(&port, baud).map(|(m, _)| m.as_code());
+                let _ = tx.send((slot, port, found));
+            })
+            .ok();
+    }
+
+    /// Take in whatever the probes have answered. Called once per frame; a result
+    /// for a port that is no longer selected is dropped, so a quick change of
+    /// mind cannot leave the screen describing the previous radio.
+    fn drain_model_probes(&mut self) {
+        while let Ok((slot, port, model)) = self.probe_rx.try_recv() {
+            let s = slot as usize;
+            let current = if slot == 0 { &self.yaesu_port } else { &self.yaesu2_port };
+            if current.trim() != port.trim() {
+                self.probe_busy[s] = false;
+                continue;
+            }
+            self.probe_busy[s] = false;
+            // No answer does not erase what we knew. A radio that is switched
+            // off would otherwise take its own settings off the screen.
+            if model.is_none() && self.probe_model[s].is_some() {
+                self.probe_silent[s] = true;
+                log::info!("[radio{}] settings probe: no answer on {} - keeping the model from last time", slot, port);
+                continue;
+            }
+            // A different radio in this slot does not inherit the previous
+            // one's permission. What that permission costs lands on the tones
+            // stored in the radio itself, so it is given to A radio, not to a
+            // slot - and a swap must not carry it over silently.
+            if let (Some(was), Some(now)) = (self.probe_model[s], model) {
+                if was != now && self.memory_write_ack[s] {
+                    self.memory_write_ack[s] = false;
+                    log::info!(
+                        "[radio{}] {} replaced {} - the memory-write permission is withdrawn, it was given to the other radio",
+                        slot,
+                        sdr_remote_core::protocol::radio_model_name(now),
+                        sdr_remote_core::protocol::radio_model_name(was)
+                    );
+                }
+            }
+            self.probe_silent[s] = model.is_none();
+            self.probe_model[s] = model;
+            match model {
+                Some(code) => log::info!(
+                    "[radio{}] settings probe: {} on {}",
+                    slot,
+                    sdr_remote_core::protocol::radio_model_name(code),
+                    port
+                ),
+                None => log::info!("[radio{}] settings probe: nothing answered on {}", slot, port),
+            }
+            // Remembered right away, so the next launch offers the same controls
+            // without opening the port again - but only when the port actually
+            // answered. Writing the empty answer too meant that opening the
+            // settings screen with the radio switched off erased what was
+            // remembered, and the next launch had to spend the probe again for
+            // nothing (2026-08-20).
+            if let Some(m) = self.probe_model[s] {
+                crate::config::modify_config(move |c| {
+                    if slot == 0 {
+                        c.yaesu_model_last = Some(m);
+                    } else {
+                        c.yaesu2_model_last = Some(m);
+                    }
+                });
+            }
         }
     }
 }

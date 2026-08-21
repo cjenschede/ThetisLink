@@ -275,6 +275,19 @@ pub(crate) struct ClientConfig {
     /// the server prunes it on connect if it is (no longer) there.
     pub(crate) yaesu_present_last: bool,
     pub(crate) yaesu2_present_last: bool,
+    /// What the server last said about Thetis and about a second receiver.
+    ///
+    /// Both seed the pre-connect display, the way `yaesu_present_last` seeds the
+    /// radios. They used to be hardcoded optimistic: the client opened claiming
+    /// Thetis and RX2 were there, so a bare installation showed the Radio and
+    /// Thetis tabs plus RX1/RX2/VRX1/VRX2 rows until a connect took them away
+    /// again. Every restart put them back (2026-08-20). Remembering what the
+    /// server actually reported keeps a real station looking unchanged and a
+    /// bare one bare.
+    pub(crate) thetis_configured_last: bool,
+    pub(crate) rx2_present_last: bool,
+    /// Ids of administrator answers the reader folded away, comma-separated.
+    pub(crate) chat_answers_seen: String,
     // Tuple: (name, enabled, eq-gains, mic_gain)
     pub(crate) yaesu_eq_profiles: Vec<(String, bool, [f32; 5], f32)>,
     pub(crate) yaesu_eq_active: String,
@@ -354,9 +367,10 @@ pub(crate) struct ClientConfig {
     /// THETISLINK_RELAY_UDP_PORT overrides this (testing / non-standard port).
     pub(crate) relay_udp_enabled: bool,
 
-    /// PATCH-1: UI-language for connect-status / connect-error strings.
-    /// Accepts "en" (default) or "nl". Any other value falls back to "en".
-    /// TODO(future): auto-detect from OS locale.
+    /// UI language: "en" (base), "nl", "de" or "fr". Any other value falls back
+    /// to "en". On a machine with no config file yet it is taken from the OS
+    /// display language - see [`first_run`]; from then on it is the operator's
+    /// own choice in Settings and is never overwritten.
     pub(crate) language: String,
 
     /// PATCH-4: count of successful connects to a real server. Used to
@@ -454,6 +468,14 @@ impl Default for ClientConfig {
             yaesu2_eq_active: String::new(),
             yaesu_popout: false,
             yaesu_present_last: false,
+            // True here, false in `first_run`: a config file that predates these
+            // keys belongs to somebody whose client has always shown these, and
+            // taking them away before the first connect of the new version would
+            // be a change rather than a default. The next connect writes the
+            // truth either way.
+            thetis_configured_last: true,
+            rx2_present_last: true,
+            chat_answers_seen: String::new(),
             yaesu2_present_last: false,
             yaesu_mem_file: String::new(),
             popout_meter_analog: false,
@@ -518,6 +540,33 @@ impl Default for ClientConfig {
     }
 }
 
+/// What the client starts as on a machine that has never run it: no config
+/// file next to the executable.
+///
+/// The only thing that differs from [`ClientConfig::default`] is the language,
+/// and the difference matters. `Default` also fills in keys an *existing* file
+/// happens to lack, and a station that has been reading English for a year
+/// must not be retranslated because Windows is Dutch - that would be a change,
+/// not a default. A machine with no file has made no such choice yet, so
+/// taking the language it reads the rest of its OS in is the best guess there
+/// is, and the first screen it ever shows is the connect wizard.
+fn first_run() -> ClientConfig {
+    ClientConfig {
+        language: sdr_remote_core::oslang::detect_ui_language().to_string(),
+        // Nothing has ever answered this client, so it claims nothing: no
+        // Thetis, no second receiver, and therefore no Radio tab, no Thetis tab
+        // and no RX/VRX rows until a server says otherwise.
+        thetis_configured_last: false,
+        rx2_present_last: false,
+        // The extra full-band spectrum row costs bandwidth per receiver chain,
+        // and a waterfall works without it - it is then built from its own view.
+        // On by default is a thing switched on for you; a fresh install starts
+        // without it and the checkbox is right there (owner, 2026-08-20).
+        full_spectrum_enabled: false,
+        ..ClientConfig::default()
+    }
+}
+
 /// Parse a `f32,f32` pair (used for popout pos / size). Returns `None` on any
 /// parse error or malformed input - callers fall back to OS default placement.
 fn parse_f32_pair(val: &str) -> Option<(f32, f32)> {
@@ -539,17 +588,83 @@ pub(crate) fn load_window_pos() -> Option<[f32; 2]> {
     load_config().main_window_pos.map(|(x, y)| [x, y])
 }
 
+/// Set when the config file exists but could not be read.
+///
+/// Guards the writes: a read that fails is not a client that has never been set
+/// up, and treating it as one would put the bare first-run values on screen and
+/// then in the file. The server has the same guard for the same reason - there
+/// it is worse, because its saves are load-mutate-save over the whole file
+/// (review finding, 2026-08-20).
+static LOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// May this process write the config file?
+pub(crate) fn may_write_config() -> bool {
+    !LOAD_FAILED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Read the config file for a read-modify-write update.
+///
+/// `None` means: do not write. Every small per-key writer in this file patches
+/// one line into the existing text and writes the result back, and they all used
+/// `unwrap_or_default()` - which turns a read failure into an EMPTY string, so
+/// what got written was a config with only that one line in it. Server address,
+/// password, memories, TX profiles, theme: gone. And the writer that runs on
+/// every successful connect (`mark_successful_connect`) is one of them, so the
+/// common path was the destructive one while the guard sat on the rare one
+/// (review finding, 2026-08-20).
+///
+/// An absent file yields `Some("")`: there is nothing to preserve and the writer
+/// should create it.
+fn read_for_update(path: &std::path::Path) -> Option<String> {
+    if !may_write_config() {
+        log::error!("Not updating the config: an earlier read of it failed");
+        return None;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(e) => {
+            log::error!(
+                "Not updating {} ({e}): it exists but could not be read, and writing now                  would leave only the line being changed",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Load config from file next to the executable.
 pub(crate) fn load_config() -> ClientConfig {
     let mut config = ClientConfig::default();
 
     let path = match std::env::current_exe() {
         Ok(exe) => exe.with_file_name(config_file_name()),
-        Err(_) => return config,
+        // Not knowing where we are is not the same as being new here, but there
+        // is no path to look at either, so there is nothing better to do.
+        Err(_) => return first_run(),
     };
-    let contents = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return config,
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => {
+            LOAD_FAILED.store(false, std::sync::atomic::Ordering::Relaxed);
+            c
+        }
+        // No config file: nothing has ever been set up here. See `first_run`.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            LOAD_FAILED.store(false, std::sync::atomic::Ordering::Relaxed);
+            return first_run();
+        }
+        // A file that IS there and cannot be read is the opposite case: the
+        // settings are still in it. Handing out the bare first-run values here
+        // would put them on screen and, at the next save, in the file.
+        Err(e) => {
+            LOAD_FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
+            log::error!(
+                "Cannot read {} ({e}). Its settings are still in it, so this run will not \
+                 write to it. Close whatever is holding the file and restart.",
+                path.display()
+            );
+            return config;
+        }
     };
 
     let mut tx_profiles: Option<Vec<(u8, String)>> = None;
@@ -837,6 +952,12 @@ pub(crate) fn load_config() -> ClientConfig {
             }
         } else if let Some(val) = line.strip_prefix("yaesu_popout=") {
             config.yaesu_popout = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("thetis_configured_last=") {
+            config.thetis_configured_last = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("rx2_present_last=") {
+            config.rx2_present_last = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("chat_answers_seen=") {
+            config.chat_answers_seen = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("yaesu_present_last=") {
             config.yaesu_present_last = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu2_present_last=") {
@@ -1198,7 +1319,10 @@ pub(crate) fn save_relay_device_name(name: &str) {
     };
     let path = exe.with_file_name(config_file_name());
     let new_line = format!("relay_device_name={}", name.trim());
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match read_for_update(&path) {
+        Some(text) => text,
+        None => return,
+    };
     let mut found = false;
     let mut updated: Vec<String> = existing
         .lines()
@@ -1236,7 +1360,10 @@ fn save_relay_instance_id(id: &str) {
     };
     let path = exe.with_file_name(config_file_name());
     let new_line = format!("relay_instance_id={id}");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match read_for_update(&path) {
+        Some(text) => text,
+        None => return,
+    };
     let mut found = false;
     let mut updated: Vec<String> = existing
         .lines()
@@ -1256,6 +1383,58 @@ fn save_relay_instance_id(id: &str) {
 }
 
 /// Save config to file next to the executable.
+/// Does a line of the existing config survive the full rewrite?
+///
+/// `save_config` rebuilds the whole file from what the app holds, and any
+/// key it does not hold is only kept because it is named here. Three times
+/// now a setting written one key at a time has been forgotten on restart
+/// for exactly that reason - the roger beep in August, and the folded-away
+/// chat answers this week. Split out of the loop so the list can be tested
+/// against the writers instead of read against them.
+pub(crate) fn survives_full_save(line: &str) -> bool {
+    line.starts_with("ptt_toggle=") || line.starts_with("yaesu_ptt_toggle=") || line.starts_with("midi_ptt_toggle=")
+        || line.starts_with("allow_zoom_below_2x=")
+        || line.starts_with("spike_protection=")
+        || line.starts_with("mic_gate_delay_thetis_ms=")
+        || line.starts_with("mic_gate_delay_yaesu_ms=")
+        || line.starts_with("smeter_source=")
+        || line.starts_with("thetis_autostart=")
+        || line.starts_with("successful_connects=")
+        || line.starts_with("relay_enabled=")
+        || line.starts_with("relay_udp_enabled=")
+        || line.starts_with("relay_url=")
+        || line.starts_with("relay_station=")
+        || line.starts_with("relay_token=")
+        || line.starts_with("relay_instance_id=")
+        || line.starts_with("relay_device_name=")
+        || line.starts_with("yaesu2_enabled=")
+        || line.starts_with("yaesu2_ptt_toggle=")
+        || line.starts_with("yaesu2_popout=")
+        || line.starts_with("yaesu_mic_gain=")
+        || line.starts_with("yaesu2_mic_gain=")
+        || line.starts_with("yaesu_compressor=")
+        || line.starts_with("yaesu2_compressor=")
+        || line.starts_with("yaesu_tx_agc=")
+        || line.starts_with("yaesu2_tx_agc=")
+        // The roger beep. Written one key at a time like the rest
+        // of this list, and therefore invisible to the rewrite
+        // above unless it is named here - which is why the ticks
+        // were forgotten on restart (2026-08-14). One prefix rather
+        // than seven lines, so a settings added later cannot be
+        // half-remembered.
+        || line.starts_with("roger_")
+        // Which administrator answers were folded away. Same trap
+        || line.starts_with("chat_answers_seen=")
+        // One prefix for the relay keys, for the same reason as `roger_`
+        // above: seven are named individually and an eighth would land
+        // outside both this list and the tests. `save_config` writes no
+        // `relay_` key itself, so a blanket prefix cannot duplicate a line.
+        || line.starts_with("relay_")
+        // as the roger keys above: written one key at a time, so
+        // invisible to this rewrite unless it is named, and the
+        // answers came back on every restart (owner, 2026-08-21).
+}
+
 pub(crate) fn save_config(
     server: &str,
     password: &str,
@@ -1370,7 +1549,16 @@ pub(crate) fn save_config(
     language: &str,
     yaesu_present_last: bool,
     yaesu2_present_last: bool,
+    thetis_configured_last: bool,
+    rx2_present_last: bool,
 ) {
+    // A config file that exists but could not be read still holds the
+    // operator's settings; writing over it with what this process managed to
+    // assemble would throw them away. See `may_write_config`.
+    if !may_write_config() {
+        log::error!("Not saving the config: it could not be read, so this would overwrite it");
+        return;
+    }
     if let Ok(exe) = std::env::current_exe() {
         let path = exe.with_file_name(config_file_name());
         let pw_enc = if password.is_empty() { String::new() } else { sdr_remote_core::auth::obfuscate_password(password) };
@@ -1556,6 +1744,8 @@ pub(crate) fn save_config(
         content.push_str(&format!("yaesu_popout={}\n", yaesu_popout));
         content.push_str(&format!("yaesu_present_last={}\n", yaesu_present_last));
         content.push_str(&format!("yaesu2_present_last={}\n", yaesu2_present_last));
+        content.push_str(&format!("thetis_configured_last={}\n", thetis_configured_last));
+        content.push_str(&format!("rx2_present_last={}\n", rx2_present_last));
         content.push_str(&format!("yaesu_eq_active={}\n", yaesu_eq_active));
         for (name, enabled, gains, mic_gain) in yaesu_eq_profiles {
             content.push_str(&format!("yaesu_eq_profile={}|{}|{:.1},{:.1},{:.1},{:.1},{:.1}|{:.3}\n",
@@ -1624,37 +1814,7 @@ pub(crate) fn save_config(
         // the radio2 enable/window/mic state disappears on every other change.
         if let Ok(existing) = std::fs::read_to_string(&path) {
             for line in existing.lines() {
-                if line.starts_with("ptt_toggle=") || line.starts_with("yaesu_ptt_toggle=") || line.starts_with("midi_ptt_toggle=")
-                    || line.starts_with("allow_zoom_below_2x=")
-                    || line.starts_with("spike_protection=")
-                    || line.starts_with("mic_gate_delay_thetis_ms=")
-                    || line.starts_with("mic_gate_delay_yaesu_ms=")
-                    || line.starts_with("smeter_source=")
-                    || line.starts_with("thetis_autostart=")
-                    || line.starts_with("successful_connects=")
-                    || line.starts_with("relay_enabled=")
-                    || line.starts_with("relay_udp_enabled=")
-                    || line.starts_with("relay_url=")
-                    || line.starts_with("relay_station=")
-                    || line.starts_with("relay_token=")
-                    || line.starts_with("relay_instance_id=")
-                    || line.starts_with("relay_device_name=")
-                    || line.starts_with("yaesu2_enabled=")
-                    || line.starts_with("yaesu2_ptt_toggle=")
-                    || line.starts_with("yaesu2_popout=")
-                    || line.starts_with("yaesu_mic_gain=")
-                    || line.starts_with("yaesu2_mic_gain=")
-                    || line.starts_with("yaesu_compressor=")
-                    || line.starts_with("yaesu2_compressor=")
-                    || line.starts_with("yaesu_tx_agc=")
-                    || line.starts_with("yaesu2_tx_agc=")
-                    // The roger beep. Written one key at a time like the rest
-                    // of this list, and therefore invisible to the rewrite
-                    // above unless it is named here - which is why the ticks
-                    // were forgotten on restart (2026-08-14). One prefix rather
-                    // than seven lines, so a settings added later cannot be
-                    // half-remembered.
-                    || line.starts_with("roger_") {
+                if survives_full_save(line) {
                     content.push_str(line);
                     content.push('\n');
                 }
@@ -1723,7 +1883,10 @@ pub(crate) fn save_relay_config(
         Err(_) => return,
     };
     let path = exe.with_file_name(config_file_name());
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match read_for_update(&path) {
+        Some(text) => text,
+        None => return,
+    };
     let token_enc = if token.is_empty() {
         String::new()
     } else {
@@ -1755,7 +1918,10 @@ pub(crate) fn save_spike_protection(enabled: bool, thetis_ms: u32, yaesu_ms: u32
         Err(_) => return,
     };
     let path = exe.with_file_name(config_file_name());
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match read_for_update(&path) {
+        Some(text) => text,
+        None => return,
+    };
     let desired = [
         ("spike_protection", enabled.to_string()),
         ("mic_gate_delay_thetis_ms", thetis_ms.to_string()),
@@ -1782,7 +1948,10 @@ pub(crate) fn save_allow_zoom_below_2x(allow: bool) {
     };
     let path = exe.with_file_name(config_file_name());
     let new_line = format!("allow_zoom_below_2x={}", allow);
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match read_for_update(&path) {
+        Some(text) => text,
+        None => return,
+    };
     let mut found = false;
     let mut updated_lines: Vec<String> = existing
         .lines()
@@ -1813,7 +1982,10 @@ fn save_single_key(key: &str, value: &str) {
     let path = exe.with_file_name(config_file_name());
     let prefix = format!("{}=", key);
     let new_line = format!("{}={}", key, value);
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match read_for_update(&path) {
+        Some(text) => text,
+        None => return,
+    };
     let mut found = false;
     let mut updated_lines: Vec<String> = existing
         .lines()
@@ -1838,6 +2010,26 @@ fn save_single_key(key: &str, value: &str) {
 /// Seven `save_single_key` calls rather than one combined line, because the
 /// file is a flat list of `key=value` and a reader that only knows some of
 /// these keys must still be able to read the rest.
+/// Remember which administrator answers have been folded away.
+///
+/// One key, comma-separated. Without it a restart brought every answer back and
+/// the panel that shows them covered the conversation, so a reader with a few
+/// answers could no longer read the chat (two users, 2026-08-20).
+pub(crate) fn save_chat_answers_seen(ids: &[i64]) {
+    let list: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+    save_single_key("chat_answers_seen", &list.join(","));
+}
+
+/// What was written down, back at startup. Unparsable entries are skipped
+/// rather than fatal: the worst a bad id can do is show an answer again.
+pub(crate) fn load_chat_answers_seen() -> Vec<i64> {
+    load_config()
+        .chat_answers_seen
+        .split(',')
+        .filter_map(|p| p.trim().parse::<i64>().ok())
+        .collect()
+}
+
 pub(crate) fn save_roger(r: &sdr_remote_logic::roger::RogerBeep) {
     save_single_key("roger_freq_hz", &format!("{:.0}", r.freq_hz));
     save_single_key("roger_volume", &format!("{:.3}", r.volume));
@@ -1882,7 +2074,10 @@ pub(crate) fn mark_successful_connect() {
         Err(_) => return,
     };
     let path = exe.with_file_name(config_file_name());
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match read_for_update(&path) {
+        Some(text) => text,
+        None => return,
+    };
     // Parse current value (if any). Default 0 covers both "missing key"
     // and "malformed value".
     let mut current: u32 = 0;
@@ -1913,6 +2108,35 @@ pub(crate) fn mark_successful_connect() {
         updated_lines.push(new_line);
     }
     let _ = std::fs::write(path, updated_lines.join("\n") + "\n");
+}
+
+#[cfg(test)]
+mod first_run_tests {
+    use super::{first_run, ClientConfig};
+
+    /// A machine that has never run this client claims nothing about the
+    /// station it has not spoken to yet: no Thetis, no second receiver. That is
+    /// what keeps a bare installation showing a bare screen instead of a Radio
+    /// tab, a Thetis tab and four receiver rows that vanish on connect.
+    #[test]
+    fn a_first_run_claims_no_hardware() {
+        let c = first_run();
+        assert!(!c.thetis_configured_last);
+        assert!(!c.rx2_present_last);
+        assert!(!c.full_spectrum_enabled, "full-band row is bandwidth nobody asked for");
+        assert!(sdr_remote_core::oslang::UI_LANGUAGES.contains(&c.language.as_str()));
+    }
+
+    /// And the other default must not follow it there: it fills in keys an
+    /// existing config file lacks, and that file belongs to somebody whose
+    /// client has always shown these. Taking them away before their first
+    /// connect on the new version would be a change, not a default.
+    #[test]
+    fn an_existing_file_missing_the_keys_keeps_showing_what_it_showed() {
+        let d = ClientConfig::default();
+        assert!(d.thetis_configured_last);
+        assert!(d.rx2_present_last);
+    }
 }
 
 #[cfg(test)]
@@ -1966,5 +2190,127 @@ mod conf_section_tests {
         assert_eq!(heading_of("spectrum_ref_db"), "RX1 spectrum and waterfall");
         assert_eq!(heading_of("rx1_enabled"), "RX1 spectrum and waterfall");
         assert_eq!(heading_of("rx2_spectrum_ref_db"), "RX2 spectrum and waterfall");
+    }
+}
+
+#[cfg(test)]
+mod full_save_tests {
+    use super::survives_full_save;
+
+    /// Every setting written ONE KEY AT A TIME has to survive the full save,
+    /// and the list of them is read out of this file rather than typed here.
+    ///
+    /// A hand-written list is what a reviewer rejected twice in the rounds
+    /// before this one, and rightly: it covers the keys that were forgotten,
+    /// not the one that will be. So the test scans its own source for every
+    /// `save_single_key("...")` literal and demands each survives. Add a writer
+    /// tomorrow and this test covers it without anyone remembering to.
+    ///
+    /// Three settings have already been lost this way: the roger beep in August
+    /// 2026, and the folded-away chat answers this week - the desktop client
+    /// being the only one of three front ends that rewrites its whole config.
+    #[test]
+    fn every_single_key_writer_survives_a_full_save() {
+        let source = include_str!("config.rs");
+        let mut keys: Vec<&str> = Vec::new();
+        for (i, _) in source.match_indices("save_single_key(\"") {
+            let rest = &source[i + "save_single_key(\"".len()..];
+            if let Some(end) = rest.find('"') {
+                let key = &rest[..end];
+                // A scan over source text also finds the mentions in comments
+                // and in this test's own strings, so only things shaped like a
+                // config key count. The first run of this test tripped over the
+                // "save_single_key(\"...\")" in the doc comment above.
+                let looks_like_a_key = !key.is_empty()
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+                if looks_like_a_key {
+                    keys.push(key);
+                }
+            }
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        // If this ever finds nothing the test would pass vacuously, which is the
+        // one way a self-scanning test can rot.
+        // Ten today. Not ">= 8": a floor below the real count lets two writers
+        // disappear without a word, so it would say "I am still reading" where
+        // it should say "I am reading all of them".
+        assert!(
+            keys.len() >= 10,
+            "the scan found only {} keys where there were 10, so either a writer              was removed or the scan stopped reading its own source",
+            keys.len()
+        );
+        for key in keys {
+            assert!(
+                survives_full_save(&format!("{key}=whatever")),
+                "{key} is written one key at a time but is not in the keep-list,                  so the next full save throws it away"
+            );
+            // Surviving the save is half of it. A key that is written and never
+            // read back is just as gone, only later - and the two spellings sit
+            // hundreds of lines apart.
+            assert!(
+                source.contains(&format!("strip_prefix(\"{key}=\"")),
+                "{key} is written but this file never reads it back with                  strip_prefix(\"{key}=\")"
+            );
+        }
+    }
+
+    /// The writers that patch their own line instead of going through
+    /// `save_single_key`, and that the scan above therefore cannot see.
+    ///
+    /// Named by hand, and that is the weakness: twelve of them, and a thirteenth
+    /// would not be here. The way out is to move them onto `save_single_key` -
+    /// they all sit behind the same guarded read since 2026-08-20, so they are
+    /// nearly identical already - and then the scan covers them too.
+    /// How many functions still patch their own line instead of going through
+    /// `save_single_key`. Six today.
+    ///
+    /// A hand-written list of their keys cannot see a thirteenth, which is the
+    /// silent case. This cannot see one either - but it CAN see a seventh
+    /// function, and that is where a thirteenth key would arrive. It turns
+    /// silence into a prompt without touching a single write path.
+    #[test]
+    fn no_new_hand_patched_writer_slips_in_unnamed() {
+        let source = include_str!("config.rs");
+        let calls = source.matches("read_for_update(").count();
+        // The helper's own definition and its doc mentions are in that count, so
+        // this is a tripwire on the number, not a census.
+        assert_eq!(
+            calls, 9,
+            "the number of read_for_update sites changed. If a writer was added:              move it onto save_single_key so the scanning test covers it, or add              its keys to the list below - and update this count."
+        );
+    }
+
+    #[test]
+    fn the_hand_patched_writers_survive_a_full_save() {
+        for key in [
+            "relay_enabled",
+            "relay_udp_enabled",
+            "relay_url",
+            "relay_station",
+            "relay_token",
+            "relay_instance_id",
+            "relay_device_name",
+            "spike_protection",
+            "mic_gate_delay_thetis_ms",
+            "mic_gate_delay_yaesu_ms",
+            "allow_zoom_below_2x",
+            "successful_connects",
+        ] {
+            assert!(
+                survives_full_save(&format!("{key}=whatever")),
+                "{key} patches its own line but is not in the keep-list"
+            );
+        }
+    }
+
+    /// And the list is a prefix match, so it must not keep something merely
+    /// because it starts the same way - that would resurrect a renamed key.
+    #[test]
+    fn an_unrelated_line_is_not_kept() {
+        assert!(!survives_full_save("something_else=1"));
+        assert!(!survives_full_save(""));
     }
 }

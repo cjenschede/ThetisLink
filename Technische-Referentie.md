@@ -26,9 +26,46 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.8.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.10.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.10.0 hoogtepunten
+
+**Een eerste start op de server claimt niets, en twee radio's van hetzelfde type blijven uit
+elkaar.** Compatibel met v2.9.x - wire `VERSION` blijft ongewijzigd en er zijn geen nieuwe
+control-ids. Zolang er geen `thetislink-server.conf` is start de server kaal: alle apparaten,
+de tweede ontvanger en alle vensters-bij-starten uit; de taal komt dan uit de weergavetaal van
+Windows (NL/DE/FR, anders Engels) en alleen dan. Drie instellingen die tot nu toe **gedeeld**
+waren zijn **per slot** geworden (`yaesu_/yaesu2_ssb_switch_on_ptt`, `_memory_write_ack`,
+`_audio_channel`); de oude gedeelde sleutels - waaronder `ftx1_memory_write_ack` en
+`yaesu2_audio_channel`, die ondanks zijn naam de gedeelde was - zaaien bij het inlezen beide
+slots. Het model van een radio wordt bij het kiezen van de COM-poort **aan de poort gevraagd**
+in plaats van uit het slotnummer afgeleid; dat bepaalt het EX-menu-dialect, het opnamekanaal en
+welke bediening wordt getoond. De ack-vlaggen krijgen `NO_DX_CLUSTER` (geinverteerd, dus een
+oudere server blijft zich gedragen als voorheen), waarmee de client zijn spot-abonnement
+opzegt. Terug naar v2.9.1 is **niet** symmetrisch: die kent de per-slot sleutels niet.
+
+### v2.9.1 hoogtepunten
+
+**Een gat is de codec weer, en audio uitzetten is stil.** Wire-protocol ongewijzigd t.o.v.
+v2.9.0. De ruisgenerator die in v2.9.0 was meegekomen is verwijderd; wat een gat vult is de
+eigen verhulling van de codec. Een stroom die wordt uitgezet reset zijn decoder - op alle zes
+de kanalen en ook bij een herverbinding - zodat een later gat niet wordt gevuld met audio uit
+een vorige sessie. Audio uit een radio telt mee als levensteken bij de verbindingsbewaking, wat
+een station zonder Thetis-audio zijn verbinding kost. 60m staat in beide bandtabellen.
+
+### v2.9.0 hoogtepunten
+
+**Verhulling op elk kanaal, herstel na een netwerkwissel, en chat + probleemmelding op een
+relay.** Wire `VERSION` ongewijzigd, met twee nieuwe pakkettypes voor het ophalen van het
+serverlog (`0x35`, `0x36`); een oudere kant die ze niet kent vraagt er nooit om en antwoordt
+er nooit op. Verhulling en foutcorrectie liepen tot dan altijd door de smalbanddecoder, ook
+met breedbandaudio aan, en alleen op het eerste kanaal; sindsdien decodeert elke stroom in zijn
+eigen formaat. Een telefoon die tussen WiFi en mobiel data wisselt haalt zijn audio zelf terug.
+De chat is een aparte container naast de relay, met een meldknop die het log meestuurt -
+geschoond, en getoond voordat het weggaat. De Android-APK is niet langer debuggable; de app
+houdt in plaats daarvan zijn eigen logbestand bij.
 
 ### v2.8.0 hoogtepunten
 

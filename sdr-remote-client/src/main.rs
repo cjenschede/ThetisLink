@@ -258,11 +258,12 @@ fn main() -> Result<()> {
     let (relay_tunnel, relay_status_handle): (
         Option<sdr_remote_logic::engine::ClientRelayTunnel>,
         Option<sdr_remote_relay::RelayStatusHandle>,
-    ) = if relay_cfg_loaded.relay_enabled
-        && !relay_cfg_loaded.relay_url.trim().is_empty()
-        && !relay_cfg_loaded.relay_station.trim().is_empty()
-        && !relay_cfg_loaded.relay_token.trim().is_empty()
-    {
+    ) = if sdr_remote_relay::is_configured(
+        relay_cfg_loaded.relay_enabled,
+        &relay_cfg_loaded.relay_url,
+        &relay_cfg_loaded.relay_station,
+        &relay_cfg_loaded.relay_token,
+    ) {
         let (uplink_tx, uplink_rx) = tokio::sync::mpsc::unbounded_channel();
         let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
         // Placeholder server address: display-label, ignored by the Relay-transport.

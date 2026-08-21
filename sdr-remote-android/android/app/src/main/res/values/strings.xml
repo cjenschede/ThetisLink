@@ -5,6 +5,11 @@
 <resources>
     <string name="app_name">ThetisLink</string>
 
+    <!-- Which language Android actually resolved this file to. Handed to the Rust
+         side so the few strings it produces (the connect status line) are in the
+         same language as everything around them, rather than guessed separately. -->
+    <string name="ui_language_code">en</string>
+
     <!-- Common / shared -->
     <string name="common_connect">Connect</string>
     <string name="common_disconnect">Disconnect</string>
@@ -264,10 +269,14 @@
     <string name="chat_leave_explain">This takes your name off everything you wrote. You do not need it to finish for the day - just leave the tab, you stay in the chat. Your messages can stay without your name so other people\'s conversations remain readable, or go with you if your call sign is in the text itself.</string>
     <string name="chat_leave_keep">Remove me, keep messages</string>
     <string name="chat_leave_delete">Remove me and delete</string>
+    <string name="chat_report_needs_relay">Reporting a problem travels over the relay too, so it needs one as well.</string>
+    <string name="chat_offline_what_a_relay_is">A relay is worth knowing about on its own. Reaching your station over the internet normally means letting a connection in from outside: a port forwarded on the router, and an address that does not change.\n\nThrough a relay, both sides make an outgoing connection instead - to a meeting point that pairs them. So your network at home stops being critical: usually nothing on the router has to change, and it works behind CGNAT or on mobile data.</string>
+    <string name="chat_offline_get_access">You can run a relay yourself - the source ships with every release. PA3GHM also runs one, with this chat room and the Report a problem button, that you can be added to on request: an experimental setup with a limited number of places, run as a hobby, with no guarantee of availability or continuity. Whoever runs a relay may decline a request or stop the service, and a no needs no explanation. Email PA3GHM@gmail.com with your callsign and a short note about your setup.</string>
     <string name="chat_offline_no_relay">No relay is set up, so there is no chat. The chat runs beside the relay you connect through.</string>
     <string name="chat_offline_no_ticket">This relay offers no chat.</string>
     <string name="chat_offline_unreachable">The chat is not answering. Audio, PTT and the radio are unaffected.</string>
     <string name="chat_answer_title">An answer to your report</string>
+    <string name="chat_answer_dismiss">Dismiss</string>
     <string name="chat_consent_title">Joining the chat</string>
     <string name="chat_consent_intro">One room for the users of this relay. Joining means agreeing to a name that others see next to what you write.</string>
     <string name="chat_consent_name_q">Under which name?</string>
@@ -292,8 +301,6 @@
     <string name="chat_report_attach_shown">This is what goes with it. Read it before you send: addresses, names and anything that looked like a password have been taken out, but the last check is yours.</string>
     <string name="settings_roger">Roger beep</string>
     <string name="settings_roger_hint">A short tone at the end of a transmission. The transmitter stays keyed for its length, so the other station hears it. Never in data or digital modes.</string>
-    <string name="settings_roger_radio1">Radio 1</string>
-    <string name="settings_roger_radio2">Radio 2</string>
     <string name="settings_roger_volume">Level</string>
     <string name="settings_roger_fm">Also in FM</string>
 </resources>

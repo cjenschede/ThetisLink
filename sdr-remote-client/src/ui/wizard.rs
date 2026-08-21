@@ -125,32 +125,54 @@ pub(crate) fn render_wizard(
     }
 
     // ── Progress bar + step header ──────────────────────────────────────
-    let (step_idx, step_total, step_label) = match state.step {
-        WizardStep::DiscoverServer => (1, 4, "Find the server"),
-        WizardStep::EnterPassword | WizardStep::Verifying => (2, 4, "Enter password"),
-        WizardStep::AwaitingTotp | WizardStep::Verifying2fa => (3, 4, "2FA code"),
-        WizardStep::Success => (4, 4, "Connected"),
+    let (step_idx, step_total) = match state.step {
+        WizardStep::DiscoverServer => (1, 4),
+        WizardStep::EnterPassword | WizardStep::Verifying => (2, 4),
+        WizardStep::AwaitingTotp | WizardStep::Verifying2fa => (3, 4),
+        WizardStep::Success => (4, 4),
     };
-    let step_label_localized = match (state.step.clone(), lang) {
-        (WizardStep::DiscoverServer, Lang::Nl) => "Vind de server",
-        (WizardStep::EnterPassword | WizardStep::Verifying, Lang::Nl) => "Wachtwoord invoeren",
-        (WizardStep::AwaitingTotp | WizardStep::Verifying2fa, Lang::Nl) => "2FA-code",
-        (WizardStep::Success, Lang::Nl) => "Verbonden",
-        _ => step_label,
+    let step_label = match state.step {
+        WizardStep::DiscoverServer => lang.pick(
+            "Find the server",
+            "Vind de server",
+            "Server finden",
+            "Trouver le serveur",
+        ),
+        WizardStep::EnterPassword | WizardStep::Verifying => lang.pick(
+            "Enter password",
+            "Wachtwoord invoeren",
+            "Passwort eingeben",
+            "Saisir le mot de passe",
+        ),
+        WizardStep::AwaitingTotp | WizardStep::Verifying2fa => {
+            lang.pick("2FA code", "2FA-code", "2FA-Code", "Code 2FA")
+        }
+        WizardStep::Success => lang.pick("Connected", "Verbonden", "Verbunden", "Connecté"),
     };
     let mut skip_clicked = false;
     ui.horizontal(|ui| {
-        ui.heading(format!("Step {} of {}: {}", step_idx, step_total, step_label_localized));
+        // "Step 2 of 4" was English on every screen, including the Dutch one -
+        // the step NAME was translated and the sentence around it was not.
+        ui.heading(lang.pick(
+            &format!("Step {step_idx} of {step_total}: {step_label}"),
+            &format!("Stap {step_idx} van {step_total}: {step_label}"),
+            &format!("Schritt {step_idx} von {step_total}: {step_label}"),
+            &format!("Étape {step_idx} sur {step_total} : {step_label}"),
+        ));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .small_button(match lang {
-                    Lang::Nl => "Wizard overslaan",
-                    Lang::En => "Skip wizard",
-                })
-                .on_hover_text(match lang {
-                    Lang::Nl => "Direct naar het standaard connect-scherm. Je config wordt niet bijgewerkt.",
-                    Lang::En => "Jump straight to the regular connect screen. Config is not updated.",
-                })
+                .small_button(lang.pick(
+                    "Skip wizard",
+                    "Wizard overslaan",
+                    "Assistent überspringen",
+                    "Passer l'assistant",
+                ))
+                .on_hover_text(lang.pick(
+                    "Jump straight to the regular connect screen. Config is not updated.",
+                    "Direct naar het standaard connect-scherm. Je config wordt niet bijgewerkt.",
+                    "Direkt zum normalen Verbindungsbildschirm. Die Konfiguration wird nicht geändert.",
+                    "Aller directement à l'écran de connexion habituel. La configuration n'est pas modifiée.",
+                ))
                 .clicked()
             {
                 skip_clicked = true;
@@ -210,26 +232,32 @@ fn render_discover(
     mdns: Option<&crate::mdns::BrowseHandle>,
     lang: Lang,
 ) -> WizardOutcome {
-    ui.label(match lang {
-        Lang::Nl => "Kies een server uit de lijst of voer het adres handmatig in.",
-        Lang::En => "Pick a server from the list or enter the address manually.",
-    });
+    ui.label(lang.pick(
+        "Pick a server from the list or enter the address manually.",
+        "Kies een server uit de lijst of voer het adres handmatig in.",
+        "Wählen Sie einen Server aus der Liste oder geben Sie die Adresse von Hand ein.",
+        "Choisissez un serveur dans la liste ou saisissez l'adresse manuellement.",
+    ));
     if let Some(handle) = mdns {
         let servers = handle.snapshot();
         if servers.is_empty() {
             ui.label(
-                RichText::new(match lang {
-                    Lang::Nl => "Bezig met scannen van het lokale netwerk...",
-                    Lang::En => "Scanning local network...",
-                })
+                RichText::new(lang.pick(
+                    "Scanning local network...",
+                    "Bezig met scannen van het lokale netwerk...",
+                    "Lokales Netzwerk wird durchsucht...",
+                    "Analyse du réseau local...",
+                ))
                 .size(11.0)
                 .color(Color32::from_rgb(150, 150, 150)),
             );
         } else {
-            ui.label(match lang {
-                Lang::Nl => "Gevonden in het netwerk:",
-                Lang::En => "Found on this network:",
-            });
+            ui.label(lang.pick(
+                "Found on this network:",
+                "Gevonden in het netwerk:",
+                "In diesem Netzwerk gefunden:",
+                "Trouvés sur ce réseau :",
+            ));
             for srv in &servers {
                 if ui.selectable_label(false, srv.display_label()).clicked() {
                     state.server_input = srv.addr_port.clone();
@@ -239,10 +267,7 @@ fn render_discover(
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(match lang {
-            Lang::Nl => "Adres:",
-            Lang::En => "Address:",
-        });
+        ui.label(lang.pick("Address:", "Adres:", "Adresse:", "Adresse :"));
         ui.add(
             egui::TextEdit::singleline(&mut state.server_input)
                 .hint_text("192.168.1.79:4580")
@@ -251,10 +276,7 @@ fn render_discover(
     });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        let next_label = match lang {
-            Lang::Nl => "Volgende",
-            Lang::En => "Next",
-        };
+        let next_label = lang.pick("Next", "Volgende", "Weiter", "Suivant");
         let enabled = !state.server_input.trim().is_empty();
         if ui.add_enabled(enabled, egui::Button::new(next_label)).clicked() {
             state.step = WizardStep::EnterPassword;
@@ -269,16 +291,15 @@ fn render_password(
     cmd_tx: &mpsc::UnboundedSender<Command>,
     lang: Lang,
 ) -> WizardOutcome {
-    ui.label(match lang {
-        Lang::Nl => "Vul het wachtwoord van de server in. Vraag dit aan de operator van de server-PC.",
-        Lang::En => "Enter the server password. Ask the operator of the server PC for it.",
-    });
+    ui.label(lang.pick(
+        "Enter the server password. Ask the operator of the server PC for it.",
+        "Vul het wachtwoord van de server in. Vraag dit aan de operator van de server-PC.",
+        "Geben Sie das Serverpasswort ein. Fragen Sie danach beim Betreiber des Server-PCs.",
+        "Saisissez le mot de passe du serveur. Demandez-le à l'opérateur du PC serveur.",
+    ));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(match lang {
-            Lang::Nl => "Wachtwoord:",
-            Lang::En => "Password:",
-        });
+        ui.label(lang.pick("Password:", "Wachtwoord:", "Passwort:", "Mot de passe :"));
         let mut edit = egui::TextEdit::singleline(&mut state.password_input).desired_width(180.0);
         if !state.password_visible {
             edit = edit.password(true);
@@ -286,22 +307,13 @@ fn render_password(
         ui.add(edit);
         ui.checkbox(
             &mut state.password_visible,
-            match lang {
-                Lang::Nl => "Toon",
-                Lang::En => "Show",
-            },
+            lang.pick("Show", "Toon", "Anzeigen", "Afficher"),
         );
     });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        let back_label = match lang {
-            Lang::Nl => "Vorige",
-            Lang::En => "Back",
-        };
-        let next_label = match lang {
-            Lang::Nl => "Verbind",
-            Lang::En => "Connect",
-        };
+        let back_label = lang.pick("Back", "Vorige", "Zurück", "Retour");
+        let next_label = lang.pick("Connect", "Verbind", "Verbinden", "Se connecter");
         if ui.button(back_label).clicked() {
             state.step = WizardStep::DiscoverServer;
             state.last_error = None;
@@ -321,11 +333,20 @@ fn render_password(
 
 fn render_verifying(ui: &mut egui::Ui, lang: Lang, is_totp: bool) {
     ui.add(egui::Spinner::new());
-    let label = match (lang, is_totp) {
-        (Lang::Nl, false) => "Bezig met verbinden...",
-        (Lang::Nl, true) => "Bezig met verifiëren van 2FA-code...",
-        (Lang::En, false) => "Connecting...",
-        (Lang::En, true) => "Verifying 2FA code...",
+    let label = if is_totp {
+        lang.pick(
+            "Verifying 2FA code...",
+            "Bezig met verifiëren van 2FA-code...",
+            "2FA-Code wird geprüft...",
+            "Vérification du code 2FA...",
+        )
+    } else {
+        lang.pick(
+            "Connecting...",
+            "Bezig met verbinden...",
+            "Verbindung wird hergestellt...",
+            "Connexion en cours...",
+        )
     };
     ui.label(RichText::new(label).size(14.0));
 }
@@ -336,18 +357,15 @@ fn render_awaiting_totp(
     cmd_tx: &mpsc::UnboundedSender<Command>,
     lang: Lang,
 ) -> WizardOutcome {
-    ui.label(match lang {
-        Lang::Nl => {
-            "Open je authenticator-app en vul de 6-cijferige code in."
-        }
-        Lang::En => "Open your authenticator app and enter the 6-digit code.",
-    });
+    ui.label(lang.pick(
+        "Open your authenticator app and enter the 6-digit code.",
+        "Open je authenticator-app en vul de 6-cijferige code in.",
+        "Öffnen Sie Ihre Authenticator-App und geben Sie den 6-stelligen Code ein.",
+        "Ouvrez votre application d'authentification et saisissez le code à 6 chiffres.",
+    ));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(match lang {
-            Lang::Nl => "Code:",
-            Lang::En => "Code:",
-        });
+        ui.label(lang.pick("Code:", "Code:", "Code:", "Code :"));
         ui.add(
             egui::TextEdit::singleline(&mut state.totp_input)
                 .desired_width(80.0)
@@ -356,14 +374,8 @@ fn render_awaiting_totp(
     });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        let back_label = match lang {
-            Lang::Nl => "Vorige",
-            Lang::En => "Back",
-        };
-        let verify_label = match lang {
-            Lang::Nl => "Verifieer",
-            Lang::En => "Verify",
-        };
+        let back_label = lang.pick("Back", "Vorige", "Zurück", "Retour");
+        let verify_label = lang.pick("Verify", "Verifieer", "Prüfen", "Vérifier");
         if ui.button(back_label).clicked() {
             // Cancel current session: a fresh attempt would otherwise
             // collide with the server's PendingTotp state.
@@ -385,24 +397,25 @@ fn render_awaiting_totp(
 fn render_success(ui: &mut egui::Ui, lang: Lang) -> WizardOutcome {
     ui.colored_label(
         Color32::from_rgb(50, 200, 50),
-        RichText::new(match lang {
-            Lang::Nl => "Verbonden!",
-            Lang::En => "Connected!",
-        })
+        RichText::new(lang.pick(
+            "Connected!",
+            "Verbonden!",
+            "Verbunden!",
+            "Connecté !",
+        ))
         .size(20.0)
         .strong(),
     );
     ui.add_space(4.0);
-    ui.label(match lang {
-        Lang::Nl => "De volgende keer dat je de client start hoef je de wizard niet meer te doorlopen.",
-        Lang::En => "Next time you start the client the wizard is skipped automatically.",
-    });
+    ui.label(lang.pick(
+        "Next time you start the client the wizard is skipped automatically.",
+        "De volgende keer dat je de client start hoef je de wizard niet meer te doorlopen.",
+        "Beim nächsten Start des Clients wird der Assistent automatisch übersprungen.",
+        "Au prochain démarrage du client, l'assistant sera automatiquement ignoré.",
+    ));
     ui.add_space(8.0);
     if ui
-        .button(match lang {
-            Lang::Nl => "Klaar",
-            Lang::En => "Done",
-        })
+        .button(lang.pick("Done", "Klaar", "Fertig", "Terminé"))
         .clicked()
     {
         return WizardOutcome::Finished;

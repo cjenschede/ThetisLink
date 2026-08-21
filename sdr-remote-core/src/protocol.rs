@@ -1138,6 +1138,15 @@ impl ServerStateFlags {
     /// RX2/VRX2 visible. Only when POSITIVELY set do clients hide RX2 + VRX2
     /// everywhere. Only trustworthy when capabilities advertises REPORTS_STATE_FLAGS.
     pub const SINGLE_RECEIVER: u32 = 1 << 4;
+    /// This server has NO DX cluster configured - no callsign, or the cluster
+    /// switched off - so no spot will ever arrive from it.
+    ///
+    /// **Inverted, like `SINGLE_RECEIVER` and for the same reason**: absent
+    /// means "a cluster, as far as you know", which is what every older server
+    /// implies by never setting it. Only when POSITIVELY set do clients drop the
+    /// DX-spot subscription and hide its toggle - a tick offering spots that
+    /// cannot come is a promise the station cannot keep.
+    pub const NO_DX_CLUSTER: u32 = 1 << 5;
 
     pub fn has(self, flag: u32) -> bool {
         self.0 & flag != 0
@@ -2245,6 +2254,38 @@ pub fn radio_model_name(code: u8) -> &'static str {
     }
 }
 
+/// The code a client holds for a slot the server has not named yet.
+///
+/// Never sent on the wire - it exists so a client can say "Yaesu 1" instead of
+/// guessing a type. The desktop client used to open with 0 (991A) for slot 0
+/// and 1 (FTX-1) for slot 1, which put two model names on screen on a station
+/// that had no radio at all, and - worse - satisfied the two `== 0` / `== 1`
+/// tests that gate model-specific controls. One of those is the CAT power
+/// button, which is only safe on a confirmed 991A because the other types drop
+/// their USB link at PS0 and cannot be switched back on remotely.
+pub const RADIO_MODEL_UNKNOWN: u8 = 0xFF;
+
+/// Has the server said which radio sits in this slot?
+pub fn radio_model_known(code: u8) -> bool {
+    code != RADIO_MODEL_UNKNOWN
+}
+
+/// How a slot is named on screen: "Yaesu 1: FTX1" once the server has said what
+/// it is, and plain "Yaesu 1" until then.
+///
+/// Here rather than in a front end, because both of them draw this label and one
+/// of them kept its own copy of the rule: the desktop learned to stop guessing a
+/// model name, and the phone went on printing a fixed "Radio 1" / "Radio 2"
+/// (owner, 2026-08-20). `slot` is 0-based; the label counts from one, the way the
+/// settings do.
+pub fn radio_slot_label(slot: u8, code: u8) -> String {
+    if radio_model_known(code) {
+        format!("Yaesu {}: {}", slot + 1, radio_model_name(code))
+    } else {
+        format!("Yaesu {}", slot + 1)
+    }
+}
+
 /// Why a radio's serial port cannot be used right now, as a wire code on
 /// `YaesuPresence`. **Single source of truth** for the codes, like
 /// `radio_model_name` above: the server classifies, every UI only maps a code
@@ -2483,6 +2524,40 @@ impl Packet {
 
 #[cfg(test)]
 mod tests {
+    /// The "not named yet" code has to stay distinguishable from every real
+    /// radio. If a future model ever took 0xFF, a client would silently go back
+    /// to claiming a type it had not been told - and to letting the CAT power
+    /// button through on a radio that cannot be switched back on remotely.
+    #[test]
+    fn the_unknown_model_code_is_not_a_real_radio() {
+        use super::{radio_model_name, RADIO_MODEL_UNKNOWN};
+        assert_eq!(radio_model_name(RADIO_MODEL_UNKNOWN), "Radio");
+        for code in [0u8, 1] {
+            assert_ne!(code, RADIO_MODEL_UNKNOWN, "a real model took the unknown code");
+            assert_ne!(
+                radio_model_name(code),
+                radio_model_name(RADIO_MODEL_UNKNOWN),
+                "model {code} is indistinguishable from an unnamed slot"
+            );
+        }
+    }
+
+    /// An unnamed slot must not read as a radio type anywhere a label is drawn.
+    /// Both front ends draw this now, so getting it wrong here goes wrong twice.
+    #[test]
+    fn an_unnamed_slot_is_labelled_by_its_number_alone() {
+        use super::{radio_model_known, radio_slot_label, RADIO_MODEL_UNKNOWN};
+        assert!(!radio_model_known(RADIO_MODEL_UNKNOWN));
+        assert_eq!(radio_slot_label(0, RADIO_MODEL_UNKNOWN), "Yaesu 1");
+        assert_eq!(radio_slot_label(1, RADIO_MODEL_UNKNOWN), "Yaesu 2");
+        // And a named one carries its type, counted from one.
+        assert!(radio_model_known(0));
+        assert_eq!(radio_slot_label(0, 0), "Yaesu 1: 991A");
+        assert_eq!(radio_slot_label(1, 1), "Yaesu 2: FTX1");
+        // Two 991As is a real station, so the slot number has to survive.
+        assert_ne!(radio_slot_label(0, 0), radio_slot_label(1, 0));
+    }
+
     /// The VRX pan offset is a signed value squeezed through an unsigned field,
     /// which is the kind of thing that works in one direction and silently
     /// wraps in the other. Both directions, and the ends.

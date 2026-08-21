@@ -20,6 +20,13 @@ impl ServerApp {
     /// The button, for the top bar. Carries the unread count, because a channel
     /// nobody opens is as empty as no channel at all (design §1.7).
     pub(super) fn render_chat_button(&mut self, ui: &mut egui::Ui) {
+        // Shown always, including on a station with no relay at all. It was
+        // hidden there for a while, on the rule that an unexplained dead control
+        // is worse than none - and that was right while the window could only
+        // say "no chat here". Now that it explains what the chat is and how to
+        // reach one, the button is the way in rather than a dead end: somebody
+        // curious enough to click gets the answer, and the relay gets found by
+        // the people who would benefit from it (owner, 2026-08-20).
         let unread = self.chat.unread();
         let label = if unread > 0 {
             format!("{} ({})", rust_i18n::t!("srv_chat"), unread)
@@ -102,6 +109,15 @@ impl ServerApp {
                 self.chat.render_body(ctx, &files, &sdr_remote_chat::ServerSide::default());
             },
         );
+        // An answer folded away is written down straight away. The server has
+        // its own config file and its own copy of the panel, so remembering it
+        // in the client and on the phone left this window forgetting on every
+        // restart (owner, 2026-08-21).
+        if self.chat.take_answers_seen_changed() {
+            let ids: Vec<String> = self.chat.seen_ids().iter().map(|i| i.to_string()).collect();
+            let joined = ids.join(",");
+            crate::config::modify_config(move |c| c.chat_answers_seen = joined);
+        }
         if closed {
             self.save_window_positions();
         }

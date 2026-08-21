@@ -9,7 +9,7 @@ mod audio_oboe;
 pub use logging::{init_logging, log_tail};
 
 pub use bridge::{
-    version, BridgeChatAnswer, BridgeChatMessage, BridgeChatState, BridgeDxSpot, BridgeRadioState, BridgeRogerBeep,
+    relay_is_configured, version, BridgeChatAnswer, BridgeChatMessage, BridgeChatState, BridgeDxSpot, BridgeRadioState, BridgeRogerBeep,
     SdrBridge,
 };
 

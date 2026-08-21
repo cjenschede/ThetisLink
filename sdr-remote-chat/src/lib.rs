@@ -53,6 +53,84 @@ pub use worker::{
     OfflineReason, POLL_INTERVAL,
 };
 
+#[cfg(all(test, feature = "ui"))]
+mod translation_key_tests {
+    /// Every key the panel asks for has to be in THIS crate's locale file.
+    ///
+    /// `t!` resolves against the crate it is compiled in, not the binary it
+    /// ends up in. The three `chat_offline_*` texts had been put in the desktop
+    /// client's locale file, so the panel found nothing and both GUIs printed
+    /// the bare key `chat_offline_no_relay` at the reader. Nothing failed, no
+    /// warning was emitted, and it shipped that way - which is the whole reason
+    /// this test exists (measured 2026-08-20).
+    #[test]
+    fn every_key_the_panel_asks_for_is_translated_here() {
+        let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let yml = std::fs::read_to_string(here.join("locales/app.yml"))
+            .expect("this crate's own translations");
+        let code = std::fs::read_to_string(here.join("src/panel.rs")).expect("the panel");
+
+        // Only literals inside `rust_i18n::t!(...)`. Two things this must not
+        // pick up: panel and layout ids are `chat_`-named too (`chat_head`,
+        // `chat_input`) and are not translations, and `format!(` ends in the
+        // same three characters as `t!(` - it supplied six format strings on
+        // the first run of this test. The macro path is therefore required,
+        // which does assume nobody imports `t` and calls it bare.
+        let mut asked: Vec<&str> = Vec::new();
+        let mut idx = 0;
+        while let Some(pos) = code[idx..].find("t!(") {
+            let at = idx + pos;
+            idx = at + "t!(".len();
+            if !code[..at].ends_with("rust_i18n::") {
+                continue;
+            }
+            let rest = code[idx..].trim_start();
+            let Some(rest) = rest.strip_prefix('"') else {
+                continue;
+            };
+            if let Some(end) = rest.find('"') {
+                asked.push(&rest[..end]);
+            }
+        }
+        assert!(asked.len() > 20, "the scan found almost nothing: {asked:?}");
+
+        let missing: Vec<&&str> = asked
+            .iter()
+            .filter(|key| !yml.contains(&format!("\n{key}:")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the panel asks for keys this crate cannot translate: {missing:?}"
+        );
+    }
+
+    /// The offline screen splits its texts on a blank line to space the
+    /// paragraphs. That only works while the translation carries real newlines:
+    /// a YAML scalar in single quotes keeps `\n` as two characters, and the
+    /// screen would silently go back to one wall of text per block - readable
+    /// enough in review, wrong on screen.
+    #[test]
+    fn the_offline_paragraphs_still_break() {
+        for locale in ["en", "nl", "de", "fr"] {
+            for key in [
+                rust_i18n::t!("chat_offline_what_it_is", locale = locale),
+                rust_i18n::t!("chat_offline_what_a_relay_is", locale = locale),
+                rust_i18n::t!("chat_offline_get_access", locale = locale),
+            ] {
+                let text = key.to_string();
+                assert!(
+                    text.contains("\n\n"),
+                    "{locale}: no paragraph break in {text:?}"
+                );
+                assert!(
+                    !text.contains("\\n"),
+                    "{locale}: backslash-n survived into the text: {text:?}"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod consent_text_tests {
     /// The version number claims something about the text, and nothing checked

@@ -125,10 +125,85 @@ srv_991a_ptt_switch_hover:
   de: "Aus (Standard): 991A-USB-Routing aktiv halten, solange ein Client verbunden ist, und ca. 2 s nach dem Trennen wiederherstellen (keine PTT-Verzögerung).\nEin: 991A-Routing nur während PTT umschalten; nützlich, wenn das Handmikrofon außerhalb TX sofort wieder aktiv sein soll. FTX-1 Auto-Quellenwahl bleibt unverändert."
   fr: "Désactivé (par défaut) : garder le routage USB du 991A actif tant qu'un client est connecté et le restaurer environ 2 s après la déconnexion (aucun délai PTT).\nActivé : commuter le routage du 991A uniquement pendant le PTT ; utile pour retrouver aussitôt le micro à main hors TX. La sélection auto de source du FTX-1 reste inchangée."
 srv_ftx1_mem_write_ack:
-  en: "Allow writing FTX-1 memory channels (I accept the condition below)"
-  nl: "Schrijven van FTX-1-geheugenkanalen toestaan (ik accepteer de voorwaarde hieronder)"
-  de: "Schreiben von FTX-1-Speicherkanaelen erlauben (ich akzeptiere die Bedingung unten)"
-  fr: "Autoriser l'ecriture des memoires du FTX-1 (j'accepte la condition ci-dessous)"
+  en: "Allow writing FTX-1 memory channels (I accept the condition)"
+  nl: "Schrijven van FTX-1-geheugenkanalen toestaan (ik accepteer de voorwaarde)"
+  de: "Schreiben von FTX-1-Speicherkanaelen erlauben (ich akzeptiere die Bedingung)"
+  fr: "Autoriser l'ecriture des memoires du FTX-1 (j'accepte la condition)"
+srv_probe_busy:
+  en: "Asking the radio which model it is..."
+  nl: "De radio vragen welk model het is..."
+  de: "Das Geraet nach seinem Modell fragen..."
+  fr: "Demande du modele a la radio..."
+srv_probe_none:
+  en: "No answer on this port yet - switch the radio on and try again."
+  nl: "Nog geen antwoord op deze poort - zet de radio aan en probeer opnieuw."
+  de: "Noch keine Antwort auf diesem Port - Geraet einschalten und erneut versuchen."
+  fr: "Pas encore de reponse sur ce port - allumez la radio et reessayez."
+srv_probe_retry:
+  en: "Ask again"
+  nl: "Opnieuw vragen"
+  de: "Erneut fragen"
+  fr: "Redemander"
+srv_probe_found:
+  en: "Detected: %{model}"
+  nl: "Herkend: %{model}"
+  de: "Erkannt: %{model}"
+  fr: "Detecte : %{model}"
+srv_probe_silent:
+  en: "The radio did not answer just now - this is what it was last time."
+  nl: "De radio antwoordde zojuist niet - dit is wat hij de vorige keer was."
+  de: "Das Geraet hat gerade nicht geantwortet - dies ist, was es zuletzt war."
+  fr: "La radio n'a pas repondu a l'instant - voici ce qu'elle etait la derniere fois."
+srv_ftx1_audio_channel:
+  en: "FTX-1 audio:"
+  nl: "FTX-1-audio:"
+  de: "FTX-1-Audio:"
+  fr: "Audio FTX-1 :"
+srv_ftx1_audio_channel_hover:
+  en: "Which receiver of an FTX-1 to listen to: its USB audio carries both, one on each channel. A 991A has one and ignores this. Applies on the next server start."
+  nl: "Naar welke ontvanger van een FTX-1 je luistert: zijn USB-audio draagt ze allebei, elk op een kanaal. Een 991A heeft er een en negeert dit. Geldt vanaf de volgende serverstart."
+  de: "Welchen Empfaenger eines FTX-1 Sie hoeren: sein USB-Audio traegt beide, je einen pro Kanal. Ein 991A hat einen und ignoriert dies. Gilt ab dem naechsten Serverstart."
+  fr: "Quel recepteur d'un FTX-1 vous ecoutez : son audio USB porte les deux, un par canal. Un 991A n'en a qu'un et ignore ceci. Effectif au prochain demarrage du serveur."
+srv_ftx1_channel_left:
+  en: "Receiver 1 (left)"
+  nl: "Ontvanger 1 (links)"
+  de: "Empfaenger 1 (links)"
+  fr: "Recepteur 1 (gauche)"
+srv_ftx1_channel_right:
+  en: "Receiver 2 (right)"
+  nl: "Ontvanger 2 (rechts)"
+  de: "Empfaenger 2 (rechts)"
+  fr: "Recepteur 2 (droite)"
+srv_ftx1_channel_mix:
+  en: "Both mixed"
+  nl: "Beide gemengd"
+  de: "Beide gemischt"
+  fr: "Les deux melanges"
+srv_ftx1_mem_write_read:
+  en: "Read the condition..."
+  nl: "Lees de voorwaarde..."
+  de: "Bedingung lesen..."
+  fr: "Lire la condition..."
+srv_ftx1_mem_write_read_hover:
+  en: "Opens the condition in a window you can read it in. Accepting there ticks the box."
+  nl: "Opent de voorwaarde in een venster waarin hij te lezen is. Accepteren daar zet de vink aan."
+  de: "Oeffnet die Bedingung in einem lesbaren Fenster. Akzeptieren dort setzt das Haekchen."
+  fr: "Ouvre la condition dans une fenetre lisible. L'accepter la coche la case."
+srv_ftx1_mem_write_title:
+  en: "Writing FTX-1 memory channels - the condition"
+  nl: "FTX-1-geheugenkanalen schrijven - de voorwaarde"
+  de: "FTX-1-Speicherkanaele schreiben - die Bedingung"
+  fr: "Ecriture des memoires du FTX-1 - la condition"
+srv_ftx1_mem_write_accept:
+  en: "Accept"
+  nl: "Accepteren"
+  de: "Akzeptieren"
+  fr: "Accepter"
+srv_ftx1_mem_write_accept_hover:
+  en: "Grants the permission and ticks the box in the settings. You can untick it again at any time."
+  nl: "Geeft de toestemming en zet de vink in de instellingen aan. Je kunt hem altijd weer uitzetten."
+  de: "Erteilt die Erlaubnis und setzt das Haekchen in den Einstellungen. Jederzeit wieder abwaehlbar."
+  fr: "Accorde l'autorisation et coche la case dans les reglages. Vous pouvez la decocher a tout moment."
 srv_ftx1_mem_write_note:
   en: "The FTX-1 resets the CTCSS tone of every channel it writes to 100.0 Hz, and has no CAT command to put it back. Tones set on the radio by hand are lost on the channels written. ThetisLink keeps the real tones in its own list and applies them each time the radio lands on a channel, so transmitting through ThetisLink still works - but the radio on its own, without ThetisLink, will transmit 100.0 Hz. Leave this off and *Write radio* still hands your list to the server - the tones in it are applied per channel, so they work - but nothing is written into the radio. What you then give up is that a frequency or name you edit lives in the server's list and not in the set. Reading is always allowed. The FT-991A is unaffected."
   nl: "De FTX-1 zet de CTCSS-toon van elk kanaal dat hij schrijft terug op 100,0 Hz en heeft geen CAT-commando om die terug te zetten. Tonen die met de hand op de radio zijn gezet, zijn op de geschreven kanalen weg. ThetisLink bewaart de echte tonen in zijn eigen lijst en zet ze telkens als de radio op een kanaal komt, dus zenden via ThetisLink blijft werken - maar de radio alleen, zonder ThetisLink, zendt 100,0 Hz uit. Laat dit uit staan, dan geeft *Write radio* je lijst nog steeds aan de server - de tonen erin worden per kanaal gezet, dus die werken - maar er wordt niets in de radio geschreven. Wat je dan opgeeft: een frequentie of naam die je hier wijzigt staat in de lijst van de server en niet in de set. Lezen mag altijd. De FT-991A heeft hier geen last van."
@@ -239,6 +314,11 @@ srv_relay_udp_hover:
   nl: "Route audio + PTT over kale UDP (poort 443) i.p.v. de wss-tunnel: geen retransmit, lagere latency. Server en client moeten het beide aan hebben. Geldt na herstart."
   de: "Audio + PTT über reines UDP (Port 443) statt des wss-Tunnels leiten: keine erneute Übertragung, niedrigere Latenz. Server und Client müssen es beide aktiviert haben. Gilt nach Neustart."
   fr: "Router l'audio + PTT sur UDP simple (port 443) au lieu du tunnel wss : pas de retransmission, latence plus faible. Le serveur et le client doivent l'activer. Effectif au redémarrage."
+srv_relay_udp_off_hover:
+  en: "Only applies once the relay is on. Switching the relay on brings this with it."
+  nl: "Geldt pas als de relay aan staat. De relay aanzetten neemt dit mee."
+  de: "Gilt erst, wenn das Relay an ist. Das Relay einzuschalten nimmt dies mit."
+  fr: "Ne s'applique qu'avec le relais actif. Activer le relais l'active aussi."
 srv_relay_url:
   en: "Relay URL:"
   nl: "Relay URL:"
@@ -274,6 +354,11 @@ srv_required_hint:
   nl: "(verplicht)"
   de: "(erforderlich)"
   fr: "(requis)"
+srv_config_unwritable:
+  en: "The settings file could not be read and will not be overwritten - changes are not saved. Close whatever is holding thetislink-server.conf and restart."
+  nl: "Het instellingenbestand kon niet gelezen worden en wordt niet overschreven - wijzigingen worden niet bewaard. Sluit wat thetislink-server.conf vasthoudt en start opnieuw."
+  de: "Die Einstellungsdatei konnte nicht gelesen werden und wird nicht ueberschrieben - Aenderungen werden nicht gespeichert. Schliessen Sie, was thetislink-server.conf haelt, und starten Sie neu."
+  fr: "Le fichier de reglages n'a pas pu etre lu et ne sera pas ecrase - les modifications ne sont pas enregistrees. Fermez ce qui retient thetislink-server.conf et redemarrez."
 srv_password_required:
   en: "Password is required"
   nl: "Wachtwoord is verplicht"

@@ -27,14 +27,107 @@ fn parse_device_pattern(pattern: &str) -> (String, usize) {
     (pattern.to_string(), 1)
 }
 
+/// The device name inside a Windows endpoint name, or the whole thing when
+/// there is no such part.
+///
+/// Windows names the two ends of one USB sound device after their ROLE, in the
+/// operator's own language, with the device itself in brackets:
+///
+/// ```text
+///   Microfoon (2- USB Audio Device)     <- capture
+///   Speakers (2- USB Audio Device)      <- playback
+/// ```
+///
+/// Only the bracketed part is the device. That is what makes "use the same
+/// device for output as for input" possible without knowing that the prefix is
+/// "Microfoon" in Dutch, "Microphone" in English and "Mikrofon" in German.
+///
+/// A name with no brackets - an FT-991A presents both ends as plain
+/// "USB Audio CODEC" - comes back unchanged, which is exactly the case that has
+/// always worked.
+fn device_core_name(full: &str) -> &str {
+    let Some(open) = full.rfind('(') else {
+        return full;
+    };
+    let Some(close) = full[open + 1..].find(')') else {
+        return full;
+    };
+    let inner = full[open + 1..open + 1 + close].trim();
+    if inner.is_empty() {
+        full
+    } else {
+        inner
+    }
+}
+
+/// Which of the three rules found the output device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputMatch {
+    /// The configured name matched an endpoint outright.
+    Exact,
+    /// The bracketed device inside the configured name matched. This is the one
+    /// that makes "same device as the input" work on Windows.
+    SameDevice,
+    /// Neither did; fell back to a plain "USB Audio CODEC" at the same position.
+    Codec,
+}
+
+struct OutputChoice {
+    index: usize,
+    step: OutputMatch,
+}
+
+/// Pick the output endpoint for a configured pattern, out of the names the host
+/// offers. Pure, so the ORDER of the rules can be tested without a sound card -
+/// and the order is where this went wrong.
+///
+/// Three rules, most specific first:
+///
+/// 1. the configured name, as given;
+/// 2. the device inside its brackets - "Microfoon (2- USB Audio Device)" is the
+///    capture end of the same box as "Speakers (2- USB Audio Device)";
+/// 3. a plain "USB Audio CODEC" at the same position, the long-standing
+///    fallback that keeps a single-radio FT-991A setup working.
+///
+/// Rule 2 is new. Without it "use the same device for output as for input"
+/// could only ever work on a device that names both ends identically; on
+/// everything Windows names by role it silently found nothing, and the operator
+/// got no modulation while the right endpoint sat in the list (2026-08-20).
+fn choose_output(names: &[String], pat_name: &str, pos: usize) -> Option<OutputChoice> {
+    let nth = |needle: &str| -> Option<usize> {
+        let needle = needle.to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        names
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .nth(pos.saturating_sub(1))
+    };
+    if let Some(index) = nth(pat_name) {
+        return Some(OutputChoice { index, step: OutputMatch::Exact });
+    }
+    let core = device_core_name(pat_name);
+    if !core.eq_ignore_ascii_case(pat_name) {
+        if let Some(index) = nth(core) {
+            return Some(OutputChoice { index, step: OutputMatch::SameDevice });
+        }
+    }
+    nth("usb audio codec").map(|index| OutputChoice { index, step: OutputMatch::Codec })
+}
+
 /// Build a cpal input capture stream that feeds into an existing tokio sender.
 pub(super) fn build_capture_stream(
     device_pattern: &str,
     tx: tokio::sync::mpsc::Sender<Vec<f32>>,
     last_audio_time: Arc<std::sync::atomic::AtomicU64>,
     prefix: &str,
-    // Dual-RX channel choice (FTX-1): 0 = L (hardware-RX 1), 1 = R (hardware-RX 2),
-    // 2 = mix (average). Mono devices ignore this (downmix branch does not run).
+    // Dual-RX channel choice (FTX-1): 0 = L, 1 = R, 2 = mix (average). L and R
+    // carry the radio's two receivers separately - heard on the radio with both
+    // switched on, 2026-08-20. Mono devices ignore this (the downmix branch
+    // does not run).
     channel: u8,
 ) -> Result<(cpal::Stream, u32), String> {
     let host = cpal::default_host();
@@ -114,33 +207,34 @@ pub(super) fn build_output_stream(
 ) -> Result<(cpal::Stream, u32), String> {
     let host = cpal::default_host();
     let (pat_name, pos) = parse_device_pattern(device_pattern);
-    let pat = pat_name.to_lowercase();
     // Per-radio output device. When two radios both report as
     // "USB Audio CODEC" (edge-case 6) the TX path MUST match the output device
     // that belongs to THIS radio - otherwise radio-1's TX audio goes to
-    // radio-0's codec; the device name must stay per slot.
-    // We match on the per-radio device pattern (same USB-CODEC = same
-    // friendly name for capture and playback) + the #N position so two
-    // identically named devices can be told apart. Fallback to
-    // "USB Audio CODEC" (same position) if the specific pattern yields no output
-    // -> no regression versus the old behaviour, single-radio keeps working.
-    let pick = |p: &str, n: usize| -> Option<cpal::Device> {
-        host.output_devices()
-            .ok()?
-            .filter(|d| d.name().map(|nm| nm.to_lowercase().contains(p)).unwrap_or(false))
-            .nth(n.saturating_sub(1))
-    };
-    let device = match pick(&pat, pos) {
-        Some(d) => d,
+    // radio-0's codec; the device name must stay per slot. The #N position is
+    // what tells two identically named devices apart.
+    let devices: Vec<cpal::Device> = host
+        .output_devices()
+        .map_err(|e| format!("enumerate output devices: {}", e))?
+        .collect();
+    let names: Vec<String> = devices
+        .iter()
+        .map(|d| d.name().unwrap_or_default())
+        .collect();
+
+    let choice = choose_output(&names, &pat_name, pos);
+    if let Some(step) = choice.as_ref().map(|c| c.step) {
+        if step != OutputMatch::Exact {
+            log::debug!(
+                "{} output '{}' #{} matched by {:?}: {}",
+                prefix, pat_name, pos, step,
+                choice.as_ref().map(|c| names[c.index].as_str()).unwrap_or("")
+            );
+        }
+    }
+    let device = match choice {
+        Some(c) => devices.into_iter().nth(c.index).expect("index from this list"),
         None => {
-            if pat != "usb audio codec" {
-                warn!(
-                    "{} no output device #{} matches '{}' - fallback to 'USB Audio CODEC' #{}",
-                    prefix, pos, pat_name, pos
-                );
-            }
-            pick("usb audio codec", pos)
-                .ok_or_else(|| format!("no output device matching '{}' (#{})", pat_name, pos))?
+            return Err(format!("no output device matching '{}' (#{})", pat_name, pos));
         }
     };
 
@@ -215,4 +309,95 @@ pub fn available_audio_outputs() -> Vec<String> {
             devices.filter_map(|d| d.name().ok()).collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod device_name_tests {
+    use super::device_core_name;
+
+    /// The case the operator hit: Windows names the two ends of one USB device
+    /// after their role, in the operator's own language, and only the bracketed
+    /// part is the device. "Same device as the input" has to survive that.
+    #[test]
+    fn the_device_is_what_is_inside_the_brackets() {
+        assert_eq!(device_core_name("Microfoon (2- USB Audio Device)"), "2- USB Audio Device");
+        assert_eq!(device_core_name("Speakers (2- USB Audio Device)"), "2- USB Audio Device");
+        assert_eq!(device_core_name("Microphone (3- BEHRINGER UMC202HD)"), "3- BEHRINGER UMC202HD");
+        // Both ends reduce to the same device - that is the whole point.
+        assert_eq!(
+            device_core_name("Microfoon (2- USB Audio Device)"),
+            device_core_name("Speakers (2- USB Audio Device)")
+        );
+    }
+
+    /// A name without brackets is already the device. The FT-991A presents both
+    /// ends as plain "USB Audio CODEC", which is the case that always worked and
+    /// must keep working untouched.
+    #[test]
+    fn a_plain_name_is_left_alone() {
+        assert_eq!(device_core_name("USB Audio CODEC"), "USB Audio CODEC");
+        assert_eq!(device_core_name(""), "");
+        assert_eq!(device_core_name("Weird ("), "Weird (");
+        assert_eq!(device_core_name("Empty ()"), "Empty ()");
+    }
+}
+
+#[cfg(test)]
+mod output_choice_tests {
+    use super::{choose_output, OutputMatch};
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The operator's case, and the one that was broken: "same device for
+    /// output as for input" hands this function the CAPTURE name. No playback
+    /// endpoint carries it, and the device is only findable through the part in
+    /// brackets.
+    #[test]
+    fn the_capture_name_finds_the_playback_end_of_the_same_box() {
+        let out = names(&["Speakers (2- USB Audio Device)", "Speakers (Realtek)"]);
+        let c = choose_output(&out, "Microfoon (2- USB Audio Device)", 1).expect("found");
+        assert_eq!(c.index, 0);
+        assert_eq!(c.step, OutputMatch::SameDevice);
+    }
+
+    /// An explicitly configured output still wins outright - the new rule may
+    /// never step in front of what the operator picked from the list.
+    #[test]
+    fn an_explicit_choice_is_taken_as_given() {
+        let out = names(&["Speakers (Realtek)", "Speakers (2- USB Audio Device)"]);
+        let c = choose_output(&out, "Speakers (2- USB Audio Device)", 1).expect("found");
+        assert_eq!(c.index, 1);
+        assert_eq!(c.step, OutputMatch::Exact);
+    }
+
+    /// The FT-991A names both ends "USB Audio CODEC" and has always matched on
+    /// the first rule. That must not change.
+    #[test]
+    fn the_codec_case_still_matches_first_time() {
+        let out = names(&["USB Audio CODEC", "Speakers (Realtek)"]);
+        let c = choose_output(&out, "USB Audio CODEC", 1).expect("found");
+        assert_eq!(c.index, 0);
+        assert_eq!(c.step, OutputMatch::Exact);
+    }
+
+    /// Two identical codecs, one per radio: the position is what keeps radio 2's
+    /// transmit audio out of radio 1's codec.
+    #[test]
+    fn the_position_still_tells_two_identical_codecs_apart() {
+        let out = names(&["USB Audio CODEC", "USB Audio CODEC"]);
+        assert_eq!(choose_output(&out, "USB Audio CODEC", 1).unwrap().index, 0);
+        assert_eq!(choose_output(&out, "USB Audio CODEC", 2).unwrap().index, 1);
+        assert!(choose_output(&out, "USB Audio CODEC", 3).is_none());
+    }
+
+    /// Last resort, unchanged: an unknown name falls back to a plain codec.
+    #[test]
+    fn an_unknown_name_falls_back_to_the_codec() {
+        let out = names(&["USB Audio CODEC"]);
+        let c = choose_output(&out, "Something Else", 1).expect("found");
+        assert_eq!(c.step, OutputMatch::Codec);
+        assert!(choose_output(&names(&["Speakers (Realtek)"]), "Something Else", 1).is_none());
+    }
 }

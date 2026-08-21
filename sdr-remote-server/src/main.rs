@@ -347,7 +347,7 @@ fn main() -> Result<()> {
             yaesu_enabled: defaults.yaesu_enabled,
             yaesu_baud: defaults.yaesu_baud,
             yaesu_ssb_switch_on_ptt: defaults.yaesu_ssb_switch_on_ptt,
-            ftx1_memory_write_ack: false,
+            yaesu_memory_write_ack: false,
             yaesu_audio_device: defaults.yaesu_audio_device,
             yaesu_audio_output_device: defaults.yaesu_audio_output_device,
             yaesu2_port: defaults.yaesu2_port,
@@ -355,7 +355,13 @@ fn main() -> Result<()> {
             yaesu2_baud: defaults.yaesu2_baud,
             yaesu2_audio_device: defaults.yaesu2_audio_device,
             yaesu2_audio_output_device: defaults.yaesu2_audio_output_device,
+            chat_answers_seen: crate::config::load().chat_answers_seen,
+            yaesu_model_last: defaults.yaesu_model_last,
+            yaesu2_model_last: defaults.yaesu2_model_last,
+            yaesu_audio_channel: defaults.yaesu_audio_channel,
             yaesu2_audio_channel: defaults.yaesu2_audio_channel,
+            yaesu2_ssb_switch_on_ptt: defaults.yaesu2_ssb_switch_on_ptt,
+            yaesu2_memory_write_ack: defaults.yaesu2_memory_write_ack,
             amplitec_port: amplitec_port.or(defaults.amplitec_port),
             amplitec_labels: defaults.amplitec_labels,
             amplitec_max_w: defaults.amplitec_max_w,
@@ -948,12 +954,18 @@ pub async fn run_server_async(
             // never answered was driven with a parser that a 991A cannot follow
             // - no memory channels, no menu values, and an IF frame read as
             // gibberish.
-            let (model, det_baud) = yaesu::detect_model(port, baud)
-                .unwrap_or((yaesu::RadioModel::Ft991a, baud));
-            info!("[radio1] slot 1 enabled: {} @ {} baud, model={:?}", port, det_baud, model);
+            // Detected or assumed, said out loud. This line used to print
+            // `model=Ft991a` for both, so a port that never answered looked
+            // exactly like a radio that had named itself - which is how a
+            // detection that could not work stayed hidden.
+            let (model, det_baud, how) = match yaesu::detect_model(port, baud) {
+                Some((m, b)) => (m, b, "detected"),
+                None => (yaesu::RadioModel::Ft991a, baud, "ASSUMED - the port stayed silent"),
+            };
+            info!("[radio1] slot 1 enabled: {} @ {} baud, model={:?} ({})", port, det_baud, model, how);
             let audio = config.yaesu2_audio_device.clone();
             let audio_out = config.yaesu2_audio_output_device.clone();
-            match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu_ssb_switch_on_ptt, config.ftx1_memory_write_ack) {
+            match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu2_ssb_switch_on_ptt, config.yaesu2_memory_write_ack) {
                 Ok(r) => Some(Arc::new(r)),
                 Err(e) => { warn!("[radio1] init failed: {} - slot 1 off, server keeps running", e); None }
             }

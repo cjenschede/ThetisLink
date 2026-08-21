@@ -102,6 +102,35 @@ fn encode_tlu1(client_id: u8, seq: u32, token_hex: &str, payload: &[u8]) -> Vec<
 /// `chat-ticket-rotate` push. Both are read the same way - by name, so a line
 /// that gains another field later still parses, and a relay that offers no
 /// ticket at all (no chat behind it) simply yields `None`.
+/// Whether a relay is actually set up to run, as opposed to merely written down.
+///
+/// All four have to be there before anything is tried, so this is the one rule
+/// that decides whether a front end builds its tunnel - and, just as importantly,
+/// whether the chat has a relay to reach at all. Kept in one place because when
+/// the two drifted apart, a client with the relay switched off but an address
+/// still in its settings was told "this relay offers no chat", blaming a relay it
+/// had never contacted, where the honest answer was that none was configured.
+pub fn is_configured(enabled: bool, url: &str, station: &str, token: &str) -> bool {
+    enabled && !url.trim().is_empty() && !station.trim().is_empty() && !token.trim().is_empty()
+}
+
+/// The relay address the chat may work with: the configured one when the relay is
+/// actually set up, and nothing at all otherwise. The raw address stays available
+/// separately, because a problem report must redact a host that is written down
+/// whether or not it is in use.
+pub fn chat_relay_url<'a>(
+    enabled: bool,
+    url: &'a str,
+    station: &str,
+    token: &str,
+) -> &'a str {
+    if is_configured(enabled, url, station, token) {
+        url
+    } else {
+        ""
+    }
+}
+
 /// Where the chat lives, given a relay address.
 ///
 /// The relay is reached over `wss://`; the chat is the same host over `https://`
@@ -1938,6 +1967,29 @@ mod recovery_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_relay_that_is_only_written_down_is_not_configured() {
+        let (u, s, t) = ("wss://relay.example/ws", "pa0xyz", "secret");
+        assert!(is_configured(true, u, s, t));
+        // The tick off is the case that went wrong: the address is still there,
+        // and the chat used to derive an endpoint from it anyway.
+        assert!(!is_configured(false, u, s, t));
+        assert!(!is_configured(true, "   ", s, t));
+        assert!(!is_configured(true, u, "", t));
+        assert!(!is_configured(true, u, s, " "));
+    }
+
+    #[test]
+    fn the_chat_only_gets_an_address_it_may_use() {
+        let (u, s, t) = ("wss://relay.example/ws", "pa0xyz", "secret");
+        assert_eq!(chat_relay_url(true, u, s, t), u);
+        assert_eq!(chat_relay_url(false, u, s, t), "");
+        // And an empty address is what makes the chat say "no relay" rather than
+        // "this relay has no chat" - the two are one step apart.
+        assert!(chat_endpoint(chat_relay_url(false, u, s, t)).is_none());
+        assert!(chat_endpoint(chat_relay_url(true, u, s, t)).is_some());
+    }
 
     #[test]
     fn parse_udp_token_extracts_last_field() {

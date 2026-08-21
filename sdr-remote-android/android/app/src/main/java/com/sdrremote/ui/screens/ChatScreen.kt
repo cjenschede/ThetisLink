@@ -35,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontStyle
@@ -65,6 +66,7 @@ fun ChatScreen(
     onEdit: (Long, String) -> Unit,
     onLeave: (Boolean) -> Unit,
     onReport: (String, String) -> Unit,
+    onDismissAnswer: (Long) -> Unit,
     buildAttachment: suspend () -> String,
 ) {
     // Reporting a problem does not need consent (design section 4): somebody who
@@ -86,20 +88,60 @@ fun ChatScreen(
         }
         // The administrator's answer to a report reaches you whether or not you
         // joined the chat, so it sits above both screens too.
-        for (a in state.answers) {
-            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Column(Modifier.padding(10.dp)) {
-                    Text(
-                        stringResource(R.string.chat_answer_title),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                    )
-                    Text(a.body, fontSize = 14.sp)
-                    Text(
-                        clock(a.at),
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    )
+        // Bounded, and with a way to put one aside. It had neither: an
+        // unbounded column of every answer and no dismiss at all on this front
+        // end, so a reader with a few answers could not see the conversation
+        // and could not scroll to it either (two users, 2026-08-20).
+        if (state.answers.isNotEmpty()) {
+            // A third of the SCREEN, not of what the parent offers. This screen
+            // is hosted in a LazyColumn item, which measures its children with
+            // an unbounded height in the scroll direction, so asking the parent
+            // gave Dp.Infinity - a third of that is Dp.Infinity and the clamp
+            // handed back its ceiling every time. That is why it asks the
+            // window instead.
+            //
+            // What that ceiling costs is currently nothing: this activity is
+            // locked to portrait (AndroidManifest), so screenHeightDp is always
+            // the tall side and 260dp is about a quarter of it. The reasoning
+            // that produced this line was about landscape, where 260dp would
+            // have been two thirds of the screen - and that case does not exist
+            // in this app. Nobody checked the manifest before spending a review
+            // round on it (2026-08-21). The line stays because asking the
+            // parent was wrong regardless, and because it is already right if
+            // the lock is ever lifted.
+            val cap = (LocalConfiguration.current.screenHeightDp.dp / 3)
+                .coerceIn(80.dp, 260.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = cap)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                for (a in state.answers) {
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.chat_answer_title),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                )
+                                Spacer(Modifier.weight(1f))
+                                TextButton(onClick = { onDismissAnswer(a.id) }) {
+                                    Text(
+                                        stringResource(R.string.chat_answer_dismiss),
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                            }
+                            Text(a.body, fontSize = 14.sp)
+                            Text(
+                                clock(a.at),
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -112,10 +154,24 @@ fun ChatScreen(
             )
         }
 
+        // A report rides on the relay's ticket, exactly like the conversation
+        // does. Without one it cannot be sent - and the button was live anyway,
+        // so the form could be filled in and the writing went nowhere. Greyed
+        // instead of hidden: the note right above says why, and a control that
+        // vanishes explains nothing (owner, 2026-08-20).
+        val canReport = state.offline == ChatOffline.None
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { showReport = true }) {
+            TextButton(onClick = { showReport = true }, enabled = canReport) {
                 Text(stringResource(R.string.chat_report_button), fontSize = 13.sp)
             }
+        }
+        if (!canReport) {
+            Text(
+                stringResource(R.string.chat_report_needs_relay),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
         }
 
         when {
@@ -157,6 +213,23 @@ private fun OfflineNote(offline: ChatOffline) {
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         modifier = Modifier.padding(vertical = 6.dp),
     )
+    // What a relay is and how to reach one. The tab is now shown without one
+    // (2026-08-20), so somebody curious enough to open it has to find an
+    // answer here and not a dead end - the line above only says what is
+    // missing.
+    if (offline != ChatOffline.None) {
+        for (extra in listOf(
+            stringResource(R.string.chat_offline_what_a_relay_is),
+            stringResource(R.string.chat_offline_get_access),
+        )) {
+            Text(
+                extra,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
+        }
+    }
 }
 
 @Composable

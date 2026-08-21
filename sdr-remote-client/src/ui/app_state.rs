@@ -258,8 +258,13 @@ impl SdrRemoteApp {
             tx_filter_initialized: false,
             last_tx_follow_sent: None,
             tx_follow_last_send_at: None,
-            thetis_configured: true,
-            rx2_present: true,
+            // Seeded from what the server said last time, not assumed. See the
+            // fields in config.rs for why an assumption was wrong here.
+            thetis_configured: config.thetis_configured_last,
+            rx2_present: config.rx2_present_last,
+            // Not seeded from disk: the toggle it guards already sits behind
+            // `thetis_configured`, so a bare install never shows it either way.
+            dx_cluster_available: true,
             thetis_starting: false,
             spectrum_enabled: config.spectrum_enabled,
             spectrum_bins: Vec::new(),
@@ -406,7 +411,12 @@ impl SdrRemoteApp {
             rx2_logged_freq_hz: 0,
             view_mismatch_at: None,
             view_sent_at: None,
-            active_tab: Tab::Radio,
+            // Every session begins disconnected, and Server is where connecting
+            // happens - so that is where the client opens, first run or
+            // thousandth. Radio opened onto controls that do nothing until a
+            // server answers, and on a fresh install the tab was not even
+            // shown, which dropped the operator onto an empty Devices list.
+            active_tab: Tab::Server,
             last_connect_status: sdr_remote_logic::state::ConnectStatus::Disconnected,
             // PATCH-3: kick off the mDNS browse on app start. Daemon-init failure
             // is caught inside `BrowseHandle::start` and surfaces as an empty
@@ -559,8 +569,12 @@ impl SdrRemoteApp {
             yaesu_tx_active: false,
             yaesu_power_on: false,
             yaesu_volume: config.yaesu_volume,
-            yaesu_model: 0,
-            yaesu2_model: 1,
+            // Unknown until the server names them. These used to open as 0
+            // (991A) and 1 (FTX-1) - guesses that showed up as model names on a
+            // station with no radio, and that let model-specific controls
+            // through before anything had confirmed the model.
+            yaesu_model: sdr_remote_core::protocol::RADIO_MODEL_UNKNOWN,
+            yaesu2_model: sdr_remote_core::protocol::RADIO_MODEL_UNKNOWN,
             yaesu2_connected: false,
             // Optimistic presence: show a Yaesu that was present last session at once
             // (pre-connect); the server prunes it on connect if it is (no longer) there.
@@ -677,7 +691,12 @@ impl SdrRemoteApp {
             chat_popout_size: None,
             chat_popout_init_applied: false,
             chat_open: config.chat_open,
-            chat: sdr_remote_chat::ChatPanel::default(),
+            chat: {
+                // What was folded away last session comes back folded away.
+                let mut panel = sdr_remote_chat::ChatPanel::default();
+                panel.restore_seen(&super::config::load_chat_answers_seen());
+                panel
+            },
             yaesu_mem_active_ch: None,
             yaesu2_mem_active_ch: None,
             yaesu_mem_active_live: false,
@@ -709,15 +728,16 @@ impl SdrRemoteApp {
             yaesu2_mem_radio_received: false,
             yaesu2_mem_blob_hash: None,
             yaesu_mem_active_slot: 0,
-            yaesu_menu_items: Vec::new(),
-            yaesu_menu_received: false,
-            yaesu_menu_blob_hash: None,
-            yaesu2_menu_entries: Vec::new(),
-            yaesu2_menu_received: false,
-            yaesu2_menu_blob_hash: None,
+            menu_items: [Vec::new(), Vec::new()],
+            menu_entries: [Vec::new(), Vec::new()],
+            menu_blob_hash: [None; 2],
+            menu_parsed_as: [sdr_remote_core::protocol::RADIO_MODEL_UNKNOWN; 2],
             collapse_yaesu2_menu: config.collapse_yaesu2_menu,
-            yaesu2_menu_edits: std::collections::HashMap::new(),
-            yaesu2_menu_filter: String::new(),
+            menu_edits: [
+                std::collections::HashMap::new(),
+                std::collections::HashMap::new(),
+            ],
+            menu_filter: [String::new(), String::new()],
             rotor_goto_input: String::new(),
             dx_spots: Vec::new(),
             smooth_display_center_hz: 0.0,
