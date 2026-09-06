@@ -183,12 +183,11 @@ fn main() {
         // Inverse FFT in-place
         ifft.process(&mut ifft_buf);
 
-        // FFT-channelizer normalization. Empirisch: voor input cos amp A
-        // is pre-AGC peak na OLA = A bij norm = 1/N_fft. (De channelizer
-        // iFFT op alleen geselecteerde bins reconstrueert geen Hann-
-        // shaped output — output is constant over de frame — dus de OLA
-        // van twee overlappende constanten geeft een 2× factor die hier
-        // gecompenseerd wordt.)
+        // FFT channelizer normalization. Empirical: for an input cos of amplitude A the
+        // pre-AGC peak after OLA is A at norm = 1/N_fft. (The channelizer iFFT over
+        // selected bins only does not reconstruct Hann-shaped output - the output is
+        // constant across the frame - so the OLA of two overlapping constants gives a 2x
+        // factor, which is compensated here.)
         let norm = 1.0 / FFT_N as f32;
 
         // Overlap-add: emit OUTPUT_HOP samples; sum new[0..64] + old_tail[0..64].

@@ -32,7 +32,10 @@ pub const POLL_INTERVAL_CLOSED: Duration = Duration::from_secs(30);
 /// long, the answer is "offline" and the UI carries on.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
-#[derive(Debug, Clone)]
+// PartialEq so a test can say which command was sent rather than pattern-match
+// its way to the same answer. It is plain data; there is nothing to compare that
+// is not carried in the variant.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ChatCommand {
     /// The relay handed out a (new) ticket, or withdrew one by disconnecting.
     Ticket(Option<String>),
@@ -69,6 +72,13 @@ pub enum ChatCommand {
     /// The redaction happens before this, not here: what leaves the machine has
     /// to be what was shown on screen, or the preview is theatre (design 1.3).
     SendDiagnosis { report: String },
+    /// Put one answer from the administrator aside, on the service.
+    ///
+    /// Sent alongside the local fold-away rather than instead of it. An older
+    /// service has no such endpoint and answers 404; the local list then keeps
+    /// doing what it always did, and nothing has to ask beforehand what the
+    /// other end can do. See DESIGN-antwoorden-gezien-op-de-dienst.md phase B.
+    DismissAnswer { id: i64 },
     /// Fetch anything after the last id we hold.
     Poll { since: i64 },
 }
@@ -140,6 +150,15 @@ pub enum ChatEvent {
     /// the reason to reach the sender and not only the log (§8), so the service
     /// sends one and this passes it through unchanged.
     Failed(String),
+    /// Nothing to apply.
+    ///
+    /// For a command whose outcome the model has no use for. Putting an answer
+    /// aside is the case it exists for: the screen already did it locally, and
+    /// what the service answers - success, 404 from a version that has no such
+    /// endpoint, or nothing at all - must not become a state, an error or a
+    /// notice. Without an arm of its own such an answer falls into the
+    /// catch-all below and is read as a state.
+    NoChange,
     /// Not usable, and WHY.
     ///
     /// "Offline" on its own covers three different situations that need three
@@ -249,6 +268,11 @@ fn perform(
             .get(format!("{base}/replies"))
             .header("Authorization", &auth)
             .send(),
+        ChatCommand::DismissAnswer { id } => client
+            .post(format!("{base}/reply/dismiss"))
+            .header("Authorization", &auth)
+            .body(format!(r#"{{"id":{}}}"#, id))
+            .send(),
         ChatCommand::SendDiagnosis { report } => client
             .post(format!("{base}/diagnosis"))
             .header("Authorization", &auth)
@@ -260,6 +284,17 @@ fn perform(
         }
     };
 
+    // One thing may be swallowed for a dismiss, and only one: a service that
+    // has no such endpoint. That is what the phasing promised and it is the
+    // whole of it.
+    //
+    // Not a refused ticket - that is worth knowing about, and every other
+    // command says so. Not a dead network either: that is simply true, and the
+    // window is going to say it anyway. The first version of this swallowed
+    // both, which turned "quiet about an older service" into "quiet about
+    // anything at all".
+    let tolerate_missing_endpoint = matches!(cmd, ChatCommand::DismissAnswer { .. });
+
     let resp = match result {
         Ok(r) => r,
         // Allowed to be down; the window says which kind of quiet this is.
@@ -270,6 +305,9 @@ fn perform(
     let text = resp.text().unwrap_or_default();
     let json: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
 
+    if status == reqwest::StatusCode::NOT_FOUND && tolerate_missing_endpoint {
+        return ChatEvent::NoChange;
+    }
     if !status.is_success() {
         // A refusal the client is meant to recognise says so in a code, and
         // then it is said in the reader's own language. This is the one
@@ -318,6 +356,10 @@ fn perform(
                 .unwrap_or_default();
             ChatEvent::Answers(answers)
         }
+        // Its own arm for the reason the SendDiagnosis arm two above has one:
+        // without it this falls into the catch-all and {"dismissed":2} is read
+        // as a state with no consent version and no remaining allowance.
+        ChatCommand::DismissAnswer { .. } => ChatEvent::NoChange,
         ChatCommand::Poll { .. } => ChatEvent::Messages {
             new: parse_message_list(&json, "messages"),
             edited: parse_message_list(&json, "edited"),
@@ -394,6 +436,146 @@ fn json_string(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// A stand-in for the service: one request, one canned answer, and it hands
+    /// back what it was sent so a test can say what went over the wire.
+    ///
+    /// Proposed in review. Everything past ChatCommand was unguarded - a wrong
+    /// URL, a GET instead of a POST and a misspelled body key all stayed green
+    /// - and thirty lines of TcpListener close that without a new dependency.
+    fn fake_service(status_line: &str, body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("een vrije poort");
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status = status_line.to_string();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+                let out = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(out.as_bytes());
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), rx)
+    }
+
+    fn client() -> reqwest::blocking::Client {
+        reqwest::blocking::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            // Without this, a machine with HTTP_PROXY or ALL_PROXY set sends
+            // even 127.0.0.1 to the proxy, and review showed what that costs:
+            // the request test fails while the other two pass without testing
+            // anything, because a connection error lands on the same answer
+            // they expect. Broken code, green suite, only behind a proxy.
+            //
+            // Removing this line cannot be caught by any test - this comment is
+            // the only guard there is.
+            .no_proxy()
+            .build()
+            .unwrap()
+    }
+
+    /// What the live service answers a successful dismiss with. Copied from the
+    /// running phase A service, not invented.
+    const DISMISS_OK: &str = r#"{"dismissed":2,"changed":true}"#;
+
+    /// The answer to a dismiss is not a state. Read as one it says "no
+    /// consent_text_version, no reports_left" and the window believes it.
+    #[test]
+    fn a_successful_dismiss_does_not_pass_for_a_state() {
+        let (base, _rx) = fake_service("200 OK", DISMISS_OK);
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        // Positively, not as a denial. "Not a State" was also satisfied by
+        // Failed, which is the round-one fault in another colour, and by
+        // Answers(vec![]) - which would wipe every answer off the screen.
+        assert!(
+            matches!(evt, ChatEvent::NoChange),
+            "een weggeklikt antwoord verandert niets: {evt:?}"
+        );
+    }
+
+    /// An older service has no such endpoint. That is the whole reason the
+    /// phasing works, and it must be quiet - not a red line in the window every
+    /// time somebody folds an answer away.
+    #[test]
+    fn an_older_service_saying_404_is_quiet() {
+        let (base, _rx) = fake_service("404 Not Found", r#"{"error":"not found"}"#);
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        assert!(
+            matches!(evt, ChatEvent::NoChange),
+            "de terugval hoort stil te zijn en verder niets te doen: {evt:?}"
+        );
+    }
+
+    /// A ticket that is not accepted is not the same thing as a service that
+    /// has no such endpoint. The first is worth knowing about; only the second
+    /// is what the phasing promised to swallow.
+    #[test]
+    fn a_refused_ticket_is_not_swallowed() {
+        let (base, _rx) = fake_service("401 Unauthorized", r#"{"error":"no"}"#);
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        // Positively: "not NoChange" was also satisfied by Offline, and then a
+        // refused ticket would reach the reader as "the network is down".
+        assert!(
+            matches!(evt, ChatEvent::Failed(_)),
+            "een geweigerd ticket is een fout, geen stilte en geen netwerkstoring: {evt:?}"
+        );
+    }
+
+    /// The brief claimed success, 404 and a dead network were equally invisible.
+    /// The third had no test, and it should not be invisible at all: the network
+    /// being down is true, and every other command says so.
+    #[test]
+    fn a_dead_network_still_says_it_is_offline() {
+        // Nothing listening: bind, note the port, drop the listener.
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let base = format!("http://127.0.0.1:{port}");
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        assert!(
+            matches!(evt, ChatEvent::Offline(_)),
+            "een dood netwerk is geen stilte om te verbergen: {evt:?}"
+        );
+    }
+
+    /// The tolerance is for one command, not for the service being flaky. A 404
+    /// on anything else is a real answer and has to reach the reader - without
+    /// this, widening the tolerance to every command stays green.
+    #[test]
+    fn a_404_on_another_command_is_not_swallowed() {
+        let (base, _rx) = fake_service("404 Not Found", r#"{"error":"not found"}"#);
+        let evt = perform(&client(), &base, "t", &ChatCommand::Answers);
+        assert!(
+            !matches!(evt, ChatEvent::NoChange),
+            "alleen wegklikken mag een 404 slikken: {evt:?}"
+        );
+    }
+
+    /// Method, path and body. Everything past ChatCommand was unguarded until
+    /// this test: a typo in the URL or a GET would have stayed green.
+    #[test]
+    fn the_request_is_a_post_to_the_dismiss_path_with_the_id() {
+        let (base, rx) = fake_service("200 OK", DISMISS_OK);
+        let _ = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 7 });
+        let sent = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("een verzoek");
+        assert!(sent.starts_with("POST /reply/dismiss "), "methode en pad: {sent}");
+        assert!(sent.contains(r#"{"id":7}"#), "body: {sent}");
+        // reqwest writes header names in lower case; the test asked for the
+        // spelling in our own source and got a red that was about the test.
+        assert!(sent.to_lowercase().contains("authorization: bearer t"), "ticket: {sent}");
+    }
+
     use super::*;
 
     #[test]

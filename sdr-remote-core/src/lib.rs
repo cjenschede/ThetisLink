@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+pub mod cat_health;
+pub mod thetis_power;
 pub mod auth;
 pub mod codec;
 pub mod conf_layout;
@@ -10,7 +12,7 @@ pub mod protocol;
 pub mod stream;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.10.0";
+pub const VERSION: &str = "2.11.0";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).
@@ -94,7 +96,7 @@ pub const FULL_SPECTRUM_BINS: usize = 8192;
 /// Default spectrum frame rate
 pub const DEFAULT_SPECTRUM_FPS: u8 = 15;
 
-// ── DDC spectrum dB↔u16 packing (wire contract, server pack ↔ client unpack) ──
+// -- DDC spectrum dB<->u16 packing (wire contract, server pack <-> client unpack) --
 //
 // A packed bin value `v` encodes `dB = FLOOR + (v / MAX) * RANGE`. The server
 // packs bins with these constants and every client MUST unpack with the same
@@ -143,7 +145,7 @@ mod spectrum_pack_tests {
     #[test]
     fn spectrum_db_pack_roundtrip() {
         // The pack scale is the client/server wire contract. Assert the
-        // documented anchors and that pack∘unpack is stable within one bin.
+        // documented anchors and that pack-then-unpack is stable within one bin.
         assert_eq!(pack_spectrum_db(SPECTRUM_PACK_FLOOR_DB), 0);
         assert_eq!(pack_spectrum_db(SPECTRUM_PACK_FLOOR_DB + SPECTRUM_PACK_RANGE_DB), 65535);
         // -30 dB is the documented full-scale reference (-150 + 120).

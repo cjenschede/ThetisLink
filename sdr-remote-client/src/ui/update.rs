@@ -7,6 +7,235 @@
 //! calls.
 
 use super::*;
+use sdr_remote_logic::ptt_button::{ptt_button, PttButton};
+use sdr_remote_logic::ptt_intent::{desktop_frame, Latches};
+
+impl SdrRemoteApp {
+    /// Decide and send the PTT for both Yaesu slots - the only place that does.
+    ///
+    /// Mirrors the Thetis handler: every input is a latch, they are OR-ed, the
+    /// result is compared with what we last sent, and only a change goes out.
+    /// The radio's own TX state is not in this, by design - it answers "is this
+    /// radio transmitting", which is just as true when another operator is doing
+    /// it, and it arrives a round trip late.
+    /// Put the PTT lamps where the state says they belong.
+    ///
+    /// Every frame, from the values themselves rather than from the moment they
+    /// changed. Writing them in the "it changed" branch meant every other way
+    /// out of a transmission - a refusal, a lost connection, a window closing -
+    /// left the lamp on, and only a real press could put it right (owner,
+    /// build 37).
+    /// How long a refusal stays on the button.
+    ///
+    /// Long enough to read, short enough not to get in the way once the transmitter
+    /// has come free in the meantime. The button is NOT locked during that afterglow:
+    /// if the operator presses again and it is possible by then, that should simply
+    /// work.
+    pub(super) const BLOCKED_SHOWN_MS: u128 = 1500;
+
+    pub(super) fn recently_blocked(at: Option<Instant>) -> bool {
+        at.map(|t| t.elapsed().as_millis() < Self::BLOCKED_SHOWN_MS).unwrap_or(false)
+    }
+
+    fn sync_midi_leds(&mut self) {
+        use crate::midi::MidiAction;
+        let want = [self.ptt, self.yaesu_ptt_last_sent[0], self.yaesu_ptt_last_sent[1]];
+        let actions = [MidiAction::Ptt, MidiAction::YaesuPtt, MidiAction::Radio2Ptt];
+        for i in 0..3 {
+            if self.led_sent[i] != want[i] {
+                self.led_sent[i] = want[i];
+                self.midi.send_led(actions[i], want[i]);
+            }
+        }
+    }
+
+    /// Everything tied to a Thetis PTT change, in one place.
+    ///
+    /// It used to sit in the top-bar block, where the decision was taken. That
+    /// decision has moved to the end of the frame - see drive_ptt() - and this belongs
+    /// with it: the spectrum override, the TX profile for the current microphone, the
+    /// spike protection and the command itself.
+    fn apply_thetis_ptt(&mut self, new_ptt: bool) {
+        // Nothing to do when nothing changed. Everything below is transition
+        // work - the log line, the spectrum override, the TX profile, the
+        // spike protection, the command - and drive_ptt calls this on every
+        // frame, so without this the tail of the function ran sixty times a
+        // second with the same value.
+        //
+        // That was not free. `SetPtt(false)` settles a refusal, and until this
+        // patch it settled every transmitter's refusal, so the Yaesu answer
+        // from the server was wiped about sixteen milliseconds after it
+        // arrived and the screen never saw it. `SetPlaybackMute(false)` went
+        // out on every frame too, one frame after the Yaesu path had asked for
+        // the mute - which is spike protection that lasts a single frame.
+        //
+        // Same shape as the Yaesu slots in drive_ptt, which have always
+        // skipped on `wil[slot] == self.yaesu_ptt_last_sent[slot]`.
+        if new_ptt == self.ptt {
+            return;
+        }
+        // Same line as the Yaesu slots below: one per transition, with what
+        // caused it.
+        log::info!(
+            "PTT thetis -> {} (mouse={} midi={} want={} blocked_own={} other_tx={} multi_tx={})",
+            if new_ptt { "ON" } else { "OFF" },
+            self.mouse_ptt,
+            self.midi_ptt,
+            self.thetis_want,
+            self.ptt_blocked_by_own,
+            self.other_tx,
+            self.multi_tx,
+        );
+        // TX spectrum override
+        if new_ptt {
+            // Entering TX: save ref, range, auto - then set TX defaults
+            self.tx_spectrum_saved_ref_db = Some(self.spectrum_ref_db);
+            self.tx_spectrum_saved_range = Some(self.spectrum_range_db);
+            self.tx_spectrum_saved_auto_ref = Some(self.auto_ref_enabled);
+            self.tx_spectrum_restore_auto_at = None;
+            self.auto_ref_enabled = false;
+            self.spectrum_ref_db = -30.0;
+            self.spectrum_range_db = 120.0;
+        } else {
+            // Leaving TX: restore ref+range immediately, auto_ref after 200ms
+            if let Some(saved) = self.tx_spectrum_saved_ref_db.take() {
+                self.spectrum_ref_db = saved;
+            }
+            if let Some(saved) = self.tx_spectrum_saved_range.take() {
+                self.spectrum_range_db = saved;
+            }
+            if self.tx_spectrum_saved_auto_ref.is_some() {
+                self.tx_spectrum_restore_auto_at = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+            }
+        }
+        // Auto-switch TX profile for current mic before PTT on
+        if new_ptt {
+            let mic = if self.selected_input.is_empty() { "(Default)" } else { &self.selected_input };
+            if let Some(profile_name) = self.mic_profile_map.get(mic).or_else(|| self.mic_profile_map.get("(Default)")) {
+                if let Some((idx, _)) = self.tx_profiles.iter().find(|(_, n)| n == profile_name) {
+                    if *idx != self.tx_profile {
+                        let _ = self.cmd_tx.send(Command::SetControl(sdr_remote_core::protocol::ControlId::TxProfile, *idx as u16));
+                        self.tx_profile = *idx;
+                    }
+                }
+            }
+        }
+        self.apply_ptt_spike_protection(false, new_ptt);
+        let _ = self.cmd_tx.send(Command::SetPtt(new_ptt));
+        self.ptt = new_ptt;
+    }
+
+    fn drive_ptt(&mut self) {
+        // Work out both slots first, and only then send.
+        //
+        // Without multi-TX only one may transmit: they share one encoding path, so the
+        // second would transmit without modulation. That choice can only be made once you
+        // know what both of them want - hence two passes instead of one.
+        let mut wil = [false; 2];
+        for slot in 0usize..2 {
+            let (held, popout) = if slot == 0 {
+                (self.yaesu_held_by_other, self.yaesu_popout)
+            } else {
+                (self.yaesu2_held_by_other, self.yaesu2_popout)
+            };
+
+            // One indexing, not two branches that can drift apart.
+            //
+            // There were eight assignments here in two mirrored blocks. A reviewer removed
+            // one of them - the midi latch of slot 1 - and the whole workspace stayed green.
+            // That is impossible now rather than untested: the latches go in as a whole and
+            // come out as a whole (Lane 6 step 2c).
+            let d = desktop_frame(
+                self.yaesu_latches[slot],
+                popout,
+                held,
+                self.yaesu_ptt_last_sent[slot],
+            );
+            self.yaesu_latches[slot] = d.latches;
+            wil[slot] = d.want_tx;
+
+        }
+
+        // ONE arbitration per frame, for all three at once, with the wants as they are
+        // NOW. This is the only point where that is possible: the top bar and both
+        // pop-outs have been drawn, so all three wants exist.
+        //
+        // There were two - one for Thetis in the top bar and one for the Yaesus here -
+        // and the first looked at the Yaesu state of the previous frame. A fresh Thetis
+        // want could be refused on stale data and thrown away immediately, while the
+        // Yaesu blocking it let go later in that same frame (review finding).
+        let arb = sdr_remote_logic::ptt_intent::arbitrate(
+            [self.thetis_want, wil[0], wil[1]],
+            [self.ptt, self.yaesu_ptt_last_sent[0], self.yaesu_ptt_last_sent[1]],
+            [self.other_tx, self.yaesu_held_by_other, self.yaesu2_held_by_other],
+            self.multi_tx,
+        );
+        wil = [arb.granted[1], arb.granted[2]];
+        self.yaesu_blocked_by_own = [arb.blocked[1], arb.blocked[2]];
+
+        self.ptt_blocked_by_own = arb.blocked[0];
+        if arb.blocked[0] {
+            self.ptt_blocked_at = Some(Instant::now());
+            // A refused CLICK disappears instead of waiting - otherwise it fires later with
+            // nothing being pressed (build 52).
+            //
+            // A held key simply comes back after this, because it is re-read every frame.
+            // That is intended: for as long as the operator holds it down he is saying "I
+            // want to transmit", and the moment that becomes possible it should happen. See
+            // the rule at PttIntent::want_tx.
+            self.mouse_ptt = false;
+            self.midi_ptt = false;
+        }
+        self.apply_thetis_ptt(arb.granted[0]);
+        // See the Thetis branch above: refused is refused. Without this a press sat
+        // waiting and fired at the moment the operator thought he was done.
+        for slot in 0usize..2 {
+            if self.yaesu_blocked_by_own[slot] {
+                self.yaesu_blocked_at[slot] = Some(Instant::now());
+                self.yaesu_latches[slot] = self.yaesu_latches[slot].released();
+            }
+        }
+
+        for slot in 0usize..2 {
+            if wil[slot] == self.yaesu_ptt_last_sent[slot] {
+                continue;
+            }
+            let want = wil[slot];
+            // One line per transition, never per frame. Enough to read back
+            // afterwards which control caused it and what the arbitration
+            // decided - the owner saw behaviour once that he could not
+            // reproduce, and a story is not evidence (2026-09-04).
+            let l = self.yaesu_latches[slot];
+            log::info!(
+                "PTT yaesu{} -> {} (mouse={} space={} midi={} wait={} blocked_own={} held_by_other={} multi_tx={})",
+                slot + 1,
+                if want { "ON" } else { "OFF" },
+                l.mouse,
+                l.space,
+                l.midi,
+                l.needs_new_press,
+                self.yaesu_blocked_by_own[slot],
+                if slot == 0 { self.yaesu_held_by_other } else { self.yaesu2_held_by_other },
+                self.multi_tx,
+            );
+            // A slot that loses does not keep its latches: otherwise it fires as
+            // soon as the other one lets go. AFTER the line above, so the log
+            // says which control was down rather than what it looks like once
+            // they have been cleared - it said space=false on every OFF, which
+            // is true of the moment it was written and useless.
+            if !want {
+                self.yaesu_latches[slot] = self.yaesu_latches[slot].released();
+            }
+            self.yaesu_ptt_last_sent[slot] = want;
+            self.apply_ptt_spike_protection(true, want);
+            let _ = self.cmd_tx.send(if slot == 0 {
+                Command::SetYaesuPtt(want)
+            } else {
+                Command::SetYaesu2Ptt(want)
+            });
+        }
+    }
+}
 
 impl eframe::App for SdrRemoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -249,12 +478,31 @@ impl eframe::App for SdrRemoteApp {
                     (Color32::from_rgb(60, 60, 60), "PTT".to_string(), true)
                 } else if current_pos_rx_only {
                     (Color32::from_rgb(120, 50, 50), rust_i18n::t!("main_rx_only").to_string(), true)
-                } else if self.other_tx {
-                    (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true)
-                } else if self.ptt {
-                    (Color32::RED, "TX".to_string(), false)
                 } else {
-                    (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false)
+                    // Same rule as the two Yaesu buttons - one place, so a third
+                    // window cannot quietly answer it differently.
+                    match sdr_remote_logic::ptt_button::ptt_button_with_own(
+                        self.other_tx,
+                        self.ptt,
+                        Self::recently_blocked(self.ptt_blocked_at),
+                    ) {
+                        PttButton::Busy => (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true),
+                        PttButton::Transmitting => (Color32::RED, "TX".to_string(), false),
+                        PttButton::Idle => (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false),
+                        // Not locked during the afterglow: if the transmitter has come free in the
+                        // meantime, a new press should work. It is only held while the refusal applies
+                        // NOW.
+                        PttButton::BlockedByOwnTx => {
+                            ui.ctx().request_repaint_after(
+                                std::time::Duration::from_millis(200),
+                            );
+                            (
+                                Color32::from_rgb(120, 90, 0),
+                                rust_i18n::t!("main_tx_own_elsewhere").to_string(),
+                                self.ptt_blocked_by_own,
+                            )
+                        }
+                    }
                 };
 
                 let button = egui::Button::new(
@@ -300,49 +548,18 @@ impl eframe::App for SdrRemoteApp {
                 }
                 // No Thetis -> never key the Thetis PTT (spacebar/mouse/MIDI all suppressed),
                 // so the button cannot go red for a radio that is not there.
-                let new_ptt = (self.mouse_ptt || space_held || self.midi_ptt)
+                let raw_want = (self.mouse_ptt || space_held || self.midi_ptt)
                     && !current_pos_rx_only
                     && self.thetis_configured;
-                if new_ptt != self.ptt {
-                    self.midi.send_led(crate::midi::MidiAction::Ptt, new_ptt);
-                    // TX spectrum override
-                    if new_ptt {
-                        // Entering TX: save ref, range, auto - then set TX defaults
-                        self.tx_spectrum_saved_ref_db = Some(self.spectrum_ref_db);
-                        self.tx_spectrum_saved_range = Some(self.spectrum_range_db);
-                        self.tx_spectrum_saved_auto_ref = Some(self.auto_ref_enabled);
-                        self.tx_spectrum_restore_auto_at = None;
-                        self.auto_ref_enabled = false;
-                        self.spectrum_ref_db = -30.0;
-                        self.spectrum_range_db = 120.0;
-                    } else {
-                        // Leaving TX: restore ref+range immediately, auto_ref after 200ms
-                        if let Some(saved) = self.tx_spectrum_saved_ref_db.take() {
-                            self.spectrum_ref_db = saved;
-                        }
-                        if let Some(saved) = self.tx_spectrum_saved_range.take() {
-                            self.spectrum_range_db = saved;
-                        }
-                        if self.tx_spectrum_saved_auto_ref.is_some() {
-                            self.tx_spectrum_restore_auto_at = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
-                        }
-                    }
-                }
-                // Auto-switch TX profile for current mic before PTT on
-                if new_ptt {
-                    let mic = if self.selected_input.is_empty() { "(Default)" } else { &self.selected_input };
-                    if let Some(profile_name) = self.mic_profile_map.get(mic).or_else(|| self.mic_profile_map.get("(Default)")) {
-                        if let Some((idx, _)) = self.tx_profiles.iter().find(|(_, n)| n == profile_name) {
-                            if *idx != self.tx_profile {
-                                let _ = self.cmd_tx.send(Command::SetControl(sdr_remote_core::protocol::ControlId::TxProfile, *idx as u16));
-                                self.tx_profile = *idx;
-                            }
-                        }
-                    }
-                }
-                self.apply_ptt_spike_protection(false, new_ptt);
-                let _ = self.cmd_tx.send(Command::SetPtt(new_ptt));
-                self.ptt = new_ptt;
+                // The WANT only. The decision falls at the end of the frame, in drive_ptt(),
+                // together with the Yaesus'.
+                //
+                // Deciding here could not be right: at this point the pop-outs have not been
+                // drawn, so this frame's Yaesu wants do not exist yet and Thetis had to make do
+                // with what went to the server last frame. A fresh press was then refused on
+                // stale data and thrown away immediately, while the Yaesu blocking it let go
+                // later in that same frame (review finding).
+                self.thetis_want = raw_want;
 
                 // Tune button (visible when tuner available on the active antenna).
                 // Multi-tuner note: stale-detection is handled SERVER-side now -
@@ -626,6 +843,10 @@ impl eframe::App for SdrRemoteApp {
                     if ui.button(rust_i18n::t!("main_disconnect").to_string()).clicked() {
                         let _ = self.cmd_tx.send(Command::Disconnect);
                         self.connected = false;
+                        // Here as well as in sync_state, and not by accident:
+                        // the line above makes the transition invisible to the
+                        // block that watches for it. See release_all_ptt.
+                        self.release_all_ptt();
                         self.catsync.force_unmute();
                     }
                     ui.colored_label(Color32::GREEN, rust_i18n::t!("main_connected").to_string());
@@ -1163,7 +1384,7 @@ impl eframe::App for SdrRemoteApp {
         // radio is gone (presence off). Without the presence term the flag stayed true
         // through a disconnect (want preserved), so on reconnect apply_popout_geometry
         // skipped the saved pos/size and the window reopened at the default spot.
-        if !(self.yaesu_popout && self.yaesu_present_last) { self.yaesu_popout_init_applied = false; }
+        if !(self.yaesu_popout && (self.yaesu_present_last || self.usb_lost_showing(0))) { self.yaesu_popout_init_applied = false; }
         // Yaesu popout window. Gated on optimistic PRESENCE (yaesu_present_last) + want
         // (yaesu_popout) - present_last, not yaesu_connected, so the window is optimistic
         // pre-connect like the chips/RX/VRX; the server prunes present_last on connect.
@@ -1174,16 +1395,25 @@ impl eframe::App for SdrRemoteApp {
         // still enabled, with no main-screen chip left to close it. Yaesu is not a spectrum
         // source (model B), so the open flag + presence gate stay here; the shared
         // show_popout helper owns only the geometry/focus/close/save lifecycle.
-        if self.yaesu_popout && self.yaesu_present_last {
+        // Absent is not always a reason to take the window away. While this
+        // client is the one keying the radio, removing it takes away the only
+        // place that could say the cable is gone - and the radio is still
+        // transmitting a carrier at that moment (see usb_lost).
+        if self.yaesu_popout && (self.yaesu_present_last || self.usb_lost_showing(0)) {
             self.render_yaesu1_popout(ctx);
         }
 
         // Slot-1 (FTX-1) own popout window - separate from the 991A window, routed
         // to slot 1. Same presence-gated model as slot 0.
-        if !(self.yaesu2_popout && self.yaesu2_present_last) { self.yaesu2_popout_init_applied = false; }
-        if self.yaesu2_popout && self.yaesu2_present_last {
+        if !(self.yaesu2_popout && (self.yaesu2_present_last || self.usb_lost_showing(1))) { self.yaesu2_popout_init_applied = false; }
+        if self.yaesu2_popout && (self.yaesu2_present_last || self.usb_lost_showing(1)) {
             self.render_yaesu2_popout(ctx);
         }
+
+        // After the pop-outs, so the mouse and spacebar latches they set are this
+        // frame's. One decision per radio, whether those windows are open or not.
+        self.drive_ptt();
+        self.sync_midi_leds();
 
         // Handle spectrum interaction keys (fallback for main-window spectrum;
         // popout viewports handle their own keys inside the viewport closure)
@@ -1311,7 +1541,7 @@ impl eframe::App for SdrRemoteApp {
                         ui.label(RichText::new(rust_i18n::t!("main_about_hardware").to_string()).size(13.0).strong());
                         egui::Grid::new("hw_grid").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
                             for (dev, iface) in [
-                                ("ANAN 7000DLE", "TCI (via Thetis)"),
+                                ("Any radio Thetis drives", "TCI (via Thetis)"),
                                 ("Yaesu FT-991A", "Serial CAT + USB Audio"),
                                 ("Yaesu FTX-1", "Serial CAT + USB Audio"),
                                 ("RF2K-S PA", "HTTP API"),
@@ -1322,6 +1552,8 @@ impl eframe::App for SdrRemoteApp {
                                 ("EA7HG Visual Rotor", "UDP"),
                                 ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
                                 ("PstRotator (any supported rotor)", "XML over UDP"),
+                                ("YPC21 / PTT-Z01 PTT button", "BLE (Android)"),
+                                ("ZL-01 shutter button", "Bluetooth touch device (Android)"),
                             ] {
                                 ui.label(dev);
                                 ui.label(RichText::new(iface).color(Color32::GRAY));

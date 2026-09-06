@@ -18,6 +18,28 @@ const SERVER_DEFAULT_MAX_BINS: u16 = 2048;
 /// Timeout before considering a client disconnected (15s for mobile resilience)
 const SESSION_TIMEOUT_SECS: u64 = 15;
 
+/// The deadline for a client that is holding a transmitter.
+///
+/// Fifteen seconds is a reasonable time to miss a listener. It is not a
+/// reasonable time to leave a radio keyed with nobody there: a link that dies
+/// mid-transmission left a 991A on the air for twenty seconds, measured
+/// 2026-09-03. Heartbeats arrive every 500 ms, so three seconds is six of them -
+/// past any ordinary hiccup - and it turns that twenty seconds into three.
+///
+/// Thetis has had this all along in another form: 500 ms without PTT packets and
+/// it lets go. This is the same idea, kept slower because a Yaesu's PTT is a
+/// command and not a stream, so there is nothing here that arrives every 20 ms.
+const TX_HOLDER_TIMEOUT_SECS: u64 = 3;
+
+/// How long this client may be silent before it is dropped.
+pub fn timeout_secs(holds_transmitter: bool) -> u64 {
+    if holds_transmitter {
+        TX_HOLDER_TIMEOUT_SECS
+    } else {
+        SESSION_TIMEOUT_SECS
+    }
+}
+
 /// Max failed auth attempts before blocking an IP
 const MAX_AUTH_FAILURES: u32 = 5;
 /// Block duration after too many failures
@@ -227,12 +249,36 @@ pub enum TouchResult {
     NewClient,
 }
 
+/// A transmitter the server can hand audio to.
+///
+/// One radio has one TX audio channel, one client has one, and the server never
+/// sends two channels into one radio - there is no mixing. So a target is an
+/// exclusive resource with at most one owner, and the same rule holds for every
+/// radio rather than only for Thetis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TxTarget {
+    Thetis,
+    /// The Yaesu in slot 0 - a 991A or an FTX-1, whichever is configured there.
+    Yaesu1,
+    /// The Yaesu in slot 1, for a second radio.
+    Yaesu2,
+}
+
+impl TxTarget {
+    pub const ALL: [TxTarget; 3] = [TxTarget::Thetis, TxTarget::Yaesu1, TxTarget::Yaesu2];
+}
+
 /// Manages connected client sessions.
 /// Supports multiple simultaneous clients with single-TX arbitration.
 pub struct SessionManager {
     clients: HashMap<SocketAddr, ClientSession>,
-    /// Which client currently holds the TX (PTT) lock
-    tx_holder: Option<SocketAddr>,
+    /// Who holds each transmitter, if anyone.
+    ///
+    /// Was a single `Option<SocketAddr>` for Thetis. The Yaesu paths had no
+    /// owner at all: any client's audio went to the radio while the PTT flag was
+    /// up, and any client could raise or drop that flag - so two people could
+    /// talk into one radio, and one could end the other's transmission.
+    tx_holders: std::collections::HashMap<TxTarget, SocketAddr>,
     /// Rate-limit auth failures per IP
     auth_failures: AuthFailureTracker,
     /// Server password (None = no auth required)
@@ -266,7 +312,7 @@ impl SessionManager {
         }
         Self {
             clients: HashMap::new(),
-            tx_holder: None,
+            tx_holders: std::collections::HashMap::new(),
             auth_failures: AuthFailureTracker::new(),
             password,
             totp_secret,
@@ -540,9 +586,13 @@ impl SessionManager {
 
     pub fn remove(&mut self, addr: SocketAddr) {
         self.clients.remove(&addr);
-        if self.tx_holder == Some(addr) {
-            info!("TX holder {} disconnected, releasing TX lock", addr);
-            self.tx_holder = None;
+        // Everything it held, not just Thetis. A client that walks off with a
+        // Yaesu would otherwise keep that radio busy for everyone.
+        for target in TxTarget::ALL {
+            if self.tx_holders.get(&target).copied() == Some(addr) {
+                info!("TX holder {} disconnected, releasing {:?}", addr, target);
+                self.tx_holders.remove(&target);
+            }
         }
     }
 
@@ -589,30 +639,38 @@ impl SessionManager {
 
     /// Check for timed-out sessions. Returns addresses of removed clients.
     pub fn check_timeout(&mut self) -> Vec<SocketAddr> {
+        // Per client, because the one holding a transmitter is missed sooner.
+        let holders: std::collections::HashSet<SocketAddr> =
+            self.tx_holders.values().copied().collect();
         let timed_out: Vec<SocketAddr> = self.clients.values()
-            .filter(|s| s.last_seen.elapsed().as_secs() > SESSION_TIMEOUT_SECS)
+            .filter(|s| s.last_seen.elapsed().as_secs() > timeout_secs(holders.contains(&s.addr)))
             .map(|s| s.addr)
             .collect();
 
         for &addr in &timed_out {
             warn!("Client {} timed out", addr);
             self.clients.remove(&addr);
-            if self.tx_holder == Some(addr) {
-                info!("TX holder {} timed out, releasing TX lock", addr);
-                self.tx_holder = None;
+            // Every transmitter it held. A client whose link died while it
+            // had a Yaesu would otherwise keep that radio busy for everyone
+            // until the server restarts.
+            for target in TxTarget::ALL {
+                if self.tx_holders.get(&target).copied() == Some(addr) {
+                    info!("TX holder {} timed out, releasing {:?}", addr, target);
+                    self.tx_holders.remove(&target);
+                }
             }
         }
 
         timed_out
     }
 
-    /// Try to acquire the TX lock for a client. Returns true if granted.
-    /// First-come-first-served: if no one holds TX, grant it; otherwise deny.
-    pub fn try_acquire_tx(&mut self, addr: SocketAddr) -> bool {
-        match self.tx_holder {
+    /// Try to acquire one transmitter. Returns true if granted.
+    /// First-come-first-served: if no one holds it, grant it; otherwise deny.
+    pub fn try_acquire_tx(&mut self, target: TxTarget, addr: SocketAddr) -> bool {
+        match self.tx_holders.get(&target).copied() {
             None => {
-                info!("TX lock acquired by {}", addr);
-                self.tx_holder = Some(addr);
+                info!("TX lock on {:?} acquired by {}", target, addr);
+                self.tx_holders.insert(target, addr);
                 true
             }
             Some(holder) if holder == addr => true,
@@ -620,17 +678,27 @@ impl SessionManager {
         }
     }
 
-    /// Release the TX lock (only if held by this client)
-    pub fn release_tx(&mut self, addr: SocketAddr) {
-        if self.tx_holder == Some(addr) {
-            info!("TX lock released by {}", addr);
-            self.tx_holder = None;
+    /// Release one transmitter - only the client holding it may do so.
+    pub fn release_tx(&mut self, target: TxTarget, addr: SocketAddr) {
+        if self.tx_holders.get(&target).copied() == Some(addr) {
+            info!("TX lock on {:?} released by {}", target, addr);
+            self.tx_holders.remove(&target);
         }
     }
 
-    /// Get the current TX holder address
-    pub fn tx_holder(&self) -> Option<SocketAddr> {
-        self.tx_holder
+    /// Who holds this transmitter, if anyone.
+    pub fn tx_holder(&self, target: TxTarget) -> Option<SocketAddr> {
+        self.tx_holders.get(&target).copied()
+    }
+
+    /// May this client's audio go to this transmitter?
+    ///
+    /// The named decision. It is small on purpose: what matters is that every
+    /// audio path asks *this*, so the refusal is covered by the same test as
+    /// the table. It had no name at all on the Yaesu side, which is why nothing
+    /// could reach it (review finding, part A).
+    pub fn accepts(&self, target: TxTarget, addr: SocketAddr) -> bool {
+        self.tx_holders.get(&target).copied() == Some(addr)
     }
 
     /// Set spectrum enabled for a client
@@ -1141,6 +1209,159 @@ impl SessionManager {
 mod tests {
     use super::*;
 
+    // ---- Step 0 of part A: recording what the TX slot does today.
+    //
+    // try_acquire_tx and release_tx had no tests at all, while the plan claimed with
+    // a tick that it works for Thetis. Both reviewers asked for this before anything
+    // changes: starting a refactor on untested behaviour is how a repair quietly
+    // breaks something else.
+    //
+    // These are characterisation tests. They pass straight away, and that is the
+    // point.
+
+    fn mgr() -> SessionManager {
+        SessionManager::new(None, None)
+    }
+
+    fn a(port: u16) -> SocketAddr {
+        format!("127.0.0.1:{port}").parse().unwrap()
+    }
+
+    /// Eerst komt, eerst maalt.
+    #[test]
+    fn the_first_to_ask_gets_tx_and_the_second_does_not() {
+        let mut m = mgr();
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)), "nobody held it");
+        assert!(!m.try_acquire_tx(TxTarget::Thetis, a(2)), "somebody else holds it");
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)));
+    }
+
+    /// The holder may ask again without losing it - that happens on every audio
+    /// packet.
+    #[test]
+    fn the_holder_may_ask_again() {
+        let mut m = mgr();
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)));
+    }
+
+    /// Only the holder can release it. Otherwise a second client could end the first
+    /// one's transmission.
+    #[test]
+    fn only_the_holder_can_release_it() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Thetis, a(1));
+
+        m.release_tx(TxTarget::Thetis, a(2));
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)), "somebody else must not release it");
+
+        m.release_tx(TxTarget::Thetis, a(1));
+        assert_eq!(m.tx_holder(TxTarget::Thetis), None);
+    }
+
+    /// And after a release the next one may have it.
+    #[test]
+    fn after_a_release_the_next_one_gets_it() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Thetis, a(1));
+        m.release_tx(TxTarget::Thetis, a(1));
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(2)));
+    }
+
+    /// A client that disappears releases, or a dropped connection keeps the
+    /// transmitter busy for everyone.
+    #[test]
+    fn a_client_that_disappears_releases_tx() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Thetis, a(1));
+        m.remove(a(1));
+        assert_eq!(m.tx_holder(TxTarget::Thetis), None);
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(2)));
+    }
+
+    // ---- Part A: a table per transmitter, and a decision with a name.
+
+    /// The heart of part A: two transmitters are independent. Client B may hold the
+    /// 991A while A holds Thetis - that is what the owner described and what can
+    /// already happen today.
+    #[test]
+    fn two_transmitters_are_held_independently() {
+        let mut m = mgr();
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(2)));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu2, a(3)));
+
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)));
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), Some(a(2)));
+        assert_eq!(m.tx_holder(TxTarget::Yaesu2), Some(a(3)));
+    }
+
+    /// The two rules the whole repair rests on.
+    #[test]
+    fn only_the_holder_of_a_transmitter_is_accepted() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Yaesu1, a(1));
+
+        assert!(m.accepts(TxTarget::Yaesu1, a(1)), "de houder mag praten");
+        assert!(
+            !m.accepts(TxTarget::Yaesu1, a(2)),
+            "somebody else must not talk into the same radio"
+        );
+    }
+
+    /// And a claim on one transmitter gives no right to the other.
+    #[test]
+    fn holding_one_transmitter_grants_nothing_on_another() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Thetis, a(1));
+        assert!(!m.accepts(TxTarget::Yaesu1, a(1)));
+        assert!(!m.accepts(TxTarget::Yaesu2, a(1)));
+    }
+
+    /// With no owner nobody is accepted - not even "for want of anything better".
+    /// That is what the Yaesu path does do today.
+    #[test]
+    fn an_unclaimed_transmitter_accepts_nobody() {
+        let m = mgr();
+        assert!(!m.accepts(TxTarget::Yaesu1, a(1)));
+    }
+
+    /// Releasing touches only your own transmitter.
+    #[test]
+    fn releasing_one_transmitter_leaves_the_others_alone() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Thetis, a(1));
+        m.try_acquire_tx(TxTarget::Yaesu1, a(1));
+
+        m.release_tx(TxTarget::Yaesu1, a(1));
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), None);
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)), "Thetis blijft van hem");
+    }
+
+    /// A departing client releases everything it held, not only Thetis.
+    #[test]
+    fn a_departing_client_releases_every_transmitter_it_held() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Thetis, a(1));
+        m.try_acquire_tx(TxTarget::Yaesu1, a(1));
+        m.try_acquire_tx(TxTarget::Yaesu2, a(2));
+
+        m.remove(a(1));
+        assert_eq!(m.tx_holder(TxTarget::Thetis), None);
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), None);
+        assert_eq!(m.tx_holder(TxTarget::Yaesu2), Some(a(2)), "somebody else's is untouched");
+    }
+
+    /// But somebody else disappearing does not affect the holder.
+    #[test]
+    fn another_client_disappearing_leaves_the_holder_alone() {
+        let mut m = mgr();
+        m.try_acquire_tx(TxTarget::Thetis, a(1));
+        m.remove(a(2));
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)));
+    }
+
     fn mk_session(addr_str: &str, allow: bool, rx1_zoom: f32, rx2_zoom: f32, rx1_en: bool, rx2_en: bool) -> ClientSession {
         let now = Instant::now();
         ClientSession {
@@ -1370,5 +1591,88 @@ mod connect_generation_tests {
         let settled = m.connect_generation();
         m.remove(a);
         assert_eq!(m.connect_generation(), settled);
+    }
+}
+
+#[cfg(test)]
+mod holder_timeout_tests {
+    use super::*;
+    use std::net::SocketAddr;
+
+    // ---- and now check_timeout() itself ----
+    //
+    // The three tests below exercise the function that USES the deadline, not only
+    // the one that computes it. That distinction is the finding: a test that fills in
+    // its own booleans can never see that the caller passes the wrong ones (review
+    // finding, round 2).
+
+    fn a(port: u16) -> SocketAddr {
+        format!("127.0.0.1:{port}").parse().unwrap()
+    }
+
+    /// Move a client's last sign of life back by this many seconds.
+    fn silent_for(m: &mut SessionManager, addr: SocketAddr, secs: u64) {
+        let c = m.clients.get_mut(&addr).expect("client bestaat");
+        c.last_seen = std::time::Instant::now() - std::time::Duration::from_secs(secs);
+    }
+
+    /// A listener may be quiet for a long time. Four seconds is nothing.
+    #[test]
+    fn check_timeout_leaves_a_quiet_listener_alone() {
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        silent_for(&mut m, a(1), 4);
+        assert!(m.check_timeout().is_empty(), "een luisteraar mag even zwijgen");
+    }
+
+    /// Whoever holds a transmitter may not. This is the case that on 2026-09-03 left a
+    /// 991A on the air for twenty seconds.
+    #[test]
+    fn check_timeout_drops_a_silent_transmitter_holder_and_frees_the_radio() {
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(1)));
+        silent_for(&mut m, a(1), 4);
+
+        let gone = m.check_timeout();
+        assert_eq!(gone, vec![a(1)], "de houder is na vier seconden weg");
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), None, "and the transmitter is free");
+    }
+
+    /// The distinction is per client, not per server: in the same round the
+    /// holder drops and the listener stays.
+    #[test]
+    fn check_timeout_judges_each_client_by_its_own_deadline() {
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        m.touch(a(2));
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        silent_for(&mut m, a(1), 5);
+        silent_for(&mut m, a(2), 5);
+
+        let gone = m.check_timeout();
+        assert_eq!(gone, vec![a(1)], "only the transmitting one drops");
+        assert!(m.clients.contains_key(&a(2)), "de luisteraar blijft");
+        assert_eq!(m.tx_holder(TxTarget::Thetis), None);
+    }
+
+    #[test]
+    fn a_listener_keeps_the_long_deadline() {
+        assert_eq!(timeout_secs(false), SESSION_TIMEOUT_SECS);
+    }
+
+    /// The measurement this exists for: a link that died mid-transmission left
+    /// the radio on the air for twenty seconds.
+    #[test]
+    fn a_client_holding_a_transmitter_is_missed_sooner() {
+        assert!(timeout_secs(true) < timeout_secs(false));
+        assert_eq!(timeout_secs(true), TX_HOLDER_TIMEOUT_SECS);
+    }
+
+    /// Not so soon that an ordinary hiccup drops a transmission: heartbeats come
+    /// every 500 ms, so the deadline has to be several of them.
+    #[test]
+    fn the_short_deadline_still_allows_several_missed_heartbeats() {
+        assert!(timeout_secs(true) * 1000 >= 4 * 500);
     }
 }

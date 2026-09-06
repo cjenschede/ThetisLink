@@ -8,6 +8,7 @@
     <!-- Common / shared -->
     <string name="common_connect">Verbinden</string>
     <string name="common_disconnect">Verbreken</string>
+    <string name="common_exit">Afsluiten</string>
     <string name="common_connected">Verbonden</string>
     <string name="common_disconnected">Niet verbonden</string>
     <string name="common_save">Opslaan</string>
@@ -296,4 +297,17 @@
     <string name="settings_roger_hint">Een kort toontje aan het eind van je uitzending. De zender blijft zolang aan, zodat het tegenstation hem hoort. Nooit in data- of digitale modes.</string>
     <string name="settings_roger_volume">Niveau</string>
     <string name="settings_roger_fm">Ook in FM</string>
+    <!-- Bluetooth-zendknop (YPC21 en soortgelijke). Android 12 en nieuwer. -->
+    <string name="settings_ble_ptt">BT-zendknop:</string>
+    <string name="settings_ble_ptt_hint">Een bluetooth-zendknop, rechtstreeks verbonden</string>
+    <string name="settings_ble_ptt_choose">Knop kiezen</string>
+    <string name="settings_ble_ptt_scanning">Zoeken naar knoppen…</string>
+    <string name="settings_ble_ptt_none_yet">Nog niets gevonden. Druk de knop een keer in om hem wakker te maken.</string>
+    <string name="settings_ble_ptt_needs_android12">Vereist Android 12 of nieuwer</string>
+    <string name="settings_ble_ptt_no_permission">Bluetooth-toestemming geweigerd</string>
+    <string name="settings_ble_ptt_connected">Verbonden: %1$s</string>
+    <string name="settings_ble_ptt_connecting">Verbinden…</string>
+    <string name="settings_ble_ptt_waiting">Buiten bereik — verbindt vanzelf weer</string>
+    <string name="settings_ble_ptt_reconnect">Opnieuw verbinden</string>
+    <string name="settings_ble_ptt_forget">Deze knop vergeten</string>
 </resources>

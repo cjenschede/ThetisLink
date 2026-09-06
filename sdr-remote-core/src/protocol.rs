@@ -695,6 +695,41 @@ impl Capabilities {
 ///           Thetis-audio packets; AudioYaesu is always wideband and ignores
 ///           the flag. Backwards-compat: old implementations (without
 ///           wideband-cap) see this bit as 0 and keep sending NB.
+/// Which transmitter a refusal is about.
+///
+/// `NotStated` is not "unknown, treat as nothing" but "the server did not say",
+/// which is what every server before this one does. The reader then falls back
+/// to its own outstanding requests, which is exactly the old behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeniedTarget {
+    NotStated,
+    Thetis,
+    Radio1,
+    Radio2,
+}
+
+impl DeniedTarget {
+    /// The transmitter index the client counts in: 0 Thetis, 1 radio one,
+    /// 2 radio two. `None` when the server did not say.
+    pub fn index(self) -> Option<usize> {
+        match self {
+            DeniedTarget::NotStated => None,
+            DeniedTarget::Thetis => Some(0),
+            DeniedTarget::Radio1 => Some(1),
+            DeniedTarget::Radio2 => Some(2),
+        }
+    }
+
+    fn bits(self) -> u8 {
+        match self {
+            DeniedTarget::NotStated => 0x00,
+            DeniedTarget::Thetis => 0x10,
+            DeniedTarget::Radio1 => 0x20,
+            DeniedTarget::Radio2 => 0x30,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Flags(pub u8);
 
@@ -702,6 +737,71 @@ impl Flags {
     pub const NONE: Self = Self(0);
     pub const PTT: Self = Self(0x01);
     pub const AUDIO_WIDEBAND: Self = Self(0x02);
+    /// This transmitter is held by a **different** client (PATCH-tx-eigendom).
+    ///
+    /// The Thetis counterpart of `held_by_other` in the Yaesu state packet, and
+    /// there for the same reason: `PTT` says "a transmission is happening",
+    /// which is true for the operator sending as well. Deriving "somebody else"
+    /// from it costs a false flash on every release. Set per client from the
+    /// ownership table; the holder never receives it.
+    ///
+    /// A spare bit, so an older client simply ignores it.
+    pub const HELD_BY_OTHER: Self = Self(0x04);
+
+    pub fn held_by_other(self) -> bool {
+        self.0 & 0x04 != 0
+    }
+
+    /// This refusal is the SERVER letting go, not another client holding on.
+    ///
+    /// Set on a `PttDenied` when the server released the transmitter itself:
+    /// the radio stopped on its own, or its TX time-out timer is about to fire
+    /// and we step off just before it does. Both are decided in
+    /// `yaesu/poll.rs`, which knows the time-out from the EX menu and watches
+    /// the radio's own report.
+    ///
+    /// The client has to tell the two apart, and it is not cosmetic. "Somebody
+    /// else has it" means a held key may keep asking - it will get its turn.
+    /// "The radio stopped" means the opposite: asking again immediately walks
+    /// straight back into the same time-out, so a held key has to be released
+    /// first. That is the difference between `refused` and `radio_left_tx` in
+    /// `ptt_intent`.
+    ///
+    /// A spare bit, so an older client reads it as an ordinary refusal - which
+    /// is what it did before this existed, and still better than nothing.
+    pub const SERVER_RELEASED: Self = Self(0x08);
+
+    pub fn server_released(self) -> bool {
+        self.0 & 0x08 != 0
+    }
+
+    /// Which transmitter a `PttDenied` is about, in bits 4 and 5.
+    ///
+    /// Two spare bits rather than a body byte, so the packet keeps its size and
+    /// an older peer on either end is not confused by a length it does not
+    /// expect.
+    ///
+    /// Zero means **not stated**, and that is the whole reason this is
+    /// back-compatible: a server that predates this sends zeroes, the client
+    /// reads "not stated", and falls back to what it did before - assume the
+    /// refusal is about everything it happens to be asking for. So the bits can
+    /// only make the answer narrower, never wrong.
+    ///
+    /// Narrower matters more than it sounds. The client used to infer the
+    /// transmitter from what it was ASKING for, and with two radios keyed that
+    /// is all of them - so a refusal about one radio released the other as
+    /// well, and no arrangement of the client could tell them apart. Four
+    /// review rounds kept arriving at this bit.
+    pub const TX_MASK: Self = Self(0x30);
+
+    pub fn denied_target(self) -> DeniedTarget {
+        match self.0 & 0x30 {
+            0x10 => DeniedTarget::Thetis,
+            0x20 => DeniedTarget::Radio1,
+            0x30 => DeniedTarget::Radio2,
+            _ => DeniedTarget::NotStated,
+        }
+    }
 
     pub fn ptt(self) -> bool {
         self.0 & 0x01 != 0
@@ -1361,8 +1461,21 @@ pub struct PttDeniedPacket;
 impl PttDeniedPacket {
     pub const SIZE: usize = Header::SIZE;
 
-    pub fn serialize(buf: &mut [u8; Self::SIZE]) {
-        let header = Header::new(PacketType::PttDenied, Flags::NONE);
+    /// One refusal, about one transmitter.
+    ///
+    /// `server_released` says WHY (see [`Flags::SERVER_RELEASED`]), `target`
+    /// says WHICH (see [`Flags::TX_MASK`]). Both are flag bits, so this packet
+    /// is still four bytes of header and nothing else.
+    pub fn serialize(
+        buf: &mut [u8; Self::SIZE],
+        target: DeniedTarget,
+        server_released: bool,
+    ) {
+        let mut bits = target.bits();
+        if server_released {
+            bits |= Flags::SERVER_RELEASED.0;
+        }
+        let header = Header::new(PacketType::PttDenied, Flags(bits));
         header.serialize(buf);
     }
 }
@@ -1984,6 +2097,18 @@ pub struct YaesuStatePacket {
     /// High-SWR alarm (PATCH-swr-alarm): FTX-1 from RI P2 (0/1), 991A from RM6 >=
     /// threshold. Additive trailing field — false on old servers/packets.
     pub hi_swr: bool,
+    /// This transmitter is held by a **different** client (PATCH-tx-eigendom).
+    ///
+    /// Computed per client from the server's ownership table, not from the
+    /// radio: `tx_active` says "this radio is transmitting", which is true for
+    /// the operator sending as well, and deriving "somebody else" from it costs
+    /// a false flash on every release - the local state drops at once and the
+    /// radio's a moment later, and in that gap an operator is told his own
+    /// carrier belongs to a stranger.
+    ///
+    /// The holder never receives this set. Additive trailing field - false on
+    /// old servers, which is the safe default: no busy shown, exactly as before.
+    pub held_by_other: bool,
     /// Max TX power (watts) for the CURRENT transmit band (PATCH-yaesu-power-scaling).
     /// Additive trailing field; **0 = still unknown** (old server / before the first
     /// EX readout), NOT 0 watts. The client scales the slider to `5..=max`.
@@ -1991,7 +2116,7 @@ pub struct YaesuStatePacket {
 }
 
 impl YaesuStatePacket {
-    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1; // 38 bytes
+    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1; // 39 bytes
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         self.serialize_as_type(buf, PacketType::YaesuState);
@@ -2020,7 +2145,8 @@ impl YaesuStatePacket {
         buf[pos] = self.scan as u8; pos += 1;
         buf[pos] = self.tuner_state; pos += 1;
         buf[pos] = self.hi_swr as u8; pos += 1;
-        buf[pos] = self.tx_power_max;
+        buf[pos] = self.tx_power_max; pos += 1;
+        buf[pos] = self.held_by_other as u8;
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -2048,8 +2174,9 @@ impl YaesuStatePacket {
         let scan = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
         let tuner_state = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
         let hi_swr = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
-        let tx_power_max = if buf.len() > pos { buf[pos] } else { 0 };
-        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan, tuner_state, hi_swr, tx_power_max })
+        let tx_power_max = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
+        let held_by_other = if buf.len() > pos { buf[pos] != 0 } else { false };
+        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan, tuner_state, hi_swr, tx_power_max, held_by_other })
     }
 }
 
@@ -2358,7 +2485,13 @@ pub enum Packet {
     HeartbeatAck(HeartbeatAck),
     Control(ControlPacket),
     Disconnect,
-    PttDenied,
+    /// `server_released` distinguishes "somebody else has it" from "the server
+    /// let go" - see [`Flags::SERVER_RELEASED`]. The two need different answers
+    /// from a held key.
+    PttDenied {
+        server_released: bool,
+        target: DeniedTarget,
+    },
     Frequency(FrequencyPacket),
     Mode(ModePacket),
     Smeter(SmeterPacket),
@@ -2427,7 +2560,10 @@ impl Packet {
             PacketType::HeartbeatAck => Ok(Packet::HeartbeatAck(HeartbeatAck::deserialize(buf)?)),
             PacketType::Control => Ok(Packet::Control(ControlPacket::deserialize(buf)?)),
             PacketType::Disconnect => Ok(Packet::Disconnect),
-            PacketType::PttDenied => Ok(Packet::PttDenied),
+            PacketType::PttDenied => Ok(Packet::PttDenied {
+                server_released: header.flags.server_released(),
+                target: header.flags.denied_target(),
+            }),
             PacketType::Frequency => Ok(Packet::Frequency(FrequencyPacket::deserialize(buf)?)),
             PacketType::Mode => Ok(Packet::Mode(ModePacket::deserialize(buf)?)),
             PacketType::Smeter => Ok(Packet::Smeter(SmeterPacket::deserialize(buf)?)),
@@ -2970,4 +3106,157 @@ mod subscription_mask_tests {
         assert_eq!(names, vec!["rx2-audio", "vrx1"]);
         assert!(SubscriptionMask::names_of(0).is_empty());
     }
+}
+
+#[cfg(test)]
+mod held_by_other_tests {
+    use super::*;
+
+    /// The two bits answer different questions: "is the transmitter keyed" and
+    /// "is somebody else holding it". They were one bit until now - the client
+    /// subtracted its own PTT from the keyed bit to guess the second - and that
+    /// guess is wrong for exactly one packet after release, which is the flash
+    /// the operator saw.
+    #[test]
+    fn ptt_and_held_are_independent() {
+        let mine = Flags::PTT;
+        assert!(mine.ptt() && !mine.held_by_other());
+
+        let theirs = Flags(Flags::PTT.0 | Flags::HELD_BY_OTHER.0);
+        assert!(theirs.ptt() && theirs.held_by_other());
+
+        // Held but not keyed: the owner has the lock and is not talking yet.
+        let idle = Flags::HELD_BY_OTHER;
+        assert!(!idle.ptt() && idle.held_by_other());
+    }
+
+    #[test]
+    fn held_bit_survives_the_smeter_wire() {
+        for flags in [Flags::NONE, Flags::PTT, Flags::HELD_BY_OTHER,
+                      Flags(Flags::PTT.0 | Flags::HELD_BY_OTHER.0)] {
+            let mut buf = [0u8; SmeterPacket::SIZE];
+            SmeterPacket { level: -73, flags }.serialize(&mut buf);
+            let back = SmeterPacket::deserialize(&buf).expect("smeter");
+            assert_eq!(back.flags.ptt(), flags.ptt());
+            assert_eq!(back.flags.held_by_other(), flags.held_by_other());
+        }
+    }
+
+    /// An older client sends 38 bytes; the field must read as "not held" then,
+    /// never as held - a stuck busy sign cannot be cleared by the operator.
+    #[test]
+    fn short_yaesu_packet_reads_as_free() {
+        let mut full = [0u8; YaesuStatePacket::SIZE];
+        let pkt = YaesuStatePacket {
+            freq_a: 14_200_000, freq_b: 0, mode: 2, smeter: 40,
+            tx_active: true, power_on: true, af_gain: 30, tx_power: 50,
+            vfo_select: 0, memory_channel: 0, squelch: 0, rf_gain: 255,
+            mic_gain: 50, split: false, scan: false, tuner_state: 0,
+            hi_swr: false, held_by_other: true, tx_power_max: 100,
+        };
+        pkt.serialize(&mut full);
+        assert!(YaesuStatePacket::deserialize(&full).unwrap().held_by_other);
+
+        let short = &full[..YaesuStatePacket::SIZE - 1];
+        assert!(!YaesuStatePacket::deserialize(short).unwrap().held_by_other);
+    }
+    /// The two reasons a PTT is refused, and why they may not look alike.
+    ///
+    /// "Somebody else has it" lets a held key keep asking - it gets its turn.
+    /// "The radio stopped" is the opposite: asking again walks straight back
+    /// into the same time-out. The bit is the only thing that tells them apart,
+    /// and it rides in the header of a packet that has no body.
+    #[test]
+    fn a_ptt_refusal_says_who_let_go_and_which_transmitter() {
+        let mut buf = [0u8; PttDeniedPacket::SIZE];
+
+        for target in [
+            DeniedTarget::NotStated,
+            DeniedTarget::Thetis,
+            DeniedTarget::Radio1,
+            DeniedTarget::Radio2,
+        ] {
+            for released in [false, true] {
+                PttDeniedPacket::serialize(&mut buf, target, released);
+                match Packet::deserialize(&buf).unwrap() {
+                    Packet::PttDenied { server_released, target: got } => {
+                        assert_eq!(server_released, released, "{:?}", target);
+                        assert_eq!(got, target);
+                    }
+                    _ => panic!("not a refusal"),
+                }
+            }
+        }
+    }
+
+    /// The transmitter numbers the client counts in. Written out rather than
+    /// derived, because they have to line up with `TxTarget` on the server
+    /// (Thetis, Yaesu1, Yaesu2) and with the three PTT slots in the client, and
+    /// none of those three can see the other two.
+    #[test]
+    fn the_transmitter_numbers_are_the_ones_everything_else_counts_in() {
+        assert_eq!(DeniedTarget::NotStated.index(), None);
+        assert_eq!(DeniedTarget::Thetis.index(), Some(0));
+        assert_eq!(DeniedTarget::Radio1.index(), Some(1));
+        assert_eq!(DeniedTarget::Radio2.index(), Some(2));
+    }
+
+    /// An older server sends the four bytes without any of this. That has to
+    /// read as an ordinary refusal about nothing in particular rather than
+    /// fail - which is what spare bits are for.
+    #[test]
+    fn a_refusal_from_an_older_server_still_parses() {
+        let mut buf = [0u8; PttDeniedPacket::SIZE];
+        let header = Header::new(PacketType::PttDenied, Flags::NONE);
+        header.serialize(&mut buf);
+        match Packet::deserialize(&buf).unwrap() {
+            Packet::PttDenied { server_released, target } => {
+                assert!(!server_released);
+                assert_eq!(target, DeniedTarget::NotStated, "must not read as Thetis");
+            }
+            _ => panic!("not a refusal"),
+        }
+    }
+
+    /// And the other direction, which is the one that cannot be tested by
+    /// running an old client: a new server's refusal must leave every bit an
+    /// older peer reads exactly as it was. Those readers are `ptt`,
+    /// `held_by_other` and the wideband bit, plus the relay's own copy of bit 0.
+    ///
+    /// This is the test that says the version byte may stay where it is. Bump
+    /// that instead and every older peer rejects every packet, because the
+    /// header parse compares it exactly.
+    #[test]
+    fn an_older_client_reads_a_new_refusal_the_way_it_always_did() {
+        let mut buf = [0u8; PttDeniedPacket::SIZE];
+        for target in [
+            DeniedTarget::NotStated,
+            DeniedTarget::Thetis,
+            DeniedTarget::Radio1,
+            DeniedTarget::Radio2,
+        ] {
+            for released in [false, true] {
+                PttDeniedPacket::serialize(&mut buf, target, released);
+                let flags = Header::deserialize(&buf).unwrap().flags;
+                assert!(!flags.ptt(), "{:?}", target);
+                assert!(!flags.held_by_other(), "{:?}", target);
+                assert_eq!(flags.0 & Flags::AUDIO_WIDEBAND.0, 0, "{:?}", target);
+                assert_eq!(flags.server_released(), released, "{:?}", target);
+                // The two bits this change owns, and nothing else.
+                assert_eq!(flags.0 & !(Flags::TX_MASK.0 | Flags::SERVER_RELEASED.0), 0);
+            }
+        }
+    }
+
+    /// The bits this change took were free, and the two that are left are still
+    /// free. A collision here is silent and total: a refusal would read as an
+    /// audio flag, or the other way round.
+    #[test]
+    fn the_transmitter_bits_do_not_collide_with_the_flags_that_existed() {
+        let taken = Flags::PTT.0 | Flags::AUDIO_WIDEBAND.0 | Flags::HELD_BY_OTHER.0
+            | Flags::SERVER_RELEASED.0;
+        assert_eq!(taken & Flags::TX_MASK.0, 0, "the transmitter bits overlap an older flag");
+        assert_eq!(taken | Flags::TX_MASK.0, 0x3F, "0x40 and 0x80 are the spare ones left");
+    }
+
 }

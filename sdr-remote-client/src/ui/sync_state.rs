@@ -16,6 +16,27 @@ fn blob_hash(text: &str) -> u64 {
     h.finish()
 }
 
+/// Why a slot is being let go.
+///
+/// One parameter that says the reason, rather than two that say the
+/// consequences. Both consequences follow from it: which exit of the shared
+/// type runs, and whether the server has to be told.
+///
+/// It used to call `radio_left_tx()` for all three. That was harmless while the
+/// exits only cleared latches; it stopped being harmless the moment one of them
+/// grew a rule of its own - a refusal would then have demanded a fresh press,
+/// which is exactly the behaviour the owner approved the other way round.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PttRelease {
+    /// The server refused. A held key may keep asking - see `PttIntent::want_tx`.
+    Refused,
+    /// There is no server any more. Nobody to tell.
+    LinkGone,
+    /// The radio stopped on its own: a time-out timer, the front panel, a fault.
+    RadioLeftTx,
+}
+
+
 impl SdrRemoteApp {
     /// Optimistic audio-enable reconciliation (RX1/RX2 share this one path). The
     /// client shows the requested value immediately (set on the toggle / at startup,
@@ -65,15 +86,118 @@ impl SdrRemoteApp {
     /// Caller checks for a confirmed transmitting -> not transmitting edge. Acting on
     /// "not transmitting" alone would unlatch in the gap between keying and the server
     /// confirming it.
-    fn release_ptt_latch(&mut self, slot: u8) {
-        if slot == 0 {
-            self.yaesu_mouse_ptt = false;
-            self.yaesu_ptt_last_sent = false;
+    /// Let go of every PTT, whatever the reason.
+    ///
+    /// One function for one exit, because there is more than one way out and
+    /// they kept being wired one at a time. Two of them are here now: the link
+    /// dying, and the operator pressing Disconnect.
+    ///
+    /// That second one used to miss it. The button sets `self.connected = false`
+    /// straight away so the label flips at once, and the block below then reads
+    /// `was_connected` - already false - so the release never ran. Disconnecting
+    /// while transmitting left the latches standing, and the next connect keyed
+    /// the radio on its own (review finding, round 2).
+    pub(super) fn release_all_ptt(&mut self) {
+        self.mouse_ptt = false;
+        self.midi_ptt = false;
+        self.ptt = false;
+        // The link is gone, so there is nobody to tell. Marking it as sent is
+        // right here and only here: a reconnect starts a fresh session in which
+        // this client holds nothing.
+        self.release_ptt_latch(0, PttRelease::LinkGone, false);
+        self.release_ptt_latch(1, PttRelease::LinkGone, false);
+    }
+
+    /// Which sources this client re-reads out of the input state every frame,
+    /// for this slot.
+    ///
+    /// The spacebar always. The mouse only in momentary mode - a click in
+    /// toggle mode flips a latch and nothing ever reports it released, so a
+    /// wait on it would never end. See `PttIntent::stop_and_wait_for_release`.
+    pub(super) fn resampled_sources(&self, slot: u8) -> &'static [sdr_remote_logic::ptt_intent::PttSource] {
+        use sdr_remote_logic::ptt_intent::PttSource;
+        let toggle = if slot == 0 { self.yaesu_ptt_toggle_mode } else { self.yaesu2_ptt_toggle_mode };
+        if toggle {
+            &[PttSource::Space]
         } else {
-            self.yaesu2_mouse_ptt = false;
-            self.yaesu2_ptt_last_sent = false;
+            &[PttSource::Space, PttSource::Mouse]
+        }
+    }
+
+    /// Let go of one slot.
+    ///
+    /// `tell_the_server` is the difference between "we stopped" and "we stopped
+    /// and nobody else knows". Faking `yaesu_ptt_last_sent = false` makes the
+    /// next frame compare a want of false against a last-sent of false, find no
+    /// change, and send nothing - so this client's button went grey while the
+    /// server still had it down as the holder of that transmitter. Every other
+    /// client then saw "TX in use" for good, and it only cleared when this one
+    /// did a real press and released it (owner, 2026-09-04, measured on a 991A
+    /// running into its time-out timer).
+    ///
+    /// Leaving `last_sent` alone lets the ordinary path notice the change and
+    /// send the release. Only a dead link suppresses that, because there is
+    /// nobody to tell.
+    /// `mixed` only reaches the log line, and it has to: on a jump the exit is
+    /// chosen conservatively, so the line named a cause that was not
+    /// necessarily the one that happened. This log is the only thing anyone has
+    /// to judge the behaviour by, and a proof that cannot fail is not a proof
+    /// (review finding).
+    fn release_ptt_latch(&mut self, slot: u8, why: PttRelease, mixed: bool) {
+        log::info!(
+            "PTT release yaesu{} ({}{}) latches mouse={} space={} midi={} wait={}",
+            slot + 1,
+            match why {
+                PttRelease::Refused => "refused by the server",
+                PttRelease::LinkGone => "link gone",
+                PttRelease::RadioLeftTx => "radio left TX",
+            },
+            if mixed { ", more than one refusal missed" } else { "" },
+            self.yaesu_latches[slot as usize].mouse,
+            self.yaesu_latches[slot as usize].space,
+            self.yaesu_latches[slot as usize].midi,
+            self.yaesu_latches[slot as usize].needs_new_press,
+        );
+        // Every latch, not just the mouse: they are OR-ed into one request now,
+        // so one left standing keys the radio again on the next frame.
+        // An exit of the shared type, and then one assignment. Not eight lines with one
+        // that can be forgotten - which is exactly the fault a reviewer found here and
+        // that no test saw.
+        let i = slot as usize;
+        let mut intent = sdr_remote_logic::ptt_intent::PttIntent::default();
+        intent.set(sdr_remote_logic::ptt_intent::PttSource::Mouse, self.yaesu_latches[i].mouse);
+        intent.set(sdr_remote_logic::ptt_intent::PttSource::Space, self.yaesu_latches[i].space);
+        intent.set(sdr_remote_logic::ptt_intent::PttSource::Midi, self.yaesu_latches[i].midi);
+        intent.set_needs_new_press(self.yaesu_latches[i].needs_new_press);
+        match why {
+            PttRelease::Refused => intent.refused(),
+            PttRelease::LinkGone => intent.disconnected(),
+            PttRelease::RadioLeftTx => intent.radio_left_tx(self.resampled_sources(slot)),
+        }
+        self.yaesu_latches[i] = sdr_remote_logic::ptt_intent::Latches {
+            mouse: intent.is_held(sdr_remote_logic::ptt_intent::PttSource::Mouse),
+            space: intent.is_held(sdr_remote_logic::ptt_intent::PttSource::Space),
+            midi: intent.is_held(sdr_remote_logic::ptt_intent::PttSource::Midi),
+            needs_new_press: intent.needs_new_press(),
+        };
+        if why == PttRelease::LinkGone {
+            self.yaesu_ptt_last_sent[i] = false;
         }
         self.apply_ptt_spike_protection(true, false);
+    }
+
+    /// Is the "USB lost" notice up for this radio slot?
+    ///
+    /// The rule itself lives in `sdr_remote_logic::usb_lost` so it can be
+    /// tested; this only feeds it the two facts and the clock.
+    pub(super) fn usb_lost_showing(&self, slot: usize) -> bool {
+        let absent = if slot == 0 { !self.yaesu_present_last } else { !self.yaesu2_present_last };
+        let holding = self.yaesu_ptt_last_sent[slot];
+        sdr_remote_logic::usb_lost::showing(
+            absent,
+            holding,
+            self.usb_lost_last_true[slot].map(|t| t.elapsed()),
+        )
     }
 
     pub(super) fn sync_state(&mut self) {
@@ -317,7 +441,88 @@ impl SdrRemoteApp {
         // zoom-reset block on reconnect was probably skipped for a while.
         let was_connected = self.connected;
         self.connected = state.connected;
-        self.ptt_denied = state.ptt_denied;
+        // The connection went away. Let go of every PTT.
+        //
+        // There were two ways out of a standing PTT - a refusal, and the radio
+        // dropping out of TX - and neither of them is "the link died". So the
+        // button stayed red on a client that was talking to nobody, until it
+        // reconnected and the radio state came back to clear it. Observed on
+        // 2026-09-03 with the network pulled mid-transmission.
+        if was_connected && !state.connected {
+            self.release_all_ptt();
+        }
+        // A refusal means this client is not transmitting, so the local
+        // optimistic PTT has to come back down. Showing a "blocked" label while
+        // the button stays red says two things at once, and only one of them is
+        // true. The red is local on purpose - a press must not wait for a round
+        // trip - which is exactly why something has to take it back when the
+        // answer arrives (part A-2).
+        // On the counter, not on the flag. A refusal can be raised and
+        // settled again between two frames - the engine publishes per packet,
+        // the screen looks once a frame, and a `watch` channel keeps only the
+        // newest value. Reading the level meant reading straight past it, and
+        // that is what happened on 2026-09-05: the refusal arrived, the engine
+        // logged that it had understood it, and this block never ran.
+        let missed = state.ptt_denial.seq.wrapping_sub(self.ptt_denial_seq);
+        if missed != 0 {
+            self.ptt_denial_seq = state.ptt_denial.seq;
+            // More than one refusal since the last frame: the record carries
+            // the newest one's payload only. `PttDenial::releases` answers what
+            // that means - the newest refusal plus whatever is still refused,
+            // which reaches the missed refusals that still matter and leaves
+            // the transmitters that were never involved alone.
+            //
+            // Letting go of everything was the first answer and it was too
+            // broad: a held Thetis being refused produces refusals at audio
+            // rate, so two in a frame is ordinary, and it dragged both radios
+            // along every time (review finding).
+            //
+            // The counter is what makes any of this visible. Reading the flag,
+            // such a frame looked exactly like a frame with one refusal in it.
+            let mixed = missed > 1;
+            // Which exit depends on WHO let go, and the server now says so.
+            //
+            // Another client holding it lets a held key keep asking - it gets
+            // its turn. The server stepping off because the radio stopped or is
+            // about to means the opposite: asking again walks straight back into
+            // the same time-out, so the key has to be released first.
+            let why = if mixed || state.ptt_denial.server_released {
+                PttRelease::RadioLeftTx
+            } else {
+                PttRelease::Refused
+            };
+            // Only the transmitters the refusal is about. Both radios were
+            // released on every refusal before, so a refusal on radio 2 let go
+            // of radio 1 as well.
+            //
+            // The numbering differs on purpose and is worth reading twice:
+            // the refusal counts transmitters (0 Thetis, 1 radio one,
+            // 2 radio two), the latches count radio slots (0 radio one,
+            // 1 radio two).
+            if state.ptt_denial.releases(missed, 0) {
+                // The button is painted from what we last asked for, so a
+                // refusal has to reach the press as well as the sign.
+                self.mouse_ptt = false;
+                self.midi_ptt = false;
+            }
+            if state.ptt_denial.releases(missed, 1) {
+                self.release_ptt_latch(0, why, mixed);
+            }
+            if state.ptt_denial.releases(missed, 2) {
+                self.release_ptt_latch(1, why, mixed);
+            }
+        }
+        // The clock for the "USB lost" notice. Stamped while it is happening,
+        // read for as long as the notice has to stay up afterwards.
+        for slot in 0usize..2 {
+            let absent = if slot == 0 { !self.yaesu_present_last } else { !self.yaesu2_present_last };
+            if absent && self.yaesu_ptt_last_sent[slot] {
+                self.usb_lost_last_true[slot] = Some(Instant::now());
+            }
+        }
+        // The sign itself stays a level: it says "something is refused right
+        // now", which is exactly what a level means.
+        self.ptt_denied = state.ptt_denial.active();
         self.rtt_ms = state.rtt_ms;
         self.jitter_ms = state.jitter_ms;
         self.buffer_depth = state.buffer_depth;
@@ -392,6 +597,13 @@ impl SdrRemoteApp {
         // Span is reset to 0 so the first spectrum packet triggers zoom calculation.
         // Use `was_connected` snapshot - see comment above on connected-state mutation.
         let reconnected = state.connected && !was_connected;
+        if reconnected {
+            // The engine starts off and remembers nothing across a session, so this choice
+            // has to travel with every connection. Forgetting it means the checkbox is on and
+            // the fan-out does not work - a setting that lies is worse than one that is not
+            // there.
+            let _ = self.cmd_tx.send(Command::SetMultiTx(self.multi_tx));
+        }
         if reconnected || (state.power_on && !self.power_on) {
             // The bins are cleared with the span they belong to. Setting the
             // span to 0 alone left the previous session's full-band picture in
@@ -1085,11 +1297,18 @@ impl SdrRemoteApp {
             self.yaesu_smeter_peak_time = Instant::now();
         }
         {
-            let was_tx = self.yaesu_tx_active;
+            // The radio's own TX flag is read for display only.
+            //
+            // It used to drive the release as well, through a falling edge and
+            // then a two-second filter on top of it. Both were the wrong layer:
+            // `yaesu/poll.rs` says in as many words that this field is a mixture
+            // of what the server optimistically set and what the radio answered,
+            // and that the FT-991A's answer is unreliable. The server decides now
+            // - it knows the time-out from the EX menu - and says so with
+            // `Flags::SERVER_RELEASED`. A decision instead of a dirty signal, so
+            // there is nothing left to filter.
             self.yaesu_tx_active = state.yaesu_tx_active;
-            if was_tx && !self.yaesu_tx_active && self.yaesu_mouse_ptt {
-                self.release_ptt_latch(0);
-            }
+            self.yaesu_held_by_other = state.yaesu_held_by_other;
         }
         self.yaesu_power_on = state.yaesu_power_on;
         // Dual-radio slot 1
@@ -1113,11 +1332,18 @@ impl SdrRemoteApp {
             self.yaesu2_smeter_peak_time = Instant::now();
         }
         {
-            let was_tx = self.yaesu2_tx_active;
+            // The radio's own TX flag is read for display only.
+            //
+            // It used to drive the release as well, through a falling edge and
+            // then a two-second filter on top of it. Both were the wrong layer:
+            // `yaesu/poll.rs` says in as many words that this field is a mixture
+            // of what the server optimistically set and what the radio answered,
+            // and that the FT-991A's answer is unreliable. The server decides now
+            // - it knows the time-out from the EX menu - and says so with
+            // `Flags::SERVER_RELEASED`. A decision instead of a dirty signal, so
+            // there is nothing left to filter.
             self.yaesu2_tx_active = state.yaesu2_tx_active;
-            if was_tx && !self.yaesu2_tx_active && self.yaesu2_mouse_ptt {
-                self.release_ptt_latch(1);
-            }
+            self.yaesu2_held_by_other = state.yaesu2_held_by_other;
         }
         self.yaesu2_power_on = state.yaesu2_power_on;
         self.yaesu2_split = state.yaesu2_split;

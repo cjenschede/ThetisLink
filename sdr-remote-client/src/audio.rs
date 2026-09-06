@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
-use log::info;
+use log::{info, warn};
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::HeapRb;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -132,8 +132,19 @@ impl ClientAudio {
                 match found {
                     Some(d) => d,
                     None => {
-                        info!("Input device '{}' not found, using default", name);
-                        host.default_input_device().context("no default input device")?
+                        // warn, not info: this changes which microphone is on the
+                        // air. And it says what it fell back to, because "not
+                        // found" without that leaves the reader guessing at the
+                        // one thing they need.
+                        let d = host.default_input_device().context("no default input device")?;
+                        let got = d.name().unwrap_or_else(|_| "(unknown)".to_string());
+                        warn!(
+                            "Input device '{}' not found - using '{}' instead. \
+                             Windows renumbers USB devices, so a stored name can stop matching; \
+                             pick the input again in the settings to make this stick.",
+                            name, got
+                        );
+                        d
                     }
                 }
             }
@@ -147,8 +158,15 @@ impl ClientAudio {
                 match found {
                     Some(d) => d,
                     None => {
-                        info!("Output device '{}' not found, using default", name);
-                        host.default_output_device().context("no default output device")?
+                        let d = host.default_output_device().context("no default output device")?;
+                        let got = d.name().unwrap_or_else(|_| "(unknown)".to_string());
+                        warn!(
+                            "Output device '{}' not found - using '{}' instead. \
+                             Windows renumbers USB devices, so a stored name can stop matching; \
+                             pick the output again in the settings to make this stick.",
+                            name, got
+                        );
+                        d
                     }
                 }
             }

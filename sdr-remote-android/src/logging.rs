@@ -68,6 +68,18 @@ const FILE_NAME: &str = "thetislink-client.log";
 
 static DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
+/// One line from the Kotlin side, into the same log the Rust side writes.
+///
+/// Everything on the Bluetooth button went to the system log alone, so the
+/// owner could never see any of it and a diagnosis needed a cable attached -
+/// and a cable suppresses the very power saving the overnight test is meant to
+/// measure. The logger installed at start writes to the file *and* the system
+/// log, so one call across the bridge puts both back in reach (review finding,
+/// a review).
+pub fn log_line(text: String) {
+    log::info!("{}", text);
+}
+
 /// The tail of the kept log, for a problem report.
 ///
 /// Says what is missing rather than returning an empty string: a report that
@@ -217,6 +229,50 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(left.len(), 2, "expected two files, found {left:?}");
+    }
+
+    /// A line handed in from Kotlin reaches the log path.
+    ///
+    /// Not a regression test - nothing was broken. It proves the half that was
+    /// only asserted: `log_line` was added so the Bluetooth button would be
+    /// visible without a cable, and nothing said it arrived anywhere. On the
+    /// phone it could not be checked at all (the APK is not debuggable, so
+    /// `run-as` refuses), which is exactly why it went unverified for a day.
+    ///
+    /// Off Android no logger is installed - `init_logging` is a no-op there -
+    /// so this test may install one. It is the only test in this crate that
+    /// does; a second would fight it, because the global logger can be set
+    /// once per process.
+    #[test]
+    fn a_line_from_kotlin_reaches_the_log() {
+        use std::sync::Mutex as StdMutex;
+
+        static CAUGHT: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
+
+        struct Catcher;
+        impl log::Log for Catcher {
+            fn enabled(&self, _: &log::Metadata) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record) {
+                CAUGHT.lock().unwrap().push(record.args().to_string());
+            }
+            fn flush(&self) {}
+        }
+
+        // Ignore the error: another test binary in the same process may have
+        // installed one already, and then the assertion below simply fails
+        // loudly instead of this line panicking quietly.
+        let _ = log::set_boxed_logger(Box::new(Catcher));
+        log::set_max_level(log::LevelFilter::Info);
+
+        super::log_line("BlePtt: key down (notification)".to_string());
+
+        let caught = CAUGHT.lock().unwrap();
+        assert!(
+            caught.iter().any(|l| l == "BlePtt: key down (notification)"),
+            "the line handed in from Kotlin never reached the logger: {caught:?}"
+        );
     }
 
     /// Asked before anything was started, it says so instead of coming back

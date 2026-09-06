@@ -4,16 +4,19 @@ package com.sdrremote
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.util.Log
 import com.sdrremote.ui.screens.MainScreen
+import com.sdrremote.viewmodel.SdrViewModel
 import com.sdrremote.ui.theme.SdrRemoteTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,9 +24,62 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
 
+    /**
+     * The same ViewModel that MainScreen uses.
+     *
+     * `viewModel()` in Compose takes this activity as its owner by default, so
+     * `by viewModels()` yields the same instance here. Were that ever to
+     * change, onStop() would release a PTT nobody is holding - so it is worth
+     * keeping an eye on.
+     */
+    private val viewModel: SdrViewModel by viewModels()
+
     private val requestMicPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* granted or not — Oboe will fail gracefully if denied */ }
+
+    /**
+     * Bluetooth, asked for only when someone switches the PTT button on.
+     *
+     * The app had no Bluetooth permission at all before this: the headset and
+     * the existing remote arrive as key and touch events, which need none. This
+     * is the first use of the Bluetooth API itself, and it is asked for at the
+     * moment it is wanted rather than at startup, where nobody would know why.
+     */
+    private var onBluetoothPermission: ((Boolean) -> Unit)? = null
+
+    private val requestBluetooth = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        onBluetoothPermission?.invoke(granted.values.all { it })
+        onBluetoothPermission = null
+    }
+
+    /** True when scanning and connecting are already allowed. */
+    fun hasBluetoothPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        return bluetoothPermissions().all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun requestBluetoothPermission(then: (Boolean) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            then(false)
+            return
+        }
+        if (hasBluetoothPermission()) {
+            then(true)
+            return
+        }
+        onBluetoothPermission = then
+        requestBluetooth.launch(bluetoothPermissions())
+    }
+
+    private fun bluetoothPermissions(): Array<String> = arrayOf(
+        Manifest.permission.BLUETOOTH_SCAN,
+        Manifest.permission.BLUETOOTH_CONNECT,
+    )
 
     /** Volume-up key state (for BT remote PTT) */
     private val _volumeUpHeld = MutableStateFlow(false)
@@ -111,6 +167,24 @@ class MainActivity : ComponentActivity() {
             return true // consume before focus navigation / scrolling
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * The screen is going away: locked, or the app put in the background.
+     *
+     * A press on the on-screen button should end there. It cannot be reached any
+     * more, and a transmitter left on behind a locked screen can only be switched
+     * off after typing a password. The Bluetooth button stays reachable and so
+     * keeps transmitting - that distinction lives in sdr-remote-logic, not here.
+     *
+     * `isChangingConfigurations` rules out a screen rotation: that is an onStop
+     * too, but the app comes straight back and that is not going away.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) {
+            viewModel.screenGone()
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

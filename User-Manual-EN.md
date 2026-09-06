@@ -1,4 +1,4 @@
-# ThetisLink v2.10.0 - User Manual
+# ThetisLink v2.11.0 - User Manual
 
 ## Table of Contents
 
@@ -19,10 +19,10 @@
 
 ## Overview
 
-ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis. It consists of:
+ThetisLink is a remote control application for Thetis - whatever radio Thetis drives is the radio you operate. It consists of:
 
 - **ThetisLink Server** — runs on the Thetis PC (Windows), controls the radio via TCI
-- **ThetisLink Client** — desktop client (Windows/macOS/Linux) with spectrum, waterfall and full control
+- **ThetisLink Client** — desktop client (Windows; on macOS from source, experimental) with spectrum, waterfall and full control
 - **ThetisLink Android** — mobile client app
 
 The server communicates with Thetis via TCI WebSocket for both control and audio. Audio is transmitted via the Opus codec over UDP with minimal latency.
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.10.0.apk` | Android client app |
+| `ThetisLink-2.11.0.apk` | Android client app |
 | `Installatie.md` | Installation guide (Dutch) |
 | `User-Manual.md` | User manual (Dutch) |
 | `Technische-Referentie.md` | Technical reference (Dutch) |
@@ -65,8 +65,8 @@ ThetisLink is distributed as a zip file with the following contents:
 
 ### System requirements
 
-- **Server:** Windows 10/11, Thetis v2.10.3.15 or PA3GHM fork, ANAN 7000DLE (or compatible)
-- **Client:** Windows/macOS/Linux or Android 8+
+- **Server:** Windows 10/11, Thetis v2.10.3.15 or PA3GHM fork, and an SDR that Thetis supports
+- **Client:** Windows or Android 8+ (macOS from source, experimental)
 - **Network:** WiFi or LAN, UDP port 4580
 
 ---
@@ -188,7 +188,7 @@ The relay runs on its own server (VPS) that you host yourself — it is not ship
 
 The server supports both routes at the same time: once a relay is configured, **each client decides for itself** whether to connect directly or via the relay. A single server can therefore serve several clients at once, some direct and some via the relay — you do not have to pick one route for the whole setup.
 
-> **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. Contact PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM).
+> **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. PA3GHM may decline a request or stop the service, and a no needs no explanation. Contact PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM).
 
 ### How it connects
 
@@ -374,9 +374,29 @@ ThetisLink offers three PTT modes:
 - **Toggle:** click the PTT button to switch between transmit and receive
 - **MIDI PTT:** separate MIDI PTT mode via an assigned MIDI controller button, independent of the desktop PTT mode
 
+**Android - BLE transmit button (YPC21 / PTT-Z01 and the same class):** the button ThetisLink connects to itself, and the one to prefer. Set it up under **Settings > BT PTT button** with **Choose button**, pressing the button once to wake it so it turns up in the list; do not pair it in the Android Bluetooth settings. The app reconnects on its own after the button has been out of range or Bluetooth has been off. Because the connection is ThetisLink's own rather than the touch system's, this button also keys **while the screen is locked** - it is in your hand and you can let it go. Out of range, the transmitter is released rather than left keyed. Needs Android 12 or newer.
+
 **Android — external BT remote (ZL-01 or similar):** a Bluetooth button that behaves as an external touch device can be used as a PTT button. ThetisLink intercepts the touch events and maps them to PTT down/up. Only works while the screen is active (touch events are only delivered to a wakeful screen on Android).
 
 **PTT spike suppression (v2.4.0):** on a tablet/laptop with a built-in speaker and microphone in one chassis, the switch-on plop at PTT-on can be transmitted. Enable **"Built-in speaker + mic (PTT spike protection)"** in the client: on PTT the speaker is muted instantly and the first few milliseconds of mic audio are discarded, so the spike is not transmitted. The **mic gate-delay** is separately adjustable for Thetis and Yaesu. Leave the option **off** for a headset or well-isolated audio (0 ms, no added latency). Since **v2.4.2** the receive audio of the other receivers stays audible during transmit; the internal-speaker mute applies **only** when this spike-protection option is enabled.
+
+### Multi-TX: one microphone to several transmitters (v2.11.0)
+
+With more than one transmitter - a Thetis and a radio, or two radios - only one
+of them may be on the air at a time. Whoever is already transmitting keeps it;
+press another and you briefly see **TX elsewhere** and nothing more happens.
+Hold that control down and it starts as soon as the first one frees up.
+
+With **Multi-TX** on, the same microphone goes to every keyed transmitter at
+once, so Thetis and both radios together. The checkbox is in the **Server tab**
+and is off by default. It appears once there is more than one transmitter - with
+a single one there is nothing to spread.
+
+Desktop only; the phone always keys one radio.
+
+Each transmitter keeps its own busy sign. If the server turns one of them down -
+because another station holds it, or because the radio itself stopped - that
+concerns only that transmitter. The other one carries on.
 
 ### TX meter (v2.0.0)
 
@@ -772,7 +792,7 @@ The raw RX-packet log line is at debug level by default, so the server log is no
 
 ## Yaesu FT-991A / FTX-1
 
-ThetisLink can control a Yaesu FT-991A transceiver as a second radio alongside the ANAN. The Yaesu is connected via a serial USB COM port.
+ThetisLink can control a Yaesu FT-991A transceiver as a second radio alongside the radio Thetis drives. The Yaesu is connected via a serial USB COM port.
 
 ### Functions
 
@@ -781,7 +801,7 @@ ThetisLink can control a Yaesu FT-991A transceiver as a second radio alongside t
 - **VFO A/B:** switch between VFO A and VFO B
 - **Memory channels:** automatically loaded when the Yaesu is enabled in the server. **(v2.8.0)** The server reads the channels **once, when the radio connects**, and every client is then served from that copy — previously each client that connected made the radio walk all its channels again, which took a second or so during which no other CAT command could get through. The **per-channel tones** are fetched at the same moment, so a client gets a complete list straight away; the radio briefly steps through the channels that have a tone mode and returns to where it was. The list starts **empty** for both radios at startup — so what you see demonstrably came from the radio rather than from an old file; **Load file** still brings in a saved list when you want one. The consequence of reading once: a channel you edit **on the radio's own front panel** is not noticed until you press **Read radio**, which always fetches a fresh list. **On the FTX-1 that does not hold for the tone:** there the list is authoritative and the radio is not, so a tone you change on the front panel is ignored on a read as long as the list already holds a value there — and shortly afterwards ThetisLink puts the list's value back on the radio, undoing your change on the set. To keep a tone you chose on the radio itself, set it in the list as well. The server log reports how many read tones were ignored for this reason. Channels with a name are displayed in the UI. **The table (v2.8.0):** a row's colour says where the **radio** is, not which row you last touched. **Green** = the radio is on this channel now. **Amber** = the channel you left when you changed frequency and slid into VFO; click it to come back. **Grey** = the rest. The whole row is clickable, not just the number, and **double-clicking** opens the edit fields (with **Close** to leave them). Edit + "Write radio" updates frequency, name, mode, shift and tone-mode (on/off) per channel. **Tones (v2.7.0):** on the FT-991A, ThetisLink now writes the CTCSS tone and the DCS code per channel as well, not just the tone-mode flag. **Read tones** fetches the tones of the channels that have a tone mode; the radio briefly steps through those channels and returns to the one it was on (a running scan is paused and resumed). **The FTX-1 (v2.8.0):** this radio cannot *store* a tone in a memory channel over CAT — its `MW` command has a field for the tone mode but none for the tone frequency — so writing a memory also resets that channel's tone to 100.0 Hz in the radio. ThetisLink therefore keeps the tones in its own list and **re-applies the right one every time the radio lands on a channel**, which means transmitting through ThetisLink works normally. Be aware of what that does not cover: the radio **on its own, without ThetisLink running**, will transmit 100.0 Hz on channels that were written. Because of that cost, *writing to the radio* is **switched off by default**. **Write radio** still hands your list to the server — its tones are applied per channel and work normally — but nothing goes into the set. So an edited frequency or name lives in the server's list only; to put it in the radio itself, tick the box in the server settings (Yaesu tab), where the condition is explained. Reading is always allowed.  **A memory can be written but not erased:** no CAT command exists for clearing a memory channel, so that can only be done on the radio itself. Deleting a row from the table removes it from your list only; the channel stays in the radio exactly as it was.  **Time-out timer (v2.8.0):** if the radio has a TX time-out set, ThetisLink releases PTT just before that limit instead of transmitting on while the set has already stopped. The setting is read from the EX menu when the radio connects (991A 036, FTX-1 030112). The **FTX-1** also reports its real transmit state, so ThetisLink lets go on a fault or when you key the set's own PTT as well; the FT-991A has no such readback, so there the time-out timer is the only net. **If you change frequency while on a memory channel (v2.5.0), ThetisLink copies the channel to VFO-A (keeping its mode) and follows your new frequency — you slide seamlessly from memory to VFO (991A + FTX-1).**
 - **Menu editor:** read and modify Yaesu menu settings via the server UI **(v2.8.0)** The server reads the EX settings **once, when the radio connects**, and keeps them; a client is then served straight from that copy instead of waiting for a fresh scan. That mainly shows on the FTX-1, where it is 405 parameters. Change a setting through ThetisLink and the copy is updated immediately — no re-scan needed. **Read radio** still fetches a fresh scan, for instance after you changed something on the set itself.
-- **Audio:** the Yaesu USB audio is captured by the server and sent via the AudioRx2 channel to the client, where it is mixed with the ANAN RX signal
+- **Audio:** the Yaesu USB audio is captured by the server and sent via the AudioRx2 channel to the client, where it is mixed with the Thetis RX signal
 - **Auto-DFM during TX (v2.0.0):** see subsection below
 
 ### Channel buttons and volume in the main window (v2.7.0)
@@ -827,6 +847,30 @@ From v2.0.0 ThetisLink toggles this automatically:
 Auto-DFM is inactive in DATA-FM ('A'), USB ('2'), FM-N ('B') and other modes — they keep their normal TX path.
 
 Known limits: a mode change during active TX can confuse the auto-restore; avoid pressing mode buttons while PTT is active. After a server crash during TX you must manually return to FM (the server cannot automatically recover its in-flight state).
+
+### When the USB to a radio goes away (v2.11.0)
+
+A radio that loses its USB connection while transmitting **keeps transmitting**.
+CAT keying is a latch, not a heartbeat: the radio holds the last thing it was
+told and there is nobody left to say stop. The audio rides on that same cable,
+so from that moment the other station hears a bare carrier and no voice.
+
+What ThetisLink does about it:
+
+- The radio's window **stays on screen** - otherwise the one place that could
+  say anything would be the thing that disappeared. Its transmit control turns
+  dark red and reads **USB LOST**. That stays up for three more seconds after the
+  cable returns, so a one-second interruption does not flash past.
+- When the cable comes back the transmitter **is switched off** and your PTT
+  control lets go. Transmitting again takes a fresh press. That is deliberate: a
+  radio that throws its own USB off is saying something about the installation,
+  and simply resuming it from a distance is not the answer.
+- If the cable stays away past the **radio's own TX time-out**, ThetisLink may
+  take it that the radio has stopped by itself, and lets the transmitter go.
+
+**With that time-out switched off on the radio there is no last brake.** The
+radio really can keep transmitting until somebody walks over to it, and
+ThetisLink does not pretend otherwise. Switch it on if you operate remotely.
 
 ### SSB transmit over the USB audio (v2.4.0)
 
@@ -927,7 +971,7 @@ The server picks the **Nth device** matching the name (`#2` = the second). Witho
 
 ## Diversity reception
 
-ThetisLink supports diversity reception via RX1 and RX2. This combines two antennas (for example the ANAN on two different antenna inputs) for improved reception.
+ThetisLink supports diversity reception via RX1 and RX2. This combines two antennas (for example a radio with two receivers on two different antenna inputs) for improved reception.
 
 ### Usage
 
@@ -982,10 +1026,14 @@ The spectrum and waterfall use a signal level-dependent color scale:
 
 ### Remote management
 
-In the Server tab there is a **Remote Reboot / Shutdown** button with which you can remotely restart or shut down the server PC:
+In the Server tab there is a **Remote Reboot / Shutdown** button with which you can remotely restart or shut down the **Windows PC that the server runs on**.
+
+Note that this concerns the PC itself, not the ThetisLink Server or Thetis: the machine really does shut down or restart, and your connection drops.
 
 - After clicking, choose between **reboot** or **shutdown**
-- For reboot a `ThetisLinkReboot` scheduled task is required on the server PC (see Installation.md for the configuration)
+- **Shutdown** works without preparation
+- **Reboot** requires a one-time Windows scheduled task `ThetisLinkReboot` on the server PC (see Installation.md for the configuration). If that task is missing, pressing the button does nothing and no error is shown
+- Only shut the PC down if you can also reach it physically: ThetisLink cannot switch a powered-down PC back on remotely
 
 ---
 
@@ -1131,7 +1179,7 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
-| **2.10.0** | **A first start on the server claims nothing, and two radios stay apart.** While there is no config file yet the server starts **bare**: every device off, the second receiver off, no window opening by itself - you switch on what you have instead of switching off what you do not. The **language** follows the Windows display language where ThetisLink has it (NL/DE/FR) and English otherwise; with a config file already there, your own choice stays. **German and French** now reach the connect screen, the wizard and the status line under them. **Two Yaesu radios of the same type can hold different settings**: switch to SSB on PTT, permission to write memory channels and which side of the USB audio to take were shared, so granting a permission on one radio granted it on the other. ThetisLink now asks the **port** which radio is on it instead of deriving it from the slot number - an FTX-1 in slot 1 used to get a 991A's menu. **Rows that do not apply are not shown** (roger beep, DX spots without a cluster, diversity on a single-receiver radio), and a radio slot is called "Yaesu 1" until the server says what it is. The **chat** explains what a relay does and is always reachable; an answer from the administrator that you click away stays away (remembered per machine, so dismissing it on the phone leaves it standing in the server window), and the strip showing those answers is bounded and scrolls, so it no longer takes the whole window. And **a settings file that cannot be read is no longer overwritten**. Wire protocol unchanged from 2.9.1; stock Thetis v2.10.3.x suffices. |
+| **2.10.0** | **A first start on the server claims nothing, and two radios stay apart.** While there is no config file yet the server starts **bare**: every device off, the second receiver off, no window opening by itself - you switch on what you have instead of switching off what you do not. The **language** follows the Windows display language where ThetisLink has it (NL/DE/FR) and English otherwise; with a config file already there, your own choice stays. **German and French** now reach the connect screen, the wizard and the status line under them. **Two Yaesu radios of the same type can hold different settings**: switch to SSB on PTT, permission to write memory channels and which side of the USB audio to take were shared, so granting a permission on one radio granted it on the other. ThetisLink now asks the **port** which radio is on it instead of deriving it from the slot number - an FTX-1 in slot 1 used to get a 991A's menu. **Rows that do not apply are not shown** (roger beep, DX spots without a cluster, diversity on a single-receiver radio), and a radio slot is called "Yaesu 1" until the server says what it is. The **chat** explains what a relay does and is always reachable; an answer from the administrator that you click away stays away (remembered per machine, so dismissing it on the phone leaves it standing in the server window), and the strip showing those answers is bounded and scrolls, so it no longer takes the whole window. And **a settings file that cannot be read is no longer overwritten**. One flag bit is added on the wire (server has no DX cluster), inverted so an older peer behaves exactly as before; stock Thetis v2.10.3.x suffices. |
 | **2.9.1** | **A gap is the codec again, and switching audio off is silent.** 2.9.0 added a noise generator that had never been part of ThetisLink; it is what made a dropout louder and harder-edged than the band it stood in for. Removed. What fills a gap is the codec's own concealment and nothing added to it, as it has been since the first build. **Switching audio off is quiet at once** - never the generator but the gate: turning audio off stops the stream at the server, the client read that as a dropout and kept filling the silence. **A stream you switch off forgets what it heard**, on all six channels and on a reconnect too. **A station listening only to a radio holds its connection** as well as any other: audio from a radio was not counted as a sign of life, so the check hung on the heartbeat alone. **60m is a band again**: the button stayed grey, 60m could hold no band memory, and the button landed 500 Hz below the band - now 5.354 MHz. The server writes the screen layout to its log at start-up. Wire protocol unchanged from 2.9.0; stock Thetis v2.10.3.x suffices. |
 | **2.9.0** | **A dropout sounds like the band again, a phone survives a network change, and chat + problem reporting.** Concealment always ran through the narrowband decoder, so with wideband audio it produced silence instead of noise - and only channel 0 tried at all. Every stream now decodes, corrects and conceals in its own format; both radios, both VRX and RX2 conceal at all. **Network change**: switching between WiFi and mobile data left the controls working and the sound gone until the app was killed - two faults, one on each side. **Chat and problem reporting** for stations on a relay: a room shared with the other users, and a report button that goes straight to the administrator with the log attached, cleaned first and shown to you before it goes. Both optional. **Android keeps its own log file** - the system log rolls away within minutes. The app is no longer debuggable, so `adb run-as` no longer works. The server says **why a radio is missing** when Windows hands its COM port to another program. Backwards-compatible with 2.8.x; stock Thetis v2.10.3.x suffices. |
 | **2.8.0** | **The radio's data is there the moment you connect, PTT is released when the radio already has, and the FTX-1's tones work in practice.** Memory channels, tones and EX settings are read **once, when the radio connects**, and every client is served from the server's copy instead of making the radio walk its channels again. **Time-out timer:** if the radio has one set, ThetisLink releases PTT just before that limit rather than transmitting on while the set has stopped; the FTX-1 also reports its real transmit state, so a fault or the set's own PTT ends the transmission here too. **FTX-1 tones:** that radio cannot store a tone in a memory channel over CAT, so ThetisLink keeps them in its own list and applies the right one each time the radio lands on a channel - writing to its memory bank is off by default and asks you to accept the cost first. The **memory table shows where the radio is**: green for the channel it is on, amber for the one you left when you tuned into VFO, and one click anywhere in the row brings you back; double-click opens the edit fields. The **window arranger is now one implementation** shared by the desktop client and the server GUI, which gains the UI scale, the 18×18 grid and five arrangement memories. Fixed: the **V/M button overwrote a memory channel** (in every release since 2.0.0, with no confirmation and nothing in the log), the FTX-1 did not actually leave memory mode on a frequency change, the EX menu dropdown dropped choices it could not parse (leaving the TX time-out unsettable), and three **Android** faults that shipped in the 2.7.0 APK: a Yaesu stayed silent when switched on, the memory list disappeared behind the EX menu, and the FTX-1's EX settings showed bare numbers. Wire protocol stays **VERSION 3** with **no new control ids**; backwards-compatible with 2.7.x. Stock Thetis v2.10.3.15 suffices. |

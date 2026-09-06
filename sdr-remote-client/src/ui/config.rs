@@ -302,6 +302,7 @@ pub(crate) struct ClientConfig {
     pub(crate) midi_encoder_hz: u64,
     pub(crate) ptt_toggle: bool,
     pub(crate) yaesu_ptt_toggle: bool,
+    pub(crate) multi_tx: bool,
     pub(crate) chat_open: bool,
     pub(crate) midi_ptt_toggle: bool,
     // Dual-radio slot 1 (FTX-1): own enable + PTT mode + volume, persistent.
@@ -503,6 +504,7 @@ impl Default for ClientConfig {
             midi_encoder_hz: 100,
             ptt_toggle: false,
             yaesu_ptt_toggle: false,
+            multi_tx: false,
             chat_open: false,
             yaesu2_enabled: false,
             yaesu2_ptt_toggle: false,
@@ -1172,6 +1174,8 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("ptt_toggle=") {
             config.ptt_toggle = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("multi_tx=") {
+            config.multi_tx = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu_ptt_toggle=") {
             config.yaesu_ptt_toggle = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("chat_open=") {

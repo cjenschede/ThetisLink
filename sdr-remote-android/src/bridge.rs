@@ -8,7 +8,13 @@ use tokio::sync::{mpsc, watch};
 
 use sdr_remote_core::protocol::ControlId;
 use sdr_remote_logic::audio::AudioBackend;
+use sdr_remote_logic::ble_ptt::{
+    BleButtonEvent, BlePttAction as LogicAction, BlePttState,
+};
 use sdr_remote_logic::commands::Command;
+use sdr_remote_logic::ptt_intent::{
+    PhonePtt as LogicPhonePtt, PttSource as LogicPttSource, PttTarget as LogicPttTarget,
+};
 use sdr_remote_logic::engine::{ClientEngine, ClientRelayTunnel};
 use sdr_remote_logic::state::RadioState;
 
@@ -28,6 +34,278 @@ pub fn version() -> String {
 /// moment the relay started working (review finding, 2026-08-20).
 pub fn relay_is_configured(enabled: bool, url: String, station: String, token: String) -> bool {
     sdr_remote_relay::is_configured(enabled, &url, &station, &token)
+}
+
+/// What to do with the connection after a Bluetooth link went away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BleDropPolicy {
+    Reconnect,
+    Close,
+}
+
+/// Wait for the button to come back, or let the client go?
+///
+/// One input. The second half - "is this still our connection" - moved into
+/// the gate, which knows the generation; asking it here as well was a check
+/// that could no longer fail.
+pub fn ble_drop_policy(wanted: bool) -> BleDropPolicy {
+    match sdr_remote_logic::ble_ptt::on_drop(wanted) {
+        sdr_remote_logic::ble_ptt::DropPolicy::Reconnect => BleDropPolicy::Reconnect,
+        sdr_remote_logic::ble_ptt::DropPolicy::Close => BleDropPolicy::Close,
+    }
+}
+
+/// What a PTT button shows, handed to Kotlin rather than written a second time
+/// there.
+///
+/// The rule was centralised into `sdr_remote_logic::ptt_button` for the three
+/// desktop buttons, and Compose kept its own copy of the same expression - so
+/// the one place with tests was the one place the phone did not use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PttButton {
+    Busy,
+    Transmitting,
+    Idle,
+}
+
+/// Ownership first, then our own request. See the logic crate for why the
+/// radio's own TX state is not an input.
+pub fn ptt_button(held_by_other: bool, want_tx: bool) -> PttButton {
+    match sdr_remote_logic::ptt_button::ptt_button(held_by_other, want_tx) {
+        sdr_remote_logic::ptt_button::PttButton::Busy => PttButton::Busy,
+        sdr_remote_logic::ptt_button::PttButton::Transmitting => PttButton::Transmitting,
+        sdr_remote_logic::ptt_button::PttButton::Idle => PttButton::Idle,
+        // Cannot arise here: this path calls ptt_button(), the variant without a block of
+        // our own, and the phone keys one radio at a time anyway.
+        //
+        // Named rather than left out all the same - the compiler forced it and that is
+        // exactly right. If Android ever gets several transmitters at once, this line has
+        // to be looked at again instead of quietly reading as "free".
+        sdr_remote_logic::ptt_button::PttButton::BlockedByOwnTx => PttButton::Idle,
+    }
+}
+
+/// What the Bluetooth PTT button asks for, on its way to Compose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlePttAction {
+    /// Nothing changed. Touch nothing.
+    Nothing,
+    KeyDown,
+    KeyUp,
+    /// The link is gone, whatever the reason. Not the same as a release: a
+    /// release means nothing in toggle mode, and this always releases.
+    Gone,
+    /// A byte this button is not known to send. Log it and change nothing;
+    /// Kotlin still has the byte it just passed in.
+    Unrecognised,
+}
+
+/// The transmit decision for a Bluetooth PTT button, handed to Kotlin rather
+/// than written a second time there.
+///
+/// The rule underneath - every drop releases, a connection starts in not
+/// transmitting - is the one that keeps a licence holder off the air by
+/// accident, and it is tested in `sdr-remote-logic` without a phone and
+/// without a button. Kotlin owns the GATT callbacks and nothing else: it
+/// reports what happened and does what this says.
+pub struct BlePttGate {
+    inner: Mutex<BlePttState>,
+}
+
+impl Default for BlePttGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlePttGate {
+    pub fn new() -> Self {
+        Self { inner: Mutex::new(BlePttState::new()) }
+    }
+
+    /// A new connection attempt starts and becomes the only one that counts.
+    ///
+    /// Everything still in flight from an older attempt is ignored from here
+    /// on, and whatever was held is released - a press cannot survive a
+    /// replaced link, because the button only reports changes.
+    pub fn begin(&self, generation: u64) -> BlePttAction {
+        Self::translate(self.inner.lock().unwrap().begin(generation))
+    }
+
+    pub fn connected(&self, generation: u64) -> BlePttAction {
+        self.apply(generation, BleButtonEvent::Connected)
+    }
+
+    pub fn disconnected(&self, generation: u64) -> BlePttAction {
+        self.apply(generation, BleButtonEvent::Disconnected)
+    }
+
+    pub fn notification(&self, generation: u64, value: u8) -> BlePttAction {
+        self.apply(generation, BleButtonEvent::Notification(value))
+    }
+
+    /// Is the physical button down? For a log line - whether that means
+    /// transmitting is PhonePtt's to say.
+    pub fn held(&self) -> bool {
+        self.inner.lock().unwrap().held()
+    }
+
+    fn apply(&self, generation: u64, event: BleButtonEvent) -> BlePttAction {
+        Self::translate(self.inner.lock().unwrap().apply(generation, event))
+    }
+
+    fn translate(action: Option<LogicAction>) -> BlePttAction {
+        match action {
+            None => BlePttAction::Nothing,
+            Some(LogicAction::KeyDown) => BlePttAction::KeyDown,
+            Some(LogicAction::KeyUp) => BlePttAction::KeyUp,
+            Some(LogicAction::Gone) => BlePttAction::Gone,
+            Some(LogicAction::Unrecognised(_)) => BlePttAction::Unrecognised,
+        }
+    }
+}
+
+// --------------------------------------------------------------- the PTT button
+//
+// Same division of labour as BlePttGate above: the rule lives in
+// `sdr-remote-logic` and is tested there without a phone, this is the lock around
+// it, and Kotlin does what it says. Until now the ViewModel kept flags of its own
+// - `requestedPtt`, `requestedPttTarget` and `_transmitting`, the last of which
+// always moved together with the first. Two booleans that have to stay equal in
+// four places is exactly the shape Lane 6 clears up.
+
+/// Which transmitter the phone is working.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PttTarget {
+    Thetis,
+    Yaesu0,
+    Yaesu1,
+}
+
+/// What the operator presses with. The phone has two; the desktop knows more
+/// (mouse, spacebar, MIDI) and those live in the same shared type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PttSource {
+    Screen,
+    Bluetooth,
+    Midi,
+    /// The volume rocker and the page-turner keys of a BLE HID remote. Both
+    /// arrive as key events to the foreground activity, so both stop reaching
+    /// the app the moment the screen goes.
+    VolumeKey,
+}
+
+impl PttTarget {
+    fn to_logic(self) -> LogicPttTarget {
+        match self {
+            PttTarget::Thetis => LogicPttTarget::Thetis,
+            PttTarget::Yaesu0 => LogicPttTarget::Yaesu0,
+            PttTarget::Yaesu1 => LogicPttTarget::Yaesu1,
+        }
+    }
+
+    fn from_logic(t: LogicPttTarget) -> Self {
+        match t {
+            LogicPttTarget::Thetis => PttTarget::Thetis,
+            LogicPttTarget::Yaesu0 => PttTarget::Yaesu0,
+            LogicPttTarget::Yaesu1 => PttTarget::Yaesu1,
+        }
+    }
+}
+
+impl PttSource {
+    fn to_logic(self) -> LogicPttSource {
+        match self {
+            PttSource::Screen => LogicPttSource::Screen,
+            PttSource::Bluetooth => LogicPttSource::Bluetooth,
+            PttSource::Midi => LogicPttSource::Midi,
+            PttSource::VolumeKey => LogicPttSource::VolumeKey,
+        }
+    }
+}
+
+/// The phone's PTT state, on the shared rule.
+pub struct PhonePtt {
+    inner: Mutex<LogicPhonePtt>,
+}
+
+impl Default for PhonePtt {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhonePtt {
+    pub fn new() -> Self {
+        Self { inner: Mutex::new(LogicPhonePtt::new()) }
+    }
+
+    /// One source, pressed or let go. Pressing releases the other transmitters - the
+    /// phone keys one at a time, and here that is a rule.
+    pub fn set(&self, target: PttTarget, source: PttSource, held: bool) {
+        self.inner.lock().unwrap().set(target.to_logic(), source.to_logic(), held);
+    }
+
+    pub fn want_tx(&self, target: PttTarget) -> bool {
+        self.inner.lock().unwrap().want_tx(target.to_logic())
+    }
+
+    /// Which transmitter is the operator asking for? At most one.
+    pub fn asking(&self) -> Option<PttTarget> {
+        self.inner.lock().unwrap().asking().map(PttTarget::from_logic)
+    }
+
+    pub fn refused(&self) {
+        self.inner.lock().unwrap().refused();
+    }
+
+    pub fn busy(&self, target: PttTarget) {
+        self.inner.lock().unwrap().busy(target.to_logic());
+    }
+
+    pub fn disconnected(&self) {
+        self.inner.lock().unwrap().disconnected();
+    }
+
+    pub fn radio_left_tx(&self, target: PttTarget) {
+        self.inner.lock().unwrap().radio_left_tx(target.to_logic());
+    }
+
+    /// The operator switches the on-screen button off: everything on that transmitter
+    /// ends, including a Bluetooth button that is still held. That is the way out when
+    /// it jams.
+    pub fn operator_stop(&self, target: PttTarget) {
+        self.inner.lock().unwrap().operator_stop(target.to_logic());
+    }
+
+    /// The screen is gone - locked or in the background. Only the sources that die
+    /// with the screen; the Bluetooth button stays.
+    pub fn screen_gone(&self) {
+        self.inner.lock().unwrap().screen_gone();
+    }
+
+    /// The Bluetooth button is no longer holding anything. Every link event
+    /// reports this, and it is unconditional - see PhonePtt::bluetooth_gone.
+    pub fn bluetooth_gone(&self) {
+        self.inner.lock().unwrap().bluetooth_gone();
+    }
+
+    /// Hold to transmit, or one press on and the next off. Compose re-applies
+    /// this on every redraw, so setting it to what it already is changes nothing.
+    pub fn set_toggle_mode(&self, toggle: bool) {
+        self.inner.lock().unwrap().set_toggle_mode(toggle);
+    }
+
+    /// A control went down. What that means - latch, or hold - is decided here
+    /// and not by the button.
+    pub fn down(&self, target: PttTarget, source: PttSource) {
+        self.inner.lock().unwrap().down(target.to_logic(), source.to_logic());
+    }
+
+    /// A control came up.
+    pub fn up(&self, target: PttTarget, source: PttSource) {
+        self.inner.lock().unwrap().up(target.to_logic(), source.to_logic());
+    }
 }
 
 /// DX cluster spot exposed to Kotlin via uniffi.
@@ -118,6 +396,12 @@ pub struct BridgeRadioState {
     /// Always false in direct mode. Overridden in get_state() from the relay status.
     pub relay_transport_fallback: bool,
     pub ptt_denied: bool,
+    /// That refusal was the server letting go, not another client holding on.
+    ///
+    /// The radio stopped or its time-out timer is about to fire. A held control
+    /// has to be released before it may ask again; an ordinary refusal does not
+    /// carry that. See `Flags::SERVER_RELEASED`.
+    pub ptt_released_by_server: bool,
     pub audio_error: bool,
     pub rtt_ms: u16,
     pub jitter_ms: f32,
@@ -262,6 +546,9 @@ pub struct BridgeRadioState {
     pub yaesu_mode: u8,
     pub yaesu_smeter: u16,
     pub yaesu_tx_active: bool,
+    /// This radio is held by a different client (server's ownership table).
+    pub yaesu_held_by_other: bool,
+    pub yaesu2_held_by_other: bool,
     pub yaesu_power_on: bool,
     pub yaesu_af_gain: u8,
     pub yaesu_tx_power: u8,
@@ -284,11 +571,11 @@ pub struct BridgeRadioState {
     pub yaesu_tuner_state: u8,
     /// Radio meldt hoge SWR tijdens TX (zelf-wissend).
     pub yaesu_hi_swr: bool,
-    /// Max TX-vermogen voor de huidige band (uit EX max-power menus; 0 = onbekend).
-    /// De slider klemt hierop, net als de desktop.
+    /// Maximum TX power for the current band (from the EX max-power menus; 0 = unknown).
+    /// The slider clamps to this, like the desktop.
     pub yaesu_tx_power_max: u8,
-    // Radio 2 (yaesu2_*) — Android toont één radio tegelijk; de selector kiest welke.
-    // De selector toont een radio alleen als 'ie connected is (= geconfigureerd + actief).
+    // Radio 2 (yaesu2_*) - Android shows one radio at a time; the selector picks which.
+    // The selector only shows a radio when it is connected (= configured and active).
     pub yaesu2_connected: bool,
     pub yaesu2_model: u8,
     pub yaesu2_tuner_state: u8,
@@ -384,7 +671,22 @@ impl From<RadioState> for BridgeRadioState {
             connected: s.connected,
             relay_transport_fallback: false, // set in get_state() from the relay status
 
-            ptt_denied: s.ptt_denied,
+            // Derived from the refusal record rather than carried as flags.
+            // Android never had the fault the counter is for - it has no
+            // per-frame Thetis PTT-off wiping an unrelated radio's refusal -
+            // so it still reads levels, and the counter comes over with the
+            // protocol patch that gives a refusal a slot number.
+            //
+            // It does read them at delay(33), a window twice as wide as the
+            // desktop's, so "it cannot happen there" is a statement about
+            // today's code and not a guarantee (review).
+            //
+            // released_by_server_now() rather than the bare field: the reason
+            // belongs to the event and is not taken back when the refusal is
+            // settled, so a level reader has to AND the two. Writing that out
+            // here would have put the rule in one front end again.
+            ptt_denied: s.ptt_denial.active(),
+            ptt_released_by_server: s.ptt_denial.released_by_server_now(),
             audio_error: s.audio_error,
             rtt_ms: s.rtt_ms,
             jitter_ms: s.jitter_ms,
@@ -505,6 +807,8 @@ impl From<RadioState> for BridgeRadioState {
             yaesu_mode: s.yaesu_mode,
             yaesu_smeter: s.yaesu_smeter,
             yaesu_tx_active: s.yaesu_tx_active,
+            yaesu_held_by_other: s.yaesu_held_by_other,
+            yaesu2_held_by_other: s.yaesu2_held_by_other,
             yaesu_power_on: s.yaesu_power_on,
             yaesu_af_gain: s.yaesu_af_gain,
             yaesu_tx_power: s.yaesu_tx_power,
@@ -648,8 +952,8 @@ pub struct SdrBridge {
     /// Android resolved `strings.xml` to, so this side cannot drift from that one.
     /// Defaults to "en" for the window before that call.
     ui_language: Mutex<String>,
-    /// Phase C: houdt de relay-monitor in leven zolang de bridge bestaat (draait op
-    /// een eigen thread). `None` in direct-modus.
+    /// Phase C: keeps the relay monitor alive for as long as the bridge exists (it runs
+    /// on a thread of its own). `None` in direct mode.
     _relay_monitor: Mutex<Option<sdr_remote_relay::RelayMonitor>>,
     /// Fase 3c: relay status handle to surface the transport (UDP / wss-fallback) to the
     /// Compose UI. `None` in direct mode.
@@ -696,9 +1000,9 @@ impl SdrBridge {
         let (engine, state_rx, cmd_tx) = ClientEngine::new();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        // Phase C: relay-transport voor Android-clients die niet kunnen port-forwarden
-        // (mobiel achter CGNAT). Is de relay-config compleet, dan tunnel + monitor
-        // (rol Client) opzetten; anders direct-UDP (default, byte-identiek).
+        // Phase C: relay transport for Android clients that cannot port-forward (mobile
+        // behind CGNAT). If the relay config is complete, set up the tunnel and monitor
+        // (role Client); otherwise direct UDP (the default, byte-identical).
         let mut relay_monitor: Option<sdr_remote_relay::RelayMonitor> = None;
         // One condition, read twice: it decides both whether the tunnel is built
         // and whether the chat has a relay to reach. Splitting them is how the
@@ -708,7 +1012,7 @@ impl SdrBridge {
         let relay_tunnel = if relay_active {
             let (uplink_tx, uplink_rx) = mpsc::unbounded_channel();
             let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
-            // Placeholder server-adres (display-label; genegeerd door de Relay-transport).
+            // Placeholder server address (a display label; ignored by the relay transport).
             let server_placeholder = SocketAddr::from(([203, 0, 113, 1], 4580));
             let relay_cfg = sdr_remote_relay::RelayConfig {
                 enabled: true,
@@ -1104,8 +1408,8 @@ impl SdrBridge {
             sdr_remote_core::protocol::ControlId::YaesuEnable, on as u16));
     }
 
-    /// Yaesu radio power on/off (CAT PS). Alleen zinvol op de 991A (PS0=standby,
-    /// USB blijft -> remote weer aan); de FTX-1 gaat echt uit -> UI toont er label-only.
+    /// Yaesu radio power on/off (CAT PS). Only meaningful on the 991A (PS0 = standby,
+    /// USB stays up -> remote on again); the FTX-1 really switches off -> label only in the UI.
     pub fn yaesu_power_on_off(&self, on: bool) {
         let _ = self.cmd_tx.send(Command::SetControl(
             sdr_remote_core::protocol::ControlId::YaesuPowerOnOff, on as u16));
@@ -1163,17 +1467,18 @@ impl SdrBridge {
         let _ = self.cmd_tx.send(Command::SetYaesuEqEnabled(on));
     }
 
-    /// Client-side spraakcompressor-amount (0-100) voor de Yaesu-TX, radio 1.
+    /// Client-side speech compressor amount (0-100) for the Yaesu TX, radio 1.
     pub fn yaesu_compressor(&self, level: u8) {
         let _ = self.cmd_tx.send(Command::SetYaesuCompressor(level));
     }
 
-    /// Client-side Yaesu-TX AGC aan/uit, radio 1 (eigen toggle, los van Thetis-AGC).
+    /// Client-side Yaesu TX AGC on/off, radio 1 (its own toggle, separate from the
+    /// Thetis AGC).
     pub fn yaesu_tx_agc(&self, on: bool) {
         let _ = self.cmd_tx.send(Command::SetYaesuTxAgc(on));
     }
 
-    /// Client-side spraakcompressor-amount (0-100) voor de Yaesu-TX, radio 2 (FTX-1).
+    /// Client-side speech compressor amount (0-100) for the Yaesu TX, radio 2 (FTX-1).
     pub fn yaesu2_compressor(&self, level: u8) {
         let _ = self.cmd_tx.send(Command::SetYaesu2Compressor(level));
     }
@@ -1183,13 +1488,13 @@ impl SdrBridge {
         let _ = self.cmd_tx.send(Command::SetYaesu2TxAgc(on));
     }
 
-    /// Getypte DSP/functie-control voor een slot (0=radio1, 1=radio2). Dekt álle
+    /// Typed DSP/function control for a slot (0 = radio 1, 1 = radio 2). Covers all
     /// DSP-knoppen + clarifier (YaesuCtrl-index in `control`, waarde in `value`).
     pub fn yaesu_control(&self, slot: u8, control: u8, value: u16) {
         let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, control, value));
     }
 
-    // ── Radio 2 (yaesu2) — spiegel van de yaesu_* functies, geroute naar slot 1 ──
+    // -- Radio 2 (yaesu2): a mirror of the yaesu_* functions, routed to slot 1 --
     pub fn yaesu2_enable(&self, on: bool) {
         let _ = self.cmd_tx.send(Command::SetControl(
             sdr_remote_core::protocol::ControlId::Yaesu2Enable, on as u16));
@@ -1441,6 +1746,45 @@ impl SdrBridge {
 }
 
 #[cfg(test)]
+mod denial_bridge_tests {
+    use super::*;
+    use sdr_remote_core::protocol::DeniedTarget;
+
+    /// The phone reads two levels off this conversion and nothing else, so this
+    /// is the whole of what a named transmitter changes for Android.
+    ///
+    /// It was claimed rather than shown - "the sign only gets more accurate" -
+    /// and a claim about the one front end nobody rebuilds is exactly the one
+    /// worth pinning. No Kotlin needed: the conversion is plain Rust and it
+    /// runs in the ordinary suite.
+    #[test]
+    fn the_phone_sees_only_the_transmitters_that_were_really_refused() {
+        let mut state = RadioState::default();
+        // Everything keyed, and the server refuses one radio by name.
+        state
+            .ptt_denial
+            .apply_refusal([true, true, true], DeniedTarget::Radio1, true);
+
+        let bridged: BridgeRadioState = state.clone().into();
+        assert!(bridged.ptt_denied);
+        assert!(bridged.ptt_released_by_server);
+
+        // Letting go of that radio ends it. Before the server named which one,
+        // the other two were in the mask as well and kept the sign up.
+        state.ptt_denial.transmitter_off(1);
+        let bridged: BridgeRadioState = state.into();
+        assert!(
+            !bridged.ptt_denied,
+            "a transmitter that was never refused is holding the sign up"
+        );
+        assert!(
+            !bridged.ptt_released_by_server,
+            "the reason outlived the refusal it belonged to"
+        );
+    }
+}
+
+#[cfg(test)]
 mod relay_rule_tests {
     //! The bridge's own view of the relay rule. The rule itself is tested in
     //! `sdr-remote-relay`, and nothing said that the function Compose actually
@@ -1531,5 +1875,90 @@ mod language_resource_tests {
                 lang.code()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod ble_ptt_bridge_tests {
+    //! The gate Kotlin actually calls, not the state machine underneath. The
+    //! rule is tested in `sdr-remote-logic`; nothing said that this wrapper
+    //! hands the same answer through, and a wrapper is exactly where a
+    //! translation quietly loses a case.
+
+    use super::{BlePttAction, BlePttGate};
+
+    #[test]
+    fn a_drop_while_held_releases_through_the_bridge_too() {
+        let gate = BlePttGate::new();
+        gate.begin(1);
+        assert_eq!(gate.connected(1), BlePttAction::Gone);
+        assert_eq!(gate.notification(1, 0x01), BlePttAction::KeyDown);
+        assert!(gate.held());
+
+        assert_eq!(gate.disconnected(1), BlePttAction::Gone);
+        assert!(!gate.held(), "the drop must reach the transmitter");
+    }
+
+    /// The mode moved to PhonePtt, where the screen button and the volume keys
+    /// obey the same one. What is left here is what only this side knows: a
+    /// press is a press, and every link event releases.
+    #[test]
+    fn presses_and_drops_reach_the_transmitter_through_the_bridge() {
+        let gate = BlePttGate::new();
+        gate.begin(1);
+        gate.connected(1);
+
+        assert_eq!(gate.notification(1, 0x01), BlePttAction::KeyDown);
+        assert!(gate.held());
+        assert_eq!(gate.notification(1, 0x00), BlePttAction::KeyUp);
+        assert!(!gate.held());
+
+        gate.notification(1, 0x01);
+        assert_eq!(gate.disconnected(1), BlePttAction::Gone);
+        assert!(!gate.held(), "the drop must reach the transmitter");
+    }
+
+    #[test]
+    fn the_drop_rule_survives_the_translation() {
+        use super::{ble_drop_policy, BleDropPolicy};
+        assert_eq!(ble_drop_policy(true), BleDropPolicy::Reconnect);
+        assert_eq!(ble_drop_policy(false), BleDropPolicy::Close);
+    }
+
+    /// The scenario the review blocked on, over the boundary Kotlin calls.
+    #[test]
+    fn a_press_from_a_replaced_connection_stops_at_the_bridge() {
+        let gate = BlePttGate::new();
+        gate.begin(1);
+        gate.connected(1);
+
+        // A different button is picked while a callback is still in flight.
+        gate.begin(2);
+
+        assert_eq!(gate.notification(1, 0x01), BlePttAction::Nothing);
+        assert!(!gate.held());
+    }
+
+    #[test]
+    fn the_unknown_byte_survives_the_translation() {
+        let gate = BlePttGate::new();
+        gate.begin(1);
+        gate.connected(1);
+        // 0xAB is the other channel's press byte. Real, and not ours.
+        assert_eq!(gate.notification(1, 0xAB), BlePttAction::Unrecognised);
+        assert!(!gate.held());
+    }
+
+    #[test]
+    fn a_release_is_not_invented_when_nothing_is_held() {
+        let gate = BlePttGate::new();
+        gate.begin(1);
+        gate.connected(1);
+        assert_eq!(gate.notification(1, 0x00), BlePttAction::Nothing);
+        // A drop is the one thing that IS reported unconditionally, and that
+        // changed on purpose: in toggle mode the button is not held while the
+        // radio is on the air, so "nothing is held" no longer means "there is
+        // nothing to release". Releasing nothing costs nothing.
+        assert_eq!(gate.disconnected(1), BlePttAction::Gone);
     }
 }

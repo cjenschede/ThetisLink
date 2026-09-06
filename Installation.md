@@ -1,10 +1,10 @@
-# ThetisLink v2.10.0 - Installation Guide
+# ThetisLink v2.11.0 - Installation Guide
 
-ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full radio control over the network via TCI WebSocket.
+ThetisLink is a remote control application for Thetis: audio, spectrum, PTT and full radio control over the network via TCI WebSocket. Whatever radio Thetis drives is the radio you operate - see the compatibility note below.
 
 **Compatibility:** ThetisLink talks only to **Thetis** (via TCI WebSocket) and not directly to the SDR hardware. It therefore works with any SDR device supported by **Thetis v2.10.3.15** (official release by ramdor) — both HPSDR Protocol 1 (Hermes, Angelia, Orion) and HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optional: Yaesu FT-991A / FTX-1 as a second radio (via COM port).
 
-**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.10.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
+**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.11.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
 
 **Disclaimer:** This software controls radio transmitters. Use at your own risk. The author is not responsible for damage to equipment, interference or violations of regulations resulting from the use of this software. Verify all safety features (PTT timeout, power limits) before transmitting.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for the ANAN 7000DLE SDR with Thetis.
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.10.0.apk | ThetisLink Android Client - phone/tablet |
+| ThetisLink-2.11.0.apk | ThetisLink Android Client - phone/tablet |
 | Installation.md | Installation guide (English, this document) |
 | User-Manual-EN.md | User manual (English) |
 | Technical-Reference.md | Technical reference (English) |
@@ -93,7 +93,7 @@ No administrator rights required for the ThetisLink Server or ThetisLink Clients
 
 ### 1.0 Installing the PA3GHM Thetis fork (recommended)
 
-The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.10.0 works best with Thetis-fork build PA3GHM TL2-4** — that build ships the wideband-IQ extension + modulation-filter fan-out that this release relies on. Earlier fork builds also work, with progressively fewer fork-only features available (TL2-3 without wideband, TL2-2 without rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 remains the fallback. Installation:
+The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.11.0 works best with Thetis-fork build PA3GHM TL2-4** — that build ships the wideband-IQ extension + modulation-filter fan-out that this release relies on. Earlier fork builds also work, with progressively fewer fork-only features available (TL2-3 without wideband, TL2-2 without rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 remains the fallback. Installation:
 
 1. First install the official **Thetis v2.10.3.15** using the standard installer (if you have not already done so)
 2. Download `Thetis.exe` from the PA3GHM fork — **release tag `TL2-4`** at [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -288,14 +288,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 ### 4.1 Installing the APK
 
 **Via file manager:**
-1. Copy `ThetisLink-2.10.0.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.11.0.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.10.0.apk
+adb install ThetisLink-2.11.0.apk
 ```
 
 ### 4.2 Connecting — guided setup wizard
@@ -312,7 +312,11 @@ The ThetisLink Android Client automatically detects connected Bluetooth headsets
 
 ### 4.4 Bluetooth PTT button
 
-ThetisLink supports Bluetooth remote shutter buttons (e.g. ZL-01) as wireless PTT. These buttons are available as simple one-button Bluetooth remote controls for phones. After pairing via Android Bluetooth settings, the button is automatically recognized as PTT.
+There are two kinds, and they are set up differently.
+
+**A BLE transmit button (YPC21 / PTT-Z01 and the same class), recommended.** Do **not** pair this one in the Android Bluetooth settings - ThetisLink connects to it itself. Open **Settings > BT PTT button** in the app, tap **Choose button**, and press the button once to wake it so it appears in the list. From then on the app reconnects on its own, including after the button has been out of range or the phone's Bluetooth has been off. Because ThetisLink holds the connection rather than the touch system, the button also works while the screen is locked, and when it drops out of range the transmitter is released instead of being left keyed. Needs Android 12 or newer.
+
+**A shutter-style button (e.g. ZL-01).** These present themselves to Android as an external one-button touch device. Pair them in the Android Bluetooth settings; ThetisLink then recognises the press as PTT. This kind only works while the screen is awake - Android delivers touch events to a wakeful screen only.
 
 ---
 
@@ -392,7 +396,7 @@ In the ThetisLink Client, use your **public IP address** as the ThetisLink Serve
 
 Port forwarding only works if you have your own public IP address and can change your router. If you have **CGNAT** (many fibre and 4G/5G providers give no public IP) or no access to the router, use the **relay** instead. Both the server (station) and the client then connect **outbound** to a relay server on a VPS — nothing incoming needs to be forwarded. See the user manual, section [Internet remote via relay], for how it works; the setup steps are below.
 
-> **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. Ask PA3GHM at **pa3ghm@gmail.com** or via [QRZ.com](https://www.qrz.com/db/PA3GHM) - a no is a valid answer. Otherwise, host your own with the steps below.
+> **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. Ask PA3GHM at **pa3ghm@gmail.com** or via [QRZ.com](https://www.qrz.com/db/PA3GHM) - a no is a valid answer, and PA3GHM may also decide to stop the service. Otherwise, host your own with the steps below.
 
 **A. Hosting the relay (one-time, on a VPS)**
 
@@ -491,15 +495,63 @@ Place a shortcut to `ThetisLink-Server.exe` in the Startup folder:
 Win+R -> shell:startup -> paste shortcut
 ```
 
-### Remote reboot via ThetisLink
+### Remote reboot and shutdown via ThetisLink
 
-The ThetisLink Client can restart the ThetisLink Server PC via the reboot button. This requires a Windows Scheduled Task:
+The Server tab of the client has a **Remote Reboot / Shutdown** button. Both choices act on the **Windows PC that the ThetisLink Server runs on** - not on the ThetisLink Server itself, and not on Thetis. The machine really does shut down or restart, and the connection drops.
+
+**Shutdown works straight away; reboot needs one-time preparation.** Shutdown is executed by the server directly. Reboot goes through a Windows scheduled task that you have to create yourself. If that task does not exist, pressing **reboot** does *nothing visible*: no error appears and the client stays connected.
+
+#### Creating the task, once
+
+Open PowerShell **as Administrator** - without elevation, `/ru SYSTEM` fails with "Access is denied":
 
 ```powershell
 schtasks /create /tn "ThetisLinkReboot" /tr "shutdown /r /t 5 /f" /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f
 ```
 
-This task is created once. The ThetisLink Server executes `schtasks /run /tn ThetisLinkReboot` upon a remote reboot request.
+| Flag | Meaning |
+|------|---------|
+| `/tn "ThetisLinkReboot"` | The name the server looks for. Spell it exactly like this or it will not be found. |
+| `/tr "shutdown /r /t 5 /f"` | What the task does: restart, after 5 seconds, forced. |
+| `/sc once /st 00:00` | A one-off schedule. The task never runs by itself - only the server starts it. |
+| `/ru SYSTEM` | Runs as SYSTEM, so it also works when nobody is logged in. |
+| `/rl HIGHEST` | Highest privileges; required to be allowed to restart. |
+| `/f` | Overwrites an existing task of the same name without asking. |
+
+#### Checking that the task exists
+
+```powershell
+schtasks /query /tn "ThetisLinkReboot"
+```
+
+If this returns `ERROR: The system cannot find the file specified`, the task does not exist and the reboot button will do nothing.
+
+Testing without the client - note that the PC really will restart 5 seconds later:
+
+```powershell
+schtasks /run /tn "ThetisLinkReboot"
+```
+
+Changed your mind: `shutdown /a` within those five seconds cancels it.
+
+#### What the server log shows
+
+On a reboot request the server writes two lines:
+
+```
+Client requested remote reboot
+schtasks exit=... stdout=... stderr=...
+```
+
+Exit code 0 with a SUCCESS message means the task was started. If `stderr` says the system cannot find the file specified, the task is missing or carries a different name.
+
+#### Removing the task
+
+```powershell
+schtasks /delete /tn "ThetisLinkReboot" /f
+```
+
+After that, only shutdown still works.
 
 ### SSH access (for file management via WinSCP)
 

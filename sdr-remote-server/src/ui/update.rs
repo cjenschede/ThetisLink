@@ -1429,7 +1429,7 @@ impl eframe::App for ServerApp {
                         ui.label(RichText::new("Hardware Support").size(13.0).strong());
                         egui::Grid::new("hw_grid_srv").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
                             for (dev, iface) in [
-                                ("ANAN 7000DLE", "TCI (via Thetis)"),
+                                ("Any radio Thetis drives", "TCI (via Thetis)"),
                                 ("Yaesu FT-991A", "Serial CAT + USB Audio"),
                                 ("Yaesu FTX-1", "Serial CAT + USB Audio"),
                                 ("RF2K-S PA", "HTTP API"),
@@ -1440,6 +1440,8 @@ impl eframe::App for ServerApp {
                                 ("EA7HG Visual Rotor", "UDP"),
                                 ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
                                 ("PstRotator (any supported rotor)", "XML over UDP"),
+                                ("YPC21 / PTT-Z01 PTT button", "BLE (Android)"),
+                                ("ZL-01 shutter button", "Bluetooth touch device (Android)"),
                             ] {
                                 ui.label(dev);
                                 ui.label(RichText::new(iface).color(Color32::GRAY));

@@ -210,11 +210,55 @@ pub struct SdrRemoteApp {
     midi_ptt: bool,
     ptt_toggle_mode: bool,       // false=push-to-talk (momentary), true=toggle (click on/off)
     yaesu_ptt_toggle_mode: bool, // independent Yaesu PTT mode
-    yaesu_mouse_ptt: bool,       // tracks local Yaesu momentary PTT button state
+    /// The latches of both Yaesu slots, and what last went to the server per slot.
+    ///
+    /// These were six loose booleans and two loose flags, with an
+    /// `if slot == 0 { ... } else { ... }` around all of it. A reviewer removed one of
+    /// those eight assignments - `yaesu2_midi_ptt` - and the whole workspace stayed
+    /// green: seven hundred tests, not one of which touches this loop, and the fitness
+    /// counter did not notice either. Slot 1 is also the slot that gets the least
+    /// attention in hand testing.
+    ///
+    /// As an array that is not merely untested but impossible: `latches[slot]` is
+    /// assigned as a whole, and writing half of it back does not exist (Lane 6 step
+    /// 2c).
+    yaesu_latches: [sdr_remote_logic::ptt_intent::Latches; 2],
+    yaesu_ptt_last_sent: [bool; 2],
+    /// May the same microphone go to more than one transmitter at a time?
+    ///
+    /// Off by default, and then the two Yaesu slots exclude each other - otherwise one
+    /// of them transmits without modulation, because they shared one encoding path. On,
+    /// the audio fans out and the picture of two red buttons is true.
+    ///
+    /// Between Thetis and a Yaesu this always happened anyway: separate encoding paths,
+    /// no exclusion. This checkbox does not take that away.
+    multi_tx: bool,
+    /// This transmitter was refused because we are already transmitting somewhere else.
+    ///
+    /// Different from "held by somebody else": there, waiting is the answer; here,
+    /// letting go is - a screen away, by ourselves.
+    ptt_blocked_by_own: bool,
+    yaesu_blocked_by_own: [bool; 2],
+    /// When that refusal last happened.
+    ///
+    /// The refusal lasts one frame: it clears the latch, so the frame after it asks for
+    /// nothing and there is nothing left to refuse. Without this the button snapped
+    /// straight back to grey and the operator only saw that nothing happened - no
+    /// colour, no reason (owner, 2026-09-03).
+    ///
+    /// A refusal is an event, not a state. It has to stay up long enough to be read.
+    /// The raw want of the Thetis PTT, as the top bar reads it this frame.
+    ///
+    /// The decision does not fall there but at the end of the frame, together with the
+    /// Yaesus'. Thetis used to decide immediately, on the Yaesu state of the PREVIOUS
+    /// frame - and then a fresh want could be refused on stale data and thrown away
+    /// right afterwards, while the Yaesu blocking it let go later in that same frame
+    /// (review finding).
+    thetis_want: bool,
+    ptt_blocked_at: Option<Instant>,
+    yaesu_blocked_at: [Option<Instant>; 2],
     /// Last PTT state sent from the Yaesu pop-out (mouse OR spacebar combined),
     /// so the spacebar-in-window PTT and the mouse PTT don't fight each other.
-    yaesu_ptt_last_sent: bool,
-    yaesu2_ptt_last_sent: bool,
     // PTT switch-on spike protection (built-in speaker+mic in one chassis). See config.rs.
     spike_protection: bool,
     mic_gate_delay_thetis_ms: u32,
@@ -324,6 +368,12 @@ pub struct SdrRemoteApp {
     connected: bool,
     ptt: bool,
     ptt_denied: bool,
+    /// Our copy of `PttDenial::seq`. A refusal is acted on when this differs
+    /// from the engine's, which is what makes it impossible to miss one.
+    ptt_denial_seq: u32,
+    /// Per radio slot: when this radio was last absent while we were keying it.
+    /// Drives the "USB lost" notice - see `sdr_remote_logic::usb_lost`.
+    usb_lost_last_true: [Option<Instant>; 2],
     rtt_ms: u16,
     jitter_ms: f32,
     buffer_depth: u32,
@@ -805,6 +855,28 @@ pub struct SdrRemoteApp {
     yaesu_smeter_peak: u16,
     yaesu_smeter_peak_time: Instant,
     yaesu_tx_active: bool,
+    /// This radio is held by ANOTHER client - from the server's ownership table.
+    ///
+    /// Not the same question as `yaesu_tx_active`, which only says the radio is
+    /// transmitting and is just as true when we are the one doing it. The PTT
+    /// buttons need "may I key this" and were reading "is it keyed".
+    yaesu_held_by_other: bool,
+    yaesu2_held_by_other: bool,
+    /// MIDI and spacebar as latches, next to the mouse latch, so ONE place per
+    /// radio decides and sends - the way the Thetis PTT has always worked.
+    ///
+    /// They used to send straight from the MIDI handler and from inside the
+    /// pop-out. Two consequences: the MIDI toggle flipped from the RADIO's TX
+    /// state (so it fought another client's transmission instead of its own),
+    /// and closing the pop-out mid-press left the radio keyed, because the only
+    /// code that could unkey it lived in the window that had just gone.
+    /// What each PTT lamp on the MIDI controller was last told.
+    ///
+    /// The lamps used to be written in the branch that sends a PTT change, so
+    /// every path that cleared the PTT some other way - a refusal, a lost
+    /// connection - left the lamp burning until a real press walked past that
+    /// branch again. A lamp follows a state, not a transition.
+    led_sent: [bool; 3],
     yaesu_power_on: bool,
     yaesu_volume: f32,
     // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1). yaesu_model/yaesu2_model =
@@ -866,7 +938,6 @@ pub struct SdrRemoteApp {
     yaesu2_popout_pos: Option<egui::Pos2>,
     yaesu2_popout_size: Option<egui::Vec2>,
     yaesu2_popout_init_applied: bool,
-    yaesu2_mouse_ptt: bool,
     yaesu_popout: bool,
     yaesu_popout_pos: Option<egui::Pos2>,
     yaesu_popout_size: Option<egui::Vec2>,

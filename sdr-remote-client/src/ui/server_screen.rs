@@ -142,6 +142,7 @@ impl SdrRemoteApp {
             }
         }
         ui.add_space(6.0);
+
         ui.collapsing(rust_i18n::t!("screen_relay_connection").to_string(), |ui| {
             // All fields save immediately on change (no separate "Apply" button anymore).
             let mut relay_changed = false;
@@ -930,6 +931,43 @@ impl SdrRemoteApp {
                 }
             }
         });
+
+        // Multi-TX: the same microphone to more than one transmitter at a time.
+        //
+        // Only shown when there is more than one transmitter - with one radio the choice
+        // means nothing, and a checkbox that does nothing is worse than no checkbox. So it
+        // is not greyed out but absent.
+        //
+        // Off: one transmitter at a time, across all three. Whoever is already
+        // transmitting keeps it; whoever presses another briefly sees "TX on another
+        // radio" and nothing else happens. Without that rule two Yaesus keyed at once
+        // while only one got modulation - two red buttons and a bare carrier (owner,
+        // 2026-09-03).
+        //
+        // On: the same microphone to every keyed transmitter, so Thetis and both Yaesus
+        // together.
+        //
+        // Note: Thetis alongside a Yaesu was always possible, because of the separate
+        // encoding paths. With this checkbox OFF that is no longer so - which is intended,
+        // and is what "one transmitter at a time" means.
+        //
+        // Desktop only. The phone keys one radio at a time, and there that is the
+        // intention.
+        let zenders = [self.thetis_configured, self.yaesu_present_last, self.yaesu2_present_last]
+            .iter()
+            .filter(|&&p| p)
+            .count();
+        if zenders > 1 {
+            ui.separator();
+            if ui
+                .checkbox(&mut self.multi_tx, rust_i18n::t!("screen_multi_tx").to_string())
+                .on_hover_text(rust_i18n::t!("screen_multi_tx_tooltip").to_string())
+                .changed()
+            {
+                let _ = self.cmd_tx.send(Command::SetMultiTx(self.multi_tx));
+                self.save_ptt_config();
+            }
+        }
 
         ui.separator();
 

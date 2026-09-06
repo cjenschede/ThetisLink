@@ -19,6 +19,8 @@ mod session;
 mod spe_expert;
 mod spectrum;
 mod tci;
+mod tx_denial;
+mod tx_orphan;
 mod tci_commands;
 mod tracked_socket;
 mod tci_parser;
@@ -1039,10 +1041,10 @@ pub async fn run_server_async(
     // Ensure PTT is released on shutdown
     ptt.lock().await.release().await;
 
-    // PstRotator-listener (v2.1.1+): signal de UDP/TCP listener-threads
-    // dat de server stopt zodat ze poort 12001 vrijgeven binnen
-    // READ_TIMEOUT (~500 ms). Zonder dit bleef de poort vasthouden tot
-    // proces-exit en kon een directe server-herstart faken bind-failure.
+    // PstRotator listener (v2.1.1+): signal the UDP/TCP listener threads that the
+    // server is stopping, so they release port 12001 within READ_TIMEOUT (~500 ms).
+    // Without this the port stayed held until process exit and an immediate server
+    // restart could fake a bind failure.
     if let Some(s) = pstrotator_listen_shutdown.as_ref() {
         s.store(true, std::sync::atomic::Ordering::Relaxed);
     }

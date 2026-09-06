@@ -278,7 +278,7 @@ impl YaesuRotorDriver {
         let dev = g
             .device
             .as_ref()
-            .ok_or_else(|| anyhow!("device niet beschikbaar"))?;
+            .ok_or_else(|| anyhow!("device not available"))?;
 
         let mut changes = GpioChanges::new();
         changes.with_gp0_level(if cw { LogicLevel::High } else { LogicLevel::Low });
@@ -310,7 +310,7 @@ impl YaesuRotorDriver {
         let dev = g
             .device
             .as_ref()
-            .ok_or_else(|| anyhow!("device niet beschikbaar"))?;
+            .ok_or_else(|| anyhow!("device not available"))?;
         dev.analog_write(value).map_err(|e| {
             let msg = format!("analog_write({}): {:?}", value, e);
             g.device = None;
@@ -339,7 +339,7 @@ impl YaesuRotorDriver {
         let dev = g
             .device
             .as_ref()
-            .ok_or_else(|| anyhow!("device niet beschikbaar"))?;
+            .ok_or_else(|| anyhow!("device not available"))?;
         let reading = dev.analog_read().map_err(|e| {
             let msg = format!("analog_read: {:?}", e);
             g.device = None;
@@ -348,7 +348,7 @@ impl YaesuRotorDriver {
         })?;
         let raw = reading
             .gp3
-            .ok_or_else(|| anyhow!("GP3 niet als ADC geconfigureerd"))?;
+            .ok_or_else(|| anyhow!("GP3 not configured as ADC"))?;
         g.last_adc_raw = Some(raw);
         // Push into the moving-average ring buffer; drop oldest sample(s)
         // until we are below the current `adc_buffer_cap`. The cap can

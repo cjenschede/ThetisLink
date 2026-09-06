@@ -199,28 +199,36 @@ impl SdrRemoteApp {
                             self.rx_mute = !self.rx_mute;
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::RxMute, self.rx_mute as u16));
                         }
+                        // A latch, exactly like MidiAction::Ptt above. It toggled
+                        // from `yaesu_tx_active` - the RADIO's state - so with
+                        // another client transmitting a press meant "switch that
+                        // off", and after our own press the toggle was inverted
+                        // for as long as the readback took. The LED is set by
+                        // drive_yaesu_ptt(), from what actually goes out.
                         MidiAction::YaesuPtt => {
                             if self.midi_ptt_toggle_mode {
                                 if pressed {
-                                    let new_tx = !self.yaesu_tx_active;
-                                    let _ = self.cmd_tx.send(Command::SetYaesuPtt(new_tx));
-                                    self.midi.send_led(MidiAction::YaesuPtt, new_tx);
+                                    self.yaesu_latches[0] = self.yaesu_latches[0]
+                                        .latching_press(
+                                            sdr_remote_logic::ptt_intent::PttSource::Midi,
+                                            self.resampled_sources(0),
+                                        );
                                 }
                             } else {
-                                let _ = self.cmd_tx.send(Command::SetYaesuPtt(pressed));
-                                self.midi.send_led(MidiAction::YaesuPtt, pressed);
+                                self.yaesu_latches[0].midi = pressed;
                             }
                         }
                         MidiAction::Radio2Ptt => {
                             if self.midi_ptt_toggle_mode {
                                 if pressed {
-                                    let new_tx = !self.yaesu2_tx_active;
-                                    let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(new_tx));
-                                    self.midi.send_led(MidiAction::Radio2Ptt, new_tx);
+                                    self.yaesu_latches[1] = self.yaesu_latches[1]
+                                        .latching_press(
+                                            sdr_remote_logic::ptt_intent::PttSource::Midi,
+                                            self.resampled_sources(1),
+                                        );
                                 }
                             } else {
-                                let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(pressed));
-                                self.midi.send_led(MidiAction::Radio2Ptt, pressed);
+                                self.yaesu_latches[1].midi = pressed;
                             }
                         }
                         _ => {}

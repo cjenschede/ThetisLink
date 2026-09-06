@@ -950,6 +950,56 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -969,6 +1019,54 @@ internal interface UniffiLib : Library {
         }
     }
 
+    fun uniffi_sdr_remote_android_fn_clone_blepttgate(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Pointer
+    fun uniffi_sdr_remote_android_fn_free_blepttgate(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_constructor_blepttgate_new(uniffi_out_err: UniffiRustCallStatus,
+    ): Pointer
+    fun uniffi_sdr_remote_android_fn_method_blepttgate_begin(`ptr`: Pointer,`generation`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_method_blepttgate_connected(`ptr`: Pointer,`generation`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_method_blepttgate_disconnected(`ptr`: Pointer,`generation`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_method_blepttgate_held(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_sdr_remote_android_fn_method_blepttgate_notification(`ptr`: Pointer,`generation`: Long,`value`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_clone_phoneptt(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Pointer
+    fun uniffi_sdr_remote_android_fn_free_phoneptt(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_constructor_phoneptt_new(uniffi_out_err: UniffiRustCallStatus,
+    ): Pointer
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_asking(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_bluetooth_gone(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_busy(`ptr`: Pointer,`target`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_disconnected(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_down(`ptr`: Pointer,`target`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_operator_stop(`ptr`: Pointer,`target`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_radio_left_tx(`ptr`: Pointer,`target`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_refused(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_screen_gone(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_set(`ptr`: Pointer,`target`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`held`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_set_toggle_mode(`ptr`: Pointer,`toggle`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_up(`ptr`: Pointer,`target`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_phoneptt_want_tx(`ptr`: Pointer,`target`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
     fun uniffi_sdr_remote_android_fn_clone_sdrbridge(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
     fun uniffi_sdr_remote_android_fn_free_sdrbridge(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
@@ -1197,9 +1295,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_yaesu_volume(`ptr`: Pointer,`vol`: Float,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_sdr_remote_android_fn_func_ble_drop_policy(`wanted`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_sdr_remote_android_fn_func_init_logging(`dir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_sdr_remote_android_fn_func_log_line(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_sdr_remote_android_fn_func_log_tail(uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_func_ptt_button(`heldByOther`: Byte,`wantTx`: Byte,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_sdr_remote_android_fn_func_relay_is_configured(`enabled`: Byte,`url`: RustBuffer.ByValue,`station`: RustBuffer.ByValue,`token`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
@@ -1317,13 +1421,55 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_sdr_remote_android_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_sdr_remote_android_checksum_func_ble_drop_policy(
+    ): Short
     fun uniffi_sdr_remote_android_checksum_func_init_logging(
     ): Short
+    fun uniffi_sdr_remote_android_checksum_func_log_line(
+    ): Short
     fun uniffi_sdr_remote_android_checksum_func_log_tail(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_ptt_button(
     ): Short
     fun uniffi_sdr_remote_android_checksum_func_relay_is_configured(
     ): Short
     fun uniffi_sdr_remote_android_checksum_func_version(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_blepttgate_begin(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_blepttgate_connected(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_blepttgate_disconnected(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_blepttgate_held(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_blepttgate_notification(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_asking(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_bluetooth_gone(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_busy(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_disconnected(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_down(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_operator_stop(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_radio_left_tx(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_refused(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_screen_gone(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_set(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_set_toggle_mode(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_up(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_phoneptt_want_tx(
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_build_attachment(
     ): Short
@@ -1547,6 +1693,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_yaesu_volume(
     ): Short
+    fun uniffi_sdr_remote_android_checksum_constructor_blepttgate_new(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_constructor_phoneptt_new(
+    ): Short
     fun uniffi_sdr_remote_android_checksum_constructor_sdrbridge_new(
     ): Short
     fun ffi_sdr_remote_android_uniffi_contract_version(
@@ -1566,16 +1716,79 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_sdr_remote_android_checksum_func_ble_drop_policy() != 2843.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_sdr_remote_android_checksum_func_init_logging() != 21388.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_sdr_remote_android_checksum_func_log_line() != 30068.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_sdr_remote_android_checksum_func_log_tail() != 33477.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_ptt_button() != 62506.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_func_relay_is_configured() != 28854.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_func_version() != 61161.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_blepttgate_begin() != 23856.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_blepttgate_connected() != 56375.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_blepttgate_disconnected() != 24425.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_blepttgate_held() != 48260.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_blepttgate_notification() != 19817.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_asking() != 12444.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_bluetooth_gone() != 49445.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_busy() != 6180.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_disconnected() != 19782.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_down() != 22837.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_operator_stop() != 18192.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_radio_left_tx() != 48341.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_refused() != 23196.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_screen_gone() != 34636.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_set() != 52752.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_set_toggle_mode() != 37600.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_up() != 31388.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_phoneptt_want_tx() != 32570.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_chat_build_attachment() != 20012.toShort()) {
@@ -1909,6 +2122,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_yaesu_volume() != 31655.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_constructor_blepttgate_new() != 53275.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_constructor_phoneptt_new() != 52404.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_constructor_sdrbridge_new() != 43073.toShort()) {
@@ -2387,6 +2606,703 @@ private class JavaLangRefCleanable(
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
 }
+public interface BlePttGateInterface {
+
+    fun `begin`(`generation`: kotlin.ULong): BlePttAction
+
+    fun `connected`(`generation`: kotlin.ULong): BlePttAction
+
+    fun `disconnected`(`generation`: kotlin.ULong): BlePttAction
+
+    fun `held`(): kotlin.Boolean
+
+    fun `notification`(`generation`: kotlin.ULong, `value`: kotlin.UByte): BlePttAction
+
+    companion object
+}
+
+open class BlePttGate: Disposable, AutoCloseable, BlePttGateInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    constructor() :
+        this(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_constructor_blepttgate_new(
+        _status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_free_blepttgate(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_clone_blepttgate(pointer!!, status)
+        }
+    }
+
+    override fun `begin`(`generation`: kotlin.ULong): BlePttAction {
+            return FfiConverterTypeBlePttAction.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_blepttgate_begin(
+        it, FfiConverterULong.lower(`generation`),_status)
+}
+    }
+    )
+    }
+
+
+    override fun `connected`(`generation`: kotlin.ULong): BlePttAction {
+            return FfiConverterTypeBlePttAction.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_blepttgate_connected(
+        it, FfiConverterULong.lower(`generation`),_status)
+}
+    }
+    )
+    }
+
+
+    override fun `disconnected`(`generation`: kotlin.ULong): BlePttAction {
+            return FfiConverterTypeBlePttAction.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_blepttgate_disconnected(
+        it, FfiConverterULong.lower(`generation`),_status)
+}
+    }
+    )
+    }
+
+
+    override fun `held`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_blepttgate_held(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+    override fun `notification`(`generation`: kotlin.ULong, `value`: kotlin.UByte): BlePttAction {
+            return FfiConverterTypeBlePttAction.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_blepttgate_notification(
+        it, FfiConverterULong.lower(`generation`),FfiConverterUByte.lower(`value`),_status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+    companion object
+
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBlePttGate: FfiConverter<BlePttGate, Pointer> {
+
+    override fun lower(value: BlePttGate): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): BlePttGate {
+        return BlePttGate(value)
+    }
+
+    override fun read(buf: ByteBuffer): BlePttGate {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: BlePttGate) = 8UL
+
+    override fun write(value: BlePttGate, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+public interface PhonePttInterface {
+
+    fun `asking`(): PttTarget?
+
+    fun `bluetoothGone`()
+
+    fun `busy`(`target`: PttTarget)
+
+    fun `disconnected`()
+
+    fun `down`(`target`: PttTarget, `source`: PttSource)
+
+    fun `operatorStop`(`target`: PttTarget)
+
+    fun `radioLeftTx`(`target`: PttTarget)
+
+    fun `refused`()
+
+    fun `screenGone`()
+
+    fun `set`(`target`: PttTarget, `source`: PttSource, `held`: kotlin.Boolean)
+
+    fun `setToggleMode`(`toggle`: kotlin.Boolean)
+
+    fun `up`(`target`: PttTarget, `source`: PttSource)
+
+    fun `wantTx`(`target`: PttTarget): kotlin.Boolean
+
+    companion object
+}
+
+open class PhonePtt: Disposable, AutoCloseable, PhonePttInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    constructor() :
+        this(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_constructor_phoneptt_new(
+        _status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_free_phoneptt(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_clone_phoneptt(pointer!!, status)
+        }
+    }
+
+    override fun `asking`(): PttTarget? {
+            return FfiConverterOptionalTypePttTarget.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_asking(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+    override fun `bluetoothGone`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_bluetooth_gone(
+        it, _status)
+}
+    }
+
+
+
+    override fun `busy`(`target`: PttTarget)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_busy(
+        it, FfiConverterTypePttTarget.lower(`target`),_status)
+}
+    }
+
+
+
+    override fun `disconnected`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_disconnected(
+        it, _status)
+}
+    }
+
+
+
+    override fun `down`(`target`: PttTarget, `source`: PttSource)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_down(
+        it, FfiConverterTypePttTarget.lower(`target`),FfiConverterTypePttSource.lower(`source`),_status)
+}
+    }
+
+
+
+    override fun `operatorStop`(`target`: PttTarget)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_operator_stop(
+        it, FfiConverterTypePttTarget.lower(`target`),_status)
+}
+    }
+
+
+
+    override fun `radioLeftTx`(`target`: PttTarget)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_radio_left_tx(
+        it, FfiConverterTypePttTarget.lower(`target`),_status)
+}
+    }
+
+
+
+    override fun `refused`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_refused(
+        it, _status)
+}
+    }
+
+
+
+    override fun `screenGone`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_screen_gone(
+        it, _status)
+}
+    }
+
+
+
+    override fun `set`(`target`: PttTarget, `source`: PttSource, `held`: kotlin.Boolean)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_set(
+        it, FfiConverterTypePttTarget.lower(`target`),FfiConverterTypePttSource.lower(`source`),FfiConverterBoolean.lower(`held`),_status)
+}
+    }
+
+
+
+    override fun `setToggleMode`(`toggle`: kotlin.Boolean)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_set_toggle_mode(
+        it, FfiConverterBoolean.lower(`toggle`),_status)
+}
+    }
+
+
+
+    override fun `up`(`target`: PttTarget, `source`: PttSource)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_up(
+        it, FfiConverterTypePttTarget.lower(`target`),FfiConverterTypePttSource.lower(`source`),_status)
+}
+    }
+
+
+
+    override fun `wantTx`(`target`: PttTarget): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_phoneptt_want_tx(
+        it, FfiConverterTypePttTarget.lower(`target`),_status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+    companion object
+
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePhonePtt: FfiConverter<PhonePtt, Pointer> {
+
+    override fun lower(value: PhonePtt): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): PhonePtt {
+        return PhonePtt(value)
+    }
+
+    override fun read(buf: ByteBuffer): PhonePtt {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: PhonePtt) = 8UL
+
+    override fun write(value: PhonePtt, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
 public interface SdrBridgeInterface {
 
     fun `chatBuildAttachment`(`log`: kotlin.String, `settings`: kotlin.String): kotlin.String
@@ -4177,6 +5093,7 @@ data class BridgeRadioState (
     var `connected`: kotlin.Boolean,
     var `relayTransportFallback`: kotlin.Boolean,
     var `pttDenied`: kotlin.Boolean,
+    var `pttReleasedByServer`: kotlin.Boolean,
     var `audioError`: kotlin.Boolean,
     var `rttMs`: kotlin.UShort,
     var `jitterMs`: kotlin.Float,
@@ -4297,6 +5214,8 @@ data class BridgeRadioState (
     var `yaesuMode`: kotlin.UByte,
     var `yaesuSmeter`: kotlin.UShort,
     var `yaesuTxActive`: kotlin.Boolean,
+    var `yaesuHeldByOther`: kotlin.Boolean,
+    var `yaesu2HeldByOther`: kotlin.Boolean,
     var `yaesuPowerOn`: kotlin.Boolean,
     var `yaesuAfGain`: kotlin.UByte,
     var `yaesuTxPower`: kotlin.UByte,
@@ -4377,6 +5296,7 @@ data class BridgeRadioState (
 public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRadioState> {
     override fun read(buf: ByteBuffer): BridgeRadioState {
         return BridgeRadioState(
+            FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -4501,6 +5421,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUShort.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterUByte.read(buf),
             FfiConverterUByte.read(buf),
             FfiConverterUByte.read(buf),
@@ -4576,6 +5498,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterBoolean.allocationSize(value.`connected`) +
             FfiConverterBoolean.allocationSize(value.`relayTransportFallback`) +
             FfiConverterBoolean.allocationSize(value.`pttDenied`) +
+            FfiConverterBoolean.allocationSize(value.`pttReleasedByServer`) +
             FfiConverterBoolean.allocationSize(value.`audioError`) +
             FfiConverterUShort.allocationSize(value.`rttMs`) +
             FfiConverterFloat.allocationSize(value.`jitterMs`) +
@@ -4696,6 +5619,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUByte.allocationSize(value.`yaesuMode`) +
             FfiConverterUShort.allocationSize(value.`yaesuSmeter`) +
             FfiConverterBoolean.allocationSize(value.`yaesuTxActive`) +
+            FfiConverterBoolean.allocationSize(value.`yaesuHeldByOther`) +
+            FfiConverterBoolean.allocationSize(value.`yaesu2HeldByOther`) +
             FfiConverterBoolean.allocationSize(value.`yaesuPowerOn`) +
             FfiConverterUByte.allocationSize(value.`yaesuAfGain`) +
             FfiConverterUByte.allocationSize(value.`yaesuTxPower`) +
@@ -4771,6 +5696,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterBoolean.write(value.`connected`, buf)
             FfiConverterBoolean.write(value.`relayTransportFallback`, buf)
             FfiConverterBoolean.write(value.`pttDenied`, buf)
+            FfiConverterBoolean.write(value.`pttReleasedByServer`, buf)
             FfiConverterBoolean.write(value.`audioError`, buf)
             FfiConverterUShort.write(value.`rttMs`, buf)
             FfiConverterFloat.write(value.`jitterMs`, buf)
@@ -4891,6 +5817,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUByte.write(value.`yaesuMode`, buf)
             FfiConverterUShort.write(value.`yaesuSmeter`, buf)
             FfiConverterBoolean.write(value.`yaesuTxActive`, buf)
+            FfiConverterBoolean.write(value.`yaesuHeldByOther`, buf)
+            FfiConverterBoolean.write(value.`yaesu2HeldByOther`, buf)
             FfiConverterBoolean.write(value.`yaesuPowerOn`, buf)
             FfiConverterUByte.write(value.`yaesuAfGain`, buf)
             FfiConverterUByte.write(value.`yaesuTxPower`, buf)
@@ -5012,6 +5940,195 @@ public object FfiConverterTypeBridgeRogerBeep: FfiConverterRustBuffer<BridgeRoge
             FfiConverterBoolean.write(value.`onThetis`, buf)
             FfiConverterBoolean.write(value.`onRadio1`, buf)
             FfiConverterBoolean.write(value.`onRadio2`, buf)
+    }
+}
+
+
+
+
+enum class BleDropPolicy {
+
+    RECONNECT,
+    CLOSE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBleDropPolicy: FfiConverterRustBuffer<BleDropPolicy> {
+    override fun read(buf: ByteBuffer) = try {
+        BleDropPolicy.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: BleDropPolicy) = 4UL
+
+    override fun write(value: BleDropPolicy, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class BlePttAction {
+
+    NOTHING,
+    KEY_DOWN,
+    KEY_UP,
+    GONE,
+    UNRECOGNISED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBlePttAction: FfiConverterRustBuffer<BlePttAction> {
+    override fun read(buf: ByteBuffer) = try {
+        BlePttAction.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: BlePttAction) = 4UL
+
+    override fun write(value: BlePttAction, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class PttButton {
+
+    BUSY,
+    TRANSMITTING,
+    IDLE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePttButton: FfiConverterRustBuffer<PttButton> {
+    override fun read(buf: ByteBuffer) = try {
+        PttButton.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PttButton) = 4UL
+
+    override fun write(value: PttButton, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class PttSource {
+
+    SCREEN,
+    BLUETOOTH,
+    MIDI,
+    VOLUME_KEY;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePttSource: FfiConverterRustBuffer<PttSource> {
+    override fun read(buf: ByteBuffer) = try {
+        PttSource.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PttSource) = 4UL
+
+    override fun write(value: PttSource, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class PttTarget {
+
+    THETIS,
+    YAESU0,
+    YAESU1;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePttTarget: FfiConverterRustBuffer<PttTarget> {
+    override fun read(buf: ByteBuffer) = try {
+        PttTarget.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PttTarget) = 4UL
+
+    override fun write(value: PttTarget, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypePttTarget: FfiConverterRustBuffer<PttTarget?> {
+    override fun read(buf: ByteBuffer): PttTarget? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypePttTarget.read(buf)
+    }
+
+    override fun allocationSize(value: PttTarget?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypePttTarget.allocationSize(value)
+        }
+    }
+
+    override fun write(value: PttTarget?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypePttTarget.write(value, buf)
+        }
     }
 }
 
@@ -5209,11 +6326,28 @@ public object FfiConverterSequenceTypeBridgeDxSpot: FfiConverterRustBuffer<List<
             FfiConverterTypeBridgeDxSpot.write(it, buf)
         }
     }
-} fun `initLogging`(`dir`: kotlin.String)
+} fun `bleDropPolicy`(`wanted`: kotlin.Boolean): BleDropPolicy {
+            return FfiConverterTypeBleDropPolicy.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_ble_drop_policy(
+        FfiConverterBoolean.lower(`wanted`),_status)
+}
+    )
+    }
+
+ fun `initLogging`(`dir`: kotlin.String)
         =
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_init_logging(
         FfiConverterString.lower(`dir`),_status)
+}
+
+
+ fun `logLine`(`text`: kotlin.String)
+        =
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_log_line(
+        FfiConverterString.lower(`text`),_status)
 }
 
 
@@ -5222,6 +6356,15 @@ public object FfiConverterSequenceTypeBridgeDxSpot: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_log_tail(
         _status)
+}
+    )
+    }
+
+ fun `pttButton`(`heldByOther`: kotlin.Boolean, `wantTx`: kotlin.Boolean): PttButton {
+            return FfiConverterTypePttButton.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_ptt_button(
+        FfiConverterBoolean.lower(`heldByOther`),FfiConverterBoolean.lower(`wantTx`),_status)
 }
     )
     }

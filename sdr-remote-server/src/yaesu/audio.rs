@@ -118,6 +118,28 @@ fn choose_output(names: &[String], pat_name: &str, pos: usize) -> Option<OutputC
     nth("usb audio codec").map(|index| OutputChoice { index, step: OutputMatch::Codec })
 }
 
+/// Why a device could not be found - said so that the reader can act on it.
+///
+/// An empty list and a name that does not match are two different faults with
+/// the same old wording. On 2026-09-03 a station lost its transmit audio for an
+/// evening: Windows handed out no sound cards at all, and the server said four
+/// times per five seconds that it could not find one particular device. The
+/// sentence that mattered - there are none - was logged once at startup and
+/// scrolled away. So say it in the warning itself, and name the cause, because
+/// there is one ordinary cause and the operator cannot guess it.
+pub(super) fn device_not_found(kind: &str, wanted: &str, pos: usize, available: &[String]) -> String {
+    if available.is_empty() {
+        format!(
+            "no {kind} devices AT ALL - Windows hands out an empty list, so '{wanted}' was never              looked for. The usual cause is a Remote Desktop session: while one is connected it              takes the machine's sound cards out of the session. Disconnect it, or set its audio              to play on the remote computer, and then restart the server - the device list is              only read at startup"
+        )
+    } else {
+        format!(
+            "no {kind} device matching '{wanted}' (#{pos}) among the {n} present: {available:?}",
+            n = available.len()
+        )
+    }
+}
+
 /// Build a cpal input capture stream that feeds into an existing tokio sender.
 pub(super) fn build_capture_stream(
     device_pattern: &str,
@@ -133,11 +155,20 @@ pub(super) fn build_capture_stream(
     let host = cpal::default_host();
     let (pat_name, pos) = parse_device_pattern(device_pattern);
     let pat = pat_name.to_lowercase();
-    let device = host.input_devices()
+    // Collect first, so a failure can say what WAS there. Picking straight out
+    // of the iterator consumed the only list we had, and then the message could
+    // only repeat the name we asked for.
+    let devices: Vec<_> = host.input_devices()
         .map_err(|e| format!("enumerate input devices: {}", e))?
-        .filter(|d| d.name().map(|n| n.to_lowercase().contains(&pat)).unwrap_or(false))
+        .collect();
+    let names: Vec<String> = devices.iter().map(|d| d.name().unwrap_or_default()).collect();
+    let idx = names.iter()
+        .enumerate()
+        .filter(|(_, n)| n.to_lowercase().contains(&pat))
+        .map(|(i, _)| i)
         .nth(pos - 1)
-        .ok_or_else(|| format!("no input device matching '{}' (#{})", pat_name, pos))?;
+        .ok_or_else(|| device_not_found("input", &pat_name, pos, &names))?;
+    let device = devices.into_iter().nth(idx).expect("index from this list");
 
     let device_name = device.name().unwrap_or_default();
     // Device name with prefix: crucial for edge-case 6 (two identical
@@ -234,7 +265,7 @@ pub(super) fn build_output_stream(
     let device = match choice {
         Some(c) => devices.into_iter().nth(c.index).expect("index from this list"),
         None => {
-            return Err(format!("no output device matching '{}' (#{})", pat_name, pos));
+            return Err(device_not_found("output", &pat_name, pos, &names));
         }
     };
 
@@ -399,5 +430,34 @@ mod output_choice_tests {
         let c = choose_output(&out, "Something Else", 1).expect("found");
         assert_eq!(c.step, OutputMatch::Codec);
         assert!(choose_output(&names(&["Speakers (Realtek)"]), "Something Else", 1).is_none());
+    }
+}
+
+
+#[cfg(test)]
+mod device_message_tests {
+    use super::device_not_found;
+
+    /// The evening this was written for: nothing to choose from.
+    #[test]
+    fn an_empty_list_says_so_and_names_the_cause() {
+        let msg = device_not_found("output", "Luidsprekers (USB Audio CODEC )", 1, &[]);
+        assert!(msg.contains("AT ALL"), "{msg}");
+        assert!(msg.contains("Remote Desktop"), "{msg}");
+        assert!(msg.contains("restart the server"), "{msg}");
+    }
+
+    /// The other fault, which the old wording could not be told apart from:
+    /// devices exist, the name has shifted. Then the candidates are the answer.
+    #[test]
+    fn a_shifted_name_shows_what_was_there() {
+        let have = vec![
+            "Microfoon (2- USB Audio CODEC )".to_string(),
+            "Microfoon (3- RODE NT-USB)".to_string(),
+        ];
+        let msg = device_not_found("input", "Microfoon (USB Audio CODEC )", 1, &have);
+        assert!(!msg.contains("AT ALL"), "{msg}");
+        assert!(msg.contains("2 present"), "{msg}");
+        assert!(msg.contains("2- USB Audio CODEC"), "{msg}");
     }
 }

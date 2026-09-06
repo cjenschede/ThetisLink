@@ -456,7 +456,7 @@ fun SpectrumControls(
 ) {
     // TL2-1 ctun-auto-recenter: zoom-min 2.0 default; 1.0 toegestaan via vink "Allow <2x".
     val zoomMin = if (allowZoomBelow2x) 1f else 2f
-    // Clamp huidige zoom-state als vink uit gaat terwijl zoom <2x stond
+    // Clamp the current zoom state when the box is unticked while zoom was <2x
     if (zoom < zoomMin) {
         onZoomChange(zoomMin)
     }

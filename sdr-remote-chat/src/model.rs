@@ -66,6 +66,16 @@ pub struct ChatModel {
     pub messages: Vec<ChatMessage>,
     pub last_id: i64,
     pub unread: usize,
+    /// Answers we have already asked a SECOND time, this session.
+    ///
+    /// Not the first attempt - that one is made by dismiss_answer and marks
+    /// nothing, or the retry below could never fire. This is the one repeat we
+    /// allow per answer per session.
+    ///
+    /// Not persisted, on purpose: a restart is exactly when it is worth asking
+    /// again, because a lost attempt is what this is for.
+    ///
+    dismiss_asked: std::collections::HashSet<i64>,
     pub offline: Option<OfflineReason>,
     pub error: Option<String>,
     /// How many problem reports this station may still send today; -1 when the
@@ -109,6 +119,7 @@ impl Default for ChatModel {
             messages: Vec::new(),
             last_id: 0,
             unread: 0,
+            dismiss_asked: std::collections::HashSet::new(),
             // Until a relay says otherwise, there is nothing to talk to. Saying
             // which of the three (§8) beats one word covering all of them.
             offline: Some(OfflineReason::NoRelay),
@@ -226,7 +237,14 @@ impl ChatModel {
         // for MESSAGES, and only a non-member asks for state, so the arm that
         // was mended is the arm that never runs for the person affected.
         // One place, no list of events to keep in step (2026-08-16).
-        if !matches!(evt, ChatEvent::Failed(_) | ChatEvent::Offline(_)) {
+        // NoChange is in this list because it means "nothing happened". An
+        // action without a consequence may not tidy away a message that is
+        // standing there for another reason - and folding an answer away is
+        // exactly such an action.
+        if !matches!(
+            evt,
+            ChatEvent::Failed(_) | ChatEvent::Offline(_) | ChatEvent::NoChange
+        ) {
             self.error = None;
         }
         match evt {
@@ -246,6 +264,11 @@ impl ChatModel {
                     self.unread = 0;
                 }
             }
+            // Nothing to apply, and that is the whole point: putting an answer
+            // aside was already done locally, so what came back may not touch
+            // the screen. Its own arm rather than a catch-all, so the next
+            // event that arrives here has to be thought about too.
+            ChatEvent::NoChange => {}
             ChatEvent::Messages { new, edited } => {
                 self.offline = None;
                 for m in new {
@@ -271,6 +294,16 @@ impl ChatModel {
                 }
             }
             ChatEvent::Answers(list) => {
+                // The service is the judge of what it has heard. Anything it
+                // still hands back that we consider folded away did not reach
+                // it - one attempt was lost - so ask again. Once per session
+                // per answer: enough to heal a lost send, not enough to keep
+                // asking an older service on every poll.
+                for a in &list {
+                    if self.answers_seen.contains(&a.id) && self.dismiss_asked.insert(a.id) {
+                        self.send_cmd(ChatCommand::DismissAnswer { id: a.id });
+                    }
+                }
                 self.offline = None;
                 self.answers = list;
             }
@@ -334,8 +367,23 @@ impl ChatModel {
     }
 
     /// Fold one away. Idempotent.
+    ///
+    /// Both halves, on purpose. Locally, so the screen reacts at once and does
+    /// not wait for a round trip. And on the service, because the answer was
+    /// addressed to the station and not to this machine - fold it away on the
+    /// desktop and the phone should not still be holding it up.
+    ///
+    /// An older service has no such endpoint and answers 404. Nothing breaks:
+    /// the local half is then all there is, which is what it was before. That
+    /// is why this does not ask what the other end can do first - a branch that
+    /// only runs against one kind of service is a branch nobody tests.
     pub fn dismiss_answer(&mut self, id: i64) {
-        self.answers_seen.insert(id);
+        // `insert` says whether this was news. Pressing twice - two devices, or
+        // a double click - then asks the service once, which is what the line
+        // above about being idempotent was always claiming.
+        if self.answers_seen.insert(id) {
+            self.send_cmd(ChatCommand::DismissAnswer { id });
+        }
     }
 
     /// The ids to write down, so a restart does not undo the folding away.
@@ -433,6 +481,21 @@ mod tests {
             reply_text: None,
             edited: false,
         }
+    }
+
+    /// A model with somewhere for its commands to go, so a test can see what
+    /// it asked the service to do rather than only what it did to itself.
+    fn count_dismiss(rx: &Receiver<ChatCommand>, id: i64) -> usize {
+        rx.try_iter()
+            .filter(|c| *c == ChatCommand::DismissAnswer { id })
+            .count()
+    }
+
+    fn wired() -> (ChatModel, Receiver<ChatCommand>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut m = ChatModel::default();
+        m.tx = Some(tx);
+        (m, rx)
     }
 
     fn joined() -> ChatModel {
@@ -703,4 +766,87 @@ mod tests {
         m.apply(ChatEvent::Offline(OfflineReason::Unreachable));
         assert_eq!(m.error.as_deref(), Some("out you go"));
     }
+
+    /// Folding an answer away must not quietly clear an error that is standing
+    /// on screen for another reason. apply() wipes the error for every event
+    /// that is not a failure, and NoChange slipped through that.
+    #[test]
+    fn folding_an_answer_away_does_not_wipe_a_standing_error() {
+        let (mut m, _rx) = wired();
+        m.apply(ChatEvent::Failed("er ging iets mis".into()));
+        assert_eq!(m.error.as_deref(), Some("er ging iets mis"), "voorwaarde");
+
+        m.apply(ChatEvent::NoChange);
+
+        assert_eq!(
+            m.error.as_deref(),
+            Some("er ging iets mis"),
+            "een handeling zonder gevolg mag geen melding opruimen"
+        );
+    }
+
+    /// The hole from §12.2: send once, fail once, and it was never tried again.
+    /// The service's own list is the judge - if it still hands back an answer we
+    /// consider folded away, it did not hear us, and we say it again.
+    #[test]
+    fn an_answer_the_service_still_lists_is_asked_away_again() {
+        let (mut m, rx) = wired();
+        m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
+        m.dismiss_answer(2);
+        let _ = rx.try_iter().count(); // eerste poging, die "mislukte"
+
+        // The service sends it again: it knows nothing of this.
+        m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
+
+        let after_first = count_dismiss(&rx, 2);
+        assert_eq!(after_first, 1, "nog een keer vragen, want hij heeft het niet gehoord");
+
+        // And then it stops. Without these two rounds a suite stays green while the
+        // client asks again on every fetch - against an older service a 404 per dismissed
+        // answer per poll, which is exactly what the limit had to prevent.
+        m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
+        m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
+        assert_eq!(count_dismiss(&rx, 2), 0, "een keer herhalen per sessie, niet elke ophaal");
+    }
+
+    /// The doc on dismiss_answer says idempotent, and locally it was. Review
+    /// pointed out that the command was not: pressing twice sent twice.
+    #[test]
+    fn folding_the_same_answer_away_twice_asks_once() {
+        let (mut m, rx) = wired();
+        m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
+        m.dismiss_answer(2);
+        m.dismiss_answer(2);
+        let sent: Vec<ChatCommand> = rx.try_iter().collect();
+        let n = sent.iter().filter(|c| **c == ChatCommand::DismissAnswer { id: 2 }).count();
+        assert_eq!(n, 1, "een keer vragen is genoeg: {sent:?}");
+    }
+
+    /// Folding an answer away is a decision about the station, not about this
+    /// machine. So it goes to the service as well as into the local list: the
+    /// phone should not still be showing what was dealt with on the desktop.
+    ///
+    /// Both, not either. An older service has no such endpoint, and then the
+    /// local half is all there is - which is exactly what it did before.
+    #[test]
+    fn putting_an_answer_aside_also_tells_the_service() {
+        let (mut m, rx) = wired();
+        m.apply(ChatEvent::Answers(vec![ChatAnswer {
+            id: 2,
+            at: 0,
+            body: "een antwoord".into(),
+        }]));
+        assert_eq!(m.unread_answers().len(), 1, "voorwaarde: hij staat er");
+
+        m.dismiss_answer(2);
+
+        assert!(m.unread_answers().is_empty(), "van dit scherm af");
+        let sent: Vec<ChatCommand> = rx.try_iter().collect();
+        assert!(
+            sent.contains(&ChatCommand::DismissAnswer { id: 2 }),
+            "en de dienst hoort het ook: {:?}",
+            sent
+        );
+    }
+
 }

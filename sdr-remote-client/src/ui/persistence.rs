@@ -20,15 +20,17 @@ impl SdrRemoteApp {
                         && !l.starts_with("yaesu2_popout=")
                         && !l.starts_with("yaesu_mic_gain=") && !l.starts_with("yaesu2_mic_gain=")
                         && !l.starts_with("yaesu_compressor=") && !l.starts_with("yaesu2_compressor=")
-                        && !l.starts_with("yaesu_tx_agc=") && !l.starts_with("yaesu2_tx_agc="))
+                        && !l.starts_with("yaesu_tx_agc=") && !l.starts_with("yaesu2_tx_agc=")
+                        && !l.starts_with("multi_tx="))
                     .collect::<Vec<_>>().join("\n");
                 content.push_str(&format!(
-                    "\nchat_open={}\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\n",
+                    "\nchat_open={}\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\nmulti_tx={}\n",
                     self.chat_open,
                     self.ptt_toggle_mode, self.yaesu_ptt_toggle_mode, self.midi_ptt_toggle_mode,
                     self.yaesu2_enabled, self.yaesu2_ptt_toggle_mode,
                     self.yaesu2_popout, self.yaesu_mic_gain, self.yaesu2_mic_gain,
-                    self.yaesu_compressor, self.yaesu2_compressor, self.yaesu_tx_agc, self.yaesu2_tx_agc));
+                    self.yaesu_compressor, self.yaesu2_compressor, self.yaesu_tx_agc, self.yaesu2_tx_agc,
+                    self.multi_tx));
                 let _ = std::fs::write(path, content);
             }
         }

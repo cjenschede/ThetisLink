@@ -16,6 +16,84 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.11.0] — 2026-09-07 (One microphone can reach several transmitters, and a cable that comes loose no longer leaves a carrier behind)
+
+> **Who this release changes things for.** **Anyone with more than one
+> transmitter** — a Thetis and a radio, or two radios. One microphone can now
+> reach several of them at once, the busy sign belongs to each transmitter
+> separately instead of being shared, and a refusal now says which radio it is
+> about, so turning one down no longer lets go of the other. **Anyone operating
+> in a shack where the transmitter reaches its own cabling**: a radio that loses
+> its USB in mid-sentence used to keep transmitting an unmodulated carrier, with
+> its window gone from the screen and no way to stop it from a distance. And
+> **anyone using the phone**, which gains a Bluetooth PTT button and a way to
+> leave that says goodbye instead of falling silent.
+>
+> **Safe to install.** A client and a server on either version still talk to each
+> other. The refusal packet keeps its four bytes and the protocol version is
+> unchanged; two spare flag bits now carry which transmitter a refusal is about,
+> and zero means "not stated", which is what every earlier server sends — a newer
+> client then falls back to exactly what it did before. Both directions are held
+> by tests rather than by argument. Your settings file is read as it stands and
+> gains one line for the multi-transmitter switch; an older version ignores a key
+> it does not know.
+>
+> **Going back to 2.10.0 works.** Nothing in this release writes a file an older
+> version cannot read, and the wire format it speaks is the one 2.10.0 already
+> understands.
+
+### Added
+
+- **Multi-TX: one microphone to several transmitters at once.** A checkbox in the
+  Server tab, off by default. With it off, one transmitter at a time — whoever is
+  already transmitting keeps it, and a held key starts as soon as the first one
+  frees up. With it on, the same microphone goes to every keyed transmitter, so
+  Thetis and both radios together. Desktop only; the phone keys one radio.
+- **A Bluetooth PTT button on the phone.** Support for the YPC21 / PTT-Z01 class
+  of button, including the ones that report a press on two characteristics at
+  once. A button that drops out of range releases the transmitter rather than
+  leaving it keyed.
+- **An exit on the phone that says goodbye.** Swiping the app out of the recents
+  list is invisible to the server, which then waits fifteen seconds for a silence.
+  There is a button now, and the server log says `disconnected` where it used to
+  say `timed out`.
+
+### Changed
+
+- **Every PTT control follows one rule, on the desktop and on the phone.** Mouse,
+  spacebar, MIDI, the on-screen button and the Bluetooth button used to each keep
+  their own idea of whether you were transmitting, which showed up as a button
+  that stayed red after the transmission had ended, or a press that fired later
+  when you thought you were done. A held control now takes over from a latched
+  one, a latching press switches the transmission rather than its own button, and
+  every way a transmission can end — refused, the radio stopping, the link going,
+  a screen going away — goes through the same exit.
+- **The busy sign belongs to a transmitter, not to the station.** With two radios,
+  "TX in use" used to be one answer for both. Ownership is now per transmitter,
+  and the sign is drawn from it.
+- **A refusal says which transmitter it is about, and why.** Whether another
+  operator holds it or the server let go itself, and for which radio. A held key
+  may keep asking in the first case; in the second it has to be released first,
+  because asking again walks straight back into the same time-out.
+
+### Fixed
+
+- **A radio that loses its USB while transmitting no longer transmits into
+  nothing.** CAT keying is a latch: the radio holds the last thing it was told,
+  and when the cable goes there is nobody left to say stop. The audio rides on
+  that same cable, so from that moment the other station hears a carrier and no
+  voice. The radio's window now stays on screen with **USB LOST** on its transmit
+  control instead of disappearing, the transmission is ended as soon as the cable
+  comes back, and if the cable stays away past the radio's own time-out the
+  server lets the transmitter go by itself. Keying up again takes a fresh press,
+  on purpose: a radio that takes its own USB down is saying something about the
+  installation.
+- **An answer you put aside stays aside.** It belonged to the machine you were
+  sitting at, so the same answer came back on the phone. It belongs to the
+  station now, and the desktop and the phone agree about it.
+- **The link comes back on its own after a network change on the phone**, without
+  needing the app to be reopened.
+
 ## [2.10.0] — 2026-08-20 (A first start on the server claims nothing, and two radios stay apart)
 
 > **Who this release changes things for.** **Anyone installing ThetisLink for the
@@ -27,8 +105,11 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 > changes are small — but see the last entry under *Fixed*, which is about not
 > losing your settings file.
 >
-> **Safe to install.** The wire protocol is unchanged from 2.9.1, so a client and
-> a server on either version still talk to each other. Stock Thetis v2.10.3.x
+> **Safe to install.** A client and a server on either version still talk to each
+> other. The wire format itself is unchanged; the only addition is one flag bit in
+> the state a server already sends (it says "this server has no DX cluster"), and
+> it is inverted on purpose - an older server never sets it and a client reads its
+> absence as the old behaviour, so neither side has to know about the other. Stock Thetis v2.10.3.x
 > suffices — no fork change is required. Your existing configuration is read as
 > it stands: three settings that used to apply to both radios at once are now per
 > radio, and an older file hands its answer to both of them. Nothing needs

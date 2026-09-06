@@ -304,6 +304,13 @@ impl ClientEngine {
         let mut yaesu_tx_sequence: u32 = 0;
         let mut yaesu_tx_accum: Vec<f32> = Vec::new();
         let mut yaesu_tx_encoder = OpusEncoderWideband::new()?;
+        // May the same microphone go to more than one Yaesu at a time?
+        //
+        // Off by default. Between Thetis and a Yaesu this always happened - those are two
+        // separate encoding paths and nothing excluded them. Between the two Yaesu slots
+        // it did not: they shared one path and slot 1 won, so the other transmitted
+        // without modulation.
+        let mut multi_tx = false;
         let mut yaesu_tx_bitrate_bps: i32 = 24_000;
         // Anti-alias filter: sinc_len 128 + f_cutoff 0.95 (identical to the
         // server-side Yaesu TX resampler). The short filter (sinc_len 32)
@@ -426,6 +433,22 @@ impl ClientEngine {
         let mut hb_sequence: u32 = 0;
         let mut ptt = false;
         let mut thetis_ptt = false;
+        // Is there an outstanding PTT request from this operator, per transmitter?
+        //
+        // Not the same as the three flags around it. Those say "we believe we
+        // are transmitting" and a refusal drops them at once - which is right,
+        // but it means they cannot answer "was this refusal meant for us". These
+        // only end when the operator lets go.
+        //
+        // One per transmitter, indexed the same way the roger-beep channel is:
+        // 0 = Thetis, 1 = Yaesu slot 0, 2 = Yaesu slot 1. It was a single bool,
+        // so letting go of the 991A also cleared an outstanding request for
+        // Thetis - and then a refusal aimed at Thetis counted as stale and was
+        // thrown away (review finding, round 2).
+        // [Thetis, radio one, radio two] - the same three, in the same order, as
+        // ptt_denial::TRANSMITTERS and DeniedTarget::index(). Three places count
+        // these and none of them can see the other two.
+        let mut ptt_requested = [false; crate::ptt_denial::TRANSMITTERS];
         let mut yaesu_ptt = false;
         // Slot-1 PTT (dual-radio). Mutually exclusive with yaesu_ptt in practice
         // (one mic) → the mic-TX chain picks the packet type based on which is active.
@@ -647,6 +670,20 @@ impl ClientEngine {
             }};
         }
 
+        // When a receive error was last reported.
+        //
+        // A burst of the same error must not be able to bury the log - see the
+        // handling at the recv_from arm below.
+        let mut last_recv_err: Option<std::time::Instant> = None;
+        // How many receive errors in a row.
+        //
+        // Silencing the log is not the same as stopping the spin, and the first
+        // repair only did the first: a transport that is permanently dead and
+        // answers something other than BrokenPipe still ran at full speed, just
+        // quietly. It took the evidence away for the half of the cases it did
+        // not fix (review finding).
+        let mut recv_err_streak: u32 = 0;
+
         loop {
             // Process all pending commands (non-blocking).
             // SetFrequency / SetFrequencyRx2 are coalesced: under rapid MIDI-wheel
@@ -848,7 +885,7 @@ impl ClientEngine {
                         state.down_kbps = 0;
                         state.up_kbps = 0;
                         state.bw_breakdown.clear();
-                        state.ptt_denied = false;
+                        state.ptt_denial.clear();
                         // Clear stale spectrum data to prevent artifacts on reconnect
                         state.spectrum_bins.clear();
                         state.full_spectrum_bins.clear();
@@ -903,9 +940,10 @@ impl ClientEngine {
                             }
                         }
                         thetis_ptt = v;
+                        ptt_requested[0] = v;
                         ptt = thetis_ptt;
                         if !v {
-                            state.ptt_denied = false;
+                            state.ptt_denial.transmitter_off(0);
                         }
                         // Thetis BIN has a side-effect on TX audio quality.
                         // Disable BIN during TX, re-enable on RX if audio_mode=BIN.
@@ -1749,6 +1787,12 @@ impl ClientEngine {
                             info!("RX2 enable sent: {}", enabled);
                         }
                     }
+                    Command::SetMultiTx(on) => {
+                        if multi_tx != on {
+                            info!("Multi-TX {}", if on { "aan - dezelfde microfoon naar elke gekeyde Yaesu" } else { "uit - een zender tegelijk" });
+                        }
+                        multi_tx = on;
+                    }
                     Command::SetYaesuVolume(v) => {
                         if (yaesu_volume - v).abs() > 0.001 {
                             log::info!("Yaesu volume -> {:.3} (local_volume {:.3})", v, local_volume);
@@ -1927,6 +1971,16 @@ impl ClientEngine {
                             }
                         }
                         yaesu_ptt = on;
+                        ptt_requested[1] = on;
+                        // Letting go clears a standing refusal, exactly as the
+                        // Thetis path already did. Without this the flag was set
+                        // from the Yaesu side and cleared only from the Thetis
+                        // side, so a refused Yaesu press left the button orange
+                        // and "TX in use" for good - no press on either client
+                        // could take it off (owner, build 21).
+                        if !on {
+                            state.ptt_denial.transmitter_off(1);
+                        }
                         // Send Yaesu PTT immediately; mic capture opens through
                         // the shared delayed gate below.
                         if let Some(ref addr) = server_addr {
@@ -1984,6 +2038,11 @@ impl ClientEngine {
                             }
                         }
                         yaesu2_ptt = on;
+                        ptt_requested[2] = on;
+                        // Same as slot 0 above.
+                        if !on {
+                            state.ptt_denial.transmitter_off(2);
+                        }
                         if let Some(ref addr) = server_addr {
                             let ctrl = ControlPacket { control_id: ControlId::Yaesu2Ptt, value: on as u16 };
                             let mut buf = [0u8; ControlPacket::SIZE];
@@ -2364,6 +2423,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                 rx2_volume_synced = false;
                 state.rx_af_gain = 0;
                 state.connected = false;
+                // The link is gone, so nothing is outstanding any more. Three of
+                // the four link-down paths did not do this, and each one left the
+                // "PTT blocked" sign standing over a connection that no longer
+                // exists (review finding).
+                state.ptt_denial.clear();
                 state.rtt_ms = 0;
                 state.jitter_ms = 0.0;
                 state.buffer_depth = 0;
@@ -2399,9 +2463,48 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     }
 
                     let (len, _addr) = match result {
-                        Ok(r) => r,
+                        Ok(r) => {
+                            recv_err_streak = 0;
+                            r
+                        }
                         Err(e) => {
-                            warn!("recv_from error: {}", e);
+                            // A transport that is gone never delivers again, so
+                            // asking it once more is a spin, not a retry.
+                            //
+                            // This used to `continue` on every error. When the
+                            // relay tunnel closes it answers BrokenPipe every
+                            // single time, and the loop then ran as fast as the
+                            // processor allowed with a log line per turn: 1.2
+                            // million lines in a quarter of an hour on the
+                            // owner's phone, which rolled the ring buffer and
+                            // took every other line with it. The loop that made
+                            // the fault also destroyed the evidence for it
+                            // (2026-09-05).
+                            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                                warn!("receive path is gone ({e}) - ending the network loop");
+                                break;
+                            }
+                            // Everything else may be temporary and must not end
+                            // the session. On Windows an ICMP port-unreachable
+                            // comes back as ConnectionReset on the next recv,
+                            // which happens routinely while a server restarts.
+                            // Reported at most once a second.
+                            let now = std::time::Instant::now();
+                            let quiet = last_recv_err
+                                .map(|t| now.duration_since(t) < std::time::Duration::from_secs(1))
+                                .unwrap_or(false);
+                            if !quiet {
+                                last_recv_err = Some(now);
+                                warn!("recv_from error: {} (x{})", e, recv_err_streak + 1);
+                            }
+                            recv_err_streak = recv_err_streak.saturating_add(1);
+                            // A run of them is not a hiccup any more. Back off so
+                            // a dead transport cannot burn a core and a battery
+                            // while it fails; ten in a row is far more than a
+                            // server restart produces.
+                            if recv_err_streak > 10 {
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            }
                             continue;
                         }
                     };
@@ -2800,7 +2903,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         }
                         Ok(Packet::Smeter(sm_pkt)) => {
                             state.smeter = sm_pkt.level as f32 / 10.0;
-                            state.other_tx = sm_pkt.flags.ptt() && !ptt && !yaesu_ptt;
+                            state.other_tx = sm_pkt.flags.held_by_other();
                         }
                         Ok(Packet::Spectrum(sp)) => {
                             state.spectrum_bins = sp.bins;
@@ -2909,13 +3012,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             let dbm = sm_pkt.level as f32 / 10.0;
                             state.smeter_sig = dbm;
                             state.smeter = dbm;
-                            state.other_tx = sm_pkt.flags.ptt() && !ptt && !yaesu_ptt;
+                            state.other_tx = sm_pkt.flags.held_by_other();
                         }
                         Ok(Packet::SmeterMaxBin(sm_pkt)) => {
                             let dbm = sm_pkt.level as f32 / 10.0;
                             state.smeter_peakbin = dbm;
                             state.smeter = dbm;
-                            state.other_tx = sm_pkt.flags.ptt() && !ptt && !yaesu_ptt;
+                            state.other_tx = sm_pkt.flags.held_by_other();
                         }
                         Ok(Packet::SmeterRx2Sig(sm_pkt)) => {
                             let dbm = sm_pkt.level as f32 / 10.0;
@@ -3349,6 +3452,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.yaesu_mode = ys.mode;
                             state.yaesu_smeter = ys.smeter;
                             state.yaesu_tx_active = ys.tx_active;
+                            state.yaesu_held_by_other = ys.held_by_other;
                             state.yaesu_power_on = ys.power_on;
                             state.yaesu_af_gain = ys.af_gain;
                             state.yaesu_tx_power = ys.tx_power;
@@ -3545,8 +3649,60 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.yaesu_jitter_ms = yaesu_jitter_buf.jitter_ms();
                             state.yaesu_buffer_depth = yaesu_jitter_buf.depth() as u32;
                         }
-                        Ok(Packet::PttDenied) => {
-                            state.ptt_denied = true;
+                        Ok(Packet::PttDenied { server_released, target }) => {
+                            // Every one of them, with what we did with it.
+                            //
+                            // The server released a Yaesu on its time-out timer,
+                            // said so, and the desktop did nothing at all - no
+                            // reaction, no line, while the phone answered within
+                            // fifty milliseconds. Whether the packet arrives and
+                            // is then dropped, or never arrives, cannot be told
+                            // from the outside (owner, 2026-09-05).
+                            info!(
+                                "PTT refused by the server (target={:?}, server_released={}, asking={:?})",
+                                target, server_released, ptt_requested
+                            );
+                            // The outstanding requests, not the transmit
+                            // flags: this handler drops those below, so reading
+                            // them here answered "did the refusal we are
+                            // handling already take effect" - always no on the
+                            // first one and always yes on the rest.
+                            //
+                            // A refusal that arrives after we let go applies to
+                            // nothing and is dropped here.
+                            // The array itself, not three elements copied out
+                            // in an order written by hand. It is already
+                            // [Thetis, radio one, radio two] and that is the
+                            // order the refusal counts in, so there is nothing
+                            // left here to get the wrong way round.
+                            if !state.ptt_denial.apply_refusal(
+                                ptt_requested,
+                                target,
+                                server_released,
+                            ) {
+                                continue;
+                            }
+                            // And let go - of the transmitters this refusal is
+                            // about, and no others. A refusal means this client
+                            // is not transmitting on those, so it must stop
+                            // believing it is: otherwise it keeps sending TX
+                            // audio at a server that is throwing it away, and
+                            // the button stays red over a transmission that
+                            // never started.
+                            //
+                            // Yaesu 2 was missing from this list entirely, so a
+                            // refusal on the second radio left the engine
+                            // believing it was still keyed.
+                            if state.ptt_denial.was_about(0) {
+                                thetis_ptt = false;
+                                ptt = false;
+                            }
+                            if state.ptt_denial.was_about(1) {
+                                yaesu_ptt = false;
+                            }
+                            if state.ptt_denial.was_about(2) {
+                                yaesu2_ptt = false;
+                            }
                         }
                         // Dual-radio slot 1 (Option B-prime) — exact mirror of slot 0.
                         Ok(Packet::YaesuState2(ys)) => {
@@ -3556,6 +3712,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.yaesu2_mode = ys.mode;
                             state.yaesu2_smeter = ys.smeter;
                             state.yaesu2_tx_active = ys.tx_active;
+                            state.yaesu2_held_by_other = ys.held_by_other;
                             state.yaesu2_power_on = ys.power_on;
                             state.yaesu2_af_gain = ys.af_gain;
                             state.yaesu2_tx_power = ys.tx_power;
@@ -3762,6 +3919,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             rx2_volume_synced = false;
                             state.rx_af_gain = 0;
                             state.connected = false;
+                            // The link is gone, so nothing is outstanding any more. Three of
+                            // the four link-down paths did not do this, and each one left the
+                            // "PTT blocked" sign standing over a connection that no longer
+                            // exists (review finding).
+                            state.ptt_denial.clear();
                             state.connect_status = crate::state::ConnectStatus::Disconnected;
                             state.rtt_ms = 0;
                             state.jitter_ms = 0.0;
@@ -4614,6 +4776,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             rx2_volume_synced = false;
                             state.rx_af_gain = 0;
                             state.connected = false;
+                            // The link is gone, so nothing is outstanding any more. Three of
+                            // the four link-down paths did not do this, and each one left the
+                            // "PTT blocked" sign standing over a connection that no longer
+                            // exists (review finding).
+                            state.ptt_denial.clear();
                             state.rtt_ms = 0;
                             // Clear stale spectrum data
                             state.spectrum_bins.clear();
@@ -5098,7 +5265,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             0 => {
                                 thetis_ptt = false;
                                 ptt = false;
-                                state.ptt_denied = false;
+                                state.ptt_denial.transmitter_off(0);
+                                // The request ends here too. This path let go of
+                                // the transmitter and left the request standing,
+                                // so a late refusal could latch the busy sign
+                                // again - the fault build 35 fixed, reopened
+                                // through the courtesy beep (review, round 2).
+                                ptt_requested[0] = false;
                                 if let Some(ref addr) = server_addr {
                                     if audio_mode == 1 && last_sent_bin != Some(1) {
                                         let ctrl = ControlPacket { control_id: ControlId::Binaural, value: 1 };
@@ -5111,6 +5284,14 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
                             1 => {
                                 yaesu_ptt = false;
+                                // Symmetrical with Thetis above. Letting go of
+                                // a transmitter settles what was outstanding
+                                // for it, and this branch did not - so a
+                                // refusal on a radio could stay standing after
+                                // the beep had already released it, with the
+                                // busy sign left over (review).
+                                state.ptt_denial.transmitter_off(1);
+                                ptt_requested[1] = false;
                                 if let Some(ref addr) = server_addr {
                                     let ctrl = ControlPacket { control_id: ControlId::YaesuPtt, value: 0 };
                                     let mut buf = [0u8; ControlPacket::SIZE];
@@ -5120,6 +5301,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
                             _ => {
                                 yaesu2_ptt = false;
+                                state.ptt_denial.transmitter_off(2);
+                                ptt_requested[2] = false;
                                 if let Some(ref addr) = server_addr {
                                     let ctrl = ControlPacket { control_id: ControlId::Yaesu2Ptt, value: 0 };
                                     let mut buf = [0u8; ControlPacket::SIZE];
@@ -5242,19 +5425,32 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                             opus_data,
                                         };
                                         yaesu_tx_sequence = yaesu_tx_sequence.wrapping_add(1);
-                                        let mut buf = Vec::with_capacity(256);
-                                        // Slot-1 PTT → AudioYaesu2, otherwise slot-0 AudioYaesu.
-                                        let to_slot1 = match roger_tone {
-                                            Some((_, ch, _)) => ch == 2,
-                                            None => yaesu2_ptt,
+
+                                        // Where this frame goes.
+                                        //
+                                        // A roger beep belongs to one channel and goes only there - otherwise the other
+                                        // radio beeps along without anything having been ended.
+                                        //
+                                        // Otherwise: with multi-TX to EVERY keyed slot, and without it to that one. It
+                                        // was always that one, with slot 1 as the winner, and then the other one sat
+                                        // transmitting without modulation (owner, 2026-09-03).
+                                        let (naar_slot0, naar_slot1) = match roger_tone {
+                                            Some((_, ch, _)) => (ch == 1, ch == 2),
+                                            None if multi_tx => (yaesu_ptt, yaesu2_ptt),
+                                            None => (!yaesu2_ptt, yaesu2_ptt),
                                         };
-                                        let tx_ptype = if to_slot1 {
-                                            PacketType::AudioYaesu2
-                                        } else {
-                                            PacketType::AudioYaesu
-                                        };
-                                        pkt.serialize_as_type(&mut buf, tx_ptype);
-                                        let _ = send_tx!(&buf, addr.as_str());
+                                        // One encoding, two addresses: no extra computation, but proportionally more
+                                        // uplink.
+                                        if naar_slot0 {
+                                            let mut buf = Vec::with_capacity(256);
+                                            pkt.serialize_as_type(&mut buf, PacketType::AudioYaesu);
+                                            let _ = send_tx!(&buf, addr.as_str());
+                                        }
+                                        if naar_slot1 {
+                                            let mut buf = Vec::with_capacity(256);
+                                            pkt.serialize_as_type(&mut buf, PacketType::AudioYaesu2);
+                                            let _ = send_tx!(&buf, addr.as_str());
+                                        }
                                     }
                                 }
                             }

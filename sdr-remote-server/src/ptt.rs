@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use sdr_remote_core::thetis_power::{forget_shutdown, power_on_step, PowerOnInputs, PowerOnStep};
 use log::{error, info, warn};
 
 use crate::tci::TciConnection;
@@ -165,6 +166,15 @@ pub struct PttController {
     thetis_path: Option<String>,
     pending_power_on: bool,
     thetis_launch_time: Option<Instant>,
+    /// When we asked Thetis to close, if it has not gone yet.
+    ///
+    /// `shutdown_ex;` is a request over TCI and closing takes seconds. Without
+    /// this, a power-on arriving in that window sees a process on its way out,
+    /// calls it "already running", and waits for a connection that cannot come
+    /// (PD0PLK, report 67, 2026-09-01).
+    thetis_shutdown_time: Option<Instant>,
+    /// A power-on waiting for a closing Thetis to actually disappear.
+    thetis_relaunch_when_gone: bool,
     /// Hard TX-gate. `true` = the current Amplitec-A position is
     /// marked as RX-only in `config.amplitec_tx_blocked`; in that case all
     /// server-initiated TX paths refuse to send a TX command
@@ -197,6 +207,8 @@ impl PttController {
             thetis_path,
             pending_power_on: false,
             thetis_launch_time: None,
+            thetis_shutdown_time: None,
+            thetis_relaunch_when_gone: false,
             tx_blocked: Arc::new(AtomicBool::new(false)),
             last_blocked_log: None,
             ptt_prefill_start: None,
@@ -344,15 +356,75 @@ impl PttController {
             self.radio_set_power(true).await;
             self.pending_power_on = false;
             self.thetis_launch_time = None;
+            // And the latch, which used to survive this. If Thetis is talking
+            // to us, whatever we were waiting for is over - however it got
+            // there, including the user starting it by hand. Left armed it
+            // fired the next time Thetis was closed on purpose, relaunching it
+            // with "launching it now as asked" while nobody had asked. The
+            // timeout that would have cleared it begins with pending_power_on,
+            // which this line has just made false, so it could never run
+            // again (found in review of report 67 - the second pass of the very
+            // fault this code was written for).
+            self.thetis_relaunch_when_gone = false;
+            self.thetis_shutdown_time = None;
+        }
+
+        // A power-on that arrived while Thetis was still closing: start it the
+        // moment the process is really gone. Nothing else could do this -
+        // waiting for it to connect is waiting for a program that is leaving.
+        if self.thetis_relaunch_when_gone && !is_process_running("Thetis.exe") {
+            self.thetis_relaunch_when_gone = false;
+            self.thetis_shutdown_time = None;
+            if let Some(path) = self.thetis_path.clone() {
+                info!("Thetis has closed; launching it now as asked");
+                if shell_execute_open(&path) {
+                    info!("Thetis.exe launch initiated");
+                } else {
+                    error!("Failed to start Thetis via ShellExecute");
+                    self.pending_power_on = false;
+                    self.thetis_launch_time = None;
+                }
+            }
         }
 
         if self.pending_power_on {
             if let Some(launch_time) = self.thetis_launch_time {
                 if now.duration_since(launch_time).as_secs() > THETIS_LAUNCH_TIMEOUT_S {
-                    warn!("Thetis launch timeout ({}s), cancelling", THETIS_LAUNCH_TIMEOUT_S);
+                    // Say which of the two waits gave up. A bare "cancelling"
+                    // sent the reporter of #67 looking at the wrong thing.
+                    if self.thetis_relaunch_when_gone {
+                        warn!(
+                            "Thetis was asked to close {}s ago and is still running - giving up on the power-on",
+                            THETIS_LAUNCH_TIMEOUT_S
+                        );
+                    } else {
+                        warn!("Thetis launch timeout ({}s), cancelling", THETIS_LAUNCH_TIMEOUT_S);
+                    }
                     self.pending_power_on = false;
                     self.thetis_launch_time = None;
+                    self.thetis_relaunch_when_gone = false;
                 }
+            }
+        }
+
+        // A shutdown we asked for ends when the process is gone - not when TCI
+        // is up, which it still is for a moment after shutdown_ex; and which is
+        // what made build 15 forget within one tick. The process scan only runs
+        // while a shutdown is actually outstanding, which is rare.
+        if let Some(asked) = self.thetis_shutdown_time {
+            let waited = now.duration_since(asked).as_secs();
+            if forget_shutdown(
+                is_process_running("Thetis.exe"),
+                waited,
+                THETIS_LAUNCH_TIMEOUT_S,
+            ) {
+                if waited > THETIS_LAUNCH_TIMEOUT_S {
+                    warn!(
+                        "Thetis was asked to close {}s ago and is still running - no longer treating it as closing",
+                        waited
+                    );
+                }
+                self.thetis_shutdown_time = None;
             }
         }
 
@@ -656,45 +728,65 @@ impl PttController {
         if !on {
             self.pending_power_on = false;
             self.thetis_launch_time = None;
+            self.thetis_relaunch_when_gone = false;
             if self.is_connected() {
                 self.radio_set_power(false).await;
             }
             return;
         }
 
-        if self.is_connected() {
-            info!("Already connected, sending ZZPS1 directly");
-            self.radio_set_power(true).await;
-            return;
-        }
+        // The decision itself lives in sdr-remote-logic with its rows written
+        // out, because it grew an input that nobody could see it needed until
+        // a tester walked into it.
+        let step = power_on_step(PowerOnInputs {
+            connected: self.is_connected(),
+            have_path: self.thetis_path.is_some(),
+            launch_pending: self.pending_power_on,
+            process_running: is_process_running("Thetis.exe"),
+            shutdown_pending: self.thetis_shutdown_time.is_some(),
+        });
+        info!("power-on: {:?}", step);
 
-        // Not connected: try auto-launch
-        if self.thetis_path.is_none() {
-            info!("No thetis_path configured, sending ZZPS1 anyway (will fail if not connected)");
-            self.radio_set_power(true).await;
-            return;
-        }
-
-        if self.pending_power_on {
-            info!("Thetis launch already pending, ignoring duplicate POWER ON");
-            return;
-        }
-
-        if !is_process_running("Thetis.exe") {
-            let path = self.thetis_path.as_ref().unwrap();
-            info!("Launching Thetis: {}", path);
-            if shell_execute_open(path) {
-                info!("Thetis.exe launch initiated");
-            } else {
-                error!("Failed to start Thetis via ShellExecute");
+        match step {
+            PowerOnStep::SendPowerOn => {
+                self.radio_set_power(true).await;
                 return;
             }
-        } else {
-            info!("Thetis already running, waiting for connection");
+            PowerOnStep::Ignore => {
+                info!("Thetis launch already pending, ignoring duplicate POWER ON");
+                return;
+            }
+            PowerOnStep::Launch => {
+                let path = self.thetis_path.as_ref().unwrap();
+                info!("Launching Thetis: {}", path);
+                if shell_execute_open(path) {
+                    info!("Thetis.exe launch initiated");
+                } else {
+                    error!("Failed to start Thetis via ShellExecute");
+                    return;
+                }
+            }
+            PowerOnStep::WaitForConnection => {
+                info!("Thetis already running, waiting for connection");
+            }
+            PowerOnStep::WaitForExitThenLaunch => {
+                info!("Thetis is still closing; it will be launched as soon as it is gone");
+                self.thetis_relaunch_when_gone = true;
+            }
         }
 
         self.pending_power_on = true;
         self.thetis_launch_time = Some(Instant::now());
+    }
+
+    /// Ask Thetis to close, and remember that we did.
+    ///
+    /// The remembering is the point. Without it the next power-on sees a
+    /// process that is on its way out and mistakes it for one that is running.
+    pub async fn request_thetis_shutdown(&mut self) {
+        self.thetis_shutdown_time = Some(Instant::now());
+        self.thetis_relaunch_when_gone = false;
+        self.send_cat("shutdown_ex;").await;
     }
 
     pub fn thetis_starting(&self) -> bool {

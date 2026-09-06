@@ -228,7 +228,10 @@ pub fn route(app: &Arc<App>, req: &Request, now: i64) -> Reply {
         // The only endpoint without a ticket: a client has to be able to find
         // out what it is talking to before it has anything to talk with.
         ("GET", "/chat/version") => ok(format!(
-            "{{\"service\":\"thetislink-chat\",\"version\":\"{}\",\"protocol\":{},\"phase\":2,\"consent_text_version\":{},\"max_message_chars\":{}}}",
+            // `can` is a list and not a version number on purpose: a client asks
+            // whether the thing it wants to do exists, which is what it actually
+            // needs to know, and an older service simply does not name it.
+            "{{\"service\":\"thetislink-chat\",\"version\":\"{}\",\"protocol\":{},\"phase\":2,\"consent_text_version\":{},\"max_message_chars\":{},\"can\":[\"dismiss_reply\"]}}",
             env!("CARGO_PKG_VERSION"),
             crate::CHAT_PROTOCOL,
             CONSENT_TEXT_VERSION,
@@ -245,6 +248,7 @@ pub fn route(app: &Arc<App>, req: &Request, now: i64) -> Reply {
         // Diagnosis: one way in for a user, the postbox for the administrator.
         ("POST", "/chat/diagnosis") => submit_diagnosis(app, req, now),
         ("GET", "/chat/replies") => replies(app, req, now),
+        ("POST", "/chat/reply/dismiss") => dismiss_reply(app, req, now),
         // The page, and the session it needs. Everything below still takes a
         // bearer token as well, so the script keeps working unchanged.
         ("GET", "/chat/admin") | ("GET", "/chat/admin/") => admin_page(app),
@@ -662,6 +666,35 @@ fn replies(app: &Arc<App>, req: &Request, now: i64) -> Reply {
             ok(format!("{{\"replies\":[{}]}}", items.join(",")))
         }
         Err(_) => refuse("500 Internal Server Error", "could not read those"),
+    }
+}
+
+/// Put one answer aside, for the station in the ticket.
+///
+/// The station is never taken from the request: `dismiss` puts it in the WHERE,
+/// so asking to put away somebody else's answer is not an error to explain but a
+/// row that does not match. The reply says the same thing either way, on purpose
+/// - "not yours" and "already aside" and "no such id" are one answer here, so
+/// this cannot be used to find out which answers exist.
+fn dismiss_reply(app: &Arc<App>, req: &Request, now: i64) -> Reply {
+    let t = match admit_even_when_banned(app, req, now) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let v = match serde_json::from_str::<serde_json::Value>(&req.body) {
+        Ok(v) => v,
+        Err(_) => return refuse("400 Bad Request", "body is not JSON"),
+    };
+    let id = v.get("id").and_then(|x| x.as_i64()).unwrap_or(0);
+    if id <= 0 {
+        return refuse("400 Bad Request", "which answer?");
+    }
+    let store = app.store.lock().expect("store lock");
+    match crate::postbox::dismiss(&store.conn, t.station_id, id, now) {
+        // `changed` says whether this call is what did it. Both are a success
+        // for the caller: what it asked for is true afterwards.
+        Ok(changed) => ok(format!("{{\"dismissed\":{},\"changed\":{}}}", id, changed)),
+        Err(_) => refuse("500 Internal Server Error", "could not put that aside"),
     }
 }
 
@@ -1115,7 +1148,7 @@ fn admin_list(app: &Arc<App>, req: &Request, now: i64) -> Reply {
                 .iter()
                 .map(|r| {
                     format!(
-                        "{{\"id\":{},\"at\":{},\"name\":{},\"bytes\":{},\"claimed\":{},\"replied\":{},\"reply\":{},\"reply_at\":{},\"collected\":{}}}",
+                        "{{\"id\":{},\"at\":{},\"name\":{},\"bytes\":{},\"claimed\":{},\"replied\":{},\"reply\":{},\"reply_at\":{},\"reply_dismissed_at\":{},\"collected\":{}}}",
                         r.id,
                         r.at,
                         match &r.display_name {
@@ -1130,6 +1163,13 @@ fn admin_list(app: &Arc<App>, req: &Request, now: i64) -> Reply {
                             None => "null".to_string(),
                         },
                         match r.reply_at {
+                            Some(t) => t.to_string(),
+                            None => "null".to_string(),
+                        },
+                        // Fetching says a client asked for it; this says a
+                        // person was done with it. The administrator wrote the
+                        // answer, so he is the one it is for.
+                        match r.reply_dismissed_at {
                             Some(t) => t.to_string(),
                             None => "null".to_string(),
                         },
@@ -1909,6 +1949,106 @@ Content-Length: {}
         assert!(mine.body.contains("kijk eens naar je audio"), "{}", mine.body);
         let theirs = route(&a, &req("GET", "/chat/replies", Some(&token(8, "r2", "chat:read")), ""), NOW);
         assert!(!theirs.body.contains("kijk eens"), "not somebody else's: {}", theirs.body);
+    }
+
+    /// Pluck the id out of a /chat/replies answer, which is {"replies":[{"id":N,...
+    fn reply_id_from(body: &str) -> i64 {
+        let after = body.split("\"id\":").nth(1).expect("een antwoord met een id");
+        after
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .expect("een getal")
+    }
+
+    /// Putting an answer aside over the wire, which is where the decision about
+    /// who may do it actually lives. `dismiss()` puts the station in the WHERE;
+    /// this checks that the endpoint hands it the station from the ticket and
+    /// not one from the request.
+    #[test]
+    fn an_answer_can_be_put_aside_by_the_station_it_belongs_to() {
+        let a = app();
+        agree(&a, 7, "c1");
+        route(&a, &req("POST", "/chat/diagnosis", Some(&token(7, "d1", "chat:write")), r#"{"report":"de log"}"#), NOW);
+        let r = route(&a, &req("POST", "/chat/admin/reply", Some("test-admin"), r#"{"id":1,"body":"een antwoord"}"#), NOW);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+
+        let mine = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
+        assert!(mine.body.contains("een antwoord"), "voorwaarde: {}", mine.body);
+        let id = reply_id_from(&mine.body);
+
+        let away = route(
+            &a,
+            &req("POST", "/chat/reply/dismiss", Some(&token(7, "r1", "chat:read")), &format!("{{\"id\":{id}}}")),
+            NOW,
+        );
+        assert_eq!(away.status, "200 OK", "{}", away.body);
+
+        let after = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
+        assert!(!after.body.contains("een antwoord"), "weg van het scherm: {}", after.body);
+    }
+
+    /// Three different situations, one answer. Otherwise the endpoint is a way
+    /// to find out which answer numbers exist: press them one by one and read
+    /// the difference between "not yours" and "no such id".
+    #[test]
+    fn the_endpoint_says_the_same_thing_whatever_the_reason() {
+        let a = app();
+        agree(&a, 7, "c1");
+        route(&a, &req("POST", "/chat/diagnosis", Some(&token(7, "d1", "chat:write")), r#"{"report":"de log"}"#), NOW);
+        route(&a, &req("POST", "/chat/admin/reply", Some("test-admin"), r#"{"id":1,"body":"van zeven"}"#), NOW);
+        let mine = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
+        let id = reply_id_from(&mine.body);
+
+        let t8 = token(8, "r2", "chat:read");
+        let not_mine = route(&a, &req("POST", "/chat/reply/dismiss", Some(&t8), &format!("{{\"id\":{id}}}")), NOW);
+        let no_such = route(&a, &req("POST", "/chat/reply/dismiss", Some(&t8), r#"{"id":424242}"#), NOW);
+
+        let t7 = token(7, "r1", "chat:read");
+        route(&a, &req("POST", "/chat/reply/dismiss", Some(&t7), &format!("{{\"id\":{id}}}")), NOW);
+        let again = route(&a, &req("POST", "/chat/reply/dismiss", Some(&t7), &format!("{{\"id\":{id}}}")), NOW);
+
+        assert_eq!(not_mine.status, again.status);
+        assert_eq!(no_such.status, again.status);
+        assert_eq!(not_mine.body, again.body, "niet-van-jou == al-opzij");
+        // Not the whole body: that echoes the number you asked about, and 424242
+        // is not the number 7 asked about. What must not differ is the verdict.
+        assert!(no_such.body.contains("\"changed\":false"), "{}", no_such.body);
+        assert!(again.body.contains("\"changed\":false"), "{}", again.body);
+
+        // And it really did not touch 7's answer.
+        let seven = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
+        assert!(!seven.body.contains("van zeven"), "7 heeft hem zelf weggeklikt");
+    }
+
+    /// The administrator wrote the answer; he is the one who should see that it
+    /// was dealt with. Fetching is not that - a client asks for answers even
+    /// when nobody opened the window.
+    #[test]
+    fn the_administrator_is_told_that_an_answer_was_put_aside() {
+        let a = app();
+        agree(&a, 7, "c1");
+        route(&a, &req("POST", "/chat/diagnosis", Some(&token(7, "d1", "chat:write")), r#"{"report":"de log"}"#), NOW);
+        route(&a, &req("POST", "/chat/admin/reply", Some("test-admin"), r#"{"id":1,"body":"antwoord"}"#), NOW);
+        let mine = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
+        let id = reply_id_from(&mine.body);
+
+        let before = route(&a, &req("GET", "/chat/admin/diagnoses", Some("test-admin"), ""), NOW);
+        assert!(
+            before.body.contains("\"reply_dismissed_at\":null"),
+            "nog niet afgehandeld, en dat moet zichtbaar zijn: {}",
+            before.body
+        );
+
+        route(&a, &req("POST", "/chat/reply/dismiss", Some(&token(7, "r1", "chat:read")), &format!("{{\"id\":{id}}}")), NOW);
+
+        let after = route(&a, &req("GET", "/chat/admin/diagnoses", Some("test-admin"), ""), NOW);
+        assert!(
+            after.body.contains(&format!("\"reply_dismissed_at\":{NOW}")),
+            "de beheerder ziet WANNEER het is afgehandeld: {}",
+            after.body
+        );
     }
 
     /// Leaving the chat takes an uncollected report with it (design 6.4).

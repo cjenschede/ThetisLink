@@ -137,6 +137,31 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Phone's own volume buttons as PTT (separate opt-in; never Bluetooth volume)
     val volumeKeysPttEnabled = prefs.getBoolean("volume_keys_ptt", false)
     LaunchedEffect(volumeKeysPttEnabled) { activity?.volumeKeysPttEnabled = volumeKeysPttEnabled }
+
+    // The Bluetooth PTT button. The controller belongs to the ViewModel, so it
+    // outlives this screen and the settings dialog; what happens here is the
+    // reading and the reconnect on start.
+    val blePtt = viewModel.blePtt
+    val bleStatus by (blePtt?.status
+        ?: MutableStateFlow(com.sdrremote.service.BlePttController.Status.Off))
+        .collectAsStateWithLifecycle()
+    val bleFound by (blePtt?.found ?: MutableStateFlow(emptyList<com.sdrremote.service.BlePttController.Found>()))
+        .collectAsStateWithLifecycle()
+    // The push-to-talk / toggle setting is read once and applied once, in the
+    // shared rule. It used to be read here a second time and pushed into the
+    // Bluetooth gate, which kept its own idea of being latched on - and that
+    // idea went out of step the moment a transmission was stopped any other way
+    // (owner, build 59).
+
+    LaunchedEffect(Unit) {
+        // Connect on start when it was switched on and a button was chosen.
+        // Phase 1 does not reconnect by itself after that; there is a button in
+        // settings for it, and automatic recovery is phase 2.
+        val address = prefs.getString("ble_ptt_address", "") ?: ""
+        if (prefs.getBoolean("ble_ptt", false) && address.isNotBlank()) {
+            blePtt?.connect(address)
+        }
+    }
     val volumeUpHeld by (activity?.volumeUpHeld ?: MutableStateFlow(false)).collectAsStateWithLifecycle()
     val lastKeyEvent by (activity?.lastKeyEvent ?: MutableStateFlow("")).collectAsStateWithLifecycle()
 
@@ -189,9 +214,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val smeterSourceState = rememberSaveable { mutableStateOf(prefs.getInt("smeter_source", 1)) }
     val waterfallRingBuffer = remember { com.sdrremote.ui.components.WaterfallRingBuffer(100) }
 
-    // TL2-1 ctun-auto-recenter: push allow_zoom_below_2x state naar server bij elke
-    // (re)connect. Server enforced strictest over alle clients (zolang een client
-    // vink-uit heeft, server klemt zoom-min op 2x voor alle clients).
+    // TL2-1 ctun auto-recenter: push the allow_zoom_below_2x state to the server on
+    // every (re)connect. The server enforces the strictest setting across all clients
+    // (while any client has the box unticked, the server clamps the zoom minimum to
+    // 2x for everyone).
     LaunchedEffect(state.connected) {
         if (state.connected) {
             viewModel.setControl(0x63, if (allowZoomBelow2xState.value) 1 else 0)
@@ -350,9 +376,9 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             if (spectrumEnabled) {
                 viewModel.enableSpectrum(true)
                 viewModel.setSpectrumFps(5)
-                // Zonder max_bins valt de server terug op zijn (veel hogere) default ->
-                // enorme spectrum-datarate bij connect. Zet dezelfde limiet als de
-                // spectrum-toggle (2048) zodat de rate meteen klopt.
+                // Without max_bins the server falls back to its (much higher) default ->
+                // huge spectrum data rate on connect. Sets the same limit as the
+                // spectrum toggle (2048) so the rate is right straight away.
                 viewModel.setSpectrumMaxBins(2048)
                 viewModel.setSpectrumZoom(spectrumZoomState.floatValue)
                 viewModel.setSpectrumPan(spectrumPanState.floatValue)
@@ -393,7 +419,6 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
 
     // MIDI controller
     val midi = remember { com.sdrremote.service.MidiController(context) }
-    var midiPtt by remember { mutableStateOf(false) }
     var midiPorts by remember { mutableStateOf(midi.listDevices()) }
     var showMidiSettings by remember { mutableStateOf(false) }
 
@@ -411,10 +436,13 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             is com.sdrremote.service.MidiEvent.ButtonEvent -> {
                 val pressed = ev.velocity > 0
                 when (ev.action) {
+                    // A MIDI button is a momentary contact, so it always
+                    // latches - the shared rule knows that and decides it. The
+                    // lamp follows the state afterwards, not the press: it used
+                    // to follow a flag this screen kept, which is why it stayed
+                    // lit after an exit had already stopped the transmitter.
                     com.sdrremote.service.MidiAction.Ptt -> if (pressed) {
-                        midiPtt = !midiPtt
-                        viewModel.setPtt(midiPtt)
-                        midi.sendLed(com.sdrremote.service.MidiAction.Ptt, midiPtt)
+                        viewModel.pttDown(uniffi.sdr_remote.PttSource.MIDI)
                     }
                     com.sdrremote.service.MidiAction.NrToggle -> if (pressed) {
                         val newVal = if (state.nrLevel >= 4) 0 else state.nrLevel + 1
@@ -453,12 +481,11 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         }
     }
 
-    // Turn off MIDI PTT LED when disconnecting
-    LaunchedEffect(connected) {
-        if (!connected && midiPtt) {
-            midiPtt = false
-            midi.sendLed(com.sdrremote.service.MidiAction.Ptt, false)
-        }
+    // The lamp follows the state, whatever changed it - a press, a refusal, a
+    // dropped link, the screen going off. It used to be switched next to each
+    // of those in turn, and the ones nobody thought of left it lit.
+    LaunchedEffect(state.transmitting) {
+        midi.sendLed(com.sdrremote.service.MidiAction.Ptt, state.transmitting)
     }
 
     // Stable callbacks - same lambda reference across recompositions.
@@ -526,6 +553,34 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 }
                 viewModel.setControl(0x64, mask)
             },
+            bleStatus = bleStatus,
+            bleDevices = bleFound.map { Triple(it.address, it.name, it.rssi) },
+            onBlePttEnabled = { on ->
+                if (on) {
+                    val address = prefs.getString("ble_ptt_address", "") ?: ""
+                    if (address.isNotBlank()) blePtt?.connect(address)
+                } else {
+                    blePtt?.disconnect()
+                }
+            },
+            onBleStartScan = { blePtt?.startScan() },
+            onBleStopScan = {
+                blePtt?.stopScan()
+                // Scanning let go of the button on purpose, so leaving the
+                // picker takes it back - unless a button was just picked, which
+                // is already a connection and would be torn down by a second
+                // one. The status says which of the two happened.
+                val idle = blePtt?.status?.value == com.sdrremote.service.BlePttController.Status.Off
+                val address = prefs.getString("ble_ptt_address", "") ?: ""
+                if (idle && prefs.getBoolean("ble_ptt", false) && address.isNotBlank()) {
+                    blePtt?.connect(address)
+                }
+            },
+            onBlePick = { address -> blePtt?.connect(address) },
+            onBleReconnect = {
+                val address = prefs.getString("ble_ptt_address", "") ?: ""
+                if (address.isNotBlank()) blePtt?.connect(address)
+            },
             dxSpotsEnabled = state.dxSpotsEnabled,
             dxClusterAvailable = state.dxClusterAvailable,
             rogerThetisPresent = state.thetisConfigured,
@@ -573,7 +628,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Spacer(Modifier.height(6.dp))
                     Text(stringResource(R.string.main_about_hardware), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     for ((dev, iface) in listOf(
-                        "ANAN 7000DLE" to "TCI",
+                        "Any radio Thetis drives" to "TCI",
                         "Yaesu FT-991A" to "Serial + USB Audio",
                         "Yaesu FTX-1" to "Serial + USB Audio",
                         "RF2K-S PA" to "HTTP",
@@ -584,6 +639,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         "EA7HG Rotor" to "UDP",
                         "PstRotator (rotors)" to "XML over UDP",
                         "Yaesu G-1000DXC Rotor" to "MCP2221A (USB)",
+                        "YPC21 / PTT-Z01 PTT button" to "BLE",
+                        "ZL-01 shutter button" to "Bluetooth touch",
                     )) {
                         Row(modifier = Modifier.fillMaxWidth()) {
                             Text(dev, fontSize = 11.sp, modifier = Modifier.weight(0.55f))
@@ -670,30 +727,30 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // of it the moment the relay is off would take away the explanation along
     // with the chat (2026-08-20).
 
-    // Data-besparing: abonneer alleen op de Yaesu-radio's als het Yaesu-window open is
+    // Data saving: subscribe to the Yaesu radios only while the Yaesu window is open
     // (devices-scherm zichtbaar en Yaesu-tab (id 6) geselecteerd). Buiten dit window blijft
-    // alleen een actief-beluisterde radio geabonneerd (zie ViewModel.updateYaesuSubscriptions).
+    // only an actively listened radio stays subscribed (see ViewModel.updateYaesuSubscriptions).
     val yaesuWindowOpen = showDevices && !showChat && deviceSubTab == 6
     LaunchedEffect(yaesuWindowOpen) {
         viewModel.setYaesuWindowOpen(yaesuWindowOpen)
     }
 
-    // Spectrum 30 s screen-grace (PATCH-android-yaesu-presence-datasaver, punt 1).
-    // Desired-state, gekeyd op showDevices + yaesuActive + connected (reconnect-edge)
-    // zodat window-wissel, Yaesu-toggle en reconnect de juiste spectrum-state opnieuw
-    // toepassen (voorkomt een stale spectrum-subscription):
-    //  - Yaesu actief      -> spectrum uit (geen grace).
-    //  - op hoofdscherm     -> spectrum aan (+ FPS-restore).
-    //  - hoofdscherm >30 s verlaten -> spectrum uit; binnen 30 s terug = effect cancelt.
-    // Het chat-scherm telt hier als "hoofdscherm verlaten": er staat geen
-    // spectrum op, dus de grace hoort te lopen zoals bij het devices-scherm.
+    // Spectrum 30 s screen grace (PATCH-android-yaesu-presence-datasaver, point 1).
+    // Desired state, keyed on showDevices + yaesuActive + connected (the reconnect
+    // edge) so that a window change, the Yaesu toggle and a reconnect re-apply the
+    // right spectrum state (which prevents a stale spectrum subscription):
+    //  - Yaesu active            -> spectrum off (no grace).
+    //  - on the main screen      -> spectrum on (+ FPS restore).
+    //  - main screen left >30 s  -> spectrum off; back within 30 s cancels the effect.
+    // The chat screen counts as "left the main screen" here: no spectrum is drawn
+    // there, so the grace should run as it does for the devices screen.
     val radioScreenVisible = !showDevices && !showChat
     LaunchedEffect(radioScreenVisible, yaesuActive, connected, spectrumEnabled) {
         if (!connected) return@LaunchedEffect
         when {
-            // Spectrum alleen streamen als de gebruiker het ook aan heeft staan; de
-            // grace regelt daarbovenop het data-besparen bij scherm-wissel. Zonder
-            // deze gate liep spectrum al bij connect (toggle uit) -> hoge datarate.
+            // Only stream spectrum when the user has it switched on as well; the grace adds
+            // data saving on top of that when screens change. Without this gate spectrum ran
+            // from connect (with the toggle off) -> a high data rate.
             yaesuActive || !spectrumEnabled -> viewModel.setSpectrumActive(false)
             radioScreenVisible -> {
                 android.util.Log.i("MainScreen", "grace cancelled -> spectrum on")
@@ -942,6 +999,18 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             viewModel.setAgcEnabled(agcEnabled)
                         },
                         onDisconnect = { viewModel.disconnect() },
+                        onExit = {
+                            // Disconnect first, so the server hears a goodbye
+                            // instead of waiting fifteen seconds for a silence.
+                            viewModel.disconnect()
+                            // finishAndRemoveTask rather than finish: this is
+                            // the deliberate "I am done", so it should also
+                            // leave the recents carousel. What stays behind
+                            // there is what the operator would swipe away
+                            // himself, and that swipe is the gesture the app
+                            // cannot see.
+                            activity?.finishAndRemoveTask()
+                        },
                         onSendTotp = { code -> viewModel.sendTotpCode(code) },
                     )
                 }
@@ -964,9 +1033,9 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Spacer(Modifier.height(8.dp))
                 }
 
-                // Zonder geconfigureerde Thetis is er niets van Thetis te tonen: laat de
-                // Radio-tab dan direct de Yaesu-weergave zien (audiolevels enz.), ook als
-                // de "Yaesu active"-toggle (= audio aan/uit) uit staat.
+                // With no Thetis configured there is nothing of Thetis to show: let the Radio tab
+                // go straight to the Yaesu view (audio levels and so on), even when the "Yaesu
+                // active" toggle (= audio on/off) is off.
                 if (yaesuActive || !state.thetisConfigured) {
                     item {
                         Text(
@@ -1156,8 +1225,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             onAllowZoomBelow2xToggle = { allow ->
                                 allowZoomBelow2xState.value = allow
                                 prefs.edit().putBoolean("allow_zoom_below_2x", allow).apply()
-                                // Push direct naar server (ControlId::AllowZoomBelow2x = 0x63).
-                                // Server enforced strictest re-applies bij elke client-toggle.
+                                // Pushed straight to the server (ControlId::AllowZoomBelow2x = 0x63).
+                                // The server's strictest-wins re-applies on every client toggle.
                                 viewModel.setControl(0x63, if (allow) 1 else 0)
                             },
                         )
@@ -1369,35 +1438,60 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     // PTT button takes remaining space
                     val pttToggleMode = prefs.getBoolean("ptt_toggle", false)
 
-                    // BT remote PTT: toggle or momentary based on ptt_toggle setting
+                    // The volume rocker and the BLE page-turner keys. Both
+                    // arrive as key events to the foreground activity, so both
+                    // die with the screen - which is why they are one source and
+                    // not the same one as the GATT button.
+                    //
+                    // Whether a press latches or has to be held is decided by
+                    // the shared rule. This kept its own `btToggled` for that,
+                    // and that flag went out of step with the transmitter the
+                    // same way the button's did.
+                    LaunchedEffect(pttToggleMode) { viewModel.setPttToggleMode(pttToggleMode) }
                     var lastVolumeUp by remember { mutableStateOf(false) }
-                    var btToggled by remember { mutableStateOf(false) }
                     LaunchedEffect(volumeUpHeld) {
                         if ((volumePttEnabled || volumeKeysPttEnabled) && volumeUpHeld != lastVolumeUp) {
                             lastVolumeUp = volumeUpHeld
-                            if (pttToggleMode) {
-                                // Toggle: only act on press (down), ignore release
-                                if (volumeUpHeld) {
-                                    btToggled = !btToggled
-                                    viewModel.setPtt(btToggled)
-                                }
-                            } else {
-                                viewModel.setPtt(volumeUpHeld)
-                            }
+                            if (volumeUpHeld) viewModel.pttDown(uniffi.sdr_remote.PttSource.VOLUME_KEY)
+                            else viewModel.pttUp(uniffi.sdr_remote.PttSource.VOLUME_KEY)
                         }
                     }
 
+                    // Busy on the radio this client is actually on. The signal
+                    // was already here - yaesuTxActive is what greys the radio
+                    // switch with "locked during TX" - and only the PTT button
+                    // was not using it. The desktop showed "in use" all along;
+                    // this is the Android catching up (owner, build 23).
+                    //
+                    // "&& !we are transmitting" because the flag is true for our
+                    // own transmission too, and telling the operator that his
+                    // own carrier belongs to somebody else is the fault this
+                    // whole evening began with.
+                    // No sum any more. Every control reports itself and the
+                    // shared rule decides; this is what that decision says.
+                    val weTransmit = state.transmitting
+                    // Held by somebody else, straight from the server. No
+                    // subtraction any more: deriving it from the radio's own TX
+                    // state is what produced the orange flash on release, and
+                    // the flash was the operator being told his own carrier
+                    // belonged to a stranger.
+                    val heldByOther = if (yaesuActive) {
+                        if (state.selectedRadio == 1) state.yaesu2HeldByOther
+                        else state.yaesuHeldByOther
+                    } else {
+                        state.otherTx
+                    }
+                    // The shared rule, not a second copy of it. It was written
+                    // out here in Kotlin on the same night it was centralised in
+                    // sdr-remote-logic, so the one place with tests was the one
+                    // place this phone did not use (review finding, round 1).
+                    val button = uniffi.sdr_remote.pttButton(heldByOther, weTransmit)
                     PttButton(
-                        ptt = midiPtt || volumeUpHeld || state.transmitting,
-                        pttDenied = state.pttDenied || state.otherTx,
-                        toggle = pttToggleMode,
-                        onPttChange = { pressed ->
-                            if (!pressed && midiPtt) {
-                                midiPtt = false
-                                midi.sendLed(com.sdrremote.service.MidiAction.Ptt, false)
-                            }
-                            viewModel.setPtt(pressed || midiPtt || volumeUpHeld)
-                        },
+                        ptt = button == uniffi.sdr_remote.PttButton.TRANSMITTING,
+                        busy = button == uniffi.sdr_remote.PttButton.BUSY,
+                        connected = state.connected,
+                        onDown = { viewModel.pttDown(uniffi.sdr_remote.PttSource.SCREEN) },
+                        onUp = { viewModel.pttUp(uniffi.sdr_remote.PttSource.SCREEN) },
                         modifier = Modifier.weight(1f),
                     )
                 }

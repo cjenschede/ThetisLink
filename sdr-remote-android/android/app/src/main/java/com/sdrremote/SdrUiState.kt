@@ -162,6 +162,9 @@ data class SdrUiState(
     val yaesuMode: Int = 0,
     val yaesuSmeter: Int = 0,
     val yaesuTxActive: Boolean = false,
+    /** This radio is held by another client - from the server's ownership table. */
+    val yaesuHeldByOther: Boolean = false,
+    val yaesu2HeldByOther: Boolean = false,
     val yaesuPowerOn: Boolean = false,
     val yaesuAfGain: Int = 0,
     val yaesuTxPower: Int = 0,
@@ -213,7 +216,7 @@ data class SdrUiState(
     val yaesu2FeatureToggles: UInt = 0u,
     val yaesu2FeatureLevels: List<Int> = emptyList(),
     val yaesu2FeatureFreqs: List<Int> = emptyList(),
-    /** Gekozen Yaesu-radio in de UI: 0=radio1, 1=radio2 (Android bedient er één tegelijk). */
+    /** Yaesu radio chosen in the UI: 0 = radio 1, 1 = radio 2 (Android works one at a time). */
     val selectedRadio: Int = 0,
     // UltraBeam RCU-06
     val ubConnected: Boolean = false,

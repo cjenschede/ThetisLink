@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -16,6 +18,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,6 +60,17 @@ fun ConnectionPanel(
     connectStatusIsAwaitingTotp: Boolean = false,
     onConnect: (String, String) -> Unit,
     onDisconnect: () -> Unit,
+    /**
+     * Leave for good: disconnect, stop the service, close the app.
+     *
+     * Android apps usually have no exit, and usually that is right. This one
+     * holds a connection open, runs a foreground service and plays audio, so
+     * "I am done, let go of everything" is a real wish - and until now the only
+     * way to grant it was swiping the app out of the recents carousel, which
+     * the app never sees. That is why the server log says `timed out` where it
+     * should say `disconnected` (owner, 2026-09-05).
+     */
+    onExit: () -> Unit,
     onSendTotp: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -117,6 +131,10 @@ fun ConnectionPanel(
                 colors = ButtonDefaults.buttonColors(containerColor = btnColor),
             ) {
                 Text(stringResource(R.string.common_disconnect))
+            }
+            Spacer(Modifier.width(6.dp))
+            OutlinedButton(onClick = onExit) {
+                Text(stringResource(R.string.common_exit))
             }
         } else {
             val pw = prefs.getString("password", "") ?: ""

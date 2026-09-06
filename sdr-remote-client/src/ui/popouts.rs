@@ -6,6 +6,7 @@
 
 use egui::{ViewportBuilder, ViewportId};
 use super::*;
+use sdr_remote_logic::ptt_button::{ptt_button, PttButton};
 
 
 /// Identifies a detachable popout window - selects its persisted geometry
@@ -545,13 +546,44 @@ impl SdrRemoteApp {
         // Fixed PTT button at bottom
         egui::TopBottomPanel::bottom("yaesu_ptt_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // PTT button - locked when other client is transmitting
-                let (ptt_color, ptt_text, ptt_locked) = if self.other_tx {
-                    (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true)
-                } else if self.yaesu_tx_active {
-                    (Color32::RED, "TX".to_string(), false)
+                // Ownership plus our own request - the radio's TX state is
+                // deliberately not in this. It read `other_tx` (Thetis, not this
+                // radio) and then `yaesu_tx_active`, and that second one is
+                // wrong twice over: it is just as true when somebody else keys
+                // the radio, and it arrives a whole round trip late, so our own
+                // press only turned red once the readback came back.
+                let btn = sdr_remote_logic::ptt_button::ptt_button_with_own(
+                    self.yaesu_held_by_other,
+                    self.yaesu_ptt_last_sent[0],
+                    Self::recently_blocked(self.yaesu_blocked_at[0]),
+                );
+                let (ptt_color, ptt_text, ptt_locked) = match btn {
+                    PttButton::Busy => (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true),
+                    PttButton::Transmitting => (Color32::RED, "TX".to_string(), false),
+                    PttButton::Idle => (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false),
+                    // Yellow-brown, not orange: this is not "somebody else is transmitting" but
+                    // "you are transmitting yourself, a screen away". Different answer, different
+                    // colour.
+                    PttButton::BlockedByOwnTx => (
+                        Color32::from_rgb(120, 90, 0),
+                        rust_i18n::t!("main_tx_own_elsewhere").to_string(),
+                        self.yaesu_blocked_by_own[0],
+                    ),
+                };
+                // The cable is gone and we are the ones keying this radio. Say
+                // so on the control itself, and in a red that is plainly not
+                // the red of a working transmission: the carrier is still
+                // going out, the voice is not, because the audio rides on the
+                // same USB. Overrides whatever the button would otherwise say
+                // - there is nothing more important to read here.
+                let (ptt_color, ptt_text, ptt_locked) = if self.usb_lost_showing(0) {
+                    (
+                        Color32::from_rgb(130, 35, 35),
+                        rust_i18n::t!("radio_usb_lost").to_string(),
+                        true,
+                    )
                 } else {
-                    (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false)
+                    (ptt_color, ptt_text, ptt_locked)
                 };
                 let ptt_btn = egui::Button::new(
                     RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
@@ -562,25 +594,41 @@ impl SdrRemoteApp {
                 // mirrors the Thetis PTT handler.
                 if self.yaesu_ptt_toggle_mode {
                     if response.clicked() {
-                        self.yaesu_mouse_ptt = !self.yaesu_mouse_ptt;
+                        // A latching press switches the transmission, not this button.
+                        // Same rule as the phone.
+                        self.yaesu_latches[0] = self.yaesu_latches[0]
+                            .latching_press(
+                                sdr_remote_logic::ptt_intent::PttSource::Mouse,
+                                self.resampled_sources(0),
+                            );
                     }
                 } else {
-                    self.yaesu_mouse_ptt = ui.input(|i| {
+                    let down = ui.input(|i| {
                         i.pointer.primary_down()
                             && response.rect.contains(i.pointer.interact_pos().unwrap_or(egui::Pos2::ZERO))
                     });
+                    self.yaesu_latches[0] = self.yaesu_latches[0].hold(
+                        sdr_remote_logic::ptt_intent::PttSource::Mouse,
+                        down,
+                        self.resampled_sources(0),
+                    );
                 }
                 // Spacebar keys this radio while ITS OWN window has focus (the
                 // pop-out is a separate viewport with its own keyboard input,
                 // so the main-window PTT handler never sees it). Momentary,
                 // combined with the mouse latch; send only on the combined edge.
-                let space_held = ui.input(|i| i.key_down(egui::Key::Space));
-                let want_tx = (self.yaesu_mouse_ptt || space_held) && !ptt_locked;
-                if want_tx != self.yaesu_ptt_last_sent {
-                    self.yaesu_ptt_last_sent = want_tx;
-                    self.apply_ptt_spike_protection(true, want_tx);
-                    let _ = self.cmd_tx.send(Command::SetYaesuPtt(want_tx));
-                }
+                // Only feed the latch here; drive_yaesu_ptt() decides and sends,
+                // once per frame, whether this window is open or not.
+                // A hold control takes over from a latch on its rising edge -
+                // see Latches::hold. Grabbing the spacebar while the MIDI or the
+                // button is latched on leaves the spacebar holding it, and
+                // letting go stops it.
+                let space_down = ui.input(|i| i.key_down(egui::Key::Space));
+                self.yaesu_latches[0] = self.yaesu_latches[0].hold(
+                    sdr_remote_logic::ptt_intent::PttSource::Space,
+                    space_down,
+                    self.resampled_sources(0),
+                );
 
                 ui.separator();
 
@@ -622,12 +670,39 @@ impl SdrRemoteApp {
     fn render_yaesu2_popout_body(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("yaesu2_ptt_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let (ptt_color, ptt_text, ptt_locked) = if self.other_tx {
-                    (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true)
-                } else if self.yaesu2_tx_active {
-                    (Color32::RED, "TX".to_string(), false)
+                // Slot 1, same rule as slot 0 - see render_yaesu1_popout_body.
+                let (ptt_color, ptt_text, ptt_locked) =
+                    match sdr_remote_logic::ptt_button::ptt_button_with_own(
+                        self.yaesu2_held_by_other,
+                        self.yaesu_ptt_last_sent[1],
+                        Self::recently_blocked(self.yaesu_blocked_at[1]),
+                    ) {
+                        PttButton::Busy => (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_tx_in_use").to_string(), true),
+                        PttButton::Transmitting => (Color32::RED, "TX".to_string(), false),
+                        PttButton::Idle => (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false),
+                        // Yellow-brown, not orange: this is not "somebody else is transmitting" but
+                        // "you are transmitting yourself, a screen away". Different answer, different
+                        // colour.
+                        PttButton::BlockedByOwnTx => (
+                            Color32::from_rgb(120, 90, 0),
+                            rust_i18n::t!("main_tx_own_elsewhere").to_string(),
+                            self.yaesu_blocked_by_own[1],
+                        ),
+                    };
+                // The cable is gone and we are the ones keying this radio. Say
+                // so on the control itself, and in a red that is plainly not
+                // the red of a working transmission: the carrier is still
+                // going out, the voice is not, because the audio rides on the
+                // same USB. Overrides whatever the button would otherwise say
+                // - there is nothing more important to read here.
+                let (ptt_color, ptt_text, ptt_locked) = if self.usb_lost_showing(1) {
+                    (
+                        Color32::from_rgb(130, 35, 35),
+                        rust_i18n::t!("radio_usb_lost").to_string(),
+                        true,
+                    )
                 } else {
-                    (Color32::from_rgb(60, 60, 60), "PTT".to_string(), false)
+                    (ptt_color, ptt_text, ptt_locked)
                 };
                 let ptt_btn = egui::Button::new(
                     RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
@@ -637,21 +712,35 @@ impl SdrRemoteApp {
                 // same as radio 1.
                 if self.yaesu2_ptt_toggle_mode {
                     if response.clicked() {
-                        self.yaesu2_mouse_ptt = !self.yaesu2_mouse_ptt;
+                        // A latching press switches the transmission, not this button.
+                        // Same rule as the phone.
+                        self.yaesu_latches[1] = self.yaesu_latches[1]
+                            .latching_press(
+                                sdr_remote_logic::ptt_intent::PttSource::Mouse,
+                                self.resampled_sources(1),
+                            );
                     }
                 } else {
-                    self.yaesu2_mouse_ptt = ui.input(|i| {
+                    let down = ui.input(|i| {
                         i.pointer.primary_down()
                             && response.rect.contains(i.pointer.interact_pos().unwrap_or(egui::Pos2::ZERO))
                     });
+                    self.yaesu_latches[1] = self.yaesu_latches[1].hold(
+                        sdr_remote_logic::ptt_intent::PttSource::Mouse,
+                        down,
+                        self.resampled_sources(1),
+                    );
                 }
-                let space_held = ui.input(|i| i.key_down(egui::Key::Space));
-                let want_tx = (self.yaesu2_mouse_ptt || space_held) && !ptt_locked;
-                if want_tx != self.yaesu2_ptt_last_sent {
-                    self.yaesu2_ptt_last_sent = want_tx;
-                    self.apply_ptt_spike_protection(true, want_tx);
-                    let _ = self.cmd_tx.send(Command::SetYaesu2Ptt(want_tx));
-                }
+                // A hold control takes over from a latch on its rising edge -
+                // see Latches::hold. Grabbing the spacebar while the MIDI or the
+                // button is latched on leaves the spacebar holding it, and
+                // letting go stops it.
+                let space_down = ui.input(|i| i.key_down(egui::Key::Space));
+                self.yaesu_latches[1] = self.yaesu_latches[1].hold(
+                    sdr_remote_logic::ptt_intent::PttSource::Space,
+                    space_down,
+                    self.resampled_sources(1),
+                );
                 ui.separator();
                 // Same audio switch as on the main screen (see slot 0).
                 if Self::render_window_audio_toggle(

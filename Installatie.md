@@ -1,10 +1,10 @@
-﻿# ThetisLink v2.10.0 - Installatiehandleiding
+﻿# ThetisLink v2.11.0 - Installatiehandleiding
 
-ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket.
+ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket. Welke radio Thetis bedient, is de radio die je bedient - zie de compatibiliteit hieronder.
 
 **Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt — zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A / FTX-1 als tweede radio (via COM-poort).
 
-**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.10.0 werkt prima met stock Thetis v2.10.3.15 via TCI alleen — er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-extensiegedrag van stock v2.10.3.15 behouden (let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata). Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
+**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.11.0 werkt prima met stock Thetis v2.10.3.15 via TCI alleen — er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-extensiegedrag van stock v2.10.3.15 behouden (let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata). Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
 
 **Disclaimer:** Deze software bestuurt radiozenders. Gebruik op eigen risico. De auteur is niet verantwoordelijk voor schade aan apparatuur, storing of overtredingen van regelgeving als gevolg van het gebruik van deze software. Controleer alle veiligheidsfuncties (PTT timeout, vermogensgrenzen) voor het zenden.
 
@@ -16,7 +16,7 @@ ThetisLink is een remote bediening voor de ANAN 7000DLE SDR met Thetis. Audio, s
 |---------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - draait op de PC naast Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.10.0.apk | ThetisLink Android Client - telefoon/tablet |
+| ThetisLink-2.11.0.apk | ThetisLink Android Client - telefoon/tablet |
 | Installatie.md | Deze handleiding (Nederlands) |
 | User-Manual.md | Gebruikershandleiding (Nederlands) |
 | Technische-Referentie.md | Technische referentie (Nederlands) |
@@ -93,7 +93,7 @@ Geen administrator-rechten nodig voor de ThetisLink Server of ThetisLink Clients
 
 ### 1.0 PA3GHM Thetis fork installeren (aanbevolen)
 
-De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.10.0 werkt het best met Thetis-fork build PA3GHM TL2-4** — die versie levert de wideband-IQ extensie + de modulation-filter fan-out die deze release benut. Eerdere fork-builds werken ook, met steeds minder fork-only features beschikbaar (TL2-3 zonder wideband, TL2-2 zonder rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 blijft de fallback. Installatie:
+De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.11.0 werkt het best met Thetis-fork build PA3GHM TL2-4** — die versie levert de wideband-IQ extensie + de modulation-filter fan-out die deze release benut. Eerdere fork-builds werken ook, met steeds minder fork-only features beschikbaar (TL2-3 zonder wideband, TL2-2 zonder rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 blijft de fallback. Installatie:
 
 1. Installeer eerst de officiele **Thetis v2.10.3.15** via de standaard installer (als je dat nog niet hebt)
 2. Download `Thetis.exe` van de PA3GHM fork — **release tag `TL2-4`** op [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -288,14 +288,14 @@ Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Statu
 ### 4.1 APK installeren
 
 **Via bestandsbeheer:**
-1. Kopieer `ThetisLink-2.10.0.apk` naar je telefoon (USB, e-mail, of cloud)
+1. Kopieer `ThetisLink-2.11.0.apk` naar je telefoon (USB, e-mail, of cloud)
 2. Open het APK-bestand op de telefoon
 3. Sta "Installeren van onbekende bronnen" toe als gevraagd
 4. Installeer
 
 **Via ADB** (met USB-debugging ingeschakeld):
 ```
-adb install ThetisLink-2.10.0.apk
+adb install ThetisLink-2.11.0.apk
 ```
 
 ### 4.2 Verbinden — begeleide setup-wizard
@@ -312,7 +312,11 @@ De ThetisLink Android Client detecteert automatisch aangesloten Bluetooth headse
 
 ### 4.4 Bluetooth PTT knop
 
-ThetisLink ondersteunt Bluetooth remote shutter knoppen (bijv. ZL-01) als draadloze PTT. Deze knoppen zijn verkrijgbaar als eenvoudige one-button Bluetooth afstandsbedieningen voor telefoons. Na het koppelen via Android Bluetooth-instellingen wordt de knop automatisch herkend als PTT.
+Er zijn twee soorten, en ze worden verschillend ingesteld.
+
+**Een BLE-zendknop (YPC21 / PTT-Z01 en dezelfde klasse), aanbevolen.** Koppel deze **niet** in de Bluetooth-instellingen van Android - ThetisLink maakt de verbinding zelf. Open in de app **Instellingen > BT-zendknop**, tik op **Knop kiezen**, en druk de knop een keer in om hem wakker te maken zodat hij in de lijst verschijnt. Daarna verbindt de app uit zichzelf opnieuw, ook nadat de knop buiten bereik is geweest of de Bluetooth van de telefoon uit heeft gestaan. Omdat ThetisLink de verbinding zelf vasthoudt en niet het aanraaksysteem, werkt de knop ook met het scherm op slot, en raakt hij buiten bereik dan wordt de zender losgelaten in plaats van aan gelaten. Vereist Android 12 of nieuwer.
+
+**Een shutter-knop (bijv. ZL-01).** Die meldt zich bij Android als een externe een-knops aanraakapparaat. Koppel hem in de Bluetooth-instellingen van Android; ThetisLink herkent de druk dan als PTT. Deze soort werkt alleen met een wakker scherm - Android levert aanraak-events alleen af aan een scherm dat aan staat.
 
 ---
 
@@ -393,7 +397,7 @@ In de ThetisLink Client gebruik je dan je **publieke IP-adres** als ThetisLink S
 
 Port forwarding werkt alleen als je een eigen publiek IP-adres hebt en je router kunt aanpassen. Heb je **CGNAT** (veel glasvezel- en 4G/5G-providers geven geen publiek IP) of geen toegang tot de router, gebruik dan de **relay**. Zowel de server (station) als de client verbinden dan **uitgaand** met een relay-server op een VPS — er hoeft niets ingekomen doorgestuurd te worden. Zie de gebruikershandleiding, sectie [Internet-remote via relay], voor de werking; hieronder de setup-stappen.
 
-> **De relay proberen zonder zelf te hosten?** Voor de eerste gebruikers die de relay willen uitproberen kan PA3GHM je — op verzoek en zolang er plek is — tijdelijk toevoegen aan een testrelay. Let op: dit is een **tijdelijke server met een beperkt aantal plekken**, dus zonder garantie op beschikbaarheid of continuïteit. Vraag het aan PA3GHM via **pa3ghm@gmail.com** of [QRZ.com](https://www.qrz.com/db/PA3GHM) — een nee is een geldig antwoord. Wil je hem zelf hosten, volg dan de stappen hieronder.
+> **De relay proberen zonder zelf te hosten?** Voor de eerste gebruikers die de relay willen uitproberen kan PA3GHM je — op verzoek en zolang er plek is — tijdelijk toevoegen aan een testrelay. Let op: dit is een **tijdelijke server met een beperkt aantal plekken**, dus zonder garantie op beschikbaarheid of continuïteit. Vraag het aan PA3GHM via **pa3ghm@gmail.com** of [QRZ.com](https://www.qrz.com/db/PA3GHM) — een nee is een geldig antwoord, en PA3GHM mag ook besluiten ermee te stoppen. Wil je hem zelf hosten, volg dan de stappen hieronder.
 
 **A. Relay hosten (eenmalig, op een VPS)**
 
@@ -492,15 +496,63 @@ Leg een snelkoppeling naar `ThetisLink-Server.exe` in de Startup map:
 Win+R -> shell:startup -> plak snelkoppeling
 ```
 
-### Remote reboot via ThetisLink
+### Remote reboot en shutdown via ThetisLink
 
-De ThetisLink Client kan de ThetisLink Server PC herstarten via de reboot-knop. Dit vereist een Windows Scheduled Task:
+In de Server-tab van de client zit de knop **Remote Reboot / Shutdown**. Beide keuzes werken op de **Windows-PC waarop de ThetisLink Server draait** - niet op de ThetisLink Server zelf en niet op Thetis. De machine gaat echt uit of opnieuw aan, en de verbinding valt weg.
+
+**Afsluiten werkt meteen, herstarten vraagt eenmalig voorbereiding.** Afsluiten voert de server rechtstreeks uit. Herstarten loopt via een Windows-taak die je zelf moet aanmaken. Bestaat die taak niet, dan gebeurt er bij een druk op **herstart** *niets zichtbaars*: er komt geen foutmelding en de client blijft gewoon verbonden.
+
+#### De taak eenmalig aanmaken
+
+Open PowerShell **als Administrator** - zonder verhoogde rechten mislukt `/ru SYSTEM` met "Access is denied":
 
 ```powershell
 schtasks /create /tn "ThetisLinkReboot" /tr "shutdown /r /t 5 /f" /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f
 ```
 
-Deze task wordt eenmalig aangemaakt. De ThetisLink Server voert `schtasks /run /tn ThetisLinkReboot` uit bij een remote reboot verzoek.
+| Vlag | Betekenis |
+|------|-----------|
+| `/tn "ThetisLinkReboot"` | De naam waarop de server zoekt. Exact zo schrijven, anders vindt hij de taak niet. |
+| `/tr "shutdown /r /t 5 /f"` | Wat de taak doet: herstarten, na 5 seconden, geforceerd. |
+| `/sc once /st 00:00` | Eenmalig schema. De taak loopt nooit uit zichzelf - hij wordt alleen door de server gestart. |
+| `/ru SYSTEM` | Draait als SYSTEM, dus ook wanneer er niemand is ingelogd. |
+| `/rl HIGHEST` | Hoogste rechten; nodig om te mogen herstarten. |
+| `/f` | Overschrijft een bestaande taak met dezelfde naam zonder te vragen. |
+
+#### Controleren dat de taak er staat
+
+```powershell
+schtasks /query /tn "ThetisLinkReboot"
+```
+
+Krijg je hier `ERROR: The system cannot find the file specified`, dan bestaat de taak niet en doet de herstart-knop niets.
+
+Testen zonder de client - let op, hierna start de PC over 5 seconden werkelijk opnieuw op:
+
+```powershell
+schtasks /run /tn "ThetisLinkReboot"
+```
+
+Bedenk je je: `shutdown /a` binnen die vijf seconden breekt het af.
+
+#### Wat het serverlog laat zien
+
+Bij een herstart-verzoek schrijft de server twee regels:
+
+```
+Client requested remote reboot
+schtasks exit=... stdout=... stderr=...
+```
+
+Exit-code 0 met een SUCCESS-melding betekent dat de taak is gestart. Noemt `stderr` dat het bestand niet gevonden kan worden, dan ontbreekt de taak of staat hij onder een andere naam.
+
+#### De taak weghalen
+
+```powershell
+schtasks /delete /tn "ThetisLinkReboot" /f
+```
+
+Daarna werkt alleen afsluiten nog.
 
 ### SSH toegang (voor bestandsbeheer via WinSCP)
 

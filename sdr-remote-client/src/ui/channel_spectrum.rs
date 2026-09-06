@@ -179,7 +179,7 @@ impl ChannelSpectrum {
     }
 
     /// Channel disabled / high-res off: clear bins so render shows the
-    /// "(spectrum nog niet ontvangen)" placeholder and the s-meter falls
+    /// "(spectrum not received yet)" placeholder and the s-meter falls
     /// to NoData.
     pub(crate) fn clear(&mut self) {
         self.bins.clear();

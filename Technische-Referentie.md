@@ -1,12 +1,12 @@
-# ThetisLink v2.8.0 — Technische Documentatie
+# ThetisLink v2.11.0 — Technische Referentie
 
 ## 1. Overzicht
 
-ThetisLink is een systeem voor het op afstand bedienen van een ANAN 7000DLE + Thetis SDR-ontvanger en maximaal twee Yaesu transceivers (FT-991A / FTX-1) via een netwerkverbinding. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
+ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger - welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken - en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
 
-**Versie:** v2.8.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.11.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
-**Doelplatform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
+**Doelplatform:** Windows 10/11 en Android 8+ (arm64); macOS (Intel/Apple Silicon) vanaf broncode, experimenteel
 **Ontwerpprioriteit:** latency > bandbreedte > features
 
 ### Thetis compatibiliteit
@@ -26,9 +26,26 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.10.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.11.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.11.0 hoogtepunten
+
+**Een microfoon kan meerdere zenders bereiken, en een losgeraakte kabel laat geen
+draaggolf meer achter.** Compatibel met v2.10.x - wire `VERSION` blijft ongewijzigd en
+`PttDenied` houdt zijn vier bytes. Twee reservebits in de vlaggenbyte dragen nu **welke**
+zender een weigering betreft (0 = niet gezegd, 1 = Thetis, 2 = radio 1, 3 = radio 2); nul is
+wat elke oudere server stuurt, en de client valt dan terug op zijn oude aanname dat het over
+alles gaat waar hij om vraagt. Eigendom van een zender is **per zender** geworden, dus het
+bezet-teken en een weigering raken alleen die ene. De PTT-wens van de operator loopt op beide
+platforms door een gedeelde regel (`ptt_intent`) met benoemde uitgangen, in plaats van per
+bediening een eigen idee. Nieuw aan serverkant: verliest een radio zijn seriele poort terwijl
+ThetisLink hem gekeyed had, dan wordt de zender bij het heropenen alsnog losgelaten, en blijft
+de poort weg tot voorbij de TX-time-out van de radio, dan laat de server hem los zonder dat er
+iets te sturen valt. Beide melden dat aan de client via dezelfde `auto_release`-teller. Staat
+de time-out van de radio op nul, dan bestaat die tweede weg niet - dat is geen aanname maar de
+afwezigheid van een rem.
 
 ### v2.10.0 hoogtepunten
 
@@ -191,7 +208,8 @@ De v2.0.0 release is een grote stap ten opzichte van de v0.x-lijn. Belangrijkste
 - **Filter preset tracking** (fork) — F1..VAR2/NONE labels worden van Thetis teruggelezen en zijn zichtbaar in de client.
 - **Diversity live circle broadcast** (fork) — real-time fase/gain updates tijdens Smart/Ultra auto-null sweep. Zie §22.
 - **Android EQ auto-switch** — mic-profiel en BT-headset-profiel wisselen automatisch op basis van het geselecteerde output device.
-- **ZL-01 BT remote PTT** — ondersteund als PTT-input op Android.
+- **BLE-zendknop (YPC21 / PTT-Z01-klasse)** — GATT-verbinding die de app zelf vasthoudt: scannen, verbinden, service discovery en opnieuw verbinden, zonder koppelen in Android. Verwerkt knoppen die een druk op twee kenmerken tegelijk melden. Overleeft een vergrendeld scherm; buiten bereik wordt de zender losgelaten. Android 12+.
+- **ZL-01 BT remote PTT** — ondersteund als PTT-input op Android; meldt zich als externe touch-device en heeft dus een wakker scherm nodig.
 - **TX meter SWR kleur-coded** — groen &lt;1:2, oranje 1:2..1:3, rood &gt;1:3.
 - **DX cluster click-to-tune** — 15 px snap op het spectrum.
 - **CW keyer + macros + stop** — keyer met macro-knoppen en een directe stop-knop.
@@ -493,7 +511,7 @@ Elk packet begint met dezelfde header:
 | 0 | 1 | Magic | `0xAA` |
 | 1 | 1 | Version | `3` (opgehoogd 1→2 in v2.0.0, 2→3 in v2.0.3; client en server moeten dezelfde wire-VERSION delen) |
 | 2 | 1 | PacketType | Zie onder |
-| 3 | 1 | Flags | Bit 0 = PTT actief; bit 1 = `AUDIO_WIDEBAND` (16 kHz Opus-payload) |
+| 3 | 1 | Flags | Bit 0 = PTT actief; bit 1 = `AUDIO_WIDEBAND` (16 kHz Opus-payload); bit 2 = `HELD_BY_OTHER`; bit 3 = `SERVER_RELEASED`; bits 4-5 = over welke zender een `PttDenied` gaat; bits 6-7 vrij |
 
 ### Packet Types
 
@@ -714,7 +732,29 @@ Nette afmelding. Alleen de header, geen payload.
 
 #### PttDenied Packet (0x06) — 4 bytes
 
-Server -> client. Verstuurd wanneer een client PTT aanvraagt terwijl een andere client de TX lock bezit.
+Server -> client, alleen een header: één weigering, over één zender. Zowel de
+reden als de zender zitten in de vlaggenbyte.
+
+- **Bit 3, `SERVER_RELEASED` — waarom.** Uit: een andere client bezit deze
+  zender. Aan: de server heeft hem zelf losgelaten, omdat de radio stopte of
+  omdat zijn TX-time-out bijna afliep. De client moet die twee uit elkaar
+  houden. In het eerste geval mag een vastgehouden knop blijven vragen, want
+  hij komt aan de beurt; in het tweede moet hij eerst worden losgelaten, anders
+  loopt hij regelrecht dezelfde time-out weer in.
+- **Bits 4-5 — welke zender.** 0 = niet gezegd, 1 = Thetis, 2 = radio 1,
+  3 = radio 2. Een server van voor deze uitbreiding stuurt nullen; de client
+  valt dan terug op de aanname dat de weigering gaat over alles waar hij op dat
+  moment om vraagt - wat hij daarvoor ook deed. Die terugval klopt precies met
+  één zender in de lucht en is te breed met meer, en dat is waar deze bits voor
+  zijn.
+
+Het pakket blijft vier bytes en de protocolversie verandert niet, dus een peer
+aan welke kant dan ook die deze bits niet kent merkt er niets van: onbekende
+vlaggenbits worden genegeerd en de versiebyte wordt exact vergeleken.
+
+Thetis-weigeringen worden afgeknepen tot één per seconde per client zolang het
+verzoek blijft binnenkomen. Thetis-PTT rijdt mee op de audiopakketten, dus elke
+geweigerde beantwoorden is er vijftig per seconde.
 
 #### Frequency Packet (0x07) — 12 bytes
 
@@ -1897,7 +1937,7 @@ Zonder IQ data genereert de server gesimuleerde spectrum:
 
 ### Overzicht
 
-ThetisLink biedt volledige ondersteuning voor de tweede ontvanger (RX2) van de ANAN 7000DLE. Dit omvat onafhankelijke audio, spectrum/waterfall, en alle bedieningselementen.
+ThetisLink biedt volledige ondersteuning voor de tweede ontvanger (RX2), op een radio die er een heeft. Dit omvat onafhankelijke audio, spectrum/waterfall, en alle bedieningselementen.
 
 ### Audio
 

@@ -409,6 +409,10 @@ pub struct NetworkService {
     vfo_freq_shared: Option<Arc<AtomicU64>>,
     vfo_b_freq_shared: Option<Arc<AtomicU64>>,
     yaesu_ptt_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Slot 1's counterpart. "The server keyed this radio" - the one thing that
+    /// separates our transmission from an operator standing at the front panel,
+    /// and the reason the orphan watch can never take his away (see tx_orphan).
+    yaesu2_ptt_flag: Arc<std::sync::atomic::AtomicBool>,
     yaesu: Option<Arc<crate::yaesu::YaesuRadio>>,
     /// Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime). Own
     /// independent broadcast/audio/control chain; None = slot 1 off.
@@ -602,6 +606,7 @@ impl NetworkService {
             vfo_freq_shared,
             vfo_b_freq_shared,
             yaesu_ptt_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            yaesu2_ptt_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             yaesu,
             yaesu2,
             audio_stats,
@@ -792,6 +797,7 @@ impl NetworkService {
         // Spawn Yaesu state broadcast task (separate from Thetis broadcast)
         let _yaesu_state_handle = {
             let yaesu = yaesu.clone();
+            let ptt_flag = self.yaesu_ptt_flag.clone();
             let socket = self.socket.clone();
             let session = self.session.clone();
             let mut shutdown = self.shutdown.clone();
@@ -819,6 +825,9 @@ impl NetworkService {
                     // the last one leaves. In per-PTT mode the SetPtt handler does this.
                     let mut ssb_applied0 = false;
                     let mut absent_ticks0: u32 = 0;
+                    let mut orphan0 = crate::tx_orphan::OrphanWatch::default();
+                    // Last `auto_release` seen from the poller - see the use below.
+                    let mut last_auto_release0: u32 = 0;
                     let mut last_conn_gen0: u64 = 0;
                     // Why the blob tick-list was last cleared, so the log names the real
                     // cause instead of always blaming the safety net.
@@ -858,10 +867,73 @@ impl NetworkService {
                                 }
                                 // Audio subscribers (for SSB-USB routing/TX) and state
                                 // subscribers (window-open OR audio) separately, under one lock.
-                                let (audio_addrs, addrs) = {
+                                let (audio_addrs, addrs, tx_holder) = {
                                     let s = session.lock().await;
-                                    (s.yaesu_addrs(), s.yaesu_state_addrs())
+                                    (
+                                        s.yaesu_addrs(),
+                                        s.yaesu_state_addrs(),
+                                        s.tx_holder(crate::session::TxTarget::Yaesu1),
+                                    )
                                 };
+                                // The owner is gone but the radio is still keyed.
+                                // Nothing else would end this: a Yaesu's PTT is a
+                                // command, not a stream that dries up, so it would
+                                // transmit until its own time-out timer expires -
+                                // and on a 991A that timer is often off. Thetis has
+                                // its own dead-man switch; this is the Yaesu's.
+                                // The server let go of this radio itself.
+                                //
+                                // Unkeying it is half the job. Without this the
+                                // session still has the client down as the holder
+                                // and the client still believes it transmits, so it
+                                // keeps sending TX audio at a radio that is off and
+                                // its button stays red - the complaint from
+                                // 2026-08-07, which survived five attempts at fixing
+                                // it on the client side (2026-09-05).
+                                //
+                                // A counter and not a flag: two of these between
+                                // ticks must not collapse into one, and one must not
+                                // be seen twice.
+                                if let Some(ref y) = yaesu {
+                                    let seen = y.status().auto_release;
+                                    if seen != last_auto_release0 {
+                                        last_auto_release0 = seen;
+                                        if let Some(holder) = tx_holder {
+                                            session
+                                                .lock()
+                                                .await
+                                                .release_tx(crate::session::TxTarget::Yaesu1, holder);
+                                            let mut buf = [0u8; PttDeniedPacket::SIZE];
+                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio1, true);
+                                            let sent = socket.try_send_to(&buf, holder);
+                                            // Whether it actually went out, not just
+                                            // that we tried. `try_send_to` returns a
+                                            // Result and it was being discarded, so a
+                                            // refusal from the socket looked exactly
+                                            // like a delivery.
+                                            info!(
+                                                concat!(
+                                                    "Yaesu radio 0 released by the server ",
+                                                    "(time-out timer or the radio stopping) - told {} ({})",
+                                                ),
+                                                holder,
+                                                match sent {
+                                                    Ok(n) => format!("{n} bytes sent"),
+                                                    Err(e) => format!("SEND FAILED: {e}"),
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                                if orphan0.observe(ptt_flag.load(Ordering::Relaxed), tx_holder.is_some()) {
+                                    if let Some(ref y) = yaesu {
+                                        log::error!(
+                                            "SAFETY: Yaesu radio 0 still keyed with no client holding it - releasing PTT"
+                                        );
+                                        y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
+                                    }
+                                    ptt_flag.store(false, Ordering::Relaxed);
+                                }
                                 if let Some(ref y) = yaesu {
                                     if !y.status().ssb_switch_on_ptt {
                                         if !audio_addrs.is_empty() {
@@ -884,6 +956,12 @@ impl NetworkService {
                                 if let Some(ref y) = yaesu {
                                     let ys = y.status();
                                     let pkt = YaesuStatePacket {
+                                        // False in the shared copy; a second copy with it
+                                        // set goes to everyone who is not holding this
+                                        // radio. The holder must never be told its own
+                                        // transmission belongs to somebody else - that is
+                                        // the false flash this field exists to end.
+                                        held_by_other: false,
                                         freq_a: ys.vfo_a_freq,
                                         freq_b: ys.vfo_b_freq,
                                         mode: ys.mode,
@@ -905,8 +983,20 @@ impl NetworkService {
                                     };
                                     let mut buf = [0u8; YaesuStatePacket::SIZE];
                                     pkt.serialize(&mut buf);
+                                    // Same numbers, one flag apart. Taken from the
+                                    // ownership table rather than the radio, so it turns
+                                    // over when the lock changes hands instead of when
+                                    // the radio stops - which is what removes the flash.
+                                    let held_buf = tx_holder.map(|_| {
+                                        let mut b = [0u8; YaesuStatePacket::SIZE];
+                                        YaesuStatePacket { held_by_other: true, ..pkt }.serialize(&mut b);
+                                        b
+                                    });
                                     for addr in &addrs {
-                                        let _ = socket.try_send_to(&buf, *addr);
+                                        match &held_buf {
+                                            Some(b) if tx_holder != Some(*addr) => { let _ = socket.try_send_to(b, *addr); }
+                                            _ => { let _ = socket.try_send_to(&buf, *addr); }
+                                        }
                                     }
                                     // Feature-state (toggles + levels): value-change-only push
                                     // + initial push to fresh subscribers (sent-set). Mark an
@@ -987,6 +1077,7 @@ impl NetworkService {
         // YaesuState2 / YaesuMemoryData2 to yaesu2_addrs (subscription-gated).
         let _yaesu2_state_handle = {
             let yaesu2 = yaesu2.clone();
+            let ptt_flag = self.yaesu2_ptt_flag.clone();
             let socket = self.socket.clone();
             let session = self.session.clone();
             let mut shutdown = self.shutdown.clone();
@@ -1006,6 +1097,8 @@ impl NetworkService {
                     // Presence-based SSB routing (opt-out mode) for radio 2 (FTX-1).
                     let mut ssb_applied1 = false;
                     let mut absent_ticks1: u32 = 0;
+                    let mut orphan1 = crate::tx_orphan::OrphanWatch::default();
+                    let mut last_auto_release1: u32 = 0;
                     let mut last_conn_gen1: u64 = 0;
                     // Why the blob tick-list was last cleared, so the log names the real
                     // cause instead of always blaming the safety net.
@@ -1043,10 +1136,68 @@ impl NetworkService {
                                         blob_reason1 = "a client joined";
                                     }
                                 }
-                                let (audio_addrs, addrs) = {
+                                let (audio_addrs, addrs, tx_holder) = {
                                     let s = session.lock().await;
-                                    (s.yaesu2_addrs(), s.yaesu2_state_addrs())
+                                    (
+                                        s.yaesu2_addrs(),
+                                        s.yaesu2_state_addrs(),
+                                        s.tx_holder(crate::session::TxTarget::Yaesu2),
+                                    )
                                 };
+                                // The owner is gone but the radio is still keyed.
+                                // Nothing else would end this: a Yaesu's PTT is a
+                                // command, not a stream that dries up, so it would
+                                // transmit until its own time-out timer expires -
+                                // and on a 991A that timer is often off. Thetis has
+                                // its own dead-man switch; this is the Yaesu's.
+                                // The server let go of this radio itself.
+                                //
+                                // Unkeying it is half the job. Without this the
+                                // session still has the client down as the holder
+                                // and the client still believes it transmits, so it
+                                // keeps sending TX audio at a radio that is off and
+                                // its button stays red - the complaint from
+                                // 2026-08-07, which survived five attempts at fixing
+                                // it on the client side (2026-09-05).
+                                //
+                                // A counter and not a flag: two of these between
+                                // ticks must not collapse into one, and one must not
+                                // be seen twice.
+                                if let Some(ref y) = yaesu2 {
+                                    let seen = y.status().auto_release;
+                                    if seen != last_auto_release1 {
+                                        last_auto_release1 = seen;
+                                        if let Some(holder) = tx_holder {
+                                            session
+                                                .lock()
+                                                .await
+                                                .release_tx(crate::session::TxTarget::Yaesu2, holder);
+                                            let mut buf = [0u8; PttDeniedPacket::SIZE];
+                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio2, true);
+                                            let sent = socket.try_send_to(&buf, holder);
+                                            info!(
+                                                concat!(
+                                                    "Yaesu radio 1 released by the server ",
+                                                    "(time-out timer or the radio stopping) - told {} ({})",
+                                                ),
+                                                holder,
+                                                match sent {
+                                                    Ok(n) => format!("{n} bytes sent"),
+                                                    Err(e) => format!("SEND FAILED: {e}"),
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                                if orphan1.observe(ptt_flag.load(Ordering::Relaxed), tx_holder.is_some()) {
+                                    if let Some(ref y) = yaesu2 {
+                                        log::error!(
+                                            "SAFETY: Yaesu radio 1 still keyed with no client holding it - releasing PTT"
+                                        );
+                                        y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
+                                    }
+                                    ptt_flag.store(false, Ordering::Relaxed);
+                                }
                                 if let Some(ref y) = yaesu2 {
                                     if !y.status().ssb_switch_on_ptt {
                                         if !audio_addrs.is_empty() {
@@ -1068,6 +1219,12 @@ impl NetworkService {
                                 if let Some(ref y) = yaesu2 {
                                     let ys = y.status();
                                     let pkt = YaesuStatePacket {
+                                        // False in the shared copy; a second copy with it
+                                        // set goes to everyone who is not holding this
+                                        // radio. The holder must never be told its own
+                                        // transmission belongs to somebody else - that is
+                                        // the false flash this field exists to end.
+                                        held_by_other: false,
                                         freq_a: ys.vfo_a_freq,
                                         freq_b: ys.vfo_b_freq,
                                         mode: ys.mode,
@@ -1089,8 +1246,18 @@ impl NetworkService {
                                     };
                                     let mut buf = [0u8; YaesuStatePacket::SIZE];
                                     pkt.serialize_as_type(&mut buf, PacketType::YaesuState2);
+                                    // Mirror of slot 0 above.
+                                    let held_buf = tx_holder.map(|_| {
+                                        let mut b = [0u8; YaesuStatePacket::SIZE];
+                                        YaesuStatePacket { held_by_other: true, ..pkt }
+                                            .serialize_as_type(&mut b, PacketType::YaesuState2);
+                                        b
+                                    });
                                     for addr in &addrs {
-                                        let _ = socket.try_send_to(&buf, *addr);
+                                        match &held_buf {
+                                            Some(b) if tx_holder != Some(*addr) => { let _ = socket.try_send_to(b, *addr); }
+                                            _ => { let _ = socket.try_send_to(&buf, *addr); }
+                                        }
                                     }
                                     // Feature-state (toggles + levels): value-change-only + initial
                                     // push to fresh subscribers (sent-set), slot 1. See slot 0.
@@ -2456,9 +2623,42 @@ impl NetworkService {
                                 SmeterPacket { level: smeter_sig, flags }.serialize_as_type(&mut buf_sig, PacketType::SmeterSig);
                                 let mut buf_pkb = [0u8; SmeterPacket::SIZE];
                                 SmeterPacket { level: smeter_peakbin, flags }.serialize_as_type(&mut buf_pkb, PacketType::SmeterMaxBin);
+
                                 let sess = session.lock().await;
+                                // The same three packets with HELD_BY_OTHER set, for
+                                // every client that is not holding Thetis.
+                                //
+                                // "Somebody else is transmitting" is news for the other
+                                // operators; the one doing it already knows. It used to
+                                // be worked out per client from the PTT bit, which does
+                                // not say who - right except for one packet after
+                                // release, and in that packet the operator was told his
+                                // own carrier belonged to a stranger.
+                                //
+                                // Taken from the ownership table rather than from is_tx,
+                                // so it turns over when the lock changes hands and not
+                                // when the transmitter falls silent.
+                                let thetis_holder = sess.tx_holder(crate::session::TxTarget::Thetis);
+                                let held_bufs = thetis_holder.map(|_| {
+                                    let f = Flags(flags.0 | Flags::HELD_BY_OTHER.0);
+                                    let mut a = [0u8; SmeterPacket::SIZE];
+                                    SmeterPacket { level: smeter, flags: f }.serialize(&mut a);
+                                    let mut g = [0u8; SmeterPacket::SIZE];
+                                    SmeterPacket { level: smeter_sig, flags: f }
+                                        .serialize_as_type(&mut g, PacketType::SmeterSig);
+                                    let mut k = [0u8; SmeterPacket::SIZE];
+                                    SmeterPacket { level: smeter_peakbin, flags: f }
+                                        .serialize_as_type(&mut k, PacketType::SmeterMaxBin);
+                                    (a, g, k)
+                                });
                                 for addr in &smeter_addrs {
                                     let mask = sess.smeter_sources(*addr);
+                                    // The holder gets the plain copies; everyone else
+                                    // gets the ones that say the transmitter is taken.
+                                    let (buf_avg, buf_sig, buf_pkb) = match &held_bufs {
+                                        Some((a, g, k)) if thetis_holder != Some(*addr) => (*a, *g, *k),
+                                        _ => (buf_avg, buf_sig, buf_pkb),
+                                    };
                                     if is_tx {
                                         // During TX the `smeter` field carries FWD-power
                                         // (from `fwd_power_raw()` above), not an S-meter
@@ -2683,6 +2883,13 @@ impl NetworkService {
         let mut opus_decoder = sdr_remote_core::codec::OpusDecoderWideband::new()?;
         let mut jitter_buf = JitterBuffer::new(3, 20);
         let mut tx_holder_addr: Option<SocketAddr> = None;
+        // Who has been told their transmit request was refused, and when.
+        //
+        // A named type rather than a bare map, so its lifetime can be tested
+        // and not just the interval - the bookkeeping leaked an entry for every
+        // client that fell silent while the interval test stayed green
+        // (review finding, round 2). The exits live with it.
+        let mut denied = crate::tx_denial::DenialLog::default();
 
         let mut shutdown = self.shutdown.clone();
         let mut playout_tick = interval(Duration::from_millis(20));
@@ -2702,6 +2909,12 @@ impl NetworkService {
         let yaesu_mic_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits())); // Yaesu gain now lives before Opus in the client
         // Slot-1 TX audio (Option B-prime) + memory-write latch (Phase B).
         let mut yaesu2_ptt_active = false;
+        // Frames turned away because the sender did not hold that radio.
+        //
+        // Counted rather than only refused: "two clients on one Yaesu is rare
+        // and nobody reported it" was a feeling, and a feeling cannot be
+        // checked. With a number it can (review finding, part A).
+        let mut yaesu_frames_refused: u64 = 0;
         let yaesu2_mic_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
         let mut yaesu2_write_pending: Option<String> = None;
         let mut yaesu2_write_armed = false;
@@ -3039,17 +3252,34 @@ impl NetworkService {
                         Packet::Audio(audio_pkt) => {
                             // Thetis-only audio path - Yaesu TX handled via AudioYaesu packets
                             let ptt_requested = audio_pkt.flags.ptt();
+                            if !ptt_requested {
+                                // Not asking any more, so this attempt is over and
+                                // the next refusal counts as a first one again.
+                                denied.attempt_over(&addr);
+                            }
                             let mut session = self.session.lock().await;
 
                             if ptt_requested {
-                                if !session.try_acquire_tx(addr) {
+                                if !session.try_acquire_tx(crate::session::TxTarget::Thetis, addr) {
                                     drop(session);
-                                    let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                    PttDeniedPacket::serialize(&mut buf);
-                                    let _ = self.socket.send_to(&buf, addr).await;
+                                    let first = denied.is_first(&addr);
+                                    let now_ms = self.server_start.elapsed().as_millis() as u64;
+                                    if denied.should_send(addr, now_ms) {
+                                        if first {
+                                            info!(
+                                                "Client {} asked for Thetis TX while another client holds it - refused",
+                                                addr
+                                            );
+                                        }
+                                        let mut buf = [0u8; PttDeniedPacket::SIZE];
+                                        PttDeniedPacket::serialize(&mut buf, DeniedTarget::Thetis, false);
+                                        let _ = self.socket.send_to(&buf, addr).await;
+                                    }
                                     continue;
                                 }
                                 drop(session);
+                                // Granted: this attempt is over as far as refusals go.
+                                denied.attempt_over(&addr);
 
                                 if tx_holder_addr != Some(addr) {
                                     info!("New TX holder {}, resetting jitter buffer and decoder", addr);
@@ -3072,7 +3302,7 @@ impl NetworkService {
                                     },
                                     arrival_ms,
                                 );
-                            } else if session.tx_holder() == Some(addr) {
+                            } else if session.tx_holder(crate::session::TxTarget::Thetis) == Some(addr) {
                                 // This client held TX - push non-PTT frame so tail
                                 // audio plays out, then release will trigger from playout
                                 drop(session);
@@ -3488,7 +3718,7 @@ impl NetworkService {
                                 }
                             }
                         }
-                        Packet::HeartbeatAck(_) | Packet::PttDenied => {}
+                        Packet::HeartbeatAck(_) | Packet::PttDenied { .. } => {}
                         // RX2 packets: client -> server (frequency, mode set)
                         Packet::FrequencyRx2(freq_pkt) => {
                             let mut ptt = self.ptt.lock().await;
@@ -3556,7 +3786,32 @@ impl NetworkService {
                         }
                         // Yaesu TX audio: forward to separate decode task
                         Packet::AudioYaesu(pkt) => {
+                            // Only from the client that holds this radio. Without
+                            // this, every client's frames went in while the PTT
+                            // flag was up and interleaved in one Opus decoder -
+                            // the server sending two audio channels into one
+                            // radio, which is the one thing it must never do.
+                            // Ownership is checked inside the same condition the
+                            // forwarding already had. Outside it, an idle client's
+                            // frames - which were silently dropped before - would
+                            // count as refusals and fill the counter with ordinary
+                            // traffic, which is the opposite of what it is for.
                             if yaesu_ptt_active && !pkt.opus_data.is_empty() {
+                                let mine = self
+                                    .session
+                                    .lock()
+                                    .await
+                                    .accepts(crate::session::TxTarget::Yaesu1, addr);
+                                if !mine {
+                                    yaesu_frames_refused += 1;
+                                    if yaesu_frames_refused == 1 || yaesu_frames_refused % 100 == 0 {
+                                        warn!(
+                                            "Yaesu TX audio from {} refused - it does not hold that radio ({} frame(s) so far)",
+                                            addr, yaesu_frames_refused
+                                        );
+                                    }
+                                    continue;
+                                }
                                 if let Some(ref tx) = yaesu_tx_packet_tx {
                                     // Only tick on successful enqueue - dropped
                                     // frames (channel full) didn't reach Yaesu.
@@ -3589,7 +3844,27 @@ impl NetworkService {
                         Packet::AudioMultiCh(_) => {} // server->client only, ignore
                         // Dual-radio slot 1 (Option B-prime) - mirror of AudioYaesu/FrequencyYaesu.
                         Packet::AudioYaesu2(pkt) => {
+                            // Ownership is checked inside the same condition the
+                            // forwarding already had. Outside it, an idle client's
+                            // frames - which were silently dropped before - would
+                            // count as refusals and fill the counter with ordinary
+                            // traffic, which is the opposite of what it is for.
                             if yaesu2_ptt_active && !pkt.opus_data.is_empty() {
+                                let mine = self
+                                    .session
+                                    .lock()
+                                    .await
+                                    .accepts(crate::session::TxTarget::Yaesu2, addr);
+                                if !mine {
+                                    yaesu_frames_refused += 1;
+                                    if yaesu_frames_refused == 1 || yaesu_frames_refused % 100 == 0 {
+                                        warn!(
+                                            "Yaesu2 TX audio from {} refused - it does not hold that radio ({} frame(s) so far)",
+                                            addr, yaesu_frames_refused
+                                        );
+                                    }
+                                    continue;
+                                }
                                 if let Some(ref tx) = yaesu2_tx_packet_tx {
                                     if tx.try_send(pkt.opus_data).is_ok() {
                                         self.audio_stats.yaesu_tx.tick(self.server_start);
@@ -3645,6 +3920,7 @@ impl NetworkService {
                         }
                         Packet::Disconnect => {
                             info!("Client {} disconnected", addr);
+                            denied.attempt_over(&addr);
                             self.session.lock().await.remove(addr);
                             // TL2-1 ctun-auto-recenter: recompute effective_zoom +
                             // strictest-tick after disconnect - the last unchecked client may
@@ -3682,7 +3958,11 @@ impl NetworkService {
                                     if ctrl.value == 2 {
                                         // Shutdown Thetis via TCI (v2.10.3.13+)
                                         ctrl_log!(opening, "Client {} requested Thetis shutdown", addr);
-                                        ptt.send_cat("shutdown_ex;").await;
+                                        // Not send_cat: the controller has to
+                                        // remember it asked, or the next
+                                        // power-on mistakes a closing Thetis
+                                        // for a running one (#67).
+                                        ptt.request_thetis_shutdown().await;
                                     } else {
                                         ptt.set_power(ctrl.value != 0).await;
                                     }
@@ -4213,6 +4493,52 @@ impl NetworkService {
                                 ControlId::YaesuPtt => {
                                     if let Some(ref yaesu) = yaesu {
                                         let on = ctrl.value != 0;
+                                        // Claim on, release on off, and neither
+                                        // reaches the radio without it. Until now
+                                        // this handler knew the sender's address
+                                        // - it logged it - and checked nothing,
+                                        // so any client could key another's radio
+                                        // and switch it off again mid-sentence.
+                                        let allowed = {
+                                            let mut sess = self.session.lock().await;
+                                            if on {
+                                                sess.try_acquire_tx(
+                                                    crate::session::TxTarget::Yaesu1,
+                                                    addr,
+                                                )
+                                            } else {
+                                                let held = sess.accepts(
+                                                    crate::session::TxTarget::Yaesu1,
+                                                    addr,
+                                                );
+                                                sess.release_tx(
+                                                    crate::session::TxTarget::Yaesu1,
+                                                    addr,
+                                                );
+                                                held
+                                            }
+                                        };
+                                        if !allowed {
+                                            ctrl_log!(
+                                                opening,
+                                                "Client {} Yaesu PTT {} refused - another client holds that radio",
+                                                addr,
+                                                if on { "TX" } else { "RX" }
+                                            );
+                                            // Tell the client, or its button stays
+                                            // red over a request that never
+                                            // happened. Part A closed the hole and
+                                            // left the screen lying about it; the
+                                            // owner saw exactly that. Only on a
+                                            // refused claim - a refused release
+                                            // means it was not transmitting anyway.
+                                            if on {
+                                                let mut buf = [0u8; PttDeniedPacket::SIZE];
+                                                PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio1, false);
+                                                let _ = self.socket.send_to(&buf, addr).await;
+                                            }
+                                            continue;
+                                        }
                                         // Auto-DFM (FM <-> DATA-FM) is now fully
                                         // handled in YaesuCmd::SetPtt itself (build 12) -
                                         // single source of truth for the mode toggle, no race
@@ -4581,10 +4907,38 @@ impl NetworkService {
                                     ctrl_log!(opening, "Client {} [radio1]: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
                                 ControlId::Yaesu2Ptt => {
+                                    // Same rule as slot 0; see ControlId::YaesuPtt.
+                                    let on2 = ctrl.value != 0;
+                                    let allowed2 = {
+                                        let mut sess = self.session.lock().await;
+                                        if on2 {
+                                            sess.try_acquire_tx(crate::session::TxTarget::Yaesu2, addr)
+                                        } else {
+                                            let held =
+                                                sess.accepts(crate::session::TxTarget::Yaesu2, addr);
+                                            sess.release_tx(crate::session::TxTarget::Yaesu2, addr);
+                                            held
+                                        }
+                                    };
+                                    if !allowed2 {
+                                        ctrl_log!(
+                                            opening,
+                                            "Client {} Yaesu2 PTT {} refused - another client holds that radio",
+                                            addr,
+                                            if on2 { "TX" } else { "RX" }
+                                        );
+                                        if on2 {
+                                            let mut buf = [0u8; PttDeniedPacket::SIZE];
+                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio2, false);
+                                            let _ = self.socket.send_to(&buf, addr).await;
+                                        }
+                                        continue;
+                                    }
                                     if let Some(ref yaesu) = yaesu2 {
                                         let on = ctrl.value != 0;
                                         yaesu.send_command(crate::yaesu::YaesuCmd::SetPtt(on));
                                         yaesu2_ptt_active = on;
+                                        self.yaesu2_ptt_flag.store(on, Ordering::Relaxed);
                                         ctrl_log!(opening, "Client {} [radio1] PTT: {}", addr, if on { "TX" } else { "RX" });
                                     }
                                 }
@@ -4746,7 +5100,7 @@ impl NetworkService {
                                 ptt.release_from_playout(depth);
                                 drop(ptt);
                                 if let Some(addr) = tx_holder_addr.take() {
-                                    self.session.lock().await.release_tx(addr);
+                                    self.session.lock().await.release_tx(crate::session::TxTarget::Thetis, addr);
                                 }
                             }
 

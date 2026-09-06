@@ -137,7 +137,11 @@ impl ConnectStatus {
 pub struct RadioState {
     // Connection
     pub connected: bool,
-    pub ptt_denied: bool,
+    /// The last refusal from the server, and what is still standing because
+    /// of it. Two loose booleans before; see `ptt_denial` for why one of them
+    /// could be wiped by an unrelated transmitter and why the other could not
+    /// be seen at all by an interface that samples.
+    pub ptt_denial: crate::ptt_denial::PttDenial,
     pub audio_error: bool,
     /// High-level connect-status with optional error detail. Replaces the
     /// older `auth_rejected` / `totp_required` booleans (which are kept
@@ -525,6 +529,11 @@ pub struct RadioState {
     pub yaesu2_mode: u8,
     pub yaesu2_smeter: u16,
     pub yaesu2_tx_active: bool,
+    /// Slot 0 is held by a different client - from the server's ownership
+    /// table, not from the radio. See `held_by_other` in the protocol.
+    pub yaesu_held_by_other: bool,
+    /// Slot 1, same.
+    pub yaesu2_held_by_other: bool,
     pub yaesu2_power_on: bool,
     pub yaesu2_af_gain: u8,
     pub yaesu2_tx_power: u8,
@@ -587,7 +596,7 @@ impl Default for RadioState {
     fn default() -> Self {
         Self {
             connected: false,
-            ptt_denied: false,
+            ptt_denial: crate::ptt_denial::PttDenial::default(),
             audio_error: false,
             connect_status: ConnectStatus::Disconnected,
             rtt_ms: 0,
@@ -837,6 +846,8 @@ impl Default for RadioState {
             yaesu2_mode: 1,
             yaesu2_smeter: 0,
             yaesu2_tx_active: false,
+            yaesu_held_by_other: false,
+            yaesu2_held_by_other: false,
             yaesu2_power_on: false,
             yaesu2_af_gain: 0,
             yaesu2_tx_power: 0,

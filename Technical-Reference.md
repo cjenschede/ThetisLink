@@ -1,12 +1,12 @@
-# ThetisLink v2.8.0 - Technical Reference
+# ThetisLink v2.11.0 - Technical Reference
 
 ## 1. Overview
 
-ThetisLink is a system for remote operation of an ANAN 7000DLE + Thetis SDR receiver and up to two Yaesu transceivers (FT-991A / FTX-1) over a network connection. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
+ThetisLink is a system for remote operation of a Thetis SDR receiver - whatever radio Thetis drives, reached over TCI and never addressed directly - and of up to two Yaesu transceivers (FT-991A / FTX-1) connected straight to the server, over a network connection. What a radio offers is what Thetis offers for it: RX2 and diversity need a second receiver, and the spectrum width follows the sample rate that radio can deliver. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
 
-**Version:** v2.8.0 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.11.0 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
-**Target platform:** Windows 10/11, macOS (Intel/Apple Silicon), Android 8+ (arm64)
+**Target platform:** Windows 10/11 and Android 8+ (arm64); macOS (Intel/Apple Silicon) from source, experimental
 **Design priority:** latency > bandwidth > features
 
 ### Thetis compatibility
@@ -26,9 +26,26 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.10.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.11.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.11.0 highlights
+
+**One microphone can reach more than one transmitter, and a cable that comes loose no
+longer leaves a carrier behind.** Compatible with v2.10.x - wire `VERSION` is unchanged and
+`PttDenied` keeps its four bytes. Two spare bits in the flags byte now carry **which**
+transmitter a refusal is about (0 = not stated, 1 = Thetis, 2 = radio 1, 3 = radio 2); zero is
+what any older server sends, and the client then falls back on its old assumption that a
+refusal covers everything it is asking for. Ownership of a transmitter has become **per
+transmitter**, so the busy marker and a refusal touch that one only. The operator's PTT intent
+runs through one shared rule (`ptt_intent`) on both platforms, with named exits, instead of
+each control having an idea of its own. New on the server side: if a radio loses its serial
+port while ThetisLink had it keyed, the transmitter is released anyway when the port is
+reopened, and if the port stays away past the radio's own TX time-out the server may take it
+that transmission has ended, without anything to send. Both report that to the client through
+the same `auto_release` counter. With the radio's time-out set to zero that second route does
+not exist - that is not an assumption but the absence of a brake.
 
 ### v2.10.0 highlights
 
@@ -191,7 +208,8 @@ The v2.0.0 release is a major step compared to the v0.x line. Key changes:
 - **Filter preset tracking** (fork) — F1..VAR2/NONE labels are read back from Thetis and visible in the client.
 - **Diversity live circle broadcast** (fork) — real-time phase/gain updates during Smart/Ultra auto-null sweep. See §22.
 - **Android EQ auto-switch** — mic profile and BT-headset profile switch automatically based on the selected output device.
-- **ZL-01 BT remote PTT** — supported as PTT input on Android.
+- **BLE transmit button (YPC21 / PTT-Z01 class)** — GATT connection held by the app itself: scan, connect, service discovery and reconnect, no Android pairing. Handles buttons that report one press on two characteristics at once. Survives a locked screen; out of range releases the transmitter. Android 12+.
+- **ZL-01 BT remote PTT** — supported as PTT input on Android; presents as an external touch device, so it needs a wakeful screen.
 - **TX meter SWR colour-coded** — green &lt;1:2, orange 1:2..1:3, red &gt;1:3.
 - **DX cluster click-to-tune** — 15 px snap on the spectrum.
 - **CW keyer + macros + stop** — keyer with macro buttons and an immediate-stop button.
@@ -498,7 +516,7 @@ Every packet starts with the same header:
 | 0 | 1 | Magic | `0xAA` |
 | 1 | 1 | Version | `3` (bumped 1→2 in v2.0.0, 2→3 in v2.0.3; clients and servers must share the same wire VERSION) |
 | 2 | 1 | PacketType | See below |
-| 3 | 1 | Flags | Bit 0 = PTT active; bit 1 = `AUDIO_WIDEBAND` (16 kHz Opus payload) |
+| 3 | 1 | Flags | Bit 0 = PTT active; bit 1 = `AUDIO_WIDEBAND` (16 kHz Opus payload); bit 2 = `HELD_BY_OTHER`; bit 3 = `SERVER_RELEASED`; bits 4-5 = which transmitter a `PttDenied` is about; bits 6-7 spare |
 
 ### Packet Types
 
@@ -719,7 +737,28 @@ Clean disconnect. Header only, no payload.
 
 #### PttDenied Packet (0x06) — 4 bytes
 
-Server -> client. Sent when a client requests PTT while another client holds the TX lock.
+Server -> client, header only: one refusal, about one transmitter. Both the
+reason and the transmitter ride in the flags byte.
+
+- **Bit 3, `SERVER_RELEASED` — why.** Clear: another client holds this
+  transmitter. Set: the server let go of it itself, because the radio stopped
+  or its TX time-out timer was about to fire. The client has to tell the two
+  apart. A held key may keep asking in the first case, because its turn comes;
+  in the second it has to be released first, or it walks straight back into the
+  same time-out.
+- **Bits 4-5 — which transmitter.** 0 = not stated, 1 = Thetis, 2 = radio 1,
+  3 = radio 2. A server from before this existed sends zeroes; the client then
+  falls back to assuming the refusal is about everything it is currently asking
+  for, which is what it did before. That fallback is exact with one transmitter
+  keyed and too broad with more, which is why the bits exist.
+
+The packet keeps its four bytes and the protocol version is unchanged, so a
+peer on either side that does not know these bits is unaffected: unknown flag
+bits are ignored, and the version byte is compared exactly.
+
+Thetis refusals are throttled to one per second per client for as long as the
+request keeps arriving. Thetis PTT rides on the audio packets, so answering
+every refused one is fifty a second.
 
 #### Frequency Packet (0x07) — 12 bytes
 
@@ -1902,7 +1941,7 @@ Without IQ data the server generates simulated spectrum:
 
 ### Overview
 
-ThetisLink provides full support for the second receiver (RX2) of the ANAN 7000DLE. This includes independent audio, spectrum/waterfall, and all controls.
+ThetisLink provides full support for the second receiver (RX2), on a radio that has one. This includes independent audio, spectrum/waterfall, and all controls.
 
 ### Audio
 

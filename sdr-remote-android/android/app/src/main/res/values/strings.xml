@@ -13,6 +13,7 @@
     <!-- Common / shared -->
     <string name="common_connect">Connect</string>
     <string name="common_disconnect">Disconnect</string>
+    <string name="common_exit">Exit</string>
     <string name="common_connected">Connected</string>
     <string name="common_disconnected">Disconnected</string>
     <string name="common_save">Save</string>
@@ -303,4 +304,17 @@
     <string name="settings_roger_hint">A short tone at the end of a transmission. The transmitter stays keyed for its length, so the other station hears it. Never in data or digital modes.</string>
     <string name="settings_roger_volume">Level</string>
     <string name="settings_roger_fm">Also in FM</string>
+    <!-- Bluetooth PTT button (YPC21 and the like). Android 12 and up. -->
+    <string name="settings_ble_ptt">BT PTT button:</string>
+    <string name="settings_ble_ptt_hint">A Bluetooth transmit button, connected directly</string>
+    <string name="settings_ble_ptt_choose">Choose button</string>
+    <string name="settings_ble_ptt_scanning">Looking for buttons…</string>
+    <string name="settings_ble_ptt_none_yet">Nothing found yet. Press the button once to wake it.</string>
+    <string name="settings_ble_ptt_needs_android12">Needs Android 12 or newer</string>
+    <string name="settings_ble_ptt_no_permission">Bluetooth permission refused</string>
+    <string name="settings_ble_ptt_connected">Connected: %1$s</string>
+    <string name="settings_ble_ptt_connecting">Connecting…</string>
+    <string name="settings_ble_ptt_waiting">Out of range — reconnects by itself</string>
+    <string name="settings_ble_ptt_reconnect">Connect again</string>
+    <string name="settings_ble_ptt_forget">Forget this button</string>
 </resources>

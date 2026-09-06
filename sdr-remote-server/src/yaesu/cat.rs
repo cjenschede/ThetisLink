@@ -179,7 +179,28 @@ pub(super) fn bringup_probe(
     if id_code.is_empty() {
         warn!("{} autodetect: ID; returned no valid response ({:?}); check cable/baud radio-menu vs config; falling back to shared Yaesu parser", prefix, id_resp);
     } else if detected.is_none() {
-        warn!("{} unknown ID code '{}'; assuming Yaesu-compatible CAT dialect", prefix, id_code);
+        // An "unknown" ID that carries several frames is not an unknown radio:
+        // it is one query answered with everything that was queued behind it,
+        // which only happens when reads and writes are out of step. PD0PLK got
+        // '007077100;MD04;TX0;AG0041;PC050;PS1;...' and the log called it an
+        // unknown radio for a whole session.
+        let extra_frames = id_code.matches(';').count() as u32;
+        let due = sdr_remote_core::cat_health::baud_hint_due(
+            sdr_remote_core::cat_health::CatTrouble {
+                frames_run_together: if extra_frames > 0 { 1 } else { 0 },
+                ..Default::default()
+            },
+        );
+        if due {
+            warn!(
+                "{} the radio answered one query with {} frames at once ('{}') - reads and writes are out of step; check baud radio-menu vs config",
+                prefix,
+                extra_frames + 1,
+                id_code
+            );
+        } else {
+            warn!("{} unknown ID code '{}'; assuming Yaesu-compatible CAT dialect", prefix, id_code);
+        }
     } else if detected != Some(model) {
         // Detected model differs from the assumed slot model - a radio that was
         // off during startup detection, or a COM/USB enumeration swap. Loud,

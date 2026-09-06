@@ -31,6 +31,14 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.TextButton
+import android.content.Context
+import android.content.ContextWrapper
+import android.util.Log
+import com.sdrremote.service.BlePttController
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +69,18 @@ fun SettingsDialog(
     dxSpotsEnabled: Boolean = true,
     dxClusterAvailable: Boolean = true,
     onDxSpotsEnabledChange: (Boolean) -> Unit = {},
+    // The Bluetooth PTT button. The dialog shows and chooses; it never owns the
+    // connection - that belongs to the ViewModel, so it survives this dialog
+    // closing. The status arrives as itself and not as an ordinal: phase 2
+    // replaced one state with another, and an int would have quietly renamed
+    // "lost" to "waiting" everywhere it was read.
+    bleStatus: BlePttController.Status = BlePttController.Status.Off,
+    bleDevices: List<Triple<String, String, Int>> = emptyList(),
+    onBlePttEnabled: (Boolean) -> Unit = {},
+    onBleStartScan: () -> Unit = {},
+    onBleStopScan: () -> Unit = {},
+    onBlePick: (String) -> Unit = {},
+    onBleReconnect: () -> Unit = {},
     // The roger beep: pitch, length, level, whether FM counts, and a tick per
     // channel. The tone and the rules live in the shared engine this app
     // already runs; this is only the way to say what it should do.
@@ -272,7 +292,134 @@ fun SettingsDialog(
                 }
                 Text(stringResource(R.string.settings_volume_keys_hint), fontSize = 11.sp, color = Color.Gray)
 
-                // DX-cluster spot stream - data-saving toggle voor metered links.
+                // A Bluetooth PTT button on its own GATT connection. Unlike the
+                // two switches above this one is not a key or a touch event, so
+                // it needs the Bluetooth API - and that is why it starts at
+                // Android 12: below that a scan also needs the location
+                // permission, which is a large ask for a transmit button. The
+                // switch stays visible there and says why, because a setting
+                // that vanishes reads as a bug.
+                Spacer(Modifier.height(8.dp))
+                val blePttActivity = LocalContext.current.findMainActivity()
+                val bleSupported = BlePttController.supported()
+                var blePtt by remember { mutableStateOf(prefs.getBoolean("ble_ptt", false)) }
+                var bleName by remember { mutableStateOf(prefs.getString("ble_ptt_name", "") ?: "") }
+                var blePicking by remember { mutableStateOf(false) }
+                var bleRefused by remember { mutableStateOf(false) }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.settings_ble_ptt),
+                        fontSize = 14.sp,
+                        color = if (bleSupported) Color.Unspecified else Color.Gray,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Switch(
+                        checked = blePtt,
+                        enabled = bleSupported,
+                        onCheckedChange = { on ->
+                            // Logged from the first line. A switch that does
+                            // nothing and a switch whose callback never runs
+                            // look identical from the outside, and the first
+                            // build had no way to tell them apart.
+                            Log.i("BlePtt", "switch -> $on, activity=${blePttActivity != null}")
+                            if (!on) {
+                                blePtt = false
+                                prefs.edit().putBoolean("ble_ptt", false).apply()
+                                onBlePttEnabled(false)
+                                return@Switch
+                            }
+                            val act = blePttActivity
+                            if (act == null) {
+                                Log.w("BlePtt", "no activity behind this dialog - cannot ask")
+                                return@Switch
+                            }
+                            act.requestBluetoothPermission { granted ->
+                                Log.i("BlePtt", "permission granted=$granted")
+                                bleRefused = !granted
+                                if (granted) {
+                                    blePtt = true
+                                    prefs.edit().putBoolean("ble_ptt", true).apply()
+                                    onBlePttEnabled(true)
+                                    if (bleName.isBlank()) blePicking = true
+                                }
+                            }
+                        },
+                    )
+                }
+                Text(
+                    when {
+                        !bleSupported -> stringResource(R.string.settings_ble_ptt_needs_android12)
+                        bleRefused -> stringResource(R.string.settings_ble_ptt_no_permission)
+                        else -> stringResource(R.string.settings_ble_ptt_hint)
+                    },
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+
+                if (blePtt && bleSupported) {
+                    Text(
+                        when (bleStatus) {
+                            BlePttController.Status.Connecting ->
+                                stringResource(R.string.settings_ble_ptt_connecting)
+                            BlePttController.Status.Connected ->
+                                stringResource(R.string.settings_ble_ptt_connected, bleName)
+                            BlePttController.Status.Waiting ->
+                                stringResource(R.string.settings_ble_ptt_waiting)
+                            else -> bleName.ifBlank { "" }
+                        },
+                        fontSize = 11.sp,
+                        // Amber, not red. Waiting is the expected state after
+                        // walking out of range, and nothing needs doing.
+                        color = if (bleStatus == BlePttController.Status.Waiting)
+                            Color(0xFFE0A030) else Color.Gray,
+                    )
+                    Row {
+                        TextButton(onClick = { blePicking = true }) {
+                            Text(stringResource(R.string.settings_ble_ptt_choose), fontSize = 12.sp)
+                        }
+                        // Still here even though Android should manage on its
+                        // own. autoConnect is known to behave differently
+                        // between phones, and a button that does nothing beats
+                        // no way out at all.
+                        if (bleName.isNotBlank() && bleStatus != BlePttController.Status.Connected) {
+                            TextButton(onClick = { onBleReconnect() }) {
+                                Text(stringResource(R.string.settings_ble_ptt_reconnect), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                if (blePicking) {
+                    BlePttPicker(
+                        devices = bleDevices,
+                        onDismiss = { blePicking = false },
+                        onPick = { address, name ->
+                            bleName = name
+                            prefs.edit()
+                                .putString("ble_ptt_address", address)
+                                .putString("ble_ptt_name", name)
+                                .apply()
+                            blePicking = false
+                            onBlePick(address)
+                        },
+                    )
+                    // DisposableEffect, not LaunchedEffect: the picker can leave
+                    // in more ways than its own two buttons. Closing the whole
+                    // settings dialog takes this subtree out of composition and
+                    // neither onDismiss nor onPick ever runs - so the scan kept
+                    // going and, since build 10, the button stayed released as
+                    // well, because scanning lets go of it first (review finding).
+                    //
+                    // Hanging the cleanup on disposal covers every exit,
+                    // including the ones nobody thought of.
+                    DisposableEffect(Unit) {
+                        onBleStartScan()
+                        onDispose { onBleStopScan() }
+                    }
+                }
+
+                // DX cluster spot stream - a data-saving toggle for metered links.
                 // Only where there is a cluster to switch off: a server with no
                 // callsign, or with the cluster off, can never send a spot, and
                 // the switch sat there ON regardless - promising a stream that
@@ -558,5 +705,71 @@ fun parseTxProfiles(str: String): List<Pair<Int, String>> {
             val name = parts[1].trim()
             if (idx != null && name.isNotEmpty()) idx to name else null
         } else null
+    }
+}
+
+/**
+ * Which button is yours.
+ *
+ * Everything with a name is listed rather than only what advertises the PTT
+ * service: the advertisement does not have to carry it, and a button that never
+ * appears cannot be picked. The likely ones sort to the top.
+ */
+@Composable
+private fun BlePttPicker(
+    devices: List<Triple<String, String, Int>>,
+    onDismiss: () -> Unit,
+    onPick: (String, String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        title = { Text(stringResource(R.string.settings_ble_ptt_choose), fontSize = 16.sp) },
+        text = {
+            Column {
+                if (devices.isEmpty()) {
+                    Text(stringResource(R.string.settings_ble_ptt_scanning), fontSize = 13.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.settings_ble_ptt_none_yet),
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                    )
+                } else {
+                    devices.forEach { (address, name, rssi) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(address, name) }
+                                .padding(vertical = 6.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(name, fontSize = 14.sp)
+                                Text(address, fontSize = 10.sp, color = Color.Gray)
+                            }
+                            Text("$rssi dBm", fontSize = 11.sp, color = Color.Gray)
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/**
+ * The activity behind a Compose dialog.
+ *
+ * `LocalContext.current as? MainActivity` looks right and is not: inside a
+ * dialog the context is a wrapper around the activity, so the cast quietly
+ * yields null and everything hanging off it does nothing at all. Walk the
+ * wrappers instead.
+ */
+private fun Context.findMainActivity(): com.sdrremote.MainActivity? {
+    var c: Context = this
+    while (true) {
+        if (c is com.sdrremote.MainActivity) return c
+        c = (c as? ContextWrapper)?.baseContext ?: return null
     }
 }

@@ -15,6 +15,7 @@ import com.sdrremote.DxSpotInfo
 import com.sdrremote.R
 import com.sdrremote.SdrUiState
 import com.sdrremote.service.AudioRouting
+import com.sdrremote.service.BlePttController
 import com.sdrremote.service.AudioService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,6 +26,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import uniffi.sdr_remote.PhonePtt
+import uniffi.sdr_remote.PttSource
+import uniffi.sdr_remote.PttTarget
 import uniffi.sdr_remote.SdrBridge
 
 private const val TAG = "SdrViewModel"
@@ -32,13 +36,29 @@ private const val TAG = "SdrViewModel"
 /** ControlId::PowerOnOff in protocol.rs - value 1 = power on / launch Thetis. */
 private const val CONTROL_POWER = 0x02
 
-private enum class PttTarget { Thetis, Yaesu0, Yaesu1 }
-
 class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private var bridge: SdrBridge? = null
     private var initError: String? = null
     val audioRouting = AudioRouting(application)
+
+    /**
+     * The Bluetooth PTT button.
+     *
+     * Held here and not by the settings screen, deliberately: a connection that
+     * dies when a screen closes is not a PTT source. It keys through
+     * [setPtt] like every other source, so the target selection (Thetis,
+     * Yaesu 1, Yaesu 2) is the same one the on-screen button uses.
+     */
+    val blePtt: BlePttController? =
+        if (BlePttController.supported()) {
+            BlePttController(
+                application,
+                onKey = { active -> setPttFromBluetooth(active) },
+                onGone = { pttBluetoothGone() },
+            )
+        }
+        else null
 
     /** True when Yaesu mode is active (Thetis audio/spectrum disabled) */
     private val _yaesuMode = MutableStateFlow(false)
@@ -92,21 +112,22 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     private var chatScreenOpen = false
 
     private var pollingJob: Job? = null
-    // Data-besparing: abonneer ALLEEN de geselecteerde, aanwezige Yaesu-radio, en
-    // alleen als het Yaesu-window open is of die radio actief beluisterd wordt. De
-    // selector leunt op presence (YaesuPresence-broadcast), niet op een abonnement.
+    // Data saving: subscribe ONLY to the selected, present Yaesu radio, and only when
+    // the Yaesu window is open or that radio is actually being listened to. The
+    // selector leans on presence (the YaesuPresence broadcast), not on a
+    // subscription.
     private var yaesuWindowOpen = false
     private var subbed0 = false
     private var subbed1 = false
     private var wasConnected = false
-    // Presence-autoswitch tracking (change-detect voor subscription/audio meeschakelen).
+    // Presence auto-switch tracking (change detection for switching subscription and audio along).
     private var prevYaesuSel = 0
     private var prevPresent0 = false
     private var prevPresent1 = false
-    // Beoogd luistervolume voor de actieve Yaesu-radio; de ander staat op 0.
-    // Init uit dezelfde prefs-key als de sticky "Volume:"-slider bij de PTT
-    // ("local_volume" in de "thetislink"-store) zodat applyYaesuAudio() na herstart
-    // het opgeslagen volume gebruikt i.p.v. de default (max).
+    // Intended listening volume for the active Yaesu radio; the other one sits at 0.
+    // Initialised from the same prefs key as the sticky "Volume:" slider next to the
+    // PTT ("local_volume" in the "thetislink" store) so that applyYaesuAudio() uses
+    // the saved volume after a restart instead of the default (max).
     // Own key. It used to share "local_volume" with the Thetis level, which is why a
     // Yaesu could start at a value that was set for Thetis, and vice versa.
     private var yaesuVol =
@@ -118,15 +139,32 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     private var thetisVol =
         getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
             .getFloat("local_volume", 1.0f)
-    private var requestedPtt = false
-    private var requestedPttTarget: PttTarget? = null
+    /**
+     * What the operator is asking of a transmitter, on the shared rule.
+     *
+     * This used to be three fields: `requestedPtt`, `requestedPttTarget` and
+     * `_transmitting`. The last of those always moved together with the first -
+     * two booleans that had to stay equal in four places, which is the shape
+     * this whole lane clears up. The rule underneath (one transmitter at a
+     * time, and every way a press can end) lives in `sdr-remote-logic` and is
+     * tested there without a phone.
+     *
+     * One step still to go: Compose squeezes four sources - the on-screen button,
+     * MIDI, the volume keys, Bluetooth - into one boolean before this sees them, so
+     * arrives here as [PttSource.SCREEN]. While that is so there is no point
+     * telling them apart on this side.
+     */
+    private val ptt = PhonePtt()
+
+    /** What was actually sent to the server - a different thing from what is being asked for. */
     private var activePttTarget: PttTarget? = null
+
     private var pttSpeakerMuted = false
 
     init {
         try {
-            // Phase C: relay-transport (voor mobiel achter CGNAT / zonder port-forward).
-            // De keuze valt bij het aanmaken van de bridge; wijzigen vereist een herstart.
+            // Phase C: relay transport (for mobile behind CGNAT / without port forwarding).
+            // The choice is made when the bridge is created; changing it needs a restart.
             val prefs = getApplication<Application>()
                 .getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
             val relayEnabled = prefs.getBoolean("relay_enabled", false)
@@ -370,19 +408,63 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 delay(33) // ~30fps
                 try {
                     val s = bridge?.getState() ?: continue
-                    // Bij disconnect de abonnement-status resetten (server vergeet subs);
+                    // On disconnect, reset the subscription state (the server forgets subs);
                     // bij (her)connect opnieuw abonneren volgens window/actief-state.
                     if (!s.connected) {
                         if (subbed0 || subbed1) { subbed0 = false; subbed1 = false }
+                        // And let go of any PTT. The link is gone, so we are not
+                        // transmitting whatever this side still believes - and
+                        // the belief is what keeps the button red and makes
+                        // the next press return early. Same
+                        // gap as on the desktop: a refusal and a radio leaving TX
+                        // could end a press, a dying link could not.
+                        if (ptt.asking() != null) {
+                            Log.i(TAG, "Connection lost while transmitting - releasing PTT")
+                            ptt.disconnected()
+                            pttEnded()
+                        }
                         wasConnected = false
                     } else if (!wasConnected) {
                         wasConnected = true
                         updateYaesuSubscriptions()
                     }
+                    // A refusal means we are not transmitting, so stop
+                    // believing we are. The red on this button is local and
+                    // optimistic - deliberately, so a press needs no round trip
+                    // - and until now nothing took it back when the server said
+                    // no. The owner had to click a second time to clear it.
+                    if (s.pttDenied && ptt.asking() != null) {
+                        // Which exit depends on WHO let go.
+                        //
+                        // Another client holding it lets a held control keep
+                        // asking - it gets its turn. The server stepping off
+                        // because the radio stopped, or is about to on its
+                        // time-out timer, means the opposite: asking again walks
+                        // straight back into it.
+                        val target = ptt.asking()
+                        if (s.pttReleasedByServer && target != null) {
+                            Log.i(TAG, "Server released the PTT (radio stopped) - releasing $target")
+                            ptt.radioLeftTx(target)
+                        } else {
+                            Log.i(TAG, "PTT refused by the server - releasing")
+                            ptt.refused()
+                        }
+                        pttEnded()
+                    }
+                    // The radio stopping is not read from its TX flag any more.
+                    //
+                    // That flag is a mixture of what the server optimistically set
+                    // and what the radio answered, and the FT-991A's answer is
+                    // unreliable - `yaesu/poll.rs` says so where it deliberately
+                    // avoids it. The server decides now, because it knows the
+                    // time-out from the EX menu, and says so through pttDenied with
+                    // pttReleasedByServer set. Handled above.
                     _state.value = SdrUiState(
                         connected = s.connected,
                         relayTransportFallback = s.relayTransportFallback,
                         pttDenied = s.pttDenied,
+                        yaesuHeldByOther = s.yaesuHeldByOther,
+                        yaesu2HeldByOther = s.yaesu2HeldByOther,
                         audioError = s.audioError,
                         authRejected = s.authRejected,
                         totpRequired = s.totpRequired,
@@ -436,7 +518,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         rxAfGain = s.rxAfGain.toInt(),
                         agcEnabled = s.agcEnabled,
                         otherTx = s.otherTx,
-                        transmitting = _transmitting,
+                        transmitting = ptt.asking() != null,
                         filterLowHz = s.filterLowHz,
                         filterHighHz = s.filterHighHz,
                         thetisConfigured = s.thetisConfigured,
@@ -568,7 +650,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         yaesu2FeatureToggles = s.yaesu2FeatureToggles,
                         yaesu2FeatureLevels = s.yaesu2FeatureLevels.map { it.toInt() },
                         yaesu2FeatureFreqs = s.yaesu2FeatureFreqs.map { it.toInt() },
-                        // Bewaar de gekozen radio; val terug als 'ie (nog) niet connected is.
+                        // Keep the chosen radio; fall back if it is not (yet) connected.
                         selectedRadio = run {
                             val sel = _state.value.selectedRadio
                             when {
@@ -686,15 +768,15 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private var lastHeadsetForEq: Boolean? = null
 
-    /** Laadt de aan de GESELECTEERDE radio + huidige audio-route (BT/mic) toegewezen
-     *  EQ-preset uit prefs naar de engine, en signaleert de UI (sliders) via
-     *  eq_preset_pending. Aangeroepen bij PTT (operator-wens: EQ per radio uit geheugen
-     *  halen op zendmoment) én bij headset-wissel. */
+    /** Loads the EQ preset assigned to the SELECTED radio and the current audio route
+     *  EQ preset from prefs to the engine, and signals the UI (sliders) through
+     *  eq_preset_pending. Called on PTT (the operator wants the EQ per radio fetched
+     *  from storage at the moment of transmitting) and on a headset change. */
     private fun loadAssignedYaesuEqPreset() {
         if (!_yaesuMode.value) return
         val prefs = getApplication<Application>().getSharedPreferences("thetislink_eq", android.content.Context.MODE_PRIVATE)
         val headsetNow = audioRouting.headsetActive
-        // Per-radio toegewezen preset (slot-specifieke key): elke radio z'n eigen keuze.
+        // Preset assigned per radio (slot-specific key): each radio its own choice.
         val presetName = if (headsetNow)
             prefs.getString("eq_preset_bt_${sel()}", "") ?: ""
         else
@@ -708,7 +790,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         yaesuEqBandSel(i, arr.getDouble(i).toFloat())
                         prefs.edit().putFloat("eq_band_${sel()}_$i", arr.getDouble(i).toFloat()).apply()
                     }
-                    // Signaleer de UI om de sliders bij te werken.
+                    // Signal the UI to update the sliders.
                     prefs.edit().putString("eq_preset_pending", presetName).apply()
                 }
             } catch (e: Exception) {
@@ -744,6 +826,11 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        // First, because everything below makes transmitting meaningless and a
+        // press held over a disconnect is a press nobody can release: the
+        // button only ever reports changes. Review finding - this function was
+        // no safety net for PTT at all.
+        blePtt?.releaseHeld("server disconnect")
         bridge?.disconnect()
         audioRouting.stop()
         AudioService.stop(getApplication())
@@ -782,17 +869,18 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun yaesuMode(mode: Int) { bridge?.yaesuMode(mode.toUByte()) }
     fun yaesuButton(id: Int) { bridge?.yaesuButton(id.toUShort()) }
     fun yaesuTxGain(gain: Float) { bridge?.yaesuTxGain(gain) }
-    // EQ routeert naar de geselecteerde radio (was altijd radio 1 → EQ deed niets op
-    // de FTX-1/radio 2). De engine houdt per radio een aparte EQ (yaesu_eq/yaesu2_eq).
+    // The EQ routes to the selected radio (it was always radio 1, so the EQ did
+    // nothing on the FTX-1 / radio 2). The engine keeps a separate EQ per radio
+    // (yaesu_eq / yaesu2_eq).
     fun yaesuEqBandSel(band: Int, gainDb: Float) {
         if (sel() == 1) bridge?.yaesu2EqBand(band.toUByte(), gainDb) else bridge?.yaesuEqBand(band.toUByte(), gainDb)
     }
     fun yaesuEqEnabledSel(on: Boolean) {
         if (sel() == 1) bridge?.yaesu2EqEnabled(on) else bridge?.yaesuEqEnabled(on)
     }
-    // Client-side TX-keten (gedeeld voor beide radio's, zelfde mic): compressor 0-100 + AGC-toggle.
-    // Compressor/AGC per radio (engine heeft aparte keten per slot): routeer naar de
-    // geselecteerde radio, net als EQ (*Sel).
+    // Client-side TX chain (shared by both radios, same microphone): compressor 0-100
+    // plus an AGC toggle. Compressor and AGC are per radio (the engine has a separate
+    // chain per slot): route to the selected radio, like the EQ (*Sel).
     fun yaesuCompressor(level: Int) {
         if (sel() == 1) bridge?.yaesu2Compressor(level.toUByte()) else bridge?.yaesuCompressor(level.toUByte())
     }
@@ -801,11 +889,11 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ── Radio-selectie & audio-routing (Android bedient één Yaesu-radio tegelijk) ──
-    // Beide slots zijn na connect geabonneerd (discovery). "Yaesu active" en de selector
-    // regelen de audio puur via volume (alleen de actieve+gekozen radio hoorbaar) + Thetis-mute.
+    // Both slots are subscribed after connect (discovery). "Yaesu active" and the selector
+    // handle the audio purely through volume (only the active and chosen radio audible) plus a Thetis mute.
     private fun sel(): Int = _state.value.selectedRadio
 
-    /** Alleen de actieve+geselecteerde Yaesu-radio hoorbaar; de ander (en beide bij inactief) stil. */
+    /** Only the active and selected Yaesu is audible; the other one (and both when inactive) stays silent. */
     private fun applyYaesuAudio() {
         val active = _yaesuMode.value
         val s = sel()
@@ -820,8 +908,8 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         bridge?.yaesu2Volume(v1)
     }
 
-    /** Yaesu-window open/dicht (data-besparing): open → abonneer de geselecteerde,
-     *  aanwezige radio; dicht → alleen een actief-beluisterde radio blijft, rest af. */
+    /** Yaesu window open or closed (data saving): open -> subscribe to the selected,
+     *  present radio; closed -> only an actively listened radio stays, the rest off. */
     fun setYaesuWindowOpen(open: Boolean) {
         if (yaesuWindowOpen == open) return
         yaesuWindowOpen = open
@@ -829,10 +917,11 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Eén stream (databesparing, PATCH-android-yaesu-presence-datasaver): abonneer
-     *  ALLEEN de geselecteerde radio, en alleen als 'ie aanwezig is (presence komt
-     *  los uit YaesuPresence, niet uit de stream) én het window open is of 'ie actief
-     *  beluisterd wordt. De selector leunt op presence, niet op een abonnement, dus
-     *  "beide abonneren voor de selector" is niet meer nodig. Meldt alleen bij wijziging. */
+     *  ONLY the selected radio, and only when it is present (presence arrives
+     *  separately through YaesuPresence, not through the stream) and the window is
+     *  open or that radio is actually being listened to. The selector leans on
+     *  presence rather than on a subscription, so "subscribe to both for the
+     *  selector" is no longer needed. Reports only on a change. */
     private fun updateYaesuSubscriptions() {
         val active = _yaesuMode.value
         val s = sel()
@@ -851,16 +940,16 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 if (want1) { bridge?.yaesu2Volume(0f); bridge?.yaesu2Enable(true); bridge?.yaesu2ReadMemories() }
                 else bridge?.yaesu2Enable(false)
             }
-            // L5: 1-stream-invariant observeerbaar (≤1 van beide true) + accidentele switch.
+            // L5: the one-stream invariant is observable (at most one of the two true) plus an accidental switch.
             if (changed) Log.i(TAG, "Yaesu sub slot0=$want0 slot1=$want1 (sel=$s active=$active)")
             applyYaesuAudio()
         }
     }
 
-    /** Presence-autocorrectie: het selectedRadio-veld wordt al in de state-mapping
-     *  gecorrigeerd als de geselecteerde radio wegvalt en de ander aanwezig is. Bij
-     *  één stream moeten de subscription + audio dán meeschakelen.
-     *  Draait per poll maar handelt alleen bij een echte wijziging (geen coroutine-spam). */
+    /** Presence auto-correction: the selectedRadio field is already remapped in the
+     *  corrected when the selected radio drops out and the other is present. With
+     *  one stream the subscription and audio have to switch along at that point.
+     *  Runs every poll but acts only on a real change (no coroutine spam). */
     private fun checkYaesuPresenceAutoSwitch() {
         val st = _state.value
         val sel = st.selectedRadio
@@ -873,13 +962,13 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             prevPresent1 = p1
             updateYaesuSubscriptions() // (bevat presence-gate; nul present → nul streams)
             applyYaesuAudio()
-            // Bij een (auto)wissel van radio ook de EQ van de nieuwe radio uit het
-            // geheugen laden, net als bij handmatige selectRadio().
+            // On an (automatic) radio change, also load the new radio's EQ from storage, just
+            // as manual selectRadio() does.
             if (selChanged) loadAssignedYaesuEqPreset()
         }
     }
 
-    /** "Yaesu active": schakel tussen Thetis en de geselecteerde Yaesu-radio (audio-routing). */
+    /** "Yaesu active": switch between Thetis and the selected Yaesu radio (audio routing). */
     fun setYaesuActive(on: Boolean) {
         _yaesuMode.value = on
         updateYaesuSubscriptions() // actieve radio blijft geabonneerd ook als window dichtgaat
@@ -899,36 +988,47 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Kies radio1 (0) of radio2 (1); verplaatst de audio naar de gekozen radio als actief. */
+    /** Pick radio 1 (0) or radio 2 (1); moves the audio to the chosen radio when active. */
     fun selectRadio(slot: Int) {
         val st = _state.value
-        if (st.yaesuTxActive || st.yaesu2TxActive) {
-            Log.i(TAG, "Radio switch ignored during TX")
+        // Our own transmission, not the radio's. The same condition sat in the
+        // screen as well and build 25 fixed only that one, so the button became
+        // clickable and the switch was thrown away a layer further down - which
+        // is worse than a greyed-out button, because now it looks like it
+        // worked. Same rule in two places, one of them missed: the third time
+        // this shape has cost something today.
+        if (st.transmitting) {
+            Log.i(TAG, "Radio switch ignored - this client is transmitting")
             return
         }
         if (st.selectedRadio == slot) return
         _state.value = st.copy(selectedRadio = slot)
         updateYaesuSubscriptions() // bij window-dicht+actief: abonneer de nieuwe, meld de oude af
         applyYaesuAudio()
-        // EQ van de nu-geselecteerde radio uit het geheugen laden: sliders tonen die
-        // waarden en de engine zendt ermee bij PTT (operator-wens: per radio z'n eigen EQ).
+        // Load the currently selected radio's EQ from storage: the sliders show those
+        // values and the engine transmits with them on PTT (operator's wish: each radio
+        // its own EQ).
         loadAssignedYaesuEqPreset()
     }
 
-    // Slot-geroute bediening voor de UI (dispatcht op selectedRadio):
-    fun yaesuPttSel(on: Boolean) { requestPtt(on, selectedYaesuPttTarget()) }
+    // Slot-routed controls for the UI (dispatched on selectedRadio):
+    /** The PTT button on the Yaesu panel - a control on the screen like any other. */
+    fun yaesuPttSel(on: Boolean) {
+        val target = selectedYaesuPttTarget()
+        if (on) pttDown(PttSource.SCREEN, target) else pttUp(PttSource.SCREEN, target)
+    }
     fun yaesuVolumeSel(vol: Float) { yaesuVol = vol; applyYaesuAudio() }
     fun yaesuFreqSel(hz: Long) { if (sel() == 0) bridge?.yaesuFreq(hz.toULong()) else bridge?.yaesu2Freq(hz.toULong()) }
     fun yaesuModeSel(mode: Int) { if (sel() == 0) bridge?.yaesuMode(mode.toUByte()) else bridge?.yaesu2Mode(mode.toUByte()) }
     fun yaesuButtonSel(id: Int) { if (sel() == 0) bridge?.yaesuButton(id.toUShort()) else bridge?.yaesu2Button(id.toUShort()) }
-    /** Radio power on/off (CAT PS) voor de geselecteerde radio. UI biedt dit alleen
-     * klikbaar aan op de 991A (standby); de FTX-1 gaat echt uit -> daar label-only. */
+    /** Radio power on/off (CAT PS) for the selected radio. The UI only offers this
+     * clickable on the 991A (standby); the FTX-1 really switches off -> label only there. */
     fun yaesuPowerOnOffSel(on: Boolean) { if (sel() == 0) bridge?.yaesuPowerOnOff(on) else bridge?.yaesu2PowerOnOff(on) }
     fun yaesuSelectVfoSel(vfo: Int) { if (sel() == 0) bridge?.yaesuSelectVfo(vfo.toUByte()) else bridge?.yaesu2SelectVfo(vfo.toUByte()) }
     fun yaesuRecallMemorySel(ch: Int) { if (sel() == 0) bridge?.yaesuRecallMemory(ch.toUShort()) else bridge?.yaesu2RecallMemory(ch.toUShort()) }
-    /** Getypte DSP/functie-control voor de geselecteerde radio (Fase 2/3). */
+    /** Typed DSP/function control for the selected radio (phase 2/3). */
     fun yaesuControlSel(control: Int, value: Int) { bridge?.yaesuControl(sel().toUByte(), control.toUByte(), value.toUShort()) }
-    /** ControlId-kanaal (squelch/rfgain/power/read) voor de geselecteerde radio: +0x60 voor radio2. */
+    /** ControlId channel (squelch/rfgain/power/read) for the selected radio: +0x60 for radio 2. */
     fun yaesuSetControlSel(controlId: Int, value: Int) {
         val id = if (sel() == 1) controlId + 0x60 else controlId
         bridge?.setControl(id.toUByte(), value.toUShort())
@@ -939,21 +1039,19 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         audioRouting.forceMode = mode
     }
 
-    private var _transmitting = false
-
     private fun selectedYaesuPttTarget(): PttTarget =
-        if (sel() == 1) PttTarget.Yaesu1 else PttTarget.Yaesu0
+        if (sel() == 1) PttTarget.YAESU1 else PttTarget.YAESU0
 
     private fun currentMicGateDelayMs(target: PttTarget): Int {
         val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
         val key = when {
             audioRouting.headsetActive -> "mic_gate_delay_ms_android_bt"
-            target == PttTarget.Thetis -> "mic_gate_delay_ms_thetis_android_mic"
+            target == PttTarget.THETIS -> "mic_gate_delay_ms_thetis_android_mic"
             else -> "mic_gate_delay_ms_yaesu_android_mic"
         }
         val defaultMs = when {
             audioRouting.headsetActive -> 0
-            target == PttTarget.Thetis -> 0
+            target == PttTarget.THETIS -> 0
             else -> 100
         }
         return prefs.getInt(key, defaultMs).coerceIn(0, 800)
@@ -1011,37 +1109,138 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             activePttTarget = null
         }
         when (target) {
-            PttTarget.Thetis -> bridge?.setPtt(active)
-            PttTarget.Yaesu0 -> bridge?.yaesuPtt(active)
-            PttTarget.Yaesu1 -> bridge?.yaesu2Ptt(active)
+            PttTarget.THETIS -> bridge?.setPtt(active)
+            PttTarget.YAESU0 -> bridge?.yaesuPtt(active)
+            PttTarget.YAESU1 -> bridge?.yaesu2Ptt(active)
         }
     }
 
-    private fun requestPtt(active: Boolean, target: PttTarget) {
-        if (active) {
-            if (requestedPtt && requestedPttTarget == target) return
-            activePttTarget?.takeIf { it != target }?.let { sendActualPtt(it, false) }
-            requestedPtt = true
-            requestedPttTarget = target
-            _transmitting = true
-            setPttSpeakerMuted(true)
-            bridge?.setMicGateDelayMs(currentMicGateDelayMs(target).toUInt())
-            applyPttStartSideEffects()
-            sendActualPtt(target, true)
-            return
-        }
+    /**
+     * The screen is gone - locked, or the app put in the background.
+     *
+     * Only the controls that die with it. The Bluetooth button keeps working
+     * and so keeps transmitting: it is in your hand and you can let it go. The
+     * on-screen button is not, and a transmitter left on behind a locked screen
+     * can only be stopped after typing a password (owner, 2026-09-04).
+     */
+    fun screenGone() {
+        val before = ptt.asking()
+        if (before == null) return
+        ptt.screenGone()
+        reconcilePtt(before)
+    }
 
-        if (!requestedPtt && activePttTarget == null) return
-        requestedPtt = false
-        requestedPttTarget = null
-        _transmitting = false
+    /**
+     * Nothing is being asked for any more - by letting go, or through an exit.
+     *
+     * Only the tidying that belongs to this side: switching off the transmitter
+     * that is still on, and the speaker back. What happens to the request itself
+     * has already been decided by [ptt], and that is exactly the separation this
+     * step makes - there is no path left that quietly cleans up the button in its
+     * manier opruimt.
+     */
+    private fun pttEnded() {
         activePttTarget?.let { sendActualPtt(it, false) }
         setPttSpeakerMuted(false)
     }
 
-    fun setPtt(active: Boolean) {
-        val target = if (_yaesuMode.value) selectedYaesuPttTarget() else PttTarget.Thetis
-        requestPtt(active, target)
+    /**
+      * A control went down, or came up.
+      *
+      * What that means - latch on, hold, or stop everything - is decided in
+      * `sdr-remote-logic`, not here and not by the button. The button used to
+      * decide it, and kept its own `pressed` and `toggled` to remember what it
+      * had decided; no exit could reach those, so the transmitter stopped while
+      * the button stayed red (owner, build 58).
+      */
+    fun pttDown(source: PttSource, target: PttTarget = currentPttTarget()) {
+        val before = ptt.asking()
+        ptt.down(target, source)
+        reconcilePtt(before)
+    }
+
+    fun pttUp(source: PttSource, target: PttTarget = currentPttTarget()) {
+        val before = ptt.asking()
+        ptt.up(target, source)
+        reconcilePtt(before)
+    }
+
+    /**
+      * Hold to transmit, or one press on and the next off.
+      *
+      * Changing this releases whatever was being transmitted - the operator
+      * changed what a press means, and a latched transmission would have no
+      * press left that could end it. So it has to go through [reconcilePtt] like
+      * every other mutator, or the model lets go and the radio does not.
+      *
+      * It did not, between builds 60 and 62. Before that the rule lived in the
+      * Bluetooth gate, which returned an action that went out over the link;
+      * moving the rule to the shared type dropped the wiring on the floor. Set
+      * toggle, tap PTT, open the settings dialog (no onStop, so no screenGone),
+      * switch to momentary: intents cleared, button grey, transmitter on the
+      * air. The Rust test stayed green because it tests the model, not the
+      * wiring (review finding).
+      */
+    fun setPttToggleMode(toggle: Boolean) {
+        val before = ptt.asking()
+        ptt.setToggleMode(toggle)
+        reconcilePtt(before)
+    }
+
+    private fun currentPttTarget(): PttTarget =
+        if (_yaesuMode.value) selectedYaesuPttTarget() else PttTarget.THETIS
+
+    /**
+     * Make the outside world match what the shared type now says.
+     *
+     * One place, so that starting and stopping cannot drift apart: everything
+     * that begins a transmission is here, and everything that ends one goes
+     * through [pttEnded].
+     */
+    private fun reconcilePtt(before: PttTarget?) {
+        val now = ptt.asking()
+        if (now == before) return
+        if (now == null) {
+            pttEnded()
+            return
+        }
+        // Switching transmitters goes through here too: the shared rule has
+        // already let the old one go, and this is what tells it.
+        activePttTarget?.takeIf { it != now }?.let { sendActualPtt(it, false) }
+        setPttSpeakerMuted(true)
+        bridge?.setMicGateDelayMs(currentMicGateDelayMs(now).toUInt())
+        applyPttStartSideEffects()
+        sendActualPtt(now, true)
+    }
+
+    /**
+     * The Bluetooth PTT button (GATT), which has a life of its own.
+     *
+     * Not the same as the screen: this button keeps working when the screen goes
+     * off, so it should not let go because the on-screen button was tapped -
+     * except when that tap means switching off, which is the
+     * way out - see PhonePtt::operator_stop.
+     *
+     * Note: the page-turner and volume keys are NOT this. Those arrive as key
+     * events to the foreground activity and are therefore bound to the screen.
+     */
+    fun setPttFromBluetooth(active: Boolean) {
+        val source = PttSource.BLUETOOTH
+        if (active) pttDown(source) else pttUp(source)
+    }
+
+    /**
+     * The Bluetooth link is gone, so that button is holding nothing.
+     *
+     * An exit, not a release: a release means nothing in toggle mode, and this
+     * has to stop the transmitter either way. The supervision timeout of the
+     * button is four seconds, which is how long an unattended carrier would
+     * last without this.
+     */
+    fun pttBluetoothGone() {
+        val before = ptt.asking()
+        ptt.bluetoothGone()
+        reconcilePtt(before)
     }
     /// The roger beep, on its way to the shared engine.
     ///
@@ -1108,8 +1307,8 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun setControl(controlId: Int, value: Int) { bridge?.setControl(controlId.toUByte(), value.toUShort()) }
     fun setAgcEnabled(enabled: Boolean) { bridge?.setAgcEnabled(enabled) }
     fun enableSpectrum(enabled: Boolean) { bridge?.enableSpectrum(enabled) }
-    /** Spectrum aan/uit voor de 30 s screen-grace (punt 1). Bij aanzetten ook de
-     *  opgeslagen FPS herstellen (zoals bij het verlaten van Yaesu-mode). */
+    /** Spectrum on/off for the 30 s screen grace (point 1). Switching it on also
+     *  restores the saved FPS (as when leaving Yaesu mode). */
     fun setSpectrumActive(enabled: Boolean) {
         if (enabled) {
             val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
@@ -1172,6 +1371,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         pollingJob?.cancel()
         chatPollingJob?.cancel()
+        // Before the bridge goes: the button releases through the same gate as
+        // any other way of losing the link, so a teardown mid-press cannot
+        // leave a transmitter keyed.
+        blePtt?.close()
         bridge?.shutdown()
         super.onCleared()
     }

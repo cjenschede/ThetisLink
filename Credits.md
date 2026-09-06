@@ -62,7 +62,7 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 
 | Device | Interface |
 |--------|-----------|
-| Apache Labs ANAN 7000DLE | TCI (via Thetis) |
+| Any radio Thetis drives - Apache Labs ANAN, Hermes-Lite 2, Red Pitaya | TCI (via Thetis) |
 | Yaesu FT-991A | Serial CAT + USB Audio |
 | Yaesu FTX-1 | Serial CAT + USB Audio |
 | RF2K-S Power Amplifier | HTTP API |
@@ -73,3 +73,5 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 | EA7HG Visual Rotor | UDP |
 | Yaesu G-1000DXC Rotor | MCP2221A USB-HID |
 | PstRotator (any supported rotor) | XML over UDP |
+| YPC21 / PTT-Z01 transmit button | BLE GATT (Android) |
+| ZL-01 shutter button | Bluetooth, as an external touch device (Android) |

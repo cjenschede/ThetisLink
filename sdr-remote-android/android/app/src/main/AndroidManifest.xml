@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Finding the Bluetooth PTT button. neverForLocation keeps this off the
+         location permission, which is why the feature is Android 12 and up: on
+         11 and older a BLE scan needs ACCESS_FINE_LOCATION, and that is a large
+         ask for a transmit button. minSdk stays 26 - the rest of the app is
+         unaffected and the setting simply reads as unavailable there. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
     <!-- PATCH-3: NSD-based mDNS scan needs a multicast lock. Normal
          permission on Android 6+ — auto-granted at install, no runtime
          prompt. -->

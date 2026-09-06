@@ -10,9 +10,118 @@ namespace sdr_remote {
     // The tail of that file, for a problem report. Says why there is nothing
     // rather than coming back empty.
     string log_tail();
+    // One line from Kotlin into the same log file the Rust side writes, so the
+    // Bluetooth button is visible without a cable attached.
+    void log_line(string text);
+    // Ownership plus our own request. The radio's TX state is deliberately not
+    // an input: it is just as true when somebody else keys the radio, and it
+    // arrives a round trip late.
+    PttButton ptt_button(boolean held_by_other, boolean want_tx);
+    // Wait for a dropped Bluetooth button to come back, or let the client go?
+    // The four rows are tested in sdr-remote-logic; Kotlin asks rather than
+    // deciding, because this rule sat in a GATT callback for one build.
+    BleDropPolicy ble_drop_policy(boolean wanted);
     // The one rule for "is this relay set up", so the front ends read it
     // instead of each doing their own sum.
     boolean relay_is_configured(boolean enabled, string url, string station, string token);
+};
+
+// What the Bluetooth PTT button asks for. The decision itself lives in
+// sdr-remote-logic and is tested there, without a phone and without a button;
+// Kotlin owns the GATT callbacks and does what this says.
+// Wait for a dropped button to come back, or let the client go? Two inputs,
+// four rows, decided in sdr-remote-logic where the rows are tested.
+enum BleDropPolicy {
+    "Reconnect",
+    "Close",
+};
+
+// What a PTT button shows. Decided in sdr-remote-logic, where the rows are
+// tested, rather than written a second time in Kotlin - which is what happened
+// the night the rule was centralised (review finding, round 1).
+enum PttButton {
+    "Busy",
+    "Transmitting",
+    "Idle",
+};
+
+enum BlePttAction {
+    "Nothing",
+    "KeyDown",
+    "KeyUp",
+    // The link is gone, whatever the reason. Not the same as a release: a
+    // release means nothing in toggle mode, and this always releases.
+    "Gone",
+    // A byte this button is not known to send. Log it and change nothing -
+    // Kotlin still has the byte it just passed in.
+    "Unrecognised",
+};
+
+interface BlePttGate {
+    constructor();
+    // A new connection attempt, and the only one that counts from here. Events
+    // still in flight from an older generation are ignored, and whatever was
+    // held is released.
+    BlePttAction begin(u64 generation);
+    BlePttAction connected(u64 generation);
+    // Every drop, whatever the reason. A link lost mid-press never delivers a
+    // release byte, so this is what stops the transmitter.
+    BlePttAction disconnected(u64 generation);
+    BlePttAction notification(u64 generation, u8 value);
+    // For a log line: is the physical button down? Whether that means
+    // transmitting is PhonePtt's to say.
+    boolean held();
+};
+
+// The phone's PTT button, on the same shared rule as the desktop.
+// The ViewModel used to keep its own flags for this; they have been folded in
+// here so that "how does a press end" lives in one place.
+enum PttTarget {
+    "Thetis",
+    "Yaesu0",
+    "Yaesu1",
+};
+
+enum PttSource {
+    "Screen",
+    "Bluetooth",
+    "Midi",
+    // Volume rocker and BLE page-turner keys: both arrive as key events to the
+    // foreground activity, so both die with the screen.
+    "VolumeKey",
+};
+
+interface PhonePtt {
+    constructor();
+    // One source, pressed or let go. Pressing releases the other transmitters -
+    // the phone keys one at a time.
+    void set(PttTarget target, PttSource source, boolean held);
+    boolean want_tx(PttTarget target);
+    // Which transmitter is the operator asking for? At most one.
+    PttTarget? asking();
+    // The exits. Every way a press can end has a name, so that "are they all wired?"
+    // stays a question with a list.
+    void refused();
+    void busy(PttTarget target);
+    void disconnected();
+    void radio_left_tx(PttTarget target);
+    // The on-screen button off: everything on this transmitter ends, including a
+    // Bluetooth button that is still held. That is the way out when that button jams.
+    void operator_stop(PttTarget target);
+    // The screen gone (locked or in the background): only the sources that die with
+    // the screen. The Bluetooth button stays.
+    void screen_gone();
+    // The Bluetooth button is no longer holding anything. Reported on every
+    // link event, and unconditional: in toggle mode the button is not held
+    // while the radio is on the air, so nothing outside can tell.
+    void bluetooth_gone();
+    // Hold to transmit, or one press on and the next off. Setting it to what it
+    // already is changes nothing - Compose re-applies it on every redraw.
+    void set_toggle_mode(boolean toggle);
+    // A control went down or came up. What that means - latch or hold - is
+    // decided here, so no button keeps a copy of "am I transmitting".
+    void down(PttTarget target, PttSource source);
+    void up(PttTarget target, PttSource source);
 };
 
 dictionary BridgeDxSpot {
@@ -73,6 +182,8 @@ dictionary BridgeRadioState {
     boolean connected;
     boolean relay_transport_fallback;
     boolean ptt_denied;
+    // That refusal was the server letting go - see Flags::SERVER_RELEASED.
+    boolean ptt_released_by_server;
     boolean audio_error;
     u16 rtt_ms;
     f32 jitter_ms;
@@ -193,6 +304,10 @@ dictionary BridgeRadioState {
     u8 yaesu_mode;
     u16 yaesu_smeter;
     boolean yaesu_tx_active;
+    // This radio is held by a different client - from the server's ownership
+    // table, so it turns over when the lock does and not when the radio stops.
+    boolean yaesu_held_by_other;
+    boolean yaesu2_held_by_other;
     boolean yaesu_power_on;
     u8 yaesu_af_gain;
     u8 yaesu_tx_power;

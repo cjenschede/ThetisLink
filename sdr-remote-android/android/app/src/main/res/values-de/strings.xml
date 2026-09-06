@@ -8,6 +8,7 @@
     <!-- Common / shared -->
     <string name="common_connect">Verbinden</string>
     <string name="common_disconnect">Trennen</string>
+    <string name="common_exit">Beenden</string>
     <string name="common_connected">Verbunden</string>
     <string name="common_disconnected">Getrennt</string>
     <string name="common_save">Speichern</string>
@@ -296,4 +297,17 @@
     <string name="settings_roger_hint">Ein kurzer Ton am Ende der Aussendung. Der Sender bleibt so lange getastet, damit die Gegenstelle ihn hoert. Nie in Daten- oder Digitalmodi.</string>
     <string name="settings_roger_volume">Pegel</string>
     <string name="settings_roger_fm">Auch in FM</string>
+    <!-- Bluetooth-PTT-Taste (YPC21 und aehnliche). Android 12 und neuer. -->
+    <string name="settings_ble_ptt">BT-PTT-Taste:</string>
+    <string name="settings_ble_ptt_hint">Eine Bluetooth-Sendetaste, direkt verbunden</string>
+    <string name="settings_ble_ptt_choose">Taste waehlen</string>
+    <string name="settings_ble_ptt_scanning">Suche nach Tasten…</string>
+    <string name="settings_ble_ptt_none_yet">Noch nichts gefunden. Taste einmal druecken, um sie zu wecken.</string>
+    <string name="settings_ble_ptt_needs_android12">Erfordert Android 12 oder neuer</string>
+    <string name="settings_ble_ptt_no_permission">Bluetooth-Berechtigung abgelehnt</string>
+    <string name="settings_ble_ptt_connected">Verbunden: %1$s</string>
+    <string name="settings_ble_ptt_connecting">Verbinde…</string>
+    <string name="settings_ble_ptt_waiting">Ausser Reichweite — verbindet sich selbst</string>
+    <string name="settings_ble_ptt_reconnect">Neu verbinden</string>
+    <string name="settings_ble_ptt_forget">Diese Taste vergessen</string>
 </resources>

@@ -301,14 +301,14 @@ private fun AmplitecTab(
 }
 
 /**
- * Twee-regelige antenne-knop — visueel afgestemd op de server- en
+ * Two-line antenna button - visually matched to the server and
  * desktop-versie (`antenna_button` in `amplitec.rs` / `devices.rs`).
  * Bovenste regel: `Ant<N>` (klein, identifier).
  * Onderste regel: alias (groter, functionele naam) — alleen als de
- * alias afwijkt van de Ant<N>-default, anders wordt het visueel een
+ * alias differs from the Ant<N> default, because otherwise it visually becomes a
  * dubbele regel.
  *
- * Geen rename hier: labels worden alleen server-side beheerd.
+ * No rename here: labels are managed server-side only.
  */
 @Composable
 private fun AmplitecAntennaButton(
@@ -1420,10 +1420,10 @@ private fun UltraBeamTab(
         }
     }
 
-    // Per-motor moving + progress bar (alleen tonen bij beweging).
-    // ubMotorsMoving is een bitfield: bit 0 = motor 1, bit 1 = motor 2.
-    // De progress-balk is een gedeelde waarde; de RCU-06 deelt geen
-    // afzonderlijke voortgang per motor.
+    // Per-motor moving + progress bar (only shown while moving).
+    // ubMotorsMoving is a bitfield: bit 0 = motor 1, bit 1 = motor 2.
+    // The progress bar is one shared value; the RCU-06 does not report separate
+    // progress per motor.
     if (state.ubMotorsMoving != 0) {
         Spacer(Modifier.height(8.dp))
         val progress = (state.ubMotorCompletion / 60f).coerceIn(0f, 1f)
@@ -1773,9 +1773,10 @@ private fun YaesuTab(
     onTxAgc: (Boolean) -> Unit = {},  // client-side TX-AGC aan/uit (gedeeld)
     onPowerOnOff: (Boolean) -> Unit = {}, // radio power on/off (CAT PS) - alleen 991A klikbaar
 ) {
-    // Android bedient één Yaesu-radio tegelijk. Bij radio2 tonen we de yaesu2_*-state
-    // via het bestaande yaesu_*-veld, zodat de rest van deze composable ongewijzigd blijft.
-    // De on*-callbacks routeren al naar de geselecteerde radio (ViewModel *Sel-functies).
+    // Android works one Yaesu radio at a time. For radio 2 we show the yaesu2_* state
+    // through the existing yaesu_* field, so the rest of this composable stays
+    // unchanged. The on* callbacks already route to the selected radio (the ViewModel
+    // *Sel functions).
     val state = if (fullState.selectedRadio == 1) fullState.copy(
         yaesuConnected = fullState.yaesu2Connected,
         yaesuModel = fullState.yaesu2Model,
@@ -1889,8 +1890,9 @@ private fun YaesuTab(
             Text("Yaesu $modelName", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Spacer(Modifier.weight(1f))
             val powerColor = if (state.yaesuPowerOn) Color(0xFF00C800) else Color(0xFF808080)
-            // 991A: klikbaar aan/standby (PS0=standby, USB/CAT blijft -> remote weer
-            // aan). FTX-1: label-only, want die gaat echt uit (USB weg, niet remote aan).
+            // 991A: clickable on/standby (PS0 = standby, USB/CAT stays up -> remote on again).
+            // FTX-1: label only, because that one really switches off (USB gone, no remote
+            // power-on).
             if (state.yaesuModel == 0) {
                 Text(
                     if (state.yaesuPowerOn) "ON" else "STBY",
@@ -1908,14 +1910,14 @@ private fun YaesuTab(
             Spacer(Modifier.width(8.dp))
             val txColor = if (state.yaesuTxActive) Color(0xFFFF4040) else Color(0xFF00C800)
             Text(if (state.yaesuTxActive) "TX" else "RX", color = txColor, fontWeight = FontWeight.Bold)
-            // Zelfde rood als de desktop TL_SWR_ALERT_TEXT en de SWR-uitlezing >3.0.
+            // The same red as the desktop TL_SWR_ALERT_TEXT and an SWR reading >3.0.
             val swrRed = Color(0xFFFF5050)
             if (state.yaesuHiSwr) {
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.dev_high_swr), color = swrRed, fontWeight = FontWeight.Bold)
             }
-            // Het alarm klinkt voor beide radio's, maar deze tab toont er één. Benoem
-            // de andere radio expliciet, anders hoor je een piep zonder zichtbare oorzaak.
+            // The alarm sounds for both radios, but this tab shows one. Name the other radio
+            // explicitly, or you hear a beep with no visible cause.
             val otherHiSwr = if (fullState.selectedRadio == 1) fullState.yaesuHiSwr else fullState.yaesu2HiSwr
             if (otherHiSwr) {
                 val otherModel = if (fullState.selectedRadio == 1) fullState.yaesuModel else fullState.yaesu2Model
@@ -1927,13 +1929,19 @@ private fun YaesuTab(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
 
-        // Radio-selector: alleen tonen als BEIDE radio's connected zijn (geconfigureerd +
-        // actief op de server). Android bedient er één tegelijk.
+        // Radio selector: only shown when BOTH radios are connected (configured +
+        // active on the server). Android works one at a time.
         if (fullState.yaesuConnected && fullState.yaesu2Connected) {
             val r1 = if (fullState.yaesuModel == 1) "FTX-1" else "FT-991A"
             val r2 = if (fullState.yaesu2Model == 1) "FTX-1" else "FT-991A"
             val sel = fullState.selectedRadio
-            val switchLocked = fullState.yaesuTxActive || fullState.yaesu2TxActive
+            // Locked while *we* transmit, not while the radio does. Those are
+            // not the same thing with more than one client: somebody else's
+            // transmission is no reason this operator cannot switch radios
+            // while listening, and until now it was - the flag says "this radio
+            // is transmitting" and every client read it as "you may not touch
+            // anything" (owner, build 24).
+            val switchLocked = fullState.transmitting
             val activeColor = ButtonDefaults.buttonColors(containerColor = Color(0xFF005AC8))
             Column(modifier = Modifier.padding(bottom = 6.dp)) {
                 Row(
@@ -1958,8 +1966,9 @@ private fun YaesuTab(
             }
         }
 
-        // Enable toggle (Yaesu audio). Met Thetis = "Yaesu active" (zet Thetis-audio
-        // uit); zonder geconfigureerde Thetis is dit puur de audio-aan/uit-knop.
+        // Enable toggle (Yaesu audio). With Thetis this is "Yaesu active" (it switches
+        // Thetis audio off); with no Thetis configured it is purely the audio on/off
+        // button.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(if (fullState.thetisConfigured) stringResource(R.string.dev_yaesu_active_label) else stringResource(R.string.dev_audio_label))
             Spacer(Modifier.width(8.dp))
@@ -2018,9 +2027,9 @@ private fun YaesuTab(
         ) {
             Column {
                 Text("VFO A", fontSize = 11.sp, color = Color.Gray)
-                // VFO-mode: de grote tikbare digit-tuner hieronder is de frequentie
-                // (geen dubbele weergave). Memory-mode: hier de frequentie + kanaalnaam
-                // (er is geen digit-tuner in memory-mode).
+                // VFO mode: the big tappable digit tuner below is the frequency (no second
+                // display). Memory mode: frequency plus channel name here (there is no digit
+                // tuner in memory mode).
                 if (isMemory) {
                     Text(formatFreqMhz(state.yaesuFreqA), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     if (memChannels.isNotEmpty()) {
@@ -2047,9 +2056,9 @@ private fun YaesuTab(
             }
         }
 
-        // Touch-afstemming: tik boven/onder een cijfer = omhoog/omlaag; lang indrukken
-        // = frequentie typen. + stapknoppen (−/+ met stapgrootte). Alleen in VFO-mode.
-        // Dit is de enige frequentieweergave in VFO-mode (geen dubbele bovenaan meer).
+        // Touch tuning: tap above or below a digit for up or down; long press to type a
+        // frequency. Plus step buttons (- / + with a step size). VFO mode only. This is
+        // the only frequency display in VFO mode - the duplicate at the top is gone.
         if (!isMemory && state.yaesuFreqA > 0) {
             Spacer(Modifier.height(4.dp))
             YaesuDigitTuner(
@@ -2138,11 +2147,12 @@ private fun YaesuTab(
 
         Spacer(Modifier.height(4.dp))
 
-        // Interne ATU: momentane Tune (band-gated HF+6m, <54 MHz) + ATU aan/uit-toggle.
-        // tuner_state komt van de radio (AC;-poll): 0=uit, 1=aan, 2=tunend. Waarden
-        // 3=Tune-start / 15=ATU-aan / 4=ATU-uit; de server vertaalt per model (991A/FTX-1).
+        // Internal ATU: momentary Tune (band-gated HF + 6 m, < 54 MHz) plus an ATU on/off
+        // toggle. tuner_state comes from the radio (the AC; poll): 0 = off, 1 = on,
+        // 2 = tuning. Values 3 = start tune, 15 = ATU on, 4 = ATU off; the server
+        // translates per model (991A / FTX-1).
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            // ATU: HF+6m (<54 MHz) en niet in FM (mode 5).
+            // ATU: HF + 6 m (<54 MHz) and not in FM (mode 5).
             val atuAvail = state.yaesuFreqA in 1L until 54_000_000L && state.yaesuMode != 5
             val canTune = state.yaesuConnected && atuAvail
             val tuning = state.yaesuTunerState == 2
@@ -2168,11 +2178,11 @@ private fun YaesuTab(
 
         Spacer(Modifier.height(8.dp))
 
-        // Sliders — sync from server state, local override on drag
+        // Sliders - sync from server state, local override on drag
         // ControlId hex: Squelch=0x29, RfGain=0x2A, MicGain=0x2B, RfPower=0x2C
-        // NB: het luistervolume zit in de sticky "Volume:"-slider bij de PTT (altijd
-        // zichtbaar, master voor Thetis én de geselecteerde Yaesu). De vroegere "Vol:"-
-        // slider hier was een duplicaat (zelfde yaesuVolumeSel) en is verwijderd.
+        // NB: the listening volume lives in the sticky "Volume:" slider next to the PTT
+        // (always visible, master for Thetis AND the selected Yaesu). The former "Vol:"
+        // slider here was a duplicate (same yaesuVolumeSel) and has been removed.
         // Sync sliders from server state
         var squelch by remember { mutableFloatStateOf(state.yaesuSquelch.toFloat()) }
         var rfGain by remember { mutableFloatStateOf(state.yaesuRfGain.toFloat()) }
@@ -2219,13 +2229,13 @@ private fun YaesuTab(
             }, valueRange = 0.05f..1f, modifier = Modifier.weight(1f))
             Text("${String.format("%.1f", localMicGain)}x", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
-        // Client-side TX-compressor (voor Yaesu-USB-audio; radio-shaping wordt op USB gebypassed).
-        // Bewust HIER, inline naast Mic-gain: in het EQ-blok (lager) kreeg deze slider geen
-        // touch (gemeten: comp onChange 0x, terwijl mic/DSP-sliders wel werken). Zelfde
-        // context als de werkende Mic-slider → wel sleepbaar. State in YaesuTab-scope.
-        // Per radio (net als EQ): laadt bij radio-wissel de compressor van die radio en
-        // stuurt 'm naar de engine (onCompressor routeert naar de geselecteerde radio).
-        // Migratie-fallback op de oude gedeelde key.
+        // Client-side TX compressor (for Yaesu USB audio; radio shaping is bypassed on
+        // USB). Deliberately HERE, inline next to Mic gain: in the EQ block (further down)
+        // this slider got no touch events at all (measured: comp onChange 0x, while the
+        // mic and DSP sliders do work). Same context as the working Mic slider -> it drags.
+        // State lives in YaesuTab scope. Per radio (like the EQ): on a radio change it
+        // loads that radio's compressor and sends it to the engine (onCompressor routes to
+        // the selected radio). Migration falls back to the old shared key.
         val compRadio = state.selectedRadio
         var compLevel by remember(compRadio) {
             mutableFloatStateOf(micEqPrefs.getFloat("yaesu_comp_$compRadio", micEqPrefs.getFloat("yaesu_comp", 0f)))
@@ -2240,8 +2250,9 @@ private fun YaesuTab(
             }, valueRange = 0f..100f, modifier = Modifier.weight(1f))
             Text("${compLevel.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
-        // RF Power - sliderbereik 5..max voor de huidige band (uit EX max-power menus);
-        // 0/onbekend -> 100. Klemt net als de desktop zodat je de band-limiet niet overschrijdt.
+        // RF Power - slider range 5..max for the current band (from the EX max-power
+        // menus); 0 or unknown -> 100. Clamps like the desktop so you cannot exceed the
+        // band limit.
         val pwrMax = if (state.yaesuTxPowerMax.toInt() >= 5) state.yaesuTxPowerMax.toFloat() else 100f
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("PWR:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
@@ -2250,7 +2261,7 @@ private fun YaesuTab(
             Text("${rfPower.coerceIn(5f, pwrMax).toInt()}W", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
 
-        // DSP/functie-controls (Fase 2) — inklapbaar, gedeeld voor de geselecteerde radio.
+        // DSP/function controls (phase 2) - collapsible, shared for the selected radio.
         Spacer(Modifier.height(8.dp))
         YaesuDspSection(state, onDspControl)
 
@@ -2258,9 +2269,9 @@ private fun YaesuTab(
         Spacer(Modifier.height(8.dp))
         val context = LocalContext.current
         val eqPrefs = remember { context.getSharedPreferences("thetislink_eq", android.content.Context.MODE_PRIVATE) }
-        // Onafhankelijke EQ per radio: keys krijgen de slot-index (0/1). Migratie: valt
-        // terug op de oude gedeelde key als er nog geen radio-specifieke waarde is, zodat
-        // de bestaande curve behouden blijft en daarna per radio kan divergeren.
+        // Independent EQ per radio: keys carry the slot index (0/1). Migration: falls back
+        // to the old shared key while there is no radio-specific value yet, so the
+        // existing curve is kept and can diverge per radio afterwards.
         val eqRadio = state.selectedRadio
         var eqEnabled by remember(eqRadio) {
             mutableStateOf(eqPrefs.getBoolean("eq_enabled_$eqRadio", eqPrefs.getBoolean("eq_enabled", false)))
@@ -2274,9 +2285,9 @@ private fun YaesuTab(
             mutableStateOf(eqPrefs.getBoolean("yaesu_tx_agc_$eqRadio", eqPrefs.getBoolean("yaesu_tx_agc", false)))
         }
 
-        // Herappliceer de EQ naar de (nieuw) geselecteerde radio: bij eerste compositie
-        // én bij radio-wissel. onEqBand/onEqEnabled routeren naar de geselecteerde radio
-        // (ViewModel *Sel), zodat de EQ ook op radio 2 (FTX-1) landt en niet alleen radio 1.
+        // Re-apply the EQ to the (newly) selected radio: on first composition and on a
+        // radio change. onEqBand / onEqEnabled route to the selected radio (the ViewModel
+        // *Sel functions), so the EQ also lands on radio 2 (FTX-1) and not only radio 1.
         LaunchedEffect(state.selectedRadio) {
             onEqEnabled(eqEnabled)
             for (i in 0..4) onEqBand(i, eqGains[i].floatValue)
@@ -2292,16 +2303,16 @@ private fun YaesuTab(
                 }
             }
         }
-        // Herstel AGC naar de engine bij eerste compositie én bij radio-wissel
-        // (onTxAgc routeert naar de geselecteerde radio).
+        // Restore the AGC to the engine on first composition and on a radio change
+        // (onTxAgc routes to the selected radio).
         LaunchedEffect(eqRadio) {
             onTxAgc(txAgc)
         }
 
-        // De verticale EQ-gain-sliders zijn inklapbaar achter een pijltje: bij het
-        // scrollen door het scherm werden ze anders per ongeluk versteld. Default
-        // ingeklapt, zodat scrollen ze nooit raakt; klik op "EQ" om ze te tonen.
-        // Per-radio (geen gedeelde instelling): eigen klap-stand voor radio 0 en 1.
+        // The vertical EQ gain sliders fold away behind an arrow: while scrolling through
+        // the screen they were otherwise nudged by accident. Collapsed by default, so
+        // scrolling never touches them; tap "EQ" to show them. Per radio (not a shared
+        // setting): its own folded state for radio 0 and 1.
         var eqExp0 by rememberSaveable { mutableStateOf(false) }
         var eqExp1 by rememberSaveable { mutableStateOf(false) }
         val eqSlidersExpanded = if (state.selectedRadio == 1) eqExp1 else eqExp0
@@ -2317,8 +2328,8 @@ private fun YaesuTab(
             )
         }
 
-        // Client-side TX-keten: AGC-toggle per radio (radio-processing werkt niet op USB).
-        // EQ → compressor → AGC → gain. De compressor-slider staat bij Mic-gain (boven).
+        // Client-side TX chain: an AGC toggle per radio (radio processing does not work on USB).
+        // EQ -> compressor -> AGC -> gain. The compressor slider sits with Mic gain (above).
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = txAgc, onCheckedChange = {
                 txAgc = it; onTxAgc(it); eqPrefs.edit().putBoolean("yaesu_tx_agc_$eqRadio", it).apply()
@@ -2337,9 +2348,9 @@ private fun YaesuTab(
         var selectedPreset by remember { mutableStateOf("") }
         var presetMenuExpanded by remember { mutableStateOf(false) }
         var showSaveDialog by remember { mutableStateOf(false) }
-        // Preset-toewijzing (BT/Mic auto-keuze) wordt per radio onthouden: bij radio-wissel
-        // herladen uit de slot-specifieke key. Dit is het kern-doel — elke radio z'n eigen
-        // gekozen EQ-preset (operator 2026-07-04).
+        // The preset assignment (BT/Mic automatic choice) is remembered per radio: on a
+        // radio change it is reloaded from the slot-specific key. That is the whole point
+        // - each radio its own chosen EQ preset (operator, 2026-07-04).
         var btPreset by remember(eqRadio) { mutableStateOf(eqPrefs.getString("eq_preset_bt_$eqRadio", "") ?: "") }
         var micPreset by remember(eqRadio) { mutableStateOf(eqPrefs.getString("eq_preset_mic_$eqRadio", "") ?: "") }
 
@@ -2594,9 +2605,9 @@ private fun YaesuTab(
             if (settingsLoading) { kotlinx.coroutines.delay(10000); settingsLoading = false }
         }
 
-        // Memory channel list (scrollable, inklapbaar achter een pijltje - geldt voor de
-        // geselecteerde radio, dus zowel 991A als FTX-1).
-        // Per-radio klap-stand (geen gedeelde instelling).
+        // Memory channel list (scrollable, folds away behind an arrow - applies to the
+        // selected radio, so both the 991A and the FTX-1).
+        // Folded state per radio (not a shared setting).
         var memExp0 by rememberSaveable { mutableStateOf(false) }
         var memExp1 by rememberSaveable { mutableStateOf(false) }
         val memListExpanded = if (state.selectedRadio == 1) memExp1 else memExp0
@@ -2619,9 +2630,8 @@ private fun YaesuTab(
                     .verticalScroll(rememberScrollState())
             ) {
                 memChannels.forEach { mem ->
-                    // Tik op een rij = kanaal oproepen (ControlId::YaesuRecallMemory).
-                    // Het actieve kanaal krijgt een blauwe achtergrond, zodat de lijst
-                    // laat zien waar de radio staat.
+                    // Tapping a row recalls that channel (ControlId::YaesuRecallMemory).
+                    // The active channel gets a blue background, so the list shows where the radio is.
                     val chNum = mem.ch.toIntOrNull()
                     val isActive = chNum != null &&
                         chNum == state.yaesuMemoryChannel && state.yaesuVfoSelect == 1
@@ -2729,16 +2739,17 @@ private val YAESU_MENU_NAMES = mapOf(
     141 to "TUNER SELECT", 142 to "VOX SELECT", 143 to "VOX GAIN", 144 to "VOX DELAY",
 )
 
-// ========== Yaesu DSP/functie-controls (Fase 2) ==========
-// Getypt YaesuControl-kanaal: onDspControl(control-index, value). Feature-state komt uit
-// state.yaesuFeature* (al geremapt naar de geselecteerde radio). Per-model verschillen
-// (NB/DNR 991A toggle+slider vs FTX-1 slider, AMC FTX-1-only, APF CW-only) server-side +
-// hier in de UI. Sliders sturen op release (onValueChangeFinished) → geen CAT-burst.
+// ========== Yaesu DSP / function controls (phase 2) ==========
+// Typed YaesuControl channel: onDspControl(control index, value). Feature state
+// comes from state.yaesuFeature* (already remapped to the selected radio).
+// Per-model differences (NB/DNR 991A toggle+slider vs FTX-1 slider, AMC FTX-1
+// only, APF CW only) live server-side and here in the UI. Sliders send on release
+// (onValueChangeFinished) -> no CAT burst.
 private val DSP_BLUE = Color(0xFF005AC8)
 
 @Composable
 private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit) {
-    // Per-radio klap-stand (geen gedeelde instelling); rememberSaveable zoals EQ/geheugenlijst.
+    // Folded state per radio (not a shared setting); rememberSaveable like the EQ and memory list.
     var dspExp0 by rememberSaveable { mutableStateOf(false) }
     var dspExp1 by rememberSaveable { mutableStateOf(false) }
     val expanded = if (state.selectedRadio == 1) dspExp1 else dspExp0
@@ -2751,7 +2762,7 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
     val isFtx1 = state.yaesuModel == 1
     val isCw = state.yaesuMode == 3 || state.yaesuMode == 4
     // Band/mode-beschikbaarheid (FT-991A/FTX-1): IPO/ATT alleen op HF+6m (<54 MHz);
-    // NB/DNF/Notch/Contour niet in FM (mode 5); NAR/AGC/DNR werken volgens de 991A OM
+    // NB/DNF/Notch/Contour not in FM (mode 5); NAR/AGC/DNR work according to the 991A OM
     // wel in FM. BK-IN is CW-only. Buiten bereik -> uitgrijzen.
     val isFm = state.yaesuMode == 5 || state.yaesuMode == 12  // 12 = C4FM (FM-familie)
     val hf6m = state.yaesuFreqA in 1L until 54_000_000L
@@ -2770,7 +2781,7 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
                 DspToggleBtn("NAR", bit(2)) { onDspControl(2, if (bit(2)) 0 else 1) }
                 DspToggleBtn("DNF", bit(3), !isFm) { onDspControl(3, if (bit(3)) 0 else 1) }
             }
-            // AGC + IPO cyclus (label toont de stand, geen blauw)
+            // AGC + IPO cycle (the label shows the setting, no blue)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
                 val agc = lvl(6)
                 val agcLbl = when (agc) { 1 -> "FAST"; 2 -> "MID"; 3 -> "SLOW"; else -> "AUTO" }
@@ -2781,15 +2792,16 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
                 val ipoLbl = when (ipo) { 1 -> "AMP1"; 2 -> "AMP2"; else -> "IPO" }
                 OutlinedButton(onClick = { onDspControl(7, (ipo + 1) % 3) }, enabled = hf6m) { Text(ipoLbl, fontSize = 12.sp) }
             }
-            // Niveaus: NB/DNR (991A toggle+slider, FTX-1 slider), AMC (FTX-1-only).
-            // Proc (radio-speech-processor) verwijderd: doet niets op USB-audio (de
-            // radio-shaping wordt gebypassed op REAR/USB). Client-side EQ/AGC vervangen 't.
-            // NB niet in FM (tester-bevestigd); DNR/AMC blijven wel bruikbaar (991A OM
-            // beperkt DNR niet tot niet-FM; AMC is TX-audio, FTX-1).
+            // Levels: NB/DNR (991A toggle+slider, FTX-1 slider), AMC (FTX-1 only).
+            // Proc (the radio speech processor) has been removed: it does nothing on USB audio
+            // (radio shaping is bypassed on REAR/USB). Client-side EQ/AGC replaces it.
+            // NB not in FM (tester-confirmed); DNR/AMC stay usable (the 991A OM does not limit
+            // DNR to non-FM; AMC is TX audio, FTX-1).
             DspLevelRow("NB", if (isFtx1) null else 13, bit(13), 8, lvl(8), 0f, 10f, onDspControl, enabled = !isFm)
             DspLevelRow("DNR", if (isFtx1) null else 14, bit(14), 9, lvl(9), 0f, 10f, onDspControl)
             if (isFtx1) DspLevelRow("AMC", null, false, 11, lvl(11), 1f, 100f, onDspControl)
-            // Contour / APF / Notch: aan/uit + frequentie (APF alleen in CW; Contour/Notch niet in FM)
+            // Contour / APF / Notch: on-off plus frequency (APF in CW only; Contour and Notch
+            // not in FM)
             DspFreqRow("Contour", 15, bit(15), 18, frq(0), 10f, 3200f, !isFm && !isCw, onDspControl)
             DspFreqRow("APF", 16, bit(16), 19, frq(1), 0f, 50f, isCw, onDspControl)
             DspFreqRow("Notch", 17, bit(17), 20, frq(2), 1f, 320f, !isFm, onDspControl)
@@ -2805,8 +2817,8 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
             ) {
                 DspToggleBtn("RIT", ritOn) { onDspControl(21, if (ritOn) 0 else 1) }
                 DspToggleBtn("XIT", xitOn) { onDspControl(22, if (xitOn) 0 else 1) }
-                // Alleen een actieve (RIT/XIT aan) offset oranje tonen; de 991A kan een
-                // opgeslagen P3-offset teruggeven terwijl de clarifier uit staat.
+                // Only show an active offset (RIT/XIT on) in orange; the 991A can return a stored
+                // P3 offset while the clarifier is off.
                 val clarActive = ritOn || xitOn
                 Text(
                     if (clarActive && off != 0) "%+d Hz".format(off) else "+0 Hz",
@@ -2850,7 +2862,7 @@ private fun DspLevelRow(
     onDspControl: (Int, Int) -> Unit,
     enabled: Boolean = true,
 ) {
-    // Bewezen patroon (zoals squelch/RF-gain): stuur op onValueChange, sync uit server-state.
+    // Proven pattern (like squelch and RF gain): send on onValueChange, sync from server state.
     var v by remember { mutableFloatStateOf(levelValue.toFloat()) }
     LaunchedEffect(levelValue) { v = levelValue.toFloat().coerceIn(min, max) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
@@ -2896,8 +2908,8 @@ private fun DspFreqRow(
     }
 }
 
-// Cijfer-tik afstemming (Fase 4): elke cijferpositie is aantikbaar; bovenste helft =
-// die decade omhoog, onderste helft omlaag. Groeperings-punten zijn niet aantikbaar.
+// Digit-tap tuning (phase 4): every digit position is tappable; the upper half
+// steps that decade up, the lower half down. Grouping dots are not tappable.
 @Composable
 private fun YaesuDigitTuner(freqHz: Long, onLongPress: () -> Unit, onDelta: (Long) -> Unit) {
     if (freqHz <= 0) return
@@ -2907,7 +2919,7 @@ private fun YaesuDigitTuner(freqHz: Long, onLongPress: () -> Unit, onDelta: (Lon
     val n = s.length
     Row(verticalAlignment = Alignment.CenterVertically) {
         s.forEachIndexed { idx, ch ->
-            // Groeperings-punt vóór elke groep van 3 (van rechts).
+            // Grouping dot before every group of three (from the right).
             if (idx > 0 && (n - idx) % 3 == 0) {
                 Text(".", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
             }
@@ -2924,7 +2936,7 @@ private fun YaesuDigitTuner(freqHz: Long, onLongPress: () -> Unit, onDelta: (Lon
                             onLongPress = { lp() },
                         )
                     }
-                    // Grotere cijfers + bredere/hogere tik-zone voor vinger-bediening.
+                    // Bigger digits and a wider, taller tap zone for finger use.
                     .padding(horizontal = 6.dp, vertical = 6.dp),
             ) {
                 Text(ch.toString(), fontSize = 30.sp, fontWeight = FontWeight.Bold)
@@ -2934,14 +2946,14 @@ private fun YaesuDigitTuner(freqHz: Long, onLongPress: () -> Unit, onDelta: (Lon
     }
 }
 
-// Touch-stapper (Fase 4): −/+ met instelbare stapgrootte (10 Hz … 1 MHz).
+// Touch stepper (phase 4): - / + with a settable step size (10 Hz to 1 MHz).
 @Composable
 private fun YaesuFreqStepper(onDelta: (Long) -> Unit) {
     var stepHz by rememberSaveable { mutableStateOf(1000L) }
     val steps = listOf("10" to 10L, "100" to 100L, "1k" to 1_000L, "10k" to 10_000L, "100k" to 100_000L, "1M" to 1_000_000L)
-    // Vol-breedte + gewogen knoppen: Material-knoppen hebben een min-breedte (~58dp)
-    // waardoor 8 knoppen naast elkaar op een telefoon niet passen (de + viel eraf).
-    // weight(1f) overschrijft die min-breedte zodat alles altijd past en zichtbaar is.
+    // Full width plus weighted buttons: Material buttons have a minimum width (~58dp)
+    // which stops eight buttons fitting side by side on a phone (the + fell off).
+    // weight(1f) overrides that minimum so everything always fits and stays visible.
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),

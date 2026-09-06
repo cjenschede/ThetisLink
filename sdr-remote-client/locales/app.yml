@@ -483,6 +483,26 @@ screen_device_name_tooltip:
   nl: "Wordt getoond in het relay-log/dashboard om dit apparaat te herkennen. Wordt actief na herstart."
   de: "Wird im Relay-Log/Dashboard angezeigt, um dieses Gerät zu identifizieren. Wird nach Neustart wirksam."
   fr: "Affiché dans le journal/tableau de bord du relais pour identifier cet appareil. Prend effet au redémarrage."
+main_tx_own_elsewhere:
+  en: "TX elsewhere"
+  nl: "TX op andere radio"
+  de: "TX auf anderem Geraet"
+  fr: "TX sur un autre poste"
+screen_multi_tx:
+  en: "Multi-TX (one microphone, several transmitters)"
+  nl: "Multi-TX (een microfoon, meerdere zenders)"
+  de: "Multi-TX (ein Mikrofon, mehrere Sender)"
+  fr: "Multi-TX (un microphone, plusieurs emetteurs)"
+radio_usb_lost:
+  en: "USB LOST"
+  nl: "USB KWIJT"
+  de: "USB WEG"
+  fr: "USB PERDU"
+screen_multi_tx_tooltip:
+  en: "Off: one transmitter at a time. Whoever is already transmitting keeps it - click another and you briefly see 'TX elsewhere' and nothing happens. Hold a PTT key down and it starts as soon as the first one frees up. On: the same microphone goes to every keyed transmitter, so Thetis and both Yaesus together. Desktop only; the phone always keys one radio."
+  nl: "Uit: een zender tegelijk. Wie al zendt houdt hem - klik je op een andere, dan zie je kort 'TX op andere radio' en gebeurt er verder niets. Houd je een PTT-toets ingedrukt, dan begint die zodra de eerste vrijkomt. Aan: dezelfde microfoon gaat naar elke gekeyde zender, dus Thetis en beide Yaesu's samen. Alleen op de desktop; de telefoon keyt altijd een radio."
+  de: "Aus: ein Sender zur Zeit. Wer schon sendet, behaelt ihn - eine andere Taste zeigt kurz 'TX auf anderem Geraet' und sonst passiert nichts. Ein: dasselbe Mikrofon geht an jeden getasteten Sender, also Thetis und beide Yaesu gleichzeitig. Nur Desktop; das Telefon tastet immer ein Geraet."
+  fr: "Desactive : un emetteur a la fois. Celui qui emet deja le garde - appuyer sur un autre affiche brievement 'TX sur un autre poste' et rien de plus. Active : le meme microphone va vers chaque emetteur en TX, donc Thetis et les deux Yaesu ensemble. Bureau uniquement ; le telephone n'active qu'un poste."
 screen_audio_over_udp:
   en: "Audio over UDP (low latency)"
   nl: "Audio over UDP (lage latency)"

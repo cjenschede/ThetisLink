@@ -8,6 +8,7 @@
     <!-- Common / shared -->
     <string name="common_connect">Connexion</string>
     <string name="common_disconnect">Déconnexion</string>
+    <string name="common_exit">Quitter</string>
     <string name="common_connected">Connecté</string>
     <string name="common_disconnected">Déconnecté</string>
     <string name="common_save">Enregistrer</string>
@@ -296,4 +297,17 @@
     <string name="settings_roger_hint">Une breve tonalite a la fin de votre emission. L\'emetteur reste en emission le temps voulu, pour que le correspondant l\'entende. Jamais en modes data ou numeriques.</string>
     <string name="settings_roger_volume">Niveau</string>
     <string name="settings_roger_fm">Aussi en FM</string>
+    <!-- Bouton PTT Bluetooth (YPC21 et similaires). Android 12 et plus. -->
+    <string name="settings_ble_ptt">Bouton PTT BT :</string>
+    <string name="settings_ble_ptt_hint">Un bouton d’émission Bluetooth, connecté directement</string>
+    <string name="settings_ble_ptt_choose">Choisir le bouton</string>
+    <string name="settings_ble_ptt_scanning">Recherche de boutons…</string>
+    <string name="settings_ble_ptt_none_yet">Rien trouvé pour l’instant. Appuyez une fois pour le réveiller.</string>
+    <string name="settings_ble_ptt_needs_android12">Nécessite Android 12 ou plus récent</string>
+    <string name="settings_ble_ptt_no_permission">Autorisation Bluetooth refusée</string>
+    <string name="settings_ble_ptt_connected">Connecté : %1$s</string>
+    <string name="settings_ble_ptt_connecting">Connexion…</string>
+    <string name="settings_ble_ptt_waiting">Hors portée — se reconnecte tout seul</string>
+    <string name="settings_ble_ptt_reconnect">Reconnecter</string>
+    <string name="settings_ble_ptt_forget">Oublier ce bouton</string>
 </resources>

@@ -75,12 +75,34 @@ impl RadioModel {
 pub fn log_input_devices() {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
-    match host.input_devices() {
-        Ok(devs) => {
-            let names: Vec<String> = devs.filter_map(|d| d.name().ok()).collect();
-            info!("Available audio input devices ({}): {:?}", names.len(), names);
+    let mut empty = 0;
+
+    // Outputs as well as inputs. It only counted the inputs, and the output is
+    // the way TO the radio - the direction that carries the transmission.
+    for (kind, devs) in [
+        ("input", host.input_devices().map(|d| d.collect::<Vec<_>>())),
+        ("output", host.output_devices().map(|d| d.collect::<Vec<_>>())),
+    ] {
+        match devs {
+            Ok(devs) => {
+                let names: Vec<String> = devs.iter().filter_map(|d| d.name().ok()).collect();
+                if names.is_empty() {
+                    empty += 1;
+                    warn!("NO audio {} devices at all - Windows hands out an empty list", kind);
+                } else {
+                    info!("Available audio {} devices ({}): {:?}", kind, names.len(), names);
+                }
+            }
+            Err(e) => warn!("Could not enumerate audio {} devices: {}", kind, e),
         }
-        Err(e) => warn!("Could not enumerate audio input devices: {}", e),
+    }
+
+    // Said once, loudly, where it is read: with no devices at all, every later
+    // "cannot find device X" is a consequence and not the fault.
+    if empty > 0 {
+        warn!(
+            "The machine has no sound cards to offer. The usual cause is a Remote Desktop              session: while one is connected it takes them out of the session. Disconnect it,              or set its audio to play on the remote computer, and restart the server - this              list is only read at startup."
+        );
     }
 }
 
@@ -350,6 +372,92 @@ impl Ft991aUsbRoutingSnapshot {
 #[allow(dead_code)]
 const SWR_991A_RAW_THRESHOLD: u16 = 110;
 
+/// When a port that came back has to be put in a known state first.
+///
+/// Only when THIS side had the radio keyed. A radio worked locally with its own
+/// microphone is none of our business, and forcing RX there would cut the
+/// operator off mid-sentence.
+pub(crate) fn release_on_reopen(ptt_commanded: bool) -> bool {
+    ptt_commanded
+}
+
+/// When a port that has stayed away means the radio has stopped by itself.
+///
+/// The radio's own TX time-out is the only brake left once the cable is gone,
+/// and after it has run there is nothing to release - the transmission ended,
+/// unheard, because the audio rides on that same USB.
+///
+/// **A time-out of zero is the operator switching that brake off**, and then
+/// this cannot fire: the radio really can keep transmitting until somebody
+/// walks over to it. Saying "it has stopped" there would be a guess dressed as
+/// a fact. That condition was in the code and in no test, which is how a
+/// safety net quietly stops being one (review finding).
+pub(crate) fn release_on_timeout(
+    ptt_commanded: bool,
+    tot_minutes: u8,
+    waited: std::time::Duration,
+) -> bool {
+    ptt_commanded
+        && tot_minutes > 0
+        && waited >= std::time::Duration::from_secs(u64::from(tot_minutes) * 60)
+}
+
+#[cfg(test)]
+mod safety_release_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn a_port_that_returns_releases_only_what_we_were_keying() {
+        assert!(release_on_reopen(true));
+        assert!(!release_on_reopen(false));
+    }
+
+    #[test]
+    fn the_time_out_has_to_have_actually_run() {
+        let tot = 10;
+        assert!(!release_on_timeout(true, tot, Duration::from_secs(9 * 60)));
+        assert!(release_on_timeout(true, tot, Duration::from_secs(10 * 60)));
+        assert!(release_on_timeout(true, tot, Duration::from_secs(30 * 60)));
+    }
+
+    /// One minute is the lowest setting the radio offers, and it is the one
+    /// this whole subject was measured with. Every other test here uses ten or
+    /// zero, so `tot_minutes > 0` could quietly become `> 1` and the net would
+    /// disappear for exactly that setting - in the way this file exists to stop
+    /// (review finding).
+    #[test]
+    fn one_minute_is_a_time_out_like_any_other() {
+        assert!(!release_on_timeout(true, 1, Duration::from_secs(59)));
+        assert!(release_on_timeout(true, 1, Duration::from_secs(60)));
+        assert!(release_on_timeout(true, 5, Duration::from_secs(5 * 60)));
+        // And the top of the menu, so the tested range covers what the radio
+        // actually offers instead of stopping at the ten this was measured with.
+        assert!(!release_on_timeout(true, 30, Duration::from_secs(29 * 60)));
+        assert!(release_on_timeout(true, 30, Duration::from_secs(30 * 60)));
+    }
+
+    #[test]
+    fn a_radio_we_were_not_keying_is_left_alone() {
+        assert!(!release_on_timeout(false, 10, Duration::from_secs(60 * 60)));
+    }
+
+    /// The condition the whole safety net leans on, and it was written down
+    /// nowhere. With the brake switched off on the radio there is no moment at
+    /// which we may claim it has stopped - not after ten minutes, not after an
+    /// hour.
+    #[test]
+    fn a_radio_with_its_time_out_switched_off_is_never_assumed_to_have_stopped() {
+        // One case, not three: `tot_minutes > 0` short-circuits before the
+        // clock is read, so a longer wait walks the same path. Written as a
+        // range it only looked thorough (review finding).
+        assert!(
+            !release_on_timeout(true, 0, Duration::from_secs(100 * 3600)),
+            "claimed the radio stopped after a hundred hours with no time-out set"
+        );
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct YaesuState {
     pub connected: bool,
@@ -359,10 +467,28 @@ pub struct YaesuState {
     /// most common field problem - other CAT software still holding the port
     /// in the background - from a silent absence into a named one.
     pub port_trouble: u8,
+    /// What the CAT link has been doing wrong since it last behaved.
+    ///
+    /// Lives here rather than in the poll loop because the loop returns on the
+    /// first stalled write and is restarted; a counter inside it can never
+    /// reach two, and two is what tells a busy port from a wrong baud rate.
+    pub cat_trouble: sdr_remote_core::cat_health::CatTrouble,
     pub vfo_a_freq: u64,
     pub vfo_b_freq: u64,
     pub mode: u8,           // Internal mode (0=LSB, 1=USB, etc. - Thetis numbering)
     pub tx_active: bool,
+    /// The last PTT state ThetisLink asked THIS radio for.
+    ///
+    /// Not `tx_active`, which is what the radio reports and which the 991A was
+    /// measured to get wrong. This is our own side of the conversation, and it
+    /// is the only thing that can answer "was this transmission ours" after the
+    /// cable is gone.
+    ///
+    /// It lives here rather than in the poll loop for the same reason
+    /// `cat_trouble` does: that loop returns on a stalled write and is
+    /// restarted, so anything it holds is lost exactly when the port dies -
+    /// which is the moment this has to survive.
+    pub ptt_commanded: bool,
     pub smeter: u16,        // Raw S-meter value (0-255)
     pub af_gain: u8,        // 0-255
     pub tx_power: u8,       // 0-100
@@ -461,6 +587,19 @@ pub struct YaesuState {
     /// The radio's own TX time-out timer in minutes, from its EX menu (FT-991A 036,
     /// FTX-1 030112), read once when the radio connects. 0 = off.
     pub tot_minutes: u8,
+    /// How often this server has let go of the PTT on its own initiative.
+    ///
+    /// Bumped in `poll.rs` when the radio stopped transmitting by itself or its
+    /// TX time-out timer is about to fire. A counter and not a flag, so the
+    /// network layer cannot miss one between two reads and cannot see the same
+    /// one twice.
+    ///
+    /// It exists because unkeying the radio was only half the job: the session
+    /// still had the client down as the holder, and the client still believed
+    /// it was transmitting. Nothing told it. That is the whole of the complaint
+    /// from 2026-08-07 and it survived five attempts at fixing it on the wrong
+    /// side (2026-09-05).
+    pub auto_release: u32,
     /// Whether an FTX-1 memory write is allowed at all - see `ftx1_memory_write_ack`
     /// in config.rs for what it costs. Never consulted for the FT-991A.
     pub ftx1_memory_write_ack: bool,
@@ -476,10 +615,12 @@ impl Default for YaesuState {
         Self {
             connected: false,
             port_trouble: sdr_remote_core::protocol::PORT_TROUBLE_NONE,
+            cat_trouble: Default::default(),
             vfo_a_freq: 0,
             vfo_b_freq: 0,
             mode: 1, // USB default
             tx_active: false,
+            ptt_commanded: false,
             smeter: 0,
             af_gain: 0,
             tx_power: 0,
@@ -516,6 +657,7 @@ impl Default for YaesuState {
             radio_tx: None,
             radio_rx_streak: 0,
             tot_minutes: 0,
+            auto_release: 0,
             ftx1_memory_write_ack: false,
             audio_channel: 2,
         }

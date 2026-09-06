@@ -451,6 +451,20 @@ pub(super) fn parse_responses(
                             prefix, payload.len(), payload);
                         *warned_short_if = true;
                     }
+                    // Counted on every occurrence, not only the first: the row
+                    // exists to reach three, and a warn-once guard can never
+                    // get there. It had a test and no caller until now, which
+                    // is the shape this project keeps finding - green counting
+                    // for something it does not cover (review finding).
+                    let crossed = {
+                        let mut st = status.lock().unwrap();
+                        let before = sdr_remote_core::cat_health::baud_hint_due(st.cat_trouble);
+                        st.cat_trouble.short_replies = st.cat_trouble.short_replies.saturating_add(1);
+                        !before && sdr_remote_core::cat_health::baud_hint_due(st.cat_trouble)
+                    };
+                    if crossed {
+                        warn!("{} replies keep coming back short - check baud radio-menu vs config", prefix);
+                    }
                 }
             }
             _ => {

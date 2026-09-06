@@ -87,6 +87,12 @@ pub enum Command {
     Rf2kSetDriveConfig { category: u8, band: u8, value: u8 },
     // Yaesu FT-991A
     SetYaesuVolume(f32),
+    /// May a client modulate more than one transmitter at a time?
+    ///
+    /// Off by default. On, the same microphone fans out to every keyed Yaesu -
+    /// between Thetis and a Yaesu that always happened, because those are separate
+    /// encoding paths.
+    SetMultiTx(bool),
     SetYaesuPtt(bool),
     SetYaesuFreq(u64),
     SetYaesuMode(u8),

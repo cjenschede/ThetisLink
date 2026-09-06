@@ -85,6 +85,13 @@ pub struct Report {
     /// on in a conversation you are conducting (2026-08-16).
     pub reply: Option<String>,
     pub reply_at: Option<i64>,
+    /// When the station put the answer aside, if it has.
+    ///
+    /// Delivered says a client asked for it, which also happens when nobody
+    /// looked. This says a person was done with it - and that is the half the
+    /// administrator could not see, while it is the half he wrote the answer
+    /// for.
+    pub reply_dismissed_at: Option<i64>,
     /// When it was fetched to the administrator's own computer, if it was.
     ///
     /// A collected report is gone from here - that is what collecting means -
@@ -163,7 +170,12 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
             -- When the station fetched it. Fetching is delivery: it is the only
             -- moment this service can observe, and an answer nobody collected
             -- must not be swept up with one that arrived.
-            delivered_at  INTEGER
+            delivered_at  INTEGER,
+            -- When the operator put it aside. Different from delivered: fetched
+            -- says a client asked for it, this says a person was done with it.
+            -- A moment and not a flag, so it stays reversible and the
+            -- administrator can see when it happened.
+            dismissed_at  INTEGER
         );
         CREATE INDEX IF NOT EXISTS replies_station ON replies(station_id);
 
@@ -177,7 +189,36 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
             station_id    INTEGER NOT NULL,
             at            INTEGER NOT NULL
         );",
-    )
+    )?;
+
+    // A store made before answers could be put aside has no such column, and
+    // CREATE TABLE IF NOT EXISTS does nothing for a table that is already there.
+    // Asked rather than assumed: adding it twice is an error, and a service that
+    // refuses to start over a column is worse than a service without the column.
+    // Same idiom as the migrations in store.rs.
+    let has_dismissed = conn
+        .prepare("SELECT 1 FROM pragma_table_info('replies') WHERE name = 'dismissed_at'")?
+        .exists([])?;
+    if !has_dismissed {
+        // Two processes can start at the same moment and both find the column
+        // missing; the second ALTER then fails on a column that is by now
+        // exactly what was wanted. Refusing to start over that is losing the
+        // service to a race we have already won, so the error only counts if the
+        // column is still not there afterwards.
+        match conn.execute("ALTER TABLE replies ADD COLUMN dismissed_at INTEGER", []) {
+            Ok(_) => log::info!("replies.dismissed_at added to an existing store"),
+            Err(e) => {
+                let now_there = conn
+                    .prepare("SELECT 1 FROM pragma_table_info('replies') WHERE name = 'dismissed_at'")?
+                    .exists([])?;
+                if !now_there {
+                    return Err(e);
+                }
+                log::info!("replies.dismissed_at was added by another starter");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Take a report in, or say why not.
@@ -254,6 +295,8 @@ pub fn list(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Report>> {
                 (SELECT r.body FROM replies r WHERE r.diagnosis_id = d.id
                    ORDER BY r.at DESC LIMIT 1),
                 (SELECT r.at   FROM replies r WHERE r.diagnosis_id = d.id
+                   ORDER BY r.at DESC LIMIT 1),
+                (SELECT r.dismissed_at FROM replies r WHERE r.diagnosis_id = d.id
                    ORDER BY r.at DESC LIMIT 1)
          FROM diagnoses d ORDER BY d.id DESC LIMIT 200",
     )?;
@@ -291,6 +334,7 @@ pub fn list(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Report>> {
             replied: r.get(6)?,
             reply: r.get(7)?,
             reply_at: r.get(8)?,
+            reply_dismissed_at: r.get(9)?,
             collected_at: None,
         })
     })?;
@@ -318,6 +362,8 @@ pub fn list(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Report>> {
                 (SELECT r.body FROM replies r WHERE r.diagnosis_id = c.diagnosis_id
                    ORDER BY r.at DESC LIMIT 1),
                 (SELECT r.at   FROM replies r WHERE r.diagnosis_id = c.diagnosis_id
+                   ORDER BY r.at DESC LIMIT 1),
+                (SELECT r.dismissed_at FROM replies r WHERE r.diagnosis_id = c.diagnosis_id
                    ORDER BY r.at DESC LIMIT 1)
          FROM collected c
          WHERE c.diagnosis_id NOT IN (SELECT id FROM diagnoses)
@@ -334,6 +380,7 @@ pub fn list(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Report>> {
             replied: r.get(4)?,
             reply: r.get(5)?,
             reply_at: r.get(6)?,
+            reply_dismissed_at: r.get(7)?,
             collected_at: Some(r.get(2)?),
         })
     })?;
@@ -463,13 +510,49 @@ pub fn reply(conn: &Connection, id: i64, text: &str, now: i64) -> Result<i64, Po
 
 
 /// Replies waiting for one station.
+/// Put an answer aside, on behalf of the station it was addressed to.
+///
+/// Aside, not away: `dismissed_at` is a moment, so this stays reversible and the
+/// administrator can still see that an answer went out and was dealt with. What
+/// it does mean is that `replies_for` stops handing it back, which is what takes
+/// it off the operator's screen - on every one of their devices at once, because
+/// the answer belongs to a station and not to a machine.
+///
+/// Returns whether this call is what put it aside. A second call, or a call from
+/// a station the answer does not belong to, changes nothing and says so.
+pub fn dismiss(
+    conn: &Connection,
+    station_id: i64,
+    reply_id: i64,
+    now: i64,
+) -> rusqlite::Result<bool> {
+    // The station comes from the ticket, never from the request, and it is in
+    // the WHERE rather than in a check beforehand: one statement decides both
+    // whether it may and whether it did. `dismissed_at IS NULL` makes a second
+    // press from a second device a no-op instead of a moved timestamp.
+    // delivered_at is set too when it was still open. Putting an answer aside is
+    // stronger proof that it arrived than fetching is: somebody read it and was
+    // done with it. Without this, prune counts a handled answer among the ones
+    // nobody ever collected, and warns about the case that went right.
+    let changed = conn.execute(
+        "UPDATE replies
+            SET dismissed_at = ?3,
+                delivered_at = COALESCE(delivered_at, ?3)
+           WHERE id = ?2 AND station_id = ?1 AND dismissed_at IS NULL",
+        params![station_id, reply_id, now],
+    )?;
+    Ok(changed > 0)
+}
+
 pub fn replies_for(
     conn: &Connection,
     station_id: i64,
     now: i64,
 ) -> rusqlite::Result<Vec<(i64, String, i64)>> {
     let mut q = conn.prepare(
-        "SELECT id, body, at FROM replies WHERE station_id = ?1 ORDER BY id ASC",
+        "SELECT id, body, at FROM replies
+           WHERE station_id = ?1 AND dismissed_at IS NULL
+           ORDER BY id ASC",
     )?;
     let rows = q
         .query_map(params![station_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
@@ -480,7 +563,8 @@ pub fn replies_for(
     // clock as one that arrived - and logged with the same word.
     if !rows.is_empty() {
         let _ = conn.execute(
-            "UPDATE replies SET delivered_at = ?2 WHERE station_id = ?1 AND delivered_at IS NULL",
+            "UPDATE replies SET delivered_at = ?2
+               WHERE station_id = ?1 AND delivered_at IS NULL AND dismissed_at IS NULL",
             params![station_id, now],
         );
     }
@@ -858,6 +942,118 @@ mod tests {
         let got = replies_for(&c, 7, T).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].1, "kijk eens naar je audio-apparaat");
+    }
+
+    /// The live service has a database that predates this column, and every
+    /// other test here starts from an empty one - so the CREATE path is covered
+    /// and the ALTER path is not. This builds the old shape by hand and checks
+    /// that init() brings it forward and the feature works on it.
+    #[test]
+    fn a_store_from_before_this_column_is_brought_forward() {
+        let c = Connection::open_in_memory().unwrap();
+        // The replies table exactly as it was before dismissed_at existed.
+        c.execute_batch(
+            "CREATE TABLE replies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                station_id INTEGER NOT NULL,
+                diagnosis_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                at INTEGER NOT NULL,
+                delivered_at INTEGER
+            );",
+        )
+        .unwrap();
+        init(&c).unwrap();
+
+        let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
+        reply(&c, id, "antwoord op een oude database", T).unwrap();
+        let r = replies_for(&c, 7, T).unwrap()[0].0;
+        assert!(dismiss(&c, 7, r, T).unwrap(), "werkt op de gemigreerde tabel");
+        assert!(replies_for(&c, 7, T).unwrap().is_empty());
+    }
+
+    /// Putting an answer aside is stronger proof that it arrived than fetching
+    /// is. Without this, an answer that was dealt with can still be counted and
+    /// logged as "never fetched" when it is pruned - a warning about the one
+    /// case that went right.
+    #[test]
+    fn an_answer_put_aside_does_not_count_as_never_fetched() {
+        let c = db();
+        let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
+        reply(&c, id, "antwoord", T).unwrap();
+        let r = replies_for(&c, 7, T).unwrap()[0].0;
+
+        // Pretend it was never collected, which is the state prune warns about.
+        c.execute("UPDATE replies SET delivered_at = NULL", []).unwrap();
+        assert!(dismiss(&c, 7, r, T).unwrap());
+
+        let delivered: Option<i64> = c
+            .query_row("SELECT delivered_at FROM replies WHERE id = ?1", params![r], |x| x.get(0))
+            .unwrap();
+        assert!(delivered.is_some(), "afgehandeld is aangekomen");
+    }
+
+    /// An answer put aside stops coming back - and that is the whole point of
+    /// moving this off the machine: it happens once, for the station.
+    #[test]
+    fn an_answer_put_aside_stops_coming_back() {
+        let c = db();
+        let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
+        reply(&c, id, "kijk eens naar je audio-apparaat", T).unwrap();
+        let got = replies_for(&c, 7, T).unwrap();
+        assert_eq!(got.len(), 1, "voorwaarde: hij staat er");
+
+        assert!(dismiss(&c, 7, got[0].0, T).unwrap(), "dit zet hem opzij");
+        assert!(
+            replies_for(&c, 7, T).unwrap().is_empty(),
+            "en dan komt hij niet meer terug"
+        );
+    }
+
+    /// The station in the ticket decides, not the number in the request.
+    #[test]
+    fn putting_aside_an_answer_that_is_not_yours_does_nothing() {
+        let c = db();
+        let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
+        reply(&c, id, "een antwoord voor 7", T).unwrap();
+        let mine = replies_for(&c, 7, T).unwrap()[0].0;
+
+        assert!(!dismiss(&c, 8, mine, T).unwrap(), "8 gaat hier niet over");
+        assert_eq!(
+            replies_for(&c, 7, T).unwrap().len(),
+            1,
+            "en 7 ziet zijn antwoord gewoon nog"
+        );
+    }
+
+    /// Two devices can press it at the same moment. That must be quiet, not an
+    /// error: the second one is not wrong, it is late.
+    #[test]
+    fn putting_the_same_answer_aside_twice_is_quiet() {
+        let c = db();
+        let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
+        reply(&c, id, "antwoord", T).unwrap();
+        let r = replies_for(&c, 7, T).unwrap()[0].0;
+
+        assert!(dismiss(&c, 7, r, T).unwrap());
+        assert!(!dismiss(&c, 7, r, T + 1).unwrap(), "de tweede doet niets");
+        assert!(replies_for(&c, 7, T).unwrap().is_empty());
+    }
+
+    /// Aside on the operator's screen is not gone from the administrator's. The
+    /// person who wrote the answer keeps seeing that it went out.
+    #[test]
+    fn the_administrator_still_sees_an_answer_that_was_put_aside() {
+        let c = db();
+        let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
+        reply(&c, id, "wat ik terugschreef", T).unwrap();
+        let r = replies_for(&c, 7, T).unwrap()[0].0;
+        dismiss(&c, 7, r, T).unwrap();
+
+        let waiting = list(&c, T).unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert!(waiting[0].replied, "er is geantwoord, en dat blijft zo");
+        assert_eq!(waiting[0].reply.as_deref(), Some("wat ik terugschreef"));
     }
 
     /// Leaving the chat takes an uncollected report with it (§6.4).

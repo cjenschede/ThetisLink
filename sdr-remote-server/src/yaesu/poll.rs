@@ -108,6 +108,10 @@ pub(super) fn yaesu_reconnect_thread(
     let mut first = true;
     let mut ever_connected = false;
     let mut disconnect_logged = false;
+    // Since when the port has been away, for the radio's own time-out timer.
+    // A local of the RECONNECT loop, which survives a failed open; not of the
+    // poll function, which returns on the first stalled write.
+    let mut down_since: Option<std::time::Instant> = None;
 
     loop {
         // Nobody owns this radio any more: stop, rather than keep a port open
@@ -117,6 +121,36 @@ pub(super) fn yaesu_reconnect_thread(
             return;
         }
         if !first {
+            if down_since.is_none() {
+                down_since = Some(std::time::Instant::now());
+            }
+            // The radio has its own brake, and after it has run there is nothing
+            // left to release - the transmission ended by itself, unheard,
+            // because the audio rides on the same USB that went away.
+            //
+            // Nobody can be told over a dead port, so this only tells the
+            // CLIENT: the lock goes back and the button lets go, instead of
+            // standing on a transmission that stopped minutes ago. Bumping the
+            // counter is the whole action here; there is no command to send.
+            //
+            // A time-out of zero means the operator switched the brake off. Then
+            // the radio really can keep transmitting until someone walks over to
+            // it, and pretending otherwise would be worse than saying nothing.
+            {
+                let mut st = status.lock().unwrap();
+                let tot = st.tot_minutes;
+                let waited = down_since.map(|t| t.elapsed()).unwrap_or_default();
+                if super::release_on_timeout(st.ptt_commanded, tot, waited) {
+                    log::error!(
+                        "{} SAFETY: the port has been away for {} min, past the radio's {}-minute time-out - it has stopped by itself; letting the client go",
+                        prefix,
+                        waited.as_secs() / 60,
+                        tot
+                    );
+                    st.ptt_commanded = false;
+                    st.auto_release = st.auto_release.wrapping_add(1);
+                }
+            }
             // Drop old audio streams (only meaningful after a successful connect -
             // during cold-start retries there is nothing to drop).
             if ever_connected {
@@ -192,6 +226,7 @@ pub(super) fn yaesu_reconnect_thread(
             }
         };
         // The port opened: whatever named trouble there was is over.
+        down_since = None;
         status.lock().unwrap().port_trouble = sdr_remote_core::protocol::PORT_TROUBLE_NONE;
 
         // Open succeeded - log the transition and reset the dedup flag for the
@@ -199,6 +234,39 @@ pub(super) fn yaesu_reconnect_thread(
         // operator-checklist item (a) is directly greppable.
         if ever_connected {
             info!("{} serial reconnected on {} @ {} baud", prefix, port_name, baud);
+            // A transmitter does not stop because the cable did.
+            //
+            // CAT PTT is a latch, not a heartbeat: the radio holds the last
+            // thing it was told, and when the port dies mid-transmission there
+            // is nobody left to say RX. On 2026-09-06 an FTX-1 came off the USB
+            // during its own transmission - most likely its own RF - and kept
+            // transmitting. The safety watchdog in network.rs did decide to
+            // release it, but that command was queued against a dead port and
+            // then thrown away by the drain above, and nothing asserted a known
+            // state when the port came back. The only remaining brake was the
+            // radio's own time-out timer, which was set to ten minutes.
+            //
+            // Through the queue and with the counter, exactly like the
+            // time-out release: the queue makes it a full release (the
+            // auto-DATA mode restore rides along), and the counter is what
+            // makes network.rs let go of the TX lock and tell the client - so
+            // the button on the screen matches the radio instead of staying
+            // red over a transmission that has stopped.
+            //
+            // Only when WE had it keyed. A radio being worked locally with its
+            // own microphone is none of our business, and forcing RX there
+            // would cut the operator off.
+            if super::release_on_reopen(status.lock().unwrap().ptt_commanded) {
+                log::error!(
+                    "{} SAFETY: the port came back while ThetisLink had this radio keyed - releasing PTT",
+                    prefix
+                );
+                {
+                    let mut st = status.lock().unwrap();
+                    st.auto_release = st.auto_release.wrapping_add(1);
+                }
+                let _ = self_tx.send(YaesuCmd::SetPtt(false));
+            }
         } else {
             info!("{} serial connected on {} @ {} baud", prefix, port_name, baud);
             // Counted so a later symptom can name its likely cause. See
@@ -583,6 +651,21 @@ fn yaesu_poll_loop(
                     );
                 }
                 ptt_on_at = None;
+                // Say so as well as do it.
+                //
+                // Unkeying the radio leaves the session holding this client as the
+                // owner and the client believing it transmits - so it keeps sending
+                // TX audio at a radio that is off, and its button stays red. The
+                // network layer watches this counter and does both halves.
+                {
+                    // One lock, not two. Written as a single assignment first,
+                    // which compiles and then deadlocks the polling thread the
+                    // moment it fires: both guards are alive at once and this
+                    // mutex is not reentrant. Nothing would have caught that
+                    // before the radio froze.
+                    let mut st = status.lock().unwrap();
+                    st.auto_release = st.auto_release.wrapping_add(1);
+                }
                 // Through the queue, not inline: the release then does everything a
                 // normal release does.
                 let _ = self_tx.send(YaesuCmd::SetPtt(false));
@@ -955,6 +1038,9 @@ fn yaesu_poll_loop(
                 last_smeter_poll = Instant::now();
             }
             Ok(cmd) => {
+                // Whether this command ENDS our transmission, decided before the
+                // match so it can be applied after the write instead of before.
+                let ends_our_tx = matches!(cmd, YaesuCmd::SetPtt(false));
                 let cmd_str = match cmd {
                     YaesuCmd::SetFreqA(hz) => {
                         // Memory-mode escape: the 991A/FTX-1 do not accept a direct VFO freq set
@@ -1000,6 +1086,23 @@ fn yaesu_poll_loop(
                     YaesuCmd::SetFreqB(hz) => format!("FB{:09};", hz),
                     YaesuCmd::SetMode(mode) => format!("MD0{};", internal_mode_to_yaesu(mode, model)),
                     YaesuCmd::SetPtt(on) => {
+                        // Our own side of the conversation, and deliberately
+                        // one-sided: keying is written down before the command
+                        // goes out, letting go only after it has.
+                        //
+                        // The other way round loses exactly the case this flag
+                        // exists for. Clearing it here and then failing to write
+                        // `TX0;` - which is what happens when the port dies at
+                        // the moment the operator lets go - leaves the radio
+                        // transmitting while ThetisLink believes it is not, and
+                        // then the reconnect never releases it.
+                        //
+                        // Erring towards "we may still be keying it" costs at
+                        // worst one redundant release; erring the other way
+                        // costs a transmitter nobody can stop.
+                        if on {
+                            status.lock().unwrap().ptt_commanded = true;
+                        }
                         // Auto-DATA PTT-toggle: in the normal modes the Yaesu does not
                         // route USB-mic audio (well) as a TX modulation source - only in the
                         // DATA variants it does. That is why we switch temporarily to the DATA mode for the
@@ -1400,6 +1503,10 @@ fn yaesu_poll_loop(
                     warn!("{} send '{}' failed: {}", prefix, cmd_str, e);
                     return;
                 }
+                // It is on the wire now, so we are no longer keying this radio.
+                if ends_our_tx {
+                    status.lock().unwrap().ptt_commanded = false;
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -1431,7 +1538,24 @@ fn yaesu_poll_loop(
             last_smeter_poll = now;
             let fast: &[u8] = if matches!(model, RadioModel::Ftx1) { b"SM0;RI0;" } else { b"SM0;RM6;RI0;" };
             if let Err(e) = port.write_all(fast) {
+                // A write that will not drain is the port telling us it cannot
+                // keep up with the rate it was opened at. One can be a busy
+                // moment; the second one in a session is the rate being wrong,
+                // and until now nothing said so - the existing baud hint only
+                // fires when the radio has gone silent, and a radio on the
+                // wrong baud is not silent (PD0PLK, report 68).
+                let due = {
+                    let mut st = status.lock().unwrap();
+                    st.cat_trouble.write_stalls = st.cat_trouble.write_stalls.saturating_add(1);
+                    sdr_remote_core::cat_health::baud_hint_due(st.cat_trouble)
+                };
                 warn!("{} S-meter poll failed: {}", prefix, e);
+                if due {
+                    warn!(
+                        "{} writes to the port keep stalling - this is what a wrong baud rate looks like; check baud radio-menu vs config",
+                        prefix
+                    );
+                }
                 return;
             }
         }

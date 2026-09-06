@@ -1,51 +1,55 @@
 # ThetisLink
 
-> **Current release: [v2.10.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.10.0)** —
-> **A first start on the server claims nothing, and two radios of the same type stay apart.** With no
-> configuration file yet, the server opens bare: every optional device off, the second
-> receiver off, no windows opening by themselves. You switch on what you have connected
-> instead of switching off what you do not. It opens in the display language of the machine
-> where ThetisLink has that translation — Dutch, German or French — and in English otherwise,
-> and that applies to a first start only: once there is a configuration file, the language in
-> it is yours and stays. German and French also reach the connect screen, the wizard and the
-> status line under them, which were English whatever you had chosen.
-> **Two Yaesu radios can now hold different settings.** Three of them — switch to SSB on PTT,
-> permission to write memory channels, which side of the USB audio to take — were stored once
-> and applied to both, so granting a permission on one radio granted it on the other for good.
-> They are per radio now, and ThetisLink works out *what* a radio is by asking the port rather
-> than by which slot it sits in: an FTX-1 in the first slot used to get an FT-991A's menu.
-> Also: **rows that do not apply are no longer shown** — the roger beep lists only the channels
-> this station has, the DX spots switch is gone where the server has no cluster, and a radio
-> slot is called "Yaesu 1" until the server says what it is instead of showing a model name
-> that was a startup guess. The **chat** now explains what a relay does and is reachable
-> whether or not you have one; it says plainly that whoever runs a relay may refuse and may
-> stop. **An answer from the administrator that you click away stays away** — remembered per
-> machine, so putting one aside on the phone leaves it standing in the server window. And the
-> strip that shows those answers is bounded and scrolls, so it no longer takes the whole
-> window: it had no limit and no scrollbar, and a few unread answers hid the chat and the
-> report button behind them.
-> And **a settings file that cannot be read is no longer overwritten** — locked by a
-> backup or a virus scanner, it used to read as "nothing has ever been configured here".
-> **Upgrading keeps your configuration**: the three settings that were shared hand their answer
-> to both radios. **Stepping back to 2.9.1 does not** — it does not know the per-radio keys, so
-> keep a copy of your `.conf` if you want that option.
-> **Backwards-compatible** — since 2.9.0 the wire protocol gains two packet types for fetching
-> a connected server's log (`0x35`, `0x36`); an older peer that knows neither simply never asks
-> and never answers. 2.9.1 and 2.10.0 change nothing on the wire. **Stock Thetis v2.10.3.x
-> suffices — no fork change required.**
-> Download `ThetisLink-2.10.0.zip` from the
+> **Current release: [v2.11.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.11.0)** —
+> **One microphone can reach several transmitters, and a cable that comes loose no longer
+> leaves a carrier behind.** With more than one transmitter — a Thetis and a radio, or two
+> radios — only one of them could be on the air. **Multi-TX** sends the same microphone to
+> every keyed transmitter at once; it is a checkbox in the Server tab, off by default, and it
+> appears once there is more than one transmitter to spread over. Alongside it, the busy sign
+> now belongs to each transmitter separately instead of being one answer for the station, and
+> a refusal says **which** radio it is about and why — so turning one of them down no longer
+> lets go of the other.
+> **A radio that loses its USB while transmitting no longer transmits into nothing.** Keying
+> over CAT is a latch: the radio holds the last thing it was told, and the audio rides on that
+> same cable, so the other station was left hearing a bare carrier with the radio's window
+> gone from the screen. The window stays now and its transmit control reads **USB LOST**; the
+> transmission is ended as soon as the cable returns, and if it stays away past the radio's own
+> time-out the server lets the transmitter go by itself. Keying up again takes a fresh press,
+> on purpose.
+> **Every PTT control now follows one rule**, on the desktop and on the phone. Mouse, spacebar,
+> MIDI, the on-screen button and a Bluetooth button each used to keep their own idea of whether
+> you were transmitting, which showed as a button that stayed red after the transmission had
+> ended or a press that fired later than you meant it. The phone also gains a **Bluetooth PTT
+> button** and a way to **leave that says goodbye**, where swiping the app away used to leave
+> the server waiting fifteen seconds for a silence.
+> **An answer you put aside now stays aside** — it belonged to the machine you were sitting at,
+> so the same answer came back on the phone; it belongs to the station now.
+> **Upgrading keeps your configuration**, and **stepping back to 2.10.0 works**: nothing here
+> writes a file an older version cannot read.
+> **Backwards-compatible** — the refusal packet keeps its four bytes and the protocol version is
+> unchanged; two spare flag bits now say which transmitter a refusal is about, and zero means
+> "not stated", which is what every earlier server sends. A newer client then falls back to what
+> it did before, and both directions are held by tests. **Stock Thetis v2.10.3.15 suffices — no
+> fork change required.**
+> Download `ThetisLink-2.11.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are
 > attached to the same release as separate download assets.
 
-Remote control for ANAN 7000DLE SDR with Thetis. Audio, spectrum, PTT and full
-radio control over the network via TCI WebSocket.
+Remote control for Thetis over the network: audio, spectrum, PTT and full radio
+control via TCI WebSocket. ThetisLink talks to Thetis and never to the radio behind
+it, so the radio Thetis drives is the radio you operate — developed here on an
+Apache Labs ANAN, with other stations reporting Hermes-Lite 2 and Red Pitaya. What
+a radio offers is what Thetis offers for it: a single-receiver radio has no RX2, and
+the spectrum width follows the sample rate that radio can deliver. A Yaesu FT-991A
+or FTX-1 is a separate matter — those connect straight to the server over CAT and
+USB audio, one model at a time, and are named individually below.
 
 ## Components
 
 - **ThetisLink Server** — runs on the Thetis PC (Windows), controls the radio via TCI
-- **ThetisLink Client** — desktop client (Windows) with spectrum, waterfall and full control
+- **ThetisLink Client** — desktop client (Windows binary; also builds from source on macOS, experimental) with spectrum, waterfall and full control
 - **ThetisLink Android** — mobile client app
 
 ## Features
@@ -58,7 +62,7 @@ radio control over the network via TCI WebSocket.
 - External device control: Amplitec 6/2 (auto-reconnect over USB), two StockCorner JC-4s/JC-3s tuners in parallel (MCP2221A USB-HID), SPE Expert 1.3K-FA, RF2K-S, UltraBeam RCU-06, and three rotor backends — EA7HG Visual Rotor, PstRotator, and direct Yaesu G-1000DXC via MCP2221A (5 V breakout, BST82 gate switches, position-feedback ADC)
 - Up to two Yaesu radios (FT-991A and/or FTX-1, any mix) running in parallel as independent channels alongside the Thetis SDR — each with its own CAT COM port, USB audio, frequency, mode, PTT and memory channels (model auto-detected)
 - MIDI controller support (desktop + Android)
-- Bluetooth remote PTT (e.g. ZL-01)
+- Bluetooth PTT on the phone, of two kinds. A **BLE transmit button** of the YPC21 / PTT-Z01 class is found, connected and reconnected by the app itself under **Settings > BT PTT button** — no pairing in the Android settings, it keeps working behind a locked screen because the button is in your hand, and a button that goes out of range releases the transmitter instead of leaving it keyed (Android 12 or newer). Shutter-style buttons (e.g. ZL-01), which present themselves as an external touch device, still work as they did — those need the screen awake
 - Embedded WebSDR / KiwiSDR panel with frequency sync and auto-mute on TX
 - DX Cluster with spectrum overlay
 - Mandatory password authentication (HMAC-SHA256) with optional TOTP 2FA

@@ -6,10 +6,11 @@ mod logging;
 #[cfg(target_os = "android")]
 mod audio_oboe;
 
-pub use logging::{init_logging, log_tail};
+pub use logging::{init_logging, log_line, log_tail};
 
 pub use bridge::{
-    relay_is_configured, version, BridgeChatAnswer, BridgeChatMessage, BridgeChatState, BridgeDxSpot, BridgeRadioState, BridgeRogerBeep,
+    ble_drop_policy, ptt_button, relay_is_configured, version, BleDropPolicy, BlePttAction,
+    BlePttGate, PhonePtt, PttButton, PttSource, PttTarget, BridgeChatAnswer, BridgeChatMessage, BridgeChatState, BridgeDxSpot, BridgeRadioState, BridgeRogerBeep,
     SdrBridge,
 };
 
