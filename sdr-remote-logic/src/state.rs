@@ -213,6 +213,12 @@ pub struct RadioState {
     pub rx_af_gain: u8,
     pub agc_enabled: bool,
     pub other_tx: bool,
+    /// The server says a transmitter is on: the PTT flag on the S-meter
+    /// packets, ten times a second. True for a microphone transmission and,
+    /// since the server keys MOX for a CW run, for CW too. It also goes up
+    /// for a Yaesu the server keyed (the flag is one bit for the station),
+    /// which is why nothing reads it without a second condition of its own.
+    pub server_tx: bool,
     pub recording: bool,
     pub playing: bool,
     /// The recordings the last Start made, as (source name, file path).
@@ -229,11 +235,26 @@ pub struct RadioState {
     pub filter_high_hz: i32,
     /// True unless a modern server explicitly reports that Thetis/TCI is disabled.
     pub thetis_configured: bool,
+    /// The server has a radio configured in this slot - powered on or not. From
+    /// the `YaesuPresence` packet, which every client gets. Cleared with the link,
+    /// so a server without that radio does not inherit it from the previous one.
+    pub yaesu_configured: bool,
+    pub yaesu2_configured: bool,
+    /// The server's list of radios is known for this session: set by the
+    /// presence packet, cleared with the link. Until then a transmit choice is
+    /// not redirected to another radio (`ble_ptt::effective_target`).
+    pub radios_known: bool,
     /// True unless a modern server explicitly reports the radio has a single
     /// receiver (SINGLE_RECEIVER flag). Default true = normal 2-RX radio, so
     /// old servers and the default config keep RX2/VRX2 visible.
     pub rx2_present: bool,
     pub thetis_starting: bool,
+    /// The server raised the alarm: the drive went up while a PA may be
+    /// amplifying out of reach. Stays on until the server can reach it again.
+    pub pa_drive_warning: bool,
+    /// The beep that goes with it, and only while the drive is actually up:
+    /// putting it back stops the sound and leaves the notice on screen.
+    pub pa_drive_alarm: bool,
     pub mon_on: bool,
     pub tx_profile_names: Vec<String>,
 
@@ -477,6 +498,8 @@ pub struct RadioState {
     /// Max TX power (watts) for the current band (PATCH-yaesu-power-scaling).
     /// 0 = old server/unknown -> client falls back to 100 for the slider range.
     pub yaesu_tx_power_max: u8,
+    /// What the server is still reading from this radio (`YAESU_LOADING_*`).
+    pub yaesu_loading: u8,
     pub yaesu_squelch: u8,
     pub yaesu_rf_gain: u8,
     pub yaesu_mic_gain: u8,
@@ -538,6 +561,7 @@ pub struct RadioState {
     pub yaesu2_af_gain: u8,
     pub yaesu2_tx_power: u8,
     pub yaesu2_tx_power_max: u8,
+    pub yaesu2_loading: u8,
     pub yaesu2_squelch: u8,
     pub yaesu2_rf_gain: u8,
     pub yaesu2_mic_gain: u8,
@@ -641,6 +665,7 @@ impl Default for RadioState {
             rx_af_gain: 0,
             agc_enabled: false,
             other_tx: false,
+            server_tx: false,
             recording: false,
             playing: false,
             last_recorded: Vec::new(),
@@ -648,8 +673,13 @@ impl Default for RadioState {
             filter_low_hz: 0,
             filter_high_hz: 0,
             thetis_configured: true,
+            yaesu_configured: false,
+            yaesu2_configured: false,
+            radios_known: false,
             rx2_present: true,
             thetis_starting: false,
+            pa_drive_warning: false,
+            pa_drive_alarm: false,
             mon_on: false,
             tx_profile_names: Vec::new(),
             dx_spots_enabled: true,
@@ -818,6 +848,8 @@ impl Default for RadioState {
             yaesu_power_on: false,
             yaesu_tx_power_max: 0,
             yaesu2_tx_power_max: 0,
+            yaesu_loading: 0,
+            yaesu2_loading: 0,
             yaesu_af_gain: 0,
             yaesu_tx_power: 0,
             yaesu_squelch: 0,
@@ -901,6 +933,113 @@ impl Default for RadioState {
             ddc_sample_rate_rx2: 0,
             diversity_autonull_result: 0,
         }
+    }
+}
+
+impl RadioState {
+    /// What a lost session must not leave behind.
+    ///
+    /// **The rule is not "everything a server told us".** That selects 304 of
+    /// this struct's 313 fields, and blanking the frequency and the mode would
+    /// only make the screen flicker for nothing. The rule is narrower, and it
+    /// is the one worth writing down (review 2120A4):
+    ///
+    /// > it came from the server, it is not refreshed within a second or two of
+    /// > reconnecting, **and standing there stale it makes the screen lie or a
+    /// > control unusable.**
+    ///
+    /// That last clause is what these have in common. Two of them were defects:
+    ///
+    /// - `yaesu_loading` left the PTT button reading LOADING **and locked**
+    ///   over a connection that is gone (build 151);
+    /// - `yaesu_held_by_other` left it orange, saying another station holds
+    ///   this radio, **and disabled** - `popouts.rs` hands it straight to
+    ///   `add_enabled` (build 161, the same shape one round later).
+    ///
+    /// Not in here, deliberately: `yaesu_model` / `yaesu2_model`, which the
+    /// server also sets. They are a `u8` with no "unknown" value - 0 means
+    /// FT-991A - so clearing them would state something false rather than
+    /// nothing. What reads them is gated on `radios_known` and
+    /// `yaesu_configured`, which this does clear.
+    ///
+    /// It lives next to the fields it clears, and not in the engine, for one
+    /// reason: on 2026-09-20 two of the eight fields this cycle added
+    /// (`yaesu_loading`, `yaesu2_loading`, build 136) were not in the engine's
+    /// list, and nothing said so - the ratchet counts the *call sites* of
+    /// `session_lost!()`, never the fields. A radio that was still loading when
+    /// the link died left the button locked on "loading" over a connection that
+    /// is gone, with `ptt_face` putting Loading above Refused. Whoever adds a
+    /// field the server owns, adds it here, one screen below its declaration.
+    ///
+    /// The engine's `session_lost!()` calls this and then clears what is not a
+    /// field of this struct: the transmit flags (locals of its loop) and the
+    /// recent CW edges.
+    pub fn forget_session(&mut self) {
+        self.ptt_denial.clear();
+        self.server_tx = false;
+        self.yaesu_tx_active = false;
+        self.yaesu2_tx_active = false;
+        self.pa_drive_warning = false;
+        self.pa_drive_alarm = false;
+        self.yaesu_configured = false;
+        self.yaesu2_configured = false;
+        self.radios_known = false;
+        self.yaesu_loading = 0;
+        self.yaesu2_loading = 0;
+        self.yaesu_held_by_other = false;
+        self.yaesu2_held_by_other = false;
+        self.other_tx = false;
+    }
+}
+
+#[cfg(test)]
+mod forget_session_tests {
+    use super::RadioState;
+
+    /// Every field a server owns is back to what a client without a server
+    /// says. The list is written out on purpose: a hand-written list is
+    /// exactly as complete as the list, so it has to be readable next to the
+    /// declarations - and this test is what makes a forgotten one visible.
+    #[test]
+    fn a_lost_session_leaves_nothing_the_server_said() {
+        let mut s = RadioState::default();
+        s.server_tx = true;
+        s.yaesu_tx_active = true;
+        s.yaesu2_tx_active = true;
+        s.pa_drive_warning = true;
+        s.pa_drive_alarm = true;
+        s.yaesu_configured = true;
+        s.yaesu2_configured = true;
+        s.radios_known = true;
+        s.yaesu_loading = sdr_remote_core::protocol::YAESU_LOADING_MEMORIES;
+        s.yaesu2_loading = sdr_remote_core::protocol::YAESU_LOADING_TONES;
+        s.yaesu_held_by_other = true;
+        s.yaesu2_held_by_other = true;
+        s.other_tx = true;
+        s.ptt_denial.apply_refusal([true, false, false], sdr_remote_core::protocol::DeniedTarget::Thetis, false);
+
+        s.forget_session();
+
+        assert!(!s.server_tx);
+        assert!(!s.yaesu_tx_active && !s.yaesu2_tx_active);
+        assert!(!s.pa_drive_warning && !s.pa_drive_alarm);
+        assert!(!s.yaesu_configured && !s.yaesu2_configured);
+        assert!(!s.radios_known);
+        assert_eq!(
+            (s.yaesu_loading, s.yaesu2_loading),
+            (0, 0),
+            "a radio that was loading when the link died is not loading now - \
+             the button would stay locked on it over a connection that is gone"
+        );
+        assert!(
+            !s.yaesu_held_by_other && !s.yaesu2_held_by_other && !s.other_tx,
+            "another station cannot still be holding a radio we no longer hear -              popouts.rs passes this straight to add_enabled, so it leaves the              button orange AND dead"
+        );
+        // Named on its own line because leaving it out survived both the suite
+        // and fitness.ps1: the test listed every other field and not this one,
+        // and the ratchet counts the link-down sites, never the fields (review
+        // 2120A4).
+        assert!(!s.ptt_denial.active(), "and a refusal by a server that is gone is not a refusal");
     }
 }
 

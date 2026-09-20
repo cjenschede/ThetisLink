@@ -1,4 +1,4 @@
-# ThetisLink v2.11.0 - User Manual
+# ThetisLink v2.12.0 - User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.11.0.apk` | Android client app |
+| `ThetisLink-2.12.0.apk` | Android client app |
 | `Installatie.md` | Installation guide (Dutch) |
 | `User-Manual.md` | User manual (Dutch) |
 | `Technische-Referentie.md` | Technical reference (Dutch) |
@@ -94,6 +94,7 @@ flowchart TB
     Server <--> UB[UltraBeam RCU-06<br>COM]
     Server <--> Rotor[Rotor: EA7HG / PstRotator / G-1000DXC<br>UDP / MCP2221A]
     Server <--> Yaesu[Yaesu FT-991A / FTX-1<br>COM + USB Audio]
+    Desktop <--> Paddle[Morse paddle<br>MCP2221A USB-HID]
 ```
 
 All audio (RX/TX), IQ spectrum data and control go through a single TCI WebSocket connection. ThetisLink does not use a separate CAT TCP connection — TCI covers all required commands, with both stock Thetis v2.10.3.15 and the PA3GHM fork. No VB-Cable or other drivers required.
@@ -339,20 +340,30 @@ On the main Radio tab: LSB, USB, AM, SAM, FM. The pop-out windows add the full s
 In CW mode a remote keyer is available over TCI:
 
 - **CW key down/up:** an assigned button or MIDI pad triggers `keyer:0,true,duration_ms;` for a dit/dah, or a PTT-style press-and-release. The server log shows every key event.
-- **CW macros:** pre-programmed text strings (CQ call, RST report, own call/QTH) are sent to Thetis via `cw_macros:0,text;`. Thetis sends them at the current keyer speed (`cw_keyer_speed:wpm;`).
+- **Stop a macro:** if a CW macro is running in Thetis itself, ThetisLink can cancel it (`cw_macros_stop;`). Macros are **written** in Thetis; ThetisLink has no screen of its own for them.
 - **Stop:** `cw_macros_stop;` cancels a running macro mid-character.
 
-Speed and macro content are adjustable in the client.
+The keyer speed is adjustable in the client.
+
+> **Looking for the Morse paddle?** This block is about the Thetis keyer, driven from a button or a MIDI pad. A real paddle on the client is under [Devices](#devices), section "Morse key: a paddle on an MCP2221A".
 
 ### Filter
 
-The filter width is adjustable with +/- buttons. Presets are available per mode:
-- **CW:** 50, 100, 250, 500, 1000 Hz
-- **SSB:** 1800, 2100, 2400, 2700, 3000, 3300, 3600, 4000 Hz
-- **AM:** 4000, 6000, 8000, 10000, 12000 Hz
-- **FM:** 5000, 10000 Hz
+The filter width is set with the − and + buttons. Between them is the width Thetis
+really has at that moment, also when it is not one of the steps below - after
+dragging in the spectrum, or with a filter chosen in Thetis itself.
 
-**Filter preset tracking (v2.0.0, with fork):** with the PA3GHM fork the current Thetis filter preset (F1, F2, F3, VAR1, VAR2 or NONE) is synchronised live to the client. The client shows which preset Thetis currently has active and you can switch via the same button set — no manual double-setting between client and Thetis UI needed.
+Each press goes to the next step in that direction:
+- **CW:** 50, 100, 250, 500, 1000 Hz - the centre (the pitch) stays put
+- **SSB, DIGU, DIGL:** 1800, 2100, 2400, 2700, 3000, 3300, 3600, 4000 Hz
+- **AM, SAM, DSB, DRM:** 4000, 6000, 8000, 10000, 12000 Hz, symmetric
+- **FM:** no steps - Thetis derives the FM width from the deviation
+
+In USB and LSB the low cut stays where it is while it lies between 0 and 500 Hz, the
+range of "Default Low Cut" in Thetis. Outside that range the button puts it back to
+100 Hz. DIGU and DIGL widen and narrow around their centre.
+
+**Thetis filter preset (fork):** the PA3GHM fork sends the active filter preset (F1, F2, F3, VAR1, VAR2 or NONE) over TCI. **ThetisLink does not use that notification at the moment:** the clients show the width Thetis has, not the name of the preset, and there is no button to pick a preset.
 
 ### Volume
 
@@ -374,7 +385,7 @@ ThetisLink offers three PTT modes:
 - **Toggle:** click the PTT button to switch between transmit and receive
 - **MIDI PTT:** separate MIDI PTT mode via an assigned MIDI controller button, independent of the desktop PTT mode
 
-**Android - BLE transmit button (YPC21 / PTT-Z01 and the same class):** the button ThetisLink connects to itself, and the one to prefer. Set it up under **Settings > BT PTT button** with **Choose button**, pressing the button once to wake it so it turns up in the list; do not pair it in the Android Bluetooth settings. The app reconnects on its own after the button has been out of range or Bluetooth has been off. Because the connection is ThetisLink's own rather than the touch system's, this button also keys **while the screen is locked** - it is in your hand and you can let it go. Out of range, the transmitter is released rather than left keyed. Needs Android 12 or newer.
+**BLE transmit button (YPC21 / PTT-Z01 and the same class) - Android and, since v2.12.0, the desktop too:** the button ThetisLink connects to itself, and the one to prefer. Set it up on the phone under **Settings > BT PTT button**, on the desktop under the **Server** tab in the **BT PTT button** group; both with **Choose button**, pressing the button once to wake it so it turns up in the list; do not pair it in the Android Bluetooth settings. The app reconnects on its own after the button has been out of range or Bluetooth has been off. Because the connection is ThetisLink's own rather than the touch system's, this button also keys **while the screen is locked** - it is in your hand and you can let it go. Out of range, the transmitter is released rather than left keyed. On Android this needs Android 12 or newer; on the desktop it uses the Bluetooth adapter Windows already has.
 
 **Android — external BT remote (ZL-01 or similar):** a Bluetooth button that behaves as an external touch device can be used as a PTT button. ThetisLink intercepts the touch events and maps them to PTT down/up. Only works while the screen is active (touch events are only delivered to a wakeful screen on Android).
 
@@ -577,6 +588,11 @@ Serial USB connection (19200 baud). Displays:
 - 6 antenna positions with configurable labels
 - Switch buttons per port
 
+> **Do you also have a Morse paddle?** It uses the same kind of board and opens
+> the **first** one it finds, while the tuners and the rotor choose by serial
+> number. If they share a PC, read the warning in the section "Morse key: a paddle
+> on an MCP2221A".
+
 ### StockCorner JC-4s / JC-3s automatic tuners (multi-tuner via MCP2221A)
 
 From v2.0.3 the server supports **two physical tuners in parallel**, each via its own Adafruit MCP2221A USB-HID breakout. JC-4s and JC-3s use the same control protocol — the model label is cosmetic only. For each tuner slot you assign a board serial number and (optionally) the Amplitec-A antenna position the tuner physically sits behind; the server then automatically routes a Tune action to the correct physical tuner.
@@ -615,6 +631,81 @@ A timeout fires if the tuner does not ACK within 3 s after GP2 HIGH (status **Ti
 **USB auto-reconnect:** once a bridge has been "Connected" at least once and the link drops afterwards (cable unplugged, sleep mode, hub reset, …), the tuner thread retries the open every 5 s on its own. A successful reconnect resets the timer so a subsequent drop is retried immediately — no server restart needed.
 
 > **Tune-button visibility:** The Tune button in the main screen is only visible when at least one Amplitec label contains a tuner-recognising word (`JC-4s`, `JC4s`, `JC-3s`, `JC3s`, or `Tuner`). Routing to the correct physical tuner slot happens automatically based on the active Amplitec-A position — see [Naming conventions](#naming-conventions).
+
+### Morse key: a paddle on an MCP2221A (v2.12.0)
+
+You can connect a real paddle to the **desktop client** and send with it -
+through Thetis, or straight through a connected Yaesu. The client reads the
+paddle itself, turns it into characters, and sends the key edges with their
+timings to the server, where they are played out at the agreed moment.
+
+**What you need**
+
+- An **Adafruit MCP2221A** breakout on the PC that runs the desktop client.
+- Your paddle, wired to that board's GP pins:
+
+  | pin | function |
+  |---|---|
+  | GP0 | paddle contact A (tip) |
+  | GP1 | paddle contact B (ring) |
+  | GP2 | straight key |
+  | GP3 | free |
+
+  **The MCP2221A has no internal pull-ups.** The resistor is therefore required,
+  not optional. Per input:
+
+  ```
+  VDD --[10k]--+--[470R]-- GPx
+               |      |
+            contact [10nF]
+               |      |
+  GND ---------+------+
+  ```
+
+  - **10 kOhm** pull-up to the **same** supply as the chip - not to 5 V on a
+    3.3 V part. Idle is high, contact closed is low.
+  - **470 Ohm** in series: protects the pin against ESD from the paddle cable
+    and against a wrongly connected voltage.
+  - **10 nF** to ground: damps RF the cable picks up in a shack with a PA, and
+    helps against contact bounce.
+
+  A pin you leave unwired floats and follows its neighbour - measured, and the
+  reason the keyer reads only the inputs you switch on in the settings. If you
+  later wire a straight key to GP2, switch that input on as well; left off, a
+  floating GP2 keys along with paddle contact B.
+- To send through a **Yaesu**: nothing extra. The radio presents two COM ports
+  on the same USB cable; ThetisLink already uses one for CAT and the other
+  becomes the key. You do **not** need a wire to the radio's KEY jack.
+
+**Settings** live in the client under the Morse key group. Switch on the input
+you actually wired first - the paddle is on by default, the straight key **off**,
+because an unwired GP2 would otherwise key along. Then: speed, iambic A or
+B, swapped paddles, straight key, the sidetone, and how long the transmitter
+stays up after the last character. **Key to** chooses where the key goes:
+Thetis or one of the radios.
+
+**What the server does with a Yaesu**
+
+- It finds that radio's second port by itself; you configure nothing.
+- On the first run it sets menu **PC KEYING** to RTS and remembers what was
+  there: menu `060` on the FT-991A, address `020114` on the FTX-1. It puts it
+  back at exit. If it was already on RTS before the server started, it is left
+  alone.
+- Sending is refused while the radio is off, not in a CW mode, or still reading
+  its memories and tones. The button of that radio then reads **PTT blocked**,
+  with the reason in the server log.
+- While you send, that radio's PTT button turns red and reads **CW**.
+- Close the server while sending and the key line goes down first, the menu
+  after it. The radio is not left transmitting.
+
+> **Careful if the server runs on the same PC.** ThetisLink uses the MCP2221A
+> board in three places: for this paddle, for the JC-4s/JC-3s tuners, and for
+> the G-1000DXC rotor. The tuners and the rotor pick their board **by serial
+> number**; the paddle opens the **first board it finds** and switches GP0, GP1
+> and GP2 to input. So with more than one MCP2221A board in one PC the paddle
+> may take a tuner's or the rotor's board - that device then stops working and
+> the paddle reads nothing. This combination is untested. Keep the paddle on a
+> PC without a tuner or rotor board, or unplug the other board while you send.
 
 ### SPE Expert 1.3K-FA
 
@@ -669,6 +760,9 @@ The client panel (compass, GoTo, Stop) looks the same regardless — the backend
 #### EA7HG Visual Rotor
 
 Direct UDP connection to EA7HG Visual Rotor software (Prosistel protocol). Enter the Visual Rotor address (e.g. `192.168.1.60:3010`); no further configuration needed.
+
+> **The same applies here:** if a Morse paddle shares this PC, it opens the first
+> MCP2221A board it finds. See the section "Morse key: a paddle on an MCP2221A".
 
 #### Yaesu G-1000DXC via Adafruit MCP2221A (v2.1.0+)
 
@@ -880,7 +974,7 @@ From v2.4.0 the Yaesu can also transmit in **SSB (LSB/USB)** remotely using the 
 - **FTX-1:** ThetisLink leaves the FTX-1's **internal automatic modulation source** untouched — it selects the USB audio itself, so no menu setting is forced.
 - **Note:** the automatic DATA switch applies only to **FM → DATA-FM**, not to SSB. SSB stays in the normal SSB mode and uses the REAR/USB routing above.
 
-SSB-over-USB routing is applied **per PTT** by default and restored between overs (presence-based restore in opt-out mode). The **Exit** button returns the radio to its fixed MIC/DATA baseline. The TX-audio output is retried until the USB CODEC device is free.
+SSB-over-USB routing is applied **per PTT** by default and restored between overs (presence-based restore in opt-out mode). Closing the server (the window's close button) returns the radio to its fixed MIC/DATA baseline. The TX-audio output is retried until the USB CODEC device is free.
 
 ### TX audio processing: compressor + AGC (v2.4.0)
 

@@ -1,37 +1,37 @@
 # ThetisLink
 
-> **Current release: [v2.11.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.11.0)** —
-> **One microphone can reach several transmitters, and a cable that comes loose no longer
-> leaves a carrier behind.** With more than one transmitter — a Thetis and a radio, or two
-> radios — only one of them could be on the air. **Multi-TX** sends the same microphone to
-> every keyed transmitter at once; it is a checkbox in the Server tab, off by default, and it
-> appears once there is more than one transmitter to spread over. Alongside it, the busy sign
-> now belongs to each transmitter separately instead of being one answer for the station, and
-> a refusal says **which** radio it is about and why — so turning one of them down no longer
-> lets go of the other.
-> **A radio that loses its USB while transmitting no longer transmits into nothing.** Keying
-> over CAT is a latch: the radio holds the last thing it was told, and the audio rides on that
-> same cable, so the other station was left hearing a bare carrier with the radio's window
-> gone from the screen. The window stays now and its transmit control reads **USB LOST**; the
-> transmission is ended as soon as the cable returns, and if it stays away past the radio's own
-> time-out the server lets the transmitter go by itself. Keying up again takes a fresh press,
-> on purpose.
-> **Every PTT control now follows one rule**, on the desktop and on the phone. Mouse, spacebar,
-> MIDI, the on-screen button and a Bluetooth button each used to keep their own idea of whether
-> you were transmitting, which showed as a button that stayed red after the transmission had
-> ended or a press that fired later than you meant it. The phone also gains a **Bluetooth PTT
-> button** and a way to **leave that says goodbye**, where swiping the app away used to leave
-> the server waiting fifteen seconds for a silence.
-> **An answer you put aside now stays aside** — it belonged to the machine you were sitting at,
-> so the same answer came back on the phone; it belongs to the station now.
-> **Upgrading keeps your configuration**, and **stepping back to 2.10.0 works**: nothing here
-> writes a file an older version cannot read.
-> **Backwards-compatible** — the refusal packet keeps its four bytes and the protocol version is
-> unchanged; two spare flag bits now say which transmitter a refusal is about, and zero means
-> "not stated", which is what every earlier server sends. A newer client then falls back to what
-> it did before, and both directions are held by tests. **Stock Thetis v2.10.3.15 suffices — no
-> fork change required.**
-> Download `ThetisLink-2.11.0.zip` from the
+> **Current release: [v2.12.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.12.0)** —
+> **A real paddle, and it keys the radio itself.** Plug a Morse paddle into an Adafruit
+> MCP2221A board on the PC running the desktop client and send with it. What you key goes
+> either to Thetis or **straight to a connected Yaesu** — over the second COM port the radio
+> already presents on the same USB cable, so there is no wire to the KEY jack. ThetisLink finds
+> that port itself, sets the radio's **PC KEYING** menu on the first run, remembers what was
+> there, and puts it back when the server stops. The client turns your contacts into elements
+> and gives you a sidetone at once; the server plays the edges out at exact moments. Speed,
+> iambic A or B, swapped paddles, a straight key and the hang time are all settings. Both the
+> FT-991A and the FTX-1 were keyed in the field, in either radio slot — the manual has the
+> wiring, including the pull-up the board does not have.
+> **Nothing transmits while a radio is still reading its settings.** Connecting to a Yaesu reads
+> its memory channels and tones, and during those seconds a PTT-off could be left waiting behind
+> a long read — which would have left the radio transmitting. That radio's transmit button now
+> reads **LOADING** and the server refuses to key it. Only transmitting is refused; the rest of
+> the controls stay usable.
+> **The FTX-1's 405 menu settings are read in the background**, one at a time in the gaps
+> between the ordinary polling, so nothing waits for them. About 73 seconds, where the first
+> version of that scan took six minutes.
+> **The loss figure measures the link again** — pooled over the streams you actually asked for,
+> with a stream the server stopped reported as such instead of counting against the link, and a
+> duplicate packet no longer standing in for one that never arrived.
+> **The Android app needs a 64-bit device (arm64).** It always did; until now a 32-bit phone or
+> tablet accepted the install and the app fell over on the first tap. It is refused at install
+> time now, with a plain "not compatible".
+> **Upgrading keeps your configuration**, and **stepping back to 2.11.0 works**: nothing here
+> writes a file an older version cannot read, and the menu ThetisLink changes on your radio for
+> CW is put back when the server stops.
+> **Backwards-compatible** — the protocol version is unchanged and the one new field in the
+> radio status is additive: an older server sends zero, which reads as "not loading", which is
+> what an older server means. **Stock Thetis v2.10.3.15 suffices — no fork change required.**
+> Download `ThetisLink-2.12.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are
@@ -59,6 +59,7 @@ USB audio, one model at a time, and are named individually below.
 - Spectrum and waterfall display (up to 1536 kHz with the PA3GHM Thetis fork)
 - Full RX2/VFO-B support with diversity reception
 - Virtual receivers (VRX1/VRX2): two independent receivers carved from the wideband DDC stream by an FFT channelizer, each with its own frequency, mode (USB/LSB/AM/SAM/FM), filter, high-resolution spectrum/waterfall and S-meter — including synchronous AM (SAM) with a carrier-tracking PLL, AM auto-tune-to-carrier, and a per-VRX NB/WB/Auto audio rate
+- A Morse paddle or straight key on the desktop client, read from an Adafruit MCP2221A USB-HID breakout, keying Thetis or a connected Yaesu.
 - External device control: Amplitec 6/2 (auto-reconnect over USB), two StockCorner JC-4s/JC-3s tuners in parallel (MCP2221A USB-HID), SPE Expert 1.3K-FA, RF2K-S, UltraBeam RCU-06, and three rotor backends — EA7HG Visual Rotor, PstRotator, and direct Yaesu G-1000DXC via MCP2221A (5 V breakout, BST82 gate switches, position-feedback ADC)
 - Up to two Yaesu radios (FT-991A and/or FTX-1, any mix) running in parallel as independent channels alongside the Thetis SDR — each with its own CAT COM port, USB audio, frequency, mode, PTT and memory channels (model auto-detected)
 - MIDI controller support (desktop + Android)

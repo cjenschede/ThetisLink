@@ -20,8 +20,13 @@ impl SdrRemoteApp {
         // Phase C: if the relay is used as transport the monitor runs in
         // main.rs; then we only show its status (no second relay connection).
         external_relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
+        sidetone: std::sync::Arc<sdr_remote_logic::sidetone::Sidetone>,
     ) -> Self {
         let config = load_config();
+        sidetone.apply(config.cw_sidetone);
+        // The paddle reader sends its edges to the engine itself; it needs its
+        // own handle before the struct takes the original.
+        let paddle_cmd_tx = cmd_tx.clone();
 
         let input_devices = crate::audio::list_input_devices();
         let output_devices = crate::audio::list_output_devices();
@@ -114,7 +119,7 @@ impl SdrRemoteApp {
             server_input: config.server.clone(),
             password_input: config.password.clone(),
             totp_input: String::new(),
-            mouse_ptt: false,
+            thetis_latches: Default::default(),
             ptt_toggle_mode: config.ptt_toggle,
             yaesu_ptt_toggle_mode: config.yaesu_ptt_toggle,
             yaesu_latches: [sdr_remote_logic::ptt_intent::Latches::default(); 2],
@@ -123,8 +128,10 @@ impl SdrRemoteApp {
             ptt_blocked_by_own: false,
             yaesu_blocked_by_own: [false; 2],
             thetis_want: false,
+            thetis_ptt_allowed: false,
             ptt_blocked_at: None,
             yaesu_blocked_at: [None; 2],
+            yaesu_refused_at: [None; 2],
             spike_protection: config.spike_protection,
             mic_gate_delay_thetis_ms: config.mic_gate_delay_thetis_ms,
             mic_gate_delay_yaesu_ms: config.mic_gate_delay_yaesu_ms,
@@ -141,7 +148,7 @@ impl SdrRemoteApp {
             midi_ptt_toggle_mode: config.midi_ptt_toggle,
             smeter_source: config.smeter_source,
             thetis_autostart: config.thetis_autostart,
-            thetis_autostart_fired: false,
+            thetis_autostart_sent: None,
             allow_zoom_below_2x: config.allow_zoom_below_2x,
             ui_language: config.language.clone(),
             reboot_confirm: false,
@@ -180,7 +187,6 @@ impl SdrRemoteApp {
             diversity_phase: 0.0,
             ddc_sample_rate_rx1: 0,
             ddc_sample_rate_rx2: 0,
-            midi_ptt: false,
             freq_step_index: 3, // default 1 kHz
             memories: config.memories,
             save_mode: false,
@@ -254,6 +260,7 @@ impl SdrRemoteApp {
             audio_error: false,
             agc_enabled: config.agc_enabled,
             other_tx: false,
+            server_tx: false,
             thetis_swr_x100: 100,
             filter_low_hz: 0,
             filter_high_hz: 0,
@@ -679,6 +686,7 @@ impl SdrRemoteApp {
             yaesu_rf_power: 50,
             yaesu_tx_power_max: 100,
             yaesu2_tx_power_max: 100,
+            yaesu_loading: [0; 2],
             yaesu_power_pending: None,
             yaesu_power_pending_at: None,
             yaesu2_power_pending: None,
@@ -687,6 +695,7 @@ impl SdrRemoteApp {
             yaesu_split_active: false,
             yaesu_tuner_state: 0,
             yaesu_hi_swr: false,
+            pa_drive_warning: false,
             yaesu_feature_toggles: 0,
             yaesu_feature_levels: [0u8; 16],
             yaesu_level_sliders: [[0i32; 4]; 2],
@@ -778,6 +787,10 @@ impl SdrRemoteApp {
             collapse_yaesu_eq: config.collapse_yaesu_eq,
             collapse_yaesu_memories: config.collapse_yaesu_memories,
             collapse_yaesu_menu: config.collapse_yaesu_menu,
+            group_audio_open: config.group_audio_open,
+            group_roger_open: config.group_roger_open,
+            group_ble_open: config.group_ble_open,
+            group_cw_open: config.group_cw_open,
             yaesu_memories_h: config.yaesu_memories_h,
             yaesu2_memories_h: config.yaesu2_memories_h,
             main_window_pos: config.main_window_pos.map(|(x, y)| egui::pos2(x, y)),
@@ -857,6 +870,33 @@ impl SdrRemoteApp {
             tci_control_changed_at: None,
             yaesu_control_changed_at: None,
             midi: crate::midi::MidiManager::new(),
+            ble: crate::ble::BleManager::new(),
+            ble_state: sdr_remote_logic::ble_ptt::BlePttState::new(),
+            ble_found: Vec::new(),
+            ble_note: String::new(),
+            ble_enabled: config.ble_ptt_enabled,
+            ble_address: config.ble_ptt_address,
+            ble_name: config.ble_ptt_name.clone(),
+            ble_target: config.ble_ptt_target,
+            ble_toggle: config.ble_ptt_toggle,
+            paddle: crate::paddle::PaddleManager::new(config.cw_keyer, sidetone.clone(), paddle_cmd_tx),
+            keyer_settings: config.cw_keyer,
+            cw_target: config.cw_target,
+            cw_target_sent: None,
+            cw_hang_ms: config.cw_hang_ms,
+            cw_hang_sent: None,
+            paddle_enabled: config.cw_paddle_enabled,
+            sidetone,
+            sidetone_settings: config.cw_sidetone,
+            sidetone_onsets_seen: 0,
+            paddle_rate: String::new(),
+            paddle_edges: 0,
+            paddle_last_edge_ms: None,
+            paddle_key_down: false,
+            paddle_last_edge_at: None,
+            yaesu_configured: false,
+            radios_known: false,
+            yaesu2_configured: false,
             midi_ports: Vec::new(),
             midi_selected_port: config.midi_device.clone(),
             midi_learn_for: None,
@@ -895,6 +935,19 @@ impl SdrRemoteApp {
             .filter_map(|s| crate::midi::MidiMapping::from_config(s))
             .collect();
         app.midi.set_mappings(midi_mappings);
+
+        // The Bluetooth button comes back on its own, like on the phone: a
+        // remembered button is connected at start without being asked.
+        if app.ble_enabled && app.ble_address != 0 && crate::ble::BleManager::available() {
+            app.ble_connect_remembered();
+        }
+
+        // The paddle reader starts with the client when it was on; it looks
+        // for the board on its own until it is there.
+        if app.paddle_enabled {
+            app.paddle.start();
+            log::info!("CW paddle: switched on at start");
+        }
 
         // Auto-connect MIDI if device was saved
         if !config.midi_device.is_empty() {

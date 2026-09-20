@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.11.0 — Gebruikershandleiding
+﻿# ThetisLink v2.12.0 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.11.0.apk` | Android client app |
+| `ThetisLink-2.12.0.apk` | Android client app |
 | `Installatie.md` | Installatiehandleiding (Nederlands) |
 | `User-Manual.md` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.md` | Technische referentie (Nederlands) |
@@ -94,6 +94,7 @@ flowchart TB
     Server <--> UB[UltraBeam RCU-06<br>COM]
     Server <--> Rotor[Rotor: EA7HG / PstRotator / G-1000DXC<br>UDP / MCP2221A]
     Server <--> Yaesu[Yaesu FT-991A / FTX-1<br>COM + USB Audio]
+    Desktop <--> Paddle[Morsepeddel<br>MCP2221A USB-HID]
 ```
 
 Alle audio (RX/TX), IQ spectrum data en besturing gaan via één enkele TCI WebSocket verbinding. ThetisLink gebruikt geen aparte CAT TCP verbinding — TCI dekt alle benodigde commando's, zowel met stock Thetis v2.10.3.15 als met de PA3GHM fork. Geen VB-Cable of andere drivers nodig.
@@ -335,20 +336,30 @@ Op het hoofd-Radio-tabblad: LSB, USB, AM, SAM, FM. De pop-out-vensters voegen de
 In CW-mode is een remote keyer beschikbaar via TCI:
 
 - **CW key down/up:** een toegewezen knop of MIDI-pad activeert `keyer:0,true,duration_ms;` voor een dit/dah, of een PTT-stijl pers-en-loslaat. Server-log toont elke key-event.
-- **CW macros:** voorgeprogrammeerde tekst-strings (CQ-call, RST-rapport, eigen call/QTH) worden via `cw_macros:0,text;` naar Thetis gestuurd. Thetis seint ze met de actuele keyer-snelheid (`cw_keyer_speed:wpm;`).
+- **Macro stoppen:** loopt er in Thetis zelf een CW-macro, dan kun je die vanuit ThetisLink afbreken (`cw_macros_stop;`). Macro's **maken** doe je in Thetis; ThetisLink heeft daar geen eigen scherm voor.
 - **Stop:** `cw_macros_stop;` cancelt een lopende macro halverwege.
 
-Snelheid en macro-content zijn instelbaar in de client.
+De keyer-snelheid is instelbaar in de client.
+
+> **Zoek je de morsepeddel?** Dit blok gaat over de keyer van Thetis, bediend met een knop of MIDI-pad. Een echte peddel aan de client staat onder [Apparaten](#apparaten), sectie "Morsesleutel: peddel op een MCP2221A".
 
 ### Filter
 
-De filterbreedte is instelbaar met +/- knoppen. Presets zijn beschikbaar per mode:
-- **CW:** 50, 100, 250, 500, 1000 Hz
-- **SSB:** 1800, 2100, 2400, 2700, 3000, 3300, 3600, 4000 Hz
-- **AM:** 4000, 6000, 8000, 10000, 12000 Hz
-- **FM:** 5000, 10000 Hz
+De filterbreedte stel je in met de knoppen − en +. Tussen de knoppen staat de breedte
+die Thetis op dat moment echt heeft, ook als dat geen stap uit het rijtje is - na
+slepen in het spectrum, of met een filter dat in Thetis zelf gekozen is.
 
-**Filter preset tracking (v2.0.0, met fork):** met de PA3GHM fork synchroniseert de huidige Thetis-filter-preset (F1, F2, F3, VAR1, VAR2 of NONE) live naar de client. De client toont welke preset Thetis nu actief heeft en je kunt via dezelfde knop-set switchen — geen handmatig dubbel-instellen tussen client en Thetis-UI nodig.
+Elke druk gaat naar de volgende stap in die richting:
+- **CW:** 50, 100, 250, 500, 1000 Hz - het midden (de toonhoogte) blijft staan
+- **SSB, DIGU, DIGL:** 1800, 2100, 2400, 2700, 3000, 3300, 3600, 4000 Hz
+- **AM, SAM, DSB, DRM:** 4000, 6000, 8000, 10000, 12000 Hz, symmetrisch
+- **FM:** geen stappen - Thetis bepaalt de FM-breedte uit de deviatie
+
+In USB en LSB blijft de lage afsnijding staan zolang die tussen 0 en 500 Hz ligt,
+het bereik van "Default Low Cut" in Thetis. Ligt hij daarbuiten, dan zet de knop hem
+terug op 100 Hz. DIGU en DIGL worden breder of smaller om het midden.
+
+**Filter-preset van Thetis (fork):** de PA3GHM fork stuurt de actieve filter-preset (F1, F2, F3, VAR1, VAR2 of NONE) mee over TCI. **ThetisLink gebruikt die melding op dit moment niet:** de clients tonen de breedte die Thetis heeft, niet de naam van de preset, en er is geen knop om een preset te kiezen.
 
 ### Volume
 
@@ -370,7 +381,7 @@ ThetisLink biedt drie PTT modi:
 - **Toggle:** klik op de PTT-knop om te wisselen tussen zenden en ontvangen
 - **MIDI PTT:** aparte MIDI PTT-modus via een toegewezen MIDI controller knop, onafhankelijk van de desktop PTT-modus
 
-**Android - BLE-zendknop (YPC21 / PTT-Z01 en dezelfde klasse):** de knop waar ThetisLink zelf verbinding mee maakt, en de knop van voorkeur. Instellen onder **Instellingen > BT-zendknop** met **Knop kiezen**, waarbij je de knop een keer indrukt om hem wakker te maken zodat hij in de lijst komt; koppel hem niet in de Bluetooth-instellingen van Android. De app verbindt uit zichzelf opnieuw nadat de knop buiten bereik is geweest of Bluetooth uit heeft gestaan. Omdat de verbinding van ThetisLink zelf is en niet van het aanraaksysteem, keyt deze knop ook **met het scherm op slot** - hij zit in je hand en je kunt hem loslaten. Buiten bereik wordt de zender losgelaten in plaats van aan gelaten. Vereist Android 12 of nieuwer.
+**BLE-zendknop (YPC21 / PTT-Z01 en dezelfde klasse) - Android en, sinds v2.12.0, ook de desktop:** de knop waar ThetisLink zelf verbinding mee maakt, en de knop van voorkeur. Op de telefoon instellen onder **Instellingen > BT-zendknop**, op de desktop onder de **Server**-tab in de groep **BT-zendknop**; beide met **Knop kiezen**, waarbij je de knop een keer indrukt om hem wakker te maken zodat hij in de lijst komt; koppel hem niet in de Bluetooth-instellingen van Android. De app verbindt uit zichzelf opnieuw nadat de knop buiten bereik is geweest of Bluetooth uit heeft gestaan. Omdat de verbinding van ThetisLink zelf is en niet van het aanraaksysteem, keyt deze knop ook **met het scherm op slot** - hij zit in je hand en je kunt hem loslaten. Buiten bereik wordt de zender losgelaten in plaats van aan gelaten. Op Android vereist dit Android 12 of nieuwer; op de desktop werkt hij met de Bluetooth-adapter die Windows al heeft.
 
 **Android — externe BT remote (ZL-01 of vergelijkbaar):** een Bluetooth-knop die zich gedraagt als externe touch-device kan als PTT-knop gebruikt worden. ThetisLink onderschept de touch-events en mappt ze naar PTT down/up. Werkt alleen als het scherm actief is (aanraak-events worden alleen door Android afgeleverd op een wakker scherm).
 
@@ -574,6 +585,11 @@ Serieel USB verbinding (19200 baud). Toont:
 - 6 antenne posities met configureerbare labels
 - Schakel knoppen per poort
 
+> **Heb je ook een morsepeddel?** Die gebruikt hetzelfde soort bordje en pakt het
+> **eerste** dat hij vindt, terwijl de tuners en de rotor op serienummer kiezen.
+> Staan ze op één PC, lees dan de waarschuwing in de sectie "Morsesleutel: peddel
+> op een MCP2221A".
+
 ### StockCorner JC-4s / JC-3s automatische tuners (multi-tuner via MCP2221A)
 
 Vanaf v2.0.3 ondersteunt de server **twee fysieke tuners parallel**, elk via een eigen Adafruit MCP2221A USB-HID breakout. JC-4s en JC-3s hebben hetzelfde besturingsprotocol — het modellabel is alleen cosmetisch. Per tuner-slot stel je het bord-serienummer en (optioneel) de Amplitec-A-antennepositie in waarachter de tuner fysiek hangt; de server stuurt vervolgens automatisch de juiste tuner aan bij een Tune-actie.
@@ -612,6 +628,84 @@ Een timeout treedt op als de tuner binnen 3 s na GP2 HIGH niet ACK't (status **T
 **USB auto-reconnect:** zodra een bridge "Connected" is geweest en de verbinding daarna wegvalt (kabel los, slaap-modus, hub reset, …) probeert de tuner-thread elke 5 s zelfstandig opnieuw te openen. Een succesvolle reconnect reset de timer zodat een volgende drop direct opnieuw geprobeerd wordt — geen server-restart nodig.
 
 > **Tune-knop zichtbaarheid:** De Tune-knop in het hoofdscherm is alleen zichtbaar wanneer er ten minste één Amplitec label naar een woord verwijst dat een tuner herkent (`JC-4s`, `JC4s`, `JC-3s`, `JC3s`, of `Tuner`). De routing naar het juiste fysieke tuner-slot gebeurt automatisch op basis van de actieve Amplitec-A positie — zie [Naamconventies](#naamconventies).
+
+### Morsesleutel: peddel op een MCP2221A (v2.12.0)
+
+Je kunt een echte peddel aan de **desktopclient** hangen en daarmee seinen - via
+Thetis, of rechtstreeks via een aangesloten Yaesu. De client leest de peddel
+zelf, maakt er tekens van, en stuurt de sleutelflanken met hun tijdstippen naar
+de server; daar worden ze op het afgesproken moment afgespeeld.
+
+**Wat je nodig hebt**
+
+- Een **Adafruit MCP2221A**-breakout op de PC waar de desktopclient draait.
+- Je peddel, aangesloten op de GP-pinnen van dat bordje:
+
+  | pin | functie |
+  |---|---|
+  | GP0 | peddelcontact A (tip) |
+  | GP1 | peddelcontact B (ring) |
+  | GP2 | rechte sleutel |
+  | GP3 | vrij |
+
+  **De MCP2221A heeft geen interne pull-ups.** De weerstand is dus verplicht en
+  niet optioneel. Per ingang:
+
+  ```
+  VDD --[10k]--+--[470R]-- GPx
+               |      |
+            contact [10nF]
+               |      |
+  GND ---------+------+
+  ```
+
+  - **10 kOhm** pull-up naar **dezelfde** voeding als de chip - niet naar 5 V bij
+    een 3,3 V-chip. Rust is hoog, contact dicht is laag.
+  - **470 Ohm** in serie: beschermt de pin tegen ESD van de peddelkabel en tegen
+    een verkeerd aangesloten spanning.
+  - **10 nF** naar massa: dempt HF die de kabel oppikt in een shack met een PA,
+    en helpt tegen contactdender.
+
+  Een pin die je niet bedraadt zweeft en volgt zijn buurman - gemeten, en daarom
+  leest de keyer alleen de ingangen die je in de instellingen aanzet. Sluit je
+  later een rechte sleutel op GP2 aan, zet die ingang dan ook aan; laat je hem
+  uit staan, dan seint een zwevende GP2 mee met peddelcontact B.
+- Wil je via een **Yaesu** seinen: niets extra's. De radio meldt zich met twee
+  COM-poorten op dezelfde USB-kabel; de ene gebruikt ThetisLink al voor CAT, de
+  andere wordt de sleutel. Je hoeft **geen** draad naar de KEY-ingang van de
+  radio te leggen.
+
+**Instellen** staat in de client onder de Morsesleutel-groep. Zet daar eerst de
+ingang aan die je bedraad hebt - de peddel staat standaard aan, de rechte sleutel
+standaard **uit**, want een niet-bedrade GP2 zou anders meeseinen. Verder:
+snelheid, iambic
+A of B, peddels omdraaien, rechte sleutel, de mithoortoon, en hoe lang de zender
+na het laatste teken aan blijft. Met **Sleutel naar** kies je waar de sleutel
+naartoe gaat: Thetis of een van de radio's.
+
+**Wat de server doet bij een Yaesu**
+
+- Hij zoekt de tweede poort van diezelfde radio zelf op; je stelt niets in.
+- Bij de eerste keer seinen zet hij het menu **PC KEYING** op RTS en onthoudt
+  wat er stond: menu `060` op de FT-991A, adres `020114` op de FTX-1. Bij het
+  afsluiten zet hij het terug. Stond het al op RTS voordat de server begon, dan
+  laat hij het met rust.
+- Seinen wordt geweigerd als de radio uit staat, niet in CW staat, of nog bezig
+  is zijn geheugens en tonen in te lezen. Je ziet dan **PTT geblokkeerd** op de
+  knop van die radio, met de reden in het serverlog.
+- Terwijl je seint wordt de PTT-knop van die radio rood en toont hij **CW**.
+- Sluit je de server terwijl je seint, dan gaat de sleutellijn eerst laag en
+  daarna het menu terug. De radio blijft dus niet zenden.
+
+> **Let op als op dezelfde PC ook de server draait.** ThetisLink gebruikt het
+> MCP2221A-bordje op drie plaatsen: voor deze peddel, voor de JC-4s/JC-3s-tuners
+> en voor de G-1000DXC-rotor. De tuners en de rotor kiezen hun bordje **op
+> serienummer**; de peddel opent het **eerste bordje dat hij tegenkomt** en zet
+> GP0, GP1 en GP2 om naar ingang. Staan er op één PC dus meerdere
+> MCP2221A-bordjes, dan kan de peddel het bordje van een tuner of de rotor
+> pakken - en dan werkt die niet meer en leest de peddel niets. Deze combinatie
+> is niet getest. Houd de peddel op een PC waar geen tuner- of rotorbordje zit,
+> of haal het andere bordje eruit terwijl je seint.
 
 ### SPE Expert 1.3K-FA
 
@@ -666,6 +760,10 @@ In het client-paneel (kompas, GoTo, Stop) is geen verschil zichtbaar — de keuz
 #### EA7HG Visual Rotor
 
 Directe UDP-verbinding met de EA7HG Visual Rotor software (Prosistel-protocol). Vul het adres van de Visual Rotor in (bv. `192.168.1.60:3010`); verder geen configuratie nodig.
+
+> **Ook hier geldt:** heb je op dezelfde PC een morsepeddel, dan pakt die het
+> eerste MCP2221A-bordje dat hij vindt. Zie de sectie "Morsesleutel: peddel op een
+> MCP2221A".
 
 #### Yaesu G-1000DXC via Adafruit MCP2221A (v2.1.0+)
 
@@ -879,7 +977,7 @@ Vanaf v2.4.0 kun je de Yaesu ook in **SSB (LSB/USB)** remote laten zenden met de
 - **FTX-1:** ThetisLink laat de **interne automatische modulatiebron** van de FTX-1 ongemoeid — die kiest de USB-audio zelf, dus er wordt géén menu-instelling geforceerd.
 - **Let op:** de automatische DATA-omschakeling geldt alleen voor **FM → DATA-FM**, niet voor SSB. SSB blijft in de gewone SSB-mode en gebruikt de REAR/USB-routing hierboven.
 
-De SSB-USB-routing wordt standaard **per PTT** toegepast en tussen overs teruggezet (in opt-out-modus presence-based hersteld). Met de **Exit**-knop zet je de radio terug naar zijn vaste MIC/DATA-basis. De TX-audio-uitgang wordt herhaald geopend tot het USB-CODEC-device vrij is.
+De SSB-USB-routing wordt standaard **per PTT** toegepast en tussen overs teruggezet (in opt-out-modus presence-based hersteld). Bij het afsluiten van de server (het kruisje van het venster) gaat de radio terug naar zijn vaste MIC/DATA-basis. De TX-audio-uitgang wordt herhaald geopend tot het USB-CODEC-device vrij is.
 
 ### TX-audiobewerking: compressor + AGC (v2.4.0)
 

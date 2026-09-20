@@ -300,6 +300,13 @@ pub(super) fn yaesu_reconnect_thread(
                 model = detected;
                 prefix = model.tag(slot);
                 model_shared.store(model.as_code(), std::sync::atomic::Ordering::Relaxed);
+                // Everything we read from the radio that just left: its PC
+                // KEYING original (putting it back at exit would write it to
+                // this model's address, unread - review 319), its memory and
+                // menu dumps, and its transmit time-out. See
+                // YaesuState::forget_previous_radio for why that list lives
+                // next to the fields and not here.
+                status.lock().unwrap().forget_previous_radio();
                 info!("{} dialect adopted from the radio's own ID", prefix);
             }
         }
@@ -444,6 +451,9 @@ pub(super) fn yaesu_reconnect_thread(
             let mut s = status.lock().unwrap();
             s.connected = false;
             s.power_on = false;
+            // A radio that is gone loads nothing; the next session starts over
+            // (and its first `loading` line is a real one, not a stale "done").
+            s.loading = 0;
         }
     }
 }
@@ -468,7 +478,7 @@ fn yaesu_poll_loop(
     // Which slot this radio sits in - the key its kept tones are filed under.
     slot: u8,
     prefix: &str,
-    ft991a_usb_routing_snapshot: Option<Ft991aUsbRoutingSnapshot>,
+    mut ft991a_usb_routing_snapshot: Option<Ft991aUsbRoutingSnapshot>,
 ) {
     let mut read_buf = String::new();
     let mut cat_monitor_on = false;
@@ -527,6 +537,10 @@ fn yaesu_poll_loop(
     // The EX/menu values follow the same rule, but LAST: an operator looks at the
     // memory list first, and the FTX-1 EX scan occupies the CAT link for seconds.
     let mut auto_menu_pending = true;
+    // The FTX-1's menu, read one item at a time between other traffic
+    // (memory::Ftx1MenuScan, build 141), and when it last took a step.
+    let mut ftx1_menu_scan: Option<crate::yaesu::memory::Ftx1MenuScan> = None;
+    let mut menu_scan_last_step = Instant::now();
     // ...but not on the first iteration. The read needs to know which memory the
     // radio is on (the per-channel CTCSS tone is not in the bulk read; only the
     // current channel's tone can be fetched, via CN), and that comes from the IF
@@ -683,7 +697,7 @@ fn yaesu_poll_loop(
         if matches!(model, RadioModel::Ftx1) && !auto_read_pending && !auto_tones_pending {
             let (in_memory, ch, tx) = {
                 let st = status.lock().unwrap();
-                (st.vfo_select == 1, st.memory_channel, st.tx_active)
+                (st.vfo_select == 1, st.memory_channel, st.on_the_air())
             };
             if !in_memory || ch == 0 {
                 tone_keeper_last = None; // out of memory mode: apply again on return
@@ -721,14 +735,19 @@ fn yaesu_poll_loop(
         // (2026-08-12). The reads keep their turn - `power_on` going true is
         // what releases them.
         let radio_is_on = status.lock().unwrap().power_on;
+        // No long read begins under a transmission: it holds this thread, and
+        // a PTT-off would wait behind it (tx_start_refusal is the other half).
+        // The reads keep their turn and start once the radio is back on receive.
+        let on_air = status.lock().unwrap().on_the_air();
         let incoming = if auto_read_pending
             && radio_is_on
+            && !on_air
             && session_start.elapsed() >= Duration::from_millis(1500)
         {
             auto_read_pending = false;
             info!("{} reading the memory channels once, now the radio is up", prefix);
             Ok(YaesuCmd::ReadAllMemories)
-        } else if auto_tones_pending && !auto_read_pending && radio_is_on {
+        } else if auto_tones_pending && !auto_read_pending && radio_is_on && !on_air {
             auto_tones_pending = false;
             // Only meaningful if the memory read produced something; the tone walk
             // needs that list to know which channels have a tone mode at all.
@@ -738,14 +757,44 @@ fn yaesu_poll_loop(
             } else {
                 cmd_rx.try_recv()
             }
-        } else if auto_menu_pending && !auto_read_pending && !auto_tones_pending && radio_is_on {
+        } else if auto_menu_pending && !auto_read_pending && !auto_tones_pending && radio_is_on && !on_air {
             auto_menu_pending = false;
             info!("{} reading the EX settings once, now the radio is up", prefix);
             Ok(YaesuCmd::ReadAllMenus)
         } else {
             cmd_rx.try_recv()
         };
+        // What is still to be read, and what is read now: the client says so
+        // in the radio's window while the CAT port is this busy. Pending
+        // reads count only while the radio is on - they wait for that, and
+        // "loading" for a radio that is off would be untrue. An explicit
+        // read (a client asking for the memories) counts while it runs.
+        let loading = loading_bits(
+            radio_is_on,
+            auto_read_pending,
+            auto_tones_pending,
+            auto_menu_pending,
+            // A read refused under a transmission does not run, so it does not
+            // count (it flashed "loading" in the log, review 318).
+            match &incoming {
+                Ok(YaesuCmd::ReadAllMemories) if !on_air => sdr_remote_core::protocol::YAESU_LOADING_MEMORIES,
+                Ok(YaesuCmd::ReadMemoryTones) if !on_air => sdr_remote_core::protocol::YAESU_LOADING_TONES,
+                Ok(YaesuCmd::ReadAllMenus) if !on_air => sdr_remote_core::protocol::YAESU_LOADING_MENUS,
+                _ => 0,
+            // The scan counts while the radio is on, like the pending reads.
+            } | if ftx1_menu_scan.is_some() && radio_is_on { sdr_remote_core::protocol::YAESU_LOADING_MENUS } else { 0 },
+        );
+        let was = std::mem::replace(&mut status.lock().unwrap().loading, loading);
+        if was != loading {
+            // What the client shows in the radio's window, for a field log.
+            info!("{} loading: {:03b} (memories=1 tones=2 menus=4){}", prefix, loading, if loading == 0 { " - done" } else { "" });
+        }
         match incoming {
+            // A read a client asked for, under a transmission: refused, for
+            // the reason above. The client's copy stays what it was.
+            Ok(YaesuCmd::ReadAllMemories | YaesuCmd::ReadAllMenus) if on_air => {
+                warn!("{} read refused: radio is on the air (transmitting or keyed for CW)", prefix);
+            }
             Ok(YaesuCmd::ReadAllMemories) => {
                 info!("{} reading all memory channels...", prefix);
                 // The per-memory CTCSS tone is not in the bulk read (P9 is fixed
@@ -820,9 +869,14 @@ fn yaesu_poll_loop(
                         let entries = crate::yaesu::memory::tone_channels(&blob);
                         if entries.is_empty() {
                             info!("{} tone read: no channel has a tone mode", prefix);
-                        } else if status.lock().unwrap().tx_active {
-                            warn!("{} tone read refused: radio is transmitting", prefix);
-                        } else {
+                        } else if status.lock().unwrap().vfo_select == 2 {
+                            // MemTune: a memory channel the operator changed by
+                            // hand (the 991A on channel 3, FM, set to CW-L). The
+                            // walk ends by recalling that channel, which brings
+                            // back what is stored and throws the change away
+                            // (field test 2026-09-19 14:53).
+                            warn!("{} tone read skipped: the radio is on a memory channel changed by hand (MemTune); recalling channels would undo that", prefix);
+                        } else if let Some(_walk) = crate::yaesu::ChannelWalk::begin(&status) {
                             info!("{} reading tones for {} channel(s)...", prefix, entries.len());
                             let ret = {
                                 let st = status.lock().unwrap();
@@ -832,7 +886,7 @@ fn yaesu_poll_loop(
                                     vfo_a_freq: st.vfo_a_freq,
                                 }
                             };
-                            let is_tx = || status.lock().map(|s| s.tx_active).unwrap_or(false);
+                            let is_tx = || status.lock().map(|s| s.on_the_air()).unwrap_or(true);
                             let tones = crate::yaesu::memory::read_memory_tones(
                                 &mut port, &entries, ret,
                                 matches!(model, RadioModel::Ftx1), &is_tx,
@@ -877,6 +931,8 @@ fn yaesu_poll_loop(
                                     prefix,
                                 );
                             }
+                        } else {
+                            warn!("{} tone read refused: radio is on the air (transmitting or keyed for CW)", prefix);
                         }
                     }
                     None => warn!("{} tone read: read the memories first", prefix),
@@ -901,10 +957,10 @@ fn yaesu_poll_loop(
                 // A write recalls channels (for the tone) and rewrites memories,
                 // which moves the transmit frequency - refuse outright while the
                 // radio is transmitting rather than write half a bank.
-                if status.lock().unwrap().tx_active {
-                    warn!("{} memory write refused: radio is transmitting", prefix);
+                let Some(_walk) = crate::yaesu::ChannelWalk::begin(&status) else {
+                    warn!("{} memory write refused: radio is on the air (transmitting or keyed for CW)", prefix);
                     continue;
-                }
+                };
                 // The FTX-1 gate. Writing this radio's bank costs every CTCSS tone
                 // stored in it: `MW` resets the channel's tone to 100.0 Hz and no CAT
                 // command puts it back. That is not a cost to pay by accident, so the
@@ -952,7 +1008,7 @@ fn yaesu_poll_loop(
                     );
                     continue;
                 }
-                let is_tx = || status.lock().map(|s| s.tx_active).unwrap_or(false);
+                let is_tx = || status.lock().map(|s| s.on_the_air()).unwrap_or(true);
                 let write_result = match model {
                     // FTX-1 writes freq via MW + name via MT (both 5-digit).
                     RadioModel::Ftx1 => write_all_memories_ftx1(&mut port, &tab_text, ret, &is_tx),
@@ -978,70 +1034,83 @@ fn yaesu_poll_loop(
                 last_full_poll = Instant::now();
                 last_smeter_poll = Instant::now();
             }
+            Ok(YaesuCmd::RestoreBeforeExit(ack)) => {
+                // The server is stopping. The port is open and the radio is
+                // answering (this arm only runs in the poll loop), so this is
+                // the moment to put back what the session changed.
+                if !matches!(model, RadioModel::Ftx1) {
+                    if ft991a_usb_routing_snapshot.is_some() {
+                        restore_991a_usb_routing_snapshot(
+                            &mut port,
+                            prefix,
+                            ft991a_usb_routing_snapshot.as_ref(),
+                            Ft991aUsbRoutingScope::All,
+                            "server exit",
+                        );
+                    } else {
+                        // Every change of the routing takes the snapshot first
+                        // (apply_991a_usb_routing), so none means none was made.
+                        info!("{} 991A USB routing was not changed this session - nothing to put back", prefix);
+                    }
+                }
+                // The PC KEYING menu, if a CW run of this server set it (step 6):
+                // 060 on the 991A, 020114 on the FTX-1.
+                {
+                    let original = status.lock().unwrap().cw_pc_keying_original.take();
+                    restore_pc_keying(&mut port, prefix, model, original.as_deref());
+                }
+                // This thread did its part; whether the routing came back in
+                // full is the restore's own line above ("restored" or "partial").
+                info!("{} settings put back before exit", prefix);
+                let _ = ack.send(());
+            }
+            Ok(YaesuCmd::PrepareCwKeying(ack)) => {
+                let result = {
+                    let known = status.lock().unwrap().cw_pc_keying_original.clone();
+                    prepare_pc_keying(&mut port, prefix, model, &mut read_buf, known.as_deref()).map(|original| {
+                        status.lock().unwrap().cw_pc_keying_original = original;
+                    })
+                };
+                if let Err(ref why) = result {
+                    warn!("{} CW: not ready for keying - {}", prefix, why);
+                }
+                let _ = ack.send(result);
+                last_response = Instant::now();
+            }
+            Ok(YaesuCmd::ReadAllMenus) if matches!(model, RadioModel::Ftx1) => {
+                // FTX-1 EX is hierarchical (P1.P2.P3) and slow to scan: one item
+                // at a time, in the gaps (the idle arm below), so nothing waits
+                // behind it.
+                if ftx1_menu_scan.is_none() {
+                    info!("{} reading all menu settings in the background, one at a time...", prefix);
+                    ftx1_menu_scan = Some(crate::yaesu::memory::Ftx1MenuScan::new());
+                } else {
+                    info!("{} menu settings are being read already", prefix);
+                }
+            }
             Ok(YaesuCmd::ReadAllMenus) => {
                 info!("{} reading all menu settings...", prefix);
-                let menu_result = match model {
-                    // FTX-1 EX is hierarchical (P1.P2.P3) -> scan-read instead of flat index.
-                    RadioModel::Ftx1 => read_all_menus_ftx1(&mut port),
-                    _ => read_all_menus(&mut port),
-                };
-                match menu_result {
-                    Ok(data) => {
-                        info!("{} read {} menu values", prefix, data.lines().count());
-                        // Keep the server's own copy (so a client can be served without
-                        // the radio being walked again) AND publish it for the push.
-                        {
-                            let tot = crate::yaesu::memory::tot_minutes_from_menu_blob(model, &data);
-                            let mut s = status.lock().unwrap();
-                            s.last_menu_blob = Some(data.clone());
-                            s.tot_minutes = tot;
-                            // Both branches, because the absence is the more useful
-                            // half: on an FT-991A the time-out timer is the ONLY thing
-                            // that releases PTT for us, so tot == 0 means no net at all.
-                            // Logging only the presence put the asymmetry the wrong way
-                            // round.
-                            if tot > 0 {
-                                info!(
-                                    concat!(
-                                        "{} TX time-out timer is set to {} min - ",
-                                        "ThetisLink releases PTT just before it fires",
-                                    ),
-                                    prefix, tot,
-                                );
-                            } else if matches!(model, RadioModel::Ft991a) {
-                                warn!(
-                                    concat!(
-                                        "{} no TX time-out timer is set - EX 036 did not read back a ",
-                                        "usable value. This radio has no transmit ",
-                                        "readback, so nothing will ",
-                                        "release PTT if it stops on its own{}",
-                                    ),
-                                    prefix,
-                                    super::two_slot_hint(),
-                                );
-                            } else {
-                                info!(
-                                    concat!(
-                                        "{} no TX time-out timer is set; the radio's own ",
-                                        "transmit state is followed instead",
-                                    ),
-                                    prefix,
-                                );
-                            }
-                        }
-                        *menu_data.lock().unwrap() = Some(format!("MENU:{}", data));
-                    }
-                    Err(e) => warn!("{} menu read failed: {}", prefix, e),
-                }
+                let menu_result = read_all_menus(&mut port);
+                apply_menu_result(model, prefix, &status, &menu_data, menu_result);
                 last_response = Instant::now();
                 last_full_poll = Instant::now();
                 last_smeter_poll = Instant::now();
             }
             Ok(cmd) => {
+                // An EX write of the operator while the menu scan runs: the scan
+                // ends with that value (Ftx1MenuScan::note_written).
+                if let (Some(scan), YaesuCmd::RawCat(raw)) = (ftx1_menu_scan.as_mut(), &cmd) {
+                    if let Some((key, value)) = crate::yaesu::memory::ex_write(raw) {
+                        scan.note_written(&key, &value);
+                    }
+                }
                 // Whether this command ENDS our transmission, decided before the
                 // match so it can be applied after the write instead of before.
                 let ends_our_tx = matches!(cmd, YaesuCmd::SetPtt(false));
                 let cmd_str = match cmd {
+                    // Answered in its own arm above; never reaches this match.
+                    YaesuCmd::RestoreBeforeExit(_) => String::new(),
+                    YaesuCmd::PrepareCwKeying(_) => String::new(),
                     YaesuCmd::SetFreqA(hz) => {
                         // Memory-mode escape: the 991A/FTX-1 do not accept a direct VFO freq set
                         // in memory mode (vfo_select 1=Memory / 2=MemTune). On a freq change
@@ -1148,41 +1217,32 @@ fn yaesu_poll_loop(
                         // 991A SSB USB TX routing per PTT (hybrid option): switch the 991A
                         // to USB source only during TX, then restore it on PTT-off. FTX-1
                         // keeps its internal auto source selection and is intentionally skipped.
-                        let ssb_on_ptt = status.lock().unwrap().ssb_switch_on_ptt;
-                        if ssb_on_ptt && !matches!(model, RadioModel::Ftx1) && matches!(mode_char, '1' | '2') {
-                            if on {
-                                let _ = port.write_all(b"EX1061;"); // SSB MIC SELECT = REAR
-                                let _ = port.write_all(b"EX1091;"); // SSB PORT SELECT = USB
-                                std::thread::sleep(Duration::from_millis(30)); // short settle before TX
-                            } else {
-                                restore_991a_usb_routing_snapshot(
-                                    &mut port,
-                                    prefix,
-                                    ft991a_usb_routing_snapshot.as_ref(),
-                                    Ft991aUsbRoutingScope::Ssb,
-                                    "PTT-off SSB",
-                                );
-                            }
-                        }
-
                         // FT-991A AM USB TX routing per PTT: AM has no DATA-AM mode.
                         // AM PORT SELECT stays USB; AM MIC SELECT switches hand mic (MIC)
                         // versus remote audio (REAR). In presence-based mode AM follows
                         // SetSsbRouting as well. FTX-1 does not use these 991A menus.
-                        if ssb_on_ptt && !matches!(model, RadioModel::Ftx1) && matches!(mode_char, '5' | 'D' | 'd') {
-                            if on {
-                                let _ = port.write_all(b"EX0481;"); // AM PORT SELECT = USB
-                                let _ = port.write_all(b"EX0451;"); // AM MIC SELECT = REAR
-                                std::thread::sleep(Duration::from_millis(30));
-                            } else {
+                        let (ssb_on_ptt, power_on) = {
+                            let st = status.lock().unwrap();
+                            (st.ssb_switch_on_ptt, st.power_on)
+                        };
+                        match per_ptt_routing(on, power_on, ssb_on_ptt, matches!(model, RadioModel::Ftx1), mode_char) {
+                            PerPttRouting::Apply(scope) => {
+                                apply_991a_usb_routing(&mut ft991a_usb_routing_snapshot, &mut port, prefix, &mut read_buf, scope);
+                                std::thread::sleep(Duration::from_millis(30)); // short settle before TX
+                            }
+                            PerPttRouting::Restore(scope) => {
                                 restore_991a_usb_routing_snapshot(
                                     &mut port,
                                     prefix,
                                     ft991a_usb_routing_snapshot.as_ref(),
-                                    Ft991aUsbRoutingScope::Am,
-                                    "PTT-off AM",
+                                    scope,
+                                    if scope == Ft991aUsbRoutingScope::Am { "PTT-off AM" } else { "PTT-off SSB" },
                                 );
                             }
+                            PerPttRouting::RadioOff => {
+                                info!("{} per-PTT USB routing skipped: the radio is off (it would wait on menus that do not answer)", prefix);
+                            }
+                            PerPttRouting::None => {}
                         }
                         // Map the current mode to the DATA variant used for USB mic TX.
                         // FM only: FM('4')->DATA-FM('A'). SSB->DATA-LSB/USB was reverted:
@@ -1267,10 +1327,7 @@ fn yaesu_poll_loop(
                         // FTX-1 keeps its internal auto source selection, so this command is a no-op for it.
                         if !matches!(model, RadioModel::Ftx1) {
                             if on {
-                                let _ = port.write_all(b"EX1061;"); // SSB MIC SELECT = REAR
-                                let _ = port.write_all(b"EX1091;"); // SSB PORT SELECT = USB
-                                let _ = port.write_all(b"EX0481;"); // AM PORT SELECT = USB
-                                let _ = port.write_all(b"EX0451;"); // AM MIC SELECT = REAR
+                                apply_991a_usb_routing(&mut ft991a_usb_routing_snapshot, &mut port, prefix, &mut read_buf, Ft991aUsbRoutingScope::All);
                                 info!("{} 991A SSB/AM USB routing ON (client present)", prefix);
                             } else {
                                 restore_991a_usb_routing_snapshot(
@@ -1303,7 +1360,13 @@ fn yaesu_poll_loop(
                         }
                     }
                     YaesuCmd::SetPower(on) => {
-                        if on {
+                        if on && status.lock().unwrap().power_on {
+                            // Already on: the ritual below holds this thread for
+                            // 1.5 s, and a PTT-off of a radio that transmits would
+                            // wait behind it (review 318; owner's decision).
+                            info!("{} power ON asked for a radio that is on - nothing sent", prefix);
+                            String::new()
+                        } else if on {
                             // Waking a set in standby has a ritual, and a bare
                             // PS1; is not it. FT-991A CAT OM (1711-D, PS): the
                             // power-ON "requires dummy data be initially sent.
@@ -1508,10 +1571,54 @@ fn yaesu_poll_loop(
                     status.lock().unwrap().ptt_commanded = false;
                 }
             }
-            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                // Nothing asked for: steps of the FTX-1's menu scan, if one runs -
+                // not under a transmission, not on a radio that is off. Reads
+                // back to back for up to MENU_SCAN_BUDGET, then MENU_SCAN_GAP of
+                // rest: one read per quiet turn took the scan six minutes
+                // (field test 2026-09-19), and a command that arrives now waits
+                // at most the budget and one read.
+                let mut finished = None;
+                if let Some(scan) = ftx1_menu_scan.as_mut() {
+                    if menu_scan_may_step(radio_is_on, on_air, menu_scan_last_step.elapsed()) {
+                        // First let the replies to this turn's polls land (they go
+                        // to the polls' buffer): a batch that starts while some
+                        // thirty of them are still coming finds a busy radio, and
+                        // the FTX-1 then answers "?;" or nothing for addresses
+                        // that exist - 299 of 405 in the first pass of build 143.
+                        // No polls go out during the batch, so it reads on a
+                        // quiet line, as the scan did before build 141.
+                        let settle = Instant::now();
+                        let mut quiet_since = Instant::now();
+                        while settle.elapsed() < MENU_SCAN_SETTLE_MAX {
+                            if crate::yaesu::memory::spill_waiting(&mut port, &mut read_buf) {
+                                quiet_since = Instant::now();
+                            } else if quiet_since.elapsed() >= MENU_SCAN_QUIET {
+                                break;
+                            } else {
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                        }
+                        let batch = Instant::now();
+                        while finished.is_none() && batch.elapsed() < MENU_SCAN_BUDGET {
+                            finished = scan.step(&mut |p1, p2, p3| {
+                                crate::yaesu::memory::read_ftx1_ex_value(&mut port, &mut read_buf, p1, p2, p3)
+                            });
+                        }
+                        menu_scan_last_step = Instant::now();
+                    }
+                }
+                if let Some(result) = finished {
+                    ftx1_menu_scan = None;
+                    apply_menu_result(model, prefix, &status, &menu_data, result);
+                }
+            }
             Err(mpsc::TryRecvError::Disconnected) => {
-                // Graceful shutdown while the port is still alive -> restore the 991A
-                // USB-routing session snapshot. FTX-1 auto source selection is left untouched.
+                // Not the way the server stops: this thread holds a sender of its
+                // own (self_tx), so the channel does not close while it runs. The
+                // restore at exit is YaesuCmd::RestoreBeforeExit. Kept because it
+                // costs nothing and a channel that does close should still leave
+                // the radio as the operator had it.
                 if !matches!(model, RadioModel::Ftx1) {
                     restore_991a_usb_routing_snapshot(
                         &mut port,
@@ -1686,5 +1793,304 @@ mod capture_channel_tests {
                 0
             );
         }
+    }
+}
+
+/// What a finished menu read leaves behind - the same for the 991A read and
+/// the FTX-1 scan in the gaps: the server's copy, the TX time-out it holds,
+/// and the push to the clients.
+fn apply_menu_result(
+    model: RadioModel,
+    prefix: &str,
+    status: &Arc<Mutex<YaesuState>>,
+    menu_data: &Arc<Mutex<Option<String>>>,
+    result: Result<String, String>,
+) {
+    let data = match result {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("{} menu read failed: {}", prefix, e);
+            return;
+        }
+    };
+    info!("{} read {} menu values", prefix, data.lines().count());
+    // Keep the server's own copy (so a client can be served without
+    // the radio being walked again) AND publish it for the push.
+    {
+        let tot = crate::yaesu::memory::tot_minutes_from_menu_blob(model, &data);
+        let mut s = status.lock().unwrap();
+        s.last_menu_blob = Some(data.clone());
+        s.tot_minutes = tot;
+        // Both branches, because the absence is the more useful
+        // half: on an FT-991A the time-out timer is the ONLY thing
+        // that releases PTT for us, so tot == 0 means no net at all.
+        // Logging only the presence put the asymmetry the wrong way
+        // round.
+        if tot > 0 {
+            info!(
+                concat!(
+                    "{} TX time-out timer is set to {} min - ",
+                    "ThetisLink releases PTT just before it fires",
+                ),
+                prefix, tot,
+            );
+        } else if matches!(model, RadioModel::Ft991a) {
+            warn!(
+                concat!(
+                    "{} no TX time-out timer is set - EX 036 did not read back a ",
+                    "usable value. This radio has no transmit ",
+                    "readback, so nothing will ",
+                    "release PTT if it stops on its own{}",
+                ),
+                prefix,
+                super::two_slot_hint(),
+            );
+        } else {
+            info!(
+                concat!(
+                    "{} no TX time-out timer is set; the radio's own ",
+                    "transmit state is followed instead",
+                ),
+                prefix,
+            );
+        }
+    }
+    *menu_data.lock().unwrap() = Some(format!("MENU:{}", data));
+}
+
+/// The rest between two batches of the FTX-1's menu scan: the radio has other
+/// things to answer (owner, 2026-09-19).
+const MENU_SCAN_GAP: Duration = Duration::from_millis(50);
+/// How long one batch reads back to back - and so the most a command that
+/// arrives meanwhile waits, plus the read under way.
+const MENU_SCAN_BUDGET: Duration = Duration::from_millis(150);
+/// Before a batch: how long the line must have been silent, and how long to
+/// wait for that at most (a radio that never goes quiet - AI on - still gets
+/// its batch).
+const MENU_SCAN_QUIET: Duration = Duration::from_millis(30);
+const MENU_SCAN_SETTLE_MAX: Duration = Duration::from_millis(250);
+
+/// The `loading` bits of a radio: the connect-time reads still to come (only
+/// while the radio is on) and the read running now.
+/// May the menu scan take a step now? Three conditions, and each of them is
+/// the whole point of one: a radio that is off answers nothing, a radio on the
+/// air must not have its serial line held for a batch (that is how a PTT-off
+/// ends up waiting), and the gap is what leaves room for the polls in between.
+///
+/// A function because the guard it replaces was three terms in an `if` in the
+/// middle of the poll loop, where no test could reach it: removing it entirely
+/// left all 1135 tests green (review 2120A2). Its twin one screen up -
+/// the refusal of a client's read under a transmission - was tested; this one
+/// was not.
+fn menu_scan_may_step(radio_on: bool, on_air: bool, since_last_step: Duration) -> bool {
+    radio_on && !on_air && since_last_step >= MENU_SCAN_GAP
+}
+
+#[cfg(test)]
+mod menu_scan_may_step_tests {
+    use super::{menu_scan_may_step, MENU_SCAN_BUDGET, MENU_SCAN_GAP, MENU_SCAN_QUIET, MENU_SCAN_SETTLE_MAX};
+
+    /// The four numbers of the scan, and what they promise each other. Not
+    /// their literal values - changing one of those on purpose should not need
+    /// a test edited, and a test that only repeats a number back catches
+    /// nothing. What this pins is the shape: break one of these and the scan
+    /// still runs, but not the way its comments say it does (review 2120A2,
+    /// four of the six thresholds were held by nothing at all).
+    #[test]
+    fn the_scans_four_waits_keep_their_promises_to_each_other() {
+        assert!(
+            MENU_SCAN_QUIET < MENU_SCAN_SETTLE_MAX,
+            "the wait for a quiet line has to be able to end before the patience for it runs out,              or a radio with AI on never gets a batch at all"
+        );
+        assert!(
+            MENU_SCAN_GAP < MENU_SCAN_BUDGET,
+            "the rest between batches is shorter than a batch, or the scan spends more time              waiting than reading - that is the six minutes of build 141"
+        );
+        // What the comment on MENU_SCAN_BUDGET promises an operator: a command
+        // that arrives during a batch waits at most the budget plus the read
+        // under way (700 ms). Under a second, and that is the number the
+        // design leans on.
+        assert!(
+            MENU_SCAN_BUDGET + std::time::Duration::from_millis(700) < std::time::Duration::from_secs(1),
+            "a command arriving mid-batch waits under a second, or the promise above it is not true"
+        );
+        assert!(
+            MENU_SCAN_SETTLE_MAX < std::time::Duration::from_secs(1),
+            "settling is a pause before work, not the work"
+        );
+    }
+
+    /// Each condition in BOTH states, because a guard that has only ever been
+    /// seen letting things through has not been seen at all.
+    #[test]
+    fn the_scan_steps_only_on_a_radio_that_is_on_and_not_transmitting() {
+        assert!(menu_scan_may_step(true, false, MENU_SCAN_GAP), "on, quiet, and the gap has passed");
+        assert!(!menu_scan_may_step(false, false, MENU_SCAN_GAP), "a radio that is off answers nothing");
+        assert!(
+            !menu_scan_may_step(true, true, MENU_SCAN_GAP),
+            "on the air: a batch here holds the line the PTT-off has to travel"
+        );
+        assert!(
+            !menu_scan_may_step(true, false, MENU_SCAN_GAP - std::time::Duration::from_millis(1)),
+            "one millisecond short of the gap is still too soon - the polls need the room"
+        );
+    }
+}
+
+fn loading_bits(radio_on: bool, memories: bool, tones: bool, menus: bool, running: u8) -> u8 {
+    use sdr_remote_core::protocol::{YAESU_LOADING_MEMORIES, YAESU_LOADING_MENUS, YAESU_LOADING_TONES};
+    let pending = if radio_on {
+        (if memories { YAESU_LOADING_MEMORIES } else { 0 })
+            | (if tones { YAESU_LOADING_TONES } else { 0 })
+            | (if menus { YAESU_LOADING_MENUS } else { 0 })
+    } else {
+        0
+    };
+    pending | running
+}
+
+#[cfg(test)]
+mod loading_bits_tests {
+    use super::loading_bits;
+    use sdr_remote_core::protocol::{YAESU_LOADING_MEMORIES as M, YAESU_LOADING_MENUS as E, YAESU_LOADING_TONES as T};
+
+    #[test]
+    fn loading_is_what_is_still_to_come_and_what_runs_now() {
+        assert_eq!(loading_bits(true, true, true, true, 0), M | T | E, "just connected");
+        assert_eq!(loading_bits(true, false, true, true, M), M | T | E, "the memory read runs: still loading it");
+        assert_eq!(loading_bits(true, false, false, true, 0), E, "memories and tones done");
+        assert_eq!(loading_bits(true, false, false, false, 0), 0, "done");
+        assert_eq!(loading_bits(false, true, true, true, 0), 0, "a radio that is off loads nothing");
+        assert_eq!(loading_bits(false, false, false, false, M), M, "a read that runs, runs");
+    }
+}
+
+/// What the per-PTT mode does with the 991A's USB routing for this PTT edge.
+#[derive(Debug, PartialEq)]
+enum PerPttRouting {
+    Apply(Ft991aUsbRoutingScope),
+    Restore(Ft991aUsbRoutingScope),
+    /// A PTT-on on a radio in standby. Taking the snapshot there waited on
+    /// every menu (~1.3 s per PTT, ~2.6 s the first time) before `TX1;`, for a
+    /// radio that transmits nothing anyway. The presence mode has waited for
+    /// `power_on` since build 123; this is the same rule for the per-PTT mode
+    /// (owner's decision, 2026-09-19).
+    RadioOff,
+    None,
+}
+
+/// SSB (`1`/`2`) and AM (`5`, `D`/`d` AM-N) in the per-PTT mode, on the 991A.
+/// A PTT-off restores whatever the radio's state: the restore writes only
+/// menus whose original is known.
+fn per_ptt_routing(on: bool, power_on: bool, ssb_on_ptt: bool, ftx1: bool, mode_char: char) -> PerPttRouting {
+    if !ssb_on_ptt || ftx1 {
+        return PerPttRouting::None;
+    }
+    let scope = match mode_char {
+        '1' | '2' => Ft991aUsbRoutingScope::Ssb,
+        '5' | 'D' | 'd' => Ft991aUsbRoutingScope::Am,
+        _ => return PerPttRouting::None,
+    };
+    if !on {
+        PerPttRouting::Restore(scope)
+    } else if power_on {
+        PerPttRouting::Apply(scope)
+    } else {
+        PerPttRouting::RadioOff
+    }
+}
+
+#[cfg(test)]
+mod per_ptt_routing_tests {
+    use super::*;
+
+    #[test]
+    fn the_per_ptt_mode_waits_for_the_radio_to_be_on() {
+        use PerPttRouting::*;
+        use Ft991aUsbRoutingScope::{Am, Ssb};
+        assert_eq!(per_ptt_routing(true, true, true, false, '2'), Apply(Ssb));
+        assert_eq!(per_ptt_routing(true, true, true, false, 'D'), Apply(Am));
+        assert_eq!(per_ptt_routing(true, true, true, false, 'd'), Apply(Am), "AM-N as some firmware spells it");
+        assert_eq!(per_ptt_routing(true, false, true, false, '1'), RadioOff, "standby: no snapshot, no wait");
+        assert_eq!(per_ptt_routing(false, false, true, false, '1'), Restore(Ssb), "a PTT-off restores regardless");
+        assert_eq!(per_ptt_routing(false, true, true, false, '5'), Restore(Am));
+        assert_eq!(per_ptt_routing(true, true, false, false, '2'), None, "the presence mode");
+        assert_eq!(per_ptt_routing(true, true, true, true, '2'), None, "the FTX-1");
+        assert_eq!(per_ptt_routing(true, true, true, false, '3'), None, "CW");
+        assert_eq!(per_ptt_routing(true, true, true, false, '4'), None, "FM");
+    }
+}
+
+/// Switch the 991A's transmit audio to USB (the menus of `scope`) - the one
+/// place that writes them, so none can skip the snapshot first. The snapshot
+/// is read at connect, but only when the radio answers PS1 then; a 991A in
+/// standby at connect and switched on later had its routing changed with
+/// nothing to restore it to, and stayed in USB mode (review 315).
+fn apply_991a_usb_routing(
+    snapshot: &mut Option<Ft991aUsbRoutingSnapshot>,
+    port: &mut Box<dyn serialport::SerialPort>,
+    prefix: &str,
+    spill: &mut String,
+    scope: Ft991aUsbRoutingScope,
+) {
+    ensure_991a_usb_routing_snapshot(snapshot, port, prefix, spill);
+    let writes = snapshot.as_ref().map(|s| s.routing_writes(scope)).unwrap_or_default();
+    let wanted = match scope {
+        Ft991aUsbRoutingScope::All => 4,
+        _ => 2,
+    };
+    if writes.len() < wanted {
+        warn!(
+            "{} 991A USB routing: {} of {} menus left as they are - their original could not be read, so they could not be put back",
+            prefix,
+            wanted - writes.len(),
+            wanted
+        );
+    }
+    for w in writes {
+        let _ = port.write_all(w);
+    }
+}
+
+fn ensure_991a_usb_routing_snapshot(
+    snapshot: &mut Option<Ft991aUsbRoutingSnapshot>,
+    port: &mut Box<dyn serialport::SerialPort>,
+    prefix: &str,
+    spill: &mut String,
+) {
+    // Mid-session the poll loop may have answers still in the buffer, and a
+    // query reads up to the first ';' - it would take "FA...;" for the EX
+    // answer and leave that menu out. Drain once before (what is dropped is
+    // at most one poll round, asked again next round).
+    match snapshot {
+        None => {
+            crate::yaesu::memory::spill_waiting(port, spill);
+            let mut taken = Ft991aUsbRoutingSnapshot::read(port, prefix);
+            if !taken.is_complete() {
+                crate::yaesu::memory::spill_waiting(port, spill);
+                taken.fill_missing(port, prefix);
+            }
+            info!(
+                "{} 991A USB routing snapshot taken now, before its first change (the radio was not awake at connect){}",
+                prefix,
+                if taken.is_complete() { "" } else { " - INCOMPLETE, the missing menus are left alone" }
+            );
+            *snapshot = Some(taken);
+        }
+        // A menu that could not be read was never written (routing_writes),
+        // so reading it now still gives the operator's value: try again every
+        // time the routing is about to change, until it is known. This is
+        // also the 991A that was asleep when a client arrived: nothing was
+        // written then, and the menus are read once it answers.
+        Some(s) if !s.is_complete() => {
+            crate::yaesu::memory::spill_waiting(port, spill);
+            s.fill_missing(port, prefix);
+            info!(
+                "{} 991A USB routing snapshot: missing menus read again - {}",
+                prefix,
+                if s.is_complete() { "complete now" } else { "still INCOMPLETE, those menus are left alone" }
+            );
+        }
+        Some(_) => {}
     }
 }

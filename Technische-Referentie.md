@@ -1,10 +1,10 @@
-# ThetisLink v2.11.0 — Technische Referentie
+# ThetisLink v2.12.0 — Technische Referentie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger - welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken - en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
 
-**Versie:** v2.11.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.12.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11 en Android 8+ (arm64); macOS (Intel/Apple Silicon) vanaf broncode, experimenteel
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -26,9 +26,36 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.11.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.12.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.12.0 hoogtepunten
+
+**Een echte peddel, en hij sleutelt de radio zelf.** De desktopclient leest een
+peddel rechtstreeks van een MCP2221A (GP0/GP1 de peddelcontacten, GP2 een rechte
+sleutel; geen interne pull-ups, dus de weerstand is verplicht). De keyer draait op
+de leesdraad, de mithoortoon klinkt lokaal en meteen, en de flanken reizen **met
+hun duur** naar de server, die ze op exacte momenten afspeelt in plaats van ze
+door te geven zodra ze aankomen. Doel is per reeks: Thetis via `keyer:` over TCI,
+of een Yaesu via de **RTS-lijn van zijn tweede COM-poort** - dezelfde USB-kabel,
+geen bedrading naar de KEY-ingang. De server zoekt die zusterpoort zelf op
+(VID/PID/serienummer) en zet menu PC KEYING op RTS: `060` op de FT-991A, adres
+`020114` op de FTX-1, per **model** gekozen en niet per sleuf. Wat er stond wordt
+onthouden en bij het afsluiten teruggezet, en alleen als er werkelijk geschreven
+is. Wire `VERSION` blijft ongewijzigd; de `loading`-byte in de radiostatus is
+additief (een oudere server stuurt nul = niet aan het laden).
+
+**Laden en zenden sluiten elkaar uit, maar alleen zenden wordt geweigerd.** Bij
+het verbinden leest de server geheugenkanalen en tonen; tijdens zo'n lange lezing
+kon een PTT-**uit** achter de wachtrij blijven staan. De knop van die radio toont
+LADEN en de server weigert een zending. De menuscan van de FTX-1 telt daar
+bewust niet in mee: die 405 waarden worden in de gaten tussen de polls gelezen,
+een adres per stap, met een budget van 150 ms per batch.
+
+**De verliesmeter meet de link.** Per stroom een venster, gepoold in plaats van
+het maximum genomen, een stroom die de server stopte wordt apart gemeld in plaats
+van als verlies geteld, en dubbele pakketten tellen niet als aangekomen.
 
 ### v2.11.0 hoogtepunten
 
@@ -205,7 +232,7 @@ De v2.0.0 release is een grote stap ten opzichte van de v0.x-lijn. Belangrijkste
 - **Server-side CTUN auto-recenter** (fork) — wanneer CTUN aan staat en de VFO naar de rand van het zichtbare spectrum drift, toggelt de TL-server CTUN (`ZZCN`/`ZZCO` via de TCI `run_cat_ex` relay) om een recenter af te dwingen. De `auto_recenter_ex` capability is alleen advertentie. Zie §13.
 - **Yaesu FT-991A auto-DFM met memory-restore** — bij PTT switcht de server tijdelijk FM → DATA-FM en bij PTT-off wordt via `MC<nnn>;` hersteld zodat memory-mode en het actieve kanaal behouden blijven. Zie §26.
 - **DDC sample rate dropdown per RX** — 48/96/192/384/768/1536 kHz, selecteerbaar per ontvanger (RX1/RX2). 768 en 1536 kHz alleen met de fork. Zie §16.
-- **Filter preset tracking** (fork) — F1..VAR2/NONE labels worden van Thetis teruggelezen en zijn zichtbaar in de client.
+- **Filter-preset push** (fork) — de fork stuurt F1..VAR2/NONE over TCI; ThetisLink gebruikt dat nog niet (de clients tonen de breedte, niet de presetnaam).
 - **Diversity live circle broadcast** (fork) — real-time fase/gain updates tijdens Smart/Ultra auto-null sweep. Zie §22.
 - **Android EQ auto-switch** — mic-profiel en BT-headset-profiel wisselen automatisch op basis van het geselecteerde output device.
 - **BLE-zendknop (YPC21 / PTT-Z01-klasse)** — GATT-verbinding die de app zelf vasthoudt: scannen, verbinden, service discovery en opnieuw verbinden, zonder koppelen in Android. Verwerkt knoppen die een druk op twee kenmerken tegelijk melden. Overleeft een vergrendeld scherm; buiten bereik wordt de zender losgelaten. Android 12+.
@@ -1115,7 +1142,7 @@ Alle resampling gebruikt **rubato SincFixedIn** met sinc interpolatie voor hoge 
 
 ---
 
-## 8. PTT Veiligheid (5 lagen)
+## 8. PTT Veiligheid (6 lagen)
 
 PTT-veiligheid is kritiek: een vastzittende zender kan schade veroorzaken aan de eindtrap en interfereert met andere gebruikers.
 
@@ -1127,9 +1154,11 @@ Elk audio packet (50x/sec) draagt de PTT-status in de flags byte. De server cont
 
 Bij PTT aan/uit stuurt de client **5 kopieen** van het audio packet. Dit garandeert dat de server de state change ziet, zelfs bij packet loss.
 
-### Laag 3: Packet timeout (500ms)
+### Laag 3: Packet timeout (2s)
 
-Als de server **500ms lang geen packets** ontvangt terwijl PTT actief is, wordt PTT automatisch uitgeschakeld. Log level: WARN.
+Als de server **2 seconden lang geen packets** ontvangt terwijl PTT actief is, wordt PTT automatisch uitgeschakeld. Log level: WARN.
+
+Dit was 500ms tot v2.11.1. Een netwerkwissel op een mobiel - van wifi naar 5G bijvoorbeeld - laat de pakketstroom langer haperen dan dat, ook als de verbinding zelf gewoon blijft bestaan, waardoor zenden tijdens zo'n wissel de zender elke keer losliet. Het venster is nu gelijk aan dat van laag 4, en dat is het moment waarop de client als weg geldt. Het loslaten gebeurt bij de eerstvolgende veiligheidscontrole nadat het venster voorbij is, en die lopen elke 100ms - in het slechtste geval staat de zender dus ongeveer 2,1 seconde aan na het wegvallen van het contact, niet precies 2. Welke van de twee regels in het log verschijnt zegt ook iets: die over de packets betekent dat de verbinding zelf nog leefde en alleen de audiostroom haperde.
 
 ### Laag 4: Heartbeat timeout (2s)
 
@@ -1138,6 +1167,28 @@ Als de server **2 seconden lang geen heartbeat** ontvangt, wordt de verbinding a
 ### Laag 5: PTT tail delay (150ms)
 
 Bij PTT loslaten wacht de server **150ms** voordat PTT uitgeschakeld wordt via TCI (`TRX:0,false;`). Dit geeft de audio pipeline (jitter buffer + resampling) tijd om te draineren, zodat de laatste audio niet afgeknipt wordt.
+
+### Laag 6: de sleutellijn van een Yaesu (v2.12.0)
+
+De lagen 1 t/m 5 gaan over **MOX bij Thetis**. Een Yaesu die via CW gesleuteld
+wordt, loopt daar niet langs: daar **is** de RTS-lijn de zender, en de radio heeft
+geen eigen waakhond op die lijn - een RTS die hoog blijft, zendt. De netten zijn
+daarom andere:
+
+- de afspeelbuffer heeft een waakhond van 3 s op een sleutel die neer blijft, en
+  die draait zowel in de afspeeldraad als in de veiligheidstik van 100 ms (als de
+  draad vastloopt is een sleutel-neer juist waarop hij vastliep);
+- een afscheid of een sessie-time-out laat de sleutel op, langs dezelfde weg als
+  de PTT;
+- mislukt een schrijfactie naar de lijn, dan wordt hij eerst expliciet laag gezet
+  en dan pas losgelaten - een mislukte sleutel-**op** zou anders een zendende
+  radio achterlaten waar niets meer naar kijkt;
+- bij het afsluiten van de server gaan alle sleutellijnen laag **voordat** de
+  menu's worden teruggezet, en het log zegt of dat de poort ook werkelijk bereikt
+  heeft.
+
+Alles wat naar een sleutellijn schrijft loopt via een kanaal met een lezer, zodat
+twee schrijvers elkaar niet kunnen inhalen.
 
 ### Safety check loop
 
@@ -1652,6 +1703,11 @@ ThetisLink heeft 7 wire-protocol `DeviceType`-waarden (0x01..0x07). Status wordt
 | 0x05 | UltraBeam RCU-06 Antennecontroller | Serieel USB, 19200 baud |
 | 0x06 | Rotor (3 backends, één tegelijk actief): EA7HG Visual Rotor / PstRotator (XML/UDP) / Yaesu G-1000DXC (MCP2221A, v2.1.0+) | UDP / UDP-XML / USB-HID afhankelijk van backend |
 | 0x07 | RemoteServer | Intern (geen externe hardware — server-side reboot/shutdown control) |
+
+> **Niet in deze tabel: de morsepeddel.** Die hangt aan de desktopclient en niet
+> aan de server, en heeft daarom geen apparaat-ID in dit protocol. De client leest
+> de MCP2221A zelf en stuurt sleutelflanken als `CwEdges`-pakketten; zie de
+> Gebruikershandleiding, sectie "Morsesleutel: peddel op een MCP2221A".
 
 ### Amplitec 6/2 Antenneschakelaar
 

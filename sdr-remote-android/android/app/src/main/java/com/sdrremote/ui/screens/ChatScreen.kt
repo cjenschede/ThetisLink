@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import com.sdrremote.ui.screenHeightInOurDp
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -109,8 +110,13 @@ fun ChatScreen(
             // round on it (2026-08-21). The line stays because asking the
             // parent was wrong regardless, and because it is already right if
             // the lock is ever lifted.
-            val cap = (LocalConfiguration.current.screenHeightDp.dp / 3)
-                .coerceIn(80.dp, 260.dp)
+            // A third of the screen, in the dp this composition draws in - and
+            // the ceiling is a share of the screen too. It used to be a flat
+            // 260dp, which is about a third of an unscaled phone but a fifth of
+            // the same phone at 60%, so the block stayed small on a screen that
+            // had grown. See `screenHeightInOurDp`.
+            val screenDp = screenHeightInOurDp()
+            val cap = (screenDp / 3).coerceIn(80.dp, screenDp / 2)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -350,9 +356,34 @@ private fun Conversation(
         }
     }
 
+    // Shares of the screen rather than flat numbers. 120dp and 420dp were
+    // measured against an unscaled phone, and they stayed put when the app
+    // learned to draw itself smaller: at 60% the screen holds far more of our
+    // dp while the list kept its 420, which is what left over half the screen
+    // empty (owner, 2026-09-08).
+    //
+    // The size is the screen MINUS what the rest of this screen costs, and not a
+    // share of it. A share was the first repair and it was wrong for a reason
+    // worth writing down: everything else here - the header, the answers, the
+    // buttons, the input field - is text and controls sized in dp, so its height
+    // stays roughly constant in the dp we draw in no matter how we scale. Only
+    // the screen grows. So a fixed fraction leaves a gap that grows with it: at
+    // 42% the list may take 997dp and the remaining 722 goes to something that
+    // needs about 300 (owner again, same evening, on the repair itself).
+    //
+    // CHAT_CHROME is derived, not chosen: the list used to be capped at 420dp on
+    // a screen of 722, so the rest was costing about 300. At full scale this
+    // gives back the same 420 it always had.
+    val listScreenDp = screenHeightInOurDp()
+    val chatChrome = 300.dp
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 420.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(
+                min = 120.dp,
+                max = (listScreenDp - chatChrome).coerceAtLeast(120.dp),
+            ),
     ) {
         items(state.messages, key = { it.id }) { m ->
             MessageRow(

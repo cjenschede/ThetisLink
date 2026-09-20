@@ -379,6 +379,16 @@ pub struct ServerConfig {
     pub autostart: bool,
     /// Active PA: 0=none, 1=SPE, 2=RF2K
     pub active_pa: u8,
+    /// Drive (%) to put back when no PA is amplifying and there is no snapshot
+    /// of what it was before one took over. See `pa_policy`.
+    pub pa_default_drive: u8,
+    /// Keep only the active PA in Operate: a PA that is not `active_pa` is put
+    /// back to Standby (never during TX). Two PAs in Operate both write the
+    /// Thetis drive, with different values, and it flips between them.
+    pub pa_single_operate: bool,
+    /// What the RF2K-S was last seen doing, kept across a restart. Without it,
+    /// "switched off" and "amplifying out of reach" look the same after a start.
+    pub rf2k_last_seen_operate: Option<bool>,
     /// Persisted pre-Operate Thetis ZZPC drive level per PA. `Some(n)` is the
     /// last value captured when the PA went Standby->Operate; `None` means
     /// no snapshot has been taken yet. Used by the TL2-server drive observer
@@ -507,6 +517,9 @@ impl Default for ServerConfig {
             language: "nl".to_string(),
             autostart: false,
             active_pa: 0,
+            pa_default_drive: crate::pa_policy::DEFAULT_PA_DRIVE,
+            pa_single_operate: true,
+            rf2k_last_seen_operate: None,
             rf2k_saved_drive: None,
             spe_saved_drive: None,
             ultrabeam_show_menu: false,
@@ -1309,6 +1322,16 @@ fn parse_conf(contents: &str) -> ServerConfig {
                 "autostart" => {
                     config.autostart = value.trim() == "true";
                 }
+                "pa_default_drive" => {
+                    config.pa_default_drive = value.trim().parse().unwrap_or(crate::pa_policy::DEFAULT_PA_DRIVE).min(100);
+                }
+                "pa_single_operate" => {
+                    config.pa_single_operate = value.trim() == "true";
+                }
+                "rf2k_last_seen_operate" => {
+                    let v = value.trim();
+                    config.rf2k_last_seen_operate = if v.is_empty() { None } else { Some(v == "true") };
+                }
                 "active_pa" => {
                     config.active_pa = value.trim().parse().unwrap_or(0);
                 }
@@ -1459,8 +1482,8 @@ pub fn save_active_pa(value: u8) {
 /// `value`: `Some(zzpc)` to write, `None` to clear.
 pub fn save_saved_drive(pa_id: u8, value: Option<u8>) {
     modify_config(|c| match pa_id {
-        1 => c.spe_saved_drive = value,
-        2 => c.rf2k_saved_drive = value,
+        crate::pa_policy::PA_SPE => c.spe_saved_drive = value,
+        crate::pa_policy::PA_RF2K => c.rf2k_saved_drive = value,
         _ => {}
     });
 }
@@ -1709,6 +1732,11 @@ fn render_conf(config: &ServerConfig) -> String {
     }
     contents.push_str(&format!("autostart={}\n", config.autostart));
     contents.push_str(&format!("active_pa={}\n", config.active_pa));
+    contents.push_str(&format!("pa_default_drive={}\n", config.pa_default_drive));
+    contents.push_str(&format!("pa_single_operate={}\n", config.pa_single_operate));
+    if let Some(v) = config.rf2k_last_seen_operate {
+        contents.push_str(&format!("rf2k_last_seen_operate={}\n", v));
+    }
     if let Some(v) = config.rf2k_saved_drive {
         contents.push_str(&format!("rf2k_saved_drive={}\n", v));
     }

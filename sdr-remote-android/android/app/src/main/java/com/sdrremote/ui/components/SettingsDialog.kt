@@ -11,6 +11,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.MaterialTheme
+import com.sdrremote.ui.UiScale
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
@@ -242,6 +246,56 @@ fun SettingsDialog(
                 }
                 Text(
                     stringResource(R.string.settings_audio_udp_hint),
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+
+                // How large the app draws itself.
+                //
+                // A step down is not only smaller: it is more on the screen at
+                // once, and past a point it is what lets the phone stand on its
+                // side at all. The line underneath says which, because a setting
+                // that quietly changes a second thing is a setting people undo
+                // by accident.
+                Spacer(Modifier.height(8.dp))
+                val scaleCtx = LocalContext.current
+                val uiScale = UiScale.scale
+                val swDp = LocalConfiguration.current.smallestScreenWidthDp
+                Text(stringResource(R.string.settings_ui_scale), fontSize = 14.sp)
+                // The six steps share the width instead of each taking what it
+                // wants. A plain row of six buttons is wide enough to run off the
+                // right-hand side of a narrow dialog once the system font is
+                // turned up - and what falls off the end is 50% and 42%, the two
+                // that matter most to someone who is looking for room (review
+                // finding, unmeasured but arithmetic: six buttons of some 64dp
+                // against roughly 328dp of dialog).
+                //
+                // A weight is legal here where it was not in the MIDI dialog: a
+                // row divides the horizontal axis, and that one is bounded.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    for (step in UiScale.STEPS) {
+                        val chosen = step == uiScale
+                        TextButton(
+                            onClick = { UiScale.set(scaleCtx, step) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                "${(step * 100).toInt()}%",
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                fontWeight = if (chosen) FontWeight.Bold else FontWeight.Normal,
+                                color = if (chosen) MaterialTheme.colorScheme.primary else Color.Gray,
+                            )
+                        }
+                    }
+                }
+                Text(
+                    if (UiScale.landscapeAllowed(swDp, uiScale)) {
+                        stringResource(R.string.settings_ui_scale_landscape_on)
+                    } else {
+                        stringResource(R.string.settings_ui_scale_landscape_off)
+                    },
                     fontSize = 11.sp,
                     color = Color.Gray,
                 )

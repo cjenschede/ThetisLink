@@ -253,6 +253,12 @@ pub(crate) struct ClientConfig {
     pub(crate) collapse_yaesu_eq: bool,
     pub(crate) collapse_yaesu_memories: bool,
     pub(crate) collapse_yaesu_menu: bool,
+    // The groups on the Server tab (helpers::settings_group). Closed by default:
+    // the tab is long, and the point of a group is that it can be shut.
+    pub(crate) group_audio_open: bool,
+    pub(crate) group_roger_open: bool,
+    pub(crate) group_ble_open: bool,
+    pub(crate) group_cw_open: bool,
     pub(crate) collapse_yaesu2_memories: bool,
     pub(crate) collapse_yaesu2_menu: bool,
     pub(crate) amplitec_power_show: bool,
@@ -305,6 +311,25 @@ pub(crate) struct ClientConfig {
     pub(crate) multi_tx: bool,
     pub(crate) chat_open: bool,
     pub(crate) midi_ptt_toggle: bool,
+    // The Bluetooth PTT button (ui/ble_screen.rs). Address as six hex bytes;
+    // 0 = no button chosen. Target in PttTarget order: 0 Thetis, 1 Yaesu 1, 2 Yaesu 2.
+    pub(crate) ble_ptt_enabled: bool,
+    pub(crate) ble_ptt_address: u64,
+    pub(crate) ble_ptt_name: String,
+    pub(crate) ble_ptt_target: u8,
+    pub(crate) ble_ptt_toggle: bool,
+    // The Morse paddle on an MCP2221A (ui/paddle_screen.rs). The switch and
+    // the sidetone; the keyer's own settings come with step 7 of the CW design.
+    pub(crate) cw_paddle_enabled: bool,
+    pub(crate) cw_sidetone: sdr_remote_logic::sidetone::SidetoneSettings,
+    /// Speed, paddle mode, reversed paddles, straight key: the keyer's own
+    /// settings (step 7 of the CW design). Speed is local for now; mirroring
+    /// the radio's speed is a later step.
+    pub(crate) cw_keyer: sdr_remote_logic::cw_keyer::KeyerSettings,
+    /// Which transmitter the key goes to: 0 Thetis, 1 Yaesu slot 0, 2 slot 1.
+    pub(crate) cw_target: u8,
+    /// How long the server holds the transmitter after the last key-up, ms.
+    pub(crate) cw_hang_ms: u16,
     // Dual-radio slot 1 (FTX-1): own enable + PTT mode + volume, persistent.
     pub(crate) yaesu2_enabled: bool,
     pub(crate) yaesu2_ptt_toggle: bool,
@@ -488,6 +513,10 @@ impl Default for ClientConfig {
             collapse_yaesu_eq: false,
             collapse_yaesu_memories: false,
             collapse_yaesu_menu: false,
+            group_audio_open: false,
+            group_roger_open: false,
+            group_ble_open: false,
+            group_cw_open: false,
             collapse_yaesu2_memories: false,
             collapse_yaesu2_menu: false,
             amplitec_power_show: false,
@@ -517,6 +546,18 @@ impl Default for ClientConfig {
             yaesu2_tx_agc: false,
             yaesu2_popout: false,
             midi_ptt_toggle: true, // MIDI defaults to toggle (existing behavior)
+            ble_ptt_enabled: false,
+            ble_ptt_address: 0,
+            ble_ptt_name: String::new(),
+            ble_ptt_target: 0,
+            // These buttons are made for short taps (measured: 110-400 ms), not for
+            // holding, so a press switches like a MIDI button does.
+            ble_ptt_toggle: true,
+            cw_paddle_enabled: false,
+            cw_sidetone: sdr_remote_logic::sidetone::SidetoneSettings::default(),
+            cw_keyer: sdr_remote_logic::cw_keyer::KeyerSettings::default(),
+            cw_target: 0,
+            cw_hang_ms: 500,
             smeter_source: 1,      // Avg matches pre-multi-source server default
             thetis_autostart: false, // opt-in: powers up the radio without being asked
             roger: sdr_remote_logic::roger::RogerBeep::default(),
@@ -1048,6 +1089,38 @@ pub(crate) fn load_config() -> ClientConfig {
             config.collapse_yaesu_memories = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("collapse_yaesu_menu=") {
             config.collapse_yaesu_menu = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("group_audio_open=") {
+            config.group_audio_open = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("group_roger_open=") {
+            config.group_roger_open = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("group_ble_open=") {
+            config.group_ble_open = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("group_cw_open=") {
+            config.group_cw_open = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("cw_paddle_enabled=") {
+            config.cw_paddle_enabled = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("cw_sidetone_on=") {
+            config.cw_sidetone.on = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("cw_sidetone_hz=") {
+            if let Ok(v) = val.trim().parse() { config.cw_sidetone.hz = v; }
+        } else if let Some(val) = line.strip_prefix("cw_sidetone_volume=") {
+            if let Ok(v) = val.trim().parse() { config.cw_sidetone.volume = v; }
+        } else if let Some(val) = line.strip_prefix("cw_wpm=") {
+            if let Ok(v) = val.trim().parse::<u8>() { config.cw_keyer.wpm = v.clamp(4, 60); }
+        } else if let Some(val) = line.strip_prefix("cw_mode=") {
+            config.cw_keyer.mode = if val.trim() == "A" {
+                sdr_remote_logic::cw_keyer::PaddleMode::IambicA
+            } else {
+                sdr_remote_logic::cw_keyer::PaddleMode::IambicB
+            };
+        } else if let Some(val) = line.strip_prefix("cw_reversed=") {
+            config.cw_keyer.reversed = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("cw_straight_key=") {
+            config.cw_keyer.straight_enabled = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("cw_target=") {
+            config.cw_target = val.trim().parse().unwrap_or(0).min(2);
+        } else if let Some(val) = line.strip_prefix("cw_hang_ms=") {
+            config.cw_hang_ms = val.trim().parse::<u16>().unwrap_or(500).clamp(200, 3000);
         } else if let Some(val) = line.strip_prefix("collapse_yaesu2_memories=") {
             config.collapse_yaesu2_memories = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("collapse_yaesu2_menu=") {
@@ -1200,6 +1273,16 @@ pub(crate) fn load_config() -> ClientConfig {
             config.yaesu2_popout = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("midi_ptt_toggle=") {
             config.midi_ptt_toggle = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("ble_ptt_enabled=") {
+            config.ble_ptt_enabled = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("ble_ptt_address=") {
+            config.ble_ptt_address = crate::ble::parse_addr(val).unwrap_or(0);
+        } else if let Some(val) = line.strip_prefix("ble_ptt_name=") {
+            config.ble_ptt_name = val.trim().to_string();
+        } else if let Some(val) = line.strip_prefix("ble_ptt_target=") {
+            config.ble_ptt_target = val.trim().parse().unwrap_or(0).min(2);
+        } else if let Some(val) = line.strip_prefix("ble_ptt_toggle=") {
+            config.ble_ptt_toggle = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("thetis_autostart=") {
             config.thetis_autostart = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("roger_freq_hz=") {
@@ -1427,6 +1510,14 @@ pub(crate) fn survives_full_save(line: &str) -> bool {
         // than seven lines, so a settings added later cannot be
         // half-remembered.
         || line.starts_with("roger_")
+        // The Bluetooth PTT button: five keys written by save_ptt_config, one
+        // prefix here for the same reason as `roger_`.
+        || line.starts_with("ble_ptt_")
+        // The Morse paddle, written by save_cw_paddle_enabled; one prefix for
+        // the keys step 7 of the CW design will add next to it.
+        || line.starts_with("cw_")
+        // The open/closed state of the groups on the Server tab, one key each.
+        || line.starts_with("group_")
         // Which administrator answers were folded away. Same trap
         || line.starts_with("chat_answers_seen=")
         // One prefix for the relay keys, for the same reason as `roger_`
@@ -1846,7 +1937,7 @@ const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
         "rx2_volume", "input_device", "output_device", "agc_enabled", "thetis_wideband_audio",
         "mic_profile", "mic_gate_delay_", "spike_protection", "roger_",
     ]),
-    ("PTT", &["ptt_toggle", "midi_ptt_toggle", "yaesu_ptt_toggle", "yaesu2_ptt_toggle"]),
+    ("PTT", &["ptt_toggle", "midi_ptt_toggle", "yaesu_ptt_toggle", "yaesu2_ptt_toggle", "ble_ptt_"]),
     ("RX1 spectrum and waterfall", &[
         "spectrum_", "rx1_", "waterfall_contrast", "wf_contrast_per_band", "auto_ref_enabled",
         "full_spectrum_enabled", "allow_zoom_below_2x",
@@ -2032,6 +2123,53 @@ pub(crate) fn load_chat_answers_seen() -> Vec<i64> {
         .split(',')
         .filter_map(|p| p.trim().parse::<i64>().ok())
         .collect()
+}
+
+/// The open/closed state of one group on the Server tab. Literal keys, so the
+/// scanning test can see each of them.
+pub(crate) fn save_group_open(key: &str, open: bool) {
+    let v = if open { "true" } else { "false" };
+    match key {
+        "group_audio_open" => save_single_key("group_audio_open", v),
+        "group_roger_open" => save_single_key("group_roger_open", v),
+        "group_ble_open" => save_single_key("group_ble_open", v),
+        "group_cw_open" => save_single_key("group_cw_open", v),
+        other => log::warn!("save_group_open: unknown group {}", other),
+    }
+}
+
+/// The Morse paddle's switch (ui/paddle_screen.rs).
+pub(crate) fn save_cw_paddle_enabled(on: bool) {
+    save_single_key("cw_paddle_enabled", if on { "true" } else { "false" });
+}
+
+/// The keyer's settings (ui/paddle_screen.rs). `paddle_enabled` is not one
+/// of them: the paddle is switched with `save_cw_paddle_enabled`.
+pub(crate) fn save_cw_keyer(s: &sdr_remote_logic::cw_keyer::KeyerSettings) {
+    save_single_key("cw_wpm", &s.wpm.to_string());
+    save_single_key("cw_mode", match s.mode {
+        sdr_remote_logic::cw_keyer::PaddleMode::IambicA => "A",
+        sdr_remote_logic::cw_keyer::PaddleMode::IambicB => "B",
+    });
+    save_single_key("cw_reversed", if s.reversed { "true" } else { "false" });
+    save_single_key("cw_straight_key", if s.straight_enabled { "true" } else { "false" });
+}
+
+/// Which transmitter the CW key goes to (ui/paddle_screen.rs).
+pub(crate) fn save_cw_target(t: u8) {
+    save_single_key("cw_target", &t.to_string());
+}
+
+/// The hang time after the last key-up (ui/paddle_screen.rs).
+pub(crate) fn save_cw_hang_ms(ms: u16) {
+    save_single_key("cw_hang_ms", &ms.to_string());
+}
+
+/// The CW sidetone (ui/paddle_screen.rs).
+pub(crate) fn save_cw_sidetone(s: &sdr_remote_logic::sidetone::SidetoneSettings) {
+    save_single_key("cw_sidetone_on", if s.on { "true" } else { "false" });
+    save_single_key("cw_sidetone_hz", &format!("{:.0}", s.hz));
+    save_single_key("cw_sidetone_volume", &format!("{:.3}", s.volume));
 }
 
 pub(crate) fn save_roger(r: &sdr_remote_logic::roger::RogerBeep) {
@@ -2312,6 +2450,18 @@ mod full_save_tests {
 
     /// And the list is a prefix match, so it must not keep something merely
     /// because it starts the same way - that would resurrect a renamed key.
+    /// The Bluetooth button's keys are written by `save_ptt_config` in
+    /// persistence.rs, outside this file, so the scanning test above cannot
+    /// see them. Named here instead.
+    #[test]
+    fn the_bluetooth_button_keys_survive_a_full_save() {
+        let source = include_str!("config.rs");
+        for key in ["ble_ptt_enabled", "ble_ptt_address", "ble_ptt_name", "ble_ptt_target", "ble_ptt_toggle"] {
+            assert!(survives_full_save(&format!("{key}=whatever")), "{key} is thrown away by a full save");
+            assert!(source.contains(&format!("strip_prefix(\"{key}=\"")), "{key} is never read back");
+        }
+    }
+
     #[test]
     fn an_unrelated_line_is_not_kept() {
         assert!(!survives_full_save("something_else=1"));

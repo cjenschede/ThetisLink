@@ -27,6 +27,10 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 anyhow = { workspace = true }
 midir = { workspace = true }
+# The Morse paddle on an MCP2221A (src/paddle.rs). Same crate the server uses
+# for its tuner and rotor bridges; resolved to vendor/mcp2221-hal by the
+# workspace patch.
+mcp2221-hal = "0.1"
 open = "5"
 chrono = "0.4"
 rust-i18n = "3"
@@ -54,6 +58,15 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
+    # The Bluetooth PTT button (src/ble.rs): WinRT rather than a new crate, so
+    # nothing enters the workspace or the SBOM for it.
+    "Devices_Bluetooth",
+    "Devices_Bluetooth_Advertisement",
+    "Devices_Bluetooth_GenericAttributeProfile",
+    "Devices_Enumeration",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
 ] }
 
 # Chat (docs/internal/DESIGN-relay-chat.md). Blocking, on its own thread: the

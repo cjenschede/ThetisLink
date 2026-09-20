@@ -413,9 +413,11 @@ fn spawn_replacement_and_exit() -> ! {
 
 impl Drop for ServerApp {
     fn drop(&mut self) {
+        // The window was closed - the one way out since the Exit button went
+        // (2026-09-19). The 991A must not be left in USB mode or on PC KEYING
+        // RTS (PE1FMC asked for a clean shutdown): the server's own end puts
+        // each Yaesu back and says so ("put back before exit"); this waits.
         self.save_window_positions();
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(true);
-        }
+        self.stop_server_and_wait(std::time::Duration::from_millis(2500));
     }
 }

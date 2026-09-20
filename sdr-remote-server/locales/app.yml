@@ -42,11 +42,6 @@ srv_about:
   nl: "Over"
   de: "Über"
   fr: "À propos"
-srv_exit:
-  en: "Exit"
-  nl: "Afsluiten"
-  de: "Beenden"
-  fr: "Quitter"
 srv_settings:
   en: "Settings"
   nl: "Instellingen"
@@ -530,6 +525,11 @@ srv_active:
   nl: "Actief"
   de: "Aktiv"
   fr: "Actif"
+srv_operate_blocked_other_pa:
+  en: "Only the PA marked as active may go into Operate - two PAs in Operate both set the Thetis drive"
+  nl: "Alleen de PA die als actief is aangemerkt mag in Operate - twee PA's in Operate zetten allebei het stuurvermogen van Thetis"
+  de: "Nur die als aktiv markierte PA darf in Betrieb gehen - zwei PAs im Betrieb setzen beide die Thetis-Ansteuerung"
+  fr: "Seul le PA marque comme actif peut passer en Marche - deux PA en Marche reglent tous deux la puissance d'attaque de Thetis"
 srv_operate:
   en: "Operate"
   nl: "Operate"

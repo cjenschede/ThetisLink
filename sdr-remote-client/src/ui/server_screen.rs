@@ -511,161 +511,171 @@ impl SdrRemoteApp {
             }
         }
 
-        ui.separator();
+        super::helpers::group_rule(ui);
 
-        // Audio device selection - refresh device list only when combo opened or first time
-        // Device enumeration (cpal/WASAPI) blocks the UI thread for 50-200ms on Windows,
-        // causing audio hiccups. Only refresh on first render or when user opens the combo.
-        let needs_device_refresh = self.device_refresh_at.is_none();
-        if needs_device_refresh {
-            self.input_devices = crate::audio::list_input_devices();
-            self.output_devices = crate::audio::list_output_devices();
-            self.device_refresh_at = Some(Instant::now());
-        }
-        ui.horizontal(|ui| {
-            ui.label(rust_i18n::t!("screen_input").to_string());
-            let default_label = rust_i18n::t!("screen_default").to_string();
-            let current_input = if self.selected_input.is_empty() {
-                default_label.clone()
-            } else {
-                self.selected_input.clone()
-            };
-            let resp = egui::ComboBox::from_id_salt("input_dev")
-                .selected_text(current_input)
-                .width(250.0)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(self.selected_input.is_empty(), default_label.as_str()).clicked() {
-                        self.selected_input.clear();
-                        let _ = self.cmd_tx.send(Command::SetInputDevice(String::new()));
-                        self.save_full_config();
-                    }
-                    for name in &self.input_devices {
-                        if ui.selectable_label(*name == self.selected_input, name).clicked() {
-                            self.selected_input = name.clone();
-                            let _ = self.cmd_tx.send(Command::SetInputDevice(name.clone()));
-                            self.save_full_config();
-                        }
-                    }
-                });
-            // Refresh device list when combo is opened (not every frame)
-            if resp.response.clicked() {
+        let group_open = self.group_audio_open;
+        if super::helpers::settings_group(
+            ui,
+            group_open,
+            RichText::new(rust_i18n::t!("screen_group_audio").to_string()).strong(),
+            |ui| {
+            // Audio device selection - refresh device list only when combo opened or first time
+            // Device enumeration (cpal/WASAPI) blocks the UI thread for 50-200ms on Windows,
+            // causing audio hiccups. Only refresh on first render or when user opens the combo.
+            let needs_device_refresh = self.device_refresh_at.is_none();
+            if needs_device_refresh {
                 self.input_devices = crate::audio::list_input_devices();
+                self.output_devices = crate::audio::list_output_devices();
+                self.device_refresh_at = Some(Instant::now());
             }
-        });
-        ui.horizontal(|ui| {
-            ui.label(rust_i18n::t!("screen_output").to_string());
-            let default_label = rust_i18n::t!("screen_default").to_string();
-            let current_output = if self.selected_output.is_empty() {
-                default_label.clone()
-            } else {
-                self.selected_output.clone()
-            };
-            let resp = egui::ComboBox::from_id_salt("output_dev")
-                .selected_text(current_output)
-                .width(250.0)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(self.selected_output.is_empty(), default_label.as_str()).clicked() {
-                        self.selected_output.clear();
-                        let _ = self.cmd_tx.send(Command::SetOutputDevice(String::new()));
-                        self.save_full_config();
-                    }
-                    for name in &self.output_devices {
-                        if ui.selectable_label(*name == self.selected_output, name).clicked() {
-                            self.selected_output = name.clone();
-                            let _ = self.cmd_tx.send(Command::SetOutputDevice(name.clone()));
+            ui.horizontal(|ui| {
+                ui.label(rust_i18n::t!("screen_input").to_string());
+                let default_label = rust_i18n::t!("screen_default").to_string();
+                let current_input = if self.selected_input.is_empty() {
+                    default_label.clone()
+                } else {
+                    self.selected_input.clone()
+                };
+                let resp = egui::ComboBox::from_id_salt("input_dev")
+                    .selected_text(current_input)
+                    .width(250.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(self.selected_input.is_empty(), default_label.as_str()).clicked() {
+                            self.selected_input.clear();
+                            let _ = self.cmd_tx.send(Command::SetInputDevice(String::new()));
                             self.save_full_config();
                         }
-                    }
-                });
-            // Refresh device list when combo is opened (not every frame)
-            if resp.response.clicked() {
-                self.output_devices = crate::audio::list_output_devices();
-            }
-        });
-
-        // Mic -> TX Profile auto-switch mapping
-        if !self.tx_profiles.is_empty() && !self.input_devices.is_empty() {
-            ui.separator();
-            ui.label(rust_i18n::t!("screen_mic_tx_profile_mapping").to_string());
-            let mut changed = false;
-            for dev_name in &self.input_devices {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(dev_name).size(11.0));
-                    let current = self.mic_profile_map.get(dev_name).cloned().unwrap_or_default();
-                    let none_label = rust_i18n::t!("screen_none_paren").to_string();
-                    let display = if current.is_empty() { none_label.clone() } else { current.clone() };
-                    egui::ComboBox::from_id_salt(format!("mic_prof_{}", dev_name))
-                        .selected_text(display)
-                        .width(150.0)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(current.is_empty(), none_label.as_str()).clicked() {
-                                self.mic_profile_map.remove(dev_name);
-                                changed = true;
+                        for name in &self.input_devices {
+                            if ui.selectable_label(*name == self.selected_input, name).clicked() {
+                                self.selected_input = name.clone();
+                                let _ = self.cmd_tx.send(Command::SetInputDevice(name.clone()));
+                                self.save_full_config();
                             }
-                            for (_, prof_name) in &self.tx_profiles {
-                                if ui.selectable_label(current == *prof_name, prof_name).clicked() {
-                                    self.mic_profile_map.insert(dev_name.clone(), prof_name.clone());
+                        }
+                    });
+                // Refresh device list when combo is opened (not every frame)
+                if resp.response.clicked() {
+                    self.input_devices = crate::audio::list_input_devices();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(rust_i18n::t!("screen_output").to_string());
+                let default_label = rust_i18n::t!("screen_default").to_string();
+                let current_output = if self.selected_output.is_empty() {
+                    default_label.clone()
+                } else {
+                    self.selected_output.clone()
+                };
+                let resp = egui::ComboBox::from_id_salt("output_dev")
+                    .selected_text(current_output)
+                    .width(250.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(self.selected_output.is_empty(), default_label.as_str()).clicked() {
+                            self.selected_output.clear();
+                            let _ = self.cmd_tx.send(Command::SetOutputDevice(String::new()));
+                            self.save_full_config();
+                        }
+                        for name in &self.output_devices {
+                            if ui.selectable_label(*name == self.selected_output, name).clicked() {
+                                self.selected_output = name.clone();
+                                let _ = self.cmd_tx.send(Command::SetOutputDevice(name.clone()));
+                                self.save_full_config();
+                            }
+                        }
+                    });
+                // Refresh device list when combo is opened (not every frame)
+                if resp.response.clicked() {
+                    self.output_devices = crate::audio::list_output_devices();
+                }
+            });
+
+            // Mic -> TX Profile auto-switch mapping
+            if !self.tx_profiles.is_empty() && !self.input_devices.is_empty() {
+                ui.separator();
+                ui.label(rust_i18n::t!("screen_mic_tx_profile_mapping").to_string());
+                let mut changed = false;
+                for dev_name in &self.input_devices {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(dev_name).size(11.0));
+                        let current = self.mic_profile_map.get(dev_name).cloned().unwrap_or_default();
+                        let none_label = rust_i18n::t!("screen_none_paren").to_string();
+                        let display = if current.is_empty() { none_label.clone() } else { current.clone() };
+                        egui::ComboBox::from_id_salt(format!("mic_prof_{}", dev_name))
+                            .selected_text(display)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(current.is_empty(), none_label.as_str()).clicked() {
+                                    self.mic_profile_map.remove(dev_name);
                                     changed = true;
                                 }
-                            }
-                        });
-                });
+                                for (_, prof_name) in &self.tx_profiles {
+                                    if ui.selectable_label(current == *prof_name, prof_name).clicked() {
+                                        self.mic_profile_map.insert(dev_name.clone(), prof_name.clone());
+                                        changed = true;
+                                    }
+                                }
+                            });
+                    });
+                }
+                if changed {
+                    self.save_full_config();
+                }
             }
-            if changed {
-                self.save_full_config();
-            }
-        }
 
-        ui.separator();
-        // PTT switch-on spike protection for a built-in speaker + mic in one chassis
-        // (tablets/laptops). Off by default so nobody pays extra latency.
-        let mut sp_changed = ui
-            .checkbox(
-                &mut self.spike_protection,
-                rust_i18n::t!("screen_builtin_speaker_mic").to_string(),
-            )
-            .on_hover_text(rust_i18n::t!("screen_builtin_speaker_mic_tooltip").to_string())
-            .changed();
-        if self.spike_protection {
-            ui.indent("spike_delays", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(rust_i18n::t!("screen_mic_gate_delay_thetis").to_string());
-                    sp_changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.mic_gate_delay_thetis_ms)
-                                .range(0..=800)
-                                .suffix(" ms")
-                                .speed(1.0),
-                        )
-                        .changed();
+            ui.separator();
+            // PTT switch-on spike protection for a built-in speaker + mic in one chassis
+            // (tablets/laptops). Off by default so nobody pays extra latency.
+            let mut sp_changed = ui
+                .checkbox(
+                    &mut self.spike_protection,
+                    rust_i18n::t!("screen_builtin_speaker_mic").to_string(),
+                )
+                .on_hover_text(rust_i18n::t!("screen_builtin_speaker_mic_tooltip").to_string())
+                .changed();
+            if self.spike_protection {
+                ui.indent("spike_delays", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(rust_i18n::t!("screen_mic_gate_delay_thetis").to_string());
+                        sp_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut self.mic_gate_delay_thetis_ms)
+                                    .range(0..=800)
+                                    .suffix(" ms")
+                                    .speed(1.0),
+                            )
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(rust_i18n::t!("screen_mic_gate_delay_yaesu").to_string());
+                        sp_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut self.mic_gate_delay_yaesu_ms)
+                                    .range(0..=800)
+                                    .suffix(" ms")
+                                    .speed(1.0),
+                            )
+                            .changed();
+                    });
+                    ui.label(
+                        egui::RichText::new(rust_i18n::t!("screen_gate_delay_hint").to_string())
+                            .size(11.0)
+                            .italics(),
+                    );
                 });
-                ui.horizontal(|ui| {
-                    ui.label(rust_i18n::t!("screen_mic_gate_delay_yaesu").to_string());
-                    sp_changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.mic_gate_delay_yaesu_ms)
-                                .range(0..=800)
-                                .suffix(" ms")
-                                .speed(1.0),
-                        )
-                        .changed();
-                });
-                ui.label(
-                    egui::RichText::new(rust_i18n::t!("screen_gate_delay_hint").to_string())
-                        .size(11.0)
-                        .italics(),
+            }
+            if sp_changed {
+                crate::ui::config::save_spike_protection(
+                    self.spike_protection,
+                    self.mic_gate_delay_thetis_ms,
+                    self.mic_gate_delay_yaesu_ms,
                 );
-            });
+            }
+            },
+        ) {
+            self.group_audio_open = !group_open;
+            super::config::save_group_open("group_audio_open", !group_open);
         }
-        if sp_changed {
-            crate::ui::config::save_spike_protection(
-                self.spike_protection,
-                self.mic_gate_delay_thetis_ms,
-                self.mic_gate_delay_yaesu_ms,
-            );
-        }
-
-        ui.separator();
+        // (The group's own line below separates it from what follows.)
 
         // Audio levels: hide Thetis-only streams in Yaesu-only setups.
         // RX bars are measured as received (before the volume sliders), the mic
@@ -764,56 +774,103 @@ impl SdrRemoteApp {
         let roger_thetis = self.thetis_configured;
         let roger_radio1 = self.yaesu_present_last;
         let roger_radio2 = self.yaesu2_present_last;
-        if roger_thetis || roger_radio1 || roger_radio2 {
-            ui.separator();
-            let roger_before = self.roger;
-            ui.horizontal(|ui| {
-                ui.label(rust_i18n::t!("screen_roger").to_string());
-                ui.add(
-                    egui::DragValue::new(&mut self.roger.freq_hz)
-                        .speed(10.0)
-                        .range(sdr_remote_logic::roger::FREQ_MIN_HZ..=sdr_remote_logic::roger::FREQ_MAX_HZ)
-                        .suffix(" Hz"),
-                )
-                .on_hover_text(rust_i18n::t!("screen_roger_freq_tooltip").to_string());
-                ui.add(
-                    egui::DragValue::new(&mut self.roger.duration_ms)
-                        .speed(10.0)
-                        .range(sdr_remote_logic::roger::DURATION_MIN_MS..=sdr_remote_logic::roger::DURATION_MAX_MS)
-                        .suffix(" ms"),
-                )
-                .on_hover_text(rust_i18n::t!("screen_roger_duration_tooltip").to_string());
-                ui.label(rust_i18n::t!("screen_roger_volume").to_string());
-                let resp = ui.add(egui::Slider::new(&mut self.roger.volume, 0.0..=1.0).fixed_decimals(2));
-                let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.roger.volume, 0.0..=1.0, 0.05);
-                let _ = scrolled;
-                ui.checkbox(&mut self.roger.include_fm, rust_i18n::t!("screen_roger_fm").to_string())
-                    .on_hover_text(rust_i18n::t!("screen_roger_fm_tooltip").to_string());
-            });
-            let l1 = self.yaesu_slot_label(0);
-            let l2 = self.yaesu_slot_label(1);
-            ui.horizontal(|ui| {
-                ui.label(rust_i18n::t!("screen_roger_on").to_string());
-                if roger_thetis {
-                    ui.checkbox(&mut self.roger.on_thetis, "Thetis");
+        // Whether the roger group is drawn: asked once, because the line above
+        // the Bluetooth group depends on the same answer.
+        let roger_shown = roger_thetis || roger_radio1 || roger_radio2;
+        if roger_shown {
+            super::helpers::group_rule(ui);
+            let group_open = self.group_roger_open;
+            if super::helpers::settings_group(
+                ui,
+                group_open,
+                RichText::new(rust_i18n::t!("screen_group_roger").to_string()).strong(),
+                |ui| {
+                let roger_before = self.roger;
+                ui.horizontal(|ui| {
+                    ui.label(rust_i18n::t!("screen_roger").to_string());
+                    ui.add(
+                        egui::DragValue::new(&mut self.roger.freq_hz)
+                            .speed(10.0)
+                            .range(sdr_remote_logic::roger::FREQ_MIN_HZ..=sdr_remote_logic::roger::FREQ_MAX_HZ)
+                            .suffix(" Hz"),
+                    )
+                    .on_hover_text(rust_i18n::t!("screen_roger_freq_tooltip").to_string());
+                    ui.add(
+                        egui::DragValue::new(&mut self.roger.duration_ms)
+                            .speed(10.0)
+                            .range(sdr_remote_logic::roger::DURATION_MIN_MS..=sdr_remote_logic::roger::DURATION_MAX_MS)
+                            .suffix(" ms"),
+                    )
+                    .on_hover_text(rust_i18n::t!("screen_roger_duration_tooltip").to_string());
+                    ui.label(rust_i18n::t!("screen_roger_volume").to_string());
+                    let resp = ui.add(egui::Slider::new(&mut self.roger.volume, 0.0..=1.0).fixed_decimals(2));
+                    let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.roger.volume, 0.0..=1.0, 0.05);
+                    let _ = scrolled;
+                    ui.checkbox(&mut self.roger.include_fm, rust_i18n::t!("screen_roger_fm").to_string())
+                        .on_hover_text(rust_i18n::t!("screen_roger_fm_tooltip").to_string());
+                });
+                let l1 = self.yaesu_slot_label(0);
+                let l2 = self.yaesu_slot_label(1);
+                ui.horizontal(|ui| {
+                    ui.label(rust_i18n::t!("screen_roger_on").to_string());
+                    if roger_thetis {
+                        ui.checkbox(&mut self.roger.on_thetis, "Thetis");
+                    }
+                    if roger_radio1 {
+                        ui.checkbox(&mut self.roger.on_radio1, l1);
+                    }
+                    if roger_radio2 {
+                        ui.checkbox(&mut self.roger.on_radio2, l2);
+                    }
+                    ui.label(
+                        RichText::new(rust_i18n::t!("screen_roger_note").to_string())
+                            .small()
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                });
+                if self.roger != roger_before {
+                    self.roger = self.roger.clamped();
+                    super::config::save_roger(&self.roger);
+                    let _ = self.cmd_tx.send(Command::SetRogerBeep(self.roger));
                 }
-                if roger_radio1 {
-                    ui.checkbox(&mut self.roger.on_radio1, l1);
-                }
-                if roger_radio2 {
-                    ui.checkbox(&mut self.roger.on_radio2, l2);
-                }
-                ui.label(
-                    RichText::new(rust_i18n::t!("screen_roger_note").to_string())
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
-            });
-            if self.roger != roger_before {
-                self.roger = self.roger.clamped();
-                super::config::save_roger(&self.roger);
-                let _ = self.cmd_tx.send(Command::SetRogerBeep(self.roger));
+                },
+            ) {
+                self.group_roger_open = !group_open;
+                super::config::save_group_open("group_roger_open", !group_open);
             }
+        }
+
+        // The Bluetooth PTT button. On this tab and not with MIDI, because it is
+        // a piece of station equipment like the roger beep, not a controller
+        // mapping (owner, 2026-09-17). The line above it is the roger group's
+        // line below, when that group is there.
+        if !roger_shown {
+            super::helpers::group_rule(ui);
+        }
+        let group_open = self.group_ble_open;
+        if super::helpers::settings_group(
+            ui,
+            group_open,
+            RichText::new(rust_i18n::t!("screen_group_ble").to_string()).strong(),
+            |ui| self.render_ble_section(ui),
+        ) {
+            self.group_ble_open = !group_open;
+            super::config::save_group_open("group_ble_open", !group_open);
+        }
+
+        // The Morse paddle: station equipment too, like the button above. Its
+        // line above is the Bluetooth group's line below - which is there
+        // because the Bluetooth group is always drawn. Should that ever become
+        // conditional, this group needs its own line above in that case.
+        let group_open = self.group_cw_open;
+        if super::helpers::settings_group(
+            ui,
+            group_open,
+            RichText::new(rust_i18n::t!("screen_group_cw").to_string()).strong(),
+            |ui| self.render_cw_section(ui),
+        ) {
+            self.group_cw_open = !group_open;
+            super::config::save_group_open("group_cw_open", !group_open);
         }
 
         // Audio recording
@@ -1015,14 +1072,13 @@ impl SdrRemoteApp {
             }
         });
         egui::Grid::new("audio_stream_stats_grid")
-            .num_columns(5)
+            .num_columns(4)
             .spacing([14.0, 3.0])
             .show(ui, |ui| {
                 ui.label(egui::RichText::new(rust_i18n::t!("screen_col_stream").to_string()).strong().size(11.0));
                 ui.label(egui::RichText::new(rust_i18n::t!("screen_col_jitter").to_string()).strong().size(11.0));
                 ui.label(egui::RichText::new(rust_i18n::t!("screen_col_buffer").to_string()).strong().size(11.0));
                 ui.label(egui::RichText::new(rust_i18n::t!("screen_col_packets").to_string()).strong().size(11.0));
-                ui.label(egui::RichText::new(rust_i18n::t!("screen_col_loss").to_string()).strong().size(11.0));
                 ui.end_row();
 
                 // Only show ACTIVE streams (current subscription), not on
@@ -1035,7 +1091,6 @@ impl SdrRemoteApp {
                     ui.label(format!("{:.1} ms", self.jitter_ms));
                     ui.label(format!("{} frames", self.buffer_depth));
                     ui.label(format!("{}", self.rx_packets));
-                    ui.label(format!("{}%", self.loss_percent));
                     ui.end_row();
                 }
                 if self.yaesu_enabled {
@@ -1044,7 +1099,6 @@ impl SdrRemoteApp {
                     ui.label(format!("{:.1} ms", self.yaesu_jitter_ms));
                     ui.label(format!("{} frames", self.yaesu_buffer_depth));
                     ui.label(format!("{}", self.yaesu_audio_packets));
-                    ui.label("-");
                     ui.end_row();
                 }
                 if self.yaesu2_enabled {
@@ -1053,7 +1107,6 @@ impl SdrRemoteApp {
                     ui.label(format!("{:.1} ms", self.yaesu2_jitter_ms));
                     ui.label(format!("{} frames", self.yaesu2_buffer_depth));
                     ui.label(format!("{}", self.yaesu2_audio_packets));
-                    ui.label("-");
                     ui.end_row();
                 }
                 if self.vrx1_enabled {
@@ -1062,7 +1115,6 @@ impl SdrRemoteApp {
                     ui.label(format!("{:.1} ms", self.vrx1_jitter_ms));
                     ui.label(format!("{} frames", self.vrx1_buffer_depth));
                     ui.label(format!("{}", self.vrx1_audio_packets));
-                    ui.label("-");
                     ui.end_row();
                 }
                 if self.vrx2_enabled {
@@ -1071,7 +1123,6 @@ impl SdrRemoteApp {
                     ui.label(format!("{:.1} ms", self.vrx2_jitter_ms));
                     ui.label(format!("{} frames", self.vrx2_buffer_depth));
                     ui.label(format!("{}", self.vrx2_audio_packets));
-                    ui.label("-");
                     ui.end_row();
                 }
                 if !shown {
@@ -1079,10 +1130,24 @@ impl SdrRemoteApp {
                     ui.label("");
                     ui.label("");
                     ui.label("");
-                    ui.label("");
                     ui.end_row();
                 }
             });
+
+        // Packet loss is a property of the LINK, not of a stream: every stream
+        // to this client goes down one socket to one address. It used to sit in
+        // the RX1+RX2 row with a dash on the other four, which read as "no
+        // measurement for those" - and since the meter now feeds on whatever
+        // streams are running, a Yaesu-only session would have shown four dashes
+        // while it was measuring the Yaesu. So it is stated once, here.
+        ui.label(
+            egui::RichText::new(format!(
+                "{}: {}%",
+                rust_i18n::t!("screen_link_loss"),
+                self.loss_percent
+            ))
+            .size(11.0),
+        );
 
         // Per-stream breakdown - only show when the user
         // has clicked "Down". List is empty for the first ~5 s

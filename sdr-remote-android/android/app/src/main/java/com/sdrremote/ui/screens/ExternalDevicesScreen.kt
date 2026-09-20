@@ -2,6 +2,7 @@
 
 package com.sdrremote.ui.screens
 
+import com.sdrremote.prefs.YaesuTxPrefs
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.ui.platform.LocalContext
@@ -1127,24 +1128,30 @@ private fun Rf2kTab(
         if (state.rf2kModulation.isNotEmpty()) {
             Text(state.rf2kModulation, color = modColor, fontWeight = FontWeight.Bold)
         }
-        Text(stringResource(R.string.dev_drive_watts, state.rf2kDriveW), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-
+        // Same row as the SPE tab: Thetis' drive in percent, which is there in
+        // Standby too, instead of the PA's own watts that read 0 when it is not
+        // amplifying.
         val driveEnabled = state.rf2kConnected && state.rf2kOperate && state.rf2kActive
         Button(
             onClick = onRf2kDriveDown,
             enabled = driveEnabled,
-            modifier = Modifier.height(36.dp),
+            modifier = Modifier.height(40.dp),
             contentPadding = PaddingValues(horizontal = 12.dp),
         ) {
-            Text("-")
+            Text(stringResource(R.string.dev_drive_down))
         }
+        Text(
+            "${state.driveLevel}%",
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+        )
         Button(
             onClick = onRf2kDriveUp,
             enabled = driveEnabled,
-            modifier = Modifier.height(36.dp),
+            modifier = Modifier.height(40.dp),
             contentPadding = PaddingValues(horizontal = 12.dp),
         ) {
-            Text("+")
+            Text(stringResource(R.string.dev_drive_up))
         }
     }
 
@@ -2214,7 +2221,7 @@ private fun YaesuTab(
         fun micEngineToDisplay(v: Float): Float = (v / 0.4f).coerceIn(0.05f, 1f)
         val micRadio = fullState.selectedRadio
         var localMicGain by remember(micRadio) {
-            mutableFloatStateOf(micEngineToDisplay(micEqPrefs.getFloat("yaesu_mic_gain_$micRadio", 0.2f)))
+            mutableFloatStateOf(micEngineToDisplay(YaesuTxPrefs.micGain(micEqPrefs, micRadio)))
         }
         // No push on radio switch here: this tab is not always composed, so the
         // engine would keep the previous radio's gain. SdrViewModel.syncTxChainForRadio
@@ -2225,7 +2232,7 @@ private fun YaesuTab(
                 localMicGain = it
                 val engineGain = micDisplayToEngine(it)
                 onTxGain(engineGain)
-                micEqPrefs.edit().putFloat("yaesu_mic_gain_$micRadio", engineGain).apply()
+                YaesuTxPrefs.setMicGain(micEqPrefs, micRadio, engineGain)
             }, valueRange = 0.05f..1f, modifier = Modifier.weight(1f))
             Text("${String.format("%.1f", localMicGain)}x", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
@@ -2238,7 +2245,7 @@ private fun YaesuTab(
         // the selected radio). Migration falls back to the old shared key.
         val compRadio = state.selectedRadio
         var compLevel by remember(compRadio) {
-            mutableFloatStateOf(micEqPrefs.getFloat("yaesu_comp_$compRadio", micEqPrefs.getFloat("yaesu_comp", 0f)))
+            mutableFloatStateOf(YaesuTxPrefs.compressor(micEqPrefs, compRadio))
         }
         // Radio-switch push lives in SdrViewModel.syncTxChainForRadio - see above.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2246,7 +2253,7 @@ private fun YaesuTab(
             Slider(value = compLevel, onValueChange = {
                 compLevel = it
                 onCompressor(it.toInt())
-                micEqPrefs.edit().putFloat("yaesu_comp_$compRadio", it).apply()
+                YaesuTxPrefs.setCompressor(micEqPrefs, compRadio, it)
             }, valueRange = 0f..100f, modifier = Modifier.weight(1f))
             Text("${compLevel.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
@@ -2269,25 +2276,38 @@ private fun YaesuTab(
         Spacer(Modifier.height(8.dp))
         val context = LocalContext.current
         val eqPrefs = remember { context.getSharedPreferences("thetislink_eq", android.content.Context.MODE_PRIVATE) }
-        // Independent EQ per radio: keys carry the slot index (0/1). Migration: falls back
-        // to the old shared key while there is no radio-specific value yet, so the
+        // Independent EQ per radio: keys carry the slot index (0/1), with a fallback
+        // to the old shared key while there is no radio-specific value yet, so an
         // existing curve is kept and can diverge per radio afterwards.
+        //
+        // Those keys and their fallbacks live in YaesuTxPrefs now. They were
+        // written out here, and a second reader in the ViewModel copied the key
+        // but not the fallback - which sent five zeros to the engine while these
+        // sliders showed the operator his real curve.
         val eqRadio = state.selectedRadio
         var eqEnabled by remember(eqRadio) {
-            mutableStateOf(eqPrefs.getBoolean("eq_enabled_$eqRadio", eqPrefs.getBoolean("eq_enabled", false)))
+            mutableStateOf(YaesuTxPrefs.eqEnabled(eqPrefs, eqRadio))
         }
         val bandLabels = listOf("100", "300", "1k", "2.5k", "4k")
         val eqGains = remember(eqRadio) {
-            Array(5) { i -> mutableFloatStateOf(eqPrefs.getFloat("eq_band_${eqRadio}_$i", eqPrefs.getFloat("eq_band_$i", 0f))) }
+            Array(5) { i -> mutableFloatStateOf(YaesuTxPrefs.band(eqPrefs, eqRadio, i)) }
         }
         // Client-side TX-keten AGC-toggle, per radio (net als EQ + compressor).
         var txAgc by remember(eqRadio) {
-            mutableStateOf(eqPrefs.getBoolean("yaesu_tx_agc_$eqRadio", eqPrefs.getBoolean("yaesu_tx_agc", false)))
+            mutableStateOf(YaesuTxPrefs.txAgc(eqPrefs, eqRadio))
         }
 
         // Re-apply the EQ to the (newly) selected radio: on first composition and on a
         // radio change. onEqBand / onEqEnabled route to the selected radio (the ViewModel
         // *Sel functions), so the EQ also lands on radio 2 (FTX-1) and not only radio 1.
+        //
+        // DELIBERATE duplication with loadAssignedYaesuEqPreset, which covers the
+        // same trigger from the state stream. It is kept because the two do not
+        // cover the same CASE: the loader returns early unless a Yaesu is the
+        // operating radio, and this one also runs while the operator is on Thetis
+        // with the screen open. Removing it would silently change that case.
+        // Written down rather than left to be rediscovered (working rule 15); if a
+        // Kotlin test harness ever exists, this is one to pin.
         LaunchedEffect(state.selectedRadio) {
             onEqEnabled(eqEnabled)
             for (i in 0..4) onEqBand(i, eqGains[i].floatValue)
@@ -2296,18 +2316,21 @@ private fun YaesuTab(
         LaunchedEffect(eqRadio) {
             while (true) {
                 kotlinx.coroutines.delay(500)
-                val prefsVal = eqPrefs.getBoolean("eq_enabled_$eqRadio", eqEnabled)
+                val prefsVal = eqPrefs.getBoolean("eq_enabled_$eqRadio", eqEnabled) // deliberately raw: the poll wants THIS slot only
                 if (prefsVal != eqEnabled) {
                     eqEnabled = prefsVal
                     onEqEnabled(prefsVal)
                 }
             }
         }
-        // Restore the AGC to the engine on first composition and on a radio change
-        // (onTxAgc routes to the selected radio).
-        LaunchedEffect(eqRadio) {
-            onTxAgc(txAgc)
-        }
+        // The AGC is NOT re-sent from here. It used to be, on first composition and
+        // on a radio change - which meant the engine only ever learned about this
+        // switch while this screen happened to be open. SdrViewModel.syncTxChainForRadio
+        // pushes it from the state stream now, beside the mic gain and the
+        // compressor it belongs with, on exactly the same triggers. Two pushers on
+        // one trigger is the drift this project keeps paying for, so this one is
+        // gone rather than kept "just in case". The checkbox below still sends on
+        // change, which is a different event.
 
         // The vertical EQ gain sliders fold away behind an arrow: while scrolling through
         // the screen they were otherwise nudged by accident. Collapsed by default, so
@@ -2319,7 +2342,7 @@ private fun YaesuTab(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = eqEnabled, onCheckedChange = {
                 eqEnabled = it; onEqEnabled(it)
-                eqPrefs.edit().putBoolean("eq_enabled_$eqRadio", it).apply()
+                YaesuTxPrefs.setEqEnabled(eqPrefs, eqRadio, it)
             })
             Text(
                 if (eqSlidersExpanded) "▼ EQ" else "▶ EQ",
@@ -2332,7 +2355,7 @@ private fun YaesuTab(
         // EQ -> compressor -> AGC -> gain. The compressor slider sits with Mic gain (above).
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = txAgc, onCheckedChange = {
-                txAgc = it; onTxAgc(it); eqPrefs.edit().putBoolean("yaesu_tx_agc_$eqRadio", it).apply()
+                txAgc = it; onTxAgc(it); YaesuTxPrefs.setTxAgc(eqPrefs, eqRadio, it)
             })
             Text("AGC", fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
@@ -2365,7 +2388,7 @@ private fun YaesuTab(
                     val g = arr.getDouble(i).toFloat()
                     eqGains[i].floatValue = g
                     onEqBand(i, g)
-                    eqPrefs.edit().putFloat("eq_band_${eqRadio}_$i", g).apply()
+                    YaesuTxPrefs.setBand(eqPrefs, eqRadio, i, g)
                 }
                 selectedPreset = name
             } catch (_: Exception) {}
@@ -2554,7 +2577,7 @@ private fun YaesuTab(
                             value = eqGains[i].floatValue,
                             onValueChange = {
                                 eqGains[i].floatValue = it; onEqBand(i, it)
-                                eqPrefs.edit().putFloat("eq_band_${eqRadio}_$i", it).apply()
+                                YaesuTxPrefs.setBand(eqPrefs, eqRadio, i, it)
                             },
                             valueRange = -12f..12f,
                             modifier = Modifier.width(40.dp).height(75.dp),

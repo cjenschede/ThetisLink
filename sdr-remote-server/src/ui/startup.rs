@@ -9,6 +9,25 @@
 use super::*;
 
 impl ServerApp {
+    /// Stop the server and wait until its thread has finished - at most
+    /// `wait`. The end of the server is where the PTT is released and each
+    /// Yaesu is put back (`run_server_async`); a fixed sleep before
+    /// `process::exit` used to cut that short, or rather hid that it never
+    /// ran.
+    pub(super) fn stop_server_and_wait(&mut self, wait: std::time::Duration) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+        let Some(handle) = self.server_thread.take() else { return };
+        let until = std::time::Instant::now() + wait;
+        while !handle.is_finished() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !handle.is_finished() {
+            log::warn!("the server did not finish within {} ms; exiting anyway", wait.as_millis());
+        }
+    }
+
     pub(super) fn start_server(&mut self) {
         // Clear log buffer for fresh start
         self.log_buffer.lock().unwrap().clear();
@@ -39,7 +58,16 @@ impl ServerApp {
             yaesu2_model_last: self.probe_model[1],
             yaesu_audio_channel: self.audio_channel[0],
             yaesu2_audio_channel: self.audio_channel[1],
-            yaesu_baud: 38400,
+            // From disk, like yaesu2_baud seven lines below - NOT a literal.
+            // Save & Start rebuilds this whole config from the screen and then
+            // writes it (config::save below), and the baud of slot 0 is not on
+            // the screen: a hardcoded 38400 here did not just ignore what the
+            // operator had set, it overwrote it on disk. After that the session
+            // and the model probe both read 38400 back and looked consistent,
+            // which is why build 151 repaired the probe and still changed
+            // nothing. Same comment as the one above chat_answers_seen: what is
+            // not on the screen has to be carried through by hand.
+            yaesu_baud: crate::config::load().yaesu_baud,
             yaesu_audio_device: if self.yaesu_audio_device.is_empty() { None } else { Some(self.yaesu_audio_device.clone()) },
             yaesu_audio_output_device: if self.yaesu_audio_output_device.is_empty() { None } else { Some(self.yaesu_audio_output_device.clone()) },
             // Dual-radio slot 1 (radio 2) - now from the settings UI. Baud + audio-channel
@@ -100,6 +128,12 @@ impl ServerApp {
             language: self.ui_language.clone(),
             autostart: self.autostart,
             active_pa: self.active_pa.load(Ordering::Relaxed),
+            // Same reason as the two snapshot fields below: the settings screen
+            // has no field for these, so read them back instead of overwriting
+            // them with a default on every restart.
+            pa_default_drive: crate::config::load().pa_default_drive,
+            pa_single_operate: crate::config::load().pa_single_operate,
+            rf2k_last_seen_operate: crate::config::load().rf2k_last_seen_operate,
             // Preserve the persisted per-PA pre-Operate snapshot values; the
             // RF2K observer is the only writer (see rf2k.rs save_saved_drive
             // call). Reading them from `load()` here keeps `start_server()`
@@ -163,6 +197,9 @@ impl ServerApp {
             let ssb_on_ptt = config.yaesu_ssb_switch_on_ptt;
             let mem_write_ack = config.yaesu_memory_write_ack;
             let ftx1_channel = config.yaesu_audio_channel;
+            // What was in this slot last time, so a swap that left the audio
+            // behind can be said out loud (see audio_device_warning).
+            let model_last0 = config.yaesu_model_last;
             match with_timeout(com_timeout, move || {
                 // Same as slot 1: name which of the two this is.
                 let (model, det_baud) = match crate::yaesu::detect_model(&port, baud) {
@@ -178,6 +215,14 @@ impl ServerApp {
                         (crate::yaesu::RadioModel::Ft991a, baud)
                     }
                 };
+                if let Some(what) = crate::yaesu::audio_device_warning(
+                    0,
+                    model,
+                    model_last0.map(crate::yaesu::RadioModel::from_code),
+                    audio_dev_opt.as_deref(),
+                ) {
+                    log::warn!("{}", what);
+                }
                 crate::yaesu::YaesuRadio::new_with_model(&port, det_baud, audio_dev_opt.as_deref(), audio_out_opt.as_deref(), model, 0, ftx1_channel, ssb_on_ptt, mem_write_ack)
             }) {
                 Ok(radio) => {

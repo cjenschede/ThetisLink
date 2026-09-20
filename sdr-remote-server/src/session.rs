@@ -29,7 +29,20 @@ const SESSION_TIMEOUT_SECS: u64 = 15;
 /// Thetis has had this all along in another form: 500 ms without PTT packets and
 /// it lets go. This is the same idea, kept slower because a Yaesu's PTT is a
 /// command and not a stream, so there is nothing here that arrives every 20 ms.
+/// Equal to the CW playout's WATCHDOG by coincidence, not by design: which of the
+/// two lifts the key of a client that died is then a race, and both outcomes are
+/// right (step-4 brief, the time-out row in section 2.6). The safety order is
+/// pinned in ptt.rs: `mox_drops_before_the_transmitter_is_given_away_or_the_key_lifted`.
 const TX_HOLDER_TIMEOUT_SECS: u64 = 3;
+
+/// Has a client been silent longer than its deadline? Compared at full
+/// precision: `elapsed().as_secs() > N` rounds down and only holds from N + 1
+/// seconds on, which made the three-second deadline of a TX holder four and
+/// the fifteen of a listener sixteen. The one place both the time-out and the
+/// check for an active session ask.
+pub fn silent_too_long(silence: std::time::Duration, holds_transmitter: bool) -> bool {
+    silence > std::time::Duration::from_secs(timeout_secs(holds_transmitter))
+}
 
 /// How long this client may be silent before it is dropped.
 pub fn timeout_secs(holds_transmitter: bool) -> u64 {
@@ -266,6 +279,32 @@ pub enum TxTarget {
 
 impl TxTarget {
     pub const ALL: [TxTarget; 3] = [TxTarget::Thetis, TxTarget::Yaesu1, TxTarget::Yaesu2];
+
+    /// The transmitter a CW key edge is for, by the number the packet carries
+    /// (`CwEdgesPacket::target`: 0 Thetis, 1 and 2 the Yaesu slots). Anything
+    /// else is no transmitter at all, and the caller refuses it.
+    pub fn from_cw_target(target: u8) -> Option<TxTarget> {
+        match target {
+            0 => Some(TxTarget::Thetis),
+            1 => Some(TxTarget::Yaesu1),
+            2 => Some(TxTarget::Yaesu2),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod cw_target_tests {
+    use super::TxTarget;
+
+    #[test]
+    fn a_cw_target_names_one_transmitter_or_none() {
+        assert_eq!(TxTarget::from_cw_target(0), Some(TxTarget::Thetis));
+        assert_eq!(TxTarget::from_cw_target(1), Some(TxTarget::Yaesu1));
+        assert_eq!(TxTarget::from_cw_target(2), Some(TxTarget::Yaesu2));
+        assert_eq!(TxTarget::from_cw_target(3), None);
+        assert_eq!(TxTarget::from_cw_target(255), None);
+    }
 }
 
 /// Manages connected client sessions.
@@ -584,21 +623,26 @@ impl SessionManager {
         self.connect_generation
     }
 
-    pub fn remove(&mut self, addr: SocketAddr) {
+    /// Returns the transmitters this client was holding, so the caller can
+    /// take them out of TX now rather than leave that to the watchdogs.
+    pub fn remove(&mut self, addr: SocketAddr) -> Vec<TxTarget> {
         self.clients.remove(&addr);
         // Everything it held, not just Thetis. A client that walks off with a
         // Yaesu would otherwise keep that radio busy for everyone.
+        let mut released = Vec::new();
         for target in TxTarget::ALL {
             if self.tx_holders.get(&target).copied() == Some(addr) {
                 info!("TX holder {} disconnected, releasing {:?}", addr, target);
                 self.tx_holders.remove(&target);
+                released.push(target);
             }
         }
+        released
     }
 
     /// Check if a session is active and authenticated
     fn is_active_authed(s: &ClientSession) -> bool {
-        s.last_seen.elapsed().as_secs() <= SESSION_TIMEOUT_SECS
+        !silent_too_long(s.last_seen.elapsed(), false)
             && matches!(s.auth_state, AuthState::NoAuth | AuthState::Authenticated)
     }
 
@@ -643,12 +687,15 @@ impl SessionManager {
         let holders: std::collections::HashSet<SocketAddr> =
             self.tx_holders.values().copied().collect();
         let timed_out: Vec<SocketAddr> = self.clients.values()
-            .filter(|s| s.last_seen.elapsed().as_secs() > timeout_secs(holders.contains(&s.addr)))
+            .filter(|s| silent_too_long(s.last_seen.elapsed(), holders.contains(&s.addr)))
             .map(|s| s.addr)
             .collect();
 
         for &addr in &timed_out {
-            warn!("Client {} timed out", addr);
+            // How long it was silent, so a field log shows how close to its
+            // deadline (3 s holding a transmitter, else the long one) it went.
+            let silent_ms = self.clients.get(&addr).map(|s| s.last_seen.elapsed().as_millis()).unwrap_or(0);
+            warn!("Client {} timed out ({} ms silent)", addr, silent_ms);
             self.clients.remove(&addr);
             // Every transmitter it held. A client whose link died while it
             // had a Yaesu would otherwise keep that radio busy for everyone
@@ -683,6 +730,32 @@ impl SessionManager {
         if self.tx_holders.get(&target).copied() == Some(addr) {
             info!("TX lock on {:?} released by {}", target, addr);
             self.tx_holders.remove(&target);
+        }
+    }
+
+    /// Take a transmitter for one attempt - a CW packet on its way through the
+    /// gates. `None` when another client holds it; otherwise whether this
+    /// client held it already (its microphone on that radio, or its own run),
+    /// which is what `give_back_attempt` needs to know.
+    ///
+    /// One pair for both kinds of transmitter. Review 316 found the rule in two
+    /// spellings: the Yaesu gate asked "did I hold it before", the Thetis gate
+    /// "does a run of mine play" - and the second let a failed CW attempt take
+    /// away a lock this client held for its microphone.
+    pub fn acquire_for_attempt(&mut self, target: TxTarget, addr: SocketAddr) -> Option<bool> {
+        let held_before = self.tx_holder(target) == Some(addr);
+        if self.try_acquire_tx(target, addr) {
+            Some(held_before)
+        } else {
+            None
+        }
+    }
+
+    /// The attempt came to nothing: give back what `acquire_for_attempt` took
+    /// for it - and only that. A lock this client held before stays its own.
+    pub fn give_back_attempt(&mut self, target: TxTarget, addr: SocketAddr, held_before: bool) {
+        if !held_before {
+            self.release_tx(target, addr);
         }
     }
 
@@ -1205,6 +1278,21 @@ impl SessionManager {
     }
 }
 
+/// May a frame coming out of the playout buffer key Thetis?
+///
+/// Only when the frame carries PTT, somebody owns the transmitter, and it is
+/// the same client the buffered audio came from. Today the two cannot differ:
+/// Thetis is only ever acquired on an audio packet, and that same packet
+/// empties the buffer when the owner changes, in the same task as playout. So
+/// a client that left with its tail in the buffer cannot key the next owner's
+/// transmission - as long as that coupling holds. Comparing identity here
+/// keeps the guarantee even when it stops holding, for one comparison (review
+/// finding on build 81). `accepts` is the same question asked of an incoming
+/// packet.
+pub fn playout_keys(frame_ptt: bool, owner: Option<SocketAddr>, audio_from: Option<SocketAddr>) -> bool {
+    frame_ptt && owner.is_some() && owner == audio_from
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1234,6 +1322,42 @@ mod tests {
         assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)), "nobody held it");
         assert!(!m.try_acquire_tx(TxTarget::Thetis, a(2)), "somebody else holds it");
         assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)));
+    }
+
+    /// A client that leaves takes its transmitters with it, and says which: the
+    /// Disconnect handler unkeys exactly those (build 80). A client that held
+    /// nothing returns nothing, and a stranger cannot take another's.
+    #[test]
+    fn a_leaving_client_hands_back_what_it_held_and_names_it() {
+        let mut m = mgr();
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu2, a(1)));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(2)));
+        assert_eq!(m.remove(a(3)), vec![], "held nothing");
+        // The client is in the table too, and remove() takes it out: the half
+        // a surviving mutant showed the first version of this test could not
+        // see, because the table was empty (review finding on build 82).
+        m.clients.insert(a(1), mk_session("127.0.0.1:1", true, 8.0, 4.0, true, true));
+        assert!(m.clients.contains_key(&a(1)));
+        let released = m.remove(a(1));
+        assert!(!m.clients.contains_key(&a(1)), "gone from the table");
+        assert_eq!(released, vec![TxTarget::Thetis, TxTarget::Yaesu2], "both it held, in slot order");
+        assert_eq!(m.tx_holder(TxTarget::Thetis), None);
+        assert_eq!(m.tx_holder(TxTarget::Yaesu2), None);
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), Some(a(2)), "the other client keeps its radio");
+        assert_eq!(m.remove(a(1)), vec![], "leaving twice hands back nothing more");
+    }
+
+    /// Playout keys on identity: the owner, and the same client the audio came
+    /// from. Every other combination keys nothing.
+    #[test]
+    fn playout_keys_only_for_the_owner_whose_audio_it_is() {
+        assert!(playout_keys(true, Some(a(1)), Some(a(1))), "owner and audio agree");
+        assert!(!playout_keys(false, Some(a(1)), Some(a(1))), "no PTT on the frame");
+        assert!(!playout_keys(true, None, Some(a(1))), "nobody owns it: a tail after a goodbye");
+        assert!(!playout_keys(true, Some(a(2)), Some(a(1))), "another client owns it: the first one's tail");
+        assert!(!playout_keys(true, Some(a(2)), None), "owner, but no audio of it yet");
+        assert!(!playout_keys(true, None, None));
     }
 
     /// The holder may ask again without losing it - that happens on every audio
@@ -1611,6 +1735,11 @@ mod holder_timeout_tests {
     }
 
     /// Move a client's last sign of life back by this many seconds.
+    fn silent_for_ms(m: &mut SessionManager, addr: SocketAddr, ms: u64) {
+        let c = m.clients.get_mut(&addr).expect("client bestaat");
+        c.last_seen = std::time::Instant::now() - std::time::Duration::from_millis(ms);
+    }
+
     fn silent_for(m: &mut SessionManager, addr: SocketAddr, secs: u64) {
         let c = m.clients.get_mut(&addr).expect("client bestaat");
         c.last_seen = std::time::Instant::now() - std::time::Duration::from_secs(secs);
@@ -1657,6 +1786,25 @@ mod holder_timeout_tests {
     }
 
     #[test]
+    fn a_failed_attempt_gives_back_only_what_it_took() {
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        m.touch(a(2));
+        // Nobody held it: taken for the attempt, and given back.
+        assert_eq!(m.acquire_for_attempt(TxTarget::Yaesu1, a(1)), Some(false));
+        m.give_back_attempt(TxTarget::Yaesu1, a(1), false);
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), None);
+        // Held already (the microphone): it stays.
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert_eq!(m.acquire_for_attempt(TxTarget::Thetis, a(1)), Some(true));
+        m.give_back_attempt(TxTarget::Thetis, a(1), true);
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)), "its own lock is not taken away");
+        // Somebody else holds it: nothing taken, nothing given back.
+        assert_eq!(m.acquire_for_attempt(TxTarget::Thetis, a(2)), None);
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)));
+    }
+
+    #[test]
     fn a_listener_keeps_the_long_deadline() {
         assert_eq!(timeout_secs(false), SESSION_TIMEOUT_SECS);
     }
@@ -1669,10 +1817,176 @@ mod holder_timeout_tests {
         assert_eq!(timeout_secs(true), TX_HOLDER_TIMEOUT_SECS);
     }
 
+    /// The deadline is the number of seconds it names. It used to be one more:
+    /// `elapsed().as_secs() > 3` rounds down, so it only held from 4.000 s on,
+    /// and the comment on TX_HOLDER_TIMEOUT_SECS promised three (found in the
+    /// review of the CW playout, 2026-09-18). The same rounding sat in the
+    /// check for an active session, against SESSION_TIMEOUT_SECS.
+    #[test]
+    fn the_deadline_is_the_number_of_seconds_it_names() {
+        let ms = std::time::Duration::from_millis;
+        assert!(!silent_too_long(ms(3000), true), "exactly three: not yet");
+        assert!(silent_too_long(ms(3001), true));
+        assert!(silent_too_long(ms(3999), true), "the second the rounding lost");
+        assert!(!silent_too_long(ms(15_000), false));
+        assert!(silent_too_long(ms(15_001), false));
+        // And through the session manager, both places.
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        m.touch(a(2));
+        m.touch(a(3));
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        silent_for_ms(&mut m, a(1), 3500);
+        silent_for_ms(&mut m, a(2), 15_500);
+        silent_for_ms(&mut m, a(3), 3500);
+        assert!(!m.active_addrs().contains(&a(2)), "fifteen and a half seconds silent is not active");
+        // A listener three and a half seconds quiet is active: its deadline is
+        // the listener's, not the holder's (review 314 found nothing pinned it).
+        assert!(m.active_addrs().contains(&a(3)), "a quiet listener is still active");
+        let mut gone = m.check_timeout();
+        gone.sort();
+        assert_eq!(gone, vec![a(1), a(2)], "three and a half seconds is past three - for the holder");
+    }
+
     /// Not so soon that an ordinary hiccup drops a transmission: heartbeats come
     /// every 500 ms, so the deadline has to be several of them.
     #[test]
     fn the_short_deadline_still_allows_several_missed_heartbeats() {
         assert!(timeout_secs(true) * 1000 >= 4 * 500);
+    }
+}
+
+/// The per-session fields of `ClientSession`, and the control that restores each.
+///
+/// Why this exists: the client has to replay every per-session setting after it
+/// comes back on a new address, and until 2026-09-13 the two lists that describe
+/// that - the defaults here and the sends in the client's restore block - were
+/// maintained by hand in two crates. They had drifted to thirteen missing
+/// entries, four of which nobody restored at all. Nothing complained, because
+/// nothing compared them.
+///
+/// The test below compares them. It reads this file's own source, so a field
+/// added to `ClientSession` without a line here fails the suite rather than
+/// waiting for someone to notice their audio is gone after a network switch.
+#[cfg(test)]
+mod session_scope_tests {
+    use sdr_remote_core::protocol::{ControlId, SESSION_SCOPED_CONTROLS};
+
+    /// Per-session state: lost on a new session, so the client must send it again.
+    const RESTORED_BY: &[(&str, ControlId)] = &[
+        ("spectrum_enabled", ControlId::SpectrumEnable),
+        ("spectrum_fps", ControlId::SpectrumFps),
+        ("spectrum_zoom", ControlId::SpectrumZoom),
+        ("spectrum_pan", ControlId::SpectrumPan),
+        ("spectrum_max_bins", ControlId::SpectrumMaxBins),
+        ("rx1_enabled", ControlId::Rx1Enable),
+        ("rx2_enabled", ControlId::Rx2Enable),
+        ("rx2_spectrum_enabled", ControlId::Rx2SpectrumEnable),
+        ("rx2_spectrum_fps", ControlId::Rx2SpectrumFps),
+        ("rx2_spectrum_zoom", ControlId::Rx2SpectrumZoom),
+        ("rx2_spectrum_pan", ControlId::Rx2SpectrumPan),
+        ("rx2_spectrum_max_bins", ControlId::Rx2SpectrumMaxBins),
+        ("vfo_sync", ControlId::VfoSync),
+        ("yaesu_enabled", ControlId::YaesuEnable),
+        ("yaesu_state_enabled", ControlId::YaesuStateEnable),
+        ("yaesu2_enabled", ControlId::Yaesu2Enable),
+        ("yaesu2_state_enabled", ControlId::Yaesu2StateEnable),
+        ("vrx1_audio_enabled", ControlId::VrxEnable),
+        ("vrx2_audio_enabled", ControlId::VrxEnable2),
+        ("vrx1_spectrum_enabled", ControlId::VrxSpectrumEnable),
+        ("vrx2_spectrum_enabled", ControlId::VrxSpectrumEnable2),
+        ("vrx1_autotune_enabled", ControlId::VrxSamAutoTune),
+        ("vrx2_autotune_enabled", ControlId::VrxSamAutoTune2),
+        ("audio_mode", ControlId::AudioMode),
+        ("dx_spots_enabled", ControlId::DxSpotsEnabled),
+        ("full_spectrum_enabled", ControlId::FullSpectrumEnabled),
+        ("allow_zoom_below_2x", ControlId::AllowZoomBelow2x),
+        ("smeter_sources", ControlId::SmeterSources),
+        ("thetis_wideband_audio", ControlId::ThetisWidebandAudio),
+    ];
+
+    /// Bookkeeping: the server owns these and a client never asks for them, so
+    /// there is nothing to restore. Named one by one on purpose - "everything I
+    /// did not think of" is not a category.
+    const NOT_SESSION_SCOPED: &[&str] = &[
+        "addr",
+        "last_seen",
+        "connected_since",
+        "auth_state",
+        "last_heartbeat_seq",
+        "rtt_ms",
+        "loss_percent",
+        "jitter_ms",
+    ];
+
+    /// The `pub` field names of `ClientSession`, read out of this file's source.
+    /// Derived rather than listed, because a list of fields is exactly as complete
+    /// as whoever last edited it.
+    fn declared_fields() -> Vec<String> {
+        let src = include_str!("session.rs");
+        let start = src
+            .find("pub struct ClientSession {")
+            .expect("ClientSession struct not found");
+        let body = &src[start..];
+        let end = body.find("\n}").expect("end of ClientSession not found");
+        body[..end]
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim();
+                let rest = l.strip_prefix("pub ")?;
+                let name = rest.split(':').next()?.trim();
+                if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+                    return None;
+                }
+                Some(name.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_field_of_a_client_session_is_either_restored_or_declared_server_owned() {
+        let fields = declared_fields();
+        assert!(
+            fields.len() > 20,
+            "the source scan found only {} fields - it has stopped working, \
+             which would make this test pass by seeing nothing",
+            fields.len()
+        );
+        for f in &fields {
+            let restored = RESTORED_BY.iter().any(|(n, _)| n == f);
+            let server_owned = NOT_SESSION_SCOPED.contains(&f.as_str());
+            assert!(
+                restored ^ server_owned,
+                "ClientSession field `{f}` is in neither list (or in both). A new \
+                 per-session field must name the control that restores it in \
+                 RESTORED_BY, or be declared server-owned in NOT_SESSION_SCOPED. \
+                 Getting this wrong means the setting is silently lost after a \
+                 network switch."
+            );
+        }
+    }
+
+    #[test]
+    fn every_restorable_field_names_a_control_the_client_replays() {
+        for (field, ctrl) in RESTORED_BY {
+            assert!(
+                SESSION_SCOPED_CONTROLS.contains(ctrl),
+                "field `{field}` says it is restored by {ctrl:?}, but that control \
+                 is not in SESSION_SCOPED_CONTROLS, so no client will ever send it \
+                 again after a new session"
+            );
+        }
+    }
+
+    #[test]
+    fn the_shared_list_carries_no_control_that_restores_nothing() {
+        for ctrl in SESSION_SCOPED_CONTROLS {
+            assert!(
+                RESTORED_BY.iter().any(|(_, c)| c == ctrl),
+                "{ctrl:?} is in SESSION_SCOPED_CONTROLS but restores no field of \
+                 ClientSession. Either it is not per-session state, or a field is \
+                 missing from RESTORED_BY."
+            );
+        }
     }
 }

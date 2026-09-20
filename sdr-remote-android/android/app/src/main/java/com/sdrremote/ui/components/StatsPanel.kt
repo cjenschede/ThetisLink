@@ -280,6 +280,14 @@ private fun StatsGrid(
         StatRow("RTT", "$rttMs ms")
         StatRow(stringResource(R.string.stats_down), "$downKbps Kbit/s")
         StatRow(stringResource(R.string.stats_up), "$upKbps Kbit/s")
+        // Loss belongs HERE, with the other facts about the connection, and not
+        // in the stream table below. Every stream to this client goes down one
+        // socket to one address, so there is one loss figure and it is about the
+        // link. It used to sit in the "Thetis RX" row with a dash on the other
+        // four, which read as "no measurement for those" - and since the meter
+        // now feeds on whatever streams are running, a Yaesu-only station would
+        // have shown four dashes while it was measuring the Yaesu.
+        StatRow(stringResource(R.string.stats_link_loss), "$lossPercent%")
 
         Spacer(Modifier.height(6.dp))
         Text(stringResource(R.string.stats_audio_streams), fontSize = 13.sp, color = Color.Gray)
@@ -288,23 +296,23 @@ private fun StatsGrid(
         var shown = false
         if (showThetisAudio) {
             shown = true
-            AudioStreamRow("Thetis RX", jitterMs, bufferDepth, rxPackets, "$lossPercent%")
+            AudioStreamRow("Thetis RX", jitterMs, bufferDepth, rxPackets)
         }
         if (yaesu1Visible) {
             shown = true
-            AudioStreamRow("Yaesu 1", yaesuJitterMs, yaesuBufferDepth, yaesuAudioPackets, "-")
+            AudioStreamRow("Yaesu 1", yaesuJitterMs, yaesuBufferDepth, yaesuAudioPackets)
         }
         if (yaesu2Visible) {
             shown = true
-            AudioStreamRow("Yaesu 2", yaesu2JitterMs, yaesu2BufferDepth, yaesu2AudioPackets, "-")
+            AudioStreamRow("Yaesu 2", yaesu2JitterMs, yaesu2BufferDepth, yaesu2AudioPackets)
         }
         if (vrx1Visible) {
             shown = true
-            AudioStreamRow("VRX1", vrx1JitterMs, vrx1BufferDepth, vrx1AudioPackets, "-")
+            AudioStreamRow("VRX1", vrx1JitterMs, vrx1BufferDepth, vrx1AudioPackets)
         }
         if (vrx2Visible) {
             shown = true
-            AudioStreamRow("VRX2", vrx2JitterMs, vrx2BufferDepth, vrx2AudioPackets, "-")
+            AudioStreamRow("VRX2", vrx2JitterMs, vrx2BufferDepth, vrx2AudioPackets)
         }
         if (!shown) {
             Text(stringResource(R.string.stats_no_stream), fontSize = 12.sp, color = Color.Gray)
@@ -324,12 +332,11 @@ private fun AudioStreamHeader() {
         AudioCell(stringResource(R.string.stats_col_jitter), 0.20f, header = true)
         AudioCell(stringResource(R.string.stats_col_buffer), 0.18f, header = true)
         AudioCell(stringResource(R.string.stats_col_packets), 0.24f, header = true)
-        AudioCell(stringResource(R.string.stats_col_loss), 0.12f, header = true)
     }
 }
 
 @Composable
-private fun AudioStreamRow(label: String, jitterMs: Float, bufferDepth: Int, packets: Long, loss: String) {
+private fun AudioStreamRow(label: String, jitterMs: Float, bufferDepth: Int, packets: Long) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -340,7 +347,6 @@ private fun AudioStreamRow(label: String, jitterMs: Float, bufferDepth: Int, pac
         AudioCell("%.1f ms".format(jitterMs), 0.20f)
         AudioCell(bufferDepth.toString(), 0.18f)
         AudioCell(packets.toString(), 0.24f)
-        AudioCell(loss, 0.12f)
     }
 }
 

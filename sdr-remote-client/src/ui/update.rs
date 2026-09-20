@@ -77,10 +77,13 @@ impl SdrRemoteApp {
         // Same line as the Yaesu slots below: one per transition, with what
         // caused it.
         log::info!(
-            "PTT thetis -> {} (mouse={} midi={} want={} blocked_own={} other_tx={} multi_tx={})",
+            "PTT thetis -> {} (mouse={} space={} midi={} bluetooth={} wait={} want={} blocked_own={} other_tx={} multi_tx={})",
             if new_ptt { "ON" } else { "OFF" },
-            self.mouse_ptt,
-            self.midi_ptt,
+            self.thetis_latches.mouse,
+            self.thetis_latches.space,
+            self.thetis_latches.midi,
+            self.thetis_latches.bluetooth,
+            self.thetis_latches.needs_new_press,
             self.thetis_want,
             self.ptt_blocked_by_own,
             self.other_tx,
@@ -156,6 +159,16 @@ impl SdrRemoteApp {
 
         }
 
+        // Thetis' frame, here and not in the top bar (build 79): out of the
+        // latches as they stand NOW, after every release this frame made. The
+        // main window is always open; `other_tx` is the server's ownership
+        // table, and it is what makes "busy" let go of every latch - including a
+        // Bluetooth button in a pocket, which used to come back on by itself when
+        // the other station stopped (review finding, 307 round 2).
+        let d = desktop_frame(self.thetis_latches, true, self.other_tx, self.ptt);
+        self.thetis_latches = d.latches;
+        self.thetis_want = d.want_tx && self.thetis_ptt_allowed;
+
         // ONE arbitration per frame, for all three at once, with the wants as they are
         // NOW. This is the only point where that is possible: the top bar and both
         // pop-outs have been drawn, so all three wants exist.
@@ -183,8 +196,7 @@ impl SdrRemoteApp {
             // That is intended: for as long as the operator holds it down he is saying "I
             // want to transmit", and the moment that becomes possible it should happen. See
             // the rule at PttIntent::want_tx.
-            self.mouse_ptt = false;
-            self.midi_ptt = false;
+            self.thetis_latches = self.thetis_latches.released();
         }
         self.apply_thetis_ptt(arb.granted[0]);
         // See the Thetis branch above: refused is refused. Without this a press sat
@@ -207,12 +219,13 @@ impl SdrRemoteApp {
             // reproduce, and a story is not evidence (2026-09-04).
             let l = self.yaesu_latches[slot];
             log::info!(
-                "PTT yaesu{} -> {} (mouse={} space={} midi={} wait={} blocked_own={} held_by_other={} multi_tx={})",
+                "PTT yaesu{} -> {} (mouse={} space={} midi={} bluetooth={} wait={} blocked_own={} held_by_other={} multi_tx={})",
                 slot + 1,
                 if want { "ON" } else { "OFF" },
                 l.mouse,
                 l.space,
                 l.midi,
+                l.bluetooth,
                 l.needs_new_press,
                 self.yaesu_blocked_by_own[slot],
                 if slot == 0 { self.yaesu_held_by_other } else { self.yaesu2_held_by_other },
@@ -293,6 +306,8 @@ impl eframe::App for SdrRemoteApp {
 
         self.sync_state();
         self.process_midi_events();
+        self.process_ble_events();
+        self.process_paddle_events();
 
         // PATCH-4: first-run / re-launched wizard owns the viewport
         // while present. Render it edge-to-edge and short-circuit the
@@ -343,7 +358,7 @@ impl eframe::App for SdrRemoteApp {
         }
 
         // Opt-in: start Thetis on the server PC if it is not running (once).
-        self.maybe_autostart_thetis();
+        self.sync_thetis_autostart();
 
         // Sync frequency and mute state to the selected WebSDR target.
         let (websdr_freq_hz, websdr_mode) = self.catsync_target_freq_mode();
@@ -472,12 +487,28 @@ impl eframe::App for SdrRemoteApp {
                         [self.amplitec_switch_a.saturating_sub(1) as usize];
 
                 // PTT button (compact for top bar)
-                let (ptt_color, ptt_text, ptt_locked) = if !self.thetis_configured {
-                    // No Thetis configured -> this (Thetis) PTT keys nothing. Disable it
-                    // so the spacebar/mouse cannot turn it red for a radio that is absent.
-                    (Color32::from_rgb(60, 60, 60), "PTT".to_string(), true)
-                } else if current_pos_rx_only {
-                    (Color32::from_rgb(120, 50, 50), rust_i18n::t!("main_rx_only").to_string(), true)
+                // The face over the ordinary one: the same rule and the same
+                // table as the two Yaesu buttons (ptt_button::ptt_face,
+                // ptt_face_look).
+                let face = sdr_remote_logic::ptt_button::ptt_face(sdr_remote_logic::ptt_button::PttFaceInputs {
+                    unavailable: !self.thetis_configured,
+                    rx_only: current_pos_rx_only,
+                    // Keying CW, and the server confirms the transmitter is on.
+                    // Not while the microphone is asking: the button is locked
+                    // under the CW sign, and a toggled microphone PTT has to stay
+                    // releasable with a click.
+                    cw_sign: self.cw_target_is_thetis()
+                        && !self.ptt
+                        && sdr_remote_logic::ptt_button::cw_on_air(
+                            self.server_tx,
+                            self.paddle_key_down,
+                            self.paddle_last_edge_at.map(|t| t.elapsed().as_millis() as u64),
+                            self.cw_hang_ms,
+                        ),
+                    ..Default::default()
+                });
+                let (ptt_color, ptt_text, ptt_locked) = if face != sdr_remote_logic::ptt_button::PttFace::Normal {
+                    Self::ptt_face_look(face, ui.ctx(), (Color32::TRANSPARENT, String::new(), false))
                 } else {
                     // Same rule as the two Yaesu buttons - one place, so a third
                     // window cannot quietly answer it differently.
@@ -520,46 +551,49 @@ impl eframe::App for SdrRemoteApp {
                     );
                 }
 
-                // PTT button: toggle or momentary (push-to-talk) mode
+                // PTT button: toggle or momentary (push-to-talk) mode. The same
+                // latch type as the Yaesu slots since build 77 (open point 37): a
+                // latching press switches the transmission, a hold control takes
+                // over on its rising edge (Latches::hold), and every exit goes
+                // through PttIntent instead of through a boolean somebody has to
+                // remember to clear.
+                let resampled = self.thetis_resampled_sources();
                 if self.ptt_toggle_mode {
-                    // Toggle: click to switch on/off
                     if response.clicked() {
-                        self.mouse_ptt = !self.mouse_ptt;
+                        self.thetis_latches = self
+                            .thetis_latches
+                            .latching_press(sdr_remote_logic::ptt_intent::PttSource::Mouse, resampled);
                     }
                 } else {
-                    // Momentary: hold to TX, release to RX
                     let pointer_on_btn = ui.input(|i| {
                         i.pointer.primary_down()
                             && response.rect.contains(i.pointer.interact_pos().unwrap_or(Pos2::ZERO))
                     });
-                    self.mouse_ptt = pointer_on_btn;
+                    self.thetis_latches = self
+                        .thetis_latches
+                        .hold(sdr_remote_logic::ptt_intent::PttSource::Mouse, pointer_on_btn, resampled);
                 }
 
                 let space_held = ui.input(|i| i.key_down(egui::Key::Space));
-                // RX-only Amplitec position: fully suppress the client PTT -
-                // including spacebar and MIDI. Also reset the toggle states
-                // (mouse/MIDI), otherwise a toggle pressed during RX-only stays
-                // "on" and it would still transmit as soon as we switch away from
-                // the RX-only position. Spacebar is real-time
-                // (key_down) and is caught by the `&&` condition.
+                self.thetis_latches = self
+                    .thetis_latches
+                    .hold(sdr_remote_logic::ptt_intent::PttSource::Space, space_held, resampled);
+                // RX-only Amplitec position, or no Thetis at all: nothing may stay
+                // latched, or it transmits the moment the position changes or the
+                // radio appears.
                 if current_pos_rx_only || !self.thetis_configured {
-                    self.mouse_ptt = false;
-                    self.midi_ptt = false;
+                    self.thetis_latches = self.thetis_latches.released();
                 }
-                // No Thetis -> never key the Thetis PTT (spacebar/mouse/MIDI all suppressed),
-                // so the button cannot go red for a radio that is not there.
-                let raw_want = (self.mouse_ptt || space_held || self.midi_ptt)
-                    && !current_pos_rx_only
-                    && self.thetis_configured;
-                // The WANT only. The decision falls at the end of the frame, in drive_ptt(),
-                // together with the Yaesus'.
-                //
-                // Deciding here could not be right: at this point the pop-outs have not been
-                // drawn, so this frame's Yaesu wants do not exist yet and Thetis had to make do
-                // with what went to the server last frame. A fresh press was then refused on
-                // stale data and thrown away immediately, while the Yaesu blocking it let go
-                // later in that same frame (review finding).
-                self.thetis_want = raw_want;
+                // The frame itself falls at the end of the frame, in drive_ptt(), out
+                // of the latches - like the Yaesu slots, whose latches are fed in the
+                // pop-outs and decided there. Deciding here was wrong twice over: the
+                // Yaesu wants of this frame do not exist yet (review finding), and the
+                // Disconnect button sits lower in this same bar, so a want computed
+                // here outlived the release it caused - one frame of "PTT thetis ->
+                // ON" fifteen milliseconds after "link gone" (field test, 2026-09-17
+                // 14:34:43). Only what this bar knows is kept: whether Thetis may be
+                // keyed at all right now.
+                self.thetis_ptt_allowed = !current_pos_rx_only && self.thetis_configured;
 
                 // Tune button (visible when tuner available on the active antenna).
                 // Multi-tuner note: stale-detection is handled SERVER-side now -
@@ -1009,6 +1043,18 @@ impl eframe::App for SdrRemoteApp {
             // overflow would push content off-screen.
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
 
+            // The one warning that has to be seen wherever the operator is: a PA
+            // that may be amplifying out of reach while the drive went up.
+            if self.pa_drive_warning {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        theme::TL_SWR_ALERT_TEXT,
+                        RichText::new(rust_i18n::t!("dev_pa_drive_warning").to_string()).size(16.0).strong(),
+                    )
+                    .on_hover_text(rust_i18n::t!("dev_pa_drive_warning_hover").to_string());
+                });
+            }
+
             // VFO A frequency
             ui.separator();
             {
@@ -1141,43 +1187,15 @@ impl eframe::App for SdrRemoteApp {
             }
 
             // Filter bandwidth control
-            {
-                let presets = filter_presets_for_mode(self.mode);
-                let cw = is_cw_mode(self.mode);
-                let current_bw = self.filter_high_hz - self.filter_low_hz;
-                let idx = closest_preset_index(presets, current_bw);
-
-                ui.horizontal(|ui| {
-                    ui.label(rust_i18n::t!("main_filter_label").to_string());
-                    let minus_btn = egui::Button::new(RichText::new(" - ").size(14.0));
-                    if ui.add_enabled(idx > 0, minus_btn).on_hover_text(rust_i18n::t!("main_hover_narrow_filter").to_string()).clicked() {
-                        let (low, high) = calc_filter_edges(
-                            self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx - 1]);
-                        let _ = self.cmd_tx.send(Command::SetControl(
-                            ControlId::FilterLow, low as i16 as u16));
-                        let _ = self.cmd_tx.send(Command::SetControl(
-                            ControlId::FilterHigh, high as i16 as u16));
-                        self.filter_low_hz = low;
-                        self.filter_high_hz = high;
-                        self.filter_changed_at = Some(Instant::now());
-                    }
-
-                    ui.label(RichText::new(format_bandwidth(presets[idx], cw)).strong().size(14.0));
-
-                    let plus_btn = egui::Button::new(RichText::new(" + ").size(14.0));
-                    if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text(rust_i18n::t!("main_hover_widen_filter").to_string()).clicked() {
-                        let (low, high) = calc_filter_edges(
-                            self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx + 1]);
-                        let _ = self.cmd_tx.send(Command::SetControl(
-                            ControlId::FilterLow, low as i16 as u16));
-                        let _ = self.cmd_tx.send(Command::SetControl(
-                            ControlId::FilterHigh, high as i16 as u16));
-                        self.filter_low_hz = low;
-                        self.filter_high_hz = high;
-                        self.filter_changed_at = Some(Instant::now());
-                    }
-                });
-            }
+            ui.horizontal(|ui| {
+                if let Some((low, high)) = filter_width_buttons(ui, self.mode, self.filter_low_hz, self.filter_high_hz) {
+                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterLow, low as i16 as u16));
+                    let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterHigh, high as i16 as u16));
+                    self.filter_low_hz = low;
+                    self.filter_high_hz = high;
+                    self.filter_changed_at = Some(Instant::now());
+                }
+            });
 
             // Memory buttons
             ui.horizontal(|ui| {
@@ -1552,7 +1570,8 @@ impl eframe::App for SdrRemoteApp {
                                 ("EA7HG Visual Rotor", "UDP"),
                                 ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
                                 ("PstRotator (any supported rotor)", "XML over UDP"),
-                                ("YPC21 / PTT-Z01 PTT button", "BLE (Android)"),
+                                ("Morse paddle / straight key", "MCP2221A USB-HID (desktop)"),
+                                ("YPC21 / PTT-Z01 PTT button", "BLE (desktop + Android)"),
                                 ("ZL-01 shutter button", "Bluetooth touch device (Android)"),
                             ] {
                                 ui.label(dev);

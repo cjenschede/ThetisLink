@@ -100,6 +100,46 @@ pub(super) fn chevron_label(
     response
 }
 
+/// A group of settings behind a chevron - so what belongs together is seen to
+/// belong together on a tab that keeps growing (owner, 2026-09-17).
+///
+/// Every group has exactly one line above it and exactly one below, open or
+/// closed, and the one below is always under the last thing that belongs to
+/// it: under the chevron when closed, under the last row when open (owner,
+/// 2026-09-18). This draws the one below. The one above is the caller's
+/// (`group_rule` in front of the call) - unless another group comes directly
+/// before, whose line below is then this group's line above, so two groups
+/// in a row share one line instead of showing two. The caller owns the open
+/// flag and persists it; this only draws and reports a click, so the body can
+/// borrow whatever it needs.
+pub(super) fn settings_group(
+    ui: &mut egui::Ui,
+    open: bool,
+    title: impl Into<egui::WidgetText>,
+    body: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let clicked = chevron_label(ui, open, title).clicked();
+    if open {
+        body(ui);
+    }
+    group_rule(ui);
+    clicked
+}
+
+/// The line above and below a settings group. egui's own separator
+/// (one thin pixel in the faint border colour, a few pixels of room) was hard
+/// to see and sat close to the text (owner, 2026-09-18): this one is drawn in
+/// the theme's weak text colour, so it follows all four themes, a little
+/// heavier, with more room on both sides.
+pub(super) fn group_rule(ui: &mut egui::Ui) {
+    const ROOM: f32 = 6.0;
+    const STROKE: f32 = 1.5;
+    ui.add_space(ROOM);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), STROKE), egui::Sense::hover());
+    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(STROKE, ui.visuals().weak_text_color()));
+    ui.add_space(ROOM);
+}
+
 /// Determine amateur band from frequency (returns None if outside bands)
 pub(crate) fn freq_to_band(hz: u64) -> Option<String> {
     match hz {
@@ -142,24 +182,43 @@ pub(crate) fn band_label(hz: u64) -> &'static str {
     }
 }
 
-// Filter bandwidth presets per mode category
-pub(crate) const SSB_PRESETS: &[i32] = &[1800, 2100, 2400, 2700, 3000, 3300, 3600, 4000];
-pub(crate) const CW_PRESETS: &[i32] = &[50, 100, 250, 500, 1000];
-pub(crate) const AM_PRESETS: &[i32] = &[4000, 6000, 8000, 10000, 12000];
-pub(crate) const FM_PRESETS: &[i32] = &[5000, 10000]; // NFM (2500Hz dev) / WFM (5000Hz dev)
+/// The filter width row for one receiver: label, minus, width, plus. Returns the
+/// edges to send when a button was pressed.
+///
+/// The rule - which width comes next, where the edges go, what the label says -
+/// lives in `sdr_remote_logic::filter_width` and is shared with Android. Until
+/// build 47 this row was written out three times here (Radio tab, RX1 popout,
+/// RX2).
+pub(crate) fn filter_width_buttons(ui: &mut egui::Ui, mode: u8, low: i32, high: i32) -> Option<(i32, i32)> {
+    use sdr_remote_logic::filter_width::{step, width_label, Step};
+    let narrower = step(mode, low, high, Step::Narrower);
+    let wider = step(mode, low, high, Step::Wider);
+    let mut pressed = None;
 
-pub(crate) fn filter_presets_for_mode(mode: u8) -> &'static [i32] {
-    match mode {
-        0 | 1 | 7 | 9 => SSB_PRESETS,   // LSB, USB, DIGU, DIGL
-        3 | 4 => CW_PRESETS,              // CWL, CWU
-        2 | 6 | 10 | 11 => AM_PRESETS,    // DSB, AM, SAM, DRM
-        5 => FM_PRESETS,                   // FM
-        _ => SSB_PRESETS,
+    ui.label(rust_i18n::t!("main_filter_label").to_string());
+    let minus_btn = egui::Button::new(RichText::new(" - ").size(14.0));
+    if ui.add_enabled(narrower.is_some(), minus_btn)
+        .on_hover_text(rust_i18n::t!("main_hover_narrow_filter").to_string())
+        .clicked()
+    {
+        pressed = narrower;
     }
-}
 
-pub(crate) fn is_cw_mode(mode: u8) -> bool {
-    mode == 3 || mode == 4
+    // No NFM/WFM suffix in FM. It used to guess the deviation from the width with
+    // "6 kHz or less is NFM", a threshold written for the VRX's own 5/10 kHz
+    // widths. Thetis reports 2 x (deviation + FM high cut): 11 kHz for NFM and
+    // 16 kHz for WFM at the default 3 kHz high cut, so it always said WFM. Thetis
+    // itself shows just the width.
+    ui.label(RichText::new(width_label(mode, low, high)).strong().size(14.0));
+
+    let plus_btn = egui::Button::new(RichText::new(" + ").size(14.0));
+    if ui.add_enabled(wider.is_some(), plus_btn)
+        .on_hover_text(rust_i18n::t!("main_hover_widen_filter").to_string())
+        .clicked()
+    {
+        pressed = wider;
+    }
+    pressed
 }
 
 // ── VRX-specific mode helpers ──────────────────────────────────────────
@@ -193,12 +252,17 @@ pub(crate) fn vrx_mode_default_filter(new_mode: u8, current_bw: i32) -> (i32, i3
 
 /// Filter presets to show in VRX BW dropdown (mode-dependent).
 pub(crate) fn vrx_filter_presets(mode: u8) -> &'static [i32] {
+    use sdr_remote_logic::filter_width::{AM_STEPS, SSB_STEPS};
     match mode {
-        2 | 3 => AM_PRESETS,  // AM / SAM
-        4 => FM_PRESETS,      // FM
-        _ => SSB_PRESETS,     // USB / LSB
+        2 | 3 => AM_STEPS,        // AM / SAM
+        4 => VRX_FM_PRESETS,      // FM
+        _ => SSB_STEPS,           // USB / LSB
     }
 }
+
+/// VRX FM widths: NFM (2500 Hz deviation) / WFM (5000 Hz). The VRX channelizer is
+/// TL's own, so unlike the main receivers these edges are honoured.
+const VRX_FM_PRESETS: &[i32] = &[5000, 10000];
 
 /// Convert a "total bandwidth" preset to (filter_low_hz, filter_high_hz)
 /// for a given VRX mode. SSB modes use one side; AM-family + FM are
@@ -213,49 +277,7 @@ pub(crate) fn vrx_filter_from_preset(mode: u8, preset_bw: i32) -> (i32, i32) {
 }
 
 pub(crate) fn format_bandwidth(hz: i32, cw: bool) -> String {
-    if cw || hz < 1000 {
-        format!("{} Hz", hz)
-    } else {
-        let khz = hz as f32 / 1000.0;
-        if (khz - khz.round()).abs() < 0.01 {
-            format!("{} kHz", khz as i32)
-        } else {
-            format!("{:.1} kHz", khz)
-        }
-    }
-}
-
-pub(crate) fn closest_preset_index(presets: &[i32], bw: i32) -> usize {
-    presets.iter()
-        .enumerate()
-        .min_by_key(|(_, &p)| (p - bw).abs())
-        .map(|(i, _)| i)
-        .unwrap_or(0)
-}
-
-/// Calculate new filter edges for a given bandwidth, respecting mode sideband rules.
-/// USB/DIGU: anchor low edge (min 25 Hz), expand upward.
-/// LSB/DIGL: anchor high edge (max -25 Hz), expand downward.
-/// CW: keep center, stay within sideband.
-/// AM/SAM/DSB/DRM/FM: symmetric around 0.
-pub(crate) fn calc_filter_edges(mode: u8, filter_low: i32, filter_high: i32, new_bw: i32) -> (i32, i32) {
-    match mode {
-        1 | 7 => {  // USB, DIGU - low edge anchored
-            let low = filter_low.max(25);
-            (low, low + new_bw)
-        }
-        0 | 9 => {  // LSB, DIGL - high edge anchored
-            let high = filter_high.min(-25);
-            (high - new_bw, high)
-        }
-        3 | 4 => {  // CWL, CWU - keep center
-            let center = (filter_low + filter_high) / 2;
-            (center - new_bw / 2, center + new_bw / 2)
-        }
-        _ => {      // AM, SAM, DSB, DRM, FM - symmetric
-            (-new_bw / 2, new_bw / 2)
-        }
-    }
+    sdr_remote_logic::filter_width::format_width_hz(hz, cw)
 }
 
 /// True for modes whose filter is symmetric around the carrier - AM, SAM, DSB,

@@ -5,6 +5,8 @@ package com.sdrremote.viewmodel
 import android.app.Application
 import android.content.Context
 import android.util.Log
+import com.sdrremote.prefs.LocalAudioPrefs
+import com.sdrremote.prefs.YaesuTxPrefs
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sdrremote.ChatAnswerUi
@@ -130,15 +132,15 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     // the saved volume after a restart instead of the default (max).
     // Own key. It used to share "local_volume" with the Thetis level, which is why a
     // Yaesu could start at a value that was set for Thetis, and vice versa.
-    private var yaesuVol =
-        getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
-            .getFloat("yaesu_volume", 1.0f)
+    private var yaesuVol = LocalAudioPrefs.yaesuVolume(
+        getApplication<Application>()
+            .getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE))
     // The "Volume" slider is in practice the THETIS level: the Yaesu panel has its
     // own. It drives the client-only RX volumes rather than the master, so it cannot
     // quietly scale the Yaesu as well - the master stays neutral at 1.0.
-    private var thetisVol =
-        getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
-            .getFloat("local_volume", 1.0f)
+    private var thetisVol = LocalAudioPrefs.localVolume(
+        getApplication<Application>()
+            .getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE))
     /**
      * What the operator is asking of a transmitter, on the shared rule.
      *
@@ -207,6 +209,38 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 .split(',')
                 .mapNotNull { it.trim().toLongOrNull() }
             if (seen.isNotEmpty()) bridge?.chatRestoreSeen(seen)
+            // The saved roger beep, handed over as soon as the engine exists.
+            //
+            // It used to reach the engine from exactly one place: the branch of the
+            // radio switch that turns the Yaesu off. So after a full restart of the
+            // app the beep was gone until the operator happened to move some other
+            // setting, which is what a user reported (#60/#61). The desktop has done
+            // this at startup all along, with a comment saying a saved setting that
+            // only works after you fiddle with it is not a saved setting - that rule
+            // lived in client/src/ui/ and Android therefore never ran it.
+            //
+            // Its own try, and that is not belt and braces. This sits inside the
+            // startup block, before startPolling(), so an exception here would have
+            // taken the whole app down instead of one setting - a preference read
+            // back as the wrong type is enough (getFloat on a key stored as
+            // something else throws). A review caught it before it shipped. A beep
+            // that fails to be restored is a beep; an app that will not start is
+            // not.
+            try {
+                sendSavedRogerBeep()
+            } catch (e: Exception) {
+                Log.w(TAG, "Saved roger beep could not be restored", e)
+            }
+            // The rest of task A, and for the same reason as the beep above: a
+            // setting that only takes effect after you touch it is not a saved
+            // setting. Its own try on the same argument - a preference read back as
+            // the wrong type throws, and four settings failing to arrive is better
+            // than an app that will not start.
+            try {
+                applyLocalSettingsAtStartup()
+            } catch (e: Exception) {
+                Log.w(TAG, "Saved local settings could not be restored", e)
+            }
             Log.i(TAG, "SdrBridge created successfully (relay=$relayEnabled, udp=$relayUdpEnabled, lang=$uiLang)")
             startPolling()
             startChatPolling()
@@ -618,6 +652,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         yaesuModel = s.yaesuModel.toInt(),
                         yaesuTunerState = s.yaesuTunerState.toInt(),
                         yaesuHiSwr = s.yaesuHiSwr,
+                        paDriveWarning = s.paDriveWarning,
                         yaesuTxPowerMax = s.yaesuTxPowerMax.toInt(),
                         yaesuFeatureToggles = s.yaesuFeatureToggles,
                         yaesuFeatureLevels = s.yaesuFeatureLevels.map { it.toInt() },
@@ -693,15 +728,63 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                     // Presence-autocorrectie: subscription/audio meeschakelen als een
                     // radio wegvalt/bijkomt.
                     checkYaesuPresenceAutoSwitch()
-                    maybeAutostartThetis(s.connected, s.thetisNotRunning, s.thetisStarting)
+                    syncThetisAutostart()
                     // Keep the engine's TX chain on the radio that is actually
                     // selected, regardless of which screen is composed.
-                    syncTxChainForRadio(_state.value.selectedRadio)
+                    syncTxChainForRadio()
                 } catch (e: Exception) {
                     Log.e(TAG, "Polling error", e)
                 }
             }
         }
+    }
+
+    /**
+     * The local settings the engine needs, once, at app start.
+     *
+     * **Task A**, open since 2026-09-12. These four are engine-local: each sets one
+     * variable in the client engine and none of them reaches the server, so the
+     * engine keeps them across every reconnect and once is enough - but that once
+     * has to happen.
+     *
+     * It did not. Android had three places that sent them and none of them was the
+     * start of the app:
+     *
+     *  - the connect button on the main screen sent all four;
+     *  - the connection edge sent the master volume and the mic gain again;
+     *  - the connect button IN THE WIZARD sent nothing at all - so an operator
+     *    setting the app up for the first time ran on the engine's defaults until
+     *    he happened to touch a slider.
+     *
+     * That last one is why this is not cosmetic: the first connection a new user
+     * makes is the one where nothing is as he left it, and it is also the bare
+     * first run the video series is meant to show.
+     *
+     * Called from init, right after the bridge exists. No connection is needed -
+     * that is the whole point of the distinction between this and a subscription.
+     */
+    private fun applyLocalSettingsAtStartup() {
+        val prefs = getApplication<Application>()
+            .getSharedPreferences(LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
+        val rx = LocalAudioPrefs.rxVolume(prefs)
+        // Not the master, whatever the key is called. setLocalVolume routes this to
+        // the VFO volumes; the engine's own master is left at its neutral 1.0 on
+        // purpose, because since v2.7.0 it multiplies the Yaesu path too. Calling
+        // it "master" in the log was wrong and a reviewer said so.
+        val local = LocalAudioPrefs.localVolume(prefs)
+        val tx = LocalAudioPrefs.txGain(prefs)
+        val agc = LocalAudioPrefs.agcEnabled(prefs)
+        setRxVolume(rx)
+        setLocalVolume(local)
+        setTxGain(tx)
+        setAgcEnabled(agc)
+        // Named in advance (working rule 11): there is no Kotlin test that can watch
+        // this, so the proof that the saved settings reached the engine at startup -
+        // and not at the first connect - is this line, before any "Connected".
+        Log.i(
+            TAG,
+            "Startup settings -> engine: rx volume $rx, Thetis volume $local, tx gain $tx, TX AGC $agc"
+        )
     }
 
     /** Radio the per-radio TX chain was last pushed for; -1 = nothing pushed yet. */
@@ -719,43 +802,47 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      *
      *  Values and preference keys are exactly the ones the sliders use
      *  (`thetislink_eq`), so the UI and the engine cannot disagree. */
-    private fun syncTxChainForRadio(radio: Int) {
+    private fun syncTxChainForRadio() {
+        // No parameter, and that is deliberate. It used to take one, read the
+        // preferences for THAT radio, and then send through yaesuTxGainSel /
+        // yaesuCompressor / yaesuTxAgc - every one of which routes on sel()
+        // instead. The two agree today because the only caller passes sel(), but
+        // reading one radio while sending to another is a defect waiting for a
+        // second caller, and this patch was about to add a third control to it.
+        val radio = sel()
         if (radio == lastTxChainRadio) return
         lastTxChainRadio = radio
         val prefs = getApplication<Application>()
             .getSharedPreferences("thetislink_eq", Context.MODE_PRIVATE)
-        val micGain = prefs.getFloat("yaesu_mic_gain_$radio", 0.2f)
-        // Migration fallback on the older shared key, as the slider does.
-        val comp = prefs.getFloat("yaesu_comp_$radio", prefs.getFloat("yaesu_comp", 0f))
-        Log.i(TAG, "TX chain -> radio $radio: mic gain $micGain, compressor ${comp.toInt()}")
+        val micGain = YaesuTxPrefs.micGain(prefs, radio)
+        val comp = YaesuTxPrefs.compressor(prefs, radio)
+        // The AGC belongs in this chain and was left behind in the screen: its
+        // only push was a LaunchedEffect in ExternalDevicesScreen, so with that
+        // screen closed the engine never heard about the switch at all.
+        val txAgc = YaesuTxPrefs.txAgc(prefs, radio)
+        Log.i(TAG, "TX chain -> radio $radio: mic gain $micGain, compressor ${comp.toInt()}, AGC $txAgc")
         yaesuTxGainSel(micGain)
         yaesuCompressor(comp.toInt())
+        yaesuTxAgc(txAgc)
     }
 
-    /** One-shot latch for the Thetis-autostart option. Process-lifetime: the
-     *  launch happens once per app start, so a launch that failed - or a Thetis
-     *  the user powers off on purpose afterwards - is not re-sent on the next
-     *  reconnect. */
-    private var thetisAutostartFired = false
+    /** What the engine was last told about the Thetis-autostart option. The
+     *  engine decides and launches, once per client run, on the server's first
+     *  report after connecting - the same rule as the desktop
+     *  (sdr_remote_logic::thetis_autostart). Until build 138 this file had
+     *  its own copy, which fired the first time it saw "not running": also
+     *  when the operator closed Thetis on purpose after connecting. */
+    private var thetisAutostartSent: Boolean? = null
 
-    /** Launch Thetis on the server PC when the user ticked "Start Thetis
-     *  automatically" on the Radio screen and the server explicitly reports
-     *  Thetis is not running. Sends the same control as a short press on the
-     *  power button.
-     *
-     *  Driven from the polling loop rather than from a Compose effect: the
-     *  power controls sit in a LazyColumn item, so a UI-side effect only runs
-     *  while that item is composed - it missed the launch whenever the screen
-     *  was scrolled elsewhere or the app had just started. Mirrors the desktop
-     *  client, where the same check hangs in the always-running frame loop. */
-    private fun maybeAutostartThetis(connected: Boolean, thetisNotRunning: Boolean, thetisStarting: Boolean) {
-        if (thetisAutostartFired || !connected || !thetisNotRunning || thetisStarting) return
-        val prefs = getApplication<Application>()
+    private fun syncThetisAutostart() {
+        val on = getApplication<Application>()
             .getSharedPreferences("thetislink", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("thetis_autostart", false)) return
-        thetisAutostartFired = true
-        Log.i(TAG, "Thetis autostart: server reports Thetis not running, sending power-on")
-        setControl(CONTROL_POWER, 1)
+            .getBoolean("thetis_autostart", false)
+        val b = bridge ?: return
+        if (thetisAutostartSent != on) {
+            b.setThetisAutostart(on)
+            thetisAutostartSent = on
+        }
     }
 
     private var lastHeadsetActive: Boolean? = null
@@ -768,30 +855,39 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private var lastHeadsetForEq: Boolean? = null
 
-    /** Loads the EQ preset assigned to the SELECTED radio and the current audio route
-     *  EQ preset from prefs to the engine, and signals the UI (sliders) through
-     *  eq_preset_pending. Called on PTT (the operator wants the EQ per radio fetched
-     *  from storage at the moment of transmitting) and on a headset change. */
+    /** Loads the EQ that belongs to the SELECTED radio and the current audio route,
+     *  sends it to the engine, and signals the UI (sliders) through
+     *  eq_preset_pending.
+     *
+     *  Called on a headset change, on a presence auto-switch, and when the
+     *  operator picks a radio - and, through the null starting value of
+     *  lastHeadsetForEq, once on the first polling round in which a Yaesu is the
+     *  operating radio. That last one is what makes it happen at startup.
+     *
+     *  NOT called on PTT. Two comments here said it was, including this one, and
+     *  applyPttStartSideEffects does not call it - so a reader assumed every
+     *  transmission would put it right. Corrected 2026-09-14. */
     private fun loadAssignedYaesuEqPreset() {
-        if (!_yaesuMode.value) return
+        // Same rule as the transmitter this serves: without a Thetis the switch is a
+        // mute, and an operator transmitting with it off still wants his radio's own
+        // EQ rather than whatever was last set.
+        if (!yaesuIsTheOperatingRadio()) return
         val prefs = getApplication<Application>().getSharedPreferences("thetislink_eq", android.content.Context.MODE_PRIVATE)
         val headsetNow = audioRouting.headsetActive
         // Preset assigned per radio (slot-specific key): each radio its own choice.
-        val presetName = if (headsetNow)
-            prefs.getString("eq_preset_bt_${sel()}", "") ?: ""
-        else
-            prefs.getString("eq_preset_mic_${sel()}", "") ?: ""
+        val presetName = YaesuTxPrefs.assignedPreset(prefs, sel(), headsetNow)
+        // A preset only writes the stored bands; it does not send them. The
+        // sending happens in ONE place below, so the engine can never be told the
+        // EQ is on without being told which curve.
         if (presetName.isNotBlank()) {
             try {
                 val json = org.json.JSONObject(prefs.getString("eq_presets", "{}") ?: "{}")
                 if (json.has(presetName)) {
                     val arr = json.getJSONArray(presetName)
-                    for (i in 0..4) {
-                        yaesuEqBandSel(i, arr.getDouble(i).toFloat())
-                        prefs.edit().putFloat("eq_band_${sel()}_$i", arr.getDouble(i).toFloat()).apply()
-                    }
-                    // Signal the UI to update the sliders.
-                    prefs.edit().putString("eq_preset_pending", presetName).apply()
+                    val gains = FloatArray(5) { i -> arr.getDouble(i).toFloat() }
+                    // One commit, and the "eq_preset_pending" nudge that tells the
+                    // sliders to reload rides along with it.
+                    YaesuTxPrefs.setBands(prefs, sel(), gains, alsoPending = presetName)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to load EQ preset '$presetName'", e)
@@ -799,15 +895,63 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Enable EQ when headset is active OR when a preset is assigned for this radio.
         val enableEq = headsetNow || presetName.isNotBlank()
+        // The bands, ALWAYS, and before the switch.
+        //
+        // This used to send them only inside the preset branch. With a headset
+        // connected and no preset assigned the EQ therefore went on while the
+        // engine kept whatever curve it had - the previous radio's, or flat since
+        // startup - and the screen showed the stored sliders beside it, so the UI
+        // and the engine disagreed with nothing to show it.
+        //
+        // That is the same defect syncTxChainForRadio was written to fix for mic
+        // gain and the compressor, in this same file; the EQ sat a screen's width
+        // away and was not taken along. The preferences are the single source now:
+        // a preset writes them, this reads them.
+        //
+        // Before the switch and not after, so the engine is never briefly on with
+        // the wrong curve.
+        // Through YaesuTxPrefs, which carries the fallback on the older shared key
+        // that the sliders have always used. Read straight from the slot key this
+        // sent five zeros to anyone whose curve predates the per-radio keys - and
+        // since the bands go before the switch, that would have replaced a good
+        // engine state with a flat one.
+        //
+        // Reading straight after the apply() above is safe: SharedPreferences
+        // updates its in-memory map synchronously and only the disk write is
+        // deferred, so a preset written a few lines up is already visible here.
+        val bands = YaesuTxPrefs.bands(prefs, sel())
+        if (enableEq) {
+            for (i in 0..4) yaesuEqBandSel(i, bands[i])
+        }
         yaesuEqEnabledSel(enableEq)
-        prefs.edit().putBoolean("eq_enabled_${sel()}", enableEq).apply()
-        Log.i(TAG, "Yaesu EQ geladen (radio=${sel()}, headset=$headsetNow, preset=$presetName, on=$enableEq)")
+        YaesuTxPrefs.setEqEnabled(prefs, sel(), enableEq)
+        // Named in advance (working rule 11): there is no Kotlin test harness, so
+        // the proof that the right curve left the app is this line in a field log.
+        // The bands are in it for that reason - "EQ on" without them says nothing
+        // about what was actually sent.
+        Log.i(
+            TAG,
+            "Yaesu EQ geladen (radio=${sel()}, headset=$headsetNow, preset=$presetName, on=$enableEq, " +
+                if (enableEq) {
+                    // Locale.ROOT and a separator that is not a decimal comma.
+                    // The first field log of this line read
+                    // "bands sent=-4,4,-1,8,2,9,7,6,12,0" - ten numbers where there
+                    // are five, because "%.1f".format uses the device locale and
+                    // this phone writes -4,4 for -4.4. The whole reason the values
+                    // are in the line is to be able to read them.
+                    "bands sent=${bands.joinToString(" ") { String.format(java.util.Locale.ROOT, "%.1f", it) }} dB)"
+                } else {
+                    "bands not sent - EQ off)"
+                }
+        )
     }
 
-    /** Auto-load the assigned Yaesu EQ preset when the audio route (BT headset ↔ phone
-     *  mic) changes. The per-radio, per-PTT load zit in loadAssignedYaesuEqPreset(). */
+    /** Auto-load the Yaesu EQ when the audio route (BT headset <-> phone mic)
+     *  changes - and, because lastHeadsetForEq starts as null, once on the first
+     *  round in which a Yaesu is the operating radio. That null is not an
+     *  accident to be tidied away: it is what loads the EQ at startup. */
     private fun checkYaesuEqAutoSwitch() {
-        if (!_yaesuMode.value) return
+        if (!yaesuIsTheOperatingRadio()) return
         val headsetNow = audioRouting.headsetActive
         if (headsetNow != lastHeadsetForEq) {
             loadAssignedYaesuEqPreset()
@@ -971,13 +1115,25 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     /** "Yaesu active": switch between Thetis and the selected Yaesu radio (audio routing). */
     fun setYaesuActive(on: Boolean) {
         _yaesuMode.value = on
+        // Tell the engine which radio is being heard, and let IT decide what
+        // happens to the Thetis streams. The rule - keep them for a grace
+        // period, then unsubscribe - lives in sdr-remote-logic/thetis_streams.rs
+        // for two reasons: there is no test harness on this side, and the
+        // unsubscribe has to travel through the engine's send path so a network
+        // switch replays it. Until now this screen only muted Thetis locally, so
+        // roughly 20 kB/s of audio nobody could hear kept arriving over mobile
+        // data while the label beside the switch said "Thetis off".
+        bridge?.setYaesuIsListeningRadio(on)
         updateYaesuSubscriptions() // actieve radio blijft geabonneerd ook als window dichtgaat
         val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
         viewModelScope.launch(Dispatchers.IO) {
             if (on) {
                 applyYaesuAudio()
                 muteThetisLocally(true)      // mute lokale Thetis-audio
-                bridge?.enableSpectrum(false)
+                // No enableSpectrum(false) here any more. It used to stop the
+                // spectrum at once, with no grace at all - the opposite mistake
+                // from the audio, which never stopped. The engine now does both
+                // together after the grace period.
             } else {
                 muteThetisLocally(false)
                 bridge?.enableSpectrum(true)
@@ -1014,8 +1170,13 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     // Slot-routed controls for the UI (dispatched on selectedRadio):
     /** The PTT button on the Yaesu panel - a control on the screen like any other. */
     fun yaesuPttSel(on: Boolean) {
-        val target = selectedYaesuPttTarget()
-        if (on) pttDown(PttSource.SCREEN, target) else pttUp(PttSource.SCREEN, target)
+        // The press names its radio; the release does not, so that it lets go of what
+        // is actually keyed. Recomputing it here had the same shape as the default
+        // that two reviewers just found: change the selected radio between the press
+        // and the release and the wrong one is released, leaving the other one
+        // transmitting.
+        if (on) pttDown(PttSource.SCREEN, selectedYaesuPttTarget())
+        else pttUp(PttSource.SCREEN)
     }
     fun yaesuVolumeSel(vol: Float) { yaesuVol = vol; applyYaesuAudio() }
     fun yaesuFreqSel(hz: Long) { if (sel() == 0) bridge?.yaesuFreq(hz.toULong()) else bridge?.yaesu2Freq(hz.toULong()) }
@@ -1159,7 +1320,24 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         reconcilePtt(before)
     }
 
-    fun pttUp(source: PttSource, target: PttTarget = currentPttTarget()) {
+    /**
+     * Let go of what is actually being transmitted, not of what the target would be
+     * if the button were pressed right now.
+     *
+     * The default used to recompute the destination on release. Shift it between the
+     * press and the release and the model lets go of a transmitter that was never
+     * held: `asking()` stays on the old one, `reconcilePtt` sees no change and
+     * returns, and the "off" is never sent. **The radio keeps transmitting until the
+     * next press.** Two reviewers found it independently.
+     *
+     * It was always reachable through the audio switch, and this patch added a second
+     * way in: `thetisConfigured` now feeds the destination, and it arrives from the
+     * server in a bulk state update that can land mid-press.
+     *
+     * `asking()` first, and the computed target only when nothing is held - a release
+     * with nothing to release is the one case where there is no better answer.
+     */
+    fun pttUp(source: PttSource, target: PttTarget = ptt.asking() ?: currentPttTarget()) {
         val before = ptt.asking()
         ptt.up(target, source)
         reconcilePtt(before)
@@ -1187,8 +1365,49 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         reconcilePtt(before)
     }
 
+    /**
+     * Where the main PTT button sends its request.
+     *
+     * The switch that used to decide this alone is called "Yaesu active" when there
+     * is a Thetis and plain "Audio" when there is not - the label already changes on
+     * `thetisConfigured` (ExternalDevicesScreen). With a Thetis, switching it off
+     * means "listen to Thetis instead", and moving the transmitter along with the
+     * audio is exactly right.
+     *
+     * Without a Thetis there is nothing to move to, and it moved anyway: a button
+     * saying "Audio" silently stopped the operator transmitting, with nothing on
+     * screen to say so. A user with a single 991A reported that, and it took until
+     * his configuration was rebuilt here to see what he meant.
+     *
+     * So the same condition that already renames the button now also decides this.
+     * Muting is muting: the volume slider has always silenced audio without touching
+     * the transmitter, and a mute that blocks transmitting in one of the two paths is
+     * not a safety measure, it is a surprise. There are real reasons to key up
+     * without listening - running the tuner, reading power and SWR, checking a
+     * repeater.
+     *
+     * `thetisConfigured` defaults to true, so nothing changes before the first status
+     * has arrived.
+     */
     private fun currentPttTarget(): PttTarget =
-        if (_yaesuMode.value) selectedYaesuPttTarget() else PttTarget.THETIS
+        if (yaesuIsTheOperatingRadio()) selectedYaesuPttTarget() else PttTarget.THETIS
+
+    /**
+     * Is a Yaesu what this client is operating - for transmitting and for everything
+     * that follows the transmitter, such as the per-radio EQ?
+     *
+     * Two ways to be true. The operator switched to it, or there is no Thetis to
+     * switch away to, in which case the switch is only a mute.
+     *
+     * One function rather than the same condition written out at each site: this
+     * project has spent four review rounds on one fact living in several places, and
+     * the second reader of that condition (the EQ) was already out of step with the
+     * first within an hour of the first being written.
+     */
+    /** Public because the screen decides the same thing for the volume slider, and
+     *  a fourth copy of this condition is how the third one came to be wrong. */
+    fun yaesuIsTheOperatingRadio(): Boolean =
+        _yaesuMode.value || !_state.value.thetisConfigured
 
     /**
      * Make the outside world match what the shared type now says.
@@ -1199,6 +1418,15 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun reconcilePtt(before: PttTarget?) {
         val now = ptt.asking()
+        // BEFORE the early return, and that placement is the whole point.
+        //
+        // It sat below it, and "nothing changed" is exactly how the stuck
+        // transmitter announced itself: let go, the model does not move, no line.
+        // As a regression detector it was silent in precisely the failure mode it
+        // was asked for. A release that did nothing now prints THETIS -> THETIS,
+        // which is the shape to grep for.
+        Log.i(TAG, "PTT $before -> $now (yaesuMode=${_yaesuMode.value} " +
+                   "thetisConfigured=${_state.value.thetisConfigured} radio=${sel()})")
         if (now == before) return
         if (now == null) {
             pttEnded()
@@ -1269,9 +1497,12 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /// Hand the saved settings over on connect, not only when the panel is
-    /// touched - a saved setting that takes effect after you fiddle with it is
-    /// not a saved setting.
+    /// Hand the saved settings over, not only when the panel is touched - a saved
+    /// setting that takes effect after you fiddle with it is not a saved setting.
+    ///
+    /// Called from `init`, once the bridge exists, and again when the radio switch
+    /// hands the audio back to Thetis. This comment used to say "on connect" while
+    /// nothing called it there; it was the radio switch or nothing.
     private fun sendSavedRogerBeep() {
         val p = getApplication<Application>()
             .getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
@@ -1294,7 +1525,13 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // that is right for Thetis then leaves a Yaesu far too quiet while its own
         // slider reads full open. The master stays at its neutral 1.0.
         thetisVol = volume
-        if (!_yaesuMode.value) {
+        // The third reader of the same switch, and both reviewers refused to let it
+        // stay behind. It read `!_yaesuMode.value` while the transmitter and the EQ
+        // had moved to `yaesuIsTheOperatingRadio()`, so without a Thetis this slider
+        // went on driving Thetis volumes that nobody can hear, in a configuration
+        // where the other two had already agreed the Yaesu is the radio being
+        // operated. One switch, one meaning.
+        if (!yaesuIsTheOperatingRadio()) {
             // In Yaesu mode Thetis is muted on purpose - remember the new level and
             // apply it when Thetis comes back.
             bridge?.setVfoAVolume(volume)

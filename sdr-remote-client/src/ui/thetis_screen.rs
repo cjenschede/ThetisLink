@@ -7,35 +7,15 @@
 use super::*;
 
 impl SdrRemoteApp {
-    /// Launch Thetis on the server PC once per client run, if the user opted in
-    /// via the Thetis-tab checkbox and the server explicitly reports that
-    /// Thetis is not running.
-    ///
-    /// Sends the same command as a short press on the Power button. Fires at
-    /// most once (`thetis_autostart_fired`): a launch that fails, or a Thetis
-    /// the user shuts down later on purpose, must not be re-triggered on the
-    /// next reconnect. `Some(false)` is required - an old server that reports
-    /// no process state (`None`) never triggers a launch.
-    pub(super) fn maybe_autostart_thetis(&mut self) {
-        if !self.thetis_autostart
-            || self.thetis_autostart_fired
-            || !self.connected
-            || !self.thetis_configured
-            || self.thetis_starting
-        {
-            return;
+    /// Tell the engine the "Start Thetis automatically" option when it
+    /// changes. The engine decides and launches, once per client run, on the
+    /// server's first report after connecting (sdr_remote_logic::thetis_autostart),
+    /// the same rule as the phone's.
+    pub(super) fn sync_thetis_autostart(&mut self) {
+        if self.thetis_autostart_sent != Some(self.thetis_autostart) {
+            let _ = self.cmd_tx.send(Command::SetThetisAutostart(self.thetis_autostart));
+            self.thetis_autostart_sent = Some(self.thetis_autostart);
         }
-        let thetis_down = self
-            .state_rx
-            .borrow()
-            .connect_status
-            .thetis_reported_not_running();
-        if !thetis_down {
-            return;
-        }
-        self.thetis_autostart_fired = true;
-        log::info!("Thetis autostart: server reports Thetis not running, sending power-on");
-        let _ = self.cmd_tx.send(Command::SetControl(ControlId::PowerOnOff, 1));
     }
 
     pub(super) fn render_thetis_screen(&mut self, ui: &mut egui::Ui) {

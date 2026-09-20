@@ -2,16 +2,29 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// High-SWR alarm beep: pitch, level and duty cycle (150 ms tone per 500 ms).
-const SWR_ALARM_HZ: f32 = 880.0;
-const SWR_ALARM_LEVEL: f32 = 0.25;
-const SWR_ALARM_PERIOD_MS: u32 = 500;
-const SWR_ALARM_ON_MS: u32 = 150;
+/// A warning beep: pitch, level and duty cycle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlarmTone {
+    pub hz: f32,
+    pub level: f32,
+    pub period_ms: u32,
+    pub on_ms: u32,
+}
+
+/// High SWR: the loud one, 150 ms per 500 ms.
+pub const SWR_ALARM: AlarmTone = AlarmTone { hz: 880.0, level: 0.25, period_ms: 500, on_ms: 150 };
+
+/// The drive was raised while a PA may be amplifying out of reach. Lower in pitch
+/// and level than the SWR beep, and slower: it has to be audible over the radio
+/// without drowning it, and it must not be mistaken for the SWR alarm - it says
+/// something entirely different (owner, 2026-09-16: "niet heel erg luid, wel
+/// hoorbaar").
+pub const PA_DRIVE_ALARM: AlarmTone = AlarmTone { hz: 660.0, level: 0.12, period_ms: 1500, on_ms: 200 };
 /// How long one alarm refresh keeps the beep alive. The engine re-arms it from
 /// every radio state push (200 ms), so this only expires when those stop.
 pub const SWR_ALARM_HOLD_MS: u32 = 1500;
 
-/// Samples of beep one `set_swr_alarm(true)` is worth, at the given rate.
+/// Samples of beep one alarm refresh is worth, at the given rate.
 pub fn swr_alarm_hold_samples(sample_rate: u32) -> u32 {
     sample_rate / 1000 * SWR_ALARM_HOLD_MS
 }
@@ -32,6 +45,19 @@ pub fn mix_swr_alarm(
     pos: &mut u32,
     phase: &mut f32,
 ) {
+    mix_alarm(SWR_ALARM, data, channels, sample_rate, remaining, pos, phase)
+}
+
+/// The same mixer for any of the tones above.
+pub fn mix_alarm(
+    tone: AlarmTone,
+    data: &mut [f32],
+    channels: usize,
+    sample_rate: u32,
+    remaining: &AtomicU32,
+    pos: &mut u32,
+    phase: &mut f32,
+) {
     let left = remaining.load(Ordering::Relaxed);
     if left == 0 {
         *pos = 0;
@@ -42,12 +68,12 @@ pub fn mix_swr_alarm(
     remaining.store(left.saturating_sub(frames), Ordering::Relaxed);
 
     let rate = sample_rate.max(1);
-    let period = (rate / 1000 * SWR_ALARM_PERIOD_MS).max(1);
-    let on = rate / 1000 * SWR_ALARM_ON_MS;
-    let step = std::f32::consts::TAU * SWR_ALARM_HZ / rate as f32;
+    let period = (rate / 1000 * tone.period_ms).max(1);
+    let on = rate / 1000 * tone.on_ms;
+    let step = std::f32::consts::TAU * tone.hz / rate as f32;
     for frame in data.chunks_mut(channels.max(1)) {
         let sample = if *pos < on {
-            let v = phase.sin() * SWR_ALARM_LEVEL;
+            let v = phase.sin() * tone.level;
             *phase += step;
             if *phase >= std::f32::consts::TAU {
                 *phase -= std::f32::consts::TAU;
@@ -61,6 +87,35 @@ pub fn mix_swr_alarm(
         for out in frame.iter_mut() {
             *out = (*out + sample).clamp(-1.0, 1.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod alarm_tone_tests {
+    use super::{PA_DRIVE_ALARM, SWR_ALARM, SWR_ALARM_HOLD_MS};
+
+    /// Both tones written out by value. A tone expressed only through its own
+    /// constant can drift to anything and no test notices - the lesson from the
+    /// hold of build 47. And the two must stay apart: an operator has to hear
+    /// which of the two warnings is speaking.
+    #[test]
+    fn the_two_warnings_do_not_sound_alike() {
+        assert_eq!(SWR_ALARM.hz, 880.0);
+        assert_eq!(SWR_ALARM.level, 0.25);
+        assert_eq!(SWR_ALARM.period_ms, 500);
+        assert_eq!(SWR_ALARM.on_ms, 150);
+
+        assert_eq!(PA_DRIVE_ALARM.hz, 660.0);
+        assert_eq!(PA_DRIVE_ALARM.level, 0.12);
+        assert_eq!(PA_DRIVE_ALARM.period_ms, 1500);
+        assert_eq!(PA_DRIVE_ALARM.on_ms, 200);
+
+        assert!(PA_DRIVE_ALARM.hz < SWR_ALARM.hz, "lower in pitch");
+        assert!(PA_DRIVE_ALARM.level < SWR_ALARM.level, "and quieter");
+        assert!(PA_DRIVE_ALARM.period_ms > SWR_ALARM.period_ms, "and slower");
+
+        // The hold both tones live on between two pushes of the state.
+        assert_eq!(SWR_ALARM_HOLD_MS, 1500);
     }
 }
 
@@ -98,4 +153,7 @@ pub trait AudioBackend: Send + 'static {
     /// over the speaker output until it is cleared. Mixing happens inside the
     /// existing playback callback, so the RX path gains no buffering or delay.
     fn set_swr_alarm(&mut self, _on: bool) {}
+    /// The drive was raised while a PA may be amplifying out of reach: a softer,
+    /// slower beep than the SWR one, on until the server clears it.
+    fn set_pa_drive_alarm(&mut self, _on: bool) {}
 }

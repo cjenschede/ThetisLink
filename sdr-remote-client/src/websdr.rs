@@ -35,7 +35,9 @@ impl SdrType {
 /// Commands sent from UI thread to the WebView thread.
 pub enum WebSdrCmd {
     /// Re-navigate to a URL (also used to reload/recover the page + audio stream).
-    Navigate(String),
+    /// The type travels with it: "Use here" points an open window at another SDR,
+    /// and the JS for the two is not interchangeable.
+    Navigate(String, SdrType),
     Mute(bool),
     SetFreq(u64, u8),
     Close,
@@ -161,6 +163,9 @@ fn init_script(sdr_type: SdrType) -> &'static str {
 #[cfg(target_os = "windows")]
 fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>) -> anyhow::Result<()> {
     use wry::raw_window_handle;
+
+    // Follows the page: a Navigate may point this window at the other kind of SDR.
+    let mut sdr_type = sdr_type;
 
     // Raw Win32 FFI - minimal set for window creation + message pump
     #[repr(C)]
@@ -298,7 +303,10 @@ fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>)
             }
             while let Ok(cmd) = rx.try_recv() {
                 match cmd {
-                    WebSdrCmd::Navigate(new_url) => { let _ = webview.load_url(&new_url); }
+                    WebSdrCmd::Navigate(new_url, new_type) => {
+                        sdr_type = new_type;
+                        let _ = webview.load_url(&new_url);
+                    }
                     WebSdrCmd::Mute(mute) => { let _ = webview.evaluate_script(&js_mute(sdr_type, mute)); }
                     WebSdrCmd::SetFreq(freq_hz, mode) => { let _ = webview.evaluate_script(&js_set_freq(sdr_type, freq_hz, mode)); }
                     WebSdrCmd::Close => {
@@ -321,6 +329,8 @@ fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>)
 #[cfg(target_os = "macos")]
 fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>) -> anyhow::Result<()> {
     info!("WebSDR opening in Safari ({:?}): {}", sdr_type, url);
+    // Follows the page, as on Windows.
+    let mut sdr_type = sdr_type;
     let _ = open::that(url);
 
     // Give Safari time to open the tab
@@ -340,7 +350,8 @@ fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>)
                 let js = js_set_freq(sdr_type, freq_hz, mode);
                 safari_eval_js(&js);
             }
-            Ok(WebSdrCmd::Navigate(new_url)) => {
+            Ok(WebSdrCmd::Navigate(new_url, new_type)) => {
+                sdr_type = new_type;
                 safari_eval_js(&format!("window.location.href = '{}';", new_url));
             }
             Err(_) => return Ok(()),

@@ -4,6 +4,8 @@ mod amplitec;
 mod audio_loops;
 mod audio_stats;
 mod config;
+mod cw_key_line;
+mod cw_playout;
 mod mcp2221_debug;
 mod mcp2221_scan;
 mod mcp2221_yaesu_rotor;
@@ -12,10 +14,13 @@ mod ctun_recenter;
 mod dxcluster;
 mod macros;
 mod network;
+mod pa_policy;
 mod power_cap;
 mod ptt;
 mod rf2k;
 mod session;
+#[cfg(test)]
+mod test_serial;
 mod spe_expert;
 mod spectrum;
 mod tci;
@@ -415,6 +420,11 @@ fn main() -> Result<()> {
             language: defaults.language,
             autostart: false,
             active_pa: 0,
+            // CLI mode: no stored settings are read, so the PA policy runs on its
+            // own defaults - one PA in Operate, drive back to 100 % when none is.
+            pa_default_drive: crate::pa_policy::DEFAULT_PA_DRIVE,
+            pa_single_operate: true,
+            rf2k_last_seen_operate: None,
             rf2k_saved_drive: None,
             spe_saved_drive: None,
             ultrabeam_show_menu: defaults.ultrabeam_show_menu,
@@ -459,16 +469,20 @@ fn main() -> Result<()> {
             // CLI mode: tuners are built inside `run_server_async` from
             // `config.tuners` (post-MCP2221A refactor); no prebuild here.
             let server = run_server_async(config, shutdown_rx, None, None, spe_arc, None, None, None, None, None, None, None, None, None, None);
-            tokio::select! {
-                result = server => {
-                    if let Err(e) = result {
-                        log::error!("Server error: {}", e);
-                    }
-                }
+            tokio::pin!(server);
+            let result = tokio::select! {
+                result = &mut server => result,
                 _ = tokio::signal::ctrl_c() => {
                     info!("Shutting down...");
                     let _ = shutdown_tx.send(true);
+                    // Let the server finish rather than dropping it here: its
+                    // end is where the PTT is released and the radios are put
+                    // back (run_server_async, after its select).
+                    server.await
                 }
+            };
+            if let Err(e) = result {
+                log::error!("Server error: {}", e);
             }
         });
     } else {
@@ -967,6 +981,14 @@ pub async fn run_server_async(
             info!("[radio1] slot 1 enabled: {} @ {} baud, model={:?} ({})", port, det_baud, model, how);
             let audio = config.yaesu2_audio_device.clone();
             let audio_out = config.yaesu2_audio_output_device.clone();
+            if let Some(what) = yaesu::audio_device_warning(
+                1,
+                model,
+                config.yaesu2_model_last.map(yaesu::RadioModel::from_code),
+                audio.as_deref(),
+            ) {
+                warn!("{}", what);
+            }
             match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu2_ssb_switch_on_ptt, config.yaesu2_memory_write_ack) {
                 Ok(r) => Some(Arc::new(r)),
                 Err(e) => { warn!("[radio1] init failed: {} - slot 1 off, server keeps running", e); None }
@@ -999,8 +1021,8 @@ pub async fn run_server_async(
         dxcluster,
         vfo_freq_shared,
         vfo_b_freq_shared,
-        yaesu_prebuilt,
-        yaesu2_prebuilt,
+        yaesu_prebuilt.clone(),
+        yaesu2_prebuilt.clone(),
         audio_stats.clone(),
         tci_probe.clone(),
         server_start,
@@ -1010,6 +1032,7 @@ pub async fn run_server_async(
     .await?;
 
     info!("Server ready, waiting for connections...");
+    let cw_lines_at_exit = network.cw_lines();
 
     // PATCH-3: advertise on the local network so clients can find us
     // without typing an IP. mDNS failure is non-fatal - manual entry
@@ -1040,6 +1063,27 @@ pub async fn run_server_async(
 
     // Ensure PTT is released on shutdown
     ptt.lock().await.release().await;
+    // And every Yaesu key line, before the radios are put back (CW step 6).
+    crate::network::lower_all_key_lines(&cw_lines_at_exit);
+
+    // Put back what this session changed on each Yaesu, and wait for the
+    // radio's thread to say it has - every way out of the server passes here
+    // (the Exit button, closing the window, a restart, Ctrl+C). See
+    // YaesuRadio::restore_before_exit for why this is not left to a drop.
+    let radios: Vec<Arc<yaesu::YaesuRadio>> = [yaesu_prebuilt, yaesu2_prebuilt].into_iter().flatten().collect();
+    if !radios.is_empty() {
+        let _ = tokio::task::spawn_blocking(move || {
+            let refs: Vec<&dyn yaesu::ExitRadio> = radios.iter().map(|r| r.as_ref() as &dyn yaesu::ExitRadio).collect();
+            // The same ~2.6 s as prepare_cw_keying, and for the same reason:
+            // close the server during the FTX-1 menu scan and this wait ran out
+            // first, so PC KEYING stayed on RTS and the 991A routing stayed
+            // applied - the radio NOT put back, with a line blaming a radio
+            // that was off (review 2120A2). Nobody had held this one to
+            // the 2.6 s that its twin was measured against.
+            yaesu::put_back_before_exit(&refs, std::time::Duration::from_millis(3000));
+        })
+        .await;
+    }
 
     // PstRotator listener (v2.1.1+): signal the UDP/TCP listener threads that the
     // server is stopping, so they release port 12001 within READ_TIMEOUT (~500 ms).

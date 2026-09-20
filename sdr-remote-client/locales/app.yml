@@ -493,6 +493,36 @@ screen_multi_tx:
   nl: "Multi-TX (een microfoon, meerdere zenders)"
   de: "Multi-TX (ein Mikrofon, mehrere Sender)"
   fr: "Multi-TX (un microphone, plusieurs emetteurs)"
+yaesu_loading_notice:
+  en: "Loading the radio's settings (%{what}) - controls respond slowly until done"
+  nl: "Instellingen van de radio worden geladen (%{what}) - bediening reageert traag tot dit klaar is"
+  de: "Einstellungen des Funkgeraets werden geladen (%{what}) - Bedienung reagiert langsam bis dahin"
+  fr: "Chargement des reglages de la radio (%{what}) - les commandes sont lentes jusqu'a la fin"
+yaesu_loading_background:
+  en: "Loading the radio's %{what} in the background"
+  nl: "De %{what} van de radio worden op de achtergrond geladen"
+  de: "Die %{what} des Funkgeraets werden im Hintergrund geladen"
+  fr: "Chargement en arriere-plan des %{what} de la radio"
+yaesu_loading_button:
+  en: "LOADING"
+  nl: "LADEN"
+  de: "LAEDT"
+  fr: "CHARGE"
+yaesu_loading_memories:
+  en: "memory channels"
+  nl: "geheugenkanalen"
+  de: "Speicherkanaele"
+  fr: "canaux memoire"
+yaesu_loading_tones:
+  en: "tones"
+  nl: "tonen"
+  de: "Toene"
+  fr: "tonalites"
+yaesu_loading_menus:
+  en: "menu settings"
+  nl: "menu-instellingen"
+  de: "Menue-Einstellungen"
+  fr: "reglages du menu"
 radio_usb_lost:
   en: "USB LOST"
   nl: "USB KWIJT"
@@ -760,6 +790,11 @@ screen_col_loss:
   nl: "Verlies"
   de: "Verlust"
   fr: "Perte"
+screen_link_loss:
+  en: "Connection loss"
+  nl: "Verbindingsverlies"
+  de: "Verbindungsverlust"
+  fr: "Perte de la liaison"
 screen_no_audio_stream_yet:
   en: "No audio stream yet"
   nl: "Nog geen audiostroom"
@@ -1797,11 +1832,6 @@ dev_store:
   nl: "Opslaan"
   de: "Speichern"
   fr: "Mémoriser"
-dev_drive_w_fmt:
-  en: "Drive: %{w}W"
-  nl: "Drive: %{w}W"
-  de: "Drive: %{w}W"
-  fr: "Drive : %{w}W"
 dev_debug_expanded:
   en: "Debug ▼"
   nl: "Debug ▼"
@@ -2167,6 +2197,16 @@ dev_power_off_upper:
   nl: "Uit"
   de: "Aus"
   fr: "Arrêt"
+dev_pa_drive_warning:
+  en: "DRIVE RAISED WHILE THE PA IS OUT OF REACH"
+  nl: "STUURVERMOGEN VERHOOGD TERWIJL DE PA ONBEREIKBAAR IS"
+  de: "ANSTEUERUNG ERHOEHT, WAEHREND DIE PA NICHT ERREICHBAR IST"
+  fr: "PUISSANCE D'ATTAQUE AUGMENTEE ALORS QUE LE PA EST INJOIGNABLE"
+dev_pa_drive_warning_hover:
+  en: "The RF2K-S cannot be reached and may still be amplifying. It keeps its drive setting and cannot be told to change it. The warning clears when the server can reach it again."
+  nl: "De RF2K-S is onbereikbaar en versterkt mogelijk nog. Hij houdt zijn stuurvermogen vast en is niet meer bij te sturen. De waarschuwing verdwijnt zodra de server hem weer kan bereiken."
+  de: "Die RF2K-S ist nicht erreichbar und verstaerkt moeglicherweise noch. Sie behaelt ihre Ansteuerung und kann nicht mehr geaendert werden. Die Warnung endet, sobald der Server sie wieder erreicht."
+  fr: "Le RF2K-S est injoignable et amplifie peut-etre encore. Il conserve sa puissance d'attaque et ne peut plus etre modifie. L'alerte disparait des que le serveur le rejoint."
 dev_high_swr:
   en: "HIGH SWR"
   nl: "HOGE SWR"
@@ -2411,3 +2451,193 @@ dev_toggle:
   nl: "Wisselen"
   de: "Umschalten"
   fr: "Bascule"
+screen_ble_ptt:
+  en: "Bluetooth PTT button:"
+  nl: "Bluetooth-zendknop:"
+  de: "Bluetooth-PTT-Taste:"
+  fr: "Bouton PTT Bluetooth :"
+screen_ble_ptt_hint:
+  en: "A Bluetooth transmit button, connected directly"
+  nl: "Een Bluetooth-zendknop, rechtstreeks verbonden"
+  de: "Eine Bluetooth-Sendetaste, direkt verbunden"
+  fr: "Un bouton d'émission Bluetooth, connecté directement"
+screen_ble_ptt_unavailable:
+  en: "not available on this platform"
+  nl: "niet beschikbaar op dit platform"
+  de: "auf dieser Plattform nicht verfügbar"
+  fr: "indisponible sur cette plateforme"
+screen_ble_ptt_choose:
+  en: "Choose button"
+  nl: "Knop kiezen"
+  de: "Taste wählen"
+  fr: "Choisir le bouton"
+screen_ble_ptt_scanning:
+  en: "Looking for buttons..."
+  nl: "Zoekt naar knoppen..."
+  de: "Suche nach Tasten..."
+  fr: "Recherche de boutons..."
+screen_ble_ptt_none_yet:
+  en: "Nothing found yet. Press the button once to wake it."
+  nl: "Nog niets gevonden. Druk de knop een keer in om hem wakker te maken."
+  de: "Noch nichts gefunden. Taste einmal drücken, um sie zu wecken."
+  fr: "Rien trouvé pour l'instant. Appuyez une fois sur le bouton pour le réveiller."
+screen_ble_ptt_use:
+  en: "Use"
+  nl: "Gebruik"
+  de: "Verwenden"
+  fr: "Utiliser"
+screen_ble_ptt_connected:
+  en: "Connected: %{name}"
+  nl: "Verbonden: %{name}"
+  de: "Verbunden: %{name}"
+  fr: "Connecté : %{name}"
+screen_ble_ptt_connecting:
+  en: "Connecting..."
+  nl: "Verbinden..."
+  de: "Verbinde..."
+  fr: "Connexion..."
+screen_ble_ptt_waiting:
+  en: "Out of range - reconnects by itself"
+  nl: "Buiten bereik - verbindt vanzelf opnieuw"
+  de: "Außer Reichweite - verbindet sich selbst wieder"
+  fr: "Hors de portée - se reconnecte tout seul"
+screen_ble_ptt_reconnect:
+  en: "Connect again"
+  nl: "Opnieuw verbinden"
+  de: "Erneut verbinden"
+  fr: "Reconnecter"
+screen_ble_ptt_forget:
+  en: "Forget this button"
+  nl: "Deze knop vergeten"
+  de: "Diese Taste vergessen"
+  fr: "Oublier ce bouton"
+screen_ble_ptt_target:
+  en: "Button keys:"
+  nl: "Knop bedient:"
+  de: "Taste schaltet:"
+  fr: "Le bouton commande :"
+screen_ble_ptt_target_single:
+  en: "Button keys %{name} (the only radio configured)"
+  nl: "Knop bedient %{name} (de enige geconfigureerde radio)"
+  de: "Taste schaltet %{name} (das einzige konfigurierte Funkgerät)"
+  fr: "Le bouton commande %{name} (la seule radio configurée)"
+screen_ble_ptt_mode:
+  en: "Button PTT:"
+  nl: "Knop-PTT:"
+  de: "Tasten-PTT:"
+  fr: "PTT du bouton :"
+screen_group_audio:
+  en: "Microphone and speaker"
+  nl: "Microfoon en luidspreker"
+  de: "Mikrofon und Lautsprecher"
+  fr: "Microphone et haut-parleur"
+screen_group_roger:
+  en: "Roger beep"
+  nl: "Rogerbeep"
+  de: "Roger-Piep"
+  fr: "Bip de fin"
+screen_group_ble:
+  en: "Bluetooth PTT button"
+  nl: "Bluetooth-zendknop"
+  de: "Bluetooth-PTT-Taste"
+  fr: "Bouton PTT Bluetooth"
+screen_group_cw:
+  en: "Morse key"
+  nl: "Morsesleutel"
+  de: "Morsetaste"
+  fr: "Manipulateur morse"
+screen_cw_paddle_hint:
+  en: "A paddle on an MCP2221A board, read directly"
+  nl: "Een peddel op een MCP2221A-bordje, rechtstreeks gelezen"
+  de: "Ein Paddle an einem MCP2221A-Board, direkt gelesen"
+  fr: "Un manipulateur double contact sur une carte MCP2221A, lu directement"
+screen_cw_paddle_looking:
+  en: "looking for the board..."
+  nl: "zoekt het bordje..."
+  de: "sucht das Board..."
+  fr: "recherche de la carte..."
+screen_cw_paddle_reading:
+  en: "reading the paddle"
+  nl: "leest de peddel"
+  de: "liest das Paddle"
+  fr: "lecture du manipulateur"
+screen_cw_key_down:
+  en: "KEY DOWN"
+  nl: "SLEUTEL NEER"
+  de: "TASTE UNTEN"
+  fr: "MANIP. BAS"
+screen_cw_key_up:
+  en: "key up"
+  nl: "sleutel op"
+  de: "Taste oben"
+  fr: "manip. haut"
+screen_cw_edges:
+  en: "edges"
+  nl: "flanken"
+  de: "Flanken"
+  fr: "fronts"
+screen_cw_paddle_note:
+  en: "The paddle keys the transmitter chosen under Key to - Thetis or a connected Yaesu. Every key edge is written to the log."
+  nl: "De peddel sleutelt de zender die je onder Sleutel naar hebt gekozen - Thetis of een aangesloten Yaesu. Elke sleutelflank komt in het log."
+  de: "Das Paddle tastet den unter Taste an gewaehlten Sender - Thetis oder ein angeschlossenes Yaesu-Geraet. Jede Tastflanke steht im Log."
+  fr: "Le manipulateur pilote l'émetteur choisi sous Manipuler vers - Thetis ou un Yaesu connecté. Chaque front est écrit dans le journal."
+screen_cw_sidetone:
+  en: "Sidetone"
+  nl: "Zijtoon"
+  de: "Mithörton"
+  fr: "Tonalité locale"
+screen_cw_sidetone_hz_tooltip:
+  en: "Pitch of the sidetone. Not yet tied to the radio's CW pitch."
+  nl: "Toonhoogte van de zijtoon. Nog niet gekoppeld aan de CW-toonhoogte van de radio."
+  de: "Tonhöhe des Mithörtons. Noch nicht an die CW-Tonhöhe des Funkgeräts gekoppelt."
+  fr: "Hauteur de la tonalité locale. Pas encore liée à la hauteur CW de la radio."
+screen_cw_speed:
+  en: "Speed"
+  nl: "Snelheid"
+  de: "Tempo"
+  fr: "Vitesse"
+screen_cw_speed_tooltip:
+  en: "Words per minute (PARIS). Local for now; following the radio's speed is a later step."
+  nl: "Woorden per minuut (PARIS). Voorlopig lokaal; de snelheid van de radio volgen komt later."
+  de: "Wörter pro Minute (PARIS). Vorerst lokal; dem Tempo des Funkgeräts folgen kommt später."
+  fr: "Mots par minute (PARIS). Local pour l'instant ; suivre la vitesse de la radio viendra plus tard."
+screen_cw_mode_tooltip:
+  en: "What happens when you let go of a squeeze: A stops after the element playing, B adds one opposite element."
+  nl: "Wat er gebeurt als je een knijp loslaat: A stopt na het lopende element, B voegt nog een tegengesteld element toe."
+  de: "Was beim Loslassen eines Squeeze passiert: A stoppt nach dem laufenden Element, B fügt ein gegenteiliges Element hinzu."
+  fr: "Ce qui se passe quand on relâche un squeeze : A s'arrête après l'élément en cours, B ajoute un élément opposé."
+screen_cw_reversed:
+  en: "Swap paddles"
+  nl: "Peddels omdraaien"
+  de: "Paddles tauschen"
+  fr: "Inverser les palettes"
+screen_cw_reversed_tooltip:
+  en: "Left makes dashes, right makes dots."
+  nl: "Links maakt strepen, rechts maakt punten."
+  de: "Links macht Striche, rechts macht Punkte."
+  fr: "Gauche fait des traits, droite fait des points."
+screen_cw_straight:
+  en: "Straight key"
+  nl: "Rechte sleutel"
+  de: "Handtaste"
+  fr: "Manipulateur simple"
+screen_cw_straight_tooltip:
+  en: "Read GP2 as a straight key. Off unless it is wired: an unconnected input floats and follows its neighbour."
+  nl: "GP2 lezen als rechte sleutel. Uit tenzij hij is aangesloten: een losse ingang zweeft en volgt zijn buurman."
+  de: "GP2 als Handtaste lesen. Aus, solange nichts angeschlossen ist: ein offener Eingang schwebt und folgt seinem Nachbarn."
+  fr: "Lire GP2 comme manipulateur simple. Désactivé tant qu'il n'est pas câblé : une entrée libre flotte et suit sa voisine."
+screen_cw_target:
+  en: "Key to"
+  nl: "Sleutel naar"
+  de: "Tasten auf"
+  fr: "Manipuler sur"
+screen_cw_hang:
+  en: "Back to receive after"
+  nl: "Terug naar ontvangst na"
+  de: "Zurück auf Empfang nach"
+  fr: "Retour en réception après"
+screen_cw_hang_tooltip:
+  en: "How long the transmitter is held after the last key-up. Shorter than the gap between your words means the next word waits a quarter of a second for the transmitter to come up."
+  nl: "Hoe lang de zender wordt vastgehouden na de laatste sleutel-op. Korter dan de pauze tussen je woorden betekent dat het volgende woord een kwart seconde wacht tot de zender weer op is."
+  de: "Wie lange der Sender nach dem letzten Loslassen gehalten wird. Kürzer als die Pause zwischen den Wörtern heißt: das nächste Wort wartet eine Viertelsekunde, bis der Sender wieder da ist."
+  fr: "Durée de maintien de l'émetteur après le dernier relâchement. Plus court que la pause entre vos mots : le mot suivant attend un quart de seconde que l'émetteur remonte."

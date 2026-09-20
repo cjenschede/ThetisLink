@@ -4,6 +4,12 @@
 //! Labels/descriptions only (cosmetic); addresses + values come from the live
 //! radio scan, so an incorrect label can never write a wrong address.
 //! Tuple = (addr6, group, subgroup, description).
+//!
+//! In core since build 146, so the server can hold the radio's own list against
+//! it. Group 11 (BLUETOOTH) was missing - its text had landed in the
+//! description of 090516 when the table was taken out of the PDF. The Android
+//! labels (`Ftx1MenuNames.kt`) are a copy; `the_android_labels_follow_the_chart`
+//! catches drift.
 
 pub const EX_CHART: &[(&str, &str, &str, &str)] = &[
     ("010101", "RADIO SETTING", "MODE SSB", "AF TREBLE GAIN -20 - -00 (or +00) - +10 (P4 = -20 - -00 or +00 - +10)"),
@@ -449,10 +455,81 @@ pub const EX_CHART: &[(&str, &str, &str, &str)] = &[
     ("090513", "PRESET", "PRESET5", "TX BPF SEL 0: 50 - 3050 1: 100 - 2900 2: 200 - 2800 3: 300 - 2700 4: 400 - 2600 Hz"),
     ("090514", "PRESET", "PRESET5", "MOD SOURCE 0: MIC 1: USB 2: REAR (RTTY/DATA Jack) 3: AUTO"),
     ("090515", "PRESET", "PRESET5", "USB MOD GAIN 000 - 100"),
-    ("090516", "PRESET", "PRESET5", "RPTT SELECT 0: OFF 1: RTS 2:DTR 3:DAKY (RTTY/DATA Jack) 01 Bluetooth 0: OFF 1: ON 1 02 Device Name : Status - 1 03 DEVICE LIST - - 04 AUDIO 0: AUTO 1: FIX 1"),
+    ("090516", "PRESET", "PRESET5", "RPTT SELECT 0: OFF 1: RTS 2:DTR 3:DAKY (RTTY/DATA Jack)"),
+    ("110101", "BLUETOOTH", "Bluetooth", "Bluetooth 0: OFF 1: ON"),
+    ("110102", "BLUETOOTH", "Bluetooth", "Device Name : Status"),
+    ("110103", "BLUETOOTH", "Bluetooth", "DEVICE LIST"),
+    ("110104", "BLUETOOTH", "Bluetooth", "AUDIO 0: AUTO 1: FIX"),
 ];
 
 /// Look up the chart entry for a 6-digit EX address: (group, sub, desc).
 pub fn lookup(addr: &str) -> Option<(&'static str, &'static str, &'static str)> {
     EX_CHART.iter().find(|e| e.0 == addr).map(|e| (e.1, e.2, e.3))
+}
+
+/// The chart's addresses this radio does not have - the options it lacks.
+///
+/// In build 146 this also gave the other side (addresses the radio answered
+/// that the chart lacks), and that was the measurement the chart was completed
+/// from: the owner's FTX-1 answered 405 of the chart's 444 and nothing
+/// outside it. Since 147 the scan only asks the chart's addresses, so that
+/// side is empty by construction and would read as evidence while measuring
+/// nothing; it is gone.
+pub fn chart_addresses_the_radio_lacks<'a>(radio: impl IntoIterator<Item = &'a str>) -> Vec<&'static str> {
+    let radio: std::collections::BTreeSet<&str> = radio.into_iter().collect();
+    EX_CHART.iter().map(|e| e.0).filter(|a| !radio.contains(a)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_chart_has_group_11_and_each_address_once() {
+        let mut seen = std::collections::HashSet::new();
+        for e in EX_CHART {
+            assert!(e.0.len() == 6 && e.0.bytes().all(|b| b.is_ascii_digit()), "{}", e.0);
+            assert!(seen.insert(e.0), "{} twice", e.0);
+        }
+        for a in ["110101", "110102", "110103", "110104"] {
+            assert!(lookup(a).is_some(), "{a}");
+        }
+        assert!(!lookup("090516").unwrap().2.contains("Bluetooth"), "no merged text");
+    }
+
+    #[test]
+    fn what_the_radio_lacks_is_named() {
+        let lacks = chart_addresses_the_radio_lacks(["010101"]);
+        assert!(lacks.contains(&"010102"), "not answered");
+        assert!(!lacks.contains(&"010101"), "answered");
+        assert_eq!(lacks.len(), EX_CHART.len() - 1);
+    }
+
+    /// The Android labels are a copy of this chart (another language, another
+    /// build): every chart address has one, and nothing else (werkregel 15).
+    #[test]
+    fn the_android_labels_follow_the_chart() {
+        let kt = include_str!("../../sdr-remote-android/android/app/src/main/java/com/sdrremote/ui/screens/Ftx1MenuNames.kt");
+        let keys: std::collections::BTreeSet<&str> = kt
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('"'))
+            .filter_map(|l| l.get(..6))
+            .collect();
+        let chart: std::collections::BTreeSet<&str> = EX_CHART.iter().map(|e| e.0).collect();
+        assert_eq!(keys, chart);
+        // And the labels themselves: each one opens with this address's
+        // subgroup. A changed label used to pass unseen (review 319).
+        let labels: std::collections::BTreeMap<&str, &str> = kt
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('"'))
+            .filter_map(|l| {
+                let (addr, rest) = l.split_at(6);
+                Some((addr, rest.split('"').nth(2)?))
+            })
+            .collect();
+        for e in EX_CHART {
+            let label = labels.get(e.0).unwrap_or_else(|| panic!("{} has no label", e.0));
+            assert!(label.starts_with(e.2), "{}: {:?} does not open with {:?}", e.0, label, e.2);
+        }
+    }
 }

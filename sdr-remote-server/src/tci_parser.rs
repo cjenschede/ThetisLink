@@ -3,15 +3,7 @@
 //! TCI protocol parser - pure functions for parsing TCI text commands,
 //! binary frame decoding, and mode conversion. No state dependencies.
 
-use std::sync::atomic::AtomicBool;
-
 use log::{info, warn};
-
-// ── Globals ─────────────────────────────────────────────────────────────
-
-/// Set to true when Thetis sends rx_channel_sensors_ex (avgdBm).
-/// When active, legacy rx_channel_sensors is ignored to prevent instant values overriding avg.
-pub static HAS_SENSORS_EX: AtomicBool = AtomicBool::new(false);
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -284,10 +276,9 @@ pub fn parse_tci_text(cmd: &str) -> Option<TciNotification> {
             Some(TciNotification::S9FrequencyEx { mhz })
         }
         "rx_channel_sensors" => {
-            // Ignore legacy format when _ex is available (avoids instant values overriding avg)
-            if HAS_SENSORS_EX.load(std::sync::atomic::Ordering::Relaxed) {
-                None
-            } else if args.len() >= 3 {
+            // Always parsed: whether it counts is the connection's to decide,
+            // from how recently the _ex format arrived (Tci, RxChannelSensors).
+            if args.len() >= 3 {
                 let receiver = args[0].trim().parse().ok()?;
                 let channel = args[1].trim().parse().ok()?;
                 let dbm = args[2].trim().parse().ok()?;
@@ -309,9 +300,6 @@ pub fn parse_tci_text(cmd: &str) -> Option<TciNotification> {
             // - peakBinDbm (field 4)  = single highest FFT bin in passband
             // All three are pushed at every sensor tick; the server keeps all three
             // cached so a client can pick its preferred source via SmeterSource.
-            if !HAS_SENSORS_EX.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                info!("TCI: rx_channel_sensors_ex active (all 3 sources cached)");
-            }
             if args.len() >= 5 {
                 let receiver = args[0].trim().parse().ok()?;
                 let channel = args[1].trim().parse().ok()?;
@@ -1093,6 +1081,23 @@ mod tests {
         for rate in [0u32, 1, 12345, 44100, 384001, u32::MAX] {
             let line = format!("ddc_sample_rate_ex:0,{}", rate);
             assert!(parse_tci_text(&line).is_none(), "should reject rate={}", rate);
+        }
+    }
+}
+
+/// Is this mode code one of the CW modes (CWL = 3, CWU = 4)? Thetis refuses
+/// `keyer:` silently in any other mode, so the server refuses out loud first.
+pub fn is_cw_mode(code: u8) -> bool {
+    matches!(code, 3 | 4)
+}
+
+#[cfg(test)]
+mod cw_mode_tests {
+    #[test]
+    fn only_the_two_cw_codes_are_cw() {
+        assert!(super::is_cw_mode(3) && super::is_cw_mode(4));
+        for other in [0u8, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 255] {
+            assert!(!super::is_cw_mode(other), "{other}");
         }
     }
 }

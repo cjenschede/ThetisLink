@@ -28,3 +28,13 @@ and SPDX identifiers for every transitive dependency are in
   GPL-2.0-only). Upstream source:
   <https://github.com/robjwells/mcp2221-hal/>. See
   `vendor/mcp2221-hal/LICENSE-MIT` for the full MIT license text.
+
+  **The vendored copy carries local additions.** Five, each marked in the source
+  with `# ThetisLink fork addition`: `MCP2221::connect_with_serial`,
+  `connect_with_serial_and_vid_pid`, `connect_with_path`, `list_devices` and the
+  `Mcp2221Listing` struct they return. They exist so two boards on one bus can
+  be told apart - ThetisLink drives up to two tuners, a rotor and a Morse paddle
+  from separate boards - and so the server can offer a serial-number picker.
+  None of them is in the upstream release. Apart from those five the tree is
+  upstream v0.1.0; `git diff` against the upstream tag shows the difference. The
+  MIT terms are unchanged and the copyright notice above is the author's.

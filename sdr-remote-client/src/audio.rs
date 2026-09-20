@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use sdr_remote_core::DEVICE_SAMPLE_RATE;
-use sdr_remote_logic::audio::{mix_swr_alarm, swr_alarm_hold_samples};
+use sdr_remote_logic::audio::{mix_alarm, mix_swr_alarm, swr_alarm_hold_samples, PA_DRIVE_ALARM};
+use sdr_remote_logic::sidetone::{mix_sidetone, Sidetone, SidetoneState};
 
 /// Ring buffer capacity in samples (2s at device rate)
 const RING_CAPACITY: usize = DEVICE_SAMPLE_RATE as usize * 2;
@@ -64,6 +65,11 @@ pub struct ClientAudio {
     /// stop (server or radio gone), so the alarm can never get stuck on.
     /// The beep is mixed in even while muted for TX, which is when it matters.
     swr_alarm: Arc<AtomicU32>,
+    /// Its own counter, so the two warnings cannot silence each other.
+    pa_drive_alarm: Arc<AtomicU32>,
+    /// The CW sidetone, keyed by the paddle reader and mixed in the playback
+    /// callback - also while muted for transmit, which is when it is keyed.
+    sidetone: Arc<Sidetone>,
     /// Samples of mic to discard right after the gate opens (keyup), so the
     /// speaker/chassis switch-on spike decays before mic audio is transmitted.
     /// 0 = disabled (no added latency - the default for isolated/headset audio).
@@ -80,7 +86,7 @@ unsafe impl Send for ClientAudio {}
 
 impl ClientAudio {
     /// Create audio pipeline. Pass device names for specific devices, or None/empty for defaults.
-    pub fn new(input_name: Option<&str>, output_name: Option<&str>) -> Result<Self> {
+    pub fn new(input_name: Option<&str>, output_name: Option<&str>, sidetone: Arc<Sidetone>) -> Result<Self> {
         let (capture_producer, capture_consumer) = HeapRb::<f32>::new(RING_CAPACITY).split();
         // Single interleaved stereo ring buffer (L,R,L,R,...) - 2x capacity for stereo
         let (playback_producer, playback_consumer) = HeapRb::<f32>::new(RING_CAPACITY * 2).split();
@@ -92,6 +98,7 @@ impl ClientAudio {
         let capture_gate = Arc::new(AtomicBool::new(false));
         let playback_mute = Arc::new(AtomicBool::new(false));
         let swr_alarm = Arc::new(AtomicU32::new(0));
+        let pa_drive_alarm = Arc::new(AtomicU32::new(0));
         let capture_gate_delay_samples = Arc::new(AtomicU32::new(0));
 
         let mut audio = Self {
@@ -106,6 +113,8 @@ impl ClientAudio {
             capture_gate,
             playback_mute,
             swr_alarm,
+            pa_drive_alarm,
+            sidetone,
             capture_gate_delay_samples,
             capture_sample_rate: DEVICE_SAMPLE_RATE,
             playback_sample_rate: DEVICE_SAMPLE_RATE,
@@ -283,9 +292,14 @@ impl ClientAudio {
         let err_flag = self.audio_error.clone();
         let mute = self.playback_mute.clone();
         let alarm = self.swr_alarm.clone();
+        let pa_alarm = self.pa_drive_alarm.clone();
         let alarm_rate = self.playback_sample_rate;
         let mut alarm_pos: u32 = 0;
         let mut alarm_phase: f32 = 0.0;
+        let mut pa_alarm_pos: u32 = 0;
+        let mut pa_alarm_phase: f32 = 0.0;
+        let sidetone = self.sidetone.clone();
+        let mut sidetone_state = SidetoneState::default();
         // Pre-allocated scratches for mute-drain and stereo-read. Capacity grows
         // automatically on the first call that needs more; no alloc after that.
         let mut drain_scratch: Vec<f32> = Vec::with_capacity(8192);
@@ -293,52 +307,70 @@ impl ClientAudio {
         let playback_stream = output_device
             .build_output_stream(
                 &out_stream_config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    // Instant mute during TX: output zeros and drain ring buffer
+                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                    // What the device itself predicts between this callback and
+                    // the speaker: the half of the sidetone's latency that the
+                    // callback cannot measure (CW design, measurement 4).
+                    // Told on every callback, and told 0 when there is nothing to
+                    // tell: the Sidetone outlives a device switch, and the figure
+                    // of the previous device must not stand for this one.
+                    let ts = info.timestamp();
+                    let device_us = ts
+                        .playback
+                        .duration_since(&ts.callback)
+                        .map_or(0, |d| d.as_micros().min(u32::MAX as u128) as u32);
+                    sidetone.note_output_latency(device_us);
+                    // Two ways to fill the buffer, and ONE place that mixes into it.
+                    // The alarms and the sidetone used to be mixed at the end of
+                    // each branch; a third branch with an early return would have
+                    // dropped all three without a sound (rule 15). Nothing returns
+                    // from inside a branch any more, and fitness.ps1 counts the
+                    // mixing place: one.
                     if mute.load(Ordering::Relaxed) {
+                        // Instant mute during TX: output zeros and drain ring buffer.
                         if drain_scratch.len() < data.len() {
                             drain_scratch.resize(data.len(), 0.0);
                         }
                         playback_consumer.pop_slice(&mut drain_scratch[..data.len()]);
                         data.fill(0.0);
                         level.store(0u32, Ordering::Relaxed);
-                        // High SWR is a TX condition, so the alarm has to survive
-                        // the TX mute - it plays into the silenced buffer.
-                        mix_swr_alarm(data, out_channels, alarm_rate, &alarm, &mut alarm_pos, &mut alarm_phase);
-                        return;
-                    }
-
-                    // Read interleaved stereo (L,R,L,R,...) into temp buffer
-                    let frames = data.len() / out_channels.max(1);
-                    let stereo_samples = frames * 2;
-                    if stereo_scratch.len() < stereo_samples {
-                        stereo_scratch.resize(stereo_samples, 0.0);
-                    }
-                    let stereo_buf = &mut stereo_scratch[..stereo_samples];
-                    let read = playback_consumer.pop_slice(stereo_buf);
-                    let read_frames = read / 2;
-
-                    // Scatter stereo into output channels (supports >2ch devices)
-                    data.fill(0.0);
-                    for i in 0..read_frames {
-                        let l = stereo_buf[i * 2];
-                        let r = stereo_buf[i * 2 + 1];
-                        let base = i * out_channels;
-                        if out_channels >= 2 {
-                            data[base] = l;
-                            data[base + 1] = r;
-                        } else {
-                            data[base] = (l + r) * 0.5;
+                    } else {
+                        // Read interleaved stereo (L,R,L,R,...) into temp buffer
+                        let frames = data.len() / out_channels.max(1);
+                        let stereo_samples = frames * 2;
+                        if stereo_scratch.len() < stereo_samples {
+                            stereo_scratch.resize(stereo_samples, 0.0);
                         }
+                        let stereo_buf = &mut stereo_scratch[..stereo_samples];
+                        let read = playback_consumer.pop_slice(stereo_buf);
+                        let read_frames = read / 2;
+
+                        // Scatter stereo into output channels (supports >2ch devices)
+                        data.fill(0.0);
+                        for i in 0..read_frames {
+                            let l = stereo_buf[i * 2];
+                            let r = stereo_buf[i * 2 + 1];
+                            let base = i * out_channels;
+                            if out_channels >= 2 {
+                                data[base] = l;
+                                data[base + 1] = r;
+                            } else {
+                                data[base] = (l + r) * 0.5;
+                            }
+                        }
+
+                        // RMS level from L channel (before anything is mixed in, so
+                        // the meter keeps showing received audio only)
+                        let sum_sq: f32 = (0..read_frames).map(|i| { let s = stereo_buf[i * 2]; s * s }).sum();
+                        let rms = (sum_sq / read_frames.max(1) as f32).sqrt();
+                        level.store(rms.to_bits(), Ordering::Relaxed);
                     }
 
-                    // RMS level from L channel (before the alarm is mixed in, so
-                    // the meter keeps showing received audio only)
-                    let sum_sq: f32 = (0..read_frames).map(|i| { let s = stereo_buf[i * 2]; s * s }).sum();
-                    let rms = (sum_sq / read_frames.max(1) as f32).sqrt();
-                    level.store(rms.to_bits(), Ordering::Relaxed);
-
+                    // High SWR is a TX condition and the sidetone is keyed during
+                    // TX, so all three play into the muted buffer as well.
                     mix_swr_alarm(data, out_channels, alarm_rate, &alarm, &mut alarm_pos, &mut alarm_phase);
+                    mix_alarm(PA_DRIVE_ALARM, data, out_channels, alarm_rate, &pa_alarm, &mut pa_alarm_pos, &mut pa_alarm_phase);
+                    mix_sidetone(data, out_channels, alarm_rate, &sidetone, &mut sidetone_state);
                 },
                 move |err| {
                     log::error!("client playback error: {}", err);
@@ -482,5 +514,11 @@ impl sdr_remote_logic::audio::AudioBackend for ClientAudio {
         // beep stops on its own if the state pushes that drive it dry up.
         let samples = if on { swr_alarm_hold_samples(self.playback_sample_rate) } else { 0 };
         self.swr_alarm.store(samples, Ordering::Relaxed);
+    }
+
+    fn set_pa_drive_alarm(&mut self, on: bool) {
+        // Same re-arming as above, its own counter and its own tone.
+        let samples = if on { swr_alarm_hold_samples(self.playback_sample_rate) } else { 0 };
+        self.pa_drive_alarm.store(samples, Ordering::Relaxed);
     }
 }

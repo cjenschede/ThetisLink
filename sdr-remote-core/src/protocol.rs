@@ -158,6 +158,9 @@ pub enum PacketType {
     /// appearing) instead of sticky. Push-on-change + once on (re)connect.
     /// Old clients ignore this unknown type (back-compat by construction).
     YaesuPresence = 0x2E,
+    /// CW key edges from a client, with the length of the state each one
+    /// ends and the last few repeated (client -> server only).
+    CwEdges = 0x2F,
     /// Ask the connected server for its own problem-report attachment
     /// (client -> server). Header only. Answered with `ServerReportPart`
     /// packets, or with nothing at all if the server cannot build one.
@@ -428,7 +431,9 @@ pub enum ControlId {
     /// RX Balance L/R pan (value: i8 -40..+40 as i16 cast to u16; TCI: rx_balance:0,0)
     RxBalance = 0x5D,
 
-    /// CW keyer key down/up (value: bit 0 = pressed, bits 1-15 = duration_ms; 0 = no duration)
+    /// Retired in build 95: CW keying travels as `CwEdges` packets, with a
+    /// sequence number and the last edges repeated. A server that receives
+    /// this control ignores it - it used to key Thetis without a single check.
     CwKey = 0x5E,
     /// CW macro stop (value: ignored; TCI: cw_macros_stop)
     CwMacroStop = 0x5F,
@@ -629,7 +634,81 @@ pub enum ControlId {
     VrxSpectrumPan = 0x99,
     /// VRX2 spectrum pan offset. Same units and reasoning.
     VrxSpectrumPan2 = 0x9A,
+    /// The drive was raised while a PA may be amplifying out of reach.
+    ///
+    /// Bit 0: show the warning. It stays up until the server can reach the PA
+    /// again, because the operator may not have been there when it happened.
+    /// Bit 1: sound the beep. Only while the drive is actually above what it was,
+    /// so putting it back stops the sound and leaves the notice.
+    ///
+    /// The RF2K-S keeps amplifying when its network drops: PTT still works, the
+    /// drive stays where it was, and nothing on it can be changed any more. Raise
+    /// the drive in that state and there is no way to tell the PA about it, so the
+    /// clients say so out loud until contact is back. The SPE does not need this -
+    /// it drops to Standby by itself when its link goes away.
+    PaDriveWarning = 0x9B,
 }
+
+/// Controls that carry PER-SESSION server state.
+///
+/// The server keys clients by `SocketAddr`, so a client that comes back on a new
+/// address gets a brand-new `ClientSession` at its defaults and has forgotten
+/// everything the previous one had asked for. Every control listed here has to be
+/// replayed once that happens, or the client keeps believing it is subscribed to
+/// something the server no longer sends.
+///
+/// **This list is the single source of truth for that.** Two tests pin it down:
+/// the server asserts that every per-session field of `ClientSession` is named
+/// here, and the client asserts that its restore replays exactly this list. Add a
+/// per-session field on one side and the other side's test fails, which is the
+/// whole point - the two lists had silently drifted apart to thirteen missing
+/// entries before this existed (2026-09-13).
+///
+/// Order matters in one place only: an `Enable` should precede the settings that
+/// shape that stream, so the server is never asked to shape a stream it is not
+/// yet producing.
+pub const SESSION_SCOPED_CONTROLS: &[ControlId] = &[
+    // RX1 and the main spectrum
+    ControlId::Rx1Enable,
+    ControlId::SpectrumEnable,
+    ControlId::SpectrumFps,
+    ControlId::SpectrumZoom,
+    ControlId::SpectrumPan,
+    ControlId::SpectrumMaxBins,
+    // RX2 audio and its own spectrum
+    ControlId::Rx2Enable,
+    ControlId::Rx2SpectrumEnable,
+    ControlId::Rx2SpectrumFps,
+    ControlId::Rx2SpectrumZoom,
+    ControlId::Rx2SpectrumPan,
+    ControlId::Rx2SpectrumMaxBins,
+    // Both Yaesu slots: audio and the separate state subscription. The state one
+    // is what makes the screen follow the radio's own VFO knob; losing it looks
+    // like a radio that has stopped responding while control still works.
+    ControlId::YaesuEnable,
+    ControlId::YaesuStateEnable,
+    ControlId::Yaesu2Enable,
+    ControlId::Yaesu2StateEnable,
+    // VRX audio, spectrum and auto-tune, both channels
+    ControlId::VrxEnable,
+    ControlId::VrxEnable2,
+    ControlId::VrxSpectrumEnable,
+    ControlId::VrxSpectrumEnable2,
+    ControlId::VrxSamAutoTune,
+    ControlId::VrxSamAutoTune2,
+    // Whole-session choices
+    ControlId::AudioMode,
+    ControlId::SmeterSources,
+    ControlId::DxSpotsEnabled,
+    ControlId::FullSpectrumEnabled,
+    ControlId::ThetisWidebandAudio,
+    ControlId::VfoSync,
+    // Not a subscription but per-session all the same, and its loss reaches
+    // further than the client that loses it: the server applies the strictest
+    // setting across all clients, so one session falling back to the default
+    // moves the zoom floor for everybody.
+    ControlId::AllowZoomBelow2x,
+];
 
 /// Hertz per step of [`ControlId::VrxSpectrumPan`].
 pub const VRX_PAN_STEP_HZ: i32 = 10;
@@ -2113,10 +2192,35 @@ pub struct YaesuStatePacket {
     /// Additive trailing field; **0 = still unknown** (old server / before the first
     /// EX readout), NOT 0 watts. The client scales the slider to `5..=max`.
     pub tx_power_max: u8,
+    /// What the server is still reading from this radio after it connected:
+    /// `YAESU_LOADING_*` bits, 0 when done. While it reads, the radio's CAT
+    /// port is busy and every control answers slowly - the FTX-1 takes some
+    /// 40 s for its memories, tones and 405 menu items (field log 2026-09-19).
+    /// The client says so in the radio's window. Additive trailing field - 0
+    /// on old servers: no notice, as before.
+    pub loading: u8,
+}
+
+/// `YaesuStatePacket::loading`: the memory channels.
+pub const YAESU_LOADING_MEMORIES: u8 = 1;
+/// `YaesuStatePacket::loading`: the CTCSS/DCS tones of the memory channels.
+pub const YAESU_LOADING_TONES: u8 = 2;
+/// `YaesuStatePacket::loading`: the menu (EX) settings.
+pub const YAESU_LOADING_MENUS: u8 = 4;
+
+/// Does this much loading keep the radio from starting a transmission? The
+/// memory channels and their tones are read in one go and hold the radio's
+/// serial thread (a PTT-off would wait behind them); the FTX-1's menu items are
+/// read one at a time in the gaps between other traffic, so they do not
+/// (owner, 2026-09-19: "de ptt mag vrijgegeven worden zodra de algemene
+/// parameters zijn geladen"). One rule for the server's refusal and the
+/// client's button.
+pub fn yaesu_loading_blocks_tx(loading: u8) -> bool {
+    loading & (YAESU_LOADING_MEMORIES | YAESU_LOADING_TONES) != 0
 }
 
 impl YaesuStatePacket {
-    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1; // 39 bytes
+    pub const SIZE: usize = Header::SIZE + 8 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1; // 40 bytes
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         self.serialize_as_type(buf, PacketType::YaesuState);
@@ -2146,7 +2250,8 @@ impl YaesuStatePacket {
         buf[pos] = self.tuner_state; pos += 1;
         buf[pos] = self.hi_swr as u8; pos += 1;
         buf[pos] = self.tx_power_max; pos += 1;
-        buf[pos] = self.held_by_other as u8;
+        buf[pos] = self.held_by_other as u8; pos += 1;
+        buf[pos] = self.loading;
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -2175,8 +2280,9 @@ impl YaesuStatePacket {
         let tuner_state = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
         let hi_swr = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
         let tx_power_max = if buf.len() > pos { buf[pos] } else { 0 }; pos += 1;
-        let held_by_other = if buf.len() > pos { buf[pos] != 0 } else { false };
-        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan, tuner_state, hi_swr, tx_power_max, held_by_other })
+        let held_by_other = if buf.len() > pos { buf[pos] != 0 } else { false }; pos += 1;
+        let loading = if buf.len() > pos { buf[pos] } else { 0 };
+        Ok(Self { freq_a, freq_b, mode, smeter, tx_active, power_on, af_gain, tx_power, vfo_select, memory_channel, squelch, rf_gain, mic_gain, split, scan, tuner_state, hi_swr, tx_power_max, held_by_other, loading })
     }
 }
 
@@ -2435,6 +2541,14 @@ pub const PORT_TROUBLE_MISSING: u8 = 2;
 ///
 /// The two trouble bytes are additive: an old client stops reading after the
 /// model bytes, and an old server's shorter packet reads as trouble = none.
+///
+/// The configured byte (2026-09-17) is additive in the same way. `present` is
+/// what is connected right now; `configured` is what the server has a radio
+/// for, powered on or not - the list a client offers when a control has to be
+/// pointed at a radio (the Bluetooth PTT button). Before this byte a client
+/// could not tell "configured but off" from "not there": the model byte is 0
+/// for a 991A and for an empty slot alike. An old server's shorter packet reads
+/// as configured = present, which is exactly what such a client could see.
 pub struct YaesuPresencePacket {
     pub slot0_present: bool,
     pub slot0_model: u8,
@@ -2442,10 +2556,12 @@ pub struct YaesuPresencePacket {
     pub slot1_model: u8,
     pub slot0_trouble: u8,
     pub slot1_trouble: u8,
+    pub slot0_configured: bool,
+    pub slot1_configured: bool,
 }
 
 impl YaesuPresencePacket {
-    pub const SIZE: usize = Header::SIZE + 6; // 10
+    pub const SIZE: usize = Header::SIZE + 7; // 11
     /// The pre-trouble size; a packet this short is an old server, not an error.
     const MIN_SIZE: usize = Header::SIZE + 4; // 8
 
@@ -2457,6 +2573,7 @@ impl YaesuPresencePacket {
         buf[7] = self.slot1_model;
         buf[8] = self.slot0_trouble;
         buf[9] = self.slot1_trouble;
+        buf[10] = (self.slot0_configured as u8) | ((self.slot1_configured as u8) << 1);
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -2474,11 +2591,155 @@ impl YaesuPresencePacket {
             slot1_model: buf[7],
             slot0_trouble: buf.get(8).copied().unwrap_or(PORT_TROUBLE_NONE),
             slot1_trouble: buf.get(9).copied().unwrap_or(PORT_TROUBLE_NONE),
+            // An old server says nothing about configuration: what it shows
+            // connected is all such a client ever saw as "there".
+            slot0_configured: buf.get(10).map(|b| b & 1 != 0).unwrap_or(buf[4] != 0),
+            slot1_configured: buf.get(10).map(|b| b & 2 != 0).unwrap_or(buf[6] != 0),
         })
     }
 }
 
 /// Parse any incoming packet by peeking at the header
+/// One key edge as the client's keyer made it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CwEdge {
+    /// Counts up per edge for the life of the client's engine; the server
+    /// drops what it has already seen.
+    pub seq: u32,
+    /// Key down (`true`) or up.
+    pub down: bool,
+    /// How long the state this edge ends lasted, in milliseconds - the TCI
+    /// model: a key-down carries the gap before it, a key-up the element.
+    pub prev_len_ms: u16,
+    /// The first edge after rest: the server anchors a new run on it.
+    pub run_start: bool,
+}
+
+/// CW key edges from a client: the newest edge and up to three before it,
+/// oldest first, so one lost packet is caught up by the next.
+///
+/// Layout after the header: target (1), count (1), then per edge seq (4,
+/// big-endian), flags (1: bit 0 down, bit 1 run start), prev_len_ms (2), and
+/// after the edges the hang time (2). The hang time came in build 103 and is
+/// additive both ways: a server that does not know it never reads past the
+/// edges, and a packet without it reads as 0, "the server's own default".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CwEdgesPacket {
+    /// Which transmitter the key goes to: 0 Thetis, 1 Yaesu slot 0, 2 slot 1.
+    pub target: u8,
+    pub edges: Vec<CwEdge>,
+    /// How long after the last key-up the server holds the transmitter before
+    /// it goes back to receive, in milliseconds; 0 = the server's default.
+    pub hang_ms: u16,
+}
+
+impl CwEdgesPacket {
+    pub const MAX_EDGES: usize = 4;
+    pub const EDGE_SIZE: usize = 4 + 1 + 2;
+    pub const MAX_SIZE: usize = Header::SIZE + 2 + Self::MAX_EDGES * Self::EDGE_SIZE + 2; // 36
+
+    /// Writes the packet; returns how many bytes it used. Panics on an empty
+    /// or over-full edge list, which the sender can never produce.
+    pub fn serialize(&self, buf: &mut [u8; Self::MAX_SIZE]) -> usize {
+        assert!(!self.edges.is_empty() && self.edges.len() <= Self::MAX_EDGES, "1..=4 edges");
+        Header::new(PacketType::CwEdges, Flags::NONE).serialize(buf);
+        buf[4] = self.target;
+        buf[5] = self.edges.len() as u8;
+        let mut at = 6;
+        for e in &self.edges {
+            buf[at..at + 4].copy_from_slice(&e.seq.to_be_bytes());
+            buf[at + 4] = (e.down as u8) | ((e.run_start as u8) << 1);
+            buf[at + 5..at + 7].copy_from_slice(&e.prev_len_ms.to_be_bytes());
+            at += Self::EDGE_SIZE;
+        }
+        buf[at..at + 2].copy_from_slice(&self.hang_ms.to_be_bytes());
+        at + 2
+    }
+
+    pub fn deserialize(buf: &[u8]) -> Result<Self> {
+        let header = Header::deserialize(buf)?;
+        if header.packet_type != PacketType::CwEdges {
+            bail!("expected CwEdges packet, got {:?}", header.packet_type);
+        }
+        if buf.len() < Header::SIZE + 2 {
+            bail!("CwEdges packet too short: {}", buf.len());
+        }
+        let target = buf[4];
+        let count = buf[5] as usize;
+        if count == 0 || count > Self::MAX_EDGES {
+            bail!("CwEdges packet with {} edges", count);
+        }
+        let need = Header::SIZE + 2 + count * Self::EDGE_SIZE;
+        if buf.len() < need {
+            bail!("CwEdges packet too short for {} edges: {} < {}", count, buf.len(), need);
+        }
+        let mut edges = Vec::with_capacity(count);
+        let mut at = 6;
+        for _ in 0..count {
+            let seq = u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]);
+            let flags = buf[at + 4];
+            let prev_len_ms = u16::from_be_bytes([buf[at + 5], buf[at + 6]]);
+            edges.push(CwEdge { seq, down: flags & 1 != 0, prev_len_ms, run_start: flags & 2 != 0 });
+            at += Self::EDGE_SIZE;
+        }
+        let hang_ms = match (buf.get(at), buf.get(at + 1)) {
+            (Some(hi), Some(lo)) => u16::from_be_bytes([*hi, *lo]),
+            _ => 0,
+        };
+        Ok(Self { target, edges, hang_ms })
+    }
+}
+
+#[cfg(test)]
+mod cw_edges_tests {
+    use super::*;
+
+    fn e(seq: u32, down: bool, len: u16, start: bool) -> CwEdge {
+        CwEdge { seq, down, prev_len_ms: len, run_start: start }
+    }
+
+    #[test]
+    fn a_cw_edges_packet_survives_the_wire() {
+        let pkt = CwEdgesPacket {
+            target: 2,
+            edges: vec![e(7, true, 0, true), e(8, false, 48, false), e(9, true, 48, false), e(10, false, 144, false)],
+            hang_ms: 500,
+        };
+        let mut buf = [0u8; CwEdgesPacket::MAX_SIZE];
+        let n = pkt.serialize(&mut buf);
+        assert_eq!(n, CwEdgesPacket::MAX_SIZE);
+        let back = CwEdgesPacket::deserialize(&buf[..n]).unwrap();
+        assert_eq!(back, pkt);
+        // One edge uses only what it needs.
+        let one = CwEdgesPacket { target: 0, edges: vec![e(u32::MAX, true, u16::MAX, true)], hang_ms: u16::MAX };
+        let n = one.serialize(&mut buf);
+        assert_eq!(n, Header::SIZE + 2 + CwEdgesPacket::EDGE_SIZE + 2);
+        // A packet from before the hang time (builds 95-98) is two bytes
+        // shorter and reads as "the server's default".
+        let old = CwEdgesPacket::deserialize(&buf[..n - 2]).unwrap();
+        assert_eq!((old.hang_ms, old.edges.len()), (0, 1));
+        assert_eq!(CwEdgesPacket::deserialize(&buf[..n]).unwrap(), one);
+        match Packet::deserialize(&buf[..n]).unwrap() {
+            Packet::CwEdges(p) => assert_eq!(p, one),
+            _ => panic!("parsed as another packet"),
+        }
+    }
+
+    #[test]
+    fn a_cw_edges_packet_with_no_or_too_many_edges_is_refused() {
+        let mut buf = [0u8; CwEdgesPacket::MAX_SIZE];
+        let one = CwEdgesPacket { target: 0, edges: vec![e(1, true, 0, true)], hang_ms: 0 };
+        let n = one.serialize(&mut buf);
+        buf[5] = 0;
+        assert!(CwEdgesPacket::deserialize(&buf[..n]).is_err(), "zero edges");
+        buf[5] = 5;
+        assert!(CwEdgesPacket::deserialize(&buf).is_err(), "five edges");
+        buf[5] = 2;
+        assert!(CwEdgesPacket::deserialize(&buf[..n - 2]).is_err(), "claims two, carries one");
+        assert!(CwEdgesPacket::deserialize(&buf[..5]).is_err(), "no count byte");
+    }
+}
+
 pub enum Packet {
     Audio(AudioPacket),
     Heartbeat(Heartbeat),
@@ -2544,6 +2805,7 @@ pub enum Packet {
     YaesuControl(YaesuControlPacket),
     YaesuFeature(YaesuFeaturePacket),
     YaesuPresence(YaesuPresencePacket),
+    CwEdges(CwEdgesPacket),
 }
 
 /// AuthResult codes
@@ -2595,6 +2857,7 @@ impl Packet {
             PacketType::YaesuControl => Ok(Packet::YaesuControl(YaesuControlPacket::deserialize(buf)?)),
             PacketType::YaesuFeature => Ok(Packet::YaesuFeature(YaesuFeaturePacket::deserialize(buf)?)),
             PacketType::YaesuPresence => Ok(Packet::YaesuPresence(YaesuPresencePacket::deserialize(buf)?)),
+            PacketType::CwEdges => Ok(Packet::CwEdges(CwEdgesPacket::deserialize(buf)?)),
             PacketType::AudioMultiCh => Ok(Packet::AudioMultiCh(MultiChannelAudioPacket::deserialize(buf)?)),
             PacketType::YaesuState => Ok(Packet::YaesuState(YaesuStatePacket::deserialize(buf)?)),
             PacketType::FrequencyYaesu => Ok(Packet::FrequencyYaesu(FrequencyPacket::deserialize(buf)?)),
@@ -2781,6 +3044,9 @@ mod tests {
             slot1_model: 1,   // FTX-1
             slot0_trouble: PORT_TROUBLE_BUSY,
             slot1_trouble: PORT_TROUBLE_NONE,
+            // Slot 1 configured but off: the case the byte exists for.
+            slot0_configured: true,
+            slot1_configured: true,
         };
         let mut buf = [0u8; YaesuPresencePacket::SIZE];
         pkt.serialize(&mut buf);
@@ -2793,8 +3059,35 @@ mod tests {
                 assert_eq!(p.slot1_model, 1);
                 assert_eq!(p.slot0_trouble, PORT_TROUBLE_BUSY);
                 assert_eq!(p.slot1_trouble, PORT_TROUBLE_NONE);
+                assert!(p.slot0_configured);
+                assert!(p.slot1_configured, "configured survives the wire even when not present");
             }
             _ => panic!("expected YaesuPresence packet"),
+        }
+    }
+
+    /// The configured bits travel on their own: each combination comes back as
+    /// it went, independent of `present`.
+    #[test]
+    fn yaesu_presence_configured_bits_are_independent_of_present() {
+        for bits in 0u8..16 {
+            let pkt = YaesuPresencePacket {
+                slot0_present: bits & 1 != 0,
+                slot0_model: 0,
+                slot1_present: bits & 2 != 0,
+                slot1_model: 1,
+                slot0_trouble: PORT_TROUBLE_NONE,
+                slot1_trouble: PORT_TROUBLE_NONE,
+                slot0_configured: bits & 4 != 0,
+                slot1_configured: bits & 8 != 0,
+            };
+            let mut buf = [0u8; YaesuPresencePacket::SIZE];
+            pkt.serialize(&mut buf);
+            let p = YaesuPresencePacket::deserialize(&buf).unwrap();
+            assert_eq!(p.slot0_configured, bits & 4 != 0, "row {bits}");
+            assert_eq!(p.slot1_configured, bits & 8 != 0, "row {bits}");
+            assert_eq!(p.slot0_present, bits & 1 != 0, "row {bits}");
+            assert_eq!(p.slot1_present, bits & 2 != 0, "row {bits}");
         }
     }
 
@@ -2809,6 +3102,8 @@ mod tests {
             slot1_model: 0,
             slot0_trouble: PORT_TROUBLE_MISSING, // must NOT survive the truncation
             slot1_trouble: PORT_TROUBLE_BUSY,
+            slot0_configured: false, // must NOT survive either: an old server
+            slot1_configured: true,  // says nothing, so configured = present
         };
         let mut buf = [0u8; YaesuPresencePacket::SIZE];
         pkt.serialize(&mut buf);
@@ -2817,6 +3112,11 @@ mod tests {
         assert_eq!(p.slot0_model, 1);
         assert_eq!(p.slot0_trouble, PORT_TROUBLE_NONE);
         assert_eq!(p.slot1_trouble, PORT_TROUBLE_NONE);
+        assert!(p.slot0_configured, "present, so an old server has it");
+        assert!(!p.slot1_configured, "not present, and an old server cannot say more");
+        // The ten-byte form (trouble, no configured byte) reads the same way.
+        let p = YaesuPresencePacket::deserialize(&buf[..10]).unwrap();
+        assert!(p.slot0_configured && !p.slot1_configured);
     }
 
     #[test]
@@ -3152,13 +3452,42 @@ mod held_by_other_tests {
             tx_active: true, power_on: true, af_gain: 30, tx_power: 50,
             vfo_select: 0, memory_channel: 0, squelch: 0, rf_gain: 255,
             mic_gain: 50, split: false, scan: false, tuner_state: 0,
-            hi_swr: false, held_by_other: true, tx_power_max: 100,
+            hi_swr: false, held_by_other: true, tx_power_max: 100, loading: 0,
         };
         pkt.serialize(&mut full);
         assert!(YaesuStatePacket::deserialize(&full).unwrap().held_by_other);
 
-        let short = &full[..YaesuStatePacket::SIZE - 1];
+        let short = &full[..YaesuStatePacket::SIZE - 2];
         assert!(!YaesuStatePacket::deserialize(short).unwrap().held_by_other);
+    }
+
+    /// The loading bits travel, and a server that does not send them reads
+    /// as "not loading": an old server shows no notice rather than a stuck one.
+    #[test]
+    fn the_loading_bits_travel_and_an_old_server_means_none() {
+        let mut full = [0u8; YaesuStatePacket::SIZE];
+        let pkt = YaesuStatePacket {
+            freq_a: 14_200_000, freq_b: 0, mode: 2, smeter: 40,
+            tx_active: false, power_on: true, af_gain: 30, tx_power: 50,
+            vfo_select: 0, memory_channel: 0, squelch: 0, rf_gain: 255,
+            mic_gain: 50, split: false, scan: false, tuner_state: 0,
+            hi_swr: false, held_by_other: true, tx_power_max: 100,
+            loading: YAESU_LOADING_TONES | YAESU_LOADING_MENUS,
+        };
+        pkt.serialize(&mut full);
+        let back = YaesuStatePacket::deserialize(&full).unwrap();
+        assert_eq!(back.loading, YAESU_LOADING_TONES | YAESU_LOADING_MENUS);
+        assert!(back.held_by_other, "the field before it is where it was");
+        let old = &full[..YaesuStatePacket::SIZE - 1];
+        assert_eq!(YaesuStatePacket::deserialize(old).unwrap().loading, 0);
+    }
+
+    #[test]
+    fn only_the_memories_and_tones_keep_a_radio_off_the_air() {
+        assert!(yaesu_loading_blocks_tx(YAESU_LOADING_MEMORIES));
+        assert!(yaesu_loading_blocks_tx(YAESU_LOADING_TONES | YAESU_LOADING_MENUS));
+        assert!(!yaesu_loading_blocks_tx(YAESU_LOADING_MENUS), "the menus load in the background");
+        assert!(!yaesu_loading_blocks_tx(0));
     }
     /// The two reasons a PTT is refused, and why they may not look alike.
     ///

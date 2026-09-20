@@ -16,6 +16,111 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.12.0] — 2026-09-20 (A real paddle, and it keys the radio itself)
+
+> **Who this release changes things for.** **Anyone who sends CW.** A paddle on
+> an MCP2221A board plugs into the desktop client, and what you key goes either
+> to Thetis or straight to a connected Yaesu — over the second COM port the radio
+> already presents on its USB cable, with no wire to the KEY jack. The client
+> makes the characters, the server plays the edges out at exact moments, and you
+> hear a sidetone locally while you send. **Anyone with an FTX-1**, whose 405
+> menu settings are now read in the background instead of holding up the
+> controls. And **anyone with a Yaesu**, which is no longer asked to transmit
+> while the server is still reading its memories.
+>
+> **One thing to check before you install: the Android app needs a 64-bit phone
+> or tablet (arm64).** It always did — the native library is built for arm64
+> only — but until now the installer accepted a 32-bit device and the app fell
+> over on the first tap, saying nothing useful. It is now refused at install time
+> with a plain "not compatible". If your device is 32-bit, this release will not
+> install where the previous one did; the previous one did not work either.
+>
+> **Safe to install.** A client and a server on either version still talk to each
+> other. The protocol version is unchanged and the one new field in the radio
+> status is additive: an older server sends zero, which reads as "not loading",
+> which is what an older server means. Your settings file is read as it stands
+> and gains keys for the Morse key and the Bluetooth button; an older version
+> ignores keys it does not know.
+>
+> **Going back to 2.11.0 works.** Nothing here writes a file an older version
+> cannot read, and the wire format is the one 2.11.0 already speaks. The menu
+> ThetisLink changes on your radio for CW (PC KEYING) is put back when the server
+> stops, so a radio is not left configured for a version you no longer run.
+
+### Added
+
+- **A Morse key.** A paddle wired to an Adafruit MCP2221A on the PC that runs the
+  desktop client: GP0 and GP1 for the paddle contacts, GP2 for a straight key.
+  The client reads the board directly, turns contacts into elements, and sends
+  the key edges with their timings to the server. Settings for speed, iambic A or
+  B, swapped paddles, a straight key, the sidetone and how long the transmitter
+  stays up after the last character. The manual has the wiring, including the
+  pull-up the board does not have.
+- **Keying a Yaesu directly.** Choose under "Key to" whether the key goes to
+  Thetis or to one of the radios. A Yaesu is keyed over the RTS line of the
+  second COM port it presents on the same USB cable — ThetisLink finds that port
+  itself. It sets the radio's PC KEYING menu to RTS on the first run (`060` on the
+  FT-991A, `020114` on the FTX-1), remembers what was there, and puts it back when
+  the server stops. If it was already on RTS, it is left alone. Both models were
+  keyed in the field, in either radio slot.
+- **The FTX-1's menu is read in the background.** All 405 settings, one item at a
+  time in the gaps between the ordinary polling, so the controls stay usable
+  while it runs. About 73 seconds, against six minutes for the first version of
+  this scan.
+- **A Bluetooth PTT button on the desktop**, the same YPC21 / PTT-Z01 class the
+  phone already supported.
+- **The phone can draw itself smaller**, which is what earns it a usable
+  landscape layout, and it now says where the transmitter went and where it
+  stopped.
+
+### Changed
+
+- **Nothing transmits while a radio is still reading its settings.** When the
+  server connects to a Yaesu it reads the memory channels and the tones; that
+  takes a couple of seconds, and during it a PTT-off could be left waiting behind
+  a long read — which would leave the radio transmitting. The PTT button of that
+  radio now reads LOADING and the server refuses to key it. Only transmitting is
+  refused: everything else stays usable, and the background menu scan does not
+  block at all.
+- **The Exit button is gone from the server window.** The window's own close
+  button does exactly the same, including putting the radios back.
+- **Starting Thetis automatically decides once.** The choice is made on the
+  server's first report after connecting, so closing Thetis yourself no longer
+  starts it again.
+- **A refusal appears on the button of the radio it is about**, reading "PTT
+  blocked", where it used to say "TX elsewhere" on a button that had nothing to
+  do with it.
+- **The loss figure measures the link, not one stream.** It is pooled over every
+  stream you actually asked for, a stream the server stops is reported as such
+  instead of counting as loss, and a duplicate packet no longer stands in for one
+  that never came.
+- **The desktop and the phone share more of their rules.** What a PTT button
+  shows, how a filter width steps, when Thetis is started, and where a transmit
+  choice falls back to now live in one place instead of being written twice.
+
+### Fixed
+
+- **The internal ATU spoke the wrong dialect on the second radio.** The tune and
+  tuner-on/off commands were chosen by radio slot rather than by model, so an
+  FT-991A in the second slot was sent the FTX-1's commands and the other way
+  round. They follow the model now.
+- **A memory write belonged to nobody.** The memory data and the write command
+  can arrive in either order, and both halves were shared between clients. With
+  two stations connected, one could write the other's memory bank to the radio.
+  Each half now carries the client it came from.
+- **A radio that lost its USB while transmitting** is put back on receive rather
+  than left with a carrier out.
+- **The S-meter keeps working** when you close Thetis and start a different
+  version of it.
+- **A radio is left as you had it.** Menu 060 and the USB routing go back to what
+  they were when the server stops, and a radio that is still transmitting at that
+  moment is taken off the air first.
+- **A menu value you set by hand is no longer overwritten** by the background
+  scan that was reading the menus at that moment.
+- **The server notices sooner that a client is gone**, so the transmitter is
+  released earlier, and a radio that is already on is no longer sent a power-on
+  command that held its CAT line busy for a second and a half.
+
 ## [2.11.0] — 2026-09-07 (One microphone can reach several transmitters, and a cable that comes loose no longer leaves a carrier behind)
 
 > **Who this release changes things for.** **Anyone with more than one

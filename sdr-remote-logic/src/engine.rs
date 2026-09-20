@@ -54,8 +54,23 @@ impl ClientTransport {
                 ..
             } => {
                 // The relay knows the destination; the addr argument (server) is ignored.
-                let _ = uplink_tx.send((*server_addr, buf.to_vec()));
-                Ok(buf.len())
+                //
+                // The result is propagated, not dropped. This channel fails when
+                // the relay monitor is gone, which is a packet that did not leave
+                // - and a caller that judges on the return value would be told it
+                // did. One such caller now exists (the Thetis stream saving sets
+                // its state from what left the socket), so a silent Ok here would
+                // reintroduce, over the relay only, exactly the fault that caller
+                // was built to avoid. Review finding.
+                uplink_tx
+                    .send((*server_addr, buf.to_vec()))
+                    .map(|_| buf.len())
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::BrokenPipe,
+                            "relay uplink channel closed",
+                        )
+                    })
             }
         }
     }
@@ -116,6 +131,13 @@ pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePack
     state.yaesu2_model = p.slot1_model;
     state.yaesu_port_trouble = p.slot0_trouble;
     state.yaesu2_port_trouble = p.slot1_trouble;
+    // What the server has a radio for, on or off. Every client gets this
+    // packet; RadioInfo (the first version's source) only reaches clients
+    // that asked for slot 1, and the desktop asks only when its own slot-1
+    // switch is on (found in the field, 2026-09-17).
+    state.yaesu_configured = p.slot0_configured;
+    state.yaesu2_configured = p.slot1_configured;
+    state.radios_known = true;
     // An absent radio cannot report high SWR. Without this an old
     // hi_swr flag stays set and the other radio keeps the alarm alive
     // again with every state push.
@@ -131,7 +153,11 @@ pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePack
 /// PTT burst count - send this many packets on PTT state change
 const PTT_BURST_COUNT: u32 = 5;
 /// Heartbeat interval
-const HEARTBEAT_INTERVAL_MS: u64 = 500;
+/// How long a loss window is, because the meter closes one per heartbeat.
+/// `pub(crate)` so a test can compare the VALUE rather than scan this file for
+/// the text of the line - a scan breaks the wrong way round, calling out a
+/// heartbeat that moved when all that happened was `500u64` or a formatter.
+pub(crate) const HEARTBEAT_INTERVAL_MS: u64 = 500;
 
 /// Minimum connection timeout in ms (dynamic: max(this, rtt*8))
 const CONNECTION_TIMEOUT_MIN_MS: u64 = 6000;
@@ -453,6 +479,54 @@ impl ClientEngine {
         // Slot-1 PTT (dual-radio). Mutually exclusive with yaesu_ptt in practice
         // (one mic) → the mic-TX chain picks the packet type based on which is active.
         let mut yaesu2_ptt = false;
+
+        // CW: the edge counter, the last few edges (repeated in every packet
+        // so a lost one is caught up), and where the key goes.
+        let mut cw_seq: u32 = 0;
+        let mut cw_recent: std::collections::VecDeque<sdr_remote_core::protocol::CwEdge> =
+            std::collections::VecDeque::with_capacity(sdr_remote_core::protocol::CwEdgesPacket::MAX_EDGES);
+        let mut cw_target: u8 = 0;
+        // A bit per transmitter the current CW run has keyed, for clearing its
+        // refusals when it is over (PttDenial::cw_run_over).
+        let mut cw_asked: u8 = 0;
+        let mut cw_hang_ms: u16 = 0; // 0 = the server's default, until the UI says
+        // A run is "asking" for its transmitter from its first edge until two
+        // seconds after its last, so a refusal in between reaches the screen.
+        let mut cw_last_edge: Option<Instant> = None;
+
+        // One place for what a lost session must not leave behind - the part that
+        // can key a transmitter or hold a sign up: the refusal, the PA warning,
+        // what the server had configured, and the transmit flags that ride on
+        // every audio packet. Five paths lose a session (the operator's
+        // Disconnect, the link going away from outside, the server's Disconnect,
+        // the time-out, and a Connect that replaces a live session), and until
+        // build 83 four of them spelled this list out by hand and the fifth did
+        // not spell it at all (review finding). What differs per path - which
+        // buffers to drain, which counters to zero - stays with that path.
+        // Open point 38, step 2; guarantee 1 on the map.
+        macro_rules! session_lost {
+            () => {{
+                // Everything the server told us about itself and the radios:
+                // RadioState::forget_session, which lives next to those fields
+                // so that adding one and forgetting it is a screen apart
+                // instead of a file apart. Among what it clears: a report left
+                // high would hide the rising edge that clears a refused first
+                // packet after the reconnect (PttDenial::cw_keyed_after_all).
+                state.forget_session();
+                // The recent CW edges would otherwise ride into the next
+                // session as "the edges before this one" and key it.
+                cw_recent.clear();
+                cw_asked = 0;
+                if thetis_ptt || yaesu_ptt || yaesu2_ptt {
+                    warn!("Link down while transmitting (thetis={} yaesu1={} yaesu2={}) - transmit flags cleared",
+                        thetis_ptt, yaesu_ptt, yaesu2_ptt);
+                }
+                thetis_ptt = false;
+                ptt = false;
+                yaesu_ptt = false;
+                yaesu2_ptt = false;
+            }};
+        }
         let mut last_ptt = false;
         let mut ptt_burst_remaining: u32 = 0;
         let mut mic_gate_delay_ms: u32 = 0;
@@ -464,6 +538,16 @@ impl ClientEngine {
         let mut conceal_since: Option<Instant> = None;
         let mut conceal_first_peak: f32 = 0.0;
         let mut conceal_frames: u32 = 0;
+        // One line per closed gap ate the log. On a lossy mobile link there are
+        // hundreds an hour, and a report from a drive on 2026-09-12 held 354 of them
+        // out of 469 lines - three quarters of the kept history spent on one message,
+        // which is why the file reached back fifty-five minutes instead of hours. The
+        // detail was never read per gap; what a reader wants is how bad the last
+        // stretch was. So: counted here, reported per window, silent at zero.
+        let mut conceal_gaps: u32 = 0;
+        let mut conceal_total_frames: u32 = 0;
+        let mut conceal_longest = Duration::ZERO;
+        let mut last_conceal_report = Instant::now();
         let mut conceal_said = Instant::now();
         // Which bits last disagreed, so the line is written when it changes
         // rather than every second.
@@ -565,13 +649,20 @@ impl ClientEngine {
 
         // Suppress server power broadcasts after sending a power command
         let mut power_suppress_until = Instant::now();
+        // "Start Thetis automatically": the option, and its once-per-run
+        // decision (crate::thetis_autostart). Across reconnects on purpose.
+        let mut thetis_autostart_enabled = false;
+        let mut thetis_autostart = crate::thetis_autostart::ThetisAutostart::default();
+        // Commands the engine gives itself (the autostart's power-on), taken
+        // before the front end's: the same path as a press on the button.
+        let mut own_commands: Vec<Command> = Vec::new();
 
-        // Packet loss tracking (rolling window per heartbeat interval)
-        let mut loss_window_received: u32 = 0;
-        let mut loss_window_max_seq: Option<u32> = None;
-        let mut loss_prev_max_seq: Option<u32> = None;
-        let mut current_loss_percent: u8 = 0;
-        let mut smoothed_loss: f32 = 0.0;
+        // Packet loss, one window per stream, closed on every heartbeat.
+        // Three streams because the server protects three and used to decide all
+        // of them from a figure that only ever measured one.
+        let mut loss_meter = crate::loss_window::LossMeter::new();
+        let mut last_worst_stream: Option<crate::loss_window::Stream> = None;
+        let mut last_stale_windows: u32 = 0;
 
         // Bandwidth monitor (down/up Kbit/s) over a rolling ~500 ms window.
         // RX bytes are summed on every recv_from(); TX bytes via the
@@ -591,10 +682,36 @@ impl ClientEngine {
         // to bw_tx_bytes. Replaces the 80+ inline call-sites in this function
         // without per-site instrumentation. Identifiers `socket` and `bw_tx_bytes`
         // are resolved in the current scope at invocation.
+        // What this client has asked the server for. Recorded HERE, in the one
+        // place every outgoing packet passes, rather than at each of the seventy
+        // sites that build a control - a rule spread over seventy places is a rule
+        // someone forgets at the seventy-first. `ControlPacket::deserialize`
+        // checks the header's packet type, so this recognises a control exactly
+        // instead of guessing from the length.
+        let mut session_intent = crate::session_intent::SessionIntent::new();
+
+        // The Thetis streams while a Yaesu is the radio being heard. Kept here
+        // rather than in the Android screen: it is a timing rule with three
+        // states, there is no Kotlin test harness, and the unsubscribe has to
+        // travel through the send path so the restore above replays it after a
+        // network switch.
+        let mut yaesu_listening = false;
+        let mut yaesu_listening_since: Option<Instant> = None;
+        let mut thetis_streams_stopped = false;
+        // When a stop or resume did not leave the socket, do not hammer at it.
+        // The tick runs every 20 ms, so retrying on every one of them is fifty
+        // attempts and fifty log lines per second - and the condition where a
+        // send fails IS a network switch, which is exactly when the log has to
+        // survive to prove this works. The repair that made the flag honest
+        // could otherwise erase its own evidence (review finding).
+        let mut thetis_stream_retry_at: Option<Instant> = None;
+        let mut thetis_stream_warned_at: Option<Instant> = None;
+
         macro_rules! send_tx {
             ($buf:expr, $addr:expr) => {{
                 let __buf: &[u8] = $buf;
                 bw_tx_bytes = bw_tx_bytes.wrapping_add(__buf.len() as u64);
+                crate::session_intent::record_if_control(&mut session_intent, __buf);
                 socket.send_to(__buf, $addr).await
             }};
         }
@@ -701,7 +818,7 @@ impl ClientEngine {
             // stopped, and there is no way to call it back.
             let mut deferred_yaesu_freq: Option<u64> = None;
             let mut deferred_yaesu2_freq: Option<u64> = None;
-            while let Ok(cmd) = self.cmd_rx.try_recv() {
+            while let Some(cmd) = own_commands.pop().or_else(|| self.cmd_rx.try_recv().ok()) {
                 match cmd {
                     Command::Connect(addr, pw) => {
                         // PATCH-1 smoke-test follow-up (2026-05-12): if we are already in
@@ -743,6 +860,10 @@ impl ClientEngine {
                                 // disconnect before the new heartbeat arrives.
                                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                             }
+                            // The fifth way to lose a session, found by a review on
+                            // build 82: it told the old server goodbye and carried
+                            // the transmit flags to the new one.
+                            session_lost!();
                         }
 
                         // PATCH-1 review finding (B1, part 1): up-front DNS / parse check.
@@ -853,7 +974,7 @@ impl ClientEngine {
                             let _ = send_tx!(&buf, addr.as_str());
                             info!("Disconnect (ring={}, jbuf={}, jitter={:.1}ms, rtt={}ms, loss={}%)",
                                 audio.playback_buffer_level(), jitter_buf.depth(),
-                                jitter_buf.jitter_ms(), last_hb_ack_rtt, current_loss_percent);
+                                jitter_buf.jitter_ms(), last_hb_ack_rtt, loss_meter.reported());
                         }
                         server_addr = None;
                         jitter_buf.reset();
@@ -885,7 +1006,7 @@ impl ClientEngine {
                         state.down_kbps = 0;
                         state.up_kbps = 0;
                         state.bw_breakdown.clear();
-                        state.ptt_denial.clear();
+                        session_lost!();
                         // Clear stale spectrum data to prevent artifacts on reconnect
                         state.spectrum_bins.clear();
                         state.full_spectrum_bins.clear();
@@ -1093,7 +1214,11 @@ impl ClientEngine {
                             if was_connected {
                                 let ctrl = ControlPacket {
                                     control_id: ControlId::SpectrumEnable,
-                                    value: enabled as u16,
+                                    // The wish is remembered above; what goes on
+                                    // the wire also has to respect the saving.
+                                    // Same reasoning as Rx1Enable below.
+                                    value: crate::thetis_streams::stream_value(
+                                        enabled, thetis_streams_stopped) as u16,
                                 };
                                 let mut buf = [0u8; ControlPacket::SIZE];
                                 ctrl.serialize(&mut buf);
@@ -1758,6 +1883,15 @@ impl ClientEngine {
                             info!("Thetis wideband audio sent: {}", on);
                         }
                     }
+                    Command::SetYaesuIsListeningRadio(on) => {
+                        // Only the edge starts the clock: a screen that repeats
+                        // its state would otherwise keep pushing the stop away.
+                        if on != yaesu_listening {
+                            yaesu_listening = on;
+                            yaesu_listening_since = if on { Some(Instant::now()) } else { None };
+                            info!("Listening radio: {}", if on { "Yaesu" } else { "Thetis" });
+                        }
+                    }
                     Command::SetRx1Enabled(enabled) => {
                         state.rx1_enabled = enabled;
                         // Switching off ends this stream. Keeping the decoder history
@@ -1768,7 +1902,18 @@ impl ClientEngine {
                         // measures how long that lasts.
                         if !enabled { st_rx1.reset(); st_bin_r.reset(); }
                         if let Some(ref addr) = server_addr {
-                            let ctrl = ControlPacket { control_id: ControlId::Rx1Enable, value: enabled as u16 };
+                            // Not the bare wish. While the grace period has this
+                            // stream given up to save data, handing it back here
+                            // would defeat the saving silently - and the tick
+                            // would not notice, because its flag still says
+                            // stopped. Review finding, and stricter than the one
+                            // it follows: that one healed itself on the next
+                            // reconnect, this one would not.
+                            let ctrl = ControlPacket {
+                                control_id: ControlId::Rx1Enable,
+                                value: crate::thetis_streams::stream_value(
+                                    enabled, thetis_streams_stopped) as u16,
+                            };
                             let mut buf = [0u8; ControlPacket::SIZE];
                             ctrl.serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
@@ -2258,13 +2403,37 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             let _ = send_tx!(&buf, addr.as_str());
                         }
                     }
-                    Command::CwKey { pressed, duration_ms } => {
+                    Command::SetThetisAutostart(on) => {
+                        thetis_autostart_enabled = on;
+                    }
+                    Command::SetCwTarget(t) => {
+                        let t = t.min(2);
+                        if t != cw_target {
+                            // The key now goes elsewhere: the run no longer asks
+                            // for the old radio, so its refusal comes down.
+                            let old = 1u8 << cw_target;
+                            state.ptt_denial.cw_run_over(cw_asked & old, ptt_requested);
+                            cw_asked &= !old;
+                        }
+                        cw_target = t;
+                    }
+                    Command::SetCwHang(ms) => {
+                        cw_hang_ms = ms;
+                    }
+                    Command::CwEdge { down, prev_len_ms, run_start } => {
+                        cw_last_edge = Some(Instant::now());
+                        cw_asked |= 1u8 << cw_target;
                         if let Some(ref addr) = server_addr {
-                            let value = (pressed as u16) | (duration_ms << 1);
-                            let ctrl = ControlPacket { control_id: ControlId::CwKey, value };
-                            let mut buf = [0u8; ControlPacket::SIZE];
-                            ctrl.serialize(&mut buf);
-                            let _ = send_tx!(&buf, addr.as_str());
+                            use sdr_remote_core::protocol::{CwEdge, CwEdgesPacket};
+                            cw_seq = cw_seq.wrapping_add(1);
+                            if cw_recent.len() == CwEdgesPacket::MAX_EDGES {
+                                cw_recent.pop_front();
+                            }
+                            cw_recent.push_back(CwEdge { seq: cw_seq, down, prev_len_ms, run_start });
+                            let pkt = CwEdgesPacket { target: cw_target, edges: cw_recent.iter().copied().collect(), hang_ms: cw_hang_ms };
+                            let mut buf = [0u8; CwEdgesPacket::MAX_SIZE];
+                            let n = pkt.serialize(&mut buf);
+                            let _ = send_tx!(&buf[..n], addr.as_str());
                         }
                     }
                     Command::CwMacroStop => {
@@ -2427,7 +2596,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                 // the four link-down paths did not do this, and each one left the
                 // "PTT blocked" sign standing over a connection that no longer
                 // exists (review finding).
-                state.ptt_denial.clear();
+                session_lost!();
                 state.rtt_ms = 0;
                 state.jitter_ms = 0.0;
                 state.buffer_depth = 0;
@@ -2522,9 +2691,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
 
                             last_audio_received = Some(Instant::now());
-                            loss_window_received += 1;
-                            let seq = pkt.sequence;
-                            loss_window_max_seq = Some(loss_window_max_seq.map_or(seq, |max| max.max(seq)));
+                            loss_meter.thetis.packet(pkt.sequence);
 
                             // Wrap legacy mono Opus as single-channel blob (CH0=RX1)
                             let mut blob = Vec::with_capacity(4 + pkt.opus_data.len());
@@ -2614,6 +2781,18 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 let thetis_proc_running = ack.state_flags.has(
                                     sdr_remote_core::protocol::ServerStateFlags::THETIS_RUNNING,
                                 );
+                                let report = crate::thetis_autostart::ThetisReport::from_flags(
+                                    crate::thetis_autostart::ThetisFlags {
+                                        configured: thetis_configured,
+                                        starting: ack.state_flags.has(sdr_remote_core::protocol::ServerStateFlags::THETIS_STARTING),
+                                        tci_up,
+                                        process_running: thetis_proc_running,
+                                    },
+                                );
+                                if thetis_autostart.step(thetis_autostart_enabled, report) {
+                                    info!("Thetis autostart: the server's first report after connecting says Thetis is not running - sending power-on");
+                                    own_commands.push(Command::SetControl(ControlId::PowerOnOff, 1));
+                                }
                                 // PATCH-1 operator-feedback (2026-05-13): suppress TciUnreachable
                                 // while the server is in the launch phase (orange Start button).
                                 // Showing "TCI not reachable" during the normal 60s startup
@@ -2732,13 +2911,79 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     st_yaesu.reset();
                                     st_yaesu2.reset();
                                     logged_first_rx = false;
+                                    // The other four, for the reason this whole
+                                    // block exists. "Yaesu: first audio packet" is
+                                    // the ONLY line that shows the radio's audio is
+                                    // back, and it sits behind these flags - which
+                                    // until now were cleared only on the paths a
+                                    // long gap takes. A short reconnect therefore
+                                    // restored the subscription and logged nothing
+                                    // about it, so the field proof for this very
+                                    // patch could not have worked: over six seconds
+                                    // the line appears, under six seconds it does
+                                    // not, and under six seconds is exactly where
+                                    // the defect lives. Review finding, and the
+                                    // cheapest one of the round.
+                                    yaesu_logged_first = false;
+                                    yaesu2_logged_first = false;
+                                    vrx1_logged_first = false;
+                                    vrx2_logged_first = false;
                                                 // Clear stale spectrum data on (re)connect
                                     state.spectrum_bins.clear();
                                     state.full_spectrum_bins.clear();
                                     state.spectrum_sequence = 0;
                                     state.full_spectrum_sequence = 0;
+                                    // Everything this client had asked for, derived
+                                    // from the shared list instead of retyped -
+                                    // including both Yaesu audio subscriptions and
+                                    // both Yaesu state subscriptions, which nobody
+                                    // replayed and which is why the radio went
+                                    // silent and the screen stopped following its
+                                    // VFO knob after a network switch (measured
+                                    // 2026-09-12/13).
+                                    //
+                                    // FIRST, before the hand-written sends below,
+                                    // and that position is deliberate. Those sends
+                                    // pass through the same macro, so they are
+                                    // recorded as they go out; replaying afterwards
+                                    // meant every one of them went twice on every
+                                    // single connect, and the count in the log line
+                                    // included packets sent a microsecond earlier
+                                    // by the block above. Found by re-reading my own
+                                    // patch before sending it to review.
+                                    //
+                                    // Replaying first also settles which value wins
+                                    // when the two disagree: the hand-written sends
+                                    // read the current variables, so they are the
+                                    // more authoritative of the two and they should
+                                    // land last.
+                                    let replay = session_intent.replay();
+                                    let mut replay_sent = 0usize;
+                                    for (id, value) in &replay {
+                                        let ctrl = ControlPacket { control_id: *id, value: *value };
+                                        let mut rbuf = [0u8; ControlPacket::SIZE];
+                                        ctrl.serialize(&mut rbuf);
+                                        // The Result is READ here, unlike the sends
+                                        // above it. A reconnect is the moment a send
+                                        // is most likely to fail, and a line that
+                                        // counted what it queued would read green
+                                        // through exactly the failure it exists to
+                                        // show (review finding).
+                                        if send_tx!(&rbuf, addr.as_str()).is_ok() {
+                                            replay_sent += 1;
+                                        }
+                                    }
+                                    // Named in the patch brief before it was built
+                                    // (working rule 11): this branch sits in a loop
+                                    // no assertion can open, so a field log is the
+                                    // only place it can be seen. The two Yaesu
+                                    // values are spelled out because they are the
+                                    // ones an operator can hear.
+                                    info!("{}", crate::session_intent::restore_summary(&replay, replay_sent));
+
                                     // Send deferred spectrum settings now that server knows us
-                                    if spectrum_enabled {
+                                    if crate::thetis_streams::stream_value(
+                                        spectrum_enabled, thetis_streams_stopped) {
                                         let mut buf = [0u8; ControlPacket::SIZE];
 
                                         let ctrl = ControlPacket {
@@ -2795,7 +3040,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         let mut rx1_buf = [0u8; ControlPacket::SIZE];
                                         let ctrl = ControlPacket {
                                             control_id: ControlId::Rx1Enable,
-                                            value: state.rx1_enabled as u16,
+                                            // Not the bare wish: if the grace
+                                            // period has given this stream up to
+                                            // save data, handing it back here
+                                            // would undo that on every reconnect.
+                                            value: crate::thetis_streams::stream_value(
+                                                state.rx1_enabled, thetis_streams_stopped) as u16,
                                         };
                                         ctrl.serialize(&mut rx1_buf);
                                         let _ = send_tx!(&rx1_buf, addr.as_str());
@@ -2904,6 +3154,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         Ok(Packet::Smeter(sm_pkt)) => {
                             state.smeter = sm_pkt.level as f32 / 10.0;
                             state.other_tx = sm_pkt.flags.held_by_other();
+                            state.server_tx = sm_pkt.flags.ptt();
                         }
                         Ok(Packet::Spectrum(sp)) => {
                             state.spectrum_bins = sp.bins;
@@ -2934,10 +3185,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         // RX2 packets
                         Ok(Packet::AudioMultiCh(pkt)) => {
                             if let Some(started) = conceal_since.take() {
-                                info!(
-                                    "concealing ended after {:.1}s and {} frame(s), first peak {:.4}",
-                                    started.elapsed().as_secs_f32(), conceal_frames, conceal_first_peak
-                                );
+                                let gap = started.elapsed();
+                                conceal_gaps += 1;
+                                conceal_total_frames += conceal_frames;
+                                if gap > conceal_longest {
+                                    conceal_longest = gap;
+                                }
                             }
                             if !logged_first_rx {
                                 info!("RX: first multi-ch audio ({} channels, seq={})",
@@ -2946,9 +3199,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
 
                             last_audio_received = Some(Instant::now());
-                            loss_window_received += 1;
-                            let seq = pkt.sequence;
-                            loss_window_max_seq = Some(loss_window_max_seq.map_or(seq, |max| max.max(seq)));
+                            loss_meter.thetis.packet(pkt.sequence);
 
                             // Serialize channels into opus_data for jitter buffer storage
                             let mut blob = Vec::new();
@@ -3087,6 +3338,19 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 }
                                 ControlId::ThetisStarting => {
                                     state.thetis_starting = ctrl.value != 0;
+                                }
+                                ControlId::PaDriveWarning => {
+                                    let on = ctrl.value & 1 != 0;
+                                    let beep = ctrl.value & 2 != 0;
+                                    if on != state.pa_drive_warning {
+                                        if on {
+                                            log::warn!("PA drive warning from the server: the drive went up while a PA is out of reach");
+                                        } else {
+                                            log::info!("PA drive warning cleared");
+                                        }
+                                    }
+                                    state.pa_drive_warning = on;
+                                    state.pa_drive_alarm = beep;
                                 }
                                 ControlId::SpectrumEnable | ControlId::SpectrumFps
                                 | ControlId::SpectrumZoom | ControlId::SpectrumPan
@@ -3451,12 +3715,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.yaesu_freq_b = ys.freq_b;
                             state.yaesu_mode = ys.mode;
                             state.yaesu_smeter = ys.smeter;
-                            state.yaesu_tx_active = ys.tx_active;
+                            state.ptt_denial.cw_keyed_after_all(1, &mut state.yaesu_tx_active, ys.tx_active, ys.held_by_other, cw_asked, ptt_requested);
                             state.yaesu_held_by_other = ys.held_by_other;
                             state.yaesu_power_on = ys.power_on;
                             state.yaesu_af_gain = ys.af_gain;
                             state.yaesu_tx_power = ys.tx_power;
                             state.yaesu_tx_power_max = ys.tx_power_max;
+                            state.yaesu_loading = ys.loading;
                             state.yaesu_squelch = ys.squelch;
                             state.yaesu_rf_gain = ys.rf_gain;
                             state.yaesu_mic_gain = ys.mic_gain;
@@ -3480,6 +3745,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
                         }
                         Ok(Packet::YaesuControl(_)) => {} // client→server only
+                        // Client -> server only: a client never receives its own key edges.
+                        Ok(Packet::CwEdges(_)) => {}
                         Ok(Packet::YaesuFeature(pkt)) => {
                             // Yaesu DSP/function feature-state feedback (PATCH-yaesu-extra-controls).
                             if pkt.slot == 0 {
@@ -3524,7 +3791,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     if vrx1_logged_first && pkt.sequence == 0 {
                                         info!("VRX1: stream reset detected, resetting jitter buffer");
                                         vrx1_jitter_buf.reset();
+                                        loss_meter.vrx1.reset();
                                     }
+                                    // A VRX-only client has no other stream, and
+                                    // its loss figure gates its own audio
+                                    // protection and its spectrum.
+                                    loss_meter.vrx1.packet(pkt.sequence);
                                     if !vrx1_logged_first {
                                         debug!(
                                             "VRX1 audio: first packet received (seq={}, opus_bytes={}) - {} ms after enable",
@@ -3542,7 +3814,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     if vrx2_logged_first && pkt.sequence == 0 {
                                         info!("VRX2: stream reset detected, resetting jitter buffer");
                                         vrx2_jitter_buf.reset();
+                                        loss_meter.vrx2.reset();
                                     }
+                                    loss_meter.vrx2.packet(pkt.sequence);
                                     if !vrx2_logged_first {
                                         debug!(
                                             "VRX2 audio: first packet received (seq={}, opus_bytes={}) - {} ms after enable",
@@ -3627,7 +3901,14 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 info!("Yaesu: stream reset detected, resetting jitter buffer");
                                 yaesu_jitter_buf.reset();
                                 st_yaesu.reset();
+                                // The loss window too, or the old sequence mark
+                                // makes the restart read as total loss.
+                                loss_meter.radio1.reset();
                             }
+                            // This stream is measured now. It never was, while the
+                            // server has always used the client's figure to protect
+                            // it - see loss_window.
+                            loss_meter.radio1.packet(pkt.sequence);
                             if !yaesu_logged_first {
                                 info!("Yaesu: first audio packet (seq={}, {}B)", pkt.sequence, pkt.opus_data.len());
                                 yaesu_logged_first = true;
@@ -3675,8 +3956,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // [Thetis, radio one, radio two] and that is the
                             // order the refusal counts in, so there is nothing
                             // left here to get the wrong way round.
+                            let cw_keying = cw_last_edge.map_or(false, |t| t.elapsed() < Duration::from_secs(2));
                             if !state.ptt_denial.apply_refusal(
-                                ptt_requested,
+                                crate::ptt_denial::asking_with_cw(ptt_requested, cw_keying, cw_target),
                                 target,
                                 server_released,
                             ) {
@@ -3711,12 +3993,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.yaesu2_freq_b = ys.freq_b;
                             state.yaesu2_mode = ys.mode;
                             state.yaesu2_smeter = ys.smeter;
-                            state.yaesu2_tx_active = ys.tx_active;
+                            state.ptt_denial.cw_keyed_after_all(2, &mut state.yaesu2_tx_active, ys.tx_active, ys.held_by_other, cw_asked, ptt_requested);
                             state.yaesu2_held_by_other = ys.held_by_other;
                             state.yaesu2_power_on = ys.power_on;
                             state.yaesu2_af_gain = ys.af_gain;
                             state.yaesu2_tx_power = ys.tx_power;
                             state.yaesu2_tx_power_max = ys.tx_power_max;
+                            state.yaesu2_loading = ys.loading;
                             state.yaesu2_squelch = ys.squelch;
                             state.yaesu2_rf_gain = ys.rf_gain;
                             state.yaesu2_mic_gain = ys.mic_gain;
@@ -3742,7 +4025,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 info!("[radio1] stream reset detected, resetting jitter buffer");
                                 yaesu2_jitter_buf.reset();
                                 st_yaesu2.reset();
+                                loss_meter.radio2.reset();
                             }
+                            loss_meter.radio2.packet(pkt.sequence);
                             if !yaesu2_logged_first {
                                 info!("[radio1] first audio packet (seq={}, {}B)", pkt.sequence, pkt.opus_data.len());
                                 yaesu2_logged_first = true;
@@ -3869,6 +4154,15 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // hour).
                                     state.session_generation =
                                         state.session_generation.wrapping_add(1);
+                                    // A new session starts from silence. The gap
+                                    // the reconnect just left belongs to the old
+                                    // one, and charging this one for it is what
+                                    // made the server switch on error correction
+                                    // two seconds after every connect and then
+                                    // have no reason to let go (open point 15).
+                                    loss_meter.reset();
+                                    last_worst_stream = None;
+                                    last_stale_windows = 0;
                                 }
                                 sdr_remote_core::protocol::AUTH_TOTP_REQUIRED => {
                                     info!("Password OK, TOTP required");
@@ -3923,7 +4217,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // the four link-down paths did not do this, and each one left the
                             // "PTT blocked" sign standing over a connection that no longer
                             // exists (review finding).
-                            state.ptt_denial.clear();
+                            session_lost!();
                             state.connect_status = crate::state::ConnectStatus::Disconnected;
                             state.rtt_ms = 0;
                             state.jitter_ms = 0.0;
@@ -3981,6 +4275,119 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                 }
 
                 _ = audio_tick.tick() => {
+                    // A CW run that fell silent stops asking; a refusal that
+                    // was about it comes down with it, unless the microphone
+                    // is still asking for the same transmitter.
+                    if let Some(t) = cw_last_edge {
+                        if t.elapsed() >= Duration::from_secs(2) {
+                            cw_last_edge = None;
+                            state.ptt_denial.cw_run_over(cw_asked, ptt_requested);
+                            cw_asked = 0;
+                        }
+                    }
+                    // Keep the PA-drive beep alive from the state, not from whatever
+                    // packet happens to arrive. It used to be re-armed beside the SWR
+                    // alarm on Yaesu state pushes, and on the phone those come in far
+                    // slower: the beep fell silent between them and repeated about
+                    // once every ten seconds (heard in the field, build 57). The
+                    // watchdog in the backend still ends it if these ticks stop.
+                    audio.set_pa_drive_alarm(state.pa_drive_alarm);
+
+                    // Thetis streams off while a Yaesu is being heard, after a
+                    // grace so switching straight back costs nothing. The
+                    // decision is a pure function with its own tests; this is
+                    // only the clock and the sockets.
+                    {
+                        use crate::thetis_streams::{thetis_stream_action, ThetisStreamAction,
+                                                    THETIS_STREAM_GRACE};
+                        let since = yaesu_listening_since.map(|t| t.elapsed());
+                        let act = thetis_stream_action(
+                            yaesu_listening, thetis_streams_stopped, since, THETIS_STREAM_GRACE);
+                        let want = act == ThetisStreamAction::Resume;
+                        // Nothing to do means no failing run either. Without this
+                        // the back-off state outlived the run it belonged to: a
+                        // failed stop, the operator switches back, and ten minutes
+                        // later a successful stop announces that it "reached the
+                        // socket after all" about something long gone.
+                        if act == ThetisStreamAction::None {
+                            thetis_stream_retry_at = None;
+                        }
+                        // Resuming never waits. The module says so in as many
+                        // words, and the back-off broke that promise for a full
+                        // second - precisely while the operator is looking at a
+                        // waterfall that has stopped moving. Both findings from the
+                        // same review.
+                        let backing_off = !want
+                            && thetis_stream_retry_at.map_or(false, |t| Instant::now() < t);
+                        if act != ThetisStreamAction::None && !backing_off {
+                            if let Some(ref addr) = server_addr {
+                                // Computed once, used for the wire AND for the log
+                                // line. The log used to call the shared function
+                                // too, which put two non-decisions into a count
+                                // that is supposed to count decisions.
+                                let rx1_wire =
+                                    crate::thetis_streams::stream_value(state.rx1_enabled, !want);
+                                let spec_wire =
+                                    crate::thetis_streams::stream_value(spectrum_enabled, !want);
+                                let mut buf = [0u8; ControlPacket::SIZE];
+                                ControlPacket {
+                                    control_id: ControlId::Rx1Enable,
+                                    value: rx1_wire as u16,
+                                }.serialize(&mut buf);
+                                let rx_ok = send_tx!(&buf, addr.as_str()).is_ok();
+                                ControlPacket {
+                                    control_id: ControlId::SpectrumEnable,
+                                    value: spec_wire as u16,
+                                }.serialize(&mut buf);
+                                let sp_ok = send_tx!(&buf, addr.as_str()).is_ok();
+                                // The flag follows what LEFT, not what was meant.
+                                // It drives the restore block after a new session,
+                                // so a flag set on an intent that never reached the
+                                // server would keep handing back a stream the
+                                // server is still sending - and nothing would say
+                                // so. Same finding as the previous patch, one
+                                // patch later, and worse here because of that.
+                                if rx_ok && sp_ok {
+                                    thetis_streams_stopped = !want;
+                                    if thetis_stream_retry_at.take().is_some() {
+                                        info!("Thetis stream change reached the socket after all");
+                                    }
+                                    thetis_stream_warned_at = None;
+                                    // Only on success. It used to sit outside this
+                                    // branch and announced a stop that had not
+                                    // happened - a log line lying about the very
+                                    // thing it was added to prove.
+                                    info!(
+                                        "Thetis streams {} (listening radio is {}), rx1={} spectrum={}",
+                                        if want { "resumed" } else { "stopped to save data" },
+                                        if yaesu_listening { "Yaesu" } else { "Thetis" },
+                                        rx1_wire,
+                                        spec_wire,
+                                    );
+                                } else {
+                                    // Once a minute while it keeps failing. Once per
+                                    // RUN was the first attempt and it is wrong the
+                                    // other way: a fault lasting hours left a single
+                                    // line at the very start, in a log that rolls, so
+                                    // the operator sees high data use and "Thetis
+                                    // off" on screen with nothing to explain it. A
+                                    // line a minute is ninety kilobytes over ten
+                                    // hours, which the log can carry.
+                                    let now = Instant::now();
+                                    let due = thetis_stream_warned_at
+                                        .map_or(true, |t| now.duration_since(t).as_secs() >= 60);
+                                    if due {
+                                        warn!(
+                                            "Thetis stream change did not leave the socket (rx1_ok={} spectrum_ok={}); retrying every second, reporting once a minute",
+                                            rx_ok, sp_ok
+                                        );
+                                        thetis_stream_warned_at = Some(now);
+                                    }
+                                    thetis_stream_retry_at = Some(now + Duration::from_secs(1));
+                                }
+                            }
+                        }
+                    }
                     // Playout: always pull frames from jitter buffer and decode.
                     // This keeps the decoder warm and jitter buffer healthy during TX.
                     // Only write to playback ring buffer when not in TX (muted callback
@@ -4780,7 +5187,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // the four link-down paths did not do this, and each one left the
                             // "PTT blocked" sign standing over a connection that no longer
                             // exists (review finding).
-                            state.ptt_denial.clear();
+                            session_lost!();
                             state.rtt_ms = 0;
                             // Clear stale spectrum data
                             state.spectrum_bins.clear();
@@ -4868,41 +5275,116 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
 
                     // Heartbeat (skip while waiting for TOTP input)
                     if !state.totp_required && last_hb_sent.elapsed().as_millis() > HEARTBEAT_INTERVAL_MS as u128 {
-                        if let Some(max) = loss_window_max_seq {
-                            let expected = if let Some(prev) = loss_prev_max_seq {
-                                max.wrapping_sub(prev) // packets since last window
+                        // One window per stream, closed together. The client
+                        // reports the worst of the streams it is EXPECTING: a
+                        // stream it asked us to stop has nothing to say, and a
+                        // stream that is running is measured even when the
+                        // others are not. Before this, the figure came from the
+                        // Thetis stream alone while the server used it to
+                        // protect the radio audio as well.
+                        // Derived in one place, never spelled out here: a struct
+                        // literal at this call site can nail a stream to false
+                        // with every test in the module still green, because they
+                        // all build their own.
+                        state.loss_percent = loss_meter.step(
+                            crate::loss_window::Expecting::from_client(
+                                audio_mode as u8,
+                                crate::thetis_streams::stream_value(
+                                    state.rx1_enabled, thetis_streams_stopped),
+                                state.rx2_enabled,
+                                yaesu_wanted,
+                                yaesu2_wanted,
+                                vrx1_wanted,
+                                vrx2_wanted,
+                            ),
+                        );
+                        // Named in advance (working rule 11): this patch moves a
+                        // threshold in a layer the suite cannot watch, so the
+                        // proof is this line in a field log. One line when the
+                        // stream that loses the MOST changes - not one per window,
+                        // which is how the conceal report once filled three
+                        // quarters of the log. Note that a client with a single
+                        // stream therefore gets this line once and never again:
+                        // there is nothing for it to change to.
+                        // Open point 18. The figure stands when no stream has
+                        // anything to say, which is right - silence is not proof
+                        // of a clean link - but until now nothing said that it
+                        // had stopped being current. Eight places in the server
+                        // read it and four of them decide whether a spectrum is
+                        // still sent, so a number that quietly stops moving is
+                        // worth a line.
+                        //
+                        // On the EDGE, both ways, and never per window: the relay
+                        // diagnostic that cried wolf and the per-gap conceal line
+                        // were both one-per-event where one-per-change carried
+                        // the same meaning.
+                        let stale = loss_meter.stale_windows();
+                        if stale == crate::loss_window::STALE_AFTER_WINDOWS {
+                            let seconds =
+                                stale as u64 * HEARTBEAT_INTERVAL_MS / 1000;
+                            if loss_meter.has_measured() {
+                                info!(
+                                    "loss meter: no stream to measure for {} s - the {}% it reports is the last real measurement, not a statement about now",
+                                    seconds, state.loss_percent
+                                );
                             } else {
-                                loss_window_received // first window: trust received count
-                            };
-                            let raw_loss = if expected > 0 && loss_window_received <= expected {
-                                (100 * (expected - loss_window_received) / expected) as u8
-                            } else {
-                                0
-                            };
-                            // EMA smoothing: slow rise/fall prevents jumpy display
-                            smoothed_loss = smoothed_loss * 0.7 + raw_loss as f32 * 0.3;
-                            current_loss_percent = smoothed_loss.round() as u8;
-                            loss_prev_max_seq = Some(max);
-                        } else if loss_prev_max_seq.is_some() {
-                            // Had packets before, now nothing. This is only REAL
-                            // loss if the client still expects RX audio. For a
-                            // VRX-only client (RX1+RX2 audio deliberately off) the
-                            // AudioMultiCh stream stops on purpose — absence is then not
-                            // loss. Otherwise the loss would climb to 100% and the
-                            // server-loss-gate would filter out the VRX spectrum (the VRX
-                            // audio/spectrum streams do not feed this meter).
-                            if state.rx1_enabled || state.rx2_enabled {
-                                smoothed_loss = smoothed_loss * 0.7 + 100.0 * 0.3;
-                                current_loss_percent = smoothed_loss.round() as u8;
-                            } else {
-                                smoothed_loss = 0.0;
-                                current_loss_percent = 0;
-                                loss_prev_max_seq = None; // clean restart when RX audio resumes
+                                // Zero because it started there, not because the
+                                // link is clean. Calling that "the last real
+                                // measurement" is the same mistake as reading
+                                // silence as a clean link, one sentence further
+                                // along. Review finding.
+                                info!(
+                                    "loss meter: nothing has been measured in {} s since this session began - the {}% it reports is a starting value, not a finding",
+                                    seconds, state.loss_percent
+                                );
                             }
                         }
-                        state.loss_percent = current_loss_percent;
-                        loss_window_received = 0;
-                        loss_window_max_seq = None;
+                        // Every silence writes down its own length, not only the
+                        // ones that cross the threshold. That is how the question
+                        // "is forty windows the right number" gets answered from
+                        // one evening of logs instead of a week of them - and it
+                        // is why this compares against the PREVIOUS window rather
+                        // than carrying a flag of its own, which could drift from
+                        // the meter across a session boundary.
+                        if stale == 0 && last_stale_windows > 0 {
+                            info!(
+                                "loss meter: measuring again ({}%) after {} window(s) with nothing to measure",
+                                state.loss_percent, last_stale_windows
+                            );
+                        }
+                        last_stale_windows = stale;
+                        if loss_meter.worst() != last_worst_stream {
+                            last_worst_stream = loss_meter.worst();
+                            if let Some(stream) = last_worst_stream {
+                                // The figure is the LINK, pooled over every stream
+                                // that is running; the stream named is only where
+                                // most of the missing packets were. Saying it
+                                // "decides" was left over from when the worst
+                                // stream set the figure on its own, and a reviewer
+                                // caught that the words had outlived the code.
+                                info!("loss meter: link at {}%, most of it missing on {}",
+                                    state.loss_percent, stream.name());
+                            }
+                        }
+                        // How rough the last stretch was, in one line, and only when
+                        // there was something to say. The per-gap lines this replaces
+                        // filled three quarters of the kept log and left it reaching
+                        // back under an hour - the same shape as the relay diagnostic
+                        // that cried wolf: a message per event where one per window
+                        // carries the same meaning.
+                        if last_conceal_report.elapsed() >= Duration::from_secs(10) {
+                            if conceal_gaps > 0 {
+                                info!(
+                                    "concealing (10 s): {} gap(s), {} frame(s), longest {:.1}s",
+                                    conceal_gaps, conceal_total_frames,
+                                    conceal_longest.as_secs_f32()
+                                );
+                            }
+                            conceal_gaps = 0;
+                            conceal_total_frames = 0;
+                            conceal_longest = Duration::ZERO;
+                            last_conceal_report = Instant::now();
+                        }
 
                         // Bandwidth-window flush — in sync with the heartbeat
                         // tick (~500 ms). bytes × 8 / window_ms = bits/ms = kbps.
@@ -4937,7 +5419,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             sequence: hb_sequence,
                             local_time: start.elapsed().as_millis() as u32,
                             rtt_ms: last_hb_ack_rtt,
-                            loss_percent: current_loss_percent,
+                            loss_percent: loss_meter.reported(),
                             jitter_ms: jitter_buf.jitter_ms().min(255.0) as u8,
                             capabilities: Capabilities::NONE,
                         };
@@ -5637,7 +6119,7 @@ mod tests {
 
         // Both present → both connected, models adopted, both changed.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
         });
         assert!(c0 && c1);
         assert!(state.yaesu_connected && state.yaesu2_connected);
@@ -5647,7 +6129,7 @@ mod tests {
         // Slot 0 drops out → connected flips to false (core of the dynamics),
         // slot 1 unchanged (no change flag).
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
         });
         assert!(c0 && !c1);
         assert!(!state.yaesu_connected);
@@ -5655,7 +6137,7 @@ mod tests {
 
         // Idempotent: same presence again → no change flags.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
         });
         assert!(!c0 && !c1);
     }
@@ -5667,22 +6149,43 @@ mod tests {
     fn presence_absence_clears_hi_swr() {
         let mut state = RadioState::default();
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
         });
         state.yaesu_hi_swr = true;
         state.yaesu2_hi_swr = true;
 
         // Slot 1 disappears → only its flag is cleared.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
+            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
         });
         assert!(state.yaesu_hi_swr, "aanwezige radio houdt zijn vlag");
         assert!(!state.yaesu2_hi_swr, "afwezige radio verliest zijn vlag");
 
         // Slot 0 disappears too → nothing remains to feed the alarm.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0,
+            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
         });
         assert!(!state.yaesu_hi_swr && !state.yaesu2_hi_swr);
+    }
+
+    /// A radio the server has but that is switched off: configured, not
+    /// connected. That is the row the Bluetooth PTT target list is built from,
+    /// and the row the first version could not see.
+    #[test]
+    fn presence_carries_what_the_server_has_configured() {
+        let mut state = RadioState::default();
+        assert!(!state.yaesu_configured && !state.yaesu2_configured);
+        apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1,
+            slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+        });
+        assert!(state.yaesu_configured && state.yaesu2_configured, "both configured");
+        assert!(!state.yaesu_connected && !state.yaesu2_connected, "neither connected");
+        // The server loses slot 1 from its configuration: the flag follows.
+        apply_yaesu_presence(&mut state, &YaesuPresencePacket {
+            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1,
+            slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: false,
+        });
+        assert!(state.yaesu_configured && !state.yaesu2_configured);
     }
 }

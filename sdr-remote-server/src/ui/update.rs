@@ -61,9 +61,7 @@ impl eframe::App for ServerApp {
         // did not work until the operator manually shut down and restarted the server.
         if auto_restart_requested() {
             self.save_window_positions();
-            if let Some(tx) = self.shutdown_tx.take() {
-                let _ = tx.send(true);
-            }
+            self.stop_server_and_wait(Duration::from_millis(2500));
             // Drop all hardware Arcs -> cpal streams, serial ports and
             // TCI connection are closed via their own Drop impls.
             self.yaesu = None;
@@ -786,28 +784,9 @@ impl eframe::App for ServerApp {
                         }
                     }
 
-                    ui.separator();
-                    if ui.button(rust_i18n::t!("srv_exit").to_string()).clicked() {
-                        // Clean shutdown (PE1FMC request): signal the server shutdown so the
-                        // Yaesu SSB routing is restored (connect-set mode; in per-PTT mode
-                        // the radio is already normal), drop the radio Arc so the cmd channel
-                        // closes -> restore in the serial thread, give it ~500 ms, shut down.
-                        // This keeps the 991 from being left in USB mode after shutdown.
-                        self.save_window_positions();
-                        if let Some(tx) = self.shutdown_tx.take() {
-                            let _ = tx.send(true);
-                        }
-                        // Dropping the radio is what runs its restore: the USB
-                        // transmit routing goes back the way the operator had
-                        // it. Written as take-and-drop rather than an
-                        // assignment because that is what it is - as a plain
-                        // `= None` before `exit` it reads as a dead store, and
-                        // the next person to tidy one away would leave a 991A
-                        // in USB mode after every shutdown.
-                        drop(self.yaesu.take());
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        std::process::exit(0);
-                    }
+                    // No Exit button (owner's decision, 2026-09-19): closing the
+                    // window is the way out, and it does all the button did - see
+                    // `Drop for ServerApp`.
                     ui.separator();
                     if ui.button(rust_i18n::t!("srv_settings").to_string()).clicked() {
                         // Stop server (thread finishes in background)
@@ -1180,9 +1159,17 @@ impl eframe::App for ServerApp {
                         let drive_pct = self.drive_level.load(Ordering::Relaxed);
                         egui::CentralPanel::default().show(ctx, |ui| {
                             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                                let spe_operate_allowed = crate::pa_policy::operate_allowed(
+                                    crate::pa_policy::effective_active_pa(
+                                        self.active_pa.load(Ordering::Relaxed),
+                                        true,
+                                        self.rf2k.is_some(),
+                                    ),
+                                    crate::pa_policy::PA_SPE,
+                                );
                                 render_spe_panel(ui, &spe_for_window, &status, &log_entries,
                                     &mut self.show_spe_log, &mut self.spe_peak_power, &mut self.spe_peak_time, drive_pct,
-                                    &self.active_pa);
+                                    &self.active_pa, spe_operate_allowed);
                             });
                         });
                         ctx.request_repaint_after(Duration::from_millis(100));
@@ -1237,9 +1224,18 @@ impl eframe::App for ServerApp {
                         }
                         egui::CentralPanel::default().show(ctx, |ui| {
                             egui::ScrollArea::vertical().show(ui, |ui| {
+                                let rf2k_operate_allowed = crate::pa_policy::operate_allowed(
+                                    crate::pa_policy::effective_active_pa(
+                                        self.active_pa.load(Ordering::Relaxed),
+                                        self.spe.is_some(),
+                                        true,
+                                    ),
+                                    crate::pa_policy::PA_RF2K,
+                                );
                                 render_rf2k_panel(ui, &rf2k_for_window, &status,
                                     &mut self.rf2k_peak_power, &mut self.rf2k_peak_time,
-                                    &self.active_pa, &mut self.rf2k_confirm_fw_close);
+                                    &self.active_pa, &mut self.rf2k_confirm_fw_close, rf2k_operate_allowed,
+                                    self.drive_level.load(Ordering::Relaxed));
                                 render_rf2k_debug_section(ui, &rf2k_for_window, &status,
                                     &mut self.rf2k_show_debug,
                                     &mut self.rf2k_confirm_high_power,
@@ -1440,7 +1436,8 @@ impl eframe::App for ServerApp {
                                 ("EA7HG Visual Rotor", "UDP"),
                                 ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
                                 ("PstRotator (any supported rotor)", "XML over UDP"),
-                                ("YPC21 / PTT-Z01 PTT button", "BLE (Android)"),
+                                ("Morse paddle / straight key", "MCP2221A USB-HID (desktop)"),
+                                ("YPC21 / PTT-Z01 PTT button", "BLE (desktop + Android)"),
                                 ("ZL-01 shutter button", "Bluetooth touch device (Android)"),
                             ] {
                                 ui.label(dev);
@@ -1696,7 +1693,13 @@ impl ServerApp {
             self.probe_port[s] = String::new();
             return;
         }
-        let baud = if slot == 0 { 38400 } else { crate::config::load().yaesu2_baud };
+        // Both slots read the rate the operator set. Slot 0 used to be a
+        // hardcoded 38400 while the session it belongs to reads
+        // `config.yaesu_baud` (ui/startup.rs): on a radio set to anything else
+        // the probe asked at the wrong rate and reported no model, while the
+        // radio itself ran fine - and slot 1 did it right beside it.
+        let cfg = crate::config::load();
+        let baud = if slot == 0 { cfg.yaesu_baud } else { cfg.yaesu2_baud };
         self.probe_busy[s] = true;
         self.probe_attempted[s] = true;
         self.probe_silent[s] = false;

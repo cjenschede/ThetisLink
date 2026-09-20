@@ -14,8 +14,31 @@ android {
         applicationId = "com.sdrremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 85
-        versionName = "2.11.0"
+        versionCode = 86
+        versionName = "2.12.0"
+
+        // ThetisLink is a 64-bit ARM app, and this line is what makes Android
+        // say so at install time instead of at the first tap.
+        //
+        // Our own `libsdr_remote_android.so` is built for arm64-v8a only. But
+        // JNA ships `libjnidispatch.so` for seven architectures, so without
+        // this filter the APK carries a `lib/armeabi-v7a/` folder - and that
+        // folder is the whole answer Android needs: it installs happily on a
+        // 32-bit device, picks armeabi-v7a as the app's ABI, and then cannot
+        // find our library at all. The app dies on the way up with
+        // `UnsatisfiedLinkError: couldn't find "libsdr_remote_android.so"`,
+        // which tells its user nothing.
+        //
+        // Measured on a tablet of one of the stations on 2026-09-20 (an "i17
+        // Pro Max", `abilist = armeabi-v7a,armeabi`, reporting Android 15.0
+        // over an API level of 28): installed, crashed twice, exactly there.
+        // With the filter the installer refuses it up front and says why.
+        //
+        // Supporting 32-bit is a separate decision, and it means building the
+        // Rust library for armeabi-v7a as well - not just widening this line.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {

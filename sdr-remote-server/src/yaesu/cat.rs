@@ -38,6 +38,12 @@ pub(super) trait CatPort {
     /// mislead it. Draining ONCE, before such a walk starts, is safe for exactly
     /// that reason - there is nothing pending that we could still want.
     ///
+    /// Second caller: a 991A routing snapshot read mid-session
+    /// (`ensure_991a_usb_routing_snapshot` in poll.rs). There the buffer can
+    /// hold poll answers we would still want - but at most one poll round,
+    /// which the next round asks again, while a poll answer taken for the EX
+    /// answer would leave a menu out of the snapshot.
+    ///
     /// Default: no-op, so a test double keeps its scripted exchange.
     fn drain(&mut self) {}
 }

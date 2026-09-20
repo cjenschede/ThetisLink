@@ -193,13 +193,56 @@ fn parse_udp_token(ready: &str) -> Option<String> {
 const RCF_MAGIC: &[u8; 4] = b"RCF1";
 /// RCF opcode: request wss-audio fallback on/off for the sender's session (byte 5).
 const RCF_FALLBACK: u8 = 0x01;
+
+/// RCF opcode: the sender announces what it can do (byte 5 = a bitmask).
+///
+/// Deliberately its OWN opcode and not a spare bit in the fallback frame's value
+/// byte. `parse_rcf_fallback` reads that byte as `!= 0`, so a capability bit set
+/// in an "off" frame would read as "put me on wss" to any station built before
+/// this - permanently, and the off frame is exactly the one that has to carry it.
+/// With an opcode of its own that parser returns None and an older station ignores
+/// the frame without noticing it.
+const RCF_CAPS: u8 = 0x02;
+
+/// Capability bit: this endpoint understands a bare downlink beacon and uses it to
+/// judge the UDP path. A station only stops sending UDP audio to a client that has
+/// said this - not to one it merely beacons at, which is a different fact.
+const CAPS_READS_BEACON: u8 = 0x01;
 /// Connect-time fallback: if UDP audio NEVER arrives within this window while the tunnel is
 /// alive, UDP is likely blocked -> request wss audio.
 const FALLBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-/// Mid-session fallback: an established UDP audio stream that goes silent this long ->
-/// request wss audio (make-before-break; the station keeps sending UDP too so recovery is
-/// detectable).
-const FALLBACK_STALL: Duration = Duration::from_millis(500);
+/// How long the DOWNLINK may be silent before the path counts as broken.
+///
+/// `FALLBACK_STALL` used to sit above this, at 500ms, and the design said to keep it
+/// because the audio path still needed it. That was wrong: the audio path uses a bare
+/// `Duration::from_millis(500)` of its own for a different question - "has this stream
+/// resumed after a quiet spell", for a debug line - and the constant's only real reader
+/// was the diagnostic that cried wolf on a healthy link. With that reader gone it was
+/// dead code carrying a claim about where it was used, which is worse than no constant
+/// at all. Removed; the two literals are a smaller matter, still visible, deliberately
+/// not renamed into this one because they mean something else.
+///
+/// This one guards a
+/// beacon that arrives once a second, so anything under a second would call a
+/// healthy path broken between two beacons - and anything at exactly a second
+/// would do it on the first late one.
+///
+/// It also has to sit BELOW `FALLBACK_RECOVER`: the healthy run restarts on a gap
+/// wider than this, so with a threshold above the recovery window a run could
+/// never grow long enough to recover. Beacon 1s < this 2.5s < recover 3s.
+const FALLBACK_DOWNLINK_STALL: Duration = Duration::from_millis(2500);
+
+/// How often the UDP keepalive goes out - the client's to its station, the station's
+/// to each client it knows, where it doubles as the beacon that proves the downlink
+/// is alive.
+///
+/// A name rather than a literal at the send site, because two tests were guarding the
+/// three-way ordering that everything here depends on and BOTH declared their own
+/// copy of this number. Putting the real one to three seconds left them green while
+/// every beacon would then restart the healthy run and recovery would be impossible -
+/// exactly the failure those tests exist to prevent. A review found it; a constant is
+/// what makes them able to see it.
+const UDP_BEACON_INTERVAL: Duration = Duration::from_secs(1);
 /// Recovery: while in fallback, UDP audio must flow healthily for this long before we drop
 /// wss and return to UDP-only. Longer than the stall threshold = hysteresis (no flapping).
 const FALLBACK_RECOVER: Duration = Duration::from_secs(3);
@@ -207,8 +250,6 @@ const FALLBACK_RECOVER: Duration = Duration::from_secs(3);
 /// rate-limit combined). Enforced on BOTH ends so a client that ignores its own dwell
 /// still cannot make the station flap.
 const FALLBACK_DWELL: Duration = Duration::from_secs(3);
-/// While in fallback the client re-asserts its request this often (lease refresh), so the
-/// station can expire the state of a client that vanished without sending an off.
 /// Whether UDP has demonstrably recovered: the healthy run must be long enough
 /// AND still be running.
 ///
@@ -228,6 +269,133 @@ fn udp_recovered(
         && last_udp_audio.map_or(false, |t| t.elapsed() < stall_after)
 }
 
+/// Has the downlink stalled - the ENTRY side of the fallback.
+///
+/// Free and testable on purpose. The exit side above has been a free function since
+/// it was written and a test has caught a defect in it twice; this side lived inline
+/// in the connection loop, where it could be reverted to the shape that caused the
+/// original defect with every test in the workspace still green. That asymmetry ran
+/// through the whole dossier and it ends here.
+///
+/// The argument order deliberately does NOT mirror `udp_recovered`. Two neighbouring
+/// functions with the same three trailing types is a swap that compiles.
+fn downlink_stalled(
+    since_ready: Duration,
+    last_downlink: Option<Instant>,
+    connect_timeout: Duration,
+    stall_after: Duration,
+) -> bool {
+    match last_downlink {
+        // Nothing has ever come down this path: only the connect window can decide.
+        None => since_ready >= connect_timeout,
+        // Something did: a beacon at its normal spacing must NOT read as a stall.
+        Some(t) => t.elapsed() >= stall_after,
+    }
+}
+
+/// What the absence-reporter should say this pass, if anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AbsenceEvent {
+    /// Say nothing.
+    Nothing,
+    /// Audio has been gone long enough to be worth one line, this long.
+    ///
+    /// The duration travels WITH the event rather than being worked out again by the
+    /// caller: the opening line prints it and the latch is set from it, and those two
+    /// drifting apart is how the closing line came to under-report every episode by a
+    /// whole threshold.
+    Began(Duration),
+    /// It is over because audio came back.
+    EndedAudioBack,
+    /// It is over because the PATH broke, and the rescue is taking it from here.
+    ///
+    /// Its own variant, because the first version had only one ending and wrote
+    /// "UDP audio is back" for both. A review caught it: the path stalling makes the
+    /// condition false just as surely as audio returning, so the line claiming audio
+    /// was back appeared on the very pass where the fallback fires - two adjacent
+    /// lines, the first one the exact opposite of the truth, at the one moment
+    /// somebody reads the log.
+    EndedPathBroken,
+}
+
+/// Whether the absence of audio is worth opening or closing a report on.
+///
+/// Free and testable because every fault in this area has been in the wiring rather
+/// than the comparison, and nothing could reach the wiring: `run_connection` is
+/// called once, from production, and no test touches it. So a mutation anywhere in
+/// the block this replaces survived the whole suite by construction - which is a
+/// stronger statement than any mutation run, and it came from a review.
+/// Takes the CLOCKS, not a duration worked out above it, and that is the point.
+///
+/// The first cut took `without_audio` ready-made, so the projection that produces it -
+/// "no audio at all means measure from the start of the session" - stayed above the
+/// function where no test could reach it. A review demonstrated it: swapping the audio
+/// clock for the downlink clock in that projection turns the reporter into the very
+/// thing it was written to find, a branch that is there and can never be reached, and
+/// every test stayed green. Here the projection is inside, and that case is the first
+/// test below.
+fn absence_edge(
+    latched: bool,
+    stalled: bool,
+    since_audio: Option<Duration>,
+    since_ready: Duration,
+) -> AbsenceEvent {
+    // No audio at all in this session: the absence is as old as the session.
+    let without_audio = since_audio.unwrap_or(since_ready);
+    let explaining = audio_absent_while_path_alive(stalled, without_audio);
+    match (explaining, latched) {
+        (true, false) => AbsenceEvent::Began(without_audio),
+        (false, true) if stalled => AbsenceEvent::EndedPathBroken,
+        (false, true) => AbsenceEvent::EndedAudioBack,
+        _ => AbsenceEvent::Nothing,
+    }
+}
+
+/// Is there a situation worth explaining: no audio, while the path says it is alive?
+///
+/// The threshold is `FALLBACK_DOWNLINK_STALL` and it is deliberately NOT a parameter.
+/// This question is defined relative to the decision it explains - below that window
+/// the rescue could not have acted either, so there is nothing to explain and a line
+/// would only be noise. Leaving the caller free to pass something else is how the
+/// previous version came to compare against 500ms, which at 20ms per frame is a single
+/// late frame, and it duly cried wolf on a healthy link three times in an afternoon.
+///
+/// A parameter here also cannot be defended by a test: a test calls this function with
+/// the right value while the call site passes the wrong one, and stays green. That
+/// exact shape has been found in this file three times now. One caller, one correct
+/// threshold, no way to get it wrong.
+fn audio_absent_while_path_alive(stalled: bool, without_audio: Duration) -> bool {
+    !stalled && without_audio >= FALLBACK_DOWNLINK_STALL
+}
+
+/// Which paths a station uses for one client's audio frame: `(udp, wss)`.
+///
+/// This is the decision the whole repair exists for, and its lease-expiry case is
+/// invisible from every parser test - so it is free and tested rather than inline.
+///
+/// A client is only taken off UDP when it can NOTICE the path coming back, which
+/// means reading a beacon. Being SENT a beacon is a different fact: a client built
+/// after the fallback but before the beacon would ask for wss and then wait for
+/// audio that never returns.
+fn station_audio_paths(
+    udp_up: bool,
+    fallback_on: bool,
+    lease_age: Duration,
+    lease: Duration,
+    reads_beacon: bool,
+) -> (bool, bool) {
+    let fb = fallback_on && lease_age < lease;
+    if fb && reads_beacon {
+        (false, true)
+    } else {
+        (udp_up, fb)
+    }
+}
+
+/// While in fallback the client re-asserts its request this often (lease refresh), so
+/// the station can expire the state of a client that vanished without sending an off.
+/// It is also how often a client repeats its capability announcement - see the send
+/// site for why that has to be repeated at all.
 const FALLBACK_HEARTBEAT: Duration = Duration::from_secs(5);
 /// Station drops a client's fallback state if it has not been re-asserted within this
 /// window (>2 heartbeats). Prevents a stale flag from being inherited by a reconnecting
@@ -241,6 +409,16 @@ struct StationFallback {
     on: bool,
     last_change: Instant,
     last_seen: Instant,
+    /// When the current fallback episode began, and how many UDP audio frames went
+    /// out during it. The line written when the episode ends carries both, so a zero
+    /// arrives with the proof that the situation occurred at all. A zero on its own
+    /// is an absence, not a measurement.
+    on_since: Option<Instant>,
+    udp_frames_while_on: u64,
+    /// Whether this client told us it reads a bare downlink beacon. Default false,
+    /// so a client built before the beacon keeps getting UDP audio during a
+    /// fallback - it has no other way of noticing that the path came back.
+    reads_beacon: bool,
 }
 
 /// Build a relay-control-frame requesting wss-audio fallback on/off.
@@ -250,6 +428,36 @@ fn encode_rcf_fallback(on: bool) -> Vec<u8> {
     f.push(RCF_FALLBACK);
     f.push(on as u8);
     f
+}
+
+/// Build a relay-control-frame announcing our capabilities.
+fn encode_rcf_caps(bits: u8) -> Vec<u8> {
+    let mut f = Vec::with_capacity(6);
+    f.extend_from_slice(RCF_MAGIC);
+    f.push(RCF_CAPS);
+    f.push(bits);
+    f
+}
+
+/// Parse a capability announcement: `Some(bits)` when it is one.
+fn parse_rcf_caps(payload: &[u8]) -> Option<u8> {
+    if payload.len() >= 6 && &payload[0..4] == RCF_MAGIC && payload[4] == RCF_CAPS {
+        Some(payload[5])
+    } else {
+        None
+    }
+}
+
+/// Is this payload a relay-control-frame of any kind, rather than traffic for the
+/// engine?
+///
+/// Both control frames return early on the station side, before the point where a
+/// client id is added to the beacon list - so this is what says "count this client
+/// anyway". After a reconnect an RCF frame is easily the first thing a client sends,
+/// and the client asking for a fallback is precisely the one that must be beaconed
+/// at, or it can never be told that its path came back.
+fn is_relay_control_frame(payload: &[u8]) -> bool {
+    parse_rcf_caps(payload).is_some() || parse_rcf_fallback(payload).is_some()
 }
 
 /// Parse a relay-control-frame: `Some(on)` when it is a wss-audio fallback request.
@@ -847,6 +1055,7 @@ async fn monitor_loop(
             generation,
         );
 
+        let mut outcome = SessionOutcome::default();
         let run_result = run_connection(
             &config,
             &status,
@@ -854,6 +1063,7 @@ async fn monitor_loop(
             &mut config_rx,
             &mut shutdown_rx,
             tunnel.as_mut(),
+            &mut outcome,
         )
         .await;
         if *shutdown_rx.borrow() {
@@ -864,6 +1074,15 @@ async fn monitor_loop(
         }
 
         if let Err(err) = run_result {
+            // How this session ended, in one line. The log said what went wrong
+            // and never whether the session had been working, so a refusal and a
+            // network switch read the same.
+            log::info!(
+                "Relay session ended: {} (carried_traffic={} rejected={})",
+                short_error(&err),
+                outcome.carried_traffic,
+                outcome.rejected.as_deref().unwrap_or("-"),
+            );
             let msg = short_error(&err);
             set_status(
                 &status,
@@ -907,6 +1126,77 @@ fn ensure_crypto_provider() {
     });
 }
 
+/// A path is worth reporting on once it has been quiet this long. Below it a gap
+/// is jitter, and logging that would drown the case worth reading.
+///
+/// Above the beacon interval on purpose: at one beacon a second a threshold of a
+/// second reports a path "returning" on a perfectly healthy line, forever.
+const PATH_QUIET_REPORT: Duration = Duration::from_millis(2500);
+
+/// Note a packet on a path and return how long that path had been silent, raw.
+///
+/// It used to filter on `PATH_QUIET_REPORT` itself, which was convenient for its one
+/// caller and wrong the moment a second question was asked of the same gap: the
+/// fallback restarts its healthy run on a gap wider than `FALLBACK_DOWNLINK_STALL`,
+/// and those two thresholds are the same 2500 ms today by coincidence, not by
+/// design. A filter inside here would have tied them together silently. The caller
+/// compares against whichever threshold it means.
+fn note_path_packet(last: &mut Option<Instant>, now: Instant) -> Option<Duration> {
+    let gap = last.map(|t| now.saturating_duration_since(t));
+    *last = Some(now);
+    gap
+}
+
+/// What one inbound datagram does to the downlink's two clocks, and how long the path
+/// had been quiet before it.
+///
+/// Free, because the only question this spot has ever got wrong is "does a keepalive
+/// count", and until now there was nothing that could ask it. Twice the answer was
+/// no and twice it was the defect: first the fallback would not fire on a path
+/// carrying only beacons, then the station reported an outage every time its operator
+/// stopped transmitting. Both times the fix was to read the whole path rather than
+/// the audio on it - and both times the reasoning lived in a comment because there
+/// was nowhere to put an assertion.
+///
+/// `healthy_since` restarts only on a gap wider than `stall`, so a beacon at its
+/// normal spacing continues the run instead of starting a new one. Getting that
+/// wrong makes recovery unreachable on a path that is demonstrably alive.
+fn note_downlink(
+    last_downlink: &mut Option<Instant>,
+    healthy_since: &mut Option<Instant>,
+    now: Instant,
+    stall: Duration,
+) -> Option<Duration> {
+    let gap = note_path_packet(last_downlink, now);
+    if gap.map_or(true, |g| g > stall) {
+        *healthy_since = Some(now);
+    }
+    gap
+}
+
+/// What became of one relay session, beside the error that ended it.
+///
+/// The retry policy needs to tell apart two things that look identical today: a
+/// relay that refused us, and a socket that died under a session which was
+/// working. Both come back as `Err(String)`, and by then a refusal has been
+/// translated into a sentence meant for a human - so the only way to tell them
+/// apart at the call site would be to compare translated text.
+///
+/// Rather than retype seventeen exit paths, the session reports alongside its
+/// error. Nothing here changes behaviour: both fields are written and logged and
+/// nothing branches on them. Step 3 of the design is what will.
+#[derive(Default, Debug)]
+pub(crate) struct SessionOutcome {
+    /// The relay refused us, with the wire code (`ERR device blocked`) and not
+    /// the sentence. All six refusals are permanent; retrying one of them faster
+    /// only knocks harder, and one of them is how a station operator says no.
+    pub rejected: Option<String>,
+    /// Peer traffic was seen before this connection ended. A session that stood,
+    /// carried something and then failed at transport level is the network-switch
+    /// case - the only case a fast retry is meant for.
+    pub carried_traffic: bool,
+}
+
 async fn run_connection(
     config: &RelayConfig,
     status: &RelayStatusHandle,
@@ -914,6 +1204,7 @@ async fn run_connection(
     config_rx: &mut watch::Receiver<RelayConfig>,
     shutdown_rx: &mut watch::Receiver<bool>,
     tunnel: Option<&mut RelayTunnel>,
+    outcome: &mut SessionOutcome,
 ) -> Result<(), String> {
     // Split the tunnel into independent pieces so the select! branches do not get
     // in each other's way with borrows: sentinel (Copy), inbound_tx (cheap clone),
@@ -1002,7 +1293,11 @@ async fn run_connection(
                 generation,
             );
         }
-        Message::Text(text) => return Err(reject_reason(&text)),
+        Message::Text(text) => {
+            // Keep the wire code before it becomes a sentence for a human.
+            outcome.rejected = Some(text.trim().to_string());
+            return Err(reject_reason(&text));
+        }
         other => return Err(format!("unexpected relay hello: {other:?}")),
     }
 
@@ -1060,6 +1355,32 @@ async fn run_connection(
     // fallback stays off, so the fase-2 UDP path is byte-identical in the normal case).
     // Client side: watch UDP-audio health and request wss fallback if it never arrives.
     let ready_at = Instant::now();
+    // Say what we can do as soon as the session stands. The station needs to know from
+    // second zero whether this client reads a bare beacon, because that decides whether
+    // it may stop sending UDP audio during a fallback - and the first fallback can
+    // arrive within two seconds.
+    //
+    // Its own opcode, so a station built before this cannot mistake it for a fallback
+    // request (which a spare bit in the fallback frame would have been). What such a
+    // station does instead: `parse_rcf_fallback` returns None, the frame falls through
+    // to the tunnel path like any other payload, and the engine rejects it at the magic
+    // byte - `RCF1` starts with 0x52 and a TL packet with 0xAA. Harmless, and the same
+    // route the fallback frames themselves already take against a station older than
+    // fase 3a. Not "silently ignored at this layer", which is what the design said and
+    // a review rightly would not accept on trust.
+    //
+    // Repeated below on the heartbeat, and that is not belt and braces: the station
+    // keeps this fact inside the per-client fallback entry, and that entry is dropped a
+    // lease after the last control frame. Announced once, it is gone fifteen seconds
+    // into every session - long before any realistic network switch.
+    if config.role == RelayRole::Client {
+        let _ = write
+            .send(Message::Binary(
+                encode_tlt1(0, &encode_rcf_caps(CAPS_READS_BEACON)).into(),
+            ))
+            .await;
+    }
+    let mut last_caps_sent = Instant::now();
     // Test hook (client only): THETISLINK_TEST_DROP_UDP=<secs> drops inbound UDP audio for
     // the first N seconds after ready, simulating a UDP-blocked network so the fallback +
     // recovery cycle can be exercised deterministically (no OS-firewall fight). 0 = off.
@@ -1089,11 +1410,51 @@ async fn run_connection(
         }
     }
     let mut last_udp_audio: Option<Instant> = None; // last inbound audio frame over UDP
-    // Last inbound audio frame over ANY path. A quiet UDP socket only means the
-    // path is broken if audio is in fact being sent; when the operator switches a
-    // channel off there is simply nothing to carry, and treating that as a stall
-    // made the transport flip to wss and back on every toggle.
-    let mut last_any_audio: Option<Instant> = None;
+    // Last inbound datagram over UDP of ANY kind - audio or a bare beacon. This is
+    // what both edges of the fallback read, and the difference from
+    // `last_udp_audio` is the whole point: a path that carries beacons is alive
+    // even while no channel is switched on, and the old test could not say so.
+    let mut last_udp_downlink: Option<Instant> = None;
+    // `last_any_audio` used to live here. It existed for one reader - the guard that
+    // asked whether audio was flowing before believing the UDP path had stalled - and
+    // that guard is gone: the question is now whether the DOWNLINK carries anything,
+    // which a station with every channel off answers with a beacon. What the comment
+    // here used to warn about, flipping on a channel toggle, cannot happen for the
+    // same reason.
+    // How long has each path been quiet? `bound_clients` already logs the FIRST
+    // packet per path out of a HashSet insert, so after a reconnect it says
+    // nothing at all, and it never carried a duration. These two do - and they
+    // are what turns the eleven seconds between "tunnel back" and "audio back"
+    // into a number.
+    // When "no audio while the path says it is alive" began, or None while that is
+    // not the case. A latch rather than a clock: the report it drives is an edge, so
+    // it needs to know whether it has already spoken, not when it last spoke.
+    //
+    // It holds the moment AUDIO STOPPED, not the moment the report fired - those are
+    // a threshold apart and the closing line carries the difference.
+    //
+    // CONVENTION, because it is cheaper than the alternative: an opening line and its
+    // closing line are a PAIR WITHIN ONE SESSION. A session that ends while this is
+    // set writes no closing line, and an unclosed opening line therefore means "the
+    // session ended", not "it never came back". Closing it properly would mean a line
+    // on each of seventeen exit paths - the same reason `SessionOutcome` exists rather
+    // than each of those paths reporting for itself.
+    //
+    // `last_fallback_report` used to live here and was a brake on a level-triggered
+    // line - one per dwell, forever, for as long as the condition held. An edge needs
+    // no brake, and the latch doubles as the start of the episode so the closing line
+    // can carry its length.
+    let mut audio_absent_since: Option<Instant> = None;
+    let mut last_in_tunnel: Option<Instant> = None;
+    // `last_in_udp` used to live here, next to `last_udp_downlink`, and the two held
+    // the same fact one line apart. The UDP path reports its quiet time from
+    // `last_udp_downlink` itself now - one variable, read for two questions with two
+    // thresholds, instead of two variables that could drift.
+    //
+    // Both are local to one connection, so a reconnect starts them at None and the
+    // first datagram after it reports no gap. An outage that spans a reconnect is
+    // therefore never reported on the UDP path - noted so that the absence of a line
+    // is not later read as evidence that nothing was wrong.
     // Same, for inbound frames.
     let mut last_stream_in: std::collections::HashMap<u16, Instant> =
         std::collections::HashMap::new();
@@ -1106,6 +1467,22 @@ async fn run_connection(
     let mut dedup = DedupWindow::new(); // drop duplicate audio across both paths
     // Station side: per-client fallback state with dwell + lease (per-session scope + rate-limit).
     let mut station_fallback: HashMap<u8, StationFallback> = HashMap::new();
+    let mut udp_audio_while_fallback: u64 = 0;
+    // Audio frames sent while the client asking for wss is not known to read a beacon.
+    // That is the failure itself rather than its cost, and it is what stayed silent for
+    // a whole review round: the capability arrived once and was thrown away with the
+    // lease fifteen seconds later.
+    let mut fallback_without_beacon_reader: u64 = 0;
+    // Beacons the station sends, so the extra traffic this repair adds to an idle line
+    // is a number somebody can read rather than an estimate in a document.
+    let mut beacons_sent: u64 = 0;
+    // And the other end of that: datagrams the client actually received. It settles a
+    // question the station log cannot answer on its own. A fallback of 393 seconds was
+    // observed while the station sent 330 beacons, and nothing said whether the client
+    // got almost none of them (the path really was dead, which is accepted) or plenty
+    // with gaps just over the threshold (recovery stricter than "usable", which would
+    // be a second subject). One counter tells those apart.
+    let mut downlink_received: u64 = 0;
 
     // Persistent 250 ms ticker, created ONCE before the loop. A `sleep()` re-created
     // each select iteration gets reset by every audio packet (<250 ms apart) and never
@@ -1144,6 +1521,7 @@ async fn run_connection(
                             continue;
                         }
                         peer_active = true;
+                        outcome.carried_traffic = true;
                         last_peer_activity = Instant::now();
                         if let Some(frame) = parse_peer_frame(&text) {
                             match frame.kind.as_str() {
@@ -1224,13 +1602,13 @@ async fn run_connection(
                     }
                     Some(Ok(Message::Binary(data))) => {
                         peer_active = true;
+                        outcome.carried_traffic = true;
                         last_peer_activity = Instant::now();
                         // TLT1 = tunneled TL-frame data -> deliver payload to the local endpoint.
                         if let Some(inbound) = &tunnel_inbound {
                             if let Some((cid, payload)) = parse_tlt1(&data) {
                                 if let Some((stream, seq)) = audio_identity(payload) {
                                     let now = Instant::now();
-                                    last_any_audio = Some(now);
                                     let quiet = last_stream_in
                                         .get(&stream)
                                         .map_or(true, |t: &Instant| t.elapsed() > Duration::from_millis(500));
@@ -1246,6 +1624,35 @@ async fn run_connection(
                                 // request (per-session scope, idempotent) instead of
                                 // forwarding it to the engine.
                                 if config.role == RelayRole::Station {
+                                    if is_relay_control_frame(payload)
+                                        && bound_clients.insert(cid)
+                                    {
+                                        log::info!(
+                                            "Relay tunnel client bound: id={cid} (control frame)"
+                                        );
+                                    }
+                                    if let Some(bits) = parse_rcf_caps(payload) {
+                                        let now = Instant::now();
+                                        let e = station_fallback.entry(cid).or_insert(
+                                            StationFallback {
+                                                on: false,
+                                                last_change: now
+                                                    .checked_sub(FALLBACK_DWELL)
+                                                    .unwrap_or(now),
+                                                last_seen: now,
+                                                reads_beacon: false,
+                                                on_since: None,
+                                                udp_frames_while_on: 0,
+                                            },
+                                        );
+                                        e.reads_beacon = bits & CAPS_READS_BEACON != 0;
+                                        e.last_seen = now;
+                                        log::info!(
+                                            "Relay client {cid} capabilities: reads_beacon={}",
+                                            e.reads_beacon
+                                        );
+                                        continue;
+                                    }
                                     if let Some(on) = parse_rcf_fallback(payload) {
                                         let now = Instant::now();
                                         let e = station_fallback.entry(cid).or_insert(
@@ -1257,6 +1664,9 @@ async fn run_connection(
                                                     .checked_sub(FALLBACK_DWELL)
                                                     .unwrap_or(now),
                                                 last_seen: now,
+                                                reads_beacon: false,
+                                                on_since: None,
+                                                udp_frames_while_on: 0,
                                             },
                                         );
                                         e.last_seen = now; // lease refresh (flip or heartbeat)
@@ -1266,10 +1676,34 @@ async fn run_connection(
                                             if e.last_change.elapsed() >= FALLBACK_DWELL {
                                                 e.on = on;
                                                 e.last_change = now;
-                                                log::info!(
-                                                    "Relay station: client {cid} wss-fallback {}",
-                                                    if on { "ON" } else { "OFF" }
-                                                );
+                                                if on {
+                                                    e.on_since = Some(now);
+                                                    e.udp_frames_while_on = 0;
+                                                    log::info!(
+                                                        "Relay station: client {cid} \
+                                                         wss-fallback ON (reads_beacon={})",
+                                                        e.reads_beacon
+                                                    );
+                                                } else {
+                                                    // The episode carries its own evidence:
+                                                    // how long it lasted and how many frames
+                                                    // still went out over UDP. Zero frames
+                                                    // only means something next to a real
+                                                    // duration.
+                                                    let secs = e
+                                                        .on_since
+                                                        .map(|t| t.elapsed().as_secs_f32())
+                                                        .unwrap_or(0.0);
+                                                    log::info!(
+                                                        "Relay station: client {cid} \
+                                                         wss-fallback OFF after {secs:.1}s, \
+                                                         {} duplicate UDP frames \
+                                                         (reads_beacon={})",
+                                                        e.udp_frames_while_on,
+                                                        e.reads_beacon
+                                                    );
+                                                    e.on_since = None;
+                                                }
                                             } else {
                                                 log::debug!(
                                                     "Relay station: client {cid} fallback flip within dwell, ignored"
@@ -1297,6 +1731,15 @@ async fn run_connection(
                                 };
                                 if bound_clients.insert(cid) {
                                     log::info!("Relay tunnel client bound: id={cid} sentinel={sentinel}");
+                                }
+                                if let Some(gap) =
+                                    note_path_packet(&mut last_in_tunnel, Instant::now())
+                                        .filter(|g| *g >= PATH_QUIET_REPORT)
+                                {
+                                    log::info!(
+                                        "Relay path back: tunnel after {:.1}s of silence",
+                                        gap.as_secs_f32(),
+                                    );
                                 }
                                 let _ = inbound.send((sentinel, payload.to_vec()));
                                 continue;
@@ -1399,16 +1842,49 @@ async fn run_connection(
                                     (udp_up && !fallback_requested, fallback_requested || ptt)
                                 }
                                 RelayRole::Station => {
-                                    // wss only while this client's fallback is on AND its
-                                    // lease is fresh (a vanished client's flag never leaks).
-                                    let fb = station_fallback.get(&client_id).map_or(false, |e| {
-                                        e.on && e.last_seen.elapsed() < FALLBACK_LEASE
-                                    });
-                                    (udp_up, fb)
+                                    let e = station_fallback.get(&client_id);
+                                    station_audio_paths(
+                                        udp_up,
+                                        e.map_or(false, |e| e.on),
+                                        // No entry at all reads as an expired lease.
+                                        e.map_or(FALLBACK_LEASE, |e| e.last_seen.elapsed()),
+                                        FALLBACK_LEASE,
+                                        e.map_or(false, |e| e.reads_beacon),
+                                    )
                                 }
                             }
                         };
                         let mut sent_any = false;
+                        // The numbers that say whether the saving actually happens. Build
+                        // the condition above wrong and every frame goes out twice exactly
+                        // as it did before, while every other number looks healthy and
+                        // nothing makes a sound.
+                        if config.role == RelayRole::Station {
+                            if let Some(e) = station_fallback.get_mut(&client_id) {
+                                let in_fallback = e.on && e.last_seen.elapsed() < FALLBACK_LEASE;
+                                // The defect itself, separate from its consequence: a
+                                // client asking for wss that the station does not know
+                                // reads a beacon. It tells "the saving did not work" apart
+                                // from "the saving never came up".
+                                if in_fallback && !e.reads_beacon {
+                                    fallback_without_beacon_reader += 1;
+                                }
+                                if do_udp && in_fallback {
+                                    // Per episode, so the line at the end of one means
+                                    // something; and session-wide, because that is the
+                                    // number that has to read zero.
+                                    e.udp_frames_while_on += 1;
+                                    udp_audio_while_fallback += 1;
+                                    if udp_audio_while_fallback % 500 == 1 {
+                                        log::warn!(
+                                            "Relay still sending UDP audio to client {client_id} \
+                                             while it is on wss ({udp_audio_while_fallback} frames) \
+                                             - the duplicate stream this repair exists to remove"
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         if do_udp {
                             if let (Some(sock), Some(tok)) = (&udp_socket, &udp_token) {
                                 udp_seq = udp_seq.wrapping_add(1);
@@ -1441,8 +1917,33 @@ async fn run_connection(
                     // Test hook: pretend the network drops inbound UDP for the first N s.
                     let test_drop = test_drop_udp_secs > 0
                         && ready_at.elapsed().as_secs() < test_drop_udp_secs;
+                    // A bare beacon arrives as a single byte: the relay forwards
+                    // [client_id] and an empty payload. It proves one thing and one
+                    // thing only - that this UDP path carries traffic right now -
+                    // and it is deliberately kept out of everything else. It is not
+                    // peer liveness (that is the tunnel), it is not traffic for the
+                    // retry policy to reason about, and it is certainly nothing for
+                    // the engine or the dedup window (review finding: an empty
+                    // payload must never reach either).
+                    if !test_drop && n >= 1 {
+                        let now = Instant::now();
+                        downlink_received += 1;
+                        let gap = note_downlink(
+                            &mut last_udp_downlink,
+                            &mut udp_healthy_since,
+                            now,
+                            FALLBACK_DOWNLINK_STALL,
+                        );
+                        if gap.is_some_and(|g| g >= PATH_QUIET_REPORT) {
+                            log::info!(
+                                "Relay path back: udp after {:.1}s of silence",
+                                gap.unwrap_or_default().as_secs_f32(),
+                            );
+                        }
+                    }
                     if !test_drop && n > 1 {
                         peer_active = true;
+                        outcome.carried_traffic = true;
                         last_peer_activity = Instant::now();
                         let cid = udp_buf[0];
                         let payload = &udp_buf[1..n];
@@ -1451,11 +1952,9 @@ async fn run_connection(
                         // so recovery only fires after continuous UDP audio (hysteresis).
                         if let Some((stream, seq)) = audio_identity(payload) {
                             let now = Instant::now();
-                            if last_udp_audio.map_or(true, |t| now.duration_since(t) > FALLBACK_STALL) {
-                                udp_healthy_since = Some(now);
-                            }
+                            // `udp_healthy_since` is fed above, from the downlink,
+                            // so that a beacon counts as well as an audio frame.
                             last_udp_audio = Some(now);
-                            last_any_audio = Some(now);
                             let quiet = last_stream_in
                                 .get(&stream)
                                 .map_or(true, |t: &Instant| t.elapsed() > Duration::from_millis(500));
@@ -1506,8 +2005,9 @@ async fn run_connection(
                 }
 
                 // Fase 3b transport state machine (client, relay-only). Two states:
-                //  - UDP (fallback off): request wss if UDP audio never arrived within the
-                //    connect window, or an established stream stalled past FALLBACK_STALL.
+                //  - UDP (fallback off): request wss if nothing arrived down the path within
+                //    the connect window, or the downlink went quiet past
+                //    FALLBACK_DOWNLINK_STALL.
                 //  - Fallback (on): return to UDP-only once UDP audio has flowed healthily for
                 //    FALLBACK_RECOVER (> stall = hysteresis). The station keeps sending UDP
                 //    during fallback, so recovery is detectable.
@@ -1530,19 +2030,95 @@ async fn run_connection(
                     // Transport state machine (flip only after the dwell).
                     if last_fallback_flip.elapsed() >= FALLBACK_DWELL {
                         if !fallback_requested {
-                            // Silence is not a stall. Only conclude that UDP is broken
-                            // while audio is demonstrably being carried - over wss, or
-                            // over UDP until it went quiet. With every channel switched
-                            // off there is nothing to carry, and flipping then cost the
-                            // operator seconds of audio on the next enable while the
-                            // transport switched back.
-                            let audio_flowing = last_any_audio
-                                .map_or(false, |t| t.elapsed() < FALLBACK_STALL);
-                            let stalled = audio_flowing
-                                && match last_udp_audio {
-                                    None => ready_at.elapsed() >= FALLBACK_CONNECT_TIMEOUT,
-                                    Some(t) => t.elapsed() >= FALLBACK_STALL,
-                                };
+                            // Is the UDP path carrying anything at all?
+                            //
+                            // This used to ask whether AUDIO had arrived in the last
+                            // 500ms, and to sit behind a second guard asking the same
+                            // thing of any audio at all. Both were false exactly when
+                            // the path had died, which is the moment this exists for -
+                            // the branch written for "UDP audio never arrived" could not
+                            // be reached at all. Six review rounds began with that.
+                            //
+                            // Now it asks the only question that has an answer while the
+                            // path is broken: has ANYTHING come down it, beacon or audio.
+                            // A station with every channel switched off still beacons, so
+                            // "silent because nobody asked for audio" and "silent because
+                            // the path is gone" stopped being the same observation, and no
+                            // knowledge of channels is needed here.
+                            //
+                            // A free function, because inline it could be reverted to the
+                            // old shape with every test still green - which a review
+                            // demonstrated rather than suspected.
+                            let stalled = downlink_stalled(
+                                ready_at.elapsed(),
+                                last_udp_downlink,
+                                FALLBACK_CONNECT_TIMEOUT,
+                                FALLBACK_DOWNLINK_STALL,
+                            );
+                            // Why the rescue did NOT fire while there is no audio.
+                            //
+                            // It exists because the entry was once unreachable and
+                            // nothing said so. But it was a LEVEL against a 500ms
+                            // threshold, and audio frames arrive every 20ms - so a
+                            // single late frame satisfied it, and on a perfectly
+                            // healthy link it announced "UDP audio is missing" while
+                            // fifty frames a second were arriving. Observed three
+                            // times in one afternoon.
+                            //
+                            // Now it is an EDGE, and the threshold is the one the
+                            // decision itself uses. Below that window there is
+                            // nothing to explain: the rescue could not have acted
+                            // yet either. Above it, with the path reporting alive,
+                            // the situation is worth exactly one line - and one
+                            // more when it clears, so the episode carries its own
+                            // length instead of leaving a reader to subtract
+                            // timestamps.
+                            //
+                            // An edge also survives the case a level could not: all
+                            // channels switched off keeps audio absent for as long
+                            // as the operator likes, and that must not become a line
+                            // every dwell forever.
+                            match absence_edge(
+                                audio_absent_since.is_some(),
+                                stalled,
+                                last_udp_audio.map(|t| t.elapsed()),
+                                ready_at.elapsed(),
+                            ) {
+                                AbsenceEvent::Began(without_audio) => {
+                                    // The moment audio stopped, not the moment this
+                                    // noticed - the two are a threshold apart, and the
+                                    // closing line would otherwise under-report every
+                                    // episode by exactly that much.
+                                    audio_absent_since =
+                                        Some(now.checked_sub(without_audio).unwrap_or(now));
+                                    log::info!(
+                                        "Relay fallback NOT requested: no UDP audio for {:.1}s \
+                                         while the path reports alive \
+                                         (downlink {:?}ms ago, since_ready={:.1}s)",
+                                        without_audio.as_secs_f32(),
+                                        last_udp_downlink.map(|t| t.elapsed().as_millis()),
+                                        ready_at.elapsed().as_secs_f32(),
+                                    );
+                                }
+                                AbsenceEvent::EndedAudioBack => {
+                                    if let Some(began) = audio_absent_since.take() {
+                                        log::info!(
+                                            "Relay UDP audio is back after {:.1}s",
+                                            began.elapsed().as_secs_f32(),
+                                        );
+                                    }
+                                }
+                                AbsenceEvent::EndedPathBroken => {
+                                    if let Some(began) = audio_absent_since.take() {
+                                        log::info!(
+                                            "Relay audio was absent for {:.1}s and now the path \
+                                             is gone too - the fallback takes it from here",
+                                            began.elapsed().as_secs_f32(),
+                                        );
+                                    }
+                                }
+                                AbsenceEvent::Nothing => {}
+                            }
                             if stalled {
                                 let _ = write
                                     .send(Message::Binary(
@@ -1554,14 +2130,30 @@ async fn run_connection(
                                 last_fallback_heartbeat = now;
                                 fallback_flips += 1;
                                 set_relay_transport(status, true);
-                                let gap_ms = last_udp_audio.map(|t| t.elapsed().as_millis());
-                                let reason = if last_udp_audio.is_none() { "connect-timeout" } else { "udp-stall" };
+                                // In the terms the DECISION used. It reported the audio
+                                // clock while deciding on the downlink clock, so on a
+                                // beacon-carrying path the reason it printed was not the
+                                // reason it acted on. Both are here now; a log that
+                                // describes a different variable than the branch is worse
+                                // than no log.
+                                let gap_ms = last_udp_downlink.map(|t| t.elapsed().as_millis());
+                                let audio_gap_ms = last_udp_audio.map(|t| t.elapsed().as_millis());
+                                let reason = if last_udp_downlink.is_none() {
+                                    "connect-timeout"
+                                } else {
+                                    "downlink-stall"
+                                };
                                 log::info!(
-                                    "Relay fallback ON (reason={reason} gap_ms={gap_ms:?} flips={fallback_flips}) - requesting wss audio"
+                                    "Relay fallback ON (reason={reason} gap_ms={gap_ms:?} \
+                                     audio_gap_ms={audio_gap_ms:?} flips={fallback_flips}) \
+                                     - requesting wss audio"
                                 );
                             }
                         } else if udp_recovered(
-                            udp_healthy_since, last_udp_audio, FALLBACK_RECOVER, FALLBACK_STALL,
+                            udp_healthy_since,
+                            last_udp_downlink,
+                            FALLBACK_RECOVER,
+                            FALLBACK_DOWNLINK_STALL,
                         ) {
                             let _ = write
                                 .send(Message::Binary(
@@ -1576,6 +2168,28 @@ async fn run_connection(
                                 "Relay fallback OFF (reason=udp-recovered flips={fallback_flips}) - back to UDP"
                             );
                         }
+                    }
+                    // Say again what we can do, whether or not we are in a fallback.
+                    //
+                    // The station keeps `reads_beacon` inside the per-client fallback
+                    // entry, and that entry is dropped a lease after the last control
+                    // frame it heard. Announced once at connect, the fact is therefore
+                    // gone fifteen seconds in - and every fallback after that finds a
+                    // fresh entry defaulting to "does not read beacons", keeps the
+                    // duplicate stream, and the saving this whole patch exists for never
+                    // happens. That is not a second-pass fault; it bites on the first
+                    // one, fifteen seconds after connecting.
+                    //
+                    // Repeating it also restores the fact after a STATION restart, which
+                    // wipes its per-client state while the client's own session runs on
+                    // and would otherwise never mention its capability again.
+                    if last_caps_sent.elapsed() >= FALLBACK_HEARTBEAT {
+                        let _ = write
+                            .send(Message::Binary(
+                                encode_tlt1(0, &encode_rcf_caps(CAPS_READS_BEACON)).into(),
+                            ))
+                            .await;
+                        last_caps_sent = now;
                     }
                     // Lease refresh while in fallback, so the station keeps the flag alive
                     // and can expire it if we vanish.
@@ -1592,7 +2206,30 @@ async fn run_connection(
                 // Station: expire per-client fallback state whose lease lapsed (a client
                 // that vanished without an off), so it never leaks to a reused client_id.
                 if config.role == RelayRole::Station && !station_fallback.is_empty() {
-                    station_fallback.retain(|_, e| e.last_seen.elapsed() < FALLBACK_LEASE);
+                    // Say so when it happens to a client that is still here. A lease
+                    // lapsing under a client that vanished is the mechanism working; one
+                    // lapsing under a client that is still bound means the station has
+                    // just forgotten something it will need - and it forgets
+                    // `reads_beacon` with it.
+                    //
+                    // This is the third of the three numbers the design asked for and the
+                    // only one that costs nothing to observe: it happens every session,
+                    // to every client, without anyone having to provoke a network switch.
+                    // It was not built, and a whole review round is what found instead
+                    // what it would have said out loud.
+                    station_fallback.retain(|cid, e| {
+                        let alive = e.last_seen.elapsed() < FALLBACK_LEASE;
+                        if !alive && bound_clients.contains(cid) {
+                            log::warn!(
+                                "Relay station: fallback lease expired for client {cid} \
+                                 while it is still bound (on={} reads_beacon={}) \
+                                 - the station has forgotten what this client can do",
+                                e.on,
+                                e.reads_beacon
+                            );
+                        }
+                        alive
+                    });
                 }
 
                 if last_status.elapsed() >= PEER_STATUS_INTERVAL {
@@ -1607,6 +2244,30 @@ async fn run_connection(
                     let report = dedup.take_drop_report();
                     if !report.is_empty() {
                         log::info!("Relay {:?} dedup: {}", config.role, report);
+                    }
+                    // The client's side of the beacon: how many datagrams the downlink
+                    // actually delivered in this window, against the roughly five a
+                    // station sends. Reported while a fallback is running, which is when
+                    // the question is asked - "was the path dead, or merely gappy".
+                    if config.role == RelayRole::Client && fallback_requested {
+                        log::info!(
+                            "Relay client: {downlink_received} downlink datagrams in the \
+                             last window while on wss"
+                        );
+                    }
+                    downlink_received = 0;
+                    // What the beacon costs and what it is failing to buy. Both stay
+                    // silent at zero, so a station without clients and a session where
+                    // the saving works say nothing at all.
+                    if config.role == RelayRole::Station && beacons_sent > 0 {
+                        log::info!(
+                            "Relay station: {beacons_sent} beacons to {} client(s), \
+                             {fallback_without_beacon_reader} audio frames to a client on \
+                             wss that is not known to read one",
+                            bound_clients.len()
+                        );
+                        beacons_sent = 0;
+                        fallback_without_beacon_reader = 0;
                     }
                 }
 
@@ -1642,10 +2303,33 @@ async fn run_connection(
 
                 // Keep our UDP source-binding + NAT mapping alive so downlink audio
                 // keeps reaching us even during long RX-only / idle periods.
-                if last_udp_keepalive.elapsed() >= Duration::from_secs(1) {
+                if last_udp_keepalive.elapsed() >= UDP_BEACON_INTERVAL {
                     if let (Some(sock), Some(tok)) = (&udp_socket, &udp_token) {
-                        udp_seq = udp_seq.wrapping_add(1);
-                        let _ = sock.send(&encode_tlu1(0, udp_seq, tok, &[])).await;
+                        match config.role {
+                            // A client has one peer, and id 0 means "the station" on
+                            // the way up. Unchanged.
+                            RelayRole::Client => {
+                                udp_seq = udp_seq.wrapping_add(1);
+                                let _ = sock.send(&encode_tlu1(0, udp_seq, tok, &[])).await;
+                            }
+                            // A station has many, and the relay routes downstream on an
+                            // exact client id - so a keepalive addressed to 0 reached
+                            // whichever client happened to hold that id, and nobody at
+                            // all when none did. That is why no client has ever seen a
+                            // downlink beacon.
+                            //
+                            // Sent CONTINUOUSLY, not only during a fallback: the entry
+                            // test needs beacons already flowing before the path breaks,
+                            // or it reads their absence as a broken path and flaps.
+                            RelayRole::Station => {
+                                for cid in bound_clients.iter().copied() {
+                                    udp_seq = udp_seq.wrapping_add(1);
+                                    let _ =
+                                        sock.send(&encode_tlu1(cid, udp_seq, tok, &[])).await;
+                                    beacons_sent += 1;
+                                }
+                            }
+                        }
                     }
                     last_udp_keepalive = Instant::now();
                 }
@@ -2120,6 +2804,443 @@ mod tests {
         );
         assert_eq!(url_host("wss://host:443/path").as_deref(), Some("host"));
         assert_eq!(url_host("ws://1.2.3.4:18080").as_deref(), Some("1.2.3.4"));
+    }
+
+    /// The one that protects every station built before the beacon.
+    ///
+    /// A capability announcement must NOT read as a fallback request. The obvious
+    /// design was a spare bit in the fallback frame's value byte, and it would have
+    /// been quietly catastrophic: that parser reads the byte as `!= 0`, so a
+    /// capability bit set in an OFF frame - the very frame a client sends first -
+    /// says "put me on wss" to an older station, and it never says otherwise again.
+    #[test]
+    fn a_capability_frame_is_not_a_fallback_request() {
+        let caps = encode_rcf_caps(CAPS_READS_BEACON);
+        assert_eq!(parse_rcf_caps(&caps), Some(CAPS_READS_BEACON));
+        assert_eq!(
+            parse_rcf_fallback(&caps),
+            None,
+            "an older station must ignore this frame, not read it as a request"
+        );
+        // And the other way round, so the two opcodes can never be confused.
+        let off = encode_rcf_fallback(false);
+        assert_eq!(parse_rcf_fallback(&off), Some(false));
+        assert_eq!(parse_rcf_caps(&off), None);
+    }
+
+    /// Both control frames have to be recognised as control frames.
+    ///
+    /// They are what puts a client on the beacon list when it has sent nothing else,
+    /// which after a reconnect is the normal case - and the client in a fallback,
+    /// the one that most needs a beacon, may send nothing else at all.
+    #[test]
+    fn both_control_frames_count_as_control_frames() {
+        assert!(is_relay_control_frame(&encode_rcf_caps(CAPS_READS_BEACON)));
+        assert!(is_relay_control_frame(&encode_rcf_fallback(true)));
+        assert!(is_relay_control_frame(&encode_rcf_fallback(false)));
+        // Audio must not be mistaken for one, or it would take the early return.
+        assert!(!is_relay_control_frame(&[0u8; 8]));
+        assert!(!is_relay_control_frame(&[]));
+    }
+
+    /// A capability frame with no bits set still parses, and grants nothing.
+    #[test]
+    fn an_empty_capability_frame_grants_nothing() {
+        let none = encode_rcf_caps(0);
+        assert_eq!(parse_rcf_caps(&none), Some(0));
+        assert_eq!(parse_rcf_caps(&none).unwrap() & CAPS_READS_BEACON, 0);
+    }
+
+    /// Recovery has to be reachable on a path carrying nothing but beacons.
+    ///
+    /// This is the shape that a review found in the first repair: move the healthy
+    /// run onto the downlink but leave its restart threshold at the audio value, and
+    /// every beacon starts a fresh run - so the run never grows, and a path that is
+    /// demonstrably alive never recovers. The numbers here are the real ones.
+    #[test]
+    fn a_beacon_only_path_can_recover() {
+        // The real one, not a copy of it. Two tests used to declare their own and
+        // neither would have noticed the send site changing underneath them.
+        let beacon_interval = UDP_BEACON_INTERVAL;
+        assert!(
+            beacon_interval < FALLBACK_DOWNLINK_STALL,
+            "a normal gap between beacons must not restart the healthy run"
+        );
+        assert!(
+            FALLBACK_DOWNLINK_STALL < FALLBACK_RECOVER,
+            "a run must be able to outgrow the restart threshold, or recovery is unreachable"
+        );
+        // And there has to be room for a beacon to go missing. At one a second against
+        // a 2500ms threshold that is exactly one lost beacon of slack, which is thin
+        // but deliberate; what must not happen is it silently becoming none.
+        assert!(
+            beacon_interval * 2 < PATH_QUIET_REPORT,
+            "a single lost beacon must not read as a path outage"
+        );
+        assert!(
+            beacon_interval * 2 < FALLBACK_DOWNLINK_STALL,
+            "a single lost beacon must not trigger a fallback"
+        );
+
+        // A run that began four seconds ago, last beacon half a second back.
+        let began = Instant::now() - Duration::from_secs(4);
+        let last = Instant::now() - Duration::from_millis(500);
+        assert!(udp_recovered(
+            Some(began),
+            Some(last),
+            FALLBACK_RECOVER,
+            FALLBACK_DOWNLINK_STALL
+        ));
+
+        // Beacons stopped three seconds ago: not recovered, whatever the run says.
+        let stale = Instant::now() - Duration::from_secs(3);
+        assert!(!udp_recovered(
+            Some(began),
+            Some(stale),
+            FALLBACK_RECOVER,
+            FALLBACK_DOWNLINK_STALL
+        ));
+    }
+
+    /// The gap belongs to the caller, not to the function that measures it.
+    ///
+    /// It used to filter on `PATH_QUIET_REPORT` before returning, which was fine while
+    /// one caller asked one question. The fallback now reads the same gap against
+    /// `FALLBACK_DOWNLINK_STALL`, and those two are the same 2500 ms by coincidence -
+    /// so a filter in here would have tied a reporting threshold to a decision
+    /// threshold where nobody would ever look for the knot.
+    #[test]
+    fn a_measured_gap_comes_back_unfiltered() {
+        let mut last: Option<Instant> = None;
+        let t0 = Instant::now();
+
+        // Nothing before it: no gap, and the clock starts.
+        assert_eq!(note_path_packet(&mut last, t0), None);
+        assert_eq!(last, Some(t0));
+
+        // A gap far below any reporting threshold still comes back, so a caller with a
+        // smaller threshold than PATH_QUIET_REPORT can see it.
+        let small = Duration::from_millis(40);
+        let gap = note_path_packet(&mut last, t0 + small).expect("a second packet has a gap");
+        assert_eq!(gap, small);
+        assert!(
+            gap < PATH_QUIET_REPORT,
+            "the point of this case is that it is below the reporting threshold"
+        );
+
+        // And the clock moved with it, so gaps do not accumulate.
+        assert_eq!(last, Some(t0 + small));
+    }
+
+    /// A path carrying nothing but keepalives is not a quiet path.
+    ///
+    /// This is the sentence the code could not express until the pre-step became a
+    /// function. Both defects at this spot were the same mistake in different clothes:
+    /// the fallback would not fire on a beacon-only path, and then the station called
+    /// every listening turn an outage. Both were "we measured the audio and called it
+    /// the path".
+    #[test]
+    fn a_path_carrying_only_keepalives_is_never_quiet() {
+        let mut last: Option<Instant> = None;
+        let mut healthy: Option<Instant> = None;
+        let t0 = Instant::now();
+
+        // First datagram of the session: no gap to report, and the run starts.
+        assert_eq!(
+            note_downlink(&mut last, &mut healthy, t0, FALLBACK_DOWNLINK_STALL),
+            None
+        );
+        assert_eq!(healthy, Some(t0));
+
+        // Sixty beacons at their normal spacing, no audio at all - a station with every
+        // channel switched off, or an operator who is listening.
+        let mut t = t0;
+        for _ in 0..60 {
+            t += UDP_BEACON_INTERVAL;
+            let gap = note_downlink(&mut last, &mut healthy, t, FALLBACK_DOWNLINK_STALL)
+                .expect("every beacon after the first closes a gap");
+            assert!(
+                gap < PATH_QUIET_REPORT,
+                "a beacon at its normal spacing must never be reported as an outage"
+            );
+        }
+
+        // And the run has been running the whole minute, so recovery is reachable.
+        assert_eq!(
+            healthy,
+            Some(t0),
+            "a beacon at its normal spacing must not restart the healthy run"
+        );
+        // Which is what makes recovery reachable: the run has grown past the window.
+        // Stated as a span rather than through `udp_recovered`, because that one reads
+        // the wall clock via `elapsed()` and this timeline is built forwards from now -
+        // `a_beacon_only_path_can_recover` covers it from the other side, with instants
+        // in the past.
+        assert!(
+            t.saturating_duration_since(healthy.expect("the run is running")) >= FALLBACK_RECOVER,
+            "a minute of beacons must leave a run long enough to recover on"
+        );
+
+        // Now the beacons stop for longer than the threshold: the run restarts, and the
+        // gap is worth a line.
+        t += FALLBACK_DOWNLINK_STALL + Duration::from_millis(1);
+        let gap = note_downlink(&mut last, &mut healthy, t, FALLBACK_DOWNLINK_STALL)
+            .expect("a gap this long is measured");
+        assert!(gap >= PATH_QUIET_REPORT);
+        assert_eq!(healthy, Some(t), "a real gap must restart the healthy run");
+    }
+
+    /// The whole episode, driven as a sequence rather than as one comparison.
+    ///
+    /// Everything that ever went wrong here was in the wiring, and no test could
+    /// reach it: `run_connection` is called once, from production, and no test calls
+    /// it - so a mutation anywhere in that block survived the entire suite by
+    /// construction. A review made that argument and it is stronger than the three
+    /// mutation runs offered against it.
+    #[test]
+    fn an_absence_opens_once_and_closes_once() {
+        let quiet = FALLBACK_DOWNLINK_STALL + Duration::from_millis(1);
+        let flowing = Duration::from_millis(20);
+
+        // A long-running session throughout; the session age is only consulted when
+        // there has been no audio at all, which is the test after this one.
+        let old = Duration::from_secs(600);
+
+        // Healthy: nothing to say, latched or not.
+        assert_eq!(
+            absence_edge(false, false, Some(flowing), old),
+            AbsenceEvent::Nothing
+        );
+
+        // Audio has been gone long enough, path alive: open, once, carrying the gap.
+        assert_eq!(
+            absence_edge(false, false, Some(quiet), old),
+            AbsenceEvent::Began(quiet)
+        );
+        // Still gone, already spoken: silence. This is the level-versus-edge fault
+        // that put fourteen lines in one log.
+        assert_eq!(
+            absence_edge(true, false, Some(quiet), old),
+            AbsenceEvent::Nothing
+        );
+
+        // Audio returns: close, saying so.
+        assert_eq!(
+            absence_edge(true, false, Some(flowing), old),
+            AbsenceEvent::EndedAudioBack
+        );
+    }
+
+    /// No audio at all in this session - the case that came out of a measurement
+    /// instead of out of a test, because it lived above the cut.
+    ///
+    /// This is a client that has started, has its relay transport up and has not been
+    /// connected to a server yet: the path is demonstrably alive and there has never
+    /// been an audio frame. The absence is then as old as the session, and the report
+    /// is worth exactly one line - not one every three seconds, which is what a log of
+    /// 2026-09-11 contained fourteen times.
+    #[test]
+    fn a_session_that_never_had_audio_measures_from_its_own_start() {
+        let young = FALLBACK_DOWNLINK_STALL - Duration::from_millis(1);
+        let old = FALLBACK_DOWNLINK_STALL + Duration::from_secs(40);
+
+        // Just started: too early to say anything.
+        assert_eq!(absence_edge(false, false, None, young), AbsenceEvent::Nothing);
+
+        // Long enough: one line, and the age it reports is the session's own.
+        assert_eq!(
+            absence_edge(false, false, None, old),
+            AbsenceEvent::Began(old),
+            "with no audio ever, the absence is as old as the session"
+        );
+
+        // And then it stays quiet, however long that lasts - the operator decides
+        // when to connect.
+        assert_eq!(
+            absence_edge(true, false, None, old + Duration::from_secs(3600)),
+            AbsenceEvent::Nothing
+        );
+    }
+
+    /// The path breaking is NOT audio coming back, and the log must not say it is.
+    ///
+    /// The first version had one ending for both. A stalled path makes the condition
+    /// false exactly as audio returning does, so "UDP audio is back" was written on
+    /// the very pass where the fallback fires - the two lines land next to each other
+    /// in the log, the first one the opposite of the truth. Found in review.
+    #[test]
+    fn a_broken_path_does_not_report_audio_returning() {
+        let quiet = FALLBACK_DOWNLINK_STALL + Duration::from_millis(1);
+
+        let old = Duration::from_secs(600);
+
+        assert_eq!(
+            absence_edge(true, true, Some(quiet), old),
+            AbsenceEvent::EndedPathBroken,
+            "the rescue is taking over; claiming audio returned would be a lie"
+        );
+        assert_ne!(
+            absence_edge(true, true, Some(quiet), old),
+            AbsenceEvent::EndedAudioBack
+        );
+
+        // And with audio flowing again while the path is also stalled - the order the
+        // two facts arrive in must not decide what gets written.
+        assert_eq!(
+            absence_edge(true, true, Some(Duration::from_millis(20)), old),
+            AbsenceEvent::EndedPathBroken
+        );
+    }
+
+    /// Two episodes in one session, no restart between them.
+    ///
+    /// Working rule 9. The second episode has to behave exactly like the first: open
+    /// once, stay quiet, close once.
+    #[test]
+    fn a_second_absence_behaves_like_the_first() {
+        let quiet = FALLBACK_DOWNLINK_STALL + Duration::from_millis(1);
+        let flowing = Duration::from_millis(20);
+
+        let mut latched = false;
+        let mut opened = 0;
+        let mut closed = 0;
+
+        // Two rounds of: gone, gone, gone, back, back.
+        for _ in 0..2 {
+            for without in [quiet, quiet, quiet, flowing, flowing] {
+                match absence_edge(latched, false, Some(without), Duration::from_secs(600)) {
+                    AbsenceEvent::Began(_) => {
+                        latched = true;
+                        opened += 1;
+                    }
+                    AbsenceEvent::EndedAudioBack | AbsenceEvent::EndedPathBroken => {
+                        latched = false;
+                        closed += 1;
+                    }
+                    AbsenceEvent::Nothing => {}
+                }
+            }
+        }
+
+        assert_eq!(opened, 2, "one opening line per episode, not per pass");
+        assert_eq!(closed, 2, "and one closing line per episode");
+        assert!(!latched, "and the second episode leaves nothing standing");
+    }
+
+    /// A healthy stream must never make the diagnostic speak.
+    ///
+    /// The line exists to explain why the rescue did not fire, and it compared against
+    /// a 500ms threshold while audio frames arrive every 20ms - so one late frame
+    /// satisfied it. On a link carrying fifty frames a second it announced "UDP audio
+    /// is missing", three times in one afternoon. The first case below is that link.
+    #[test]
+    fn a_healthy_audio_stream_never_trips_the_diagnostic() {
+        let frame_interval = Duration::from_millis(20);
+
+        // A stream running normally, even with a frame or two late.
+        assert!(!audio_absent_while_path_alive(false, frame_interval * 30));
+        assert!(
+            frame_interval * 30 > Duration::from_millis(500),
+            "this case has to be past the OLD threshold, or it proves nothing"
+        );
+
+        // Audio gone for longer than the rescue's own window, path reporting alive:
+        // that is the situation worth a line.
+        assert!(audio_absent_while_path_alive(false, FALLBACK_DOWNLINK_STALL));
+
+        // But not while the path is stalled - then the rescue is acting and there is
+        // nothing to explain.
+        assert!(!audio_absent_while_path_alive(true, Duration::from_secs(60)));
+    }
+
+    /// The entry, which for six rounds had no test at all.
+    ///
+    /// The one that matters is the third: a beacon at its normal spacing must NOT read
+    /// as a stall. Put the old guard back in front of this decision and that case is
+    /// what breaks, which is the whole reason the function was pulled out of the loop.
+    #[test]
+    fn a_beacon_at_normal_spacing_is_not_a_stall() {
+        let beacon_interval = UDP_BEACON_INTERVAL;
+
+        // 1. nothing has ever arrived, still inside the connect window: wait.
+        assert!(!downlink_stalled(
+            Duration::from_millis(500),
+            None,
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+
+        // 2. nothing has ever arrived and the connect window has passed: UDP is blocked.
+        assert!(downlink_stalled(
+            FALLBACK_CONNECT_TIMEOUT + Duration::from_millis(1),
+            None,
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+
+        // 3. the load-bearing one: a beacon one second ago, no audio at all, every
+        //    channel switched off. This must not be a stall, and nothing else in the
+        //    workspace says so.
+        assert!(!downlink_stalled(
+            Duration::from_secs(60),
+            Some(Instant::now() - beacon_interval),
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+
+        // 4. the beacons themselves stopped: the path is gone.
+        assert!(downlink_stalled(
+            Duration::from_secs(60),
+            Some(Instant::now() - FALLBACK_DOWNLINK_STALL - Duration::from_millis(1)),
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+    }
+
+    /// The saving itself, including the case that made it never happen.
+    ///
+    /// A station stops sending UDP audio only to a client it knows reads a beacon. That
+    /// fact reached the station once at connect and was dropped with the fallback entry
+    /// a lease later, so every realistic fallback found the default - and the duplicate
+    /// stream this patch exists to remove was never removed. The third case below is
+    /// that situation; it passes here because the repair is that the client keeps
+    /// saying it, not that the station stops forgetting.
+    #[test]
+    fn a_station_only_drops_udp_for_a_client_that_reads_beacons() {
+        let fresh = Duration::from_secs(1);
+        let expired = FALLBACK_LEASE + Duration::from_secs(1);
+
+        // No fallback: UDP only, as before this patch existed.
+        assert_eq!(
+            station_audio_paths(true, false, fresh, FALLBACK_LEASE, true),
+            (true, false)
+        );
+
+        // Fallback, client reads beacons: wss only. This is the saving.
+        assert_eq!(
+            station_audio_paths(true, true, fresh, FALLBACK_LEASE, true),
+            (false, true)
+        );
+
+        // Fallback, but the station does not know this client reads beacons: BOTH, on
+        // purpose. It has no other way of noticing that its path came back.
+        assert_eq!(
+            station_audio_paths(true, true, fresh, FALLBACK_LEASE, false),
+            (true, true)
+        );
+
+        // The lease lapsed: the station no longer believes the client is in a fallback,
+        // so UDP resumes and wss stops - even though `reads_beacon` still says true.
+        assert_eq!(
+            station_audio_paths(true, true, expired, FALLBACK_LEASE, true),
+            (true, false)
+        );
+
+        // No UDP transport at all: wss carries it whatever the flags say.
+        assert_eq!(
+            station_audio_paths(false, true, fresh, FALLBACK_LEASE, true),
+            (false, true)
+        );
     }
 
     #[test]

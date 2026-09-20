@@ -41,11 +41,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.sdrremote.R
+import uniffi.sdr_remote.filterStep
+import uniffi.sdr_remote.filterWidthLabel
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -230,10 +231,9 @@ fun RadioControls(
         }
 
         // Thetis autostart: opt-in for what a short press on the power button
-        // above does. This is the setting only - the launch itself is driven by
-        // SdrViewModel.maybeAutostartThetis(), because these controls live in a
-        // LazyColumn item and a UI-side effect would only run while that item
-        // happens to be composed.
+        // above does. This is the setting only - SdrViewModel.syncThetisAutostart()
+        // hands it to the engine, which decides the launch (the same rule as the
+        // desktop).
         val context = LocalContext.current
         val prefs = remember { context.getSharedPreferences("thetislink", Context.MODE_PRIVATE) }
         var autostart by remember { mutableStateOf(prefs.getBoolean("thetis_autostart", false)) }
@@ -424,75 +424,11 @@ private fun DriveSlider(driveLevel: Int, onDriveChange: (Int) -> Unit) {
     }
 }
 
-// Filter bandwidth presets per mode category
-private val SSB_PRESETS = intArrayOf(1800, 2100, 2400, 2700, 3000, 3300, 3600, 4000)
-private val CW_PRESETS = intArrayOf(50, 100, 250, 500, 1000)
-private val AM_PRESETS = intArrayOf(4000, 6000, 8000, 10000, 12000)
-private val FM_PRESETS = intArrayOf(8000, 12000, 16000)
-
-private fun presetsForMode(mode: Int): IntArray = when (mode) {
-    0, 1, 7, 9 -> SSB_PRESETS      // LSB, USB, DIGU, DIGL
-    3, 4 -> CW_PRESETS              // CWL, CWU
-    2, 6, 10, 11 -> AM_PRESETS      // DSB, AM, SAM, DRM
-    5 -> FM_PRESETS                  // FM
-    else -> SSB_PRESETS
-}
-
-private fun isCwMode(mode: Int): Boolean = mode == 3 || mode == 4
-
-private fun formatBandwidth(hz: Int, cw: Boolean): String {
-    return if (cw || hz < 1000) {
-        "$hz Hz"
-    } else {
-        val khz = hz / 1000f
-        if (khz == khz.toInt().toFloat()) {
-            "${khz.toInt()} kHz"
-        } else {
-            "${"%.1f".format(khz)} kHz"
-        }
-    }
-}
-
-private fun closestPresetIndex(presets: IntArray, bw: Int): Int {
-    var bestIdx = 0
-    var bestDist = abs(presets[0] - bw)
-    for (i in 1 until presets.size) {
-        val dist = abs(presets[i] - bw)
-        if (dist < bestDist) {
-            bestDist = dist
-            bestIdx = i
-        }
-    }
-    return bestIdx
-}
-
-/**
- * Calculate filter edges respecting mode sideband rules.
- * USB/DIGU: anchor low edge (min 25 Hz), expand upward.
- * LSB/DIGL: anchor high edge (max -25 Hz), expand downward.
- * CW: keep center within sideband.
- * AM/SAM/DSB/DRM/FM: symmetric around 0.
- */
-private fun calcFilterEdges(mode: Int, filterLow: Int, filterHigh: Int, newBw: Int): Pair<Int, Int> {
-    return when (mode) {
-        1, 7 -> {   // USB, DIGU
-            val low = filterLow.coerceAtLeast(25)
-            Pair(low, low + newBw)
-        }
-        0, 9 -> {   // LSB, DIGL
-            val high = filterHigh.coerceAtMost(-25)
-            Pair(high - newBw, high)
-        }
-        3, 4 -> {   // CWL, CWU
-            val center = (filterLow + filterHigh) / 2
-            Pair(center - newBw / 2, center + newBw / 2)
-        }
-        else -> {   // AM, SAM, DSB, DRM, FM
-            Pair(-newBw / 2, newBw / 2)
-        }
-    }
-}
-
+// Filter width buttons. The rule - which width comes next, where the edges go,
+// what the label says - lives in sdr-remote-logic (filter_width) and is shared
+// with the desktop. Compose had its own copy until build 47: it kept the low
+// edge and added the width, showed the nearest step instead of the real width,
+// and that copy is the one report 74 locked up in.
 @Composable
 fun FilterBandwidthControl(
     filterLowHz: Int,
@@ -500,10 +436,10 @@ fun FilterBandwidthControl(
     mode: Int,
     onFilterChange: (low: Int, high: Int) -> Unit,
 ) {
-    val presets = remember(mode) { presetsForMode(mode) }
-    val cw = remember(mode) { isCwMode(mode) }
-    val currentBw = filterHighHz - filterLowHz
-    val currentIdx = remember(currentBw, mode) { closestPresetIndex(presets, currentBw) }
+    val m = mode.toUByte()
+    val narrower = remember(m, filterLowHz, filterHighHz) { filterStep(m, filterLowHz, filterHighHz, false) }
+    val wider = remember(m, filterLowHz, filterHighHz) { filterStep(m, filterLowHz, filterHighHz, true) }
+    val label = remember(m, filterLowHz, filterHighHz) { filterWidthLabel(m, filterLowHz, filterHighHz) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -511,12 +447,8 @@ fun FilterBandwidthControl(
         horizontalArrangement = Arrangement.Center,
     ) {
         Button(
-            onClick = {
-                val newIdx = (currentIdx - 1).coerceAtLeast(0)
-                val (low, high) = calcFilterEdges(mode, filterLowHz, filterHighHz, presets[newIdx])
-                onFilterChange(low, high)
-            },
-            enabled = currentIdx > 0,
+            onClick = { narrower?.let { onFilterChange(it.lowHz, it.highHz) } },
+            enabled = narrower != null,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF404040)),
         ) {
             Text("-", fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -525,22 +457,19 @@ fun FilterBandwidthControl(
         Spacer(Modifier.width(12.dp))
 
         Text(
-            text = formatBandwidth(presets[currentIdx], cw),
+            text = label,
             fontWeight = FontWeight.Bold,
             fontSize = 16.sp,
             textAlign = TextAlign.Center,
-            modifier = Modifier.width(80.dp),
+            // Wide enough for "2.42 kHz": the label is the real width now, not a step.
+            modifier = Modifier.width(96.dp),
         )
 
         Spacer(Modifier.width(12.dp))
 
         Button(
-            onClick = {
-                val newIdx = (currentIdx + 1).coerceAtMost(presets.size - 1)
-                val (low, high) = calcFilterEdges(mode, filterLowHz, filterHighHz, presets[newIdx])
-                onFilterChange(low, high)
-            },
-            enabled = currentIdx < presets.size - 1,
+            onClick = { wider?.let { onFilterChange(it.lowHz, it.highHz) } },
+            enabled = wider != null,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF404040)),
         ) {
             Text("+", fontWeight = FontWeight.Bold, fontSize = 18.sp)

@@ -213,6 +213,8 @@ fn build_yaesu_presence(slot0_model: u8, slot1_model: u8) -> Vec<u8> {
         slot1_model,
         slot0_trouble: 0,
         slot1_trouble: 0,
+        slot0_configured: true,
+        slot1_configured: true,
     };
     let mut buf = [0u8; YaesuPresencePacket::SIZE];
     pkt.serialize(&mut buf);
@@ -582,8 +584,13 @@ async fn the_yaesu_playback_gain_follows_the_same_per_model_calibration_as_the_m
         let _ = wait_for_level(&state_rx, &server, client, pick).await;
 
         let played = rec.playback.lock().unwrap().clone();
-        let energy: f32 = played.iter().map(|s| s * s).sum();
-        rms.push((energy / played.len().max(1) as f32).sqrt());
+        // The peak, not the mean: the mean divides by the length of the
+        // recording, and that is "when the test happened to look" - a run
+        // recorded twice as long reads 1.41 times quieter, which is exactly
+        // the 7.52-against-5.32 this test failed with once under a loaded
+        // suite (review 319). A test that measures may not divide by
+        // something that depends on the moment you look.
+        rms.push(played.iter().fold(0.0f32, |m, s| m.max(s.abs())));
         let _ = shutdown_tx.send(true);
     }
 
@@ -591,8 +598,10 @@ async fn the_yaesu_playback_gain_follows_the_same_per_model_calibration_as_the_m
     assert!(a991 > 0.0 && ftx1 > 0.0, "both radios must have produced audio");
     let expected = 16.8_f32 / 3.16;
     let ratio = ftx1 / a991;
+    // Tighter now that the measure does not move with the recording length:
+    // a real calibration error of 25% used to disappear into the old window.
     assert!(
-        ratio / expected > 0.7 && ratio / expected < 1.4,
+        ratio / expected > 0.9 && ratio / expected < 1.12,
         "playback gain must use the per-model calibration, like the meter: \
          991A {a991:.4}, FTX-1 {ftx1:.4} (ratio {ratio:.2}, expected {expected:.2}). \
          A ratio near 1.0 means one flat constant is back on the audio path"

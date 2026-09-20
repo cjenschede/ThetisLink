@@ -40,7 +40,7 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 | bytemuck | Safe transmute for audio buffers | MIT / Apache-2.0 / Zlib |
 | hmac / sha2 / rand | Authentication (HMAC-SHA256) | MIT / Apache-2.0 |
 | wry | WebView (embedded WebSDR) | MIT / Apache-2.0 |
-| mcp2221-hal | Adafruit MCP2221A USB-HID bridge (StockCorner JC-4s / JC-3s tuners) — vendored, used under MIT terms | MIT / Apache-2.0 |
+| mcp2221-hal | Adafruit MCP2221A USB-HID bridge (StockCorner JC-4s / JC-3s tuners, G-1000DXC rotor, Morse paddle) — vendored, used under MIT terms | MIT / Apache-2.0 |
 
 ### Android (Kotlin)
 
@@ -73,5 +73,6 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 | EA7HG Visual Rotor | UDP |
 | Yaesu G-1000DXC Rotor | MCP2221A USB-HID |
 | PstRotator (any supported rotor) | XML over UDP |
-| YPC21 / PTT-Z01 transmit button | BLE GATT (Android) |
+| Morse paddle / straight key | MCP2221A USB-HID (desktop) |
+| YPC21 / PTT-Z01 transmit button | BLE GATT (desktop + Android) |
 | ZL-01 shutter button | Bluetooth, as an external touch device (Android) |

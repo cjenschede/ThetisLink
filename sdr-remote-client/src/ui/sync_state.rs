@@ -98,14 +98,25 @@ impl SdrRemoteApp {
     /// while transmitting left the latches standing, and the next connect keyed
     /// the radio on its own (review finding, round 2).
     pub(super) fn release_all_ptt(&mut self) {
-        self.mouse_ptt = false;
-        self.midi_ptt = false;
-        self.ptt = false;
         // The link is gone, so there is nobody to tell. Marking it as sent is
         // right here and only here: a reconnect starts a fresh session in which
-        // this client holds nothing.
-        self.release_ptt_latch(0, PttRelease::LinkGone, false);
-        self.release_ptt_latch(1, PttRelease::LinkGone, false);
+        // this client holds nothing. All three transmitters through the one
+        // exit - until build 77 Thetis was three booleans here, and the
+        // Bluetooth button's was missing (review finding, 2026-09-17).
+        for tx in 0..3 {
+            self.release_tx_latch(tx, PttRelease::LinkGone, false);
+        }
+    }
+
+    /// Which sources the Thetis transmitter re-reads every frame: the spacebar
+    /// always, the mouse only in momentary mode - see `resampled_sources`.
+    pub(super) fn thetis_resampled_sources(&self) -> &'static [sdr_remote_logic::ptt_intent::PttSource] {
+        use sdr_remote_logic::ptt_intent::PttSource;
+        if self.ptt_toggle_mode {
+            &[PttSource::Space]
+        } else {
+            &[PttSource::Space, PttSource::Mouse]
+        }
     }
 
     /// Which sources this client re-reads out of the input state every frame,
@@ -144,46 +155,59 @@ impl SdrRemoteApp {
     /// to judge the behaviour by, and a proof that cannot fail is not a proof
     /// (review finding).
     fn release_ptt_latch(&mut self, slot: u8, why: PttRelease, mixed: bool) {
+        self.release_tx_latch(slot as usize + 1, why, mixed);
+    }
+
+    /// Let go of one transmitter, in `PttTarget` order: 0 Thetis, 1 and 2 the
+    /// Yaesu slots. One function for all three since build 77; before that the
+    /// Thetis exits were hand-written booleans at every call site.
+    fn release_tx_latch(&mut self, tx: usize, why: PttRelease, mixed: bool) {
+        let name = ["thetis", "yaesu1", "yaesu2"][tx];
+        let l = if tx == 0 { self.thetis_latches } else { self.yaesu_latches[tx - 1] };
         log::info!(
-            "PTT release yaesu{} ({}{}) latches mouse={} space={} midi={} wait={}",
-            slot + 1,
+            "PTT release {} ({}{}) latches mouse={} space={} midi={} bluetooth={} wait={}",
+            name,
             match why {
                 PttRelease::Refused => "refused by the server",
                 PttRelease::LinkGone => "link gone",
                 PttRelease::RadioLeftTx => "radio left TX",
             },
             if mixed { ", more than one refusal missed" } else { "" },
-            self.yaesu_latches[slot as usize].mouse,
-            self.yaesu_latches[slot as usize].space,
-            self.yaesu_latches[slot as usize].midi,
-            self.yaesu_latches[slot as usize].needs_new_press,
+            l.mouse,
+            l.space,
+            l.midi,
+            l.bluetooth,
+            l.needs_new_press,
         );
         // Every latch, not just the mouse: they are OR-ed into one request now,
         // so one left standing keys the radio again on the next frame.
         // An exit of the shared type, and then one assignment. Not eight lines with one
         // that can be forgotten - which is exactly the fault a reviewer found here and
         // that no test saw.
-        let i = slot as usize;
-        let mut intent = sdr_remote_logic::ptt_intent::PttIntent::default();
-        intent.set(sdr_remote_logic::ptt_intent::PttSource::Mouse, self.yaesu_latches[i].mouse);
-        intent.set(sdr_remote_logic::ptt_intent::PttSource::Space, self.yaesu_latches[i].space);
-        intent.set(sdr_remote_logic::ptt_intent::PttSource::Midi, self.yaesu_latches[i].midi);
-        intent.set_needs_new_press(self.yaesu_latches[i].needs_new_press);
+        let resampled = if tx == 0 {
+            self.thetis_resampled_sources()
+        } else {
+            self.resampled_sources((tx - 1) as u8)
+        };
+        let mut intent = l.intent();
         match why {
             PttRelease::Refused => intent.refused(),
             PttRelease::LinkGone => intent.disconnected(),
-            PttRelease::RadioLeftTx => intent.radio_left_tx(self.resampled_sources(slot)),
+            PttRelease::RadioLeftTx => intent.radio_left_tx(resampled),
         }
-        self.yaesu_latches[i] = sdr_remote_logic::ptt_intent::Latches {
-            mouse: intent.is_held(sdr_remote_logic::ptt_intent::PttSource::Mouse),
-            space: intent.is_held(sdr_remote_logic::ptt_intent::PttSource::Space),
-            midi: intent.is_held(sdr_remote_logic::ptt_intent::PttSource::Midi),
-            needs_new_press: intent.needs_new_press(),
-        };
-        if why == PttRelease::LinkGone {
-            self.yaesu_ptt_last_sent[i] = false;
+        let next = sdr_remote_logic::ptt_intent::Latches::from_intent(&intent);
+        if tx == 0 {
+            self.thetis_latches = next;
+            if why == PttRelease::LinkGone {
+                self.ptt = false;
+            }
+        } else {
+            self.yaesu_latches[tx - 1] = next;
+            if why == PttRelease::LinkGone {
+                self.yaesu_ptt_last_sent[tx - 1] = false;
+            }
         }
-        self.apply_ptt_spike_protection(true, false);
+        self.apply_ptt_spike_protection(tx != 0, false);
     }
 
     /// Is the "USB lost" notice up for this radio slot?
@@ -500,16 +524,23 @@ impl SdrRemoteApp {
             // 2 radio two), the latches count radio slots (0 radio one,
             // 1 radio two).
             if state.ptt_denial.releases(missed, 0) {
-                // The button is painted from what we last asked for, so a
-                // refusal has to reach the press as well as the sign.
-                self.mouse_ptt = false;
-                self.midi_ptt = false;
+                // The same exit as the Yaesu slots, with the same reason: a
+                // refusal lets a held key keep asking, the radio stopping on its
+                // own makes it wait for a fresh press (build 77; before that
+                // Thetis cleared three booleans whatever the reason).
+                self.release_tx_latch(0, why, mixed);
             }
             if state.ptt_denial.releases(missed, 1) {
                 self.release_ptt_latch(0, why, mixed);
+                // And the sign on that radio's own button, as a refusal by this
+                // client itself already set it. Without this a server refusal
+                // of a Yaesu - a PTT, or since CW step 6 a key sent to it - was
+                // only seen in the general label beside Thetis's PTT (review 316).
+                self.yaesu_refused_at[0] = Some(std::time::Instant::now());
             }
             if state.ptt_denial.releases(missed, 2) {
                 self.release_ptt_latch(1, why, mixed);
+                self.yaesu_refused_at[1] = Some(std::time::Instant::now());
             }
         }
         // The clock for the "USB lost" notice. Stamped while it is happening,
@@ -653,6 +684,7 @@ impl SdrRemoteApp {
         self.audio_error = state.audio_error;
         self.agc_enabled = state.agc_enabled;
         self.other_tx = state.other_tx;
+        self.server_tx = state.server_tx;
         if !state.playing { self.playing = false; }
         if !state.last_recorded.is_empty() && state.last_recorded != self.last_recorded {
             self.last_recorded = state.last_recorded.clone();
@@ -703,9 +735,13 @@ impl SdrRemoteApp {
                 self.save_full_config();
             }
         }
-        // Once user changes filter locally, client is authoritative until mode changes.
-        // filter_changed_at is cleared on mode change (above), so new mode values are accepted.
-        if self.filter_changed_at.is_none() {
+        // A local filter change outranks the server only until it has had time to
+        // reach Thetis and come back (`filter_width::accept_server_filter`). Until
+        // build 47 it held until the next mode change: the desktop stopped
+        // following Thetis after one press and wrote its stale edges back with the
+        // next. A mode change still clears it at once (above).
+        if sdr_remote_logic::filter_width::accept_server_filter(self.filter_changed_at, std::time::Instant::now()) {
+            self.filter_changed_at = None;
             self.filter_low_hz = state.filter_low_hz;
             self.filter_high_hz = state.filter_high_hz;
         }
@@ -1314,6 +1350,9 @@ impl SdrRemoteApp {
         // Dual-radio slot 1
         self.yaesu_model = state.yaesu_model;
         self.yaesu2_model = state.yaesu2_model;
+        self.yaesu_configured = state.yaesu_configured;
+        self.radios_known = state.radios_known;
+        self.yaesu2_configured = state.yaesu2_configured;
         self.yaesu2_connected = state.yaesu2_connected;
         Self::accept_yaesu_freq(
             &mut self.yaesu2_freq_a,
@@ -1403,10 +1442,12 @@ impl SdrRemoteApp {
         // Max-power follows the band directly (not debounced; is not a slider value).
         self.yaesu_tx_power_max = state.yaesu_tx_power_max as u16;
         self.yaesu2_tx_power_max = state.yaesu2_tx_power_max as u16;
+        self.yaesu_loading = [state.yaesu_loading, state.yaesu2_loading];
         self.yaesu_split_active = state.yaesu_split;
         self.yaesu_scan_active = state.yaesu_scan;
         self.yaesu_tuner_state = state.yaesu_tuner_state;
         self.yaesu_hi_swr = state.yaesu_hi_swr;
+        self.pa_drive_warning = state.pa_drive_warning;
         self.yaesu_feature_levels = state.yaesu_feature_levels;
         self.yaesu_clar_offset = state.yaesu_feature_freqs[3] as i16; // clarifier-offset (§15)
         // yaesu_feature_toggles is synced behind the debounce (optimistic toggles).
@@ -1639,8 +1680,11 @@ impl SdrRemoteApp {
             self.rx2_volume = state.rx2_af_gain as f32 / 100.0;
         }
         self.rx2_af_gain_display = state.rx2_af_gain;
-        // Once user changes RX2 filter locally, client is authoritative until mode changes.
-        if self.rx2_filter_changed_at.is_none() && (state.filter_rx2_low_hz != 0 || state.filter_rx2_high_hz != 0) {
+        // Same hold as RX1 above.
+        if (state.filter_rx2_low_hz != 0 || state.filter_rx2_high_hz != 0)
+            && sdr_remote_logic::filter_width::accept_server_filter(self.rx2_filter_changed_at, std::time::Instant::now())
+        {
+            self.rx2_filter_changed_at = None;
             self.rx2_filter_low_hz = state.filter_rx2_low_hz;
             self.rx2_filter_high_hz = state.filter_rx2_high_hz;
         }

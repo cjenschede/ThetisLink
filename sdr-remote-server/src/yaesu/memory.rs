@@ -1428,9 +1428,16 @@ pub(super) fn parse_ftx1_tag(mt: &str) -> String {
     String::new()
 }
 
-/// FTX-1 mode code (P6 in MR/MW) -> label. Codes differ from the 991A
-/// (3=CW-U, 7=CW-L, E=PSK, H/I=C4FM). Labels chosen so they round-trip
-/// correctly with `ftx1_mode_to_code` and are recognizable in the client editor.
+/// FTX-1 mode code (P6 in MR/MW) -> label.
+///
+/// Some codes differ from the 991A (E=PSK, H/I=C4FM), but **CW does not** - and
+/// this comment used to say it did. Both radios use 3 for the normal CW and 7 for
+/// the reversed one; the FTX-1 manual writes the sideband into the name ("CW-U",
+/// "CW-L") where the 991A uses the older "CW" and "CW-R". The claim here is what
+/// sent `yaesu_mode_to_internal` the wrong way for a whole release, so it is
+/// corrected rather than left as a signpost pointing at the fault.
+/// Labels chosen so they round-trip correctly with `ftx1_mode_to_code` and are
+/// recognizable in the client editor.
 pub(super) fn ftx1_mode_label(c: char) -> &'static str {
     match c {
         '1' => "LSB", '2' => "USB", '3' => "CW", '4' => "FM", '5' => "AM",
@@ -1849,31 +1856,41 @@ pub(super) fn read_all_menus(port: &mut Box<dyn serialport::SerialPort>) -> Resu
 /// Bounds: P1 1..=11, P2 1..=9, P3 1..=40. Per (P1,P2) we stop early if
 /// P3=01 and 02 are missing (subgroup does not exist), and after 6 consecutive misses
 /// within an existing subgroup (end of items, tolerates gaps up to 5).
-enum Ftx1ExRead {
+#[derive(Debug, PartialEq)]
+pub(super) enum Ftx1ExRead {
     Value(String),
     Missing,
     NoResponse,
 }
 
-fn read_ftx1_ex_value(port: &mut Box<dyn serialport::SerialPort>, p1: u8, p2: u8, p3: u8) -> Ftx1ExRead {
+pub(super) fn read_ftx1_ex_value(port: &mut Box<dyn serialport::SerialPort>, spill: &mut String, p1: u8, p2: u8, p3: u8) -> Ftx1ExRead {
     let cmd = format!("EX{:02}{:02}{:02};", p1, p2, p3);
     let prefix = format!("EX{:02}{:02}{:02}", p1, p2, p3);
 
+    // Whatever already waits is not the answer to this question: since build
+    // 141 the scan runs in the gaps between the polls, and a late reply to one
+    // of them was being read as this address's answer (field test 2026-09-19:
+    // the first pass found 275 of 405). It goes to the polls' buffer instead.
+    spill_waiting(port, spill);
+    let mut rejected_once = false;
     for attempt in 0..3 {
         let resp = cat_query_with_timeout(port, &cmd, Duration::from_millis(700));
         std::thread::sleep(Duration::from_millis(15));
 
-        if resp.contains("?;") {
-            return Ftx1ExRead::Missing;
-        }
-        if let Some(start) = resp.find(&prefix) {
-            if let Some(end_rel) = resp[start..].find(';') {
-                let value_start = start + prefix.len();
-                let value_end = start + end_rel;
-                if value_end >= value_start {
-                    return Ftx1ExRead::Value(resp[value_start..value_end].to_string());
+        match ex_frame(&resp, &prefix, spill) {
+            Some(ExFrame::Value(v)) => return Ftx1ExRead::Value(v),
+            Some(ExFrame::Rejected) => {
+                // "?;" once can be the radio rejecting something else - a poll -
+                // and taken for "no such address" it cost the whole subgroup:
+                // two in a row end a subgroup's scan. Twice is the address.
+                if rejected_once || attempt == 2 {
+                    return Ftx1ExRead::Missing;
                 }
+                rejected_once = true;
+                std::thread::sleep(Duration::from_millis(30));
+                continue;
             }
+            None => {}
         }
 
         // Empty or stale/mismatched replies can happen during the long EX scan;
@@ -1886,103 +1903,472 @@ fn read_ftx1_ex_value(port: &mut Box<dyn serialport::SerialPort>, p1: u8, p2: u8
     Ftx1ExRead::NoResponse
 }
 
-pub(super) fn read_all_menus_ftx1(port: &mut Box<dyn serialport::SerialPort>) -> Result<String, String> {
-    // The FTX-1 intermittently returns a transient "?;" or times out for an
-    // address that actually has a value, so a single pass misses a variable
-    // subset of the ~405 menus (this is why the old flow needed several manual
-    // "Read" clicks, each recovering different stragglers). We run up to
-    // MAX_PASSES full passes and merge results by address, re-querying only the
-    // addresses not yet captured, and stop as soon as a pass adds nothing new.
-    // One "Read" thus does internally what the operator used to do by clicking
-    // repeatedly, converging on the complete set.
-    //
-    // Pathological guard: if the radio stops replying entirely mid-scan
-    // (unplugged / hung), a non-existent subgroup would otherwise scan all 40
-    // addresses at ~2.2 s each, blocking the single-threaded poll loop (PTT/CAT)
-    // for minutes. Abort once we see this many *consecutive* no-response reads
-    // with no valid value or "?;" in between (any real reply resets the counter),
-    // spanning all passes.
-    use std::collections::BTreeMap;
-    const MAX_PASSES: u8 = 5;
-    const MAX_CONSECUTIVE_NO_RESPONSE: u8 = 15; // ~33 s of uninterrupted silence
-    let mut found: BTreeMap<String, String> = BTreeMap::new();
-    let mut no_response_count = 0usize;
-    let mut consecutive_no_response = 0u8;
-    let mut aborted = false;
 
-    'passes: for pass in 1..=MAX_PASSES {
-        let before = found.len();
-        'scan: for p1 in 1..=11u8 {
-            for p2 in 1..=9u8 {
-                let mut found_in_p2 = false;
-                let mut consecutive_definitive_miss = 0u8;
-                for p3 in 1..=40u8 {
-                    let key = format!("{:02}{:02}{:02}", p1, p2, p3);
-                    // Already captured in an earlier pass: treat as present, no I/O.
-                    if found.contains_key(&key) {
-                        found_in_p2 = true;
-                        consecutive_definitive_miss = 0;
-                        consecutive_no_response = 0;
-                        continue;
-                    }
-                    match read_ftx1_ex_value(port, p1, p2, p3) {
-                        Ftx1ExRead::Value(value) => {
-                            found.insert(key, value);
-                            found_in_p2 = true;
-                            consecutive_definitive_miss = 0;
-                            consecutive_no_response = 0;
-                        }
-                        Ftx1ExRead::Missing => {
-                            consecutive_definitive_miss += 1;
-                            consecutive_no_response = 0;
-                        }
-                        Ftx1ExRead::NoResponse => {
-                            no_response_count += 1;
-                            consecutive_no_response += 1;
-                            if consecutive_no_response >= MAX_CONSECUTIVE_NO_RESPONSE {
-                                aborted = true;
-                                break 'scan;
-                            }
-                        }
-                    }
+/// Move what already waits on the port - replies to the polls - into the poll
+/// loop's buffer, without waiting for more. True when there was something.
+pub(super) fn spill_waiting(port: &mut Box<dyn serialport::SerialPort>, spill: &mut String) -> bool {
+    match port.bytes_to_read() {
+        Ok(n) if n > 0 => {
+            let mut waiting = vec![0u8; n as usize];
+            if let Ok(k) = std::io::Read::read(port, &mut waiting) {
+                spill.push_str(&String::from_utf8_lossy(&waiting[..k]));
+            }
+            true
+        }
+        _ => false,
+    }
+}
 
-                    if !found_in_p2 && p3 >= 2 && consecutive_definitive_miss >= 2 {
-                        break; // subgroup does not exist: 01 and 02 were both rejected by the radio.
-                    }
-                    if found_in_p2 && consecutive_definitive_miss >= 6 {
-                        break; // end of items in this subgroup; tolerate gaps up to 5 addresses.
+/// An EX write as `RawCat` carries it to the radio: `EX` + a six-digit FTX-1
+/// address + the value.
+pub(super) fn ex_write(s: &str) -> Option<(String, String)> {
+    let body = s.strip_prefix("EX")?.strip_suffix(';')?;
+    if body.len() <= 6 || !body[..6].chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((body[..6].to_string(), body[6..].to_string()))
+}
+
+/// What came back for an EX question, as far as that address is concerned.
+#[derive(Debug, PartialEq)]
+pub(super) enum ExFrame {
+    Value(String),
+    Rejected,
+}
+
+/// This address's answer out of what the port gave; every other frame -
+/// replies to the polls, which the scan runs between since build 141 - goes
+/// to `spill`, the poll loop's own buffer, so it is parsed as usual. Build 142
+/// threw them away, and the FTX-1's frequency and mode could go unfollowed
+/// while the menus loaded (review 318).
+pub(super) fn ex_frame(resp: &str, prefix: &str, spill: &mut String) -> Option<ExFrame> {
+    let mut got = None;
+    for frame in resp.split_inclusive(';') {
+        let complete = frame.ends_with(';');
+        let body = frame.trim_end_matches(';');
+        if complete && got.is_none() && body.starts_with(prefix) {
+            got = Some(ExFrame::Value(body[prefix.len()..].to_string()));
+        } else if complete && got.is_none() && body == "?" {
+            got = Some(ExFrame::Rejected);
+        } else {
+            spill.push_str(frame);
+        }
+    }
+    got
+}
+
+const FTX1_MENU_MAX_PASSES: u8 = 5;
+const FTX1_MENU_MAX_CONSECUTIVE_NO_RESPONSE: u8 = 15; // ~33 s of uninterrupted silence
+
+/// The FTX-1's EX menu, read one item at a time: `step` does at most one
+/// read, so the serial thread can take it in the gaps between other traffic
+/// (build 141). All at once it held the thread for some 40 s - every control
+/// of the radio, a PTT-off too, waited behind it.
+///
+/// It reads the addresses of the chart (`sdr_remote_core::ftx1_ex_chart`), in
+/// its order - since build 147. Until then it searched blind, subgroup by
+/// subgroup until two "no such address", and asked 364 addresses per pass that
+/// do not exist; the owner's radio answered all 405 of its addresses from the
+/// chart and none outside it (field log 2026-09-19 23:09, build 146). A chart
+/// address the radio lacks (an option it does not have) costs one question per
+/// pass. What this cannot find: an address a later firmware adds and the chart
+/// does not know - the end of the scan logs the radio against the chart.
+///
+/// The FTX-1 intermittently returns a transient "?;" or times out for an
+/// address that actually has a value. Up to `FTX1_MENU_MAX_PASSES` passes ask
+/// again what is not yet found, and stop as soon as a pass adds nothing new.
+///
+/// Pathological guard: if the radio stops replying entirely mid-scan
+/// (unplugged / hung), abort once this many *consecutive* no-response reads
+/// come with no valid value or "?;" in between - any real reply resets the
+/// counter, and so does the start of a pass. That last one because from pass
+/// two on only the addresses not yet found are read, and those are the ones
+/// that answer "?;" or nothing: without it fifteen scattered time-outs over a
+/// whole pass would end a scan that is doing its work (review 319).
+pub(super) struct Ftx1MenuScan {
+    addresses: Vec<(u8, u8, u8)>,
+    found: std::collections::BTreeMap<String, String>,
+    pass: u8,
+    next: usize,
+    before: usize,
+    no_response_count: usize,
+    consecutive_no_response: u8,
+    aborted: bool,
+    /// This pass: answers "no such address" and no answer at all. In the
+    /// pass's log line, so a field log shows where a short pass came from.
+    pass_missing: usize,
+    pass_no_answer: usize,
+}
+
+/// The chart's addresses as (p1, p2, p3), in the chart's order.
+fn ftx1_chart_addresses() -> Vec<(u8, u8, u8)> {
+    sdr_remote_core::ftx1_ex_chart::EX_CHART
+        .iter()
+        .filter_map(|e| {
+            let a = e.0;
+            Some((a.get(0..2)?.parse().ok()?, a.get(2..4)?.parse().ok()?, a.get(4..6)?.parse().ok()?))
+        })
+        .collect()
+}
+
+impl Ftx1MenuScan {
+    pub(super) fn new() -> Self {
+        Self {
+            addresses: ftx1_chart_addresses(),
+            found: std::collections::BTreeMap::new(),
+            pass: 1,
+            next: 0,
+            before: 0,
+            no_response_count: 0,
+            consecutive_no_response: 0,
+            aborted: false,
+            pass_missing: 0,
+            pass_no_answer: 0,
+        }
+    }
+
+    /// The operator wrote this address while the scan runs: that value is the
+    /// one the scan ends with, whatever it read before, and the address is not
+    /// asked again. Without this the scan's older value overwrote the server's
+    /// copy at its end, and the menu window jumped back (review 318).
+    pub(super) fn note_written(&mut self, key: &str, value: &str) {
+        self.found.insert(key.to_string(), value.to_string());
+    }
+
+    /// At most one read. `Some` once the scan is complete (or aborted).
+    pub(super) fn step(&mut self, read: &mut dyn FnMut(u8, u8, u8) -> Ftx1ExRead) -> Option<Result<String, String>> {
+        loop {
+            if self.next >= self.addresses.len() {
+                // The end of a pass.
+                let added = self.found.len() - self.before;
+                info!(
+                    "FTX-1: EX menu scan pass {}/{} -> {} values total (+{} new; {} answered no-such-address, {} no answer)",
+                    self.pass,
+                    FTX1_MENU_MAX_PASSES,
+                    self.found.len(),
+                    added,
+                    self.pass_missing,
+                    self.pass_no_answer
+                );
+                self.pass_missing = 0;
+                self.pass_no_answer = 0;
+                if self.aborted || added == 0 || self.pass >= FTX1_MENU_MAX_PASSES {
+                    return Some(self.finish());
+                }
+                self.pass += 1;
+                self.before = self.found.len();
+                self.next = 0;
+                self.consecutive_no_response = 0;
+                continue;
+            }
+            let (p1, p2, p3) = self.addresses[self.next];
+            self.next += 1;
+            let key = format!("{:02}{:02}{:02}", p1, p2, p3);
+            // Already captured in an earlier pass (or written by the operator):
+            // no I/O.
+            if self.found.contains_key(&key) {
+                continue;
+            }
+            match read(p1, p2, p3) {
+                Ftx1ExRead::Value(value) => {
+                    self.found.insert(key, value);
+                    self.consecutive_no_response = 0;
+                }
+                Ftx1ExRead::Missing => {
+                    self.consecutive_no_response = 0;
+                    self.pass_missing += 1;
+                }
+                Ftx1ExRead::NoResponse => {
+                    self.no_response_count += 1;
+                    self.pass_no_answer += 1;
+                    self.consecutive_no_response += 1;
+                    if self.consecutive_no_response >= FTX1_MENU_MAX_CONSECUTIVE_NO_RESPONSE {
+                        self.aborted = true;
+                        self.next = self.addresses.len(); // the pass ends here; the next step finishes
                     }
                 }
             }
-        }
-        let added = found.len() - before;
-        info!(
-            "FTX-1: EX menu scan pass {}/{} -> {} values total (+{} new)",
-            pass,
-            MAX_PASSES,
-            found.len(),
-            added
-        );
-        if aborted || added == 0 {
-            break 'passes; // radio gone, or converged (a full pass found nothing new).
+            return None;
         }
     }
 
-    if aborted {
-        warn!(
-            "FTX-1: EX menu scan aborted after {} consecutive no-response reads (radio not responding); returning {} partial values",
-            MAX_CONSECUTIVE_NO_RESPONSE,
-            found.len()
-        );
-    } else if no_response_count > 0 {
-        warn!("FTX-1: EX menu scan had {} timeout/stale replies across passes (recovered via re-scan where possible)", no_response_count);
+    fn finish(&mut self) -> Result<String, String> {
+        if self.aborted {
+            warn!(
+                "FTX-1: EX menu scan aborted after {} consecutive no-response reads (radio not responding); returning {} partial values",
+                FTX1_MENU_MAX_CONSECUTIVE_NO_RESPONSE,
+                self.found.len()
+            );
+        } else if self.no_response_count > 0 {
+            warn!("FTX-1: EX menu scan had {} timeout/stale replies across passes (recovered via re-scan where possible)", self.no_response_count);
+        }
+        info!("FTX-1: read {} EX menu values", self.found.len());
+        if !self.aborted {
+            // Which of the chart's addresses this radio does not have - the
+            // options it lacks. The other side (addresses outside the chart)
+            // cannot be seen since the scan follows the chart (build 149).
+            let lacks = sdr_remote_core::ftx1_ex_chart::chart_addresses_the_radio_lacks(
+                self.found.keys().map(|k| k.as_str()),
+            );
+            info!(
+                "FTX-1: chart addresses this radio does not have ({}): {}",
+                lacks.len(),
+                lacks.join(" ")
+            );
+        }
+        let lines: Vec<String> = std::mem::take(&mut self.found)
+            .into_iter()
+            .map(|(k, v)| format!("{}:{}", k, v))
+            .collect();
+        Ok(lines.join("\n"))
     }
-    info!("FTX-1: read {} EX menu values", found.len());
-    let lines: Vec<String> = found
-        .into_iter()
-        .map(|(k, v)| format!("{}:{}", k, v))
-        .collect();
-    Ok(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod ftx1_menu_scan_tests {
+    use super::{ftx1_chart_addresses, Ftx1ExRead, Ftx1MenuScan};
+    use std::collections::HashMap;
+
+    /// A radio with these addresses; `flaky` answers nothing the first time.
+    fn radio(items: &[(u8, u8, u8)], flaky: &[(u8, u8, u8)]) -> (HashMap<(u8, u8, u8), String>, HashMap<(u8, u8, u8), u8>) {
+        let values = items.iter().map(|&a| (a, format!("{}{}{}", a.0, a.1, a.2))).collect();
+        let fails = flaky.iter().map(|&a| (a, 1u8)).collect();
+        (values, fails)
+    }
+
+    /// Runs the scan to its end; the reads in order.
+    fn run(values: &HashMap<(u8, u8, u8), String>, fails: &mut HashMap<(u8, u8, u8), u8>) -> (Result<String, String>, Vec<(u8, u8, u8)>) {
+        let mut scan = Ftx1MenuScan::new();
+        let mut reads = Vec::new();
+        loop {
+            let mut reads_this_step = 0;
+            let done = scan.step(&mut |p1, p2, p3| {
+                reads_this_step += 1;
+                reads.push((p1, p2, p3));
+                if let Some(n) = fails.get_mut(&(p1, p2, p3)) {
+                    if *n > 0 {
+                        *n -= 1;
+                        return Ftx1ExRead::NoResponse;
+                    }
+                }
+                match values.get(&(p1, p2, p3)) {
+                    Some(v) => Ftx1ExRead::Value(v.clone()),
+                    None => Ftx1ExRead::Missing,
+                }
+            });
+            assert!(reads_this_step <= 1, "a step reads at most once, so traffic can go between");
+            if let Some(r) = done {
+                return (r, reads);
+            }
+            assert!(reads.len() < 100_000, "the scan ends");
+        }
+    }
+
+    /// The owner's radio: every chart address but the 39 it answered
+    /// no-such-address to (field log 2026-09-19 23:09).
+    #[test]
+    fn a_radio_with_the_chart_less_39_gives_405() {
+        let absent = "010337 010604 010702 010703 050102 050103 050104 050105 050106 050108 050109 050110 050202 050203 050204 050205 050206 050207 050301 050401 050501 050502 050503 050504 060109 080407 080601 080602 080603 080604 080605 080606 080607 080608 080609 110101 110102 110103 110104";
+        let absent: Vec<(u8, u8, u8)> = absent
+            .split(' ')
+            .map(|a| (a[0..2].parse().unwrap(), a[2..4].parse().unwrap(), a[4..6].parse().unwrap()))
+            .collect();
+        let items: Vec<(u8, u8, u8)> = ftx1_chart_addresses().into_iter().filter(|a| !absent.contains(a)).collect();
+        let (values, mut fails) = radio(&items, &[]);
+        let (r, reads) = run(&values, &mut fails);
+        assert_eq!(r.unwrap().lines().count(), 405);
+        assert_eq!(reads.len(), 444 + 39, "one pass over the chart, a second only over the 39 it lacks");
+    }
+
+    /// The order of the reads decides which partial set an aborted scan
+    /// leaves: the chart's order (review 318 - a golden row, not a
+    /// second copy of the algorithm).
+    #[test]
+    fn the_scan_reads_in_the_charts_order() {
+        let chart = ftx1_chart_addresses();
+        let (values, mut fails) = radio(&chart, &[]);
+        let (_, reads) = run(&values, &mut fails);
+        assert_eq!(reads, chart, "every address once, in the chart's order");
+    }
+
+    #[test]
+    fn a_missed_item_is_recovered_in_the_next_pass() {
+        let chart = ftx1_chart_addresses();
+        let flaky = chart[1];
+        let (values, mut fails) = radio(&chart[..3], &[flaky]);
+        let (r, reads) = run(&values, &mut fails);
+        assert_eq!(r.unwrap().lines().count(), 3, "the transient timeout came back in pass 2");
+        assert_eq!(reads.iter().filter(|a| **a == flaky).count(), 2);
+    }
+
+    /// Both ways the counter goes back to nought - an answer with a value and
+    /// a "no such address" - and the start of a pass (review 319: the two
+    /// resets were untested; the pass).
+    #[test]
+    fn an_answer_of_any_kind_keeps_the_scan_going() {
+        let chart = ftx1_chart_addresses();
+        // Fourteen no-answers, then a value; fourteen more, then a "no such
+        // address"; fourteen more. Under a counter that never resets this is
+        // three times over the limit.
+        let mut fails: HashMap<(u8, u8, u8), u8> = HashMap::new();
+        for a in chart.iter().take(14) {
+            fails.insert(*a, 255);
+        }
+        for a in chart.iter().skip(15).take(14) {
+            fails.insert(*a, 255);
+        }
+        for a in chart.iter().skip(30).take(14) {
+            fails.insert(*a, 255);
+        }
+        let values: HashMap<(u8, u8, u8), String> = [(chart[14], "v".to_string())].into_iter().collect();
+        let (r, _) = run(&values, &mut fails);
+        assert_eq!(r.unwrap().lines().count(), 1, "it read on to the end");
+    }
+
+    /// And the OTHER reset, the one at the start of a pass - which the test
+    /// above cannot see, because every address it does not name answers
+    /// "no such address" and that resets the counter too. So the run above
+    /// never gets near fifteen within one pass and passes with or without the
+    /// per-pass reset (review 2120A2: a test that cannot fail).
+    ///
+    /// This one puts the last ten addresses of the chart on permanent silence.
+    /// Pass 1 therefore ENDS on ten in a row with nothing after them to reset
+    /// the count, and pass 2 reads exactly those ten again - so without the
+    /// reset the fifth read of pass 2 is the fifteenth in a row and the scan
+    /// gives up on a radio that answered 434 of its 444 addresses.
+    #[test]
+    fn a_pass_that_ends_in_silence_does_not_poison_the_next_one() {
+        let chart = ftx1_chart_addresses();
+        let n = chart.len();
+        let mut fails: HashMap<(u8, u8, u8), u8> = HashMap::new();
+        for a in chart.iter().skip(n - 10) {
+            fails.insert(*a, 255);
+        }
+        // Everything else answers with a value, so nothing else can reset the
+        // counter at the end of the pass either.
+        let values: HashMap<(u8, u8, u8), String> = chart
+            .iter()
+            .take(n - 10)
+            .map(|a| (*a, "v".to_string()))
+            .collect();
+        let (r, reads) = run(&values, &mut fails);
+
+        // What the reset protects is the RECOVERY pass, and that is what to
+        // assert: every one of the ten silent addresses is asked again. The
+        // number of values found is not the measure - an aborted scan still
+        // hands back what it had, which is why the first version of this test
+        // passed either way (measured: 454 reads with the reset, 449 without).
+        for a in chart.iter().skip(n - 10) {
+            assert!(
+                reads.iter().filter(|r| *r == a).count() >= 2,
+                "{a:?} was asked once and never again: the scan gave up inside pass 2"
+            );
+        }
+        assert_eq!(r.unwrap().lines().count(), n - 10, "and the ten silent ones are the only ones missing");
+    }
+
+    #[test]
+    fn a_silent_radio_ends_the_scan() {
+        let values = HashMap::new();
+        let mut fails: HashMap<(u8, u8, u8), u8> = ftx1_chart_addresses().into_iter().map(|a| (a, 255)).collect();
+        let (r, reads) = run(&values, &mut fails);
+        assert_eq!(r.unwrap(), "", "nothing read");
+        assert_eq!(reads.len(), 15, "aborted after 15 reads without an answer");
+    }
+
+    /// Review 318 (point E): the operator sets a menu item the scan has
+    /// already read. At its end the scan's own, older value overwrote the
+    /// server's copy, and the menu window jumped back.
+    #[test]
+    fn a_value_written_during_the_scan_is_the_one_it_ends_with() {
+        let items = [(1, 1, 1), (1, 1, 2)];
+        let (values, _) = radio(&items, &[]);
+        let mut scan = Ftx1MenuScan::new();
+        let mut read = |p1, p2, p3| match values.get(&(p1, p2, p3)) {
+            Some(v) => Ftx1ExRead::Value(v.clone()),
+            None => Ftx1ExRead::Missing,
+        };
+        scan.step(&mut read); // 1.1.1 read: "111"
+        scan.note_written("010101", "999");
+        let blob = loop {
+            if let Some(r) = scan.step(&mut read) {
+                break r.unwrap();
+            }
+        };
+        assert!(blob.lines().any(|l| l == "010101:999"), "{blob}");
+    }
+
+    #[test]
+    fn an_ex_write_is_recognised() {
+        assert_eq!(super::ex_write("EX010101999;"), Some(("010101".to_string(), "999".to_string())));
+        assert_eq!(super::ex_write("EX0101;"), None, "not a six-digit address");
+        assert_eq!(super::ex_write("EX010101;"), None, "a read, not a write");
+        assert_eq!(super::ex_write("EX01010A5;"), None, "not all digits");
+        assert_eq!(super::ex_write("EX010101999"), None, "no terminator");
+        assert_eq!(super::ex_write("FA014200000;"), None);
+    }
+
+    /// Review 318 (point E, on 142): what waits on the port while the scan
+    /// takes its turn is mostly the polls' replies. Thrown away, the FTX-1's
+    /// frequency and mode went unfollowed while the menus loaded; now they go
+    /// to the poll's parser, and only this address's frame is the answer.
+    #[test]
+    fn frames_that_are_not_the_answer_go_to_the_polls() {
+        let mut spill = String::new();
+        let got = super::ex_frame("FA014200000;EX010101005;MD04;", "EX010101", &mut spill);
+        assert_eq!(got, Some(super::ExFrame::Value("005".to_string())));
+        assert_eq!(spill, "FA014200000;MD04;");
+        let mut spill = String::new();
+        assert_eq!(super::ex_frame("?;", "EX010101", &mut spill), Some(super::ExFrame::Rejected));
+        assert_eq!(super::ex_frame("IF00014200000;", "EX010101", &mut spill), None);
+        assert_eq!(spill, "IF00014200000;");
+        // Review 318 round 2: a frame cut off at the end of the read is
+        // not an answer - not even when it carries this address - and goes on
+        // whole to the polls, where the rest of it follows.
+        let mut spill = String::new();
+        assert_eq!(super::ex_frame("FA0142;EX0101010", "EX010101", &mut spill), None);
+        assert_eq!(spill, "FA0142;EX0101010");
+        // Two answers for the same address: the first one counts.
+        let mut spill = String::new();
+        assert_eq!(super::ex_frame("EX010101005;EX010101006;", "EX010101", &mut spill), Some(super::ExFrame::Value("005".to_string())));
+        assert_eq!(spill, "EX010101006;");
+    }
+}
+
+/// The menu that holds the radio's TX time-out, per model.
+fn tot_menu_key(model: RadioModel) -> &'static str {
+    if matches!(model, RadioModel::Ftx1) { "030112" } else { "036" }
+}
+
+/// What an operator's menu write does to the TX time-out the server holds.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum TotAfterWrite {
+    /// Not the time-out menu.
+    Untouched,
+    /// The time-out menu, in the form the radio takes: the new minutes.
+    Set(u8),
+    /// The time-out menu, but not in that form: the radio refuses it and keeps
+    /// its old time-out, and so must the server.
+    NotTaken,
+}
+
+/// The menu window takes free text. Adopting the typed value made "45" or
+/// "1O" read as 0 - no time-out - while the radio kept its own; on a 991A that
+/// time-out is the only thing that lets ThetisLink release the PTT (review
+/// 318 round 2). Only two digits, 00-30, the form both models answer
+/// with and take.
+pub(super) fn tot_after_menu_write(model: RadioModel, key: &str, value: &str) -> TotAfterWrite {
+    if key.trim() != tot_menu_key(model) {
+        return TotAfterWrite::Untouched;
+    }
+    let v = value.trim();
+    if v.len() == 2 && v.bytes().all(|b| b.is_ascii_digit()) {
+        let m: u8 = v.parse().unwrap_or(99);
+        if m <= 30 {
+            return TotAfterWrite::Set(m);
+        }
+    }
+    TotAfterWrite::NotTaken
 }
 
 /// The radio's TX time-out timer, in minutes, out of the EX-menu blob this server
@@ -1991,7 +2377,7 @@ pub(super) fn read_all_menus_ftx1(port: &mut Box<dyn serialport::SerialPort>) ->
 ///
 /// The two models number their menus differently: FT-991A `036`, FTX-1 `030112`.
 pub(super) fn tot_minutes_from_menu_blob(model: RadioModel, blob: &str) -> u8 {
-    let key = if matches!(model, RadioModel::Ftx1) { "030112" } else { "036" };
+    let key = tot_menu_key(model);
     for line in blob.lines() {
         let Some((k, v)) = line.split_once(':') else { continue };
         if k.trim() != key {
@@ -2006,6 +2392,21 @@ pub(super) fn tot_minutes_from_menu_blob(model: RadioModel, blob: &str) -> u8 {
 #[cfg(test)]
 mod tot_tests {
     use super::*;
+
+    #[test]
+    fn only_a_time_out_the_radio_takes_is_adopted() {
+        use super::TotAfterWrite::*;
+        let m = RadioModel::Ft991a;
+        assert_eq!(tot_after_menu_write(m, "036", "05"), Set(5));
+        assert_eq!(tot_after_menu_write(m, "036", "00"), Set(0), "off, written as the radio writes it");
+        assert_eq!(tot_after_menu_write(m, "036", "30"), Set(30));
+        assert_eq!(tot_after_menu_write(m, "036", "5"), NotTaken, "one digit: the radio may refuse it");
+        assert_eq!(tot_after_menu_write(m, "036", "45"), NotTaken, "out of range - not 'no time-out'");
+        assert_eq!(tot_after_menu_write(m, "036", "1O"), NotTaken, "a letter O");
+        assert_eq!(tot_after_menu_write(m, "037", "05"), Untouched);
+        assert_eq!(tot_after_menu_write(RadioModel::Ftx1, "030112", "10"), Set(10));
+        assert_eq!(tot_after_menu_write(RadioModel::Ftx1, "036", "05"), Untouched, "the 991A's number means nothing here");
+    }
 
     #[test]
     fn the_991a_reads_its_own_menu_number() {
@@ -2462,5 +2863,77 @@ mod tone_merge_tests {
     fn an_ftx1_read_still_fills_an_empty_one() {
         let m = merge_tones_into_blob(&blob(""), &[(6, "88.5 Hz".into(), false)], true, "[test]");
         assert_eq!(ctcss_of(&m), "88.5 Hz");
+    }
+}
+
+/// The port end of the EX scan, which had no tests at all: the code path stops
+/// at a `SerialPort` and there was no way to be one. Two mutants lived here
+/// (review 2120A2), and the worst is one word - `NoResponse` written as
+/// `Missing` - which quietly takes both the abort guard and the retry out of
+/// the scan while all eight scan tests stay green.
+#[cfg(test)]
+mod ex_read_tests {
+    use super::{read_ftx1_ex_value, spill_waiting, Ftx1ExRead};
+    use crate::test_serial::FakeSerial;
+
+    #[test]
+    fn an_answer_for_this_address_is_its_value() {
+        let fake = FakeSerial::answering_each(&["EX0101012;"]);
+        let mut port = fake.boxed();
+        let mut spill = String::new();
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::Value("2".to_string()));
+        assert!(fake.log().written_text().contains("EX010101;"), "and it asked the address it was given");
+    }
+
+    /// "?;" twice is the radio saying it does not have this address. Once is
+    /// not enough - it can be the radio rejecting a poll - and the scan pays
+    /// for a wrong call with a whole subgroup.
+    #[test]
+    fn two_rejections_are_a_missing_address() {
+        let fake = FakeSerial::answering_each(&["?;", "?;"]);
+        let mut port = fake.boxed();
+        let mut spill = String::new();
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::Missing);
+    }
+
+    /// Silence is NOT "no such address", and this is the assertion that says
+    /// so. The two go different ways through the scan: a missing address is
+    /// settled and never asked again, silence is retried in the next pass and
+    /// counts towards the abort guard for a radio that has stopped answering
+    /// altogether. Slow on purpose - three attempts of 700 ms is what the
+    /// radio really costs us.
+    #[test]
+    fn silence_is_not_the_same_as_no_such_address() {
+        let fake = FakeSerial::new(); // answers nothing at all
+        let mut port = fake.boxed();
+        let mut spill = String::new();
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::NoResponse);
+    }
+
+    /// What was already waiting is a reply to a poll, not to this question. It
+    /// goes to the poll loop's buffer - it is not thrown away, which is the
+    /// whole difference between this and the `drain` it replaced.
+    #[test]
+    fn what_was_already_waiting_goes_to_the_polls_and_not_to_the_bin() {
+        let fake = FakeSerial::answering("FA014070000;");
+        let mut port = fake.boxed();
+        let mut spill = String::new();
+        assert!(spill_waiting(&mut port, &mut spill));
+        assert_eq!(spill, "FA014070000;", "handed on, not dropped");
+        assert!(!spill_waiting(&mut port, &mut spill), "and nothing is waiting now");
+        assert_eq!(spill, "FA014070000;", "an empty port adds nothing");
+    }
+
+    /// And the two together: a poll's reply waiting on the line does not
+    /// become this address's answer. That was the field defect of build 141 -
+    /// the first pass found 275 of 405.
+    #[test]
+    fn a_polls_reply_is_not_read_as_this_addresss_answer() {
+        let fake = FakeSerial::answering_each(&["EX0101017;"]);
+        fake.feed("FA014070000;"); // already on the line before we ask
+        let mut port = fake.boxed();
+        let mut spill = String::new();
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::Value("7".to_string()));
+        assert_eq!(spill, "FA014070000;", "the poll's reply went to the poll loop");
     }
 }

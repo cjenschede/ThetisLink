@@ -78,6 +78,13 @@ pub struct TciConnection {
     pub smeter_rx2_sig_dbm: Option<f32>,
     /// RX2 MaxBin source dBm.
     pub smeter_rx2_peakbin_dbm: Option<f32>,
+    /// When this connection last got `rx_channel_sensors_ex`. While that is
+    /// recent the plain `rx_channel_sensors` is ignored (its instant values
+    /// would override the average); once it is not, the plain one counts
+    /// again. Per connection and by time - until build 137 a process-wide
+    /// flag, set once and never cleared: a Thetis with the extensions off,
+    /// after one with them on, left the S-meter frozen.
+    sensors_ex_at: Option<Instant>,
     pub rx2_nr_level: u8,
     pub rx2_anf_on: bool,
     pub rx2_agc_mode: u8,
@@ -137,7 +144,12 @@ pub struct TciConnection {
     pub rx2_nf_enable: bool,
     pub rx_balance: i8,
     // Tune state (TCI: tune)
+    /// TUNE on either receiver - RX1 or RX2/VFO-B TX. One flag, because every
+    /// reader asks "is Thetis putting out a carrier", not "on which receiver"
+    /// (review finding on build 62: only receiver 0 was kept).
     pub tune_active: bool,
+    /// Per receiver, so a TUNE OFF on one does not clear a TUNE ON on the other.
+    pub(crate) tune_rx: [bool; 2],
     // Tune drive level (TCI: tune_drive, 0-100)
     pub tune_drive: u8,
     // Monitor volume in dB (TCI: mon_volume, typically -40..0)
@@ -269,6 +281,135 @@ pub struct TciConnection {
 /// Parsed TCI notifications from the reader task
 // TciNotification enum defined in tci_parser.rs (imported via `use crate::tci_parser::*`)
 
+/// How long the `_ex` sensor format counts as current after its last message.
+/// Thetis sends it several times a second; two seconds without one means it
+/// stopped.
+pub(crate) const SENSORS_EX_FRESH: std::time::Duration = std::time::Duration::from_secs(2);
+
+pub(crate) fn sensors_ex_fresh(at: Option<Instant>, now: Instant) -> bool {
+    at.map_or(false, |t| now.saturating_duration_since(t) < SENSORS_EX_FRESH)
+}
+
+/// What a sensor message does - the four ways, in one place (review 318,
+/// the decision the S-meter fault came from, until now inline).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SensorUse {
+    /// An `_ex` message: cached; `newly` when the format was not current.
+    Extended { newly: bool },
+    /// A plain message while `_ex` is current: ignored.
+    IgnorePlain,
+    /// A plain message, `_ex` having stopped: its cached values are forgotten
+    /// (once - the stamp is cleared with them) and the plain one counts.
+    PlainAfterExtendedStopped,
+    /// A plain message, no `_ex` ever on this connection.
+    Plain,
+}
+
+pub(crate) fn sensor_use(is_ex: bool, ex_at: Option<Instant>, now: Instant) -> SensorUse {
+    let fresh = sensors_ex_fresh(ex_at, now);
+    if is_ex {
+        SensorUse::Extended { newly: !fresh }
+    } else if fresh {
+        SensorUse::IgnorePlain
+    } else if ex_at.is_some() {
+        SensorUse::PlainAfterExtendedStopped
+    } else {
+        SensorUse::Plain
+    }
+}
+
+#[cfg(test)]
+mod sensors_ex_tests {
+    use super::*;
+
+    /// A Thetis that stops sending the _ex sensors (extensions off, or a stock
+    /// Thetis after a fork one) gets its plain ones counted again.
+    #[test]
+    fn the_extended_sensors_count_only_while_they_keep_coming() {
+        let t0 = Instant::now();
+        assert!(!sensors_ex_fresh(None, t0), "never seen");
+        assert!(sensors_ex_fresh(Some(t0), t0 + std::time::Duration::from_millis(1999)));
+        assert!(!sensors_ex_fresh(Some(t0), t0 + SENSORS_EX_FRESH), "stopped: the plain ones count");
+    }
+
+    /// The window itself: Thetis sends several per second, and a frozen meter
+    /// after the format stops is the fault this closes - not seconds of it
+    /// (review 318: 60 s stayed green).
+    #[test]
+    fn the_extended_window_is_short() {
+        assert!(SENSORS_EX_FRESH >= std::time::Duration::from_millis(500));
+        assert!(SENSORS_EX_FRESH <= std::time::Duration::from_secs(3));
+    }
+
+    /// Review 318 (point C): a Thetis without the extensions after one with
+    /// them, through a reconnect - the field rule of 137. The disconnect
+    /// cleared the stamp but kept the extended values, and the getters prefer
+    /// those: the meter stood on the old Thetis's last value until a PTT.
+    #[test]
+    fn a_thetis_that_drops_out_leaves_nothing_of_what_it_was_doing() {
+        let mut t = TciConnection::new(None);
+        // Every value forget_sensor_values clears, set to something, plus the
+        // two flags that decide whether this station is transmitting. Written
+        // out one by one because a hand-written list is exactly as complete as
+        // the list, and five of these seven lines could be deleted with the
+        // whole suite still green (review 2120A3).
+        t.smeter_raw_dbm = [Some(-50.0), Some(-60.0)];
+        t.smeter_direct_dbm = Some(-48.0);
+        t.smeter_sig_dbm = Some(-47.0);
+        t.smeter_peakbin_dbm = Some(-45.0);
+        t.smeter_rx2_direct_dbm = Some(-44.0);
+        t.smeter_rx2_sig_dbm = Some(-43.0);
+        t.smeter_rx2_peakbin_dbm = Some(-42.0);
+        t.thetis_tx_active = true;
+        t.tune_active = true;
+
+        t.handle_disconnect();
+
+        assert_eq!(t.smeter_raw_dbm, [None, None], "the spectrum calibration of a Thetis that is gone");
+        assert!(t.smeter_direct_dbm.is_none());
+        assert!(t.smeter_sig_dbm.is_none());
+        assert!(t.smeter_peakbin_dbm.is_none());
+        assert!(t.smeter_rx2_direct_dbm.is_none());
+        assert!(t.smeter_rx2_sig_dbm.is_none());
+        assert!(t.smeter_rx2_peakbin_dbm.is_none());
+        assert!(
+            !t.thetis_tx_active && !t.tune_active,
+            "a TX or TUNE that was on at the moment of the drop would hold the PA guard for good"
+        );
+        assert!(t.sensors_ex_at.is_none(), "and the extended window closed with it");
+    }
+
+    #[test]
+    fn a_new_thetis_without_extensions_after_one_with_moves_the_meter() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut t = TciConnection::new(None);
+        rt.block_on(t.handle_notification(TciNotification::RxChannelSensors {
+            receiver: 0, channel: 0, dbm: -50.0, dbm_sig: Some(-48.0), dbm_peakbin: Some(-45.0),
+        }));
+        assert!(t.smeter_direct_dbm.is_some() && t.smeter_raw_dbm[0].is_some());
+        t.handle_disconnect();
+        rt.block_on(t.handle_notification(TciNotification::RxChannelSensors {
+            receiver: 0, channel: 0, dbm: -100.0, dbm_sig: None, dbm_peakbin: None,
+        }));
+        assert!(t.smeter_direct_dbm.is_none(), "the old Thetis's value no longer stands in for the meter");
+        assert!(t.smeter_raw_dbm[0].is_none(), "nor for the spectrum calibration");
+        // And the new connection counts a plain message at once: the stamp went
+        // with the disconnect (review 318 round 2).
+        assert_eq!(t.smeter_window.len(), 1, "the plain message was not ignored");
+    }
+
+    #[test]
+    fn a_sensor_message_does_one_of_four_things() {
+        let t0 = Instant::now();
+        let later = t0 + SENSORS_EX_FRESH;
+        assert_eq!(sensor_use(true, None, t0), SensorUse::Extended { newly: true });
+        assert_eq!(sensor_use(true, Some(t0), t0), SensorUse::Extended { newly: false });
+        assert_eq!(sensor_use(false, Some(t0), t0), SensorUse::IgnorePlain);
+        assert_eq!(sensor_use(false, Some(t0), later), SensorUse::PlainAfterExtendedStopped, "forget the cached values");
+        assert_eq!(sensor_use(false, None, later), SensorUse::Plain, "once: the stamp went with them");
+    }
+}
+
 impl TciConnection {
     /// Inject the shared TX-blocked flag from `PttController`. Used
     /// in the TRX-notification handler to immediately cancel Thetis-direct PTT
@@ -322,6 +463,7 @@ impl TciConnection {
             smeter_rx2_direct_dbm: None,
             smeter_rx2_sig_dbm: None,
             smeter_rx2_peakbin_dbm: None,
+            sensors_ex_at: None,
             rx2_nr_level: 0,
             rx2_anf_on: false,
             rx2_agc_mode: 3,
@@ -369,6 +511,7 @@ impl TciConnection {
             rx2_nf_enable: false,
             rx_balance: 0,
             tune_active: false,
+            tune_rx: [false; 2],
             tune_drive: 0,
             mon_volume: -40,
             meter_cal_offset: [0.0; 2],
@@ -545,13 +688,32 @@ impl TciConnection {
 
         // Drain all pending notifications into a local vec to avoid double borrow
         let mut notifications = Vec::new();
+        let mut reader_gone = false;
         if let Some(ref mut rx) = self.notify_rx {
-            while let Ok(notif) = rx.try_recv() {
-                notifications.push(notif);
+            loop {
+                match rx.try_recv() {
+                    Ok(notif) => notifications.push(notif),
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    // The reader task is gone, whatever it managed to say on
+                    // its way out. This is the disconnect that does not depend
+                    // on a message getting through (review finding on build 69: a stream
+                    // that ends without a Close frame sent nothing at all).
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        reader_gone = true;
+                        break;
+                    }
+                }
             }
         }
         for notif in notifications {
             self.handle_notification(notif).await;
+        }
+        // Only if the Disconnected notification in the same drain did not
+        // already do it: handle_disconnect() clears `connected`, so this is the
+        // "exactly once" a review asked for on build 71, not a second pass.
+        if reader_gone && self.connected {
+            warn!("TCI: reader task ended without a word - treating it as a disconnect");
+            self.handle_disconnect();
         }
 
         // DDC centre refresh. `dds` is a push-on-change notification, so a push
@@ -959,7 +1121,13 @@ impl TciConnection {
                 }
             }
             TciNotification::RxChannelSensors { receiver, channel: _, dbm, dbm_sig, dbm_peakbin } => {
-                if HAS_SENSORS_EX.load(std::sync::atomic::Ordering::Relaxed) {
+                let now = Instant::now();
+                let use_ = sensor_use(dbm_sig.is_some(), self.sensors_ex_at, now);
+                if matches!(use_, SensorUse::Extended { .. }) {
+                    if use_ == (SensorUse::Extended { newly: true }) {
+                        info!("TCI: rx_channel_sensors_ex active (all 3 sources cached)");
+                    }
+                    self.sensors_ex_at = Some(now);
                     // _ex format: Thetis provides all three sources per tick
                     // (Sig=peak-hold, Avg=true-mean, MaxBin=peak FFT bin) so
                     // each client can subscribe via SmeterSources. Cache all
@@ -976,7 +1144,18 @@ impl TciConnection {
                         self.smeter_rx2_sig_dbm = dbm_sig;
                         self.smeter_rx2_peakbin_dbm = dbm_peakbin;
                     }
+                } else if use_ == SensorUse::IgnorePlain {
+                    // The _ex format is current: the plain one alongside it is
+                    // ignored, its instant values would override the average.
                 } else {
+                    if use_ == SensorUse::PlainAfterExtendedStopped {
+                        self.sensors_ex_at = None;
+                        // The _ex format stopped (the extensions switched off,
+                        // or another Thetis): its last values must not stand
+                        // in for the meter, the getters prefer them.
+                        info!("TCI: rx_channel_sensors_ex stopped - back to the plain sensor messages");
+                        self.forget_sensor_values();
+                    }
                     // Legacy format: do our own RMS averaging
                     let mw = 10.0_f32.powf(dbm / 10.0);
                     let window = if receiver == 0 { &mut self.smeter_window } else { &mut self.smeter_rx2_window };
@@ -1143,10 +1322,11 @@ impl TciConnection {
                 self.rx_balance = value.clamp(-40, 40) as i8;
             }
             TciNotification::RxBalance { .. } => {}
-            TciNotification::Tune { receiver: 0, active } => {
-                if active != self.tune_active {
-                    debug!("TCI: TUNE {}", if active { "ON" } else { "OFF" });
-                    self.tune_active = active;
+            TciNotification::Tune { receiver, active } if receiver < 2 => {
+                let any = merge_tune(&mut self.tune_rx, receiver as usize, active);
+                if any != self.tune_active {
+                    debug!("TCI: TUNE {} (rx{})", if any { "ON" } else { "OFF" }, receiver);
+                    self.tune_active = any;
                 }
             }
             TciNotification::Tune { .. } => {}
@@ -1580,6 +1760,18 @@ impl TciConnection {
         self.iq_started = false;
         self.tx_audio_tx = None;
         self.server_caps.clear();
+        // The next Thetis may not send the _ex sensors - and the values this
+        // one left must not stand in for the meter (the getters prefer them)
+        // until a PTT happens to clear them (review 318).
+        self.sensors_ex_at = None;
+        self.forget_sensor_values();
+        // What Thetis was doing is unknown once it is gone. Left standing, a
+        // TX or TUNE that was on at the moment of the drop would hold the PA
+        // guard for good - the same class as the Yaesu `connected` gate a review
+        // found on build 65, found here by asking the same question of Thetis.
+        self.thetis_tx_active = false;
+        self.tune_active = false;
+        self.tune_rx = [false; 2];
     }
 
     /// Check if connected Thetis advertises a capability
@@ -1687,17 +1879,25 @@ impl TciConnection {
         (self.fwd_power_watts * 10.0).round() as u16
     }
 
+    /// The values of the `_ex` sensor format, all eight: the getters prefer
+    /// them over the plain average while they are there, and `smeter_raw_dbm`
+    /// feeds the automatic spectrum calibration.
+    fn forget_sensor_values(&mut self) {
+        self.smeter_raw_dbm = [None; 2];
+        self.smeter_direct_dbm = None;
+        self.smeter_sig_dbm = None;
+        self.smeter_peakbin_dbm = None;
+        self.smeter_rx2_direct_dbm = None;
+        self.smeter_rx2_sig_dbm = None;
+        self.smeter_rx2_peakbin_dbm = None;
+    }
+
     pub fn set_tx_active(&mut self, active: bool) {
         if active != self.tx_active {
             self.tx_active = active;
             self.smeter_window.clear();
             self.smeter_rx2_window.clear();
-            self.smeter_direct_dbm = None;
-            self.smeter_sig_dbm = None;
-            self.smeter_peakbin_dbm = None;
-            self.smeter_rx2_direct_dbm = None;
-            self.smeter_rx2_sig_dbm = None;
-            self.smeter_rx2_peakbin_dbm = None;
+            self.forget_sensor_values();
             if !active {
                 self.fwd_power_watts = 0.0;
             }
@@ -1895,14 +2095,51 @@ async fn tci_reader_task(
                     _ => {}
                 }
             }
-            Ok(Message::Close(_)) | Err(_) => {
-                let _ = notify_tx.try_send(TciNotification::Disconnected);
-                break;
-            }
+            Ok(Message::Close(_)) | Err(_) => break,
             _ => {}
         }
     }
+    // Every way out of the loop ends here - Close, an error, and a stream that
+    // simply ends (`None`, which used to break without a word). Sent with a
+    // wait for room rather than try_send, so a full queue cannot lose it; and
+    // the consumer treats the channel closing as a disconnect regardless.
+    let _ = notify_tx.send(TciNotification::Disconnected).await;
 }
 
 
 // Parser functions, binary decoders, and mode conversion moved to tci_parser.rs
+/// TUNE as Thetis reports it, one flag over both receivers.
+///
+/// Thetis sends `tune:1,…` when VFO B is the TX VFO - the same one transmitter,
+/// reported on the other receiver. Both writers of the TUNE state go through
+/// here (the notification, and the server's own `set_tune`), so neither can
+/// leave the other's receiver behind: a review on build 65 found `set_tune` writing
+/// the flag directly, and a receiver-1 TUNE could then be pushed away by a
+/// server-sent TUNE OFF. Returns whether any receiver is tuning.
+pub(crate) fn merge_tune(rx: &mut [bool; 2], receiver: usize, active: bool) -> bool {
+    if receiver < 2 {
+        rx[receiver] = active;
+    }
+    rx[0] || rx[1]
+}
+
+#[cfg(test)]
+mod tune_tests {
+    use super::merge_tune;
+
+    /// A TUNE OFF on one receiver does not clear a TUNE ON on the other, in
+    /// either order, and an unknown receiver changes nothing.
+    #[test]
+    fn tune_on_either_receiver_holds_until_both_are_off() {
+        let mut rx = [false; 2];
+        assert!(!merge_tune(&mut rx, 0, false), "quiet");
+        assert!(merge_tune(&mut rx, 1, true), "VFO B tuning");
+        assert!(merge_tune(&mut rx, 0, false), "a server TUNE OFF on rx0 does not end it");
+        assert!(!merge_tune(&mut rx, 1, false), "until rx1 says so");
+        assert!(merge_tune(&mut rx, 0, true), "rx0 tuning");
+        assert!(merge_tune(&mut rx, 1, false), "rx1 off does not end it");
+        assert!(!merge_tune(&mut rx, 0, false));
+        assert!(!merge_tune(&mut rx, 7, true), "a receiver Thetis does not have changes nothing");
+        assert_eq!(rx, [false, false]);
+    }
+}

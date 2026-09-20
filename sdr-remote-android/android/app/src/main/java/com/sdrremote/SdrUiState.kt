@@ -185,6 +185,8 @@ data class SdrUiState(
     val yaesuModel: Int = 0, // 0=991A, 1=FTX-1
     val yaesuTunerState: Int = 0, // interne ATU: 0=uit, 1=aan, 2=tunend
     val yaesuHiSwr: Boolean = false, // radio meldt hoge SWR tijdens TX (zelf-wissend)
+    // De server meldt: stuurvermogen omhoog terwijl een PA onbereikbaar is.
+    val paDriveWarning: Boolean = false,
     val yaesuTxPowerMax: Int = 0, // max TX-vermogen huidige band (EX max-power; 0=onbekend)
     // DSP/functie-feature-state radio 1 (typed control channel)
     val yaesuFeatureToggles: UInt = 0u,

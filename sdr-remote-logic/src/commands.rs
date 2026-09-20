@@ -176,6 +176,12 @@ pub enum Command {
     SetThetisWidebandAudio(bool),
     // RX1 audio subscription (default on; false = no RX1 audio, save bandwidth)
     SetRx1Enabled(bool),
+    /// The operator is hearing a Yaesu rather than Thetis (Android only - the
+    /// desktop shows everything at once and has no such switch). After a grace
+    /// period the engine unsubscribes the Thetis audio and spectrum, because on
+    /// a phone that is a stream you pay for and cannot hear. See
+    /// `crate::thetis_streams`.
+    SetYaesuIsListeningRadio(bool),
     // RX2 / VFO-B
     SetRx2Enabled(bool),
     SetVfoSync(bool),
@@ -197,7 +203,17 @@ pub enum Command {
     RotorCw,
     RotorCcw,
     // CW keying
-    CwKey { pressed: bool, duration_ms: u16 },
+    /// One key edge from the paddle reader, as the keyer made it: down or
+    /// up, how long the state it ends lasted, and whether it starts a run.
+    /// The engine numbers it and sends it with the edges before it.
+    CwEdge { down: bool, prev_len_ms: u16, run_start: bool },
+    /// Which transmitter the key goes to: 0 Thetis, 1 Yaesu slot 0, 2 slot 1.
+    SetCwTarget(u8),
+    /// The "Start Thetis automatically" option (thetis_autostart). The engine
+    /// decides and sends the power-on itself - one rule for both front ends.
+    SetThetisAutostart(bool),
+    /// How long the server holds the transmitter after the last key-up, ms.
+    SetCwHang(u16),
     CwMacroStop,
     // Audio recording
     StartRecording { rx1: bool, rx2: bool, yaesu: bool, yaesu2: bool, vrx1: bool, vrx2: bool, path: String },

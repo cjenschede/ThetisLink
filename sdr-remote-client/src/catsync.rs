@@ -65,6 +65,16 @@ pub fn build_tune_url(base_url: &str, freq_hz: u64, mode: u8) -> String {
     }
 }
 
+/// Is the WebSDR to be muted right now?
+///
+/// Both paths - the window TL opens itself and a browser outside it - follow the
+/// "WebSDR mute on TX" checkbox. Until build 51 the window TL opens ignored the
+/// checkbox and muted on every transmission; the owner confirmed on 2026-09-16
+/// that off has to mean off, after PE1FMC reported it (report 75).
+pub fn mute_wanted(enabled: bool, transmitting: bool) -> bool {
+    enabled && transmitting
+}
+
 pub struct CatSync {
     pub enabled: bool,
     muted: bool,
@@ -136,32 +146,35 @@ impl CatSync {
         self.favorites.push((label, url));
     }
 
-    /// Update mute state based on TX. Only acts when enabled and state changes.
+    /// Update mute state based on TX. Only acts when the state changes.
     pub fn update_mute(&mut self, transmitting: bool) {
-        // WebView JS mute: always when window is open, regardless of WASAPI checkbox
+        let want = mute_wanted(self.enabled, transmitting);
+
+        // The window TL opens itself, muted over JS.
         if let Some(ref tx) = self.websdr_tx {
-            if transmitting != self.webview_muted {
-                if tx.send(crate::websdr::WebSdrCmd::Mute(transmitting)).is_ok() {
-                    self.webview_muted = transmitting;
+            if want != self.webview_muted {
+                if tx.send(crate::websdr::WebSdrCmd::Mute(want)).is_ok() {
+                    self.webview_muted = want;
+                    // The only trace this path leaves. Until build 51 it left none,
+                    // so a report that the sound stayed away could not be told from
+                    // one that it never muted at all.
+                    info!("WebSDR window: {} on TX", if want { "muted" } else { "unmuted" });
                 } else {
+                    // The window is gone; a fresh one opens unmuted.
                     self.websdr_tx = None;
+                    self.webview_muted = false;
                 }
             }
+        } else {
+            self.webview_muted = false;
         }
 
-        // WASAPI browser mute: only when enabled
-        if !self.enabled {
-            if self.muted {
-                self.apply_mute(false);
-                self.muted = false;
-            }
+        // A browser outside TL, muted over WASAPI.
+        if want == self.muted {
             return;
         }
-        if transmitting == self.muted {
-            return;
-        }
-        self.apply_mute(transmitting);
-        self.muted = transmitting;
+        self.apply_mute(want);
+        self.muted = want;
     }
 
     /// Force unmute (e.g., on disconnect)
@@ -173,6 +186,9 @@ impl CatSync {
         if let Some(ref tx) = self.websdr_tx {
             let _ = tx.send(crate::websdr::WebSdrCmd::Mute(false));
         }
+        // Without this the flag stayed true after the checkbox went off, and the
+        // next transmission skipped its own mute as "already muted".
+        self.webview_muted = false;
     }
 
     pub fn is_muted(&self) -> bool {
@@ -193,6 +209,11 @@ impl CatSync {
         true
     }
 
+    /// Which SDR the window is being driven as. Follows the URL.
+    pub fn sdr_type(&self) -> crate::websdr::SdrType {
+        self.sdr_type
+    }
+
     /// Close embedded WebSDR window.
     pub fn close_websdr_window(&mut self) {
         if let Some(tx) = self.websdr_tx.take() {
@@ -205,12 +226,18 @@ impl CatSync {
     /// reloading rebuilds the page + audio stream, with the current freq/mode -
     /// saves having to close and reopen the window.
     pub fn reload_websdr_window(&mut self, freq_hz: u64, mode: u8) {
+        // The type follows the URL, window open or not. Until build 52 it was
+        // decided once, when the window opened: "Use here" pointed an open KiwiSDR
+        // window at a WebSDR and TL kept sending KiwiSDR JS, which that page does
+        // not know - so it was never muted and its frequency never followed
+        // (PE1FMC/owner, 2026-09-16).
+        self.sdr_type = crate::websdr::SdrType::detect(&self.websdr_url);
         if self.websdr_tx.is_none() {
             return;
         }
         let url = self.websdr_tune_url(freq_hz, mode);
         let tx = self.websdr_tx.as_ref().unwrap();
-        if tx.send(crate::websdr::WebSdrCmd::Navigate(url)).is_ok() {
+        if tx.send(crate::websdr::WebSdrCmd::Navigate(url, self.sdr_type)).is_ok() {
             self.last_synced_freq = freq_hz;
             self.last_synced_mode = mode;
             self.webview_muted = false; // fresh page starts unmuted
@@ -381,5 +408,35 @@ fn process_name(pid: u32) -> String {
         } else {
             String::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mute_wanted;
+
+    /// The window is driven as whatever its URL says, also after a switch with
+    /// "Use here". The JS of the two is not interchangeable: a WebSDR mutes with
+    /// `setmute(1)` and a KiwiSDR with `kiwi.muted`, and each swallows the other's.
+    #[test]
+    fn the_sdr_type_follows_the_url_on_a_switch() {
+        use crate::websdr::SdrType;
+        let mut cs = super::CatSync::new();
+        cs.websdr_url = "http://example.org:8073/".to_string();
+        cs.reload_websdr_window(7_100_000, 1);
+        assert_eq!(cs.sdr_type(), SdrType::KiwiSdr);
+        cs.websdr_url = "http://sdr.websdrmaasbree.nl:8901/".to_string();
+        cs.reload_websdr_window(7_100_000, 1);
+        assert_eq!(cs.sdr_type(), SdrType::WebSdr, "a WebSDR driven as a KiwiSDR mutes nothing");
+    }
+
+    /// Four rows, and the second one is the report: with the checkbox off the
+    /// WebSDR window was muted anyway, on every transmission.
+    #[test]
+    fn off_means_off() {
+        assert!(!mute_wanted(false, false));
+        assert!(!mute_wanted(false, true), "checkbox off must not mute on TX");
+        assert!(!mute_wanted(true, false));
+        assert!(mute_wanted(true, true));
     }
 }

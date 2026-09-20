@@ -17,16 +17,20 @@ pub(super) fn render_spe_panel(
     peak_time: &mut std::time::Instant,
     drive_level: u8,
     active_pa: &Arc<AtomicU8>,
+    // May this PA be switched INTO Operate? `active_pa` is a permission: two
+    // PAs in Operate both write the Thetis drive and it flips between their
+    // values. Switching OFF is always allowed.
+    operate_allowed: bool,
 ) {
     let amber = Color32::from_rgb(255, 170, 40);
-    let is_active = active_pa.load(Ordering::Relaxed) == 1;
+    let is_active = active_pa.load(Ordering::Relaxed) == crate::pa_policy::PA_SPE;
 
     // Header row: title + active checkbox + log checkbox + status indicator
     ui.horizontal(|ui| {
         ui.heading("SPE Expert 1.3K-FA");
         let mut active = is_active;
         if ui.checkbox(&mut active, rust_i18n::t!("srv_active").to_string()).changed() {
-            let new_val = if active { 1 } else { 0 };
+            let new_val = if active { crate::pa_policy::PA_SPE } else { 0 };
             active_pa.store(new_val, Ordering::Relaxed);
             crate::config::save_active_pa(new_val);
         }
@@ -77,7 +81,15 @@ pub(super) fn render_spe_panel(
         };
         let btn = egui::Button::new(RichText::new(op_text).strong().color(Color32::WHITE))
             .fill(op_color);
-        if ui.add_enabled(status.connected, btn).clicked() {
+        let in_operate = status.state == 2;
+        let may_press = status.connected && (in_operate || operate_allowed);
+        let resp = ui.add_enabled(may_press, btn);
+        let resp = if !operate_allowed && !in_operate {
+            resp.on_disabled_hover_text(rust_i18n::t!("srv_operate_blocked_other_pa").to_string())
+        } else {
+            resp
+        };
+        if resp.clicked() {
             spe.send_command(spe_expert::SpeCmd::ToggleOperate);
         }
 

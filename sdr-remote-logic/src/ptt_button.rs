@@ -74,6 +74,141 @@ pub fn ptt_button_with_own(
     }
 }
 
+/// How long after the hang time the CW sign may still stand: the rise of MOX
+/// at the start of a run, the playout delay and the way back of the server's
+/// word all lie between the key and the confirmation.
+pub const CW_SIGN_MARGIN_MS: u64 = 500;
+
+/// Is this client keying CW on the air right now - for the sign on the PTT
+/// button? Two things have to be true, and neither is enough alone.
+///
+/// **The server says the transmitter is on** (`server_tx`, the PTT flag on the
+/// S-meter packets): the sign is a confirmation, not a wish. A key that is
+/// refused, a server that does not know the packet, a link that is down - the
+/// button stays grey, and that is the information.
+///
+/// **And this client is in a CW run**: the key is down, or the last edge is no
+/// longer ago than the hang time plus a margin. Without this the sign would
+/// also go up for a transmission that is not ours to claim.
+pub fn cw_on_air(server_tx: bool, key_down: bool, since_last_edge_ms: Option<u64>, hang_ms: u16) -> bool {
+    let in_run = key_down || since_last_edge_ms.map_or(false, |ms| ms <= u64::from(hang_ms) + CW_SIGN_MARGIN_MS);
+    server_tx && in_run
+}
+
+/// What a PTT button shows over its ordinary face, strongest first - one rule
+/// for all three buttons (Thetis in the main window, the two Yaesu windows).
+/// Build 132 exists because a Yaesu face was wrong twice ("TX elsewhere" for a
+/// server refusal, then grey while the 991A keyed); review 317 moved that
+/// decision here, and the Thetis button, which had its own order inline in
+/// the client, followed (owner's decision, 2026-09-19).
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PttFace {
+    /// There is no such transmitter on this server (Thetis not configured).
+    Unavailable,
+    /// The antenna position is receive-only (Amplitec).
+    RxOnly,
+    /// The USB cable is gone while we key the radio.
+    UsbLost,
+    /// A CW run of ours keys this transmitter (`cw_on_air`).
+    Cw,
+    /// The server still reads this radio's settings: it starts no
+    /// transmission until that is done (`YaesuState::tx_start_refusal`).
+    Loading,
+    /// The server refused this transmitter for us a moment ago.
+    Refused,
+    /// What `ptt_button_with_own` says.
+    Normal,
+}
+
+/// What can override a PTT button's ordinary face. A button leaves at false
+/// what does not apply to it (a Yaesu has no receive-only antenna position,
+/// Thetis no USB cable).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PttFaceInputs {
+    pub unavailable: bool,
+    pub rx_only: bool,
+    pub usb_lost: bool,
+    pub cw_sign: bool,
+    /// The radio is still loading (`YaesuStatePacket::loading` != 0).
+    pub loading: bool,
+    /// Our own microphone transmission on it: a transmission already on air
+    /// is shown as such, never hidden under "loading".
+    pub own_tx: bool,
+    pub refused: bool,
+}
+
+pub fn ptt_face(i: PttFaceInputs) -> PttFace {
+    if i.unavailable {
+        PttFace::Unavailable
+    } else if i.rx_only {
+        PttFace::RxOnly
+    } else if i.usb_lost {
+        PttFace::UsbLost
+    } else if i.cw_sign {
+        PttFace::Cw
+    } else if i.loading && !i.own_tx {
+        PttFace::Loading
+    } else if i.refused {
+        PttFace::Refused
+    } else {
+        PttFace::Normal
+    }
+}
+
+#[cfg(test)]
+mod ptt_face_tests {
+    use super::*;
+
+    fn face(unavailable: bool, rx_only: bool, usb_lost: bool, cw_sign: bool, refused: bool) -> PttFace {
+        ptt_face(PttFaceInputs { unavailable, rx_only, usb_lost, cw_sign, refused, ..Default::default() })
+    }
+
+    #[test]
+    fn a_loading_radio_says_so_unless_it_already_transmits() {
+        let loading = PttFaceInputs { loading: true, ..Default::default() };
+        assert_eq!(ptt_face(loading), PttFace::Loading);
+        assert_eq!(ptt_face(PttFaceInputs { refused: true, ..loading }), PttFace::Loading, "the refusal is the loading");
+        assert_eq!(ptt_face(PttFaceInputs { own_tx: true, ..loading }), PttFace::Normal, "on air: the ordinary red TX");
+        assert_eq!(ptt_face(PttFaceInputs { cw_sign: true, ..loading }), PttFace::Cw, "keyed: say CW");
+        assert_eq!(ptt_face(PttFaceInputs { usb_lost: true, ..loading }), PttFace::UsbLost);
+    }
+
+    #[test]
+    fn the_yaesu_button_says_the_strongest_thing_first() {
+        assert_eq!(face(false, false, true, true, true), PttFace::UsbLost);
+        assert_eq!(face(false, false, false, true, true), PttFace::Cw, "keyed after all: the refusal is old news");
+        assert_eq!(face(false, false, false, true, false), PttFace::Cw, "the ordinary case: keying, nothing refused (review 317 r2)");
+        assert_eq!(face(false, false, false, false, true), PttFace::Refused);
+        assert_eq!(face(false, false, false, false, false), PttFace::Normal);
+    }
+
+    /// The Thetis button's order, as it was inline in update.rs: no Thetis on
+    /// this server, then a receive-only antenna, then the CW sign.
+    #[test]
+    fn the_thetis_button_keeps_its_order() {
+        assert_eq!(face(true, true, false, true, false), PttFace::Unavailable);
+        assert_eq!(face(false, true, false, true, false), PttFace::RxOnly, "receive-only beats the CW sign");
+        assert_eq!(face(false, false, false, true, false), PttFace::Cw);
+        assert_eq!(face(false, false, false, false, false), PttFace::Normal);
+    }
+}
+
+#[cfg(test)]
+mod cw_sign_tests {
+    use super::*;
+
+    #[test]
+    fn the_cw_sign_needs_the_servers_word_and_a_run_of_our_own() {
+        assert!(cw_on_air(true, true, None, 500), "key down, confirmed");
+        assert!(cw_on_air(true, false, Some(300), 500), "between elements, confirmed");
+        assert!(cw_on_air(true, false, Some(500 + CW_SIGN_MARGIN_MS), 500), "the last moment of the margin");
+        assert!(!cw_on_air(true, false, Some(500 + CW_SIGN_MARGIN_MS + 1), 500), "the run is over: somebody else's transmission");
+        assert!(!cw_on_air(true, false, None, 500), "never keyed: not ours");
+        assert!(!cw_on_air(false, true, Some(0), 500), "keying, but the server does not say TX: grey");
+        assert!(!cw_on_air(false, false, None, 500));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

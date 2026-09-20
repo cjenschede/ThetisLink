@@ -1,10 +1,10 @@
-# ThetisLink v2.11.0 - Technical Reference
+# ThetisLink v2.12.0 - Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of a Thetis SDR receiver - whatever radio Thetis drives, reached over TCI and never addressed directly - and of up to two Yaesu transceivers (FT-991A / FTX-1) connected straight to the server, over a network connection. What a radio offers is what Thetis offers for it: RX2 and diversity need a second receiver, and the spectrum width follows the sample rate that radio can deliver. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over UDP with Opus codec.
 
-**Version:** v2.11.0 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.12.0 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
 **Target platform:** Windows 10/11 and Android 8+ (arm64); macOS (Intel/Apple Silicon) from source, experimental
 **Design priority:** latency > bandwidth > features
@@ -26,9 +26,36 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.11.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.12.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.12.0 highlights
+
+**A real paddle, and it keys the radio itself.** The desktop client reads a paddle
+straight off an MCP2221A (GP0/GP1 the paddle contacts, GP2 a straight key; no
+internal pull-ups, so the resistor is required). The keyer runs on the reader
+thread, the sidetone sounds locally and at once, and the edges travel **with their
+durations** to the server, which plays them out at exact moments rather than
+passing them on as they arrive. The target is per run: Thetis over TCI (`keyer:`),
+or a Yaesu over the **RTS line of its second COM port** - the same USB cable, no
+wire to the KEY jack. The server finds that sibling port itself (VID/PID/serial)
+and sets the PC KEYING menu to RTS: `060` on the FT-991A, address `020114` on the
+FTX-1, chosen per **model** and not per slot. What was there is remembered and put
+back at exit, and only if something was actually written. Wire `VERSION` is
+unchanged; the `loading` byte in the radio status is additive (an older server
+sends zero = not loading).
+
+**Loading and transmitting exclude each other, but only transmitting is refused.**
+On connect the server reads memory channels and tones; during such a long read a
+PTT-**off** could be left queued behind it. That radio's button reads LOADING and
+the server refuses to key it. The FTX-1's menu scan deliberately does not count
+towards this: those 405 values are read in the gaps between the polls, one address
+per step, with a budget of 150 ms per batch.
+
+**The loss meter measures the link.** A window per stream, pooled rather than
+maximised, a stream the server stopped reported separately instead of counted as
+loss, and duplicate packets no longer counted as arrivals.
 
 ### v2.11.0 highlights
 
@@ -205,7 +232,7 @@ The v2.0.0 release is a major step compared to the v0.x line. Key changes:
 - **Server-side CTUN auto-recenter** (fork) — when CTUN is on and the VFO drifts to the edge of the visible spectrum, the TL-server toggles CTUN (`ZZCN`/`ZZCO` via the TCI `run_cat_ex` relay) to force a recenter. The `auto_recenter_ex` capability is advertise-only. See §13.
 - **Yaesu FT-991A auto-DFM with memory-restore** — on PTT the server temporarily switches FM → DATA-FM and on PTT-off restores via `MC<nnn>;` so memory mode and the active channel remain. See §26.
 - **DDC sample rate dropdown per RX** — 48/96/192/384/768/1536 kHz, selectable per receiver (RX1/RX2). 768 and 1536 kHz only with the fork. See §16.
-- **Filter preset tracking** (fork) — F1..VAR2/NONE labels are read back from Thetis and visible in the client.
+- **Filter preset push** (fork) — the fork sends F1..VAR2/NONE over TCI; ThetisLink does not use it yet (the clients show the width, not the preset name).
 - **Diversity live circle broadcast** (fork) — real-time phase/gain updates during Smart/Ultra auto-null sweep. See §22.
 - **Android EQ auto-switch** — mic profile and BT-headset profile switch automatically based on the selected output device.
 - **BLE transmit button (YPC21 / PTT-Z01 class)** — GATT connection held by the app itself: scan, connect, service discovery and reconnect, no Android pairing. Handles buttons that report one press on two characteristics at once. Survives a locked screen; out of range releases the transmitter. Android 12+.
@@ -1119,7 +1146,7 @@ All resampling uses **rubato SincFixedIn** with sinc interpolation for high audi
 
 ---
 
-## 8. PTT Safety (5 layers)
+## 8. PTT Safety (6 layers)
 
 PTT safety is critical: a stuck transmitter can damage the final amplifier and interferes with other users.
 
@@ -1131,9 +1158,11 @@ Every audio packet (50x/sec) carries the PTT status in the flags byte. The serve
 
 On PTT on/off the client sends **5 copies** of the audio packet. This guarantees the server sees the state change, even with packet loss.
 
-### Layer 3: Packet timeout (500ms)
+### Layer 3: Packet timeout (2s)
 
-If the server receives **no packets for 500ms** while PTT is active, PTT is automatically disabled. Log level: WARN.
+If the server receives **no packets for 2 seconds** while PTT is active, PTT is automatically disabled. Log level: WARN.
+
+This was 500ms until v2.11.1. A mobile handover - walking out of wifi range onto 5G, say - stalls the packet stream for longer than that even when the connection itself survives, so transmitting through one dropped the transmitter every time. The window is now the same as layer 4, which is the point at which the client counts as gone. The release happens on the first safety check after the window has passed, and those run every 100ms, so in the worst case the transmitter is keyed for about 2.1 seconds after contact is lost - not exactly 2. Which of the two lines appears in the log also says something: the packet one means the connection itself was still alive and only the audio stream stalled.
 
 ### Layer 4: Heartbeat timeout (2s)
 
@@ -1142,6 +1171,25 @@ If the server receives **no heartbeat for 2 seconds**, the connection is conside
 ### Layer 5: PTT tail delay (150ms)
 
 When PTT is released, the server waits **150ms** before disabling PTT via TCI (`TRX:0,false;`). This gives the audio pipeline (jitter buffer + resampling) time to drain, so the last audio is not cut off.
+
+### Layer 6: a Yaesu's key line (v2.12.0)
+
+Layers 1 to 5 are about **MOX on Thetis**. A Yaesu keyed for CW does not go that
+way: there the RTS line **is** the transmitter, and the radio has no watchdog of
+its own on it - an RTS left high transmits. So the nets are different ones:
+
+- the playout buffer has a 3 s watchdog on a key left down, and it runs both in
+  the playout thread and on the 100 ms safety tick (if that thread stalls, a key
+  held down is what it stalled on);
+- a goodbye or a session time-out lifts the key, by the same route as the PTT;
+- a failed write to the line puts it down explicitly before the handle is given
+  up - a failed key-**up** would otherwise leave a transmitting radio with nothing
+  left watching it;
+- when the server stops, every key line goes down **before** the menus are put
+  back, and the log says whether that reached the port.
+
+Everything that writes to a key line goes through one channel with one reader, so
+two writers cannot overtake each other.
 
 ### Safety check loop
 
@@ -1656,6 +1704,11 @@ ThetisLink defines 7 wire-protocol `DeviceType` values (0x01..0x07). Status is r
 | 0x05 | UltraBeam RCU-06 Antenna Controller | Serial USB, 19200 baud |
 | 0x06 | Rotor (3 backends, one active at a time): EA7HG Visual Rotor / PstRotator (XML/UDP) / Yaesu G-1000DXC (MCP2221A, v2.1.0+) | UDP / UDP-XML / USB-HID depending on backend |
 | 0x07 | RemoteServer | Internal (no external hardware — server-side reboot/shutdown control) |
+
+> **Not in this table: the Morse paddle.** It hangs on the desktop client rather
+> than on the server, so it has no device ID in this protocol. The client reads
+> the MCP2221A itself and sends key edges as `CwEdges` packets; see the User
+> Manual, section "Morse key: a paddle on an MCP2221A".
 
 ### Amplitec 6/2 Antenna Switch
 

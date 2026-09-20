@@ -107,7 +107,7 @@ impl SdrRemoteApp {
         // AMC (AO) only exists on the FTX-1; the 991A has no AO CAT command
         // (no readback -> slider would snap back). Model code 1 = FTX-1.
         let is_ftx1 = (if slot == 0 { self.yaesu_model } else { self.yaesu2_model }) == 1;
-        // APF is CW-only (mode 3=CW, 4=CW-R); grey out outside CW.
+        // APF is CW-only (internal 3 = CW-L, 4 = CW-U); grey out outside CW.
         let is_cw = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 3 | 4);
         // NB/DNR/Contour/Notch are not usable in FM (mode 5) -> grey out.
         let is_fm = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 5 | 12);

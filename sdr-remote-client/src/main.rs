@@ -3,9 +3,11 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod audio;
+mod ble;
 mod catsync;
 mod mdns;
 mod midi;
+mod paddle;
 mod ui;
 mod websdr;
 
@@ -302,6 +304,14 @@ fn main() -> Result<()> {
         (None, None)
     };
 
+    // The CW sidetone is shared between the paddle reader (in the UI's
+    // ownership) and the playback callback (in the engine's audio backend).
+    // Made here, before either exists, and handed to both.
+    let sidetone = std::sync::Arc::new(sdr_remote_logic::sidetone::Sidetone::new(
+        sdr_remote_logic::sidetone::SidetoneSettings::default(),
+    ));
+    let sidetone_for_audio = sidetone.clone();
+
     // Start engine in background thread (tokio runtime)
     let network_thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
@@ -309,7 +319,7 @@ fn main() -> Result<()> {
             rt.block_on(async {
                 if let Err(e) = engine.run(
                     |input, output| {
-                        let audio = audio::ClientAudio::new(input, output)?;
+                        let audio = audio::ClientAudio::new(input, output, sidetone_for_audio.clone())?;
                         audio.start()?;
                         Ok(Box::new(audio) as Box<dyn sdr_remote_logic::audio::AudioBackend>)
                     },
@@ -368,7 +378,7 @@ fn main() -> Result<()> {
         &app_title,
         native_options,
         Box::new(move |_cc| {
-            Ok(Box::new(ui::SdrRemoteApp::new(state_rx, cmd_tx, log_buffer, relay_status_handle)))
+            Ok(Box::new(ui::SdrRemoteApp::new(state_rx, cmd_tx, log_buffer, relay_status_handle, sidetone)))
         }),
     );
 

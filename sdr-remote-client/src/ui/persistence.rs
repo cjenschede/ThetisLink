@@ -21,16 +21,20 @@ impl SdrRemoteApp {
                         && !l.starts_with("yaesu_mic_gain=") && !l.starts_with("yaesu2_mic_gain=")
                         && !l.starts_with("yaesu_compressor=") && !l.starts_with("yaesu2_compressor=")
                         && !l.starts_with("yaesu_tx_agc=") && !l.starts_with("yaesu2_tx_agc=")
-                        && !l.starts_with("multi_tx="))
+                        && !l.starts_with("multi_tx=")
+                        && !l.starts_with("ble_ptt_"))
                     .collect::<Vec<_>>().join("\n");
                 content.push_str(&format!(
-                    "\nchat_open={}\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\nmulti_tx={}\n",
+                    "\nchat_open={}\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\nmulti_tx={}\nble_ptt_enabled={}\nble_ptt_address={}\nble_ptt_name={}\nble_ptt_target={}\nble_ptt_toggle={}\n",
                     self.chat_open,
                     self.ptt_toggle_mode, self.yaesu_ptt_toggle_mode, self.midi_ptt_toggle_mode,
                     self.yaesu2_enabled, self.yaesu2_ptt_toggle_mode,
                     self.yaesu2_popout, self.yaesu_mic_gain, self.yaesu2_mic_gain,
                     self.yaesu_compressor, self.yaesu2_compressor, self.yaesu_tx_agc, self.yaesu2_tx_agc,
-                    self.multi_tx));
+                    self.multi_tx,
+                    self.ble_enabled,
+                    if self.ble_address == 0 { String::new() } else { crate::ble::format_addr(self.ble_address) },
+                    self.ble_name, self.ble_target, self.ble_toggle));
                 let _ = std::fs::write(path, content);
             }
         }
@@ -248,7 +252,10 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetControl(fhi_id, mem.filter_high_hz as i16 as u16));
                 match vfo {
                     Vfo::A => { self.filter_low_hz = mem.filter_low_hz; self.filter_high_hz = mem.filter_high_hz; self.filter_changed_at = Some(Instant::now()); }
-                    Vfo::B => { self.rx2_filter_low_hz = mem.filter_low_hz; self.rx2_filter_high_hz = mem.filter_high_hz; }
+                    // RX2 gets the same hold as RX1: without it the next server
+                    // state overwrites the restored filter before Thetis has
+                    // echoed it back (review finding, 2026-09-16).
+                    Vfo::B => { self.rx2_filter_low_hz = mem.filter_low_hz; self.rx2_filter_high_hz = mem.filter_high_hz; self.rx2_filter_changed_at = Some(Instant::now()); }
                 }
             }
             // Restore NR

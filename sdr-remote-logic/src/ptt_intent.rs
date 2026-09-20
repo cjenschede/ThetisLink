@@ -349,6 +349,11 @@ pub struct Latches {
     pub mouse: bool,
     pub space: bool,
     pub midi: bool,
+    /// A Bluetooth PTT button. A latch like MIDI - it is not re-sampled every
+    /// frame - and its own field, because it has an exit MIDI does not have: the
+    /// button goes out of range, and that must release what the button holds and
+    /// nothing else.
+    pub bluetooth: bool,
     /// The radio dropped out of TX and nothing has been released since.
     ///
     /// Rides along with the latches because the caller already stores and
@@ -358,6 +363,32 @@ pub struct Latches {
 }
 
 impl Latches {
+    /// The latches as an intent. Every source is named here and in
+    /// [`Latches::from_intent`], and nowhere else: this list used to be spelled
+    /// out by hand in five places (three methods here, `desktop_frame`, and the
+    /// release path of the desktop client), and a field added to the struct
+    /// would have reached some of them and not the others.
+    pub fn intent(self) -> PttIntent {
+        let mut i = PttIntent::default();
+        i.set(PttSource::Mouse, self.mouse);
+        i.set(PttSource::Space, self.space);
+        i.set(PttSource::Midi, self.midi);
+        i.set(PttSource::Bluetooth, self.bluetooth);
+        i.set_needs_new_press(self.needs_new_press);
+        i
+    }
+
+    /// The other direction. See [`Latches::intent`].
+    pub fn from_intent(i: &PttIntent) -> Self {
+        Self {
+            mouse: i.is_held(PttSource::Mouse),
+            space: i.is_held(PttSource::Space),
+            midi: i.is_held(PttSource::Midi),
+            bluetooth: i.is_held(PttSource::Bluetooth),
+            needs_new_press: i.needs_new_press(),
+        }
+    }
+
     /// Everything released, and the wait kept.
     ///
     /// For a caller that has to drop the presses of a slot - it lost the
@@ -377,22 +408,13 @@ impl Latches {
     /// while the spacebar was keying looked like it did nothing and then kept
     /// the transmitter on after the spacebar came up (owner, 2026-09-04).
     pub fn latching_press(self, source: PttSource, resampled: &[PttSource]) -> Self {
-        let mut i = PttIntent::default();
-        i.set(PttSource::Mouse, self.mouse);
-        i.set(PttSource::Space, self.space);
-        i.set(PttSource::Midi, self.midi);
-        i.set_needs_new_press(self.needs_new_press);
+        let mut i = self.intent();
         if i.any_held() {
             i.operator_stop(resampled);
         } else {
             i.set(source, true);
         }
-        Self {
-            mouse: i.is_held(PttSource::Mouse),
-            space: i.is_held(PttSource::Space),
-            midi: i.is_held(PttSource::Midi),
-            needs_new_press: i.needs_new_press(),
-        }
+        Self::from_intent(&i)
     }
 
     /// A hold-to-talk control, read out of the input state every frame.
@@ -409,12 +431,7 @@ impl Latches {
     /// controls that are both re-read every frame would each clear the other on
     /// its own rising edge, every frame, for as long as both were down.
     pub fn hold(self, source: PttSource, down: bool, resampled: &[PttSource]) -> Self {
-        let mut i = PttIntent::default();
-        i.set(PttSource::Mouse, self.mouse);
-        i.set(PttSource::Space, self.space);
-        i.set(PttSource::Midi, self.midi);
-        i.set_needs_new_press(self.needs_new_press);
-
+        let mut i = self.intent();
         if down && !i.is_held(source) {
             for s in PttSource::ALL {
                 if !resampled.contains(&s) {
@@ -425,17 +442,11 @@ impl Latches {
         i.set(source, down);
         // The only place a release is observed rather than reconstructed.
         i.settle(resampled);
-
-        Self {
-            mouse: i.is_held(PttSource::Mouse),
-            space: i.is_held(PttSource::Space),
-            midi: i.is_held(PttSource::Midi),
-            needs_new_press: i.needs_new_press(),
-        }
+        Self::from_intent(&i)
     }
 
     pub fn released(self) -> Self {
-        Self { mouse: false, space: false, midi: false, needs_new_press: self.needs_new_press }
+        Self { needs_new_press: self.needs_new_press, ..Default::default() }
     }
 }
 
@@ -474,11 +485,7 @@ pub fn desktop_frame(
     // behaviour-neutral.
     // Sources first, then the flag, then settle. The other order loses the flag:
     // an intermediate state in which nothing is held yet clears it.
-    let mut i = PttIntent::default();
-    i.set(PttSource::Mouse, latches.mouse);
-    i.set(PttSource::Space, latches.space);
-    i.set(PttSource::Midi, latches.midi);
-    i.set_needs_new_press(latches.needs_new_press);
+    let mut i = latches.intent();
 
     if !window_open {
         i.window_gone();
@@ -491,12 +498,7 @@ pub fn desktop_frame(
         i.busy();
     }
 
-    let l = Latches {
-        mouse: i.is_held(PttSource::Mouse),
-        space: i.is_held(PttSource::Space),
-        midi: i.is_held(PttSource::Midi),
-        needs_new_press: i.needs_new_press(),
-    };
+    let l = Latches::from_intent(&i);
     let want_tx = i.want_tx();
     let send = if want_tx == last_sent { None } else { Some(want_tx) };
 
@@ -685,9 +687,22 @@ impl PhonePtt {
         // transmit and never a request to stop. That was my reasoning and not a
         // requirement, and it made the three buttons behave differently from
         // each other for no reason the operator could see (2026-09-04).
-        if self.latches(source) && self.want_tx(target) {
-            self.operator_stop(target);
-            return;
+        // On what is being transmitted, not on what this press is aimed at.
+        //
+        // It read `want_tx(target)`, and for a latching control the press IS the
+        // stop - there is no release to correct it. So when the destination moved
+        // between starting and stopping, the stop found nothing transmitting at its
+        // own target, fell through, and STARTED one: the old transmitter went off
+        // and a new one came on, after the action meant to end it. Reachable without
+        // the operator doing anything, because the destination is fed by
+        // `thetisConfigured` from the server and by the automatic remap when the
+        // selected radio drops out. Two reviewers, second round, and the line above
+        // already said this is how it works.
+        if self.latches(source) {
+            if let Some(held) = self.asking() {
+                self.operator_stop(held);
+                return;
+            }
         }
         self.set(target, source, true);
     }
@@ -946,6 +961,57 @@ mod phone_tests {
         p.down(PttTarget::Thetis, PttSource::Screen);
         assert!(p.want_tx(PttTarget::Thetis));
         p.up(PttTarget::Thetis, PttSource::Screen);
+        assert!(!p.want_tx(PttTarget::Thetis));
+    }
+
+    /// A latching press stops whatever is transmitting, even if the destination moved.
+    ///
+    /// This is the one that got through the first repair. `up` was fixed to release
+    /// what is actually held, but a latching control has no meaningful release - the
+    /// press is the stop. And the press looked at its own target: with the
+    /// destination moved in between, it found nothing transmitting there, fell
+    /// through, and STARTED one. The old transmitter went off and a new one came on,
+    /// after the action meant to end it.
+    ///
+    /// The destination moves without the operator touching anything. It is fed by
+    /// whether a Thetis is configured, which arrives from the server, and by the
+    /// automatic remap when the selected radio drops out - so "latched on radio 1,
+    /// the USB goes, press to stop, radio 2 goes on air" is a real sequence.
+    #[test]
+    fn a_latching_stop_stops_even_when_the_destination_moved() {
+        let mut p = PhonePtt::new();
+        p.set_toggle_mode(true);
+
+        // Latched on, on Thetis.
+        p.down(PttTarget::Thetis, PttSource::Screen);
+        p.up(PttTarget::Thetis, PttSource::Screen);
+        assert!(p.want_tx(PttTarget::Thetis), "one tap latches it on");
+
+        // The destination moved underneath. The next tap is meant to STOP.
+        p.down(PttTarget::Yaesu0, PttSource::Screen);
+
+        assert!(
+            !p.want_tx(PttTarget::Thetis),
+            "the transmission that was running has to end"
+        );
+        assert!(
+            !p.want_tx(PttTarget::Yaesu0),
+            "and no new one may start - a stop that keys another radio is the fault"
+        );
+        assert_eq!(p.asking(), None, "nothing may be left transmitting");
+    }
+
+    /// With nothing transmitting, a latching press still starts on its own target.
+    ///
+    /// The other half of the same branch: stopping takes priority over the target,
+    /// starting does not.
+    #[test]
+    fn a_latching_press_on_a_quiet_radio_starts_that_radio() {
+        let mut p = PhonePtt::new();
+        p.set_toggle_mode(true);
+
+        p.down(PttTarget::Yaesu0, PttSource::Screen);
+        assert!(p.want_tx(PttTarget::Yaesu0), "a tap on a quiet slot keys that slot");
         assert!(!p.want_tx(PttTarget::Thetis));
     }
 
@@ -1492,10 +1558,45 @@ mod desktop_frame_tests {
         }
         let want = (m || s || d) && !held;
         Decision {
-            latches: Latches { mouse: m, space: s, midi: d, needs_new_press: false },
+            latches: Latches { mouse: m, space: s, midi: d, bluetooth: false, needs_new_press: false },
             want_tx: want,
             send: if want == last_sent { None } else { Some(want) },
         }
+    }
+
+    /// The Bluetooth button is a latch of its own: it holds like MIDI, a second
+    /// press lets go, and going out of range releases what the button holds and
+    /// nothing else. And the two helpers are each other's inverse over every
+    /// combination, so a field can no longer be dropped on one side.
+    #[test]
+    fn a_bluetooth_button_is_a_latch_of_its_own() {
+        let resampled = &[PttSource::Space];
+        let l = Latches::default().latching_press(PttSource::Bluetooth, resampled);
+        assert!(l.bluetooth && !l.midi, "the button holds, MIDI does not");
+        assert!(l.intent().want_tx());
+        let again = l.latching_press(PttSource::Bluetooth, resampled);
+        assert!(!again.bluetooth, "the second press lets go");
+
+        let out_of_range = Latches { bluetooth: true, ..Default::default() }
+            .hold(PttSource::Bluetooth, false, resampled);
+        assert!(!out_of_range.bluetooth, "out of range is a release");
+        assert!(!out_of_range.intent().want_tx());
+
+        let both = Latches { bluetooth: true, midi: true, ..Default::default() };
+        assert_eq!(both.released(), Latches::default(), "released() clears the new field too");
+
+        for bits in 0u8..16 {
+            let l = Latches {
+                mouse: bits & 1 != 0,
+                space: bits & 2 != 0,
+                midi: bits & 4 != 0,
+                bluetooth: bits & 8 != 0,
+                needs_new_press: false,
+            };
+            assert_eq!(Latches::from_intent(&l.intent()), l, "row {bits}");
+        }
+        let waiting = Latches { needs_new_press: true, ..Default::default() };
+        assert_eq!(Latches::from_intent(&waiting.intent()), waiting, "the flag survives the round trip");
     }
 
     /// **Today's truth table, pinned down.**
@@ -1516,7 +1617,7 @@ mod desktop_frame_tests {
             let last_sent = bits & 32 != 0;
 
             let got = desktop_frame(
-                Latches { mouse, space, midi, needs_new_press: false },
+                Latches { mouse, space, midi, bluetooth: false, needs_new_press: false },
                 window_open,
                 held,
                 last_sent,
@@ -1532,13 +1633,54 @@ mod desktop_frame_tests {
         assert_eq!(gecontroleerd, 64, "all rows walked");
     }
 
+    /// Open point 37: the Thetis side, which had been four loose booleans OR-ed
+    /// into one want, runs through this function since build 77. Over every
+    /// combination the want is what the OR was - except when another station
+    /// holds the transmitter: the booleans stayed latched there, this lets go.
+    #[test]
+    fn the_thetis_side_matches_the_booleans_it_replaced_except_when_busy() {
+        for bits in 0u8..64 {
+            let l = Latches {
+                mouse: bits & 1 != 0,
+                space: bits & 2 != 0,
+                midi: bits & 4 != 0,
+                bluetooth: bits & 8 != 0,
+                needs_new_press: false,
+            };
+            let other_tx = bits & 16 != 0;
+            let last_sent = bits & 32 != 0;
+            let d = desktop_frame(l, true, other_tx, last_sent);
+            let any = l.mouse || l.space || l.midi || l.bluetooth;
+            assert_eq!(d.want_tx, any && !other_tx, "row {bits}: the OR the booleans made");
+            if other_tx {
+                assert_eq!(d.latches, Latches::default(), "row {bits}: busy lets go");
+            } else {
+                assert_eq!(d.latches, l, "row {bits}: nothing else changes");
+            }
+        }
+    }
+
+    /// The acceptance criterion of open point 37, in the owner's words: busy =
+    /// let go, also for the button in the pocket. Before, the latch stayed and
+    /// the transmitter came back on by itself the moment the other station
+    /// stopped (review finding, 307 round 2).
+    #[test]
+    fn busy_lets_go_of_the_button_in_the_pocket() {
+        let pressed = Latches { bluetooth: true, ..Default::default() };
+        let busy = desktop_frame(pressed, true, true, false);
+        assert!(!busy.want_tx && !busy.latches.bluetooth, "busy: let go");
+        let free_again = desktop_frame(busy.latches, true, false, false);
+        assert!(!free_again.want_tx, "the other station stopped: nothing comes back on its own");
+        assert_eq!(free_again.send, None);
+    }
+
     /// And the four properties the table carries, named separately - so that a
     /// failing table does not only say "row 37" but also what is broken.
 
     #[test]
     fn a_closed_window_forgets_its_own_presses_and_keeps_midi() {
         let d = desktop_frame(
-            Latches { mouse: true, space: true, midi: true, needs_new_press: false },
+            Latches { mouse: true, space: true, midi: true, bluetooth: false, needs_new_press: false },
             false,
             false,
             false,
@@ -1551,7 +1693,7 @@ mod desktop_frame_tests {
     #[test]
     fn busy_drops_everything_including_midi() {
         let d = desktop_frame(
-            Latches { mouse: true, space: true, midi: true, needs_new_press: false },
+            Latches { mouse: true, space: true, midi: true, bluetooth: false, needs_new_press: false },
             true,
             true,
             false,
@@ -1625,7 +1767,7 @@ mod desktop_frame_tests {
     /// Dropping the presses of a slot does not end a wait for a fresh press.
     #[test]
     fn released_keeps_the_wait() {
-        let l = Latches { mouse: true, space: true, midi: true, needs_new_press: true };
+        let l = Latches { mouse: true, space: true, midi: true, bluetooth: false, needs_new_press: true };
         let r = l.released();
         assert!(!r.mouse && !r.space && !r.midi, "the presses go");
         assert!(r.needs_new_press, "and the wait stays");
@@ -1771,12 +1913,7 @@ mod desktop_frame_tests {
         let mut i = PttIntent::default();
         i.set(PttSource::Space, true);
         i.radio_left_tx(&[PttSource::Space]);
-        let na = Latches {
-            mouse: i.is_held(PttSource::Mouse),
-            space: i.is_held(PttSource::Space),
-            midi: i.is_held(PttSource::Midi),
-            needs_new_press: i.needs_new_press(),
-        };
+        let na = Latches::from_intent(&i);
 
         // Next frame, spacebar still down.
         let d2 = desktop_frame(Latches { space: true, ..na }, true, false, true);

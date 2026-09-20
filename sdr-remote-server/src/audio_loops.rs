@@ -12,6 +12,7 @@ use crate::tracked_socket::TrackedSocket;
 use tokio::sync::{watch, Mutex};
 use tokio::time::{interval, Duration};
 
+use sdr_remote_core::audio_channels::{channel_allowed, receiver_count, worst_receiver};
 use sdr_remote_core::codec::{OpusEncoder, OpusEncoderWideband};
 use sdr_remote_core::protocol::*;
 use sdr_remote_core::{
@@ -705,9 +706,13 @@ pub async fn tci_multichannel_audio_loop(
                     // - the desktop client UI's "RX2 enabled" toggle must
                     // mute the upstream RX2 stream entirely, not just the
                     // local playback (bandwidth bug uncovered 2026-05-13).
-                    let (client_modes, worst_loss): (Vec<(std::net::SocketAddr, u8, bool, bool, bool)>, u8) = {
+                    let (client_modes, worst_pair, n_receiving): (
+                        Vec<(std::net::SocketAddr, u8, bool, bool, bool)>,
+                        Option<(std::net::SocketAddr, u8)>,
+                        usize,
+                    ) = {
                         let sess = session.lock().await;
-                        let modes = addrs
+                        let modes: Vec<(std::net::SocketAddr, u8, bool, bool, bool)> = addrs
                             .iter()
                             .map(|&a| (
                                 a,
@@ -722,9 +727,33 @@ pub async fn tci_multichannel_audio_loop(
                         // listener - and the listener who needs it is the one
                         // whose audio falls apart without it, not the one who
                         // would rather have the last decibel.
-                        let worst = addrs.iter().map(|&a| sess.client_loss(a)).max().unwrap_or(0);
-                        (modes, worst)
+                        // WHO is the worst, not just how bad. One set of encoders
+                        // feeds everybody, so a single phone on a poor network gives
+                        // a desktop on a perfect cable twenty percent redundancy -
+                        // and until now the line said the percentage without saying
+                        // whose it was. That cost an evening of looking at the wrong
+                        // client (2026-09-13, open point 15a).
+                        // Only clients we are actually SENDING to. thetis_audio_addrs
+                        // returns every authenticated client, including one that has
+                        // switched its Thetis audio off - and the loss such a client
+                        // reports is about a stream it is not receiving. Letting that
+                        // decide the protection for everybody is how a phone in
+                        // data-saving mode could pin maximum redundancy on a desktop.
+                        //
+                        // "Receiving" is the same decision the channel filter below
+                        // makes, taken from one place. Reading it as `rx1_enabled`
+                        // alone was wrong in the opposite direction: a desktop in
+                        // Mono, BIN or Split with RX1 off and RX2 on still gets CH2,
+                        // and silently lost the protection its link was asking for.
+                        let candidates: Vec<(std::net::SocketAddr, u8, bool, bool, u8)> = modes
+                            .iter()
+                            .map(|&(a, mode, rx1, rx2, _)| (a, mode, rx1, rx2, sess.client_loss(a)))
+                            .collect();
+                        let worst_pair = worst_receiver(&candidates);
+                        let n_receiving = receiver_count(&candidates);
+                        (modes, worst_pair, n_receiving)
                     };
+                    let worst_loss = worst_pair.map_or(0, |(_, l)| l);
                     loss_protect.update(worst_loss);
                     if let Some((on, pct)) = loss_protect.take_change() {
                         // Checked, not discarded. If the encoder refuses, the
@@ -741,7 +770,14 @@ pub async fn tci_multichannel_audio_loop(
                             warn!("RX audio: {} of 6 encoders refused the error-correction change - they keep their previous setting", failed);
                         }
                         if on {
-                            info!("RX audio: packet loss {}% - error correction on at {}%", worst_loss, pct);
+                            let who = worst_pair
+                                .map_or_else(|| "?".to_string(), |(a, _)| a.to_string());
+                            info!(
+                                "RX audio: packet loss {}% at {} (worst of {} receiving client(s)) - error correction on at {}% for all of them",
+                                worst_loss, who,
+                                n_receiving,
+                                pct
+                            );
                         } else {
                             info!("RX audio: link clean again - error correction off, all bits to the sound");
                         }
@@ -764,19 +800,7 @@ pub async fn tci_multichannel_audio_loop(
                         let src: &Vec<(u8, Vec<u8>)> = if use_wb { &channels_wb } else { &channels_nb };
                         let client_chs: Vec<(u8, Vec<u8>)> = src.iter()
                             .filter(|(ch_id, _)| {
-                                let allowed = match *mode {
-                                    255 => *ch_id == 0,                    // Android: RX1 only
-                                    0 => *ch_id == 0 || *ch_id == 2,      // Mono: RX1 + RX2
-                                    1 => true,                             // BIN: all
-                                    2 => *ch_id == 0 || *ch_id == 2,      // Split: RX1 + RX2
-                                    _ => *ch_id == 0,
-                                };
-                                if !allowed { return false; }
-                                // RX1-audio-subscription: CH0 (RX1) + CH1 (RX1 imag/BIN)
-                                // are dropped if the client has RX1-audio off (VRX-only).
-                                if (*ch_id == 0 || *ch_id == 1) && !rx1_enabled { return false; }
-                                if *ch_id == 2 && !rx2_enabled { return false; }
-                                true
+                                channel_allowed(*mode, *ch_id, *rx1_enabled, *rx2_enabled)
                             })
                             .cloned()
                             .collect();
@@ -890,12 +914,18 @@ pub async fn yaesu_audio_loop(
             _ = tick.tick() => {
                 // Subscribers + their WB-preference. RX-bandwidth follows the Thetis-toggle
                 // per client; TX always stays wideband (see network.rs).
-                let (subs, worst_loss): (Vec<(std::net::SocketAddr, bool)>, u8) = {
+                let (subs, worst_pair): (
+                    Vec<(std::net::SocketAddr, bool)>,
+                    Option<(std::net::SocketAddr, u8)>,
+                ) = {
                     let s = session.lock().await;
                     let addrs = if slot == 0 { s.yaesu_addrs() } else { s.yaesu2_addrs() };
-                    let worst = addrs.iter().map(|&a| s.client_loss(a)).max().unwrap_or(0);
+                    // Same reasoning as the RX path above: name the listener whose
+                    // link decides this for everybody.
+                    let worst = addrs.iter().map(|&a| (a, s.client_loss(a))).max_by_key(|(_, l)| *l);
                     (addrs.into_iter().map(|a| (a, s.client_thetis_wideband(a))).collect(), worst)
                 };
+                let worst_loss = worst_pair.map_or(0, |(_, l)| l);
                 loss_protect.update(worst_loss);
                 if let Some((on, pct)) = loss_protect.take_change() {
                     if enc_nb.set_loss_protection(on, pct).is_err()
@@ -904,7 +934,12 @@ pub async fn yaesu_audio_loop(
                         warn!("Radio {} audio: an encoder refused the error-correction change - it keeps its previous setting", slot + 1);
                     }
                     if on {
-                        info!("Radio {} audio: packet loss {}% - error correction on at {}%", slot + 1, worst_loss, pct);
+                        let who = worst_pair
+                            .map_or_else(|| "?".to_string(), |(a, _)| a.to_string());
+                        info!(
+                            "Radio {} audio: packet loss {}% at {} (worst of {} listener(s)) - error correction on at {}% for all of them",
+                            slot + 1, worst_loss, who, subs.len(), pct
+                        );
                     } else {
                         info!("Radio {} audio: link clean again - error correction off", slot + 1);
                     }

@@ -290,8 +290,11 @@ pub fn mode_string_to_internal(mode: &str) -> u8 {
     match mode.trim() {
         "LSB" => 0,
         "USB" => 1,
-        "CW" => 3,
-        "CW-R" => 4,
+        // "CW" is the upper-sideband one and "CW-R" the reverse - the same pair
+        // that `yaesu_mode_to_internal` on the server handles, and it was swapped
+        // here too. Internal numbering is Thetis's: 3 = CWL, 4 = CWU.
+        "CW" => 4,
+        "CW-R" => 3,
         "FM" | "FM-N" | "DATA-FM" | "C4FM" => 5, // all FM variants -> internal FM
         "AM" | "AM-N" => 6,
         "RTTY-USB" | "DATA-USB" => 7,
@@ -375,3 +378,36 @@ pub const DCS_CODES: &[&str] = &[
 
 /// Tone modes for combo box.
 pub const TONE_MODES: &[&str] = &["None", "Tone", "T SQL", "DCS", "D Code"];
+#[cfg(test)]
+mod mode_string_tests {
+    use super::*;
+
+    /// The third place the CW pair lives, and the one the user report was about.
+    ///
+    /// It had the pair reversed like the server's two translations did, and unlike
+    /// those it is in the client - so no test in the server crate can ever reach it.
+    /// A review pointed out that reversing it back leaves the whole suite green,
+    /// proved by construction rather than by running: this function appears twice in
+    /// the entire tree, its definition and one caller, and no test named it.
+    ///
+    /// Internal numbering is Thetis's DSPMode: CWL = 3, CWU = 4. The Yaesu names come
+    /// from the memory module, which labels code 3 "CW" and code 7 "CW-R".
+    #[test]
+    fn the_cw_pair_maps_the_same_way_the_server_does() {
+        assert_eq!(mode_string_to_internal("CW"), 4, "plain CW is the upper one");
+        assert_eq!(mode_string_to_internal("CW-R"), 3, "the reverse is the lower one");
+    }
+
+    /// And the neighbours, so a fix to CW cannot quietly shift the rest.
+    #[test]
+    fn the_modes_around_the_cw_pair_are_unchanged() {
+        assert_eq!(mode_string_to_internal("LSB"), 0);
+        assert_eq!(mode_string_to_internal("USB"), 1);
+        assert_eq!(mode_string_to_internal("FM"), 5);
+        assert_eq!(mode_string_to_internal("AM"), 6);
+        assert_eq!(mode_string_to_internal("DATA-USB"), 7);
+        assert_eq!(mode_string_to_internal("DATA-LSB"), 9);
+        // Anything it does not know falls back to USB rather than to a CW mode.
+        assert_eq!(mode_string_to_internal("nonsense"), 1);
+    }
+}

@@ -68,12 +68,16 @@ impl SdrRemoteApp {
                     let pressed = velocity > 0;
                     match action {
                         MidiAction::Ptt => {
+                            // Thetis, the same way as YaesuPtt below (build 77).
                             if self.midi_ptt_toggle_mode {
-                                // Toggle: press to switch on/off (ignore release)
-                                if pressed { self.midi_ptt = !self.midi_ptt; }
+                                if pressed {
+                                    self.thetis_latches = self.thetis_latches.latching_press(
+                                        sdr_remote_logic::ptt_intent::PttSource::Midi,
+                                        self.thetis_resampled_sources(),
+                                    );
+                                }
                             } else {
-                                // Momentary: press=TX, release=RX
-                                self.midi_ptt = pressed;
+                                self.thetis_latches.midi = pressed;
                             }
                         }
                         MidiAction::ModeCycle if pressed => {

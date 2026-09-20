@@ -539,6 +539,100 @@ impl SdrRemoteApp {
         self.save_ptt_config(); // persist window closed state
     }
 
+    /// What a Yaesu's PTT button says, over what `ptt_button_with_own` gave -
+    /// one place for both slots, in this order:
+    /// - the USB cable is gone while we key the radio (nothing matters more);
+    /// - a CW run of ours keys this radio: red "CW", locked, as the Thetis
+    ///   button has had since step 4 - it stayed grey while the 991A was
+    ///   keyed (field test 2026-09-19);
+    /// - the server refused this radio for us a moment ago: "PTT blocked",
+    ///   not "TX elsewhere", which is this client's own arbitration;
+    /// - otherwise what the button already said.
+    fn yaesu_ptt_face(&self, slot: usize, ctx: &egui::Context, normal: (Color32, String, bool)) -> (Color32, String, bool) {
+        use sdr_remote_logic::ptt_button::{ptt_face, PttFaceInputs};
+        let tx_reported = if slot == 0 { self.yaesu_tx_active } else { self.yaesu2_tx_active };
+        let cw_sign = self.cw_target_is_yaesu(slot)
+            // Not while the microphone asks: a toggled PTT stays releasable.
+            && !self.yaesu_ptt_last_sent[slot]
+            && sdr_remote_logic::ptt_button::cw_on_air(
+                tx_reported,
+                self.paddle_key_down,
+                self.paddle_last_edge_at.map(|t| t.elapsed().as_millis() as u64),
+                self.cw_hang_ms,
+            );
+        let face = ptt_face(PttFaceInputs {
+            usb_lost: self.usb_lost_showing(slot),
+            cw_sign,
+            loading: sdr_remote_core::protocol::yaesu_loading_blocks_tx(self.yaesu_loading[slot]),
+            own_tx: self.yaesu_ptt_last_sent[slot],
+            refused: Self::recently_blocked(self.yaesu_refused_at[slot]),
+            ..Default::default()
+        });
+        Self::ptt_face_look(face, ctx, normal)
+    }
+
+    /// Colour, text and lock of a PTT face - one table for all three buttons.
+    pub(super) fn ptt_face_look(
+        face: sdr_remote_logic::ptt_button::PttFace,
+        ctx: &egui::Context,
+        normal: (Color32, String, bool),
+    ) -> (Color32, String, bool) {
+        use sdr_remote_logic::ptt_button::PttFace;
+        match face {
+            // No such transmitter: this PTT keys nothing, so the spacebar and
+            // the mouse cannot turn it red for a radio that is absent.
+            PttFace::Unavailable => (Color32::from_rgb(60, 60, 60), "PTT".to_string(), true),
+            PttFace::RxOnly => (Color32::from_rgb(120, 50, 50), rust_i18n::t!("main_rx_only").to_string(), true),
+            PttFace::UsbLost => (Color32::from_rgb(130, 35, 35), rust_i18n::t!("radio_usb_lost").to_string(), true),
+            // Red like any transmission, "CW" so it is not mistaken for the
+            // microphone, and locked: a click would key the microphone into a
+            // CW run. It comes down by itself after the hang time, so the
+            // screen has to look again without waiting for a mouse.
+            PttFace::Cw => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                (Color32::RED, "CW".to_string(), true)
+            }
+            PttFace::Loading => (Color32::from_rgb(90, 90, 90), rust_i18n::t!("yaesu_loading_button").to_string(), true),
+            PttFace::Refused => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_ptt_blocked").to_string(), false)
+            }
+            PttFace::Normal => normal,
+        }
+    }
+
+    /// While the server is still reading this radio after it connected, say so
+    /// at the top of its window: the CAT port is busy and every control
+    /// answers slowly until it is done (owner's wish, 2026-09-19 - in the
+    /// radio's own window, not the main screen). Above the scroll area, so it
+    /// is seen without scrolling.
+    fn yaesu_loading_notice(&self, ui: &mut egui::Ui, slot: usize) {
+        use sdr_remote_core::protocol::{YAESU_LOADING_MEMORIES, YAESU_LOADING_MENUS, YAESU_LOADING_TONES};
+        let bits = self.yaesu_loading[slot];
+        if bits == 0 {
+            return;
+        }
+        let mut what: Vec<String> = Vec::new();
+        for (bit, key) in [
+            (YAESU_LOADING_MEMORIES, "yaesu_loading_memories"),
+            (YAESU_LOADING_TONES, "yaesu_loading_tones"),
+            (YAESU_LOADING_MENUS, "yaesu_loading_menus"),
+        ] {
+            if bits & bit != 0 {
+                what.push(rust_i18n::t!(key).to_string());
+            }
+        }
+        // Only the menus left: they load in the gaps, the radio answers as
+        // usual and may transmit (build 141) - a quieter line.
+        let (colour, key) = if sdr_remote_core::protocol::yaesu_loading_blocks_tx(bits) {
+            (Color32::from_rgb(255, 165, 0), "yaesu_loading_notice")
+        } else {
+            (Color32::from_rgb(170, 170, 170), "yaesu_loading_background")
+        };
+        ui.colored_label(colour, rust_i18n::t!(key, what = what.join(", ")).to_string());
+        ui.separator();
+    }
+
     /// Yaesu-1 popout body: fixed PTT + volume bar on the bottom, the 991A panel
     /// (scrollable) in the centre. Relocated verbatim from the inline update-loop
     /// block; PTT mouse-latch + spacebar OR mirrors the Thetis PTT handler.
@@ -576,15 +670,8 @@ impl SdrRemoteApp {
                 // going out, the voice is not, because the audio rides on the
                 // same USB. Overrides whatever the button would otherwise say
                 // - there is nothing more important to read here.
-                let (ptt_color, ptt_text, ptt_locked) = if self.usb_lost_showing(0) {
-                    (
-                        Color32::from_rgb(130, 35, 35),
-                        rust_i18n::t!("radio_usb_lost").to_string(),
-                        true,
-                    )
-                } else {
-                    (ptt_color, ptt_text, ptt_locked)
-                };
+                let (ptt_color, ptt_text, ptt_locked) =
+                    self.yaesu_ptt_face(0, ui.ctx(), (ptt_color, ptt_text, ptt_locked));
                 let ptt_btn = egui::Button::new(
                     RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
                 ).fill(ptt_color).min_size(egui::vec2(80.0, 40.0));
@@ -658,6 +745,7 @@ impl SdrRemoteApp {
             });
         });
         egui::CentralPanel::default().show(ctx, |ui| {
+            self.yaesu_loading_notice(ui, 0);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 self.render_yaesu_popout(ui);
             });
@@ -695,15 +783,8 @@ impl SdrRemoteApp {
                 // going out, the voice is not, because the audio rides on the
                 // same USB. Overrides whatever the button would otherwise say
                 // - there is nothing more important to read here.
-                let (ptt_color, ptt_text, ptt_locked) = if self.usb_lost_showing(1) {
-                    (
-                        Color32::from_rgb(130, 35, 35),
-                        rust_i18n::t!("radio_usb_lost").to_string(),
-                        true,
-                    )
-                } else {
-                    (ptt_color, ptt_text, ptt_locked)
-                };
+                let (ptt_color, ptt_text, ptt_locked) =
+                    self.yaesu_ptt_face(1, ui.ctx(), (ptt_color, ptt_text, ptt_locked));
                 let ptt_btn = egui::Button::new(
                     RichText::new(ptt_text).size(18.0).color(Color32::WHITE).strong(),
                 ).fill(ptt_color).min_size(egui::vec2(80.0, 40.0));
@@ -765,6 +846,7 @@ impl SdrRemoteApp {
             });
         });
         egui::CentralPanel::default().show(ctx, |ui| {
+            self.yaesu_loading_notice(ui, 1);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 self.render_yaesu2_panel(ui);
             });

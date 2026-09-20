@@ -36,6 +36,57 @@ pub fn relay_is_configured(enabled: bool, url: String, station: String, token: S
     sdr_remote_relay::is_configured(enabled, &url, &station, &token)
 }
 
+/// Filter edges for one press of a width button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BridgeFilterEdges {
+    pub low_hz: i32,
+    pub high_hz: i32,
+}
+
+/// The edges one press of a width button sends, or nothing when there is no step
+/// that way. The rule is `sdr_remote_logic::filter_width`, shared with the
+/// desktop; Compose kept its own copy until build 47, and that copy is the one
+/// report 74 locked up in.
+pub fn filter_step(mode: u8, low_hz: i32, high_hz: i32, wider: bool) -> Option<BridgeFilterEdges> {
+    use sdr_remote_logic::filter_width::{step, Step};
+    let dir = if wider { Step::Wider } else { Step::Narrower };
+    step(mode, low_hz, high_hz, dir).map(|(low_hz, high_hz)| BridgeFilterEdges { low_hz, high_hz })
+}
+
+/// The width between the buttons, as Thetis has it.
+pub fn filter_width_label(mode: u8, low_hz: i32, high_hz: i32) -> String {
+    sdr_remote_logic::filter_width::width_label(mode, low_hz, high_hz)
+}
+
+#[cfg(test)]
+mod filter_bridge_tests {
+    use super::*;
+
+    /// The two hops Kotlin makes: the direction flag and the edges that come back.
+    /// The bridge had no test at all, so swapping `wider` left all of them green
+    /// (review finding, 2026-09-16) - and Compose would then narrow on plus.
+    #[test]
+    fn the_direction_flag_and_the_edges_survive_the_bridge() {
+        assert_eq!(
+            filter_step(1, 100, 2800, true),
+            Some(BridgeFilterEdges { low_hz: 100, high_hz: 3100 })
+        );
+        assert_eq!(
+            filter_step(1, 100, 2800, false),
+            Some(BridgeFilterEdges { low_hz: 100, high_hz: 2500 })
+        );
+        assert_eq!(filter_step(1, 100, 1900, false), None, "nothing narrower than the bottom step");
+        assert_eq!(filter_step(5, -8000, 8000, true), None, "FM has no steps");
+    }
+
+    #[test]
+    fn the_label_crosses_the_bridge_unchanged() {
+        assert_eq!(filter_width_label(1, 7579, 10000), "2.42 kHz");
+        assert_eq!(filter_width_label(4, 350, 850), "500 Hz");
+        assert_eq!(filter_width_label(1, 0, 0), "--");
+    }
+}
+
 /// What to do with the connection after a Bluetooth link went away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BleDropPolicy {
@@ -571,6 +622,7 @@ pub struct BridgeRadioState {
     pub yaesu_tuner_state: u8,
     /// Radio meldt hoge SWR tijdens TX (zelf-wissend).
     pub yaesu_hi_swr: bool,
+    pub pa_drive_warning: bool,
     /// Maximum TX power for the current band (from the EX max-power menus; 0 = unknown).
     /// The slider clamps to this, like the desktop.
     pub yaesu_tx_power_max: u8,
@@ -825,6 +877,7 @@ impl From<RadioState> for BridgeRadioState {
             yaesu_model: s.yaesu_model,
             yaesu_tuner_state: s.yaesu_tuner_state,
             yaesu_hi_swr: s.yaesu_hi_swr,
+            pa_drive_warning: s.pa_drive_warning,
             yaesu_tx_power_max: s.yaesu_tx_power_max,
             yaesu2_connected: s.yaesu2_connected,
             yaesu2_model: s.yaesu2_model,
@@ -1204,6 +1257,23 @@ impl SdrBridge {
 
     pub fn set_agc_enabled(&self, enabled: bool) {
         let _ = self.cmd_tx.send(Command::SetAgcEnabled(enabled));
+    }
+
+    /// The operator is hearing a Yaesu rather than Thetis.
+    ///
+    /// The engine owns what follows - a grace period, then an unsubscribe of the
+    /// Thetis audio and spectrum. Deliberately not decided here: this screen has
+    /// no test harness, and the unsubscribe has to travel through the engine's
+    /// send path so it is replayed after a network switch. A saving a reconnect
+    /// silently undoes is not a saving.
+    pub fn set_yaesu_is_listening_radio(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetYaesuIsListeningRadio(on));
+    }
+
+    /// The "Start Thetis automatically" option; the engine decides and
+    /// launches (sdr_remote_logic::thetis_autostart), as on the desktop.
+    pub fn set_thetis_autostart(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetThetisAutostart(on));
     }
 
     pub fn set_control(&self, control_id: u8, value: u16) {

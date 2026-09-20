@@ -24,6 +24,16 @@ namespace sdr_remote {
     // The one rule for "is this relay set up", so the front ends read it
     // instead of each doing their own sum.
     boolean relay_is_configured(boolean enabled, string url, string station, string token);
+    // The RX filter width buttons: the edges one press sends (null when there is
+    // no step that way) and the width to show. One rule with the desktop, in
+    // sdr-remote-logic; Compose had its own copy until build 47.
+    BridgeFilterEdges? filter_step(u8 mode, i32 low_hz, i32 high_hz, boolean wider);
+    string filter_width_label(u8 mode, i32 low_hz, i32 high_hz);
+};
+
+dictionary BridgeFilterEdges {
+    i32 low_hz;
+    i32 high_hz;
 };
 
 // What the Bluetooth PTT button asks for. The decision itself lives in
@@ -324,6 +334,9 @@ dictionary BridgeRadioState {
     u8 yaesu_model;
     u8 yaesu_tuner_state;
     boolean yaesu_hi_swr;
+    // The server says the drive went up while a PA may be amplifying out of
+    // reach. Stays true until the server can reach it again.
+    boolean pa_drive_warning;
     u8 yaesu_tx_power_max;
     boolean yaesu2_connected;
     u8 yaesu2_model;
@@ -401,7 +414,13 @@ interface SdrBridge {
     void set_frequency(u64 hz);
     void set_mode(u8 mode);
     void set_control(u8 control_id, u16 value);
+    void set_thetis_autostart(boolean on);
     void set_agc_enabled(boolean enabled);
+
+    // The operator is hearing a Yaesu rather than Thetis. The engine stops the
+    // Thetis audio and spectrum after a grace period so the phone is not paying
+    // for a stream nobody can hear; see sdr-remote-logic/src/thetis_streams.rs.
+    void set_yaesu_is_listening_radio(boolean on);
     void enable_spectrum(boolean enabled);
     void set_spectrum_fps(u8 fps);
     void set_spectrum_max_bins(u16 bins);

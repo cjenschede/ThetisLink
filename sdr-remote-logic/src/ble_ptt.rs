@@ -191,6 +191,38 @@ impl BlePttState {
     }
 }
 
+/// Which transmitter the button keys, given what the server has configured.
+///
+/// `configured` is Thetis, Yaesu slot 0, Yaesu slot 1 - the same order as
+/// `PttTarget` and the server's slots. `chosen` is the operator's setting in
+/// that numbering. Decided with the owner on 2026-09-17: the list follows what
+/// the **server** has configured, powered on or not; with a single radio there
+/// is nothing to choose and that one is taken; and a choice that points at a
+/// radio the server no longer has falls back to the first one it does have,
+/// rather than to nothing - a button that keys nothing looks broken.
+///
+/// Only when the server's list is known (`known`). Right after a reconnect the
+/// client knows Thetis from the handshake but the Yaesu slots only half a
+/// second later (the presence packet); falling back in that window sent a key
+/// meant for the 991A to Thetis (field test, 2026-09-19 10:27:54: a paddle held
+/// through a server restart - refused only because Thetis was not in CW mode).
+/// Until the list is known the choice stands, and the server refuses a radio it
+/// does not have.
+pub fn effective_target(configured: [bool; 3], chosen: u8, known: bool) -> u8 {
+    if !known {
+        return if (chosen as usize) < 3 { chosen } else { 0 };
+    }
+    if (chosen as usize) < 3 && configured[chosen as usize] {
+        return chosen;
+    }
+    configured.iter().position(|c| *c).unwrap_or(0) as u8
+}
+
+/// Is there anything to choose between?
+pub fn target_needs_a_choice(configured: [bool; 3]) -> bool {
+    configured.iter().filter(|c| **c).count() >= 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::BleButtonEvent::*;
@@ -337,6 +369,48 @@ mod tests {
         use super::{on_drop, DropPolicy};
         assert_eq!(on_drop(true), DropPolicy::Reconnect);
         assert_eq!(on_drop(false), DropPolicy::Close);
+    }
+
+    /// The list follows the server's configuration, not what is switched on;
+    /// one radio means no choice; a stale choice falls back to a radio that
+    /// exists.
+    /// The window after a reconnect: Thetis known from the handshake, the
+    /// Yaesu slots not yet. The key chosen for the 991A must not go to Thetis.
+    #[test]
+    fn until_the_servers_radios_are_known_the_choice_stands() {
+        assert_eq!(effective_target([true, false, false], 1, false), 1, "the 991A, not Thetis");
+        assert_eq!(effective_target([false, false, false], 2, false), 2);
+        assert_eq!(effective_target([true, false, false], 0, false), 0);
+        assert_eq!(effective_target([true, false, false], 9, false), 0, "a choice out of range is Thetis, as before");
+        // The boundary itself (review 316 r2: `<= 3` survived with only 9).
+        assert_eq!(effective_target([true, false, false], 3, false), 0, "3 is out of range too");
+        // Known: the rule of the design applies again.
+        assert_eq!(effective_target([true, false, false], 1, true), 0);
+    }
+
+    #[test]
+    fn the_target_follows_what_the_server_has_configured() {
+        use super::{effective_target, target_needs_a_choice};
+        // Thetis only: no choice, and every setting lands on Thetis.
+        assert!(!target_needs_a_choice([true, false, false]));
+        assert_eq!(effective_target([true, false, false], 2, true), 0);
+        // One Yaesu only: the same, on that Yaesu.
+        assert!(!target_needs_a_choice([false, true, false]));
+        assert_eq!(effective_target([false, true, false], 0, true), 1);
+        // Two or three: the choice holds when it exists.
+        assert!(target_needs_a_choice([true, true, false]));
+        assert_eq!(effective_target([true, true, true], 2, true), 2);
+        assert_eq!(effective_target([true, true, false], 1, true), 1);
+        // A choice that points at a radio the server lost: the first there is.
+        assert_eq!(effective_target([true, false, true], 1, true), 0);
+        assert_eq!(effective_target([false, false, true], 1, true), 2);
+        // Nothing configured at all (server not reached yet): Thetis, harmlessly.
+        assert_eq!(effective_target([false, false, false], 2, true), 0);
+        // Out of range never panics - including 3, the first index past the
+        // array, where `< 3` and `<= 3` part ways (review finding: the only value the
+        // surviving mutant differed on, and its consequence was a panic).
+        assert_eq!(effective_target([true, true, true], 3, true), 0);
+        assert_eq!(effective_target([true, true, true], 9, true), 0);
     }
 
     /// The scenario a code review named, and the reason the generation exists.

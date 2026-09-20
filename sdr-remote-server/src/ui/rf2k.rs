@@ -15,6 +15,12 @@ pub(super) fn render_rf2k_panel(
     peak_time: &mut std::time::Instant,
     active_pa: &Arc<AtomicU8>,
     confirm_fw_close: &mut bool,
+    // See the same parameter on the SPE panel: only the active PA may be
+    // switched into Operate. Switching off is always allowed.
+    operate_allowed: bool,
+    // Thetis' drive level in percent, shown the same way as on the SPE panel -
+    // also in Standby, where the PA's own drive-in-watts reads nothing.
+    drive_level: u8,
 ) {
     render_rf2k_header(ui, rf2k, status, active_pa, confirm_fw_close);
     render_rf2k_error_bar(ui, rf2k, status);
@@ -22,9 +28,9 @@ pub(super) fn render_rf2k_panel(
     render_rf2k_band_freq(ui, status);
     render_rf2k_telemetry(ui, status);
     render_rf2k_antennas(ui, rf2k, status);
-    render_rf2k_operating_controls(ui, rf2k, status);
+    render_rf2k_operating_controls(ui, rf2k, status, operate_allowed);
     render_rf2k_tuner(ui, rf2k, status);
-    render_rf2k_drive_control(ui, rf2k, status, active_pa);
+    render_rf2k_drive_control(ui, rf2k, status, active_pa, drive_level);
 }
 
 // ── Section 1: Header ──────────────────────────────────────────────────────
@@ -36,7 +42,7 @@ fn render_rf2k_header(
     active_pa: &Arc<AtomicU8>,
     confirm_fw_close: &mut bool,
 ) {
-    let is_active = active_pa.load(Ordering::Relaxed) == 2;
+    let is_active = active_pa.load(Ordering::Relaxed) == crate::pa_policy::PA_RF2K;
     ui.horizontal(|ui| {
         ui.label(RichText::new("RF2K-S").strong().size(14.0));
         let title = if status.device_name.is_empty() { "" } else { &status.device_name };
@@ -54,7 +60,7 @@ fn render_rf2k_header(
     ui.horizontal(|ui| {
         let mut active = is_active;
         if ui.checkbox(&mut active, "Active").changed() {
-            let new_val = if active { 2 } else { 0 };
+            let new_val = if active { crate::pa_policy::PA_RF2K } else { 0 };
             active_pa.store(new_val, Ordering::Relaxed);
             // Persist immediately so a non-graceful shutdown (process kill,
             // power loss, remote-restart) doesn't lose the user's PA choice.
@@ -495,6 +501,7 @@ fn render_rf2k_operating_controls(
     ui: &mut egui::Ui,
     rf2k: &Rf2k,
     status: &rf2k::Rf2kStatus,
+    operate_allowed: bool,
 ) {
     let amber = Color32::from_rgb(255, 170, 40);
     ui.horizontal(|ui| {
@@ -506,7 +513,14 @@ fn render_rf2k_operating_controls(
         };
         let btn = egui::Button::new(RichText::new(op_text).strong().color(Color32::WHITE))
             .fill(op_color);
-        if ui.add_enabled(status.connected, btn).clicked() {
+        let may_press = status.connected && (status.operate || operate_allowed);
+        let resp = ui.add_enabled(may_press, btn);
+        let resp = if !operate_allowed && !status.operate {
+            resp.on_disabled_hover_text(rust_i18n::t!("srv_operate_blocked_other_pa").to_string())
+        } else {
+            resp
+        };
+        if resp.clicked() {
             rf2k.send_command(rf2k::Rf2kCmd::SetOperate(!status.operate));
         }
 
@@ -629,23 +643,21 @@ fn render_rf2k_drive_control(
     rf2k: &Rf2k,
     status: &rf2k::Rf2kStatus,
     active_pa: &Arc<AtomicU8>,
+    drive_level: u8,
 ) {
     let amber = Color32::from_rgb(255, 170, 40);
-    let is_active = active_pa.load(Ordering::Relaxed) == 2;
+    let is_active = active_pa.load(Ordering::Relaxed) == crate::pa_policy::PA_RF2K;
     let drive_enabled = status.connected && status.operate && is_active;
 
     ui.horizontal(|ui| {
-        ui.label("Drive:");
-        if ui.add_enabled(drive_enabled, egui::Button::new("\u{2212}")).clicked() {
+        // Same row as the SPE panel: Thetis' drive in percent, which is there in
+        // Standby too. The PA's own drive-in-watts used to sit here and read
+        // "--W" whenever the PA was not amplifying.
+        if ui.add_enabled(drive_enabled, egui::Button::new("Drive -")).clicked() {
             rf2k.send_command(rf2k::Rf2kCmd::DriveDown);
         }
-        let drive_text = if status.drive_w > 0 {
-            format!("{}W", status.drive_w)
-        } else {
-            "--W".to_string()
-        };
-        ui.label(RichText::new(drive_text).strong().monospace());
-        if ui.add_enabled(drive_enabled, egui::Button::new("+")).clicked() {
+        ui.label(format!("{}%", drive_level));
+        if ui.add_enabled(drive_enabled, egui::Button::new("Drive +")).clicked() {
             rf2k.send_command(rf2k::Rf2kCmd::DriveUp);
         }
 

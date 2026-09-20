@@ -1389,7 +1389,7 @@ impl DriveObserverState {
                         self.ctx.saved_drive = Some(observed_zzpc);
                         // Persist immediately so the snapshot survives a
                         // host-restart while the PA stays in Operate.
-                        crate::config::save_saved_drive(2, Some(observed_zzpc));
+                        crate::config::save_saved_drive(crate::pa_policy::PA_RF2K, Some(observed_zzpc));
                     }
                 }
                 (Rf2kDriveState::Operate, Rf2kDriveState::OperateToStandby) => {

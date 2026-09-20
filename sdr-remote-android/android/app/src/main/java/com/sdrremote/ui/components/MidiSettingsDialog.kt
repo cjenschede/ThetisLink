@@ -5,6 +5,8 @@ package com.sdrremote.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -67,7 +69,11 @@ fun MidiSettingsDialog(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface,
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 Text(stringResource(R.string.midi_title), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
 
@@ -136,7 +142,7 @@ fun MidiSettingsDialog(
                     if (currentMappings.isEmpty()) {
                         Text(stringResource(R.string.midi_no_mappings), color = Color.Gray, fontSize = 13.sp)
                     } else {
-                        LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = 200.dp)) {
+                        LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
                             itemsIndexed(currentMappings) { idx, mapping ->
                                 Row(
                                     modifier = Modifier
@@ -172,10 +178,19 @@ fun MidiSettingsDialog(
                 Text(stringResource(R.string.midi_add_mapping), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
 
+                // A plain Column, not a LazyColumn: this list lives inside a
+                // column that scrolls, and a lazy list there has no bounded
+                // height to lay itself out in. The `weight(1f)` it carried had
+                // nothing to divide either - a weight needs a finite main axis.
+                // Neither of those is a compile error, which is why this survived
+                // a green build and a hand test (review finding).
+                //
+                // It is a fixed handful of entries - MidiAction.entries - so
+                // laziness bought nothing here to begin with; the outer scroll
+                // does the work.
                 val actions = MidiAction.entries
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(actions.size) { idx ->
-                        val action = actions[idx]
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    actions.forEach { action ->
                         Button(
                             onClick = {
                                 learnForAction = action

@@ -192,40 +192,8 @@ impl SdrRemoteApp {
 
         // -- Filter + NR + ANF --
         {
-            let presets = filter_presets_for_mode(self.mode);
-            let cw = is_cw_mode(self.mode);
-            let is_fm = self.mode == 5;
-            let current_bw = self.filter_high_hz - self.filter_low_hz;
-            let idx = closest_preset_index(presets, current_bw);
-
             ui.horizontal(|ui| {
-                ui.label(rust_i18n::t!("main_filter_label").to_string());
-                let minus_btn = egui::Button::new(RichText::new(" - ").size(14.0));
-                if ui.add_enabled(idx > 0, minus_btn).on_hover_text(rust_i18n::t!("main_hover_narrow_filter").to_string()).clicked() {
-                    let (low, high) = calc_filter_edges(
-                        self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx - 1]);
-                    let _ = self.cmd_tx.send(Command::SetControl(
-                        ControlId::FilterLow, low as i16 as u16));
-                    let _ = self.cmd_tx.send(Command::SetControl(
-                        ControlId::FilterHigh, high as i16 as u16));
-                    self.filter_low_hz = low;
-                    self.filter_high_hz = high;
-                    self.filter_changed_at = Some(Instant::now());
-                }
-
-                if is_fm {
-                    // FM: show actual bandwidth from Thetis + deviation label
-                    let dev_label = if current_bw <= 6000 { "NFM" } else { "WFM" };
-                    let bw_text = format!("{} {}", format_bandwidth(current_bw, false), dev_label);
-                    ui.label(RichText::new(bw_text).strong().size(14.0));
-                } else {
-                    ui.label(RichText::new(format_bandwidth(presets[idx], cw)).strong().size(14.0));
-                }
-
-                let plus_btn = egui::Button::new(RichText::new(" + ").size(14.0));
-                if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text(rust_i18n::t!("main_hover_widen_filter").to_string()).clicked() {
-                    let (low, high) = calc_filter_edges(
-                        self.mode, self.filter_low_hz, self.filter_high_hz, presets[idx + 1]);
+                if let Some((low, high)) = filter_width_buttons(ui, self.mode, self.filter_low_hz, self.filter_high_hz) {
                     let _ = self.cmd_tx.send(Command::SetControl(
                         ControlId::FilterLow, low as i16 as u16));
                     let _ = self.cmd_tx.send(Command::SetControl(
@@ -570,45 +538,15 @@ impl SdrRemoteApp {
 
         // -- Filter bandwidth control --
         {
-            let presets = filter_presets_for_mode(self.rx2_mode);
-            let cw = is_cw_mode(self.rx2_mode);
-            let is_fm = self.rx2_mode == 5;
             // Fallback to RX1 filter if RX2 filter not available (Thetis ZZRL/ZZRH may not respond)
             let (fl, fh) = if self.rx2_filter_low_hz != 0 || self.rx2_filter_high_hz != 0 {
                 (self.rx2_filter_low_hz, self.rx2_filter_high_hz)
             } else {
                 (self.filter_low_hz, self.filter_high_hz)
             };
-            let current_bw = fh - fl;
-            let idx = closest_preset_index(presets, current_bw);
 
             ui.horizontal(|ui| {
-                ui.label(rust_i18n::t!("main_filter_label").to_string());
-                let minus_btn = egui::Button::new(RichText::new(" - ").size(14.0));
-                if ui.add_enabled(idx > 0, minus_btn).on_hover_text(rust_i18n::t!("main_hover_narrow_filter").to_string()).clicked() {
-                    let (low, high) = calc_filter_edges(
-                        self.rx2_mode, fl, fh, presets[idx - 1]);
-                    let _ = self.cmd_tx.send(Command::SetControl(
-                        ControlId::Rx2FilterLow, low as i16 as u16));
-                    let _ = self.cmd_tx.send(Command::SetControl(
-                        ControlId::Rx2FilterHigh, high as i16 as u16));
-                    self.rx2_filter_low_hz = low;
-                    self.rx2_filter_high_hz = high;
-                    self.rx2_filter_changed_at = Some(Instant::now());
-                }
-
-                if is_fm {
-                    let dev_label = if current_bw <= 6000 { "NFM" } else { "WFM" };
-                    let bw_text = format!("{} {}", format_bandwidth(current_bw, false), dev_label);
-                    ui.label(RichText::new(bw_text).strong().size(14.0));
-                } else {
-                    ui.label(RichText::new(format_bandwidth(presets[idx], cw)).strong().size(14.0));
-                }
-
-                let plus_btn = egui::Button::new(RichText::new(" + ").size(14.0));
-                if ui.add_enabled(idx < presets.len() - 1, plus_btn).on_hover_text(rust_i18n::t!("main_hover_widen_filter").to_string()).clicked() {
-                    let (low, high) = calc_filter_edges(
-                        self.rx2_mode, fl, fh, presets[idx + 1]);
+                if let Some((low, high)) = filter_width_buttons(ui, self.rx2_mode, fl, fh) {
                     let _ = self.cmd_tx.send(Command::SetControl(
                         ControlId::Rx2FilterLow, low as i16 as u16));
                     let _ = self.cmd_tx.send(Command::SetControl(

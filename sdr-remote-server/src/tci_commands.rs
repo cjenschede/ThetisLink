@@ -345,7 +345,9 @@ impl TciConnection {
         let cmd = format!("tune:0,{};", if on { "true" } else { "false" });
         debug!("TCI: TUNE {}", if on { "ON" } else { "OFF" });
         self.send(&cmd).await;
-        self.tune_active = on;
+        // Through the same rule as the notification, so receiver 1 is not
+        // pushed aside by a TUNE OFF the server sent for receiver 0.
+        self.tune_active = crate::tci::merge_tune(&mut self.tune_rx, 0, on);
     }
 
     pub async fn set_tune_drive(&mut self, level: u8) {

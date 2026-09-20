@@ -111,6 +111,7 @@
     <string name="stats_audio_levels">Audio Levels:</string>
     <string name="stats_statistics">Statistics:</string>
     <string name="stats_tcp_fallback">TCP fallback</string>
+    <string name="stats_link_loss">Connection loss</string>
     <string name="stats_down">Down</string>
     <string name="stats_up">Up</string>
     <string name="stats_audio_streams">Audio streams:</string>
@@ -206,7 +207,6 @@
     <string name="dev_auto">Auto</string>
     <string name="dev_bypass">Bypass</string>
     <string name="dev_store">Store</string>
-    <string name="dev_drive_watts">Drive: %1$dW</string>
     <string name="dev_reflected">Reflected: %1$dW</string>
     <string name="dev_antenna_label">Antenna:</string>
     <string name="dev_ub_dir">Dir:</string>
@@ -223,6 +223,7 @@
     <string name="dev_stop">STOP</string>
     <string name="dev_goto">GoTo:</string>
     <string name="dev_go">Go</string>
+    <string name="dev_pa_drive_warning">Drive raised while the PA is out of reach</string>
     <string name="dev_high_swr">HIGH SWR</string>
     <string name="dev_high_swr_other">HIGH SWR (%1$s)</string>
     <string name="dev_radio_label">Radio:</string>
@@ -317,4 +318,7 @@
     <string name="settings_ble_ptt_waiting">Out of range — reconnects by itself</string>
     <string name="settings_ble_ptt_reconnect">Connect again</string>
     <string name="settings_ble_ptt_forget">Forget this button</string>
+    <string name="settings_ui_scale">Display size:</string>
+    <string name="settings_ui_scale_landscape_on">At this size the app turns with the device. Lock rotation on the device to stay upright.</string>
+    <string name="settings_ui_scale_landscape_off">At this size the app stays upright. A smaller size lets it turn.</string>
 </resources>

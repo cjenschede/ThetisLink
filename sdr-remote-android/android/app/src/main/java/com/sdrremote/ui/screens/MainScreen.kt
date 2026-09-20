@@ -2,6 +2,7 @@
 
 package com.sdrremote.ui.screens
 
+import com.sdrremote.prefs.LocalAudioPrefs
 import android.content.Context
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -166,22 +167,22 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val lastKeyEvent by (activity?.lastKeyEvent ?: MutableStateFlow("")).collectAsStateWithLifecycle()
 
     // Volume state - loaded from SharedPreferences, persists across restarts
-    val rxVolumeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("rx_volume", 0.5f)) }
-    val localVolumeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("local_volume", 1f)) }
+    val rxVolumeState = rememberSaveable { mutableFloatStateOf(LocalAudioPrefs.rxVolume(prefs)) }
+    val localVolumeState = rememberSaveable { mutableFloatStateOf(LocalAudioPrefs.localVolume(prefs)) }
     // Switching between Thetis and a Yaesu switches which level this slider holds, so
     // it has to reload - otherwise it shows the other one's value and the first touch
     // sets the wrong level.
     LaunchedEffect(yaesuActive) {
         localVolumeState.floatValue = if (yaesuActive) {
-            prefs.getFloat("yaesu_volume", 1f)
+            LocalAudioPrefs.yaesuVolume(prefs)
         } else {
-            prefs.getFloat("local_volume", 1f)
+            LocalAudioPrefs.localVolume(prefs)
         }
     }
-    val txGainState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("tx_gain", 0.5f)) }
+    val txGainState = rememberSaveable { mutableFloatStateOf(LocalAudioPrefs.txGain(prefs)) }
 
     // AGC state - loaded from SharedPreferences, persists across restarts
-    var agcEnabled by rememberSaveable { mutableStateOf(prefs.getBoolean("agc_enabled", false)) }
+    var agcEnabled by rememberSaveable { mutableStateOf(LocalAudioPrefs.agcEnabled(prefs)) }
 
     // TX profiles from SharedPreferences
     var txProfilesStr by rememberSaveable {
@@ -367,12 +368,14 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         }
     }
 
-    // Send volume + spectrum state to engine whenever connection becomes active.
+    // Send the SERVER-side state to the engine whenever the connection becomes
+    // active. The master volume and the mic gain used to be re-sent here as well;
+    // they are engine-local and already went out at app start, and re-sending them
+    // on a second trigger is the duplication this project keeps paying for. The
+    // spectrum below is a subscription and genuinely does belong per session.
     val connected = state.connected
     LaunchedEffect(connected) {
         if (connected) {
-            viewModel.setLocalVolume(localVolumeState.floatValue)
-            viewModel.setTxGain(txGainState.floatValue)
             if (spectrumEnabled) {
                 viewModel.enableSpectrum(true)
                 viewModel.setSpectrumFps(5)
@@ -493,7 +496,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         { v ->
             rxVolumeState.floatValue = v
             viewModel.setRxVolume(v)
-            prefs.edit().putFloat("rx_volume", v).apply()
+            LocalAudioPrefs.setRxVolume(prefs, v)
         }
     }
     // One slider, two meanings: in Yaesu mode it is the Yaesu level, otherwise the
@@ -504,12 +507,17 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val onLocalVolumeChange: (Float) -> Unit = remember {
         { v ->
             localVolumeState.floatValue = v
-            if (viewModel.yaesuMode.value) {
+            // The same question the transmitter, the EQ and the volume path ask.
+            // This read the raw switch, so without a Thetis the slider was routed to
+            // a Thetis path that the view model had just stopped pushing - and moving
+            // it did nothing at all. Fourth reader of one condition; it reads the
+            // function now, like the other three.
+            if (viewModel.yaesuIsTheOperatingRadio()) {
                 viewModel.yaesuVolumeSel(v) // geselecteerde radio (niet altijd radio1)
-                prefs.edit().putFloat("yaesu_volume", v).apply()
+                LocalAudioPrefs.setYaesuVolume(prefs, v)
             } else {
                 viewModel.setLocalVolume(v)
-                prefs.edit().putFloat("local_volume", v).apply()
+                LocalAudioPrefs.setLocalVolume(prefs, v)
             }
         }
     }
@@ -517,7 +525,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         { v ->
             txGainState.floatValue = v
             viewModel.setTxGain(v)
-            prefs.edit().putFloat("tx_gain", v).apply()
+            LocalAudioPrefs.setTxGain(prefs, v)
         }
     }
     val onControl: (Int, Int) -> Unit = remember {
@@ -639,6 +647,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         "EA7HG Rotor" to "UDP",
                         "PstRotator (rotors)" to "XML over UDP",
                         "Yaesu G-1000DXC Rotor" to "MCP2221A (USB)",
+                        "Morse paddle / straight key" to "MCP2221A USB-HID (desktop)",
                         "YPC21 / PTT-Z01 PTT button" to "BLE",
                         "ZL-01 shutter button" to "Bluetooth touch",
                     )) {
@@ -739,7 +748,11 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Desired state, keyed on showDevices + yaesuActive + connected (the reconnect
     // edge) so that a window change, the Yaesu toggle and a reconnect re-apply the
     // right spectrum state (which prevents a stale spectrum subscription):
-    //  - Yaesu active            -> spectrum off (no grace).
+    //  - Yaesu active            -> the ENGINE decides, after its grace period.
+    //    It used to be "spectrum off, no grace" right here, which is half of
+    //    what open point 13 was about: the audio never stopped and the spectrum
+    //    stopped at once. Removing the send in setYaesuActive was not enough -
+    //    this block sends it too, and a review caught that it still won.
     //  - on the main screen      -> spectrum on (+ FPS restore).
     //  - main screen left >30 s  -> spectrum off; back within 30 s cancels the effect.
     // The chat screen counts as "left the main screen" here: no spectrum is drawn
@@ -751,7 +764,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             // Only stream spectrum when the user has it switched on as well; the grace adds
             // data saving on top of that when screens change. Without this gate spectrum ran
             // from connect (with the toggle off) -> a high data rate.
-            yaesuActive || !spectrumEnabled -> viewModel.setSpectrumActive(false)
+            !spectrumEnabled -> viewModel.setSpectrumActive(false)
             radioScreenVisible -> {
                 android.util.Log.i("MainScreen", "grace cancelled -> spectrum on")
                 viewModel.setSpectrumActive(true)
@@ -778,6 +791,18 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     .padding(horizontal = 12.dp)
                     .padding(top = 12.dp),
             ) {
+                // The one warning that has to be seen wherever you are: a PA that
+                // may be amplifying out of reach while the drive went up. It stays
+                // until the server can reach the PA again.
+                if (state.paDriveWarning) { item {
+                    Text(
+                        stringResource(R.string.dev_pa_drive_warning),
+                        color = Color(0xFFFF5050),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    )
+                } }
+
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
@@ -993,10 +1018,11 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             spectrumPanState.floatValue = 0f
                             prefs.edit().putFloat("spectrum_zoom", 20f).putFloat("spectrum_pan", 0f).apply()
                             viewModel.connect(addr, password)
-                            viewModel.setRxVolume(rxVolumeState.floatValue)
-                            viewModel.setLocalVolume(localVolumeState.floatValue)
-                            viewModel.setTxGain(txGainState.floatValue)
-                            viewModel.setAgcEnabled(agcEnabled)
+                            // The four local settings used to be sent here. They are
+                            // engine-local and the engine outlives every connection,
+                            // so SdrViewModel.applyLocalSettingsAtStartup sends them
+                            // once at app start instead - which also covers the
+                            // connect button in the WIZARD, which sent none of them.
                         },
                         onDisconnect = { viewModel.disconnect() },
                         onExit = {
@@ -1269,7 +1295,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         onAgcToggle = {
                             agcEnabled = it
                             viewModel.setAgcEnabled(it)
-                            prefs.edit().putBoolean("agc_enabled", it).apply()
+                            LocalAudioPrefs.setAgcEnabled(prefs, it)
                         },
                         onRf2kOperate = { viewModel.rf2kOperate(it) },
                         onSpeOperate = { viewModel.speOperate() },

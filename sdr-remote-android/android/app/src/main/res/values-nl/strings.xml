@@ -106,6 +106,7 @@
     <string name="stats_audio_levels">Audioniveaus:</string>
     <string name="stats_statistics">Statistieken:</string>
     <string name="stats_tcp_fallback">TCP-fallback</string>
+    <string name="stats_link_loss">Verbindingsverlies</string>
     <string name="stats_down">Omlaag</string>
     <string name="stats_up">Omhoog</string>
     <string name="stats_audio_streams">Audiostreams:</string>
@@ -201,7 +202,6 @@
     <string name="dev_auto">Auto</string>
     <string name="dev_bypass">Bypass</string>
     <string name="dev_store">Opslaan</string>
-    <string name="dev_drive_watts">Drive: %1$dW</string>
     <string name="dev_reflected">Gereflecteerd: %1$dW</string>
     <string name="dev_antenna_label">Antenne:</string>
     <string name="dev_ub_dir">Richting:</string>
@@ -218,6 +218,7 @@
     <string name="dev_stop">STOP</string>
     <string name="dev_goto">GaNaar:</string>
     <string name="dev_go">Ga</string>
+    <string name="dev_pa_drive_warning">Stuurvermogen verhoogd terwijl de PA onbereikbaar is</string>
     <string name="dev_high_swr">HOGE SWR</string>
     <string name="dev_high_swr_other">HOGE SWR (%1$s)</string>
     <string name="dev_radio_label">Radio:</string>
@@ -310,4 +311,7 @@
     <string name="settings_ble_ptt_waiting">Buiten bereik — verbindt vanzelf weer</string>
     <string name="settings_ble_ptt_reconnect">Opnieuw verbinden</string>
     <string name="settings_ble_ptt_forget">Deze knop vergeten</string>
+    <string name="settings_ui_scale">Weergavegrootte:</string>
+    <string name="settings_ui_scale_landscape_on">Bij deze grootte draait de app mee met het toestel. Zet de schermrotatie vast om staand te blijven.</string>
+    <string name="settings_ui_scale_landscape_off">Bij deze grootte blijft de app staand. Kleiner zetten laat hem meedraaien.</string>
 </resources>

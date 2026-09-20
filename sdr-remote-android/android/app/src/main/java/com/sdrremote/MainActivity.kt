@@ -5,12 +5,18 @@ package com.sdrremote
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import com.sdrremote.ui.UiScale
 import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -95,6 +101,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // How large we draw ourselves, and whether that earns us landscape.
+        //
+        // Loaded before anything is composed, because it decides the orientation
+        // as well as the size. The rule lives in UiScale together with the
+        // reasoning; here it is only applied.
+        UiScale.load(this)
+        applyOrientationPolicy()
+
         // Start keeping our own log before anything else runs, so a fault
         // during start-up is in it too. The system log alone is a ring buffer
         // shared with the whole phone: on a busy device our lines are gone
@@ -114,8 +128,22 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            SdrRemoteTheme {
-                MainScreen()
+            val scale = UiScale.scale
+
+            // A change of scale can also change whether landscape is allowed, so
+            // the policy is re-applied whenever it moves - not only at start-up.
+            // Without this, turning the scale down would need a restart before
+            // the phone would turn, and turning it back up would leave a phone
+            // lying on its side with a layout that no longer fits.
+            LaunchedEffect(scale) { applyOrientationPolicy() }
+
+            val base = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(base.density * scale, base.fontScale),
+            ) {
+                SdrRemoteTheme {
+                    MainScreen()
+                }
             }
         }
     }
@@ -180,6 +208,27 @@ class MainActivity : ComponentActivity() {
      * `isChangingConfigurations` rules out a screen rotation: that is an onStop
      * too, but the app comes straight back and that is not going away.
      */
+    /**
+     * Lock to portrait, or let the device decide - by the rule in [UiScale].
+     *
+     * The manifest locks this activity to portrait, so a device that never earns
+     * landscape never even briefly rotates. This lifts that lock, and puts it
+     * back: a scale turned up again has to leave the phone standing, or it would
+     * stay on its side with a layout that has no room.
+     *
+     * `smallestScreenWidthDp` is Android's own figure for the device and does not
+     * move when we scale our own drawing - which is exactly why the rule divides
+     * by the scale instead of asking Android again.
+     */
+    private fun applyOrientationPolicy() {
+        val sw = resources.configuration.smallestScreenWidthDp
+        requestedOrientation = if (UiScale.landscapeAllowed(sw, UiScale.scale)) {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) {

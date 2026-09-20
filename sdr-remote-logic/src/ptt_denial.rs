@@ -43,6 +43,21 @@ use sdr_remote_core::protocol::DeniedTarget;
 /// Thetis, Yaesu 1, Yaesu 2 - the three things that can transmit.
 pub const TRANSMITTERS: usize = 3;
 
+/// What this client is asking for, with the CW key counted in. A CW run
+/// sends no PTT request - it sends edges - so a refusal of the key found
+/// nobody asking and was dropped, and the operator keyed into a blocked
+/// Amplitec position with no sign on the screen (field test of build 97,
+/// 2026-09-18 00:29). `cw_target` is the transmitter the key goes to.
+pub fn asking_with_cw(ptt_requested: [bool; TRANSMITTERS], cw_keying: bool, cw_target: u8) -> [bool; TRANSMITTERS] {
+    let mut asking = ptt_requested;
+    if cw_keying {
+        if let Some(slot) = asking.get_mut(cw_target as usize) {
+            *slot = true;
+        }
+    }
+    asking
+}
+
 /// A refusal, and what is still standing because of it.
 ///
 /// `Default` is "nothing refused, nothing outstanding", which is also what a
@@ -152,6 +167,49 @@ impl PttDenial {
         }
     }
 
+    /// A CW run is over (silent), or its key went to another radio: its
+    /// refusals come down - for every transmitter in `asked` (a bit per one the
+    /// run keyed), except one the microphone is still asking for.
+    ///
+    /// Every one, not only the current target: the run that stopped at 10:27:54
+    /// on 2026-09-19 had asked Thetis first (a reconnect) and the 991A after,
+    /// and only the 991A's refusal was cleared - "PTT blocked" stayed up.
+    pub fn cw_run_over(&mut self, asked: u8, mic_asking: [bool; TRANSMITTERS]) {
+        for (i, mic) in mic_asking.iter().enumerate() {
+            if asked & (1u8 << i) != 0 && !mic {
+                self.transmitter_off(i);
+            }
+        }
+    }
+
+    /// The server now reports a transmitter as keyed that it refused a CW
+    /// packet for, nobody else holds it, and our CW run asked for it: the
+    /// refusal was of an earlier packet and is over. Only on the report's
+    /// rising edge (`report` false, `now_tx` true), so a report that is still
+    /// high from before a refusal cannot take a fresh one down.
+    ///
+    /// It stores the new report itself (`*report = now_tx`): the edge exists
+    /// only if this runs before the store, and with the store here that order
+    /// cannot be turned round at a call site (review 317).
+    ///
+    /// Field test 2026-09-19 15:28: the first packet after a server restart
+    /// came before the server had found the 991A and was refused; the next
+    /// ones keyed it, and "PTT blocked" stayed up until the operator stopped.
+    pub fn cw_keyed_after_all(
+        &mut self,
+        t: usize,
+        report: &mut bool,
+        now_tx: bool,
+        held_by_other: bool,
+        cw_asked: u8,
+        mic_asking: [bool; TRANSMITTERS],
+    ) {
+        let was_tx = std::mem::replace(report, now_tx);
+        if t < TRANSMITTERS && !was_tx && now_tx && !held_by_other && cw_asked & (1u8 << t) != 0 && !mic_asking[t] {
+            self.transmitter_off(t);
+        }
+    }
+
     /// The link went away. Nothing is outstanding any more, but `seq` stays -
     /// see the field.
     pub fn clear(&mut self) {
@@ -225,6 +283,16 @@ pub fn transmitters_to_release(missed: u32, covered: u8, outstanding: u8) -> u8 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CW run counts as asking for its transmitter, and nothing else.
+    #[test]
+    fn the_cw_key_counts_as_asking_for_its_target() {
+        assert_eq!(asking_with_cw([false; 3], true, 0), [true, false, false]);
+        assert_eq!(asking_with_cw([false; 3], true, 2), [false, false, true]);
+        assert_eq!(asking_with_cw([false, true, false], true, 0), [true, true, false]);
+        assert_eq!(asking_with_cw([false; 3], false, 0), [false; 3], "no run, nothing asked");
+        assert_eq!(asking_with_cw([false; 3], true, 7), [false; 3], "an impossible target asks for nothing");
+    }
 
     const THETIS: usize = 0;
     const YAESU1: usize = 1;
@@ -586,5 +654,66 @@ mod tests {
         assert!(!d.active());
         assert!(!d.released_by_server_now());
         assert_eq!(d.seq, seen_seq, "a reader would read this as a new refusal");
+    }
+}
+
+#[cfg(test)]
+mod cw_run_over_tests {
+    use super::*;
+
+    #[test]
+    fn a_cw_run_that_is_over_clears_every_radio_it_asked_not_only_the_last() {
+        let mut d = PttDenial::default();
+        // Refused on Thetis (the reconnect window), then on the 991A.
+        d.apply_refusal([true, false, false], DeniedTarget::Thetis, false);
+        d.apply_refusal([false, true, false], DeniedTarget::Radio1, false);
+        assert!(d.active());
+        d.cw_run_over(0b011, [false, false, false]);
+        assert!(!d.active(), "both come down");
+        // The microphone still asking for Thetis keeps Thetis's refusal.
+        d.apply_refusal([true, false, false], DeniedTarget::Thetis, false);
+        d.cw_run_over(0b001, [true, false, false]);
+        assert!(d.active(), "the microphone's own refusal stays");
+        // A transmitter the run never asked for is left alone.
+        let mut d = PttDenial::default();
+        d.apply_refusal([false, false, true], DeniedTarget::Radio2, false);
+        d.cw_run_over(0b001, [false, false, false]);
+        assert!(d.active());
+    }
+}
+
+#[cfg(test)]
+mod cw_keyed_after_all_tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_first_packet_comes_down_once_the_radio_is_keyed() {
+        let mut r = true;
+        PttDenial::default().cw_keyed_after_all(1, &mut r, false, false, 0, [false; 3]);
+        assert!(!r, "a falling report is stored as well (review 317 r2)");
+        let mut r = false;
+        assert!({ let mut d = PttDenial::default(); d.cw_keyed_after_all(1, &mut r, true, false, 0, [false; 3]); r }, "the report is stored");
+        let mut d = PttDenial::default();
+        d.apply_refusal([false, true, false], DeniedTarget::Radio1, false);
+        // The report rises during our run to radio one: down.
+        d.cw_keyed_after_all(1, &mut false, true, false, 0b010, [false; 3]);
+        assert!(!d.active());
+        // Not on a report that was already high (it may predate the refusal).
+        d.apply_refusal([false, true, false], DeniedTarget::Radio1, false);
+        d.cw_keyed_after_all(1, &mut true, true, false, 0b010, [false; 3]);
+        assert!(d.active(), "no rising edge");
+        // Not when somebody else holds the radio: that refusal is the truth.
+        d.cw_keyed_after_all(1, &mut false, true, true, 0b010, [false; 3]);
+        assert!(d.active(), "held by another client");
+        // Not when our run never asked for it.
+        d.cw_keyed_after_all(1, &mut false, true, false, 0b001, [false; 3]);
+        assert!(d.active(), "not our run's radio");
+        // Not when the microphone asks for it.
+        d.cw_keyed_after_all(1, &mut false, true, false, 0b010, [false, true, false]);
+        assert!(d.active(), "the microphone's refusal");
+        // And only that transmitter.
+        d.apply_refusal([false, false, true], DeniedTarget::Radio2, false);
+        d.cw_keyed_after_all(1, &mut false, true, false, 0b010, [false; 3]);
+        assert!(d.active(), "radio two's refusal stays");
     }
 }

@@ -106,6 +106,7 @@
     <string name="stats_audio_levels">Audiopegel:</string>
     <string name="stats_statistics">Statistiken:</string>
     <string name="stats_tcp_fallback">TCP-Fallback</string>
+    <string name="stats_link_loss">Verbindungsverlust</string>
     <string name="stats_down">Runter</string>
     <string name="stats_up">Hoch</string>
     <string name="stats_audio_streams">Audiostreams:</string>
@@ -201,7 +202,6 @@
     <string name="dev_auto">Auto</string>
     <string name="dev_bypass">Bypass</string>
     <string name="dev_store">Speichern</string>
-    <string name="dev_drive_watts">Drive: %1$dW</string>
     <string name="dev_reflected">Reflektiert: %1$dW</string>
     <string name="dev_antenna_label">Antenne:</string>
     <string name="dev_ub_dir">Richt.:</string>
@@ -218,6 +218,7 @@
     <string name="dev_stop">STOPP</string>
     <string name="dev_goto">GeheZu:</string>
     <string name="dev_go">Los</string>
+    <string name="dev_pa_drive_warning">Ansteuerung erhöht, während die PA nicht erreichbar ist</string>
     <string name="dev_high_swr">HOHES SWR</string>
     <string name="dev_high_swr_other">HOHES SWR (%1$s)</string>
     <string name="dev_radio_label">Radio:</string>
@@ -310,4 +311,7 @@
     <string name="settings_ble_ptt_waiting">Ausser Reichweite — verbindet sich selbst</string>
     <string name="settings_ble_ptt_reconnect">Neu verbinden</string>
     <string name="settings_ble_ptt_forget">Diese Taste vergessen</string>
+    <string name="settings_ui_scale">Anzeigegröße:</string>
+    <string name="settings_ui_scale_landscape_on">Bei dieser Größe dreht die App mit dem Gerät. Bildschirmdrehung sperren, um im Hochformat zu bleiben.</string>
+    <string name="settings_ui_scale_landscape_off">Bei dieser Größe bleibt die App im Hochformat. Kleiner erlaubt das Drehen.</string>
 </resources>

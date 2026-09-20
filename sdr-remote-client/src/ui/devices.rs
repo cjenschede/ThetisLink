@@ -854,14 +854,15 @@ impl SdrRemoteApp {
             if !self.rf2k_modulation.is_empty() {
                 ui.colored_label(mod_color, RichText::new(&self.rf2k_modulation).strong());
             }
-            let w = self.rf2k_drive_w;
-            ui.label(rust_i18n::t!("dev_drive_w_fmt", w = w).to_string());
-
+            // Same row as the SPE tab above: Thetis' drive in percent, which is
+            // there in Standby too, instead of the PA's own watts that read 0
+            // whenever it is not amplifying.
             let drive_enabled = self.rf2k_connected && self.rf2k_operate && self.rf2k_active;
-            if ui.add_enabled(drive_enabled, egui::Button::new("-")).clicked() {
+            if ui.add_enabled(drive_enabled, egui::Button::new(rust_i18n::t!("dev_drive_minus").to_string())).clicked() {
                 let _ = self.cmd_tx.send(Command::Rf2kDriveDown);
             }
-            if ui.add_enabled(drive_enabled, egui::Button::new("+")).clicked() {
+            ui.label(format!("{}%", self.drive_level));
+            if ui.add_enabled(drive_enabled, egui::Button::new(rust_i18n::t!("dev_drive_plus").to_string())).clicked() {
                 let _ = self.cmd_tx.send(Command::Rf2kDriveUp);
             }
         });

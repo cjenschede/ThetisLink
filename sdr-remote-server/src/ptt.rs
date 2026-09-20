@@ -120,10 +120,24 @@ fn is_process_running(name: &str) -> bool {
 /// Timeout for Thetis launch (seconds)
 const THETIS_LAUNCH_TIMEOUT_S: u64 = 60;
 
-/// Safety timeout: release PTT if no packets received for this duration
-const PTT_PACKET_TIMEOUT_MS: u64 = 500;
+/// Safety timeout: release PTT if no packets received for this duration.
+///
+/// Raised from 500ms after four observed handovers: walking out of wifi range
+/// while transmitting dropped the transmitter every time, because a mobile
+/// handover stalls the packet stream for well over half a second even when the
+/// connection itself survives - three of those four kept their tunnel alive
+/// throughout. Half a second is stricter than the network is reliable.
+///
+/// Deliberately equal to `HEARTBEAT_TIMEOUT_MS`, and it must never exceed it:
+/// that one is the window after which the client counts as gone, and a
+/// transmitter may not stay keyed past the moment nobody is known to be holding
+/// it. So the worst case - keyed with no contact at all - is 2s either way, and
+/// which of the two lines appears says whether the tunnel was still alive.
+const PTT_PACKET_TIMEOUT_MS: u64 = 2000;
 
-/// Safety timeout: release PTT if heartbeat lost for this duration
+/// Safety timeout: release PTT if heartbeat lost for this duration.
+///
+/// The client sends one every 500ms, so this is four missed heartbeats of slack.
 const HEARTBEAT_TIMEOUT_MS: u64 = 2000;
 
 /// Minimum PTT tail delay in ms (CAT+VB-Cable mode)
@@ -138,6 +152,63 @@ const PTT_TAIL_MIN_MS_TCI: u64 = 25;
 const PTT_TAIL_MARGIN_MS_TCI: u64 = 10;
 const PTT_PREFILL_MS_TCI: u64 = 10;
 
+/// How long a clock has been silent, for a log line. A clock that was never set
+/// reads as "never", which is a different thing from a long gap and must not print
+/// as one.
+fn describe_silence(since: Option<Duration>) -> String {
+    match since {
+        Some(d) => format!("{:.1}s", d.as_secs_f32()),
+        None => "never (no reading at all)".to_string(),
+    }
+}
+
+/// What the safety layer wants done with the transmitter, this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SafetyAction {
+    /// Leave it alone.
+    None,
+    /// Nothing has been heard from the client at all: release, and say so loudly.
+    ReleaseHeartbeatLost,
+    /// The client is still there but its transmit stream stopped: release.
+    ReleaseNoPackets,
+}
+
+/// Decide, from two clocks, whether the transmitter must be unkeyed.
+///
+/// Free and testable because everything around it talks to a radio. The two tests
+/// this file first had asserted a relation and a lower bound between the constants,
+/// and a review showed both survive setting each constant to a full minute - so they
+/// guarded nothing that this layer exists for. This is what can actually be asserted:
+/// what the layer DOES, per tick, for every shape the clocks can take.
+///
+/// A missing clock counts as expired, not as "no opinion". Both checks used to sit
+/// behind `if let Some(..)`, so a clock that was never set silently switched its
+/// guard off - and a guard whose failure mode is "stay keyed" has the wrong default.
+/// The path that reaches Tx today always records a packet first, so this is a
+/// belt-and-braces change rather than a fix for something observed; it costs nothing
+/// and it removes a way for a later caller to be surprised.
+///
+/// Heartbeat before packets, so on a total loss the louder and more informative line
+/// wins the tie when both windows are equal.
+fn safety_action(
+    state: PttState,
+    since_heartbeat: Option<Duration>,
+    since_packet: Option<Duration>,
+    heartbeat_timeout: Duration,
+    packet_timeout: Duration,
+) -> SafetyAction {
+    if state != PttState::Tx {
+        return SafetyAction::None;
+    }
+    if since_heartbeat.map_or(true, |d| d > heartbeat_timeout) {
+        return SafetyAction::ReleaseHeartbeatLost;
+    }
+    if since_packet.map_or(true, |d| d > packet_timeout) {
+        return SafetyAction::ReleaseNoPackets;
+    }
+    SafetyAction::None
+}
+
 /// PTT state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PttState {
@@ -150,7 +221,7 @@ pub enum PttState {
 /// Safety layers:
 /// 1. PTT state in every audio packet (checked 50x/sec)
 /// 2. Burst of 5 packets on PTT state change (handled by client)
-/// 3. 500ms timeout: no packets -> PTT released
+/// 3. PTT_PACKET_TIMEOUT_MS without packets -> PTT released
 /// 4. 2s heartbeat timeout -> connection lost, PTT released + alarm
 /// 5. PTT tail: delay on Tx->Rx to let audio pipeline drain
 pub struct PttController {
@@ -234,6 +305,11 @@ impl PttController {
         self.tx_blocked.clone()
     }
 
+    /// Is the current Amplitec position marked receive-only?
+    pub fn tx_blocked(&self) -> bool {
+        self.tx_blocked.load(Ordering::Relaxed)
+    }
+
     fn prefill_ms(&self) -> u64 {
         if true { PTT_PREFILL_MS_TCI } else { PTT_PREFILL_MS }
     }
@@ -250,6 +326,23 @@ impl PttController {
         let now = Instant::now();
         self.last_ptt_packet = Some(now);
         self.last_heartbeat = Some(now);
+    }
+
+    /// The server's own CW playout is active: a played edge, or a key held
+    /// down. That keeps the packet watchdog fed - the playout is what stands
+    /// in for the audio stream here - and deliberately NOT the heartbeat: a
+    /// heartbeat is a sign of life from the client, and the server cannot
+    /// give one on its behalf. A client that dies with the key down is
+    /// dropped by the heartbeat watchdog after 2 s like any other; build 103's
+    /// first draft fed both and would have held the carrier until the CW
+    /// watchdog, a second later.
+    pub fn record_cw_activity(&mut self) {
+        self.last_ptt_packet = Some(Instant::now());
+    }
+
+    #[cfg(test)]
+    fn watchdog_stamps(&self) -> (Option<Instant>, Option<Instant>) {
+        (self.last_ptt_packet, self.last_heartbeat)
     }
 
     pub fn activate_from_playout(&mut self) {
@@ -279,6 +372,44 @@ impl PttController {
             self.pending_activate = Some(now);
             self.ptt_prefill_start = Some(now);
         }
+    }
+
+    /// Key MOX for a CW run, through the same machine as the microphone PTT:
+    /// the Amplitec gate, the heartbeat and packet time-outs and the release
+    /// all apply as they do to audio. Returns whether Thetis is keyed.
+    ///
+    /// Why the server keys MOX at all: Thetis's own TCI keyer raises MOX on
+    /// the first key-down when nothing else has, and drops it again on the
+    /// first key-up - at once, without its break-in delay
+    /// (`TCIServer.cs`: `ensureDirectKeyerMoxLocked`,
+    /// `captureDirectKeyerMoxReleaseLocked`). Every run began with TX, RX, TX
+    /// and lost its first elements in the rise (field test of build 96,
+    /// 2026-09-18 00:05). With the TCI PTT active Thetis leaves MOX alone.
+    ///
+    /// What it does to the microphone's state, on purpose (review 313 asked):
+    /// a microphone tail release that was pending is cancelled - the CW run
+    /// holds the transmitter now, and the run hands it back; a microphone
+    /// prefill that was pending is dropped - MOX goes up here at once, so the
+    /// microphone's audio finds the transmitter already on and needs no
+    /// prefill of its own. `tail_delay_ms` is left alone: the next microphone
+    /// release computes its own. Pinned by `activate_for_cw_takes_over_the_microphones_pending_state`.
+    /// A microphone that keys during the run rides on the run's MOX, and the
+    /// run's idle release drops it: that is fout 4 of the step-4 brief (§3d),
+    /// left so on purpose (the owner, 2026-09-18).
+    pub async fn activate_for_cw(&mut self) -> bool {
+        if self.tx_blocked.load(Ordering::Relaxed) {
+            return false;
+        }
+        if self.pending_release.take().is_some() {
+            info!("PTT re-keyed for CW during tail delay, release cancelled");
+        }
+        self.pending_activate = None;
+        self.record_ptt_packet();
+        if self.state != PttState::Tx {
+            info!("PTT keyed for a CW run");
+            self.set_state(PttState::Tx).await;
+        }
+        self.state == PttState::Tx
     }
 
     pub async fn check_prefill(&mut self) {
@@ -318,26 +449,39 @@ impl PttController {
     pub async fn check_safety(&mut self) -> bool {
         let now = Instant::now();
 
-        if let Some(last_hb) = self.last_heartbeat {
-            if now.duration_since(last_hb).as_millis() > HEARTBEAT_TIMEOUT_MS as u128 {
-                if self.state == PttState::Tx {
-                    error!("SAFETY: Heartbeat timeout! Releasing PTT.");
-                    self.pending_release = None;
-                    self.force_release().await;
-                    return true;
-                }
+        let since_heartbeat = self.last_heartbeat.map(|t| now.duration_since(t));
+        let since_packet = self.last_ptt_packet.map(|t| now.duration_since(t));
+        match safety_action(
+            self.state,
+            since_heartbeat,
+            since_packet,
+            Duration::from_millis(HEARTBEAT_TIMEOUT_MS),
+            Duration::from_millis(PTT_PACKET_TIMEOUT_MS),
+        ) {
+            SafetyAction::ReleaseHeartbeatLost => {
+                // The measured silence, not the threshold. The threshold printing
+                // itself proves nothing: four of these lines in one session never
+                // said whether the gap had been 0.6s or thirty, and that is the
+                // number that decides whether the window is wide enough.
+                error!(
+                    "SAFETY: Heartbeat timeout after {}! Releasing PTT.",
+                    describe_silence(since_heartbeat)
+                );
+                self.pending_release = None;
+                self.force_release().await;
+                return true;
             }
-        }
-
-        if self.state == PttState::Tx {
-            if let Some(last_pkt) = self.last_ptt_packet {
-                if now.duration_since(last_pkt).as_millis() > PTT_PACKET_TIMEOUT_MS as u128 {
-                    warn!("SAFETY: No PTT packets for 500ms, releasing PTT.");
-                    self.pending_release = None;
-                    self.force_release().await;
-                    return true;
-                }
+            SafetyAction::ReleaseNoPackets => {
+                warn!(
+                    "SAFETY: No PTT packets for {} (window {PTT_PACKET_TIMEOUT_MS}ms), \
+                     releasing PTT.",
+                    describe_silence(since_packet)
+                );
+                self.pending_release = None;
+                self.force_release().await;
+                return true;
             }
+            SafetyAction::None => {}
         }
 
         if let Some(release_time) = self.pending_release {
@@ -1347,5 +1491,256 @@ impl PttController {
         if let Some(tci) = Some(&mut self.tci) {
             tci.write_tx_audio(samples);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CW playout stands in for the audio stream, never for the client:
+    /// its activity feeds the packet watchdog and leaves the heartbeat alone,
+    /// so a client that dies with the key down is still dropped at 2 s.
+    #[test]
+    fn cw_activity_feeds_the_packet_watchdog_and_not_the_heartbeat() {
+        let mut p = PttController::new_tci(None, None);
+        assert_eq!(p.watchdog_stamps(), (None, None));
+        p.record_cw_activity();
+        let (packet, heartbeat) = p.watchdog_stamps();
+        assert!(packet.is_some(), "the packet watchdog is fed");
+        assert!(heartbeat.is_none(), "the heartbeat is the client's to give");
+        p.record_ptt_packet();
+        let (packet, heartbeat) = p.watchdog_stamps();
+        assert!(packet.is_some() && heartbeat.is_some(), "a packet from the client is both");
+        // And the decision that follows from it: fresh packets, a heartbeat
+        // that went silent - released.
+        assert_eq!(
+            safety_action(
+                PttState::Tx,
+                Some(Duration::from_millis(HEARTBEAT_TIMEOUT_MS + 1)),
+                Some(Duration::from_millis(10)),
+                Duration::from_millis(HEARTBEAT_TIMEOUT_MS),
+                Duration::from_millis(PTT_PACKET_TIMEOUT_MS),
+            ),
+            SafetyAction::ReleaseHeartbeatLost
+        );
+    }
+
+    /// `activate_for_cw` had no test at all (review 313). What it does: the
+    /// Amplitec gate refuses and changes nothing; otherwise MOX goes up now, a
+    /// pending microphone prefill is dropped (MOX is up already, the
+    /// microphone needs none), a pending tail release is cancelled (the run
+    /// holds the transmitter), and the tail length is left for the next
+    /// microphone release to compute.
+    #[tokio::test]
+    async fn activate_for_cw_takes_over_the_microphones_pending_state() {
+        // The gate.
+        let mut p = PttController::new_tci(None, None);
+        p.activate_from_playout(); // a microphone prefill is pending
+        p.tx_blocked_handle().store(true, Ordering::Relaxed);
+        assert!(!p.activate_for_cw().await, "receive-only: refused");
+        assert!(p.state != PttState::Tx && p.pending_activate.is_some(), "and nothing touched");
+        // A pending prefill: MOX up at once, the prefill gone.
+        let mut p = PttController::new_tci(None, None);
+        p.activate_from_playout();
+        assert!(p.pending_activate.is_some() && p.state != PttState::Tx);
+        assert!(p.activate_for_cw().await);
+        assert!(p.state == PttState::Tx && p.pending_activate.is_none());
+        // A pending tail release: cancelled, the tail length untouched.
+        p.release_from_playout(2);
+        let tail = p.tail_delay_ms;
+        assert!(p.pending_release.is_some());
+        assert!(p.activate_for_cw().await);
+        assert!(p.pending_release.is_none() && p.state == PttState::Tx);
+        assert_eq!(p.tail_delay_ms, tail);
+    }
+
+    /// The order of the deadlines when a link dies, which the safety of a
+    /// transmitter rests on and which until review 314 stood only in prose:
+    /// MOX drops first (heartbeat, 2 s), and only then is the transmitter
+    /// given away (the holder's session time-out) or the CW key lifted by the
+    /// playout's own watchdog. The packet watchdog may never outlast the
+    /// heartbeat (its comment says so).
+    #[test]
+    fn mox_drops_before_the_transmitter_is_given_away_or_the_key_lifted() {
+        assert!(PTT_PACKET_TIMEOUT_MS <= HEARTBEAT_TIMEOUT_MS, "the packet watchdog outlasts the heartbeat");
+        assert!(HEARTBEAT_TIMEOUT_MS < crate::session::timeout_secs(true) * 1000, "the lock goes before MOX");
+        assert!(
+            Duration::from_millis(HEARTBEAT_TIMEOUT_MS) < crate::cw_playout::WATCHDOG,
+            "the CW key is lifted before MOX drops"
+        );
+    }
+
+    /// The ceiling. This is the property the whole layer exists for.
+    ///
+    /// The first version of these tests asserted that the packet guard does not
+    /// outlive the heartbeat guard, and that both leave room for jitter. A review
+    /// showed that setting BOTH constants to a full minute passes all of it: a
+    /// relation and a lower bound say nothing about how long a transmitter may run
+    /// on. Mutating one constant was not the proof; mutating both together was.
+    ///
+    /// Two seconds is the owner's decision, in his words "de ptt of na 2 sec is echt
+    /// snel genoeg", and that decision is what this number is anchored to. Raising it
+    /// is allowed - by changing this line, deliberately, with a reason.
+    #[test]
+    fn a_transmitter_is_never_left_keyed_longer_than_the_owner_allowed() {
+        const OWNER_CEILING_MS: u64 = 2000;
+        assert!(
+            HEARTBEAT_TIMEOUT_MS <= OWNER_CEILING_MS,
+            "a transmitter may not run on longer than the owner decided"
+        );
+        assert!(
+            PTT_PACKET_TIMEOUT_MS <= OWNER_CEILING_MS,
+            "a transmitter may not run on longer than the owner decided"
+        );
+    }
+
+    /// And the packet guard may not outlive the guard that decides the client is gone.
+    #[test]
+    fn a_transmitter_is_never_keyed_past_the_moment_its_holder_is_gone() {
+        assert!(
+            PTT_PACKET_TIMEOUT_MS <= HEARTBEAT_TIMEOUT_MS,
+            "the packet guard must not outlive the guard that decides the client is gone"
+        );
+    }
+
+    /// Both must still leave room for ordinary jitter, or they fire on nothing.
+    ///
+    /// The client heartbeat is every 500ms and transmit packets arrive 50 times a
+    /// second. The packet guard was 500ms until four measured handovers showed a
+    /// mobile network stalls longer than that while the connection survives.
+    #[test]
+    fn the_guards_leave_room_for_ordinary_jitter() {
+        const CLIENT_HEARTBEAT_INTERVAL_MS: u64 = 500;
+        assert!(
+            HEARTBEAT_TIMEOUT_MS >= CLIENT_HEARTBEAT_INTERVAL_MS * 3,
+            "fewer than three missed heartbeats is jitter, not a lost client"
+        );
+        assert!(
+            PTT_PACKET_TIMEOUT_MS >= CLIENT_HEARTBEAT_INTERVAL_MS * 2,
+            "a network handover stalls longer than this; measured, not assumed"
+        );
+    }
+
+    const HB: Duration = Duration::from_millis(HEARTBEAT_TIMEOUT_MS);
+    const PKT: Duration = Duration::from_millis(PTT_PACKET_TIMEOUT_MS);
+
+    fn ms(v: u64) -> Option<Duration> {
+        Some(Duration::from_millis(v))
+    }
+
+    /// Not transmitting: the guards have no business doing anything.
+    #[test]
+    fn a_receiver_is_never_touched_by_the_safety_layer() {
+        assert_eq!(
+            safety_action(PttState::Rx, None, None, HB, PKT),
+            SafetyAction::None
+        );
+        assert_eq!(
+            safety_action(PttState::Rx, ms(60_000), ms(60_000), HB, PKT),
+            SafetyAction::None
+        );
+    }
+
+    /// Transmitting with both clocks fresh: leave it alone.
+    #[test]
+    fn a_healthy_stream_keeps_the_transmitter() {
+        assert_eq!(
+            safety_action(PttState::Tx, ms(100), ms(20), HB, PKT),
+            SafetyAction::None
+        );
+    }
+
+    /// A missing clock releases rather than disabling its guard.
+    ///
+    /// Both checks used to sit behind `if let Some(..)`. A clock that was never set
+    /// switched its guard off entirely and the transmitter stayed keyed - a guard
+    /// whose failure mode is "stay keyed" has its default the wrong way round.
+    #[test]
+    fn a_clock_that_was_never_set_releases_rather_than_going_quiet() {
+        assert_eq!(
+            safety_action(PttState::Tx, None, ms(20), HB, PKT),
+            SafetyAction::ReleaseHeartbeatLost
+        );
+        assert_eq!(
+            safety_action(PttState::Tx, ms(100), None, HB, PKT),
+            SafetyAction::ReleaseNoPackets
+        );
+    }
+
+    /// The stream stopped while the client is still there: the packet guard, and it
+    /// must be that one - the distinction is the whole diagnostic value of the line.
+    #[test]
+    fn a_stalled_stream_under_a_live_client_is_the_packet_guard() {
+        assert_eq!(
+            safety_action(
+                PttState::Tx,
+                ms(100),
+                ms(PTT_PACKET_TIMEOUT_MS + 1),
+                HB,
+                PKT
+            ),
+            SafetyAction::ReleaseNoPackets
+        );
+    }
+
+    /// Total loss: the heartbeat guard wins the tie, because both windows are equal
+    /// and its line says more.
+    #[test]
+    fn a_total_loss_reports_the_lost_client_not_the_stalled_stream() {
+        assert_eq!(
+            safety_action(
+                PttState::Tx,
+                ms(HEARTBEAT_TIMEOUT_MS + 1),
+                ms(PTT_PACKET_TIMEOUT_MS + 1),
+                HB,
+                PKT
+            ),
+            SafetyAction::ReleaseHeartbeatLost
+        );
+    }
+
+    /// Exactly on the window is not yet over it.
+    #[test]
+    fn the_boundary_itself_does_not_release() {
+        assert_eq!(
+            safety_action(
+                PttState::Tx,
+                ms(HEARTBEAT_TIMEOUT_MS),
+                ms(PTT_PACKET_TIMEOUT_MS),
+                HB,
+                PKT
+            ),
+            SafetyAction::None
+        );
+    }
+
+    /// A stale packet clock releases on the very first tick after Tx is re-entered.
+    ///
+    /// This documents a real sequence rather than a wish. A safety release does not
+    /// clear `last_ptt_packet`, and the jitter buffer can still hold transmit frames
+    /// that put the state back to Tx a tick later - so the transmitter re-keys and is
+    /// dropped again immediately, once per buffered frame, and the log shows two
+    /// SAFETY lines close together. Whether that sequence is reached in the field is
+    /// not established; this is what happens when it is, and it is the shape to look
+    /// for in the next log.
+    #[test]
+    fn a_stale_packet_clock_releases_again_at_once() {
+        let long_ago = ms(30_000);
+        assert_eq!(
+            safety_action(PttState::Tx, ms(100), long_ago, HB, PKT),
+            SafetyAction::ReleaseNoPackets
+        );
+    }
+
+    /// A clock that was never set says "never", and never reads as a measured gap.
+    #[test]
+    fn a_silence_that_was_never_measured_says_so() {
+        assert_eq!(describe_silence(ms(2500)), "2.5s");
+        assert!(describe_silence(None).contains("never"));
+        assert!(
+            !describe_silence(None).contains("0.0"),
+            "no reading must not print as a gap of zero"
+        );
     }
 }

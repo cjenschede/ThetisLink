@@ -23,6 +23,8 @@ mod devices;
 mod yaesu_panel;
 mod screens;
 mod midi_screen;
+mod ble_screen;
+mod paddle_screen;
 mod server_screen;
 mod diversity_screen;
 mod thetis_screen;
@@ -30,7 +32,7 @@ mod wizard;
 pub(crate) mod controls;
 pub(crate) mod yaesu_memory;
 pub(crate) mod yaesu_menu;
-pub(crate) mod ftx1_ex_chart;
+pub(crate) use sdr_remote_core::ftx1_ex_chart;
 
 pub(crate) use helpers::*;
 pub(crate) use meters::*;
@@ -206,8 +208,16 @@ pub struct SdrRemoteApp {
     server_input: String,
     password_input: String,
     totp_input: String,
-    mouse_ptt: bool,
-    midi_ptt: bool,
+    /// The latches of the Thetis transmitter - mouse, spacebar, MIDI and the
+    /// Bluetooth button as one value, the same shape as `yaesu_latches`.
+    ///
+    /// Four loose booleans until build 77, OR-ed into one want and cleared by
+    /// hand at fourteen places, each of which had to know every boolean (open
+    /// point 37 - and the Bluetooth button was forgotten at two of them within a
+    /// day of being added). The Yaesu slots took this road in step 2c; Thetis
+    /// takes it now, and `$LATCH_SITES` in fitness.ps1 goes to one - the
+    /// last-sent flag inside the one exit function, named there.
+    thetis_latches: sdr_remote_logic::ptt_intent::Latches,
     ptt_toggle_mode: bool,       // false=push-to-talk (momentary), true=toggle (click on/off)
     yaesu_ptt_toggle_mode: bool, // independent Yaesu PTT mode
     /// The latches of both Yaesu slots, and what last went to the server per slot.
@@ -255,8 +265,16 @@ pub struct SdrRemoteApp {
     /// right afterwards, while the Yaesu blocking it let go later in that same frame
     /// (review finding).
     thetis_want: bool,
+    /// What the top bar knows and drive_ptt does not: no RX-only antenna
+    /// position, and a Thetis to key. Read each frame, never latched.
+    thetis_ptt_allowed: bool,
     ptt_blocked_at: Option<Instant>,
     yaesu_blocked_at: [Option<Instant>; 2],
+    /// When the server last refused this Yaesu for us (a PTT, or a CW packet).
+    /// Apart from `yaesu_blocked_at`, which is this client's own arbitration
+    /// ("TX elsewhere"): a refusal by the server is not that, and the button
+    /// said so wrongly (field test 2026-09-19).
+    yaesu_refused_at: [Option<Instant>; 2],
     /// Last PTT state sent from the Yaesu pop-out (mouse OR spacebar combined),
     /// so the spacebar-in-window PTT and the mouse PTT don't fight each other.
     // PTT switch-on spike protection (built-in speaker+mic in one chassis). See config.rs.
@@ -288,10 +306,9 @@ pub struct SdrRemoteApp {
     /// Checkbox in the Thetis tab: launch Thetis on the server PC when this
     /// client starts and the server reports Thetis is not running. Persistent.
     thetis_autostart: bool,
-    /// One-shot latch for `thetis_autostart`: set once the launch has been
-    /// sent this client run. Keeps a later deliberate power-off (or a failed
-    /// launch) from being overridden on every reconnect.
-    thetis_autostart_fired: bool,
+    /// What the engine was last told about `thetis_autostart`; the engine
+    /// decides the launch (sdr_remote_logic::thetis_autostart).
+    thetis_autostart_sent: Option<bool>,
     /// TL2-1 ctun-auto-recenter setup checkbox "Allow zoom below 2x (with smear during tune)".
     /// Default false -> zoom-min 2x. True -> zoom-min 1x allowed.
     allow_zoom_below_2x: bool,
@@ -424,6 +441,8 @@ pub struct SdrRemoteApp {
     audio_error: bool,
     agc_enabled: bool,
     other_tx: bool,
+    /// The server says a transmitter is on (RadioState::server_tx).
+    server_tx: bool,
     thetis_swr_x100: u16,
     filter_low_hz: i32,
     filter_high_hz: i32,
@@ -992,6 +1011,8 @@ pub struct SdrRemoteApp {
     // the slider range 5..=max. 0 = old server/unknown -> fall back to 100.
     yaesu_tx_power_max: u16,
     yaesu2_tx_power_max: u16,
+    /// What the server is still reading from each Yaesu (`YAESU_LOADING_*`).
+    yaesu_loading: [u8; 2],
     // Confirm-based PWR-sync: last-sent value + time. The slider only accepts the
     // radio readback once it confirms this value (or after timeout) -> no bounce.
     yaesu_power_pending: Option<u16>,
@@ -1002,6 +1023,8 @@ pub struct SdrRemoteApp {
     yaesu_split_active: bool,
     yaesu_tuner_state: u8, // internal ATU state of the radio (0=off,1=on,2=tuning) via AC;-poll
     yaesu_hi_swr: bool,    // radio reports high SWR during TX (self-clearing)
+    /// The server says the drive went up while a PA is out of reach.
+    pa_drive_warning: bool,
     yaesu_feature_toggles: u32, // DSP/function toggles bitfield (PATCH-yaesu-extra-controls)
     yaesu_feature_levels: [u8; 16], // multi-state/level values (Phase B: AGC, IPO)
     // Phase C level-sliders (debounced), [slot][NB,DNR,Processor,AMC]. Synced from
@@ -1159,6 +1182,10 @@ pub struct SdrRemoteApp {
     collapse_yaesu_eq: bool,
     collapse_yaesu_memories: bool,
     collapse_yaesu_menu: bool,
+    group_audio_open: bool,
+    group_roger_open: bool,
+    group_ble_open: bool,
+    group_cw_open: bool,
     yaesu_memories_h: f32,
     yaesu2_memories_h: f32,
     /// Persisted main-window outer position; tracked during runtime so a
@@ -1253,6 +1280,50 @@ pub struct SdrRemoteApp {
     yaesu_control_changed_at: Option<Instant>,
     // MIDI
     midi: crate::midi::MidiManager,
+    // The Bluetooth PTT button (ui/ble_screen.rs). Transport, rule, and the
+    // settings that go with it; `ble_found` is the scan list, `ble_note` the
+    // last thing the transport said.
+    ble: crate::ble::BleManager,
+    ble_state: sdr_remote_logic::ble_ptt::BlePttState,
+    ble_found: Vec<(u64, String, i16, bool)>,
+    ble_note: String,
+    ble_enabled: bool,
+    ble_address: u64,
+    ble_name: String,
+    ble_target: u8,
+    ble_toggle: bool,
+    // The Morse paddle (ui/paddle_screen.rs): the reader thread with the keyer
+    // on it, and what the screen shows of it. Step 2 of the CW design: edges
+    // go to the log only.
+    paddle: crate::paddle::PaddleManager,
+    paddle_enabled: bool,
+    /// The CW sidetone (shared with the playback callback), its settings as
+    /// shown, and how many onsets have been logged.
+    sidetone: std::sync::Arc<sdr_remote_logic::sidetone::Sidetone>,
+    sidetone_settings: sdr_remote_logic::sidetone::SidetoneSettings,
+    sidetone_onsets_seen: u32,
+    /// The keyer's settings as shown on screen; the reader gets a copy on
+    /// every change.
+    keyer_settings: sdr_remote_logic::cw_keyer::KeyerSettings,
+    /// Which transmitter the key goes to (the setting), and what the engine
+    /// was last told (the effective one, which follows what the server has).
+    cw_target: u8,
+    cw_target_sent: Option<u8>,
+    /// The hang time as shown, and what the engine was last told.
+    cw_hang_ms: u16,
+    cw_hang_sent: Option<u16>,
+    paddle_rate: String,
+    paddle_edges: u64,
+    paddle_last_edge_ms: Option<u64>,
+    paddle_key_down: bool,
+    /// When the last key edge arrived, by this machine's clock - for the CW
+    /// sign on the PTT button.
+    paddle_last_edge_at: Option<std::time::Instant>,
+    /// Which Yaesu slots the server has a radio in, on or off (from RadioInfo).
+    yaesu_configured: bool,
+    /// The server's radio list is known for this session (RadioState::radios_known).
+    radios_known: bool,
+    yaesu2_configured: bool,
     midi_ports: Vec<String>,
     midi_selected_port: String,
     midi_learn_for: Option<usize>, // index in mapping list being learned, or ALL.len() for new

@@ -4,7 +4,8 @@ package com.sdrremote.ui.screens
 /**
  * FTX-1 EX-menu labels, keyed by the six-digit address the radio reports.
  *
- * Generated from the desktop client's chart (sdr-remote-client/src/ui/ftx1_ex_chart.rs),
+ * Generated from the shared chart (sdr-remote-core/src/ftx1_ex_chart.rs; a core test checks
+ * that both hold the same addresses),
  * itself taken from the official FTX-1 CAT Operation Reference Manual, Table 3.
  * Labels are cosmetic: addresses and values come from the live radio scan, so a wrong
  * label can never write a wrong address.
@@ -453,4 +454,8 @@ internal val FTX1_MENU_NAMES: Map<String, String> = mapOf(
     "090514" to "PRESET5 - MOD SOURCE",
     "090515" to "PRESET5 - USB MOD GAIN",
     "090516" to "PRESET5 - RPTT SELECT",
+    "110101" to "Bluetooth - Bluetooth",
+    "110102" to "Bluetooth - Device Name : Status",
+    "110103" to "Bluetooth - DEVICE LIST",
+    "110104" to "Bluetooth - AUDIO",
 )

@@ -106,6 +106,7 @@
     <string name="stats_audio_levels">Niveaux audio :</string>
     <string name="stats_statistics">Statistiques :</string>
     <string name="stats_tcp_fallback">Repli TCP</string>
+    <string name="stats_link_loss">Perte de liaison</string>
     <string name="stats_down">Desc.</string>
     <string name="stats_up">Mont.</string>
     <string name="stats_audio_streams">Flux audio :</string>
@@ -201,7 +202,6 @@
     <string name="dev_auto">Auto</string>
     <string name="dev_bypass">Bypass</string>
     <string name="dev_store">Enregistrer</string>
-    <string name="dev_drive_watts">Drive : %1$dW</string>
     <string name="dev_reflected">Réfléchi : %1$dW</string>
     <string name="dev_antenna_label">Antenne :</string>
     <string name="dev_ub_dir">Dir. :</string>
@@ -218,6 +218,7 @@
     <string name="dev_stop">STOP</string>
     <string name="dev_goto">Aller :</string>
     <string name="dev_go">Aller</string>
+    <string name="dev_pa_drive_warning">Puissance d\'attaque augmentée alors que le PA est injoignable</string>
     <string name="dev_high_swr">SWR ÉLEVÉ</string>
     <string name="dev_high_swr_other">SWR ÉLEVÉ (%1$s)</string>
     <string name="dev_radio_label">Radio :</string>
@@ -310,4 +311,7 @@
     <string name="settings_ble_ptt_waiting">Hors portée — se reconnecte tout seul</string>
     <string name="settings_ble_ptt_reconnect">Reconnecter</string>
     <string name="settings_ble_ptt_forget">Oublier ce bouton</string>
+    <string name="settings_ui_scale">Taille d\'affichage :</string>
+    <string name="settings_ui_scale_landscape_on">À cette taille, l\'application suit l\'appareil. Verrouillez la rotation pour rester en portrait.</string>
+    <string name="settings_ui_scale_landscape_off">À cette taille, l\'application reste en portrait. Une taille plus petite permet la rotation.</string>
 </resources>
