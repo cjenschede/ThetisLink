@@ -43,6 +43,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sdrremote.R
+import com.sdrremote.ui.components.StationNoticeLines
 import com.sdrremote.nsd.MdnsDiscovery
 
 /** PATCH-4: first-run connection wizard for Android. Mirrors the
@@ -73,6 +74,10 @@ fun ConnectWizard(
     connectStatusIsError: Boolean,
     connectStatusHeadline: String,
     connectStatusAction: String,
+    // From Rust (station_notice): what blocks the station, and whether Connect
+    // may be offered. The wizard draws them and decides nothing.
+    stationNotices: List<String> = emptyList(),
+    canConnect: Boolean = true,
     onConnect: (String, String) -> Unit,
     onSendTotp: (String) -> Unit,
     onDisconnect: () -> Unit,
@@ -253,7 +258,7 @@ fun ConnectWizard(
                             onConnect(serverInput, passwordInput)
                             step = WizardStep.Verifying
                         },
-                        enabled = passwordInput.isNotBlank(),
+                        enabled = passwordInput.isNotBlank() && canConnect,
                     ) { Text(stringResource(R.string.common_connect)) }
                 }
             }
@@ -307,6 +312,10 @@ fun ConnectWizard(
                 }
             }
         }
+
+        // What blocks the station, from Rust: on every step, as on the desktop,
+        // so a wizard on a dead engine does not spin without a word (review 60).
+        StationNoticeLines(stationNotices)
 
         // Sticky error footer (same i18n text Rust produces for the panel)
         if (connectStatusIsError && connectStatusHeadline.isNotEmpty()) {

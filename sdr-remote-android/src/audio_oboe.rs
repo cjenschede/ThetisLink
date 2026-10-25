@@ -13,7 +13,10 @@ use oboe::{
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::HeapRb;
 
-use sdr_remote_logic::audio::{mix_alarm, mix_swr_alarm, swr_alarm_hold_samples, AudioBackend, PA_DRIVE_ALARM};
+use sdr_remote_logic::audio::{
+    mix_alarm, mix_swr_alarm, ptt_dropped_alarm_samples, swr_alarm_hold_samples, AudioBackend, PA_DRIVE_ALARM,
+    PTT_DROPPED_ALARM,
+};
 
 /// Ring buffer capacity in samples (2 seconds at 48kHz)
 const RING_CAPACITY: usize = 48_000 * 2;
@@ -102,6 +105,8 @@ struct PlaybackCallback {
     /// The PA-drive warning: its own watchdog, tone and phase, so the two
     /// warnings cannot silence one another.
     pa_drive_alarm: Arc<AtomicU32>,
+    /// The press let go with the session (build 253): armed once, plays out.
+    ptt_dropped_alarm: Arc<AtomicU32>,
     /// Device rate, cached on the first callback: it is only known once the
     /// stream is open, which is after this callback is built.
     sample_rate: u32,
@@ -109,6 +114,8 @@ struct PlaybackCallback {
     alarm_phase: f32,
     pa_alarm_pos: u32,
     pa_alarm_phase: f32,
+    dropped_pos: u32,
+    dropped_phase: f32,
 }
 
 impl AudioOutputCallback for PlaybackCallback {
@@ -135,6 +142,8 @@ impl AudioOutputCallback for PlaybackCallback {
                 &mut self.alarm_pos, &mut self.alarm_phase);
             mix_alarm(PA_DRIVE_ALARM, data, 1, self.sample_rate, &self.pa_drive_alarm,
                 &mut self.pa_alarm_pos, &mut self.pa_alarm_phase);
+            mix_alarm(PTT_DROPPED_ALARM, data, 1, self.sample_rate, &self.ptt_dropped_alarm,
+                &mut self.dropped_pos, &mut self.dropped_phase);
             return DataCallbackResult::Continue;
         }
 
@@ -159,6 +168,8 @@ impl AudioOutputCallback for PlaybackCallback {
             &mut self.alarm_pos, &mut self.alarm_phase);
         mix_alarm(PA_DRIVE_ALARM, data, 1, self.sample_rate, &self.pa_drive_alarm,
             &mut self.pa_alarm_pos, &mut self.pa_alarm_phase);
+        mix_alarm(PTT_DROPPED_ALARM, data, 1, self.sample_rate, &self.ptt_dropped_alarm,
+            &mut self.dropped_pos, &mut self.dropped_phase);
 
         DataCallbackResult::Continue
     }
@@ -196,6 +207,7 @@ pub struct OboeAudioBackend {
     playback_mute: Arc<AtomicBool>,
     swr_alarm: Arc<AtomicU32>,
     pa_drive_alarm: Arc<AtomicU32>,
+    ptt_dropped_alarm: Arc<AtomicU32>,
     capture_sample_rate: u32,
     playback_sample_rate: u32,
     // Keep streams alive — dropped when OboeAudioBackend is dropped
@@ -216,6 +228,7 @@ impl OboeAudioBackend {
         let playback_mute = Arc::new(AtomicBool::new(false));
         let swr_alarm = Arc::new(AtomicU32::new(0));
         let pa_drive_alarm = Arc::new(AtomicU32::new(0));
+        let ptt_dropped_alarm = Arc::new(AtomicU32::new(0));
 
         // Capture stream (microphone)
         let capture_cb = CaptureCallback {
@@ -249,11 +262,14 @@ impl OboeAudioBackend {
             mute: playback_mute.clone(),
             swr_alarm: swr_alarm.clone(),
             pa_drive_alarm: pa_drive_alarm.clone(),
+            ptt_dropped_alarm: ptt_dropped_alarm.clone(),
             sample_rate: 0,
             alarm_pos: 0,
             alarm_phase: 0.0,
             pa_alarm_pos: 0,
             pa_alarm_phase: 0.0,
+            dropped_pos: 0,
+            dropped_phase: 0.0,
         };
 
         let mut playback_stream = AudioStreamBuilder::default()
@@ -293,6 +309,7 @@ impl OboeAudioBackend {
             playback_mute,
             swr_alarm,
             pa_drive_alarm,
+            ptt_dropped_alarm,
             capture_sample_rate,
             playback_sample_rate,
             _capture_stream: capture_stream,
@@ -362,5 +379,10 @@ impl AudioBackend for OboeAudioBackend {
         // Same re-arming as above, its own counter and its own tone.
         let samples = if on { swr_alarm_hold_samples(self.playback_sample_rate) } else { 0 };
         self.pa_drive_alarm.store(samples, Ordering::Relaxed);
+    }
+
+    fn sound_ptt_dropped(&mut self) {
+        // Armed once; the callback counts it down to silence.
+        self.ptt_dropped_alarm.store(ptt_dropped_alarm_samples(self.playback_sample_rate), Ordering::Relaxed);
     }
 }

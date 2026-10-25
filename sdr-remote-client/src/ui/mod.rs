@@ -26,6 +26,7 @@ mod midi_screen;
 mod ble_screen;
 mod paddle_screen;
 mod server_screen;
+mod developer_mode;
 mod diversity_screen;
 mod thetis_screen;
 mod wizard;
@@ -391,6 +392,15 @@ pub struct SdrRemoteApp {
     /// Per radio slot: when this radio was last absent while we were keying it.
     /// Drives the "USB lost" notice - see `sdr_remote_logic::usb_lost`.
     usb_lost_last_true: [Option<Instant>; 2],
+    /// Which build the server runs, as judged in the engine. Shown on the
+    /// Server screen; nothing here refuses to work over it.
+    server_build: sdr_remote_core::protocol::PeerBuild,
+    /// The measurement file being written (open point 34), from the engine.
+    measurement_file: Option<String>,
+    /// The developer mode (build 295), as saved; and what is typed in its code
+    /// field while it is closed.
+    developer_mode: bool,
+    dev_code: String,
     rtt_ms: u16,
     jitter_ms: f32,
     buffer_depth: u32,
@@ -410,7 +420,6 @@ pub struct SdrRemoteApp {
     down_kbps: u32,
     up_kbps: u32,
     bw_breakdown: Vec<(u8, u32)>,
-    bw_breakdown_expanded: bool,
     loss_percent: u8,
     capture_level: f32,
     playback_level: f32,
@@ -422,7 +431,7 @@ pub struct SdrRemoteApp {
     frequency_hz: u64,
     mode: u8,
     /// RX1 S-meter - dBm in RX mode, watts in TX mode (disambiguated by
-    /// `self.ptt || self.other_tx`).  `SMETER_NO_DATA_DBM` (-200.0) before
+    /// `self.smeter_tx || self.other_tx`).  `SMETER_NO_DATA_DBM` (-200.0) before
     /// the first sample arrives.
     smeter: f32,
     smeter_peak: f32,
@@ -439,10 +448,18 @@ pub struct SdrRemoteApp {
     anf_on: bool,
     drive_level: u8,
     audio_error: bool,
+    /// The chosen microphone that was not found (build 188).
+    mic_missing: Option<String>,
     agc_enabled: bool,
     other_tx: bool,
     /// The server says a transmitter is on (RadioState::server_tx).
     server_tx: bool,
+    /// The Thetis meter carries watts now (RadioState::smeter_tx).
+    smeter_tx: bool,
+    /// Our own transmission is still going on (RadioState::tx_window_open).
+    tx_window_open: bool,
+    /// The automatic references pause (RadioState::auto_ref_paused).
+    auto_ref_paused: bool,
     thetis_swr_x100: u16,
     filter_low_hz: i32,
     filter_high_hz: i32,
@@ -479,9 +496,12 @@ pub struct SdrRemoteApp {
     full_spectrum_center_hz: u32,
     full_spectrum_span_hz: u32,
     full_spectrum_sequence: u16,
+    /// When the last full-band row of RX1 came in (build 234): the row is a
+    /// source only while it still comes (`RowLive`).
+    full_row_at: Option<Instant>,
     // Spectrum display settings (local UI)
     spectrum_ref_db: f32,    // Top of display in dB (e.g. -20.0)
-    spectrum_range_db: f32,  // dB range from top to bottom (e.g. 100.0)
+    spectrum_range_db: f32,  // dB range from top to bottom (e.g. 70.0)
     // Spectrum zoom/pan (sent to server, server extracts the view)
     spectrum_zoom: f32,      // 1.0 = full span, 2.0 = half span, etc.
     spectrum_pan: f32,       // 0.0 = centered, -0.5..+0.5 = shift fraction
@@ -506,10 +526,6 @@ pub struct SdrRemoteApp {
     // Auto ref level
     auto_ref_enabled: bool,
     // TX spectrum override
-    tx_spectrum_saved_ref_db: Option<f32>,   // saved spectrum_ref_db before TX
-    tx_spectrum_saved_range: Option<f32>,     // saved range_db before TX
-    tx_spectrum_saved_auto_ref: Option<bool>, // saved auto_ref_enabled before TX
-    tx_spectrum_restore_auto_at: Option<std::time::Instant>, // delayed auto_ref restore
     // Per-band WF contrast
     wf_contrast_per_band: HashMap<String, f32>,
     band_mem: HashMap<String, BandMemory>,
@@ -602,6 +618,19 @@ pub struct SdrRemoteApp {
     /// Last DDC center we saw - used to detect bucket-switches.
     last_vrx1_ddc_center_hz: u64,
     last_vrx2_ddc_center_hz: u64,
+    /// The reach of the previous frame (`vrx_tune_limits`): a reach that
+    /// changes without the centre - another VRX filter, the first spectrum
+    /// packet - is looked at too (build 228).
+    last_vrx1_reach_hz: (u64, u64),
+    last_vrx2_reach_hz: (u64, u64),
+    /// The previous frame's centre was measured (build 232): a fall back to
+    /// the estimate - a lost session - is not a move.
+    last_vrx1_measured: bool,
+    last_vrx2_measured: bool,
+    /// Since when a connected server has left a measured centre unsaid (build
+    /// 232): one that stays silent becomes the estimate's starting point.
+    vrx1_fallback_since: Option<std::time::Instant>,
+    vrx2_fallback_since: Option<std::time::Instant>,
     /// VRX spectrum zoom levels (per VRX). 32× default = ~12 kHz view
     /// at 384 kHz DDC. Range matches RX1/RX2 spectrum (1× to 1024×).
     vrx1_spectrum_zoom: f32,
@@ -720,7 +749,6 @@ pub struct SdrRemoteApp {
     relay_token: String,
     relay_instance_id: String,
     relay_device_name: String,
-    relay_udp_enabled: bool,
     relay_monitor: Option<sdr_remote_relay::RelayMonitor>,
     relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
     /// Phase C: relay runs as transport (monitor in main.rs). In that case don't
@@ -741,12 +769,6 @@ pub struct SdrRemoteApp {
     amplitec_power_max_w: [u16; 6],
     amplitec_power_tx_blocked: [bool; 6],
     amplitec_power_loaded: bool,
-    /// Power-cap edit state. Initialized from server values as soon as
-    /// `amplitec_power_loaded` becomes true; after that only changed by the
-    /// operator (DragValue / Checkbox). The Save button sends these values to
-    /// the server.
-    /// Collapsing-section open/closed. Persisted in client config.
-    amplitec_power_show: bool,
     /// Index of the favorite currently in inline-edit mode (max one at a
     /// time). `None` = all labels read-only/selectable. On loss of
     /// focus or Enter this is reset to `None` and the name is written
@@ -808,7 +830,7 @@ pub struct SdrRemoteApp {
     rf2k_active: bool,
     rf2k_peak_power: u16,
     rf2k_peak_time: Instant,
-    // RF2K-S debug (Fase D)
+    // RF2K-S debug (Phase D)
     rf2k_debug_available: bool,
     rf2k_bias_pct_x10: u16,
     rf2k_psu_source: u8,
@@ -825,15 +847,10 @@ pub struct SdrRemoteApp {
     rf2k_tuner_6m: bool,
     rf2k_band_gap_allowed: bool,
     rf2k_controller_version: u16,
-    rf2k_drive_config_ssb: [u8; 11],
-    rf2k_drive_config_am: [u8; 11],
-    rf2k_drive_config_cont: [u8; 11],
-    rf2k_show_debug: bool,
-    rf2k_show_drive_config: bool,
+    rf2k_drive_config: sdr_remote_core::rf2k_drive::DriveTable,
     rf2k_confirm_high_power: bool,
     rf2k_confirm_zero_fram: bool,
-    rf2k_drive_edit: [[u8; 11]; 3],
-    rf2k_drive_loaded: bool,
+    rf2k_drive_edit: sdr_remote_core::rf2k_drive::DriveEdit,
     rf2k_confirm_fw_close: bool,
     // UltraBeam RCU-06
     ub_connected: bool,
@@ -936,8 +953,6 @@ pub struct SdrRemoteApp {
     yaesu2_eq_profiles: Vec<(String, bool, [f32; 5], f32)>,
     yaesu2_eq_active_profile: String,
     yaesu2_eq_new_name: String,
-    collapse_yaesu2_eq: bool,
-    collapse_yaesu2_memories: bool,
     yaesu2_control_changed_at: Option<std::time::Instant>, // debounce slider-sync
     yaesu2_volume: f32,
     // Own enable + PTT-mode for radio 2 (separate from radio 1), so each Yaesu
@@ -1125,7 +1140,6 @@ pub struct SdrRemoteApp {
     /// Editable value buffers per EX key (lazily filled on render).
     menu_edits: [std::collections::HashMap<String, String>; 2],
     menu_filter: [String; 2],
-    collapse_yaesu2_menu: bool,
     rotor_goto_input: String,
     // DX Cluster spots
     dx_spots: Vec<sdr_remote_logic::state::DxSpotInfo>,
@@ -1177,15 +1191,7 @@ pub struct SdrRemoteApp {
     /// S-meter type PER channel (analog=true / bar=false). Index via M_RX1..M_YAESU2.
     /// Clicking the meter toggles the type; persistent per channel.
     meter_analog: [bool; 6],
-    ub_show_menu: bool,
-    collapse_diversity: bool,
-    collapse_yaesu_eq: bool,
-    collapse_yaesu_memories: bool,
-    collapse_yaesu_menu: bool,
-    group_audio_open: bool,
-    group_roger_open: bool,
-    group_ble_open: bool,
-    group_cw_open: bool,
+    folds_open: config::FoldsOpen,
     yaesu_memories_h: f32,
     yaesu2_memories_h: f32,
     /// Persisted main-window outer position; tracked during runtime so a
@@ -1225,8 +1231,13 @@ pub struct SdrRemoteApp {
     rx2_last_spectrum_seq: u16,
     rx2_full_spectrum_bins: Vec<u16>,
     rx2_full_spectrum_center_hz: u32,
+    /// The DDC centres the server says (build 231), in Hz; 0 until it has.
+    ddc_centre_rx1_hz: u64,
+    ddc_centre_rx2_hz: u64,
     rx2_full_spectrum_span_hz: u32,
     rx2_full_spectrum_sequence: u16,
+    /// The same for RX2.
+    rx2_full_row_at: Option<Instant>,
     rx2_spectrum_zoom: f32,
     rx2_spectrum_pan: f32,
     rx2_last_sent_zoom: f32,
@@ -1450,7 +1461,7 @@ impl SdrRemoteApp {
     ) -> (bool, bool) {
         let mut audio = false;
         let mut window = false;
-        ui.group(|ui| {
+        sdr_remote_theme::group(ui).show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let w = Self::CHANNEL_CHIP_W;
@@ -1570,7 +1581,7 @@ impl SdrRemoteApp {
     }
 
     // ---------------------------------------------------------------------
-    // controls-scaffolding - sub-stap 4 writeback-extract
+    // controls-scaffolding - sub-step 4 writeback extract
     // ---------------------------------------------------------------------
 
     /// Build an `RxChannelState` snapshot for RX1. Takes `freq_edit_text`

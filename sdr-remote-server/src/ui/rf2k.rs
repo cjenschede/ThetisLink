@@ -96,7 +96,7 @@ fn render_rf2k_header(
             });
     }
 
-    ui.separator();
+    sdr_remote_theme::rule(ui);
 }
 
 // ── Section 2: Error bar (conditional) ─────────────────────────────────────
@@ -465,7 +465,7 @@ fn render_rf2k_telemetry(
         ui.label(format!("Volt: {:.1}V", volt));
         ui.label(format!("Cur: {:.1}A", cur));
     });
-    ui.separator();
+    sdr_remote_theme::rule(ui);
 }
 
 // ── Section 6: Antenna Selection ───────────────────────────────────────────
@@ -606,7 +606,7 @@ fn render_rf2k_tuner(
             if ui.add_enabled(tuner_edit_enabled, egui::Button::new("K").small()).clicked() {
                 rf2k.send_command(rf2k::Rf2kCmd::TunerK);
             }
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             // L adjust
             ui.label("L:");
             if ui.add_enabled(tuner_edit_enabled, egui::Button::new("\u{2212}").small()).clicked() {
@@ -615,7 +615,7 @@ fn render_rf2k_tuner(
             if ui.add_enabled(tuner_edit_enabled, egui::Button::new("+").small()).clicked() {
                 rf2k.send_command(rf2k::Rf2kCmd::TunerLUp);
             }
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             // C adjust
             ui.label("C:");
             if ui.add_enabled(tuner_edit_enabled, egui::Button::new("\u{2212}").small()).clicked() {
@@ -624,7 +624,7 @@ fn render_rf2k_tuner(
             if ui.add_enabled(tuner_edit_enabled, egui::Button::new("+").small()).clicked() {
                 rf2k.send_command(rf2k::Rf2kCmd::TunerCUp);
             }
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             if ui.add_enabled(tuner_edit_enabled, egui::Button::new("Reset").small()).clicked() {
                 rf2k.send_command(rf2k::Rf2kCmd::TunerReset);
             }
@@ -633,7 +633,7 @@ fn render_rf2k_tuner(
             }
         });
     }
-    ui.separator();
+    sdr_remote_theme::rule(ui);
 }
 
 // ── Section 9: Drive Control ───────────────────────────────────────────────
@@ -687,7 +687,7 @@ pub(super) fn render_rf2k_footer(
     status: &rf2k::Rf2kStatus,
 ) {
     ui.add_space(4.0);
-    ui.separator();
+    sdr_remote_theme::rule(ui);
     let ver = if status.controller_version > 0 {
         let hw = if status.hw_revision.is_empty() {
             String::new()
@@ -793,7 +793,7 @@ pub(super) fn render_rf2k_debug_section(
                 }
             }
 
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             ui.label("Tuner 6m:");
             let t6m_text = if status.tuner_6m { "ON" } else { "OFF" };
             if ui.add_enabled(status.connected, egui::Button::new(t6m_text).small()).clicked() {
@@ -807,7 +807,7 @@ pub(super) fn render_rf2k_debug_section(
             if ui.add_enabled(status.connected, egui::Button::new(bg_text).small()).clicked() {
                 rf2k.send_command(rf2k::Rf2kCmd::SetBandGap(!status.band_gap_allowed));
             }
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             ui.label("AT thresh:");
             if ui.add_enabled(status.connected, egui::Button::new("\u{2212}").small()).clicked() {
                 rf2k.send_command(rf2k::Rf2kCmd::AutotuneThresholdDown);
@@ -899,9 +899,9 @@ pub(super) fn render_rf2k_drive_config_section(
     rf2k: &Rf2k,
     status: &rf2k::Rf2kStatus,
     show_drive_config: &mut bool,
-    drive_edit: &mut [[u8; 11]; 3],
-    drive_loaded: &mut bool,
+    drive_edit: &mut sdr_remote_core::rf2k_drive::DriveEdit,
 ) {
+    use sdr_remote_core::rf2k_drive;
     if !status.debug_available {
         return;
     }
@@ -909,30 +909,20 @@ pub(super) fn render_rf2k_drive_config_section(
     ui.add_space(6.0);
     if super::chevron_label(ui, *show_drive_config, RichText::new("Drive Config").strong()).clicked() {
         *show_drive_config = !*show_drive_config;
-        if *show_drive_config && !*drive_loaded {
-            // Load from status
-            drive_edit[0] = status.drive_config_ssb;
-            drive_edit[1] = status.drive_config_am;
-            drive_edit[2] = status.drive_config_cont;
-            *drive_loaded = true;
-        }
     }
 
     if !*show_drive_config {
         return;
     }
 
-    // Load from status if not loaded yet
-    if !*drive_loaded {
-        drive_edit[0] = status.drive_config_ssb;
-        drive_edit[1] = status.drive_config_am;
-        drive_edit[2] = status.drive_config_cont;
-        *drive_loaded = true;
-    }
+    // The fields follow the table the Pi reports, whenever it changes - the
+    // same as the desktop client (build 204). Filled once, they kept the
+    // first table for the whole run.
+    drive_edit.follow(&status.drive_config);
 
     ui.indent("rf2k_drive_cfg", |ui| {
-        let bands = ["160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"];
-        let categories = ["SSB", "AM", "CONT"];
+        let bands = rf2k_drive::BAND_NAMES;
+        let categories = rf2k_drive::CATEGORY_NAMES;
 
         egui::Grid::new("rf2k_drive_grid")
             .striped(true)
@@ -945,16 +935,16 @@ pub(super) fn render_rf2k_drive_config_section(
                 }
                 ui.end_row();
 
-                for band_idx in 0..11 {
+                for band_idx in 0..rf2k_drive::BANDS {
                     ui.label(bands[band_idx]);
-                    for cat_idx in 0..3 {
-                        let mut val = drive_edit[cat_idx][band_idx] as i32;
+                    for cat_idx in 0..categories.len() {
+                        let mut val = drive_edit.cells[cat_idx][band_idx] as i32;
                         let drag = egui::DragValue::new(&mut val)
                             .range(0..=100)
                             .suffix("W")
                             .speed(0.5);
                         if ui.add(drag).changed() {
-                            drive_edit[cat_idx][band_idx] = val.clamp(0, 100) as u8;
+                            drive_edit.cells[cat_idx][band_idx] = val.clamp(0, 100) as u8;
                         }
                     }
                     ui.end_row();
@@ -963,23 +953,8 @@ pub(super) fn render_rf2k_drive_config_section(
 
         ui.add_space(4.0);
         if ui.add_enabled(status.connected, egui::Button::new("Save to Pi")).clicked() {
-            // Send each changed value
-            for cat_idx in 0..3u8 {
-                let current = match cat_idx {
-                    0 => &status.drive_config_ssb,
-                    1 => &status.drive_config_am,
-                    _ => &status.drive_config_cont,
-                };
-                for band_idx in 0..11u8 {
-                    let new_val = drive_edit[cat_idx as usize][band_idx as usize];
-                    if new_val != current[band_idx as usize] {
-                        rf2k.send_command(rf2k::Rf2kCmd::SetDriveConfig {
-                            category: cat_idx,
-                            band: band_idx,
-                            value: new_val,
-                        });
-                    }
-                }
+            for change in drive_edit.changed(&status.drive_config) {
+                rf2k.send_command(rf2k::Rf2kCmd::SetDriveConfig(change));
             }
         }
     });

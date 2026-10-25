@@ -1953,13 +1953,13 @@ Content-Length: {}
 
     /// Pluck the id out of a /chat/replies answer, which is {"replies":[{"id":N,...
     fn reply_id_from(body: &str) -> i64 {
-        let after = body.split("\"id\":").nth(1).expect("een antwoord met een id");
+        let after = body.split("\"id\":").nth(1).expect("an answer with an id");
         after
             .chars()
             .take_while(|c| c.is_ascii_digit())
             .collect::<String>()
             .parse()
-            .expect("een getal")
+            .expect("a number")
     }
 
     /// Putting an answer aside over the wire, which is where the decision about
@@ -1975,7 +1975,7 @@ Content-Length: {}
         assert_eq!(r.status, "200 OK", "{}", r.body);
 
         let mine = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
-        assert!(mine.body.contains("een antwoord"), "voorwaarde: {}", mine.body);
+        assert!(mine.body.contains("een antwoord"), "precondition: {}", mine.body);
         let id = reply_id_from(&mine.body);
 
         let away = route(
@@ -1986,7 +1986,7 @@ Content-Length: {}
         assert_eq!(away.status, "200 OK", "{}", away.body);
 
         let after = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
-        assert!(!after.body.contains("een antwoord"), "weg van het scherm: {}", after.body);
+        assert!(!after.body.contains("een antwoord"), "off the screen: {}", after.body);
     }
 
     /// Three different situations, one answer. Otherwise the endpoint is a way
@@ -2011,7 +2011,7 @@ Content-Length: {}
 
         assert_eq!(not_mine.status, again.status);
         assert_eq!(no_such.status, again.status);
-        assert_eq!(not_mine.body, again.body, "niet-van-jou == al-opzij");
+        assert_eq!(not_mine.body, again.body, "not-yours == already-set-aside");
         // Not the whole body: that echoes the number you asked about, and 424242
         // is not the number 7 asked about. What must not differ is the verdict.
         assert!(no_such.body.contains("\"changed\":false"), "{}", no_such.body);
@@ -2019,7 +2019,7 @@ Content-Length: {}
 
         // And it really did not touch 7's answer.
         let seven = route(&a, &req("GET", "/chat/replies", Some(&token(7, "r1", "chat:read")), ""), NOW);
-        assert!(!seven.body.contains("van zeven"), "7 heeft hem zelf weggeklikt");
+        assert!(!seven.body.contains("van zeven"), "7 dismissed it itself");
     }
 
     /// The administrator wrote the answer; he is the one who should see that it
@@ -2037,7 +2037,7 @@ Content-Length: {}
         let before = route(&a, &req("GET", "/chat/admin/diagnoses", Some("test-admin"), ""), NOW);
         assert!(
             before.body.contains("\"reply_dismissed_at\":null"),
-            "nog niet afgehandeld, en dat moet zichtbaar zijn: {}",
+            "not handled yet, and that has to show: {}",
             before.body
         );
 
@@ -2046,7 +2046,7 @@ Content-Length: {}
         let after = route(&a, &req("GET", "/chat/admin/diagnoses", Some("test-admin"), ""), NOW);
         assert!(
             after.body.contains(&format!("\"reply_dismissed_at\":{NOW}")),
-            "de beheerder ziet WANNEER het is afgehandeld: {}",
+            "the administrator sees WHEN it was handled: {}",
             after.body
         );
     }

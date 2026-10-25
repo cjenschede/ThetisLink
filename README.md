@@ -1,37 +1,21 @@
 # ThetisLink
 
-> **Current release: [v2.12.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.12.0)** —
-> **A real paddle, and it keys the radio itself.** Plug a Morse paddle into an Adafruit
-> MCP2221A board on the PC running the desktop client and send with it. What you key goes
-> either to Thetis or **straight to a connected Yaesu** — over the second COM port the radio
-> already presents on the same USB cable, so there is no wire to the KEY jack. ThetisLink finds
-> that port itself, sets the radio's **PC KEYING** menu on the first run, remembers what was
-> there, and puts it back when the server stops. The client turns your contacts into elements
-> and gives you a sidetone at once; the server plays the edges out at exact moments. Speed,
-> iambic A or B, swapped paddles, a straight key and the hang time are all settings. Both the
-> FT-991A and the FTX-1 were keyed in the field, in either radio slot — the manual has the
-> wiring, including the pull-up the board does not have.
-> **Nothing transmits while a radio is still reading its settings.** Connecting to a Yaesu reads
-> its memory channels and tones, and during those seconds a PTT-off could be left waiting behind
-> a long read — which would have left the radio transmitting. That radio's transmit button now
-> reads **LOADING** and the server refuses to key it. Only transmitting is refused; the rest of
-> the controls stay usable.
-> **The FTX-1's 405 menu settings are read in the background**, one at a time in the gaps
-> between the ordinary polling, so nothing waits for them. About 73 seconds, where the first
-> version of that scan took six minutes.
-> **The loss figure measures the link again** — pooled over the streams you actually asked for,
-> with a stream the server stopped reported as such instead of counting against the link, and a
-> duplicate packet no longer standing in for one that never arrived.
-> **The Android app needs a 64-bit device (arm64).** It always did; until now a 32-bit phone or
-> tablet accepted the install and the app fell over on the first tap. It is refused at install
-> time now, with a plain "not compatible".
-> **Upgrading keeps your configuration**, and **stepping back to 2.11.0 works**: nothing here
-> writes a file an older version cannot read, and the menu ThetisLink changes on your radio for
-> CW is put back when the server stops.
-> **Backwards-compatible** — the protocol version is unchanged and the one new field in the
-> radio status is additive: an older server sends zero, which reads as "not loading", which is
-> what an older server means. **Stock Thetis v2.10.3.15 suffices — no fork change required.**
-> Download `ThetisLink-2.12.0.zip` from the
+> **Current release: [v2.13.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.13.0)** —
+> **One encrypted connection, at home and on the road.** Desktop, phone and server now talk
+> over a single encrypted QUIC connection: straight to the server on your own network, through
+> a forwarded port, or through the relay. With the relay set up, the app connects through it,
+> then looks for a shorter way and moves the running connection over without dropping it - and
+> it tells you which way it takes (L, D, R, D+R, L+R). A network that blocks UDP still connects,
+> over an emergency route through the relay's TCP line. After a change of network the app
+> reconnects at once. The password check now runs both ways, so the server proves it is the one
+> you mean. A Yaesu's transmit audio is buffered and timed the way Thetis's always was, with
+> 80 ms of lead so the first syllable is not cut.
+> **Update the server, the desktop client and the Android app together.** This release does not
+> talk to 2.12: an older program reports only "Server not reachable". Your settings are kept, and
+> the server still listens on port 4580 (now QUIC over UDP), so a forwarded port keeps working.
+> **Stock Thetis v2.10.3.15 suffices**; the Thetis fork **PA3GHM TL2-18** is released at the same
+> time and adds the extras listed in the changelog.
+> Download `ThetisLink-2.13.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases) — the ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `LICENSE` and `SHA256SUMS.txt`. SBOM and third-party license artefacts are
@@ -55,7 +39,7 @@ USB audio, one model at a time, and are named individually below.
 ## Features
 
 - Real-time bidirectional audio (Opus codec, minimal latency)
-- Two ways to connect — directly (LAN, or over the internet via router port-forward) or through a self-hosted VPS relay (works behind CGNAT, no port-forward). The server supports **both at the same time**: once a relay is configured, each client decides for itself whether to connect directly or via the relay, so one server can serve multiple clients concurrently — some direct, some relayed
+- One encrypted QUIC connection for audio, spectrum, controls and PTT — directly (LAN, or over the internet via a router port-forward) or through a self-hosted VPS relay (works behind CGNAT, no port-forward). Through the relay, the connection moves to a direct path by itself when one can be found, and falls back to the relay's TCP line on a network that blocks UDP. One server serves direct and relayed clients at the same time, or the relay only if you choose
 - Spectrum and waterfall display (up to 1536 kHz with the PA3GHM Thetis fork)
 - Full RX2/VFO-B support with diversity reception
 - Virtual receivers (VRX1/VRX2): two independent receivers carved from the wideband DDC stream by an FFT channelizer, each with its own frequency, mode (USB/LSB/AM/SAM/FM), filter, high-resolution spectrum/waterfall and S-meter — including synchronous AM (SAM) with a carrier-tracking PLL, AM auto-tune-to-carrier, and a per-VRX NB/WB/Auto audio rate
@@ -66,7 +50,7 @@ USB audio, one model at a time, and are named individually below.
 - Bluetooth PTT on the phone, of two kinds. A **BLE transmit button** of the YPC21 / PTT-Z01 class is found, connected and reconnected by the app itself under **Settings > BT PTT button** — no pairing in the Android settings, it keeps working behind a locked screen because the button is in your hand, and a button that goes out of range releases the transmitter instead of leaving it keyed (Android 12 or newer). Shutter-style buttons (e.g. ZL-01), which present themselves as an external touch device, still work as they did — those need the screen awake
 - Embedded WebSDR / KiwiSDR panel with frequency sync and auto-mute on TX
 - DX Cluster with spectrum overlay
-- Mandatory password authentication (HMAC-SHA256) with optional TOTP 2FA
+- Mandatory password authentication, checked both ways and tied to the encrypted connection, with optional TOTP 2FA
 - Smart and Ultra diversity auto-null algorithms
 - Chat and problem reporting for stations on the same relay (see below); both optional,
   and neither needed to operate

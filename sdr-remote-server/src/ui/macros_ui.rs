@@ -75,7 +75,7 @@ pub(super) fn render_macro_editor(
     show: &mut bool,
 ) {
     ui.heading(rust_i18n::t!("srv_macro_editor").to_string());
-    ui.separator();
+    sdr_remote_theme::rule(ui);
 
     ui.columns(2, |cols| {
         // Left column: slot list
@@ -195,7 +195,7 @@ pub(super) fn render_macro_editor(
         }
     });
 
-    ui.separator();
+    sdr_remote_theme::rule(ui);
     ui.horizontal(|ui| {
         if ui.button(rust_i18n::t!("srv_save").to_string()).clicked() {
             save_editor_to_slot(slots, *editor_slot, editor_label, editor_actions);

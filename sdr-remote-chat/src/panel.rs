@@ -350,7 +350,7 @@ impl ChatPanel {
         // together still take nearly everything. Bounded is not the same as
         // guaranteed room, and the comment used to claim the second.
         let max_h = (ctx.screen_rect().height() / 3.0).clamp(80.0, 260.0);
-        egui::TopBottomPanel::top("chat_answers").show(ctx, |ui| {
+        egui::TopBottomPanel::top("chat_answers").show_separator_line(false).show(ctx, |ui| {
             ui.add_space(4.0);
             egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
             for a in unread {
@@ -378,7 +378,7 @@ impl ChatPanel {
                 ui.add_space(4.0);
             }
             });
-            ui.separator();
+            sdr_remote_theme::rule(ui);
         });
         dismissed
     }
@@ -400,6 +400,9 @@ impl ChatPanel {
     }
 
     pub fn render_body(&mut self, ctx: &egui::Context, files: &ChatFiles, server: &ServerSide) {
+        // The window's ground first: the server opens this window itself, and
+        // without it the seams between the panels are black (review of 208).
+        sdr_remote_theme::paint_window_ground(ctx);
         if let Some(id) = self.render_answers(ctx) {
             self.m.dismiss_answer(id);
             self.answers_seen_changed = true;
@@ -586,7 +589,7 @@ impl ChatPanel {
         // somebody who has not joined - or does not want to - must still be able
         // to say what is wrong (design section 4).
         ui.add_space(12.0);
-        ui.separator();
+        sdr_remote_theme::rule(ui);
         ui.add_space(6.0);
         ui.label(
             RichText::new(rust_i18n::t!("chat_diag_without_joining").to_string())
@@ -608,7 +611,7 @@ impl ChatPanel {
         // anything above the top of the window was simply unreachable. A bottom
         // panel claims its space first and the scroll area gets what remains,
         // which is what makes it a scroll area at all.
-        egui::TopBottomPanel::top("chat_head").show(ctx, |ui| {
+        egui::TopBottomPanel::top("chat_head").show_separator_line(false).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(
@@ -620,13 +623,17 @@ impl ChatPanel {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     self.render_leave_buttons(ui);
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
                     self.render_report_button(ui, files, server);
                 });
             });
+            // The panel's edge, as `rule` (its own border line is off).
+            sdr_remote_theme::rule(ui);
         });
 
-        egui::TopBottomPanel::bottom("chat_input").show(ctx, |ui| {
+        egui::TopBottomPanel::bottom("chat_input").show_separator_line(false).show(ctx, |ui| {
+            // The panel's edge, as `rule` (its own border line is off).
+            sdr_remote_theme::rule(ui);
             self.render_error(ui);
             // What you are answering, right above where you type it - the only
             // place it can be seen at the moment it matters.
@@ -912,7 +919,7 @@ impl ChatPanel {
                     );
 
                     ui.add_space(10.0);
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
 
                     // Reading the log costs time and it is not always wanted, so it
                     // happens when the box is ticked and not before.

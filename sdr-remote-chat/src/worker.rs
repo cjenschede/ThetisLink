@@ -447,7 +447,7 @@ mod tests {
     /// URL, a GET instead of a POST and a misspelled body key all stayed green
     /// - and thirty lines of TcpListener close that without a new dependency.
     fn fake_service(status_line: &str, body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("een vrije poort");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = std::sync::mpsc::channel();
         let status = status_line.to_string();
@@ -499,7 +499,7 @@ mod tests {
         // Answers(vec![]) - which would wipe every answer off the screen.
         assert!(
             matches!(evt, ChatEvent::NoChange),
-            "een weggeklikt antwoord verandert niets: {evt:?}"
+            "a dismissed answer changes nothing: {evt:?}"
         );
     }
 
@@ -512,7 +512,7 @@ mod tests {
         let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
         assert!(
             matches!(evt, ChatEvent::NoChange),
-            "de terugval hoort stil te zijn en verder niets te doen: {evt:?}"
+            "the fallback is meant to be quiet and do nothing else: {evt:?}"
         );
     }
 
@@ -527,7 +527,7 @@ mod tests {
         // refused ticket would reach the reader as "the network is down".
         assert!(
             matches!(evt, ChatEvent::Failed(_)),
-            "een geweigerd ticket is een fout, geen stilte en geen netwerkstoring: {evt:?}"
+            "a refused ticket is an error, not silence and not a network fault: {evt:?}"
         );
     }
 
@@ -545,7 +545,7 @@ mod tests {
         let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
         assert!(
             matches!(evt, ChatEvent::Offline(_)),
-            "een dood netwerk is geen stilte om te verbergen: {evt:?}"
+            "a dead network is not a silence to hide: {evt:?}"
         );
     }
 
@@ -558,7 +558,7 @@ mod tests {
         let evt = perform(&client(), &base, "t", &ChatCommand::Answers);
         assert!(
             !matches!(evt, ChatEvent::NoChange),
-            "alleen wegklikken mag een 404 slikken: {evt:?}"
+            "only a dismiss may swallow a 404: {evt:?}"
         );
     }
 
@@ -568,7 +568,7 @@ mod tests {
     fn the_request_is_a_post_to_the_dismiss_path_with_the_id() {
         let (base, rx) = fake_service("200 OK", DISMISS_OK);
         let _ = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 7 });
-        let sent = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("een verzoek");
+        let sent = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("a request");
         assert!(sent.starts_with("POST /reply/dismiss "), "methode en pad: {sent}");
         assert!(sent.contains(r#"{"id":7}"#), "body: {sent}");
         // reqwest writes header names in lower case; the test asked for the

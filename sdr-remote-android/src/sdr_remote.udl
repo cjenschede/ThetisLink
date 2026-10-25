@@ -13,6 +13,10 @@ namespace sdr_remote {
     // One line from Kotlin into the same log file the Rust side writes, so the
     // Bluetooth button is visible without a cable attached.
     void log_line(string text);
+    // The developer mode (build 298): switch it for this process, with the
+    // line that says so, and check a typed code against the core's one code.
+    void set_developer_mode(boolean on);
+    boolean developer_code_matches(string code);
     // Ownership plus our own request. The radio's TX state is deliberately not
     // an input: it is just as true when somebody else keys the radio, and it
     // arrives a round trip late.
@@ -24,11 +28,21 @@ namespace sdr_remote {
     // The one rule for "is this relay set up", so the front ends read it
     // instead of each doing their own sum.
     boolean relay_is_configured(boolean enabled, string url, string station, string token);
+    // The word for the route the connection settings ask for (the bridge's own
+    // rule), to compare with the state's route in the "in use" line.
+    string expected_route_label(boolean relay_enabled, string url, string station, string token);
     // The RX filter width buttons: the edges one press sends (null when there is
     // no step that way) and the width to show. One rule with the desktop, in
     // sdr-remote-logic; Compose had its own copy until build 47.
     BridgeFilterEdges? filter_step(u8 mode, i32 low_hz, i32 high_hz, boolean wider);
     string filter_width_label(u8 mode, i32 low_hz, i32 high_hz);
+    // The S reading for a level in dBm, the same rule as every desktop meter
+    // (sdr_remote_core::s_meter, build 218); Compose had two copies of its own.
+    string s_meter_text(f32 dbm);
+    // The bar position (0-1) and the Yaesu conversion, the desktop's scale
+    // (build 219); Compose had its own copies.
+    f32 s_meter_fraction(f32 dbm);
+    f32 yaesu_s_meter_dbm(u32 raw);
 };
 
 dictionary BridgeFilterEdges {
@@ -190,10 +204,20 @@ dictionary BridgeChatState {
 
 dictionary BridgeRadioState {
     boolean connected;
-    boolean relay_transport_fallback;
+    // Goes up on every new session on this link (RadioState::session_generation):
+    // the screen lets go of a held PTT then, as it does when the link dies.
+    u64 session_generation;
+    // The transport this engine runs on, as the screen shows it: "QUIC" or
+    // "QUIC via relay" (Route::label - one word for both apps).
+    string route;
     boolean ptt_denied;
     // That refusal was the server letting go - see Flags::SERVER_RELEASED.
     boolean ptt_released_by_server;
+    // What blocks the station and what helps, one line each, in the app's
+    // language - from sdr_remote_logic::station_notice. The screens draw them.
+    sequence<string> station_notices;
+    // Whether Connect may be offered (station_notice::can_offer_connect).
+    boolean can_connect;
     boolean audio_error;
     u16 rtt_ms;
     f32 jitter_ms;
@@ -240,7 +264,20 @@ dictionary BridgeRadioState {
     u8 drive_level;
     u8 rx_af_gain;
     boolean agc_enabled;
+    boolean server_build_differs;
+    string server_build;
+    // The measurement file being written (open point 34), or null when off.
+    string? measurement_file;
+    boolean relay_only;
+    boolean force_tcp;
+    boolean via_relay;
+    string path_short;
+    string path_name;
+    string path_hint;
+    boolean path_coupling;
     boolean other_tx;
+    boolean smeter_tx;
+    boolean auto_ref_paused;
     i32 filter_low_hz;
     i32 filter_high_hz;
     boolean thetis_configured;
@@ -393,7 +430,7 @@ dictionary BridgeRadioState {
 };
 
 interface SdrBridge {
-    constructor(boolean relay_enabled, string relay_url, string relay_station, string relay_token, string relay_instance, string relay_name, boolean relay_udp_enabled);
+    constructor(boolean relay_enabled, string relay_url, string relay_station, string relay_token, string relay_instance, string relay_name);
     void connect(string addr, string password);
     void send_totp_code(string code);
     void disconnect();
@@ -404,6 +441,21 @@ interface SdrBridge {
     void set_ptt(boolean active);
     void set_roger_beep(BridgeRogerBeep beep);
     void set_mic_gate_delay_ms(u32 delay_ms);
+    // Measurement mode (open point 34): a folder starts a new file there, null stops it.
+    void set_measurement(string? dir);
+    void set_relay_only(boolean on);
+    // "Force TCP" on the measurement screen (build 146).
+    void set_force_tcp(boolean on);
+    // The phone's network and position for the measurement file (build 181); 2147483647 = not given.
+    void measure_cell(string tech, i64 cell_id, i32 pci, i32 arfcn, i32 tac);
+    // A 5G cell that is not the registered one (build 210); link = Android's CellInfo.CONNECTION_* number.
+    void measure_nr_cell(i32 link, i64 cell_id, i32 pci, i32 arfcn, i32 tac);
+    void measure_signal(string tech, i32 rsrp, i32 rsrq, i32 sinr, i32 level);
+    void measure_gps(i32 lat_e6, i32 lon_e6, i32 speed_kmh, i32 accuracy_m);
+    // The phone has a (new) default network: ends a relay wait for a network that was not up yet.
+    void network_available();
+    // The default network is another one than before: a new relay session on it (build 186).
+    void network_changed();
     void set_playback_mute(boolean mute);
     void set_dx_spots_enabled(boolean enabled);
     void set_rx_volume(f32 volume);

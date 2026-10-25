@@ -467,13 +467,13 @@ impl SdrRemoteApp {
                     gsnap.rows(), gsnap.cols(), theme::TL_SELECTED_FILL);
 
                 ui.add_space(6.0);
-                ui.separator();
+                super::helpers::rule(ui);
 
                 ui.label(rust_i18n::t!("main_pick_window").to_string());
                 select = sdr_remote_layout::window_palette(ui, &avail, active);
 
                 ui.add_space(6.0);
-                ui.separator();
+                super::helpers::rule(ui);
 
                 ui.label(rust_i18n::t!("main_place_hint").to_string());
                 let intents = sdr_remote_layout::placement_grid(ui, &gsnap, active, drag_anchor);
@@ -484,7 +484,7 @@ impl SdrRemoteApp {
                 fill_rect = intents.fill_rect;
 
                 ui.add_space(8.0);
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(RichText::new(rust_i18n::t!("main_apply").to_string()).strong())
                         .fill(theme::TL_SELECTED_FILL)).clicked() { do_apply = true; }
@@ -493,7 +493,7 @@ impl SdrRemoteApp {
 
                 // --- Arrangement memories: store/restore actual window positions ---
                 ui.add_space(8.0);
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.label(rust_i18n::t!("main_layout_memory").to_string());
                 ui.label(RichText::new(
                     rust_i18n::t!("main_layout_memory_help").to_string()

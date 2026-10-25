@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// RF2K-S power amplifier HTTP controller.
 /// Communicates via REST API on the Raspberry Pi (port 8080).
@@ -62,7 +62,7 @@ pub struct Rf2kStatus {
     pub max_power_w: u16,
     // Device
     pub device_name: String,
-    // Debug (Fase D)
+    // Debug (Phase D)
     pub debug_available: bool,
     pub bias_pct_x10: u16,
     pub psu_source: u8,
@@ -79,10 +79,8 @@ pub struct Rf2kStatus {
     pub tuner_6m: bool,
     pub band_gap_allowed: bool,
     pub controller_version: u16,
-    // Drive config (Fase D)
-    pub drive_config_ssb: [u8; 11],
-    pub drive_config_am: [u8; 11],
-    pub drive_config_cont: [u8; 11],
+    // Drive config (Phase D): SSB, AM, CONT (`sdr_remote_core::rf2k_drive`).
+    pub drive_config: sdr_remote_core::rf2k_drive::DriveTable,
 }
 
 impl Default for Rf2kStatus {
@@ -132,9 +130,7 @@ impl Default for Rf2kStatus {
             tuner_6m: false,
             band_gap_allowed: false,
             controller_version: 0,
-            drive_config_ssb: [0; 11],
-            drive_config_am: [0; 11],
-            drive_config_cont: [0; 11],
+            drive_config: [[0; 11]; 3],
         }
     }
 }
@@ -145,7 +141,7 @@ pub enum Rf2kCmd {
     SetAntenna { antenna_type: u8, number: u8 }, // type 0=Internal, 1=External
     ErrorReset,
     Close,                      // FW Close (shutdown Pi)
-    // Tuner controls (Fase B)
+    // Tuner controls (Phase B)
     TunerMode(u8),              // 0=MANUAL, 1=AUTO
     TunerBypass(bool),          // true=bypass on, false=bypass off
     TunerReset,
@@ -155,10 +151,10 @@ pub enum Rf2kCmd {
     TunerCUp,
     TunerCDown,
     TunerK,                     // Cycle K coefficient (CL->LC->BYPASS)
-    // Drive controls (Fase C)
+    // Drive controls (Phase C)
     DriveUp,
     DriveDown,
-    // Debug controls (Fase D)
+    // Debug controls (Phase D)
     SetHighPower(bool),
     SetTuner6m(bool),
     SetBandGap(bool),
@@ -169,7 +165,7 @@ pub enum Rf2kCmd {
     DacAlcUp,
     DacAlcDown,
     ZeroFRAM,
-    SetDriveConfig { category: u8, band: u8, value: u8 },
+    SetDriveConfig(sdr_remote_core::rf2k_drive::DriveChange),
 }
 
 // JSON response structs for Pi REST API
@@ -271,11 +267,42 @@ struct ErrorHistoryEntry {
     error: String,
 }
 
-#[derive(Deserialize)]
+/// The Pi's drive table, read and written back with the same field names
+/// (build 206; review of 205: the write was a hand-written `json!` that a swap
+/// of `ssb` and `am` left green, and every save would have swapped both rows on
+/// the Pi).
+#[derive(Deserialize, Serialize)]
 struct DriveConfigResponse {
     ssb: Vec<u8>,
     am: Vec<u8>,
     cont: Vec<u8>,
+}
+
+impl DriveConfigResponse {
+    /// The Pi's arrays by row of `sdr_remote_core::rf2k_drive` - the one
+    /// place where its names meet the row order, for the read and the write.
+    fn row_mut(&mut self, category: u8) -> &mut Vec<u8> {
+        match category {
+            0 => &mut self.ssb,
+            1 => &mut self.am,
+            _ => &mut self.cont,
+        }
+    }
+
+    /// One changed cell into the Pi's table, before the save writes it back
+    /// (review of 206: this was two lines in `execute_command`, where a swap
+    /// of row and band stayed green). A band outside the Pi's row is left
+    /// alone, and so is a row outside the shared order - `row_mut` would put
+    /// that one in CONT (review of 207). The save then writes the table as it
+    /// was, and the screen follows it back.
+    fn apply(&mut self, change: sdr_remote_core::rf2k_drive::DriveChange) {
+        if change.category as usize >= sdr_remote_core::rf2k_drive::ROWS {
+            return;
+        }
+        if let Some(cell) = self.row_mut(change.category).get_mut(change.band as usize) {
+            *cell = change.value;
+        }
+    }
 }
 
 impl Rf2k {
@@ -367,12 +394,12 @@ fn rf2k_thread(
                 tune_carrier_active = true;
             }
             Ok(cmd) => {
-                let is_drive_config = matches!(cmd, Rf2kCmd::SetDriveConfig { .. });
+                let is_drive_config = matches!(cmd, Rf2kCmd::SetDriveConfig(_));
                 execute_command(&client, base_url, &cmd);
                 // Refetch drive config after SetDriveConfig
                 if is_drive_config {
-                    if let Ok(dc) = fetch_drive_config(&client, base_url) {
-                        apply_drive_config(&mut status.lock().unwrap(), &dc);
+                    if let Ok(mut dc) = fetch_drive_config(&client, base_url) {
+                        apply_drive_config(&mut status.lock().unwrap(), &mut dc);
                     }
                 }
                 // Brief delay then poll
@@ -422,9 +449,7 @@ fn rf2k_thread(
                     let tuner_6m = s.tuner_6m;
                     let band_gap_allowed = s.band_gap_allowed;
                     let controller_version = s.controller_version;
-                    let drive_config_ssb = s.drive_config_ssb;
-                    let drive_config_am = s.drive_config_am;
-                    let drive_config_cont = s.drive_config_cont;
+                    let drive_config = s.drive_config;
 
                     *s = new_status;
                     s.device_name = device_name;
@@ -446,9 +471,7 @@ fn rf2k_thread(
                     s.tuner_6m = tuner_6m;
                     s.band_gap_allowed = band_gap_allowed;
                     s.controller_version = controller_version;
-                    s.drive_config_ssb = drive_config_ssb;
-                    s.drive_config_am = drive_config_am;
-                    s.drive_config_cont = drive_config_cont;
+                    s.drive_config = drive_config;
                 } // lock dropped here
 
                 // Drive observer: feed latest polled operate-mode and Thetis
@@ -483,10 +506,11 @@ fn rf2k_thread(
                     }
                 }
 
-                // Drive config: fetch once at startup, then after SetDriveConfig
+                // Drive config: fetch at startup, after SetDriveConfig, and
+                // again once the Pi is back after an outage (below).
                 if !drive_config_fetched {
-                    if let Ok(dc) = fetch_drive_config(&client, base_url) {
-                        apply_drive_config(&mut status.lock().unwrap(), &dc);
+                    if let Ok(mut dc) = fetch_drive_config(&client, base_url) {
+                        apply_drive_config(&mut status.lock().unwrap(), &mut dc);
                         drive_config_fetched = true;
                         info!("RF2K-S drive config loaded");
                     }
@@ -499,6 +523,10 @@ fn rf2k_thread(
                 }
                 if consecutive_failures >= 3 {
                     status.lock().unwrap().connected = false;
+                    // The Pi may come back restarted, or changed through its
+                    // own web page: read its drive table again then, not keep
+                    // the one from before (owner, 2026-10-15).
+                    drive_config_fetched = false;
                 }
                 // Safety: if we lost connection during tune, turn off carrier
                 if tune_carrier_active && consecutive_failures >= 3 {
@@ -821,20 +849,13 @@ fn execute_command(client: &reqwest::blocking::Client, base_url: &str, cmd: &Rf2
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         }
-        Rf2kCmd::SetDriveConfig { category, band, value } => {
+        Rf2kCmd::SetDriveConfig(change) => {
             let cfg_result = fetch_drive_config(client, base_url);
             if let Ok(mut dc) = cfg_result {
-                let arr = match category {
-                    0 => &mut dc.ssb,
-                    1 => &mut dc.am,
-                    _ => &mut dc.cont,
-                };
-                if (*band as usize) < arr.len() {
-                    arr[*band as usize] = *value;
-                }
+                dc.apply(*change);
                 client
                     .put(format!("{}/drive/config", base_url))
-                    .json(&serde_json::json!({"ssb": dc.ssb, "am": dc.am, "cont": dc.cont}))
+                    .json(&dc)
                     .send()
                     .map(|_| ())
                     .map_err(|e| e.to_string())
@@ -879,7 +900,7 @@ fn cmd_name(cmd: &Rf2kCmd) -> &'static str {
         Rf2kCmd::DacAlcUp => "DacAlcUp",
         Rf2kCmd::DacAlcDown => "DacAlcDown",
         Rf2kCmd::ZeroFRAM => "ZeroFRAM",
-        Rf2kCmd::SetDriveConfig { .. } => "SetDriveConfig",
+        Rf2kCmd::SetDriveConfig(_) => "SetDriveConfig",
     }
 }
 
@@ -912,20 +933,10 @@ fn parse_band(v: &serde_json::Value) -> u8 {
         serde_json::Value::Number(n) => n.as_u64().unwrap_or(0) as u16,
         _ => 0,
     };
-    match meters {
-        160 => 0,
-        80 => 1,
-        60 => 2,
-        40 => 3,
-        30 => 4,
-        20 => 5,
-        17 => 6,
-        15 => 7,
-        12 => 8,
-        10 => 9,
-        6 => 10,
-        _ => 0,
-    }
+    // The index is the position in the one band list (build 205); an
+    // unknown band reads as 0, as it always did.
+    let name = format!("{meters}m");
+    sdr_remote_core::rf2k_drive::BAND_NAMES.iter().position(|b| *b == name).unwrap_or(0) as u8
 }
 
 fn parse_tuner_mode(mode: &str) -> u8 {
@@ -998,15 +1009,24 @@ fn apply_debug(s: &mut Rf2kStatus, dbg: DebugResponse) {
     s.controller_version = dbg.controller_version.unwrap_or(0);
 }
 
-fn apply_drive_config(s: &mut Rf2kStatus, dc: &DriveConfigResponse) {
-    for (i, &v) in dc.ssb.iter().enumerate().take(11) {
-        s.drive_config_ssb[i] = v;
-    }
-    for (i, &v) in dc.am.iter().enumerate().take(11) {
-        s.drive_config_am[i] = v;
-    }
-    for (i, &v) in dc.cont.iter().enumerate().take(11) {
-        s.drive_config_cont[i] = v;
+fn apply_drive_config(s: &mut Rf2kStatus, dc: &mut DriveConfigResponse) {
+    use sdr_remote_core::rf2k_drive::{BANDS, CATEGORY_NAMES};
+    for (category, row) in s.drive_config.iter_mut().enumerate() {
+        let from_pi = dc.row_mut(category as u8);
+        // A shorter row leaves the last cells as they were, and a save into
+        // one of them is dropped by `SetDriveConfig` - both silent. Not seen
+        // from a real Pi; said aloud if it ever is (review of 204).
+        if from_pi.len() != BANDS {
+            warn!(
+                "RF2K-S drive config: {} has {} bands, expected {}",
+                CATEGORY_NAMES[category],
+                from_pi.len(),
+                BANDS
+            );
+        }
+        for (cell, &v) in row.iter_mut().zip(from_pi.iter()) {
+            *cell = v;
+        }
     }
 }
 
@@ -1063,11 +1083,11 @@ pub fn debug_labels_string(status: &Rf2kStatus) -> String {
         .map(|(t, e)| format!("{}={}", t, e))
         .collect::<Vec<_>>()
         .join(";");
-    let drive_ssb: String = status.drive_config_ssb.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
-    let drive_am: String = status.drive_config_am.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
-    let drive_cont: String = status.drive_config_cont.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
+    // Fields 44-46 in row order, as one piece, so the rows cannot change
+    // places here (review of 204).
+    let drive_rows = sdr_remote_core::rf2k_drive::to_wire(&status.drive_config).join(",");
     format!(
-        ",{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        ",{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
         if status.debug_available { 1 } else { 0 },    // 28
         status.bias_pct_x10,                            // 29
         status.psu_source,                              // 30
@@ -1084,28 +1104,13 @@ pub fn debug_labels_string(status: &Rf2kStatus) -> String {
         if status.tuner_6m { 1 } else { 0 },           // 41
         if status.band_gap_allowed { 1 } else { 0 },   // 42
         status.controller_version,                      // 43
-        drive_ssb,                                      // 44
-        drive_am,                                       // 45
-        drive_cont,                                     // 46
+        drive_rows,                                     // 44, 45, 46
     )
 }
 
 /// Band index to name
 pub fn band_name(band: u8) -> &'static str {
-    match band {
-        0 => "160m",
-        1 => "80m",
-        2 => "60m",
-        3 => "40m",
-        4 => "30m",
-        5 => "20m",
-        6 => "17m",
-        7 => "15m",
-        8 => "12m",
-        9 => "10m",
-        10 => "6m",
-        _ => "?",
-    }
+    sdr_remote_core::rf2k_drive::BAND_NAMES.get(band as usize).copied().unwrap_or("?")
 }
 
 /// Tuner mode index to name
@@ -1477,6 +1482,85 @@ impl DriveObserverState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Pi names its rows; the row order is `rf2k_drive`'s. `row_mut` is
+    /// where they meet, and this ties it to `CATEGORY_NAMES` (review of 204).
+    #[test]
+    fn the_pis_row_names_follow_the_shared_order() {
+        use sdr_remote_core::rf2k_drive::{CATEGORY_NAMES, ROWS};
+        let json = format!(
+            r#"{{"{}": [10], "{}": [20], "{}": [30]}}"#,
+            CATEGORY_NAMES[0].to_lowercase(),
+            CATEGORY_NAMES[1].to_lowercase(),
+            CATEGORY_NAMES[2].to_lowercase()
+        );
+        let mut dc: DriveConfigResponse = serde_json::from_str(&json).unwrap();
+        for category in 0..ROWS as u8 {
+            assert_eq!(dc.row_mut(category)[0], (category + 1) * 10, "row {category} is not {}", CATEGORY_NAMES[category as usize]);
+        }
+        // And back: what "Save to Pi" puts carries each row under its own
+        // name (review of 205).
+        for category in 0..ROWS as u8 {
+            dc.row_mut(category)[0] = 100 + category;
+        }
+        let put = serde_json::to_value(&dc).unwrap();
+        for (category, name) in CATEGORY_NAMES.iter().enumerate() {
+            assert_eq!(put[name.to_lowercase()][0], 100 + category as u64, "the save writes {name} under another name");
+        }
+    }
+
+    /// A change from a screen lands in its own row and band of what the save
+    /// writes to the Pi, and nowhere else (review of 206).
+    #[test]
+    fn a_change_lands_in_its_own_cell_of_the_save() {
+        use sdr_remote_core::rf2k_drive::{DriveChange, BANDS, CATEGORY_NAMES, ROWS};
+        let zeros = format!("[{}]", vec!["0"; BANDS].join(","));
+        let json = format!(
+            r#"{{"{}": {zeros}, "{}": {zeros}, "{}": {zeros}}}"#,
+            CATEGORY_NAMES[0].to_lowercase(),
+            CATEGORY_NAMES[1].to_lowercase(),
+            CATEGORY_NAMES[2].to_lowercase()
+        );
+        for category in 0..ROWS as u8 {
+            for band in 0..BANDS as u8 {
+                let mut dc: DriveConfigResponse = serde_json::from_str(&json).unwrap();
+                dc.apply(DriveChange { category, band, value: 77 });
+                let put = serde_json::to_value(&dc).unwrap();
+                for (row, name) in CATEGORY_NAMES.iter().enumerate() {
+                    for column in 0..BANDS {
+                        let expected = if (row, column) == (category as usize, band as usize) { 77 } else { 0 };
+                        assert_eq!(put[name.to_lowercase()][column], expected, "change {category},{band} wrote {name} {column}");
+                    }
+                }
+            }
+        }
+        // A band the Pi's row does not have changes nothing, and neither does
+        // a row outside the shared order (review of 207).
+        for change in [
+            DriveChange { category: 0, band: BANDS as u8, value: 77 },
+            DriveChange { category: ROWS as u8, band: 0, value: 77 },
+        ] {
+            let mut dc: DriveConfigResponse = serde_json::from_str(&json).unwrap();
+            dc.apply(change);
+            assert_eq!(
+                serde_json::to_value(&dc).unwrap(),
+                serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+                "{change:?} changed the table"
+            );
+        }
+    }
+
+    /// The Pi reports the band in metres; the index is its place in the one
+    /// list, so 40 m is 3 everywhere that names it (build 204-205).
+    #[test]
+    fn the_band_index_is_the_place_in_the_band_list() {
+        for (index, name) in sdr_remote_core::rf2k_drive::BAND_NAMES.iter().enumerate() {
+            let metres: u64 = name.trim_end_matches('m').parse().unwrap();
+            assert_eq!(parse_band(&serde_json::json!(metres)), index as u8);
+            assert_eq!(band_name(index as u8), *name);
+        }
+        assert_eq!(parse_band(&serde_json::json!(2)), 0);
+    }
 
     fn ctx_with(saved: Option<u8>, last_zzpc: u8, tr_start: Option<Instant>) -> DriveObserverCtx {
         DriveObserverCtx {

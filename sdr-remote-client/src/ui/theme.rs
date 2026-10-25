@@ -15,7 +15,7 @@ use egui::Color32;
 // The theme system itself lives in `sdr-remote-theme`, so the server can show
 // exactly the same variants and visuals. Only re-exported here, so all
 // existing `theme::` call-sites remain unchanged.
-pub(crate) use sdr_remote_theme::{apply_visuals, Palette, ThemeVariant};
+pub(crate) use sdr_remote_theme::{apply_visuals, colour_button, Palette, ThemeVariant};
 
 // ── Toggle / selection colors ──────────────────────────────────────────────
 
@@ -33,8 +33,6 @@ pub(crate) const TL_SWR_ALERT_TEXT: Color32 = Color32::from_rgb(255, 80, 80);
 
 // ── Spacing / layout ───────────────────────────────────────────────────────
 
-/// Vertical gap between spectrum and waterfall within one panel.
-pub(crate) const TL_INNER_GAP_Y: f32 = 2.0;
 /// Width of the spectrum-control sliders (Ref/Range/Zoom/Pan/WF).
 pub(crate) const TL_SLIDER_WIDTH: f32 = 80.0;
 

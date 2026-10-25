@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.sdrremote.ui.components.findMainActivity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sdrremote.ui.components.AudioStats
 import com.sdrremote.ui.components.ConnectionPanel
+import com.sdrremote.ui.components.StationNoticeLines
 import com.sdrremote.ui.components.FilterBandwidthControl
 import com.sdrremote.ui.components.FrequencyDisplay
 import com.sdrremote.ui.components.PttButton
@@ -93,6 +95,25 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val yaesuActive by viewModel.yaesuMode.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("thetislink", Context.MODE_PRIVATE) }
+    // The measurement switch, for both places that show it (build 181): on asks
+    // for location first - for the cell and GPS rows - and starts either way.
+    val onMeasurement: (Boolean) -> Unit = remember(viewModel, context) {
+        { on ->
+            val act = context.findMainActivity()
+            if (on && act != null) {
+                act.requestLocationPermission { viewModel.setMeasurement(true) }
+            } else {
+                viewModel.setMeasurement(on)
+            }
+        }
+    }
+    // The tools only the developer mode draws (build 298): the measurement -
+    // and with it the one request for location - "relay only" and "force TCP".
+    // Null outside the mode, and the statistics block draws none of them.
+    val developerMode by viewModel.developerMode.collectAsStateWithLifecycle()
+    val devMeasurement: ((Boolean) -> Unit)? = if (developerMode) onMeasurement else null
+    val devRelayOnly: ((Boolean) -> Unit)? = if (developerMode) { { on: Boolean -> viewModel.setRelayOnly(on) } } else null
+    val devForceTcp: ((Boolean) -> Unit)? = if (developerMode) { { on: Boolean -> viewModel.setForceTcp(on) } } else null
 
     // PATCH-4: first-run wizard owns the viewport until the user finishes
     // it OR explicitly skips. `wizardActive` is also flipped on by a small
@@ -115,6 +136,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             connectStatusIsError = state.connectStatusIsError,
             connectStatusHeadline = state.connectStatusHeadline,
             connectStatusAction = state.connectStatusAction,
+            stationNotices = state.stationNotices,
+            canConnect = state.canConnect,
             onConnect = { server, pw ->
                 prefs.edit().putString("server_addr", server).putString("password", pw).apply()
                 viewModel.connect(server, pw)
@@ -206,10 +229,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val spectrumZoomState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("spectrum_zoom", 20f)) }
     val spectrumPanState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("spectrum_pan", 0f)) }
     val spectrumRefState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("spectrum_ref", -30f)) }
-    val spectrumRangeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("spectrum_range", 80f)) }
+    val spectrumRangeState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("spectrum_range", 70f)) }
     val waterfallContrastState = rememberSaveable { mutableFloatStateOf(prefs.getFloat("waterfall_contrast", 1f)) }
-    // TL2-1 ctun-auto-recenter setup-vink "Allow zoom below 2x".
-    // Default uit (zoom-min 2x; smear-vrij gegarandeerd via auto-recenter feature).
+    // TL2-1 ctun-auto-recenter setup tick box "Allow zoom below 2x".
+    // Off by default (zoom-min 2x; free of smear, guaranteed by the auto-recenter feature).
     val allowZoomBelow2xState = rememberSaveable { mutableStateOf(prefs.getBoolean("allow_zoom_below_2x", false)) }
     // S-meter source: 0=Sig, 1=Avg (default), 2=MaxBin. Same choice for RX1+RX2.
     val smeterSourceState = rememberSaveable { mutableStateOf(prefs.getInt("smeter_source", 1)) }
@@ -253,36 +276,9 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     var autoRefFrames by remember { mutableIntStateOf(0) }
     var autoRefInitialized by remember { mutableStateOf(false) }
 
-    // TX spectrum override - save/restore ref + range + auto on PTT transitions
-    var txSavedRef by remember { mutableStateOf<Float?>(null) }
-    var txSavedRange by remember { mutableStateOf<Float?>(null) }
-    var txSavedAutoRef by remember { mutableStateOf<Boolean?>(null) }
-
-    LaunchedEffect(state.transmitting) {
-        if (state.transmitting) {
-            // Entering TX: save current ref+range+auto, set TX defaults
-            txSavedRef = spectrumRefState.floatValue
-            txSavedRange = spectrumRangeState.floatValue
-            txSavedAutoRef = autoRefEnabled
-            autoRefEnabled = false
-            spectrumRefState.floatValue = -30f
-            spectrumRangeState.floatValue = 120f
-        } else {
-            // Leaving TX: restore ref+range immediately, auto_ref after 200ms
-            txSavedRef?.let { spectrumRefState.floatValue = it; txSavedRef = null }
-            txSavedRange?.let { spectrumRangeState.floatValue = it; txSavedRange = null }
-            val savedAuto = txSavedAutoRef
-            txSavedAutoRef = null
-            if (savedAuto != null) {
-                kotlinx.coroutines.delay(500)
-                autoRefEnabled = savedAuto
-                if (savedAuto) {
-                    autoRefFrames = 0
-                    autoRefInitialized = false
-                }
-            }
-        }
-    }
+    // The spectrum keeps its receive settings while transmitting; its automatic
+    // reference pauses on the engine's `autoRefPaused` and carries on from its last
+    // receive value afterwards (build 176).
 
     // Per-band WF contrast tracking
     var currentBand by remember { mutableStateOf<String?>(null) }
@@ -290,7 +286,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // Auto ref level calculation - runs on each new spectrum frame
     val spectrumSeq = state.spectrumSequence
     LaunchedEffect(spectrumSeq) {
-        if (!autoRefEnabled) return@LaunchedEffect
+        if (!autoRefEnabled || state.autoRefPaused) return@LaunchedEffect
         val bins = state.spectrumBins
         if (bins.isEmpty()) return@LaunchedEffect
         val spanHz = state.spectrumSpanHz
@@ -513,7 +509,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             // it did nothing at all. Fourth reader of one condition; it reads the
             // function now, like the other three.
             if (viewModel.yaesuIsTheOperatingRadio()) {
-                viewModel.yaesuVolumeSel(v) // geselecteerde radio (niet altijd radio1)
+                viewModel.yaesuVolumeSel(v) // the selected radio (not always radio 1)
                 LocalAudioPrefs.setYaesuVolume(prefs, v)
             } else {
                 viewModel.setLocalVolume(v)
@@ -543,6 +539,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         val routing = viewModel.audioRouting
         SettingsDialog(
             connected = state.connected,
+            routeInUse = state.route,
+            pathInUse = state.pathName,
             headsetActive = routing.headsetActive,
             headsetName = routing.headsetName,
             audioMode = routing.forceMode.ordinal,
@@ -600,6 +598,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
             onRogerChange = { f, v, ms, fm, t, r1, r2 ->
                 viewModel.setRogerBeep(f, v, ms, fm, t, r1, r2)
             },
+            developerMode = developerMode,
+            onDeveloperMode = { viewModel.switchDeveloperMode(it) },
             onReboot = { viewModel.serverReboot() },
             onShutdown = { viewModel.serverShutdown() },
             onDismiss = { showSettings = false },
@@ -607,14 +607,26 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     }
 
     if (showAbout) {
-        val versionName = try { context.packageManager.getPackageInfo(context.packageName, 0).versionName } catch (_: Exception) { "?" }
         AlertDialog(
             onDismissRequest = { showAbout = false },
             title = { Text(stringResource(R.string.main_about_title)) },
             text = {
                 Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     Text("ThetisLink", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                    Text("v$versionName", fontSize = 14.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    // version() is version_string(), the same text the server is
+                    // compared against. The Gradle versionName carries no build
+                    // number and said something shorter about the same binary.
+                    Text("v${version()}", fontSize = 14.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    if (developerMode) {
+                        Text(
+                            "DEV",
+                            color = com.sdrremote.prefs.DeveloperMode.COLOUR,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     Spacer(Modifier.height(4.dp))
                     Text(stringResource(R.string.main_about_subtitle), fontSize = 13.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(10.dp))
@@ -737,7 +749,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // with the chat (2026-08-20).
 
     // Data saving: subscribe to the Yaesu radios only while the Yaesu window is open
-    // (devices-scherm zichtbaar en Yaesu-tab (id 6) geselecteerd). Buiten dit window blijft
+    // (devices screen visible and Yaesu tab (id 6) selected). Outside this window
     // only an actively listened radio stays subscribed (see ViewModel.updateYaesuSubscriptions).
     val yaesuWindowOpen = showDevices && !showChat && deviceSubTab == 6
     LaunchedEffect(yaesuWindowOpen) {
@@ -905,6 +917,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         )
                     }
                 } else if (showDevices) {
+                    // The station notices above the device tabs too: here the
+                    // Amplitec is switched, and an RX-only position without the
+                    // fork must be said where it happens (build 216).
+                    if (state.stationNotices.isNotEmpty()) {
+                        item { StationNoticeLines(state.stationNotices) }
+                    }
                     item {
                         ExternalDevicesScreen(
                             state = state,
@@ -1003,7 +1021,13 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
 
                     ConnectionPanel(
                         connected = state.connected,
+                        pathShort = state.pathShort,
+                        pathName = state.pathName,
+                        pathHint = state.pathHint,
+                        pathCoupling = state.pathCoupling,
                         audioError = state.audioError,
+                        stationNotices = state.stationNotices,
+                        canConnect = state.canConnect,
                         transmitting = state.transmitting,
                         paForwardW = paForwardW,
                         paMaxW = paMaxW,
@@ -1041,8 +1065,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     )
                 }
 
-                // Debug: show last key event (for BT remote discovery)
-                if (lastKeyEvent.isNotEmpty()) {
+                // The last key event, for finding out what a Bluetooth remote
+                // sends: developer mode only (owner, 2026-10-24) - `onKeyDown`
+                // fills it on every key, the volume buttons too.
+                if (developerMode && lastKeyEvent.isNotEmpty()) {
                     item {
                         Text(
                             text = stringResource(R.string.main_key, lastKeyEvent),
@@ -1075,6 +1101,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             // Yaesu side, this one did not.
                             captureLevel = state.yaesuMicLevel,
                             playbackLevel = if (state.selectedRadio == 1) state.playbackLevelYaesu2 else state.playbackLevelYaesu,
+                            serverBuildDiffers = state.serverBuildDiffers,
+                            serverBuild = state.serverBuild,
                             rttMs = state.rttMs,
                             jitterMs = state.jitterMs,
                             bufferDepth = state.bufferDepth,
@@ -1097,7 +1125,13 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             showThetisAudio = false,
                             yaesu1Visible = state.selectedRadio == 0 && state.yaesuConnected,
                             yaesu2Visible = state.selectedRadio == 1 && state.yaesu2Connected,
-                            relayTransportFallback = state.relayTransportFallback,
+                            measurementFile = state.measurementFile,
+                            onMeasurement = devMeasurement,
+                            relayOnly = state.relayOnly,
+                            viaRelay = state.viaRelay,
+                            onRelayOnly = devRelayOnly,
+                            forceTcp = state.forceTcp,
+                            onForceTcp = devForceTcp,
                         )
                     }
                 }
@@ -1107,7 +1141,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         frequencyHz = state.frequencyHz,
                         smeter = state.smeter,
                         mode = state.mode,
-                        transmitting = state.transmitting,
+                        transmitting = state.meterTx,
                         otherTx = state.otherTx,
                         onFrequencyChange = { hz ->
                             pendingFreq = hz
@@ -1167,7 +1201,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             refDb = spectrumRefState.floatValue,
                             rangeDb = spectrumRangeState.floatValue,
                             smeter = state.smeter,
-                            transmitting = state.transmitting,
+                            transmitting = state.meterTx,
                             otherTx = state.otherTx,
                             dxSpots = state.dxSpots,
                             onFrequencyClick = { hz ->
@@ -1323,6 +1357,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     AudioStats(
                         captureLevel = state.captureLevel,
                         playbackLevel = state.playbackLevel,
+                        serverBuildDiffers = state.serverBuildDiffers,
+                        serverBuild = state.serverBuild,
                         rttMs = state.rttMs,
                         jitterMs = state.jitterMs,
                         bufferDepth = state.bufferDepth,
@@ -1347,7 +1383,13 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         yaesu2Visible = state.yaesu2Connected,
                         vrx1Visible = state.vrx1AudioPackets > 0L,
                         vrx2Visible = state.vrx2AudioPackets > 0L,
-                        relayTransportFallback = state.relayTransportFallback,
+                        measurementFile = state.measurementFile,
+                        onMeasurement = devMeasurement,
+                        relayOnly = state.relayOnly,
+                        viaRelay = state.viaRelay,
+                        onRelayOnly = devRelayOnly,
+                        forceTcp = state.forceTcp,
+                        onForceTcp = devForceTcp,
                     )
                 }
 

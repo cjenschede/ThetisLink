@@ -38,6 +38,16 @@ use crate::codec::{OpusDecoder, OpusDecoderWideband};
 /// something else is stuck - it is a backstop, not a timer anyone waits for.
 const CONCEAL_MAX_FRAMES: u32 = 400; // 8 s at 20 ms
 
+/// What `StreamDecoder::recover_or_conceal` put in a lost frame's place, with
+/// the format of what came out.
+#[derive(Debug, PartialEq)]
+pub enum Filled {
+    /// Rebuilt from the redundancy in the next packet: real audio.
+    Rebuilt(Vec<i16>, bool),
+    /// Concealed: Opus' own extrapolation.
+    Concealed(Vec<i16>, bool),
+}
+
 /// One receive stream: both decoders and the format of the last real frame.
 pub struct StreamDecoder {
     nb: OpusDecoder,
@@ -109,6 +119,40 @@ impl StreamDecoder {
             self.nb.decode_fec(next_opus)
         };
         self.accept(r, wideband)
+    }
+
+    /// One lost frame: rebuild it from the redundancy in the next packet when
+    /// there is one and it carries some, and otherwise fill the gap. `next` is
+    /// that packet's own Opus data and wideband flag.
+    ///
+    /// The one place that decides this (build 155). It sits here, below the
+    /// client's playback resamplers, so the server can use the same decision
+    /// on the transmit path when that comes (review of build 154). Until build
+    /// 154 only the Thetis stream on the client rebuilt; the radios and VRX
+    /// always concealed.
+    pub fn recover_or_conceal(&mut self, next: Option<(&[u8], bool)>) -> Option<Filled> {
+        if let Some((opus, wideband)) = next {
+            // Only from a packet that really carries redundancy: without it
+            // `decode_fec` hands back the concealed frame and calls it audio,
+            // and every count of concealment downstream comes out low
+            // (build 155).
+            if crate::codec::carries_redundancy(opus) {
+                if let Some(pcm) = self.recover(opus, wideband) {
+                    return Some(Filled::Rebuilt(pcm, wideband));
+                }
+            }
+        }
+        self.conceal_filled()
+    }
+
+    /// A gap filled in, with the format it is in: the one the stream was last
+    /// carrying, read before the decoder runs. The one place that says so
+    /// (build 156; review of 155: two places worked it out, and a wrong flag
+    /// here sends every concealed wideband frame through the narrowband
+    /// resampler with no test noticing).
+    pub fn conceal_filled(&mut self) -> Option<Filled> {
+        let wideband = self.wideband();
+        self.conceal().map(|pcm| Filled::Concealed(pcm, wideband))
     }
 
     fn accept(&mut self, r: Result<Vec<i16>>, wideband: bool) -> Option<Vec<i16>> {

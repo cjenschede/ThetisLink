@@ -73,16 +73,31 @@ pub fn spe_amplifying(connected: bool, state: u8) -> Amplifying {
     }
 }
 
-/// The RF2K-S, which carries on without its network.
-pub fn rf2k_amplifying(connected: bool, operate: bool, last_seen_operate: Option<bool>) -> Amplifying {
-    if connected {
-        return if operate { Amplifying::Yes } else { Amplifying::No };
-    }
-    match last_seen_operate {
-        Some(false) => Amplifying::No,
-        // Seen in Operate, or never seen at all: we cannot tell an amplifier that
-        // is switched off from one that is amplifying out of reach.
-        _ => Amplifying::Unknown,
+/// What the server knows of the RF2K-S. Named fields since build 226 (review
+/// of 224): by position, `reachable` and `reports_operate` swapped read an
+/// RF2K-S out of reach in Standby as amplifying, and one in Operate as off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rf2kReading {
+    /// The server has a fresh reading of it.
+    pub reachable: bool,
+    /// That reading says Operate.
+    pub reports_operate: bool,
+    /// What it was last seen doing, kept on disk.
+    pub last_seen_operate: Option<bool>,
+}
+
+impl Rf2kReading {
+    /// The RF2K-S, which carries on without its network.
+    pub fn amplifying(self) -> Amplifying {
+        if self.reachable {
+            return if self.reports_operate { Amplifying::Yes } else { Amplifying::No };
+        }
+        match self.last_seen_operate {
+            Some(false) => Amplifying::No,
+            // Seen in Operate, or never seen at all: we cannot tell an amplifier that
+            // is switched off from one that is amplifying out of reach.
+            _ => Amplifying::Unknown,
+        }
     }
 }
 
@@ -98,8 +113,24 @@ pub fn worst(a: Amplifying, b: Amplifying) -> Amplifying {
 /// Raise the alarm? Only while a PA may be amplifying out of reach and the drive
 /// has gone **up** since we lost contact - the one move nobody can undo from the
 /// shack, and the PA cannot be told about it either.
-pub fn drive_alarm(state: Amplifying, drive_when_lost: u8, drive_now: u8) -> bool {
-    matches!(state, Amplifying::Unknown) && drive_now > drive_when_lost
+///
+/// Named fields since build 229 (review of 228): by position, the two drives
+/// swapped turned the alarm round - it beeped at a lower drive and kept quiet
+/// at a higher one, the one move it exists for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriveAlarm {
+    /// What the PA is doing, as far as the server can tell.
+    pub state: Amplifying,
+    /// The drive when contact was lost (`AlarmBaseline`).
+    pub drive_when_lost: u8,
+    /// The drive now.
+    pub drive_now: u8,
+}
+
+impl DriveAlarm {
+    pub fn raised(self) -> bool {
+        matches!(self.state, Amplifying::Unknown) && self.drive_now > self.drive_when_lost
+    }
 }
 
 /// May we act on this reading of a PA whose Operate control is a *toggle*?
@@ -124,28 +155,60 @@ pub fn steady_in_operate(prev: Option<bool>, now: bool) -> bool {
 /// - **Not clearing it** when contact returns leaves an old value lying about, and
 ///   the next time contact drops the alarm compares against a number from another
 ///   session.
-pub fn alarm_baseline(prev: Option<u8>, out_of_reach: bool, drive_known: bool, drive_now: u8) -> Option<u8> {
-    if !out_of_reach {
-        return None;
-    }
-    if !drive_known {
-        return prev;
-    }
-    prev.or(Some(drive_now))
+///
+/// Named fields since build 228 (review of 226): by position, `out_of_reach`
+/// and `drive_known` swapped kept a baseline while the PA was in reach, and
+/// the alarm later compared against a number from another session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlarmBaseline {
+    /// The baseline so far.
+    pub prev: Option<u8>,
+    /// The RF2K-S cannot be reached and may be amplifying.
+    pub out_of_reach: bool,
+    /// Thetis has told us the drive on this connection.
+    pub drive_known: bool,
+    /// The Thetis drive now.
+    pub drive_now: u8,
 }
 
-/// Does the red line stay up?
+impl AlarmBaseline {
+    pub fn next(self) -> Option<u8> {
+        if !self.out_of_reach {
+            return None;
+        }
+        if !self.drive_known {
+            return self.prev;
+        }
+        self.prev.or(Some(self.drive_now))
+    }
+}
+
+/// Does the red line stay up? Named fields since build 224 (review of 223):
+/// by position, `reachable` swapped with one of the others kept the line away
+/// while the PA was out of reach, with every test green.
 ///
 /// The beep and the line answer two different questions, and the owner asked for
 /// exactly that split after hearing it in the field (2026-09-16): the **beep** says
 /// "the drive is too high *right now*" and stops the moment he puts it back; the
 /// **line** says "this happened while the PA was out of reach" and stays until the
 /// server can see the PA again - he may not have been in the room when it happened.
-pub fn warning_stays(was_up: bool, alarm_now: bool, reachable: bool) -> bool {
-    if reachable {
-        return false;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriveWarning {
+    /// The red line was up at the previous tick.
+    pub was_up: bool,
+    /// The drive alarm is on right now.
+    pub alarm_now: bool,
+    /// The server can reach the PA.
+    pub reachable: bool,
+}
+
+impl DriveWarning {
+    pub fn stays(self) -> bool {
+        if self.reachable {
+            return false;
+        }
+        self.was_up || self.alarm_now
     }
-    was_up || alarm_now
 }
 
 /// Is the one startup attempt spent on this reading?
@@ -202,6 +265,19 @@ impl TxSources {
     }
 }
 
+/// What the PA tick reads under the PTT lock (build 226, review of 224: by
+/// position, `tx_active` and `known` swapped kept "transmitting" true while
+/// Thetis was on, and no PA went to Standby).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThetisReading {
+    /// Anything transmits (`TxSources::any`).
+    pub tx_active: bool,
+    /// The Thetis drive in percent.
+    pub drive: u8,
+    /// Thetis has said something on this connection.
+    pub known: bool,
+}
+
 /// Does a new Thetis run begin on this tick?
 ///
 /// The one startup attempt is per Thetis run, not per server run (review finding on build
@@ -210,36 +286,138 @@ impl TxSources {
 /// server never having stopped. Thetis going from unknown to known is that
 /// boundary, and it costs nothing to check: on the very first tick the attempt
 /// has not been spent yet.
-pub fn new_thetis_run(prev_known: bool, known: bool) -> bool {
-    !prev_known && known
+///
+/// Named fields since build 228 (review of 226): by position, the two swapped
+/// fired when Thetis went away instead of when it came back, and the process
+/// check of build 226 looked at the wrong moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThetisKnown {
+    /// Thetis was known on the previous tick.
+    pub before: bool,
+    /// Thetis is known now.
+    pub now: bool,
+}
+
+impl ThetisKnown {
+    pub fn became_known(self) -> bool {
+        !self.before && self.now
+    }
+}
+
+/// What Thetis came back as, once it is known again (build 226, owner after
+/// the review of 224: "only at a real restart of Thetis"). `handle_disconnect`
+/// clears what Thetis said, so every new TCI connection made it known again -
+/// and the drive was put back after a short drop too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThetisBackInput<'a> {
+    /// Thetis.exe's process id in the run the startup check was made for.
+    pub run_pid: Option<u32>,
+    /// Every Thetis.exe on this PC now; empty: not on this PC.
+    pub pids_now: &'a [u32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThetisBack {
+    /// Another process: Thetis was restarted.
+    NewProcess { pid: u32, was: Option<u32> },
+    /// The same process: TCI came back, Thetis never went away.
+    SameProcess { pid: u32 },
+    /// Not on this PC: no way to tell, so every new connection counts, as
+    /// before build 226.
+    NotSeen,
+    /// More than one Thetis.exe (build 227, review of 226): an old one still
+    /// closing while the new one already talks TCI, or two radios. No way to
+    /// tell which, so every new connection counts, as before build 226.
+    Several { count: usize },
+}
+
+impl ThetisBackInput<'_> {
+    pub fn back(self) -> ThetisBack {
+        match self.pids_now {
+            [] => ThetisBack::NotSeen,
+            [pid] if self.run_pid == Some(*pid) => ThetisBack::SameProcess { pid: *pid },
+            [pid] => ThetisBack::NewProcess { pid: *pid, was: self.run_pid },
+            more => ThetisBack::Several { count: more.len() },
+        }
+    }
+
+    /// The process id to remember for this run: only when one is sure.
+    pub fn run_pid_now(self) -> Option<u32> {
+        match self.pids_now {
+            [pid] => Some(*pid),
+            _ => None,
+        }
+    }
+}
+
+impl ThetisBack {
+    /// A new run: the startup check runs again.
+    pub fn new_run(self) -> bool {
+        !matches!(self, ThetisBack::SameProcess { .. })
+    }
 }
 
 /// The active-PA mark as it may be used: a mark on a PA this server does not
-/// have is no permission to switch off the one it does have.
-pub fn effective_active_pa(active_pa: u8, spe_present: bool, rf2k_present: bool) -> u8 {
-    match active_pa {
-        PA_SPE if !spe_present => 0,
-        PA_RF2K if !rf2k_present => 0,
-        other => other,
+/// have is no permission to switch off the one it does have. Named fields
+/// since build 228 (review of 226): by position, the two presences swapped
+/// dropped the mark with only one PA configured, and with it the single-Operate
+/// rule and the drive choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveMark {
+    /// The mark as stored (`active_pa`, 0: none).
+    pub marked: u8,
+    /// This server has an SPE configured.
+    pub spe_present: bool,
+    /// This server has an RF2K-S configured.
+    pub rf2k_present: bool,
+}
+
+impl ActiveMark {
+    pub fn effective(self) -> u8 {
+        match self.marked {
+            PA_SPE if !self.spe_present => 0,
+            PA_RF2K if !self.rf2k_present => 0,
+            other => other,
+        }
     }
 }
 
-/// What to do with a PA we have a fresh reading of.
-pub fn enforce(active_pa: u8, pa_id: u8, connected: bool, in_operate: bool, tx_active: bool) -> Enforce {
-    // No reading is not a reason to act: an unreachable PA is the case where TL
-    // knows least, and switching on a guess is worse than leaving it.
-    if !connected || !in_operate {
-        return Enforce::Nothing;
+/// What the single-Operate rule decides on, for one PA. Named fields since
+/// build 224 (review of 223): by position, `in_operate` or `connected` swapped
+/// with `tx_active` gave `Nothing` outside TX, so a PA that is not the active
+/// one stayed in Operate, with every test green.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnforceInput {
+    /// The PA marked active for this antenna position (0: none).
+    pub active_pa: u8,
+    /// The PA this reading is of.
+    pub pa_id: u8,
+    /// The server has a fresh reading of it.
+    pub connected: bool,
+    /// It reports Operate.
+    pub in_operate: bool,
+    /// Anything transmits (`TxSources::any`).
+    pub tx_active: bool,
+}
+
+impl EnforceInput {
+    /// What to do with a PA we have a fresh reading of.
+    pub fn decide(self) -> Enforce {
+        // No reading is not a reason to act: an unreachable PA is the case where TL
+        // knows least, and switching on a guess is worse than leaving it.
+        if !self.connected || !self.in_operate {
+            return Enforce::Nothing;
+        }
+        if operate_allowed(self.active_pa, self.pa_id) {
+            return Enforce::Nothing;
+        }
+        if self.tx_active {
+            // Taking a PA out of Operate with power going through it is the kind of
+            // switching this project exists to avoid.
+            return Enforce::WaitForRx;
+        }
+        Enforce::Standby
     }
-    if operate_allowed(active_pa, pa_id) {
-        return Enforce::Nothing;
-    }
-    if tx_active {
-        // Taking a PA out of Operate with power going through it is the kind of
-        // switching this project exists to avoid.
-        return Enforce::WaitForRx;
-    }
-    Enforce::Standby
 }
 
 /// The drive the PA took over from, if this poll is the moment it took over.
@@ -296,6 +474,93 @@ pub fn startup_restore(
 mod tests {
     use super::*;
 
+    // The cases below are spelled by position; the inputs are built here by
+    // name, as the loop does (build 224).
+    fn enforce(active_pa: u8, pa_id: u8, connected: bool, in_operate: bool, tx_active: bool) -> Enforce {
+        EnforceInput { active_pa, pa_id, connected, in_operate, tx_active }.decide()
+    }
+
+    fn warning_stays(was_up: bool, alarm_now: bool, reachable: bool) -> bool {
+        DriveWarning { was_up, alarm_now, reachable }.stays()
+    }
+
+    fn drive_alarm(state: Amplifying, drive_when_lost: u8, drive_now: u8) -> bool {
+        DriveAlarm { state, drive_when_lost, drive_now }.raised()
+    }
+
+    fn alarm_baseline(prev: Option<u8>, out_of_reach: bool, drive_known: bool, drive_now: u8) -> Option<u8> {
+        AlarmBaseline { prev, out_of_reach, drive_known, drive_now }.next()
+    }
+
+    fn new_thetis_run(before: bool, now: bool) -> bool {
+        ThetisKnown { before, now }.became_known()
+    }
+
+    fn effective_active_pa(marked: u8, spe_present: bool, rf2k_present: bool) -> u8 {
+        ActiveMark { marked, spe_present, rf2k_present }.effective()
+    }
+
+    /// The five callers of the mark, the baseline and the Thetis run build
+    /// their inputs by name (build 228, review of 226).
+    #[test]
+    fn the_callers_hand_the_mark_the_baseline_and_the_run_over_by_name() {
+        let net = include_str!("network.rs");
+        let ui = include_str!("ui/update.rs");
+        for (src, line, n) in [
+            (net, "spe_present: spe.is_some(),", 1),
+            (net, "rf2k_present: rf2k.is_some(),", 1),
+            (net, "spe_present: self.spe.is_some(),", 2),
+            (net, "rf2k_present: self.rf2k.is_some(),", 2),
+            (ui, "spe_present: true,", 1),
+            (ui, "rf2k_present: self.rf2k.is_some(),", 1),
+            (ui, "spe_present: self.spe.is_some(),", 1),
+            (ui, "rf2k_present: true,", 1),
+            (net, "prev: pa_drive_when_lost,", 1),
+            // The two drives (build 229, review of 228, K1).
+            (net, "pa_policy::DriveAlarm { state: rf_amp, drive_when_lost: base, drive_now }.raised()", 1),
+            (net, "drive_known: thetis_known,", 1),
+            (net, "(pa_policy::ThetisKnown { before: pa_prev_thetis_known, now: thetis_known }).became_known()", 1),
+        ] {
+            assert_eq!(src.matches(line).count(), n, "{line}");
+        }
+        assert_eq!(net.matches("ActiveMark {").count(), 3);
+        assert_eq!(ui.matches("ActiveMark {").count(), 2);
+    }
+
+    /// The loop hands its readings over by name (build 224, review of 223):
+    /// by position, two booleans swapped kept a PA that is not the active one
+    /// in Operate, or kept the red line away while the PA was out of reach,
+    /// with every test here green.
+    #[test]
+    fn the_loop_hands_the_pa_readings_over_by_name() {
+        let net = include_str!("network.rs");
+        for line in [
+            "connected: spe_seen,",
+            "in_operate: spe_operate,",
+            "connected: rf_seen,",
+            "in_operate: rf_operate,",
+            "was_up: pa_drive_warning,",
+            "alarm_now: pa_drive_alarm_now,",
+            "reachable: !out_of_reach,",
+            // A copied row with the wrong PA (review of 224, P1).
+            "pa_id: PA_SPE,",
+            "pa_id: PA_RF2K,",
+            // The tick's own readings (build 226, review of 224).
+            "pa_policy::ThetisReading { tx_active: tx.any(), drive: g.drive_level(), known: g.power_on() }",
+            "out_of_reach,\n                                drive_known: thetis_known,",
+            "let pa_policy::ThetisReading { tx_active: is_tx, drive: drive_now, known: thetis_known } = {",
+            "reachable: rf_seen,",
+            "reports_operate: rf_operate,",
+            "last_seen_operate: pa_rf2k_last_seen,",
+            "let back_input = pa_policy::ThetisBackInput { run_pid: pa_thetis_pid, pids_now: &pids_now };",
+            // The run's process id is kept (review of 226, PD1).
+            "pa_thetis_pid = back_input.run_pid_now();",
+        ] {
+            assert_eq!(net.matches(line).count(), 1, "{line}");
+        }
+        assert_eq!(net.matches("tx_active: is_tx,").count(), 3, "both PAs, and the reading it comes from");
+    }
+
     // ---- the report: everything off while the PA was in Operate -------------
 
     // ---- what "no contact" means per PA ------------------------------------
@@ -314,6 +579,10 @@ mod tests {
     /// anything any more.
     #[test]
     fn an_unreachable_rf2k_is_unknown_unless_it_was_in_standby() {
+        let rf2k_amplifying = |reachable, reports_operate, last_seen_operate| {
+            Rf2kReading { reachable, reports_operate, last_seen_operate }.amplifying()
+        };
+        assert_eq!(rf2k_amplifying(false, true, Some(false)), Amplifying::No, "a stale Operate out of reach");
         assert_eq!(rf2k_amplifying(false, false, Some(true)), Amplifying::Unknown);
         assert_eq!(rf2k_amplifying(false, false, None), Amplifying::Unknown, "never seen is not the same as off");
         assert_eq!(rf2k_amplifying(false, false, Some(false)), Amplifying::No);
@@ -425,6 +694,40 @@ mod tests {
         assert!(!startup_attempt_used(Amplifying::No, false), "Thetis not yet answering");
         assert!(startup_attempt_used(Amplifying::No, true), "restored, or nothing to restore");
         assert!(startup_attempt_used(Amplifying::Yes, true), "a PA is amplifying: leave it, and done");
+    }
+
+    /// A run is a process (build 226): TCI back to the same Thetis.exe leaves
+    /// the drive; another process, or none on this PC, runs the check again.
+    /// And the loop spends the check only on a new run.
+    #[test]
+    fn a_tci_drop_without_a_thetis_restart_is_not_a_new_run() {
+        let back = |run_pid, pids_now: &[u32]| ThetisBackInput { run_pid, pids_now }.back();
+        assert_eq!(back(Some(10), &[10]), ThetisBack::SameProcess { pid: 10 });
+        assert!(!back(Some(10), &[10]).new_run(), "a TCI drop, Thetis still running");
+        assert_eq!(back(Some(10), &[11]), ThetisBack::NewProcess { pid: 11, was: Some(10) });
+        assert!(back(Some(10), &[11]).new_run(), "Thetis was restarted");
+        assert_eq!(back(None, &[11]), ThetisBack::NewProcess { pid: 11, was: None });
+        assert!(back(None, &[11]).new_run(), "the first run seen with a process");
+        assert_eq!(back(Some(10), &[]), ThetisBack::NotSeen);
+        assert!(back(Some(10), &[]).new_run(), "Thetis on another PC: as before 226");
+        assert!(back(None, &[]).new_run());
+        // The old one still closing while the new one talks (review of 226):
+        // not "the same", whichever number is lower.
+        assert_eq!(back(Some(10), &[10, 11]), ThetisBack::Several { count: 2 });
+        assert!(back(Some(10), &[10, 11]).new_run());
+        assert!(back(Some(11), &[10, 11]).new_run());
+        // What the run remembers: one process, or nothing.
+        let keep = |pids_now: &[u32]| ThetisBackInput { run_pid: Some(10), pids_now }.run_pid_now();
+        assert_eq!(keep(&[12]), Some(12));
+        assert_eq!(keep(&[]), None);
+        assert_eq!(keep(&[10, 11]), None);
+        let net = include_str!("network.rs");
+        assert_eq!(net.matches("if back.new_run() {").count(), 1);
+        assert_eq!(
+            net.matches("                                        pa_startup_done = false;\n").count(),
+            1,
+            "only a new run spends it again"
+        );
     }
 
     /// Thetis going from unknown to known is a new run, and only that.

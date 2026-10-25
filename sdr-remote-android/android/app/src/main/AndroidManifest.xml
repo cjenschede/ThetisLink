@@ -17,6 +17,10 @@
          permission on Android 6+ — auto-granted at install, no runtime
          prompt. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Measurement mode only (build 181): the serving cell and GPS position in the
+         measurement file. Asked for when a measurement starts, never at startup. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application

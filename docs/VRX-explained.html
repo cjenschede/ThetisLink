@@ -355,13 +355,13 @@
     <svg viewBox="0 0 760 198" role="img" aria-label="Windowing">
       <text x="190" y="24" text-anchor="middle">hard cut — starts at +1, ends at &minus;1</text>
       <rect x="60" y="40" width="264" height="64" fill="none" stroke="#ff7a7a" stroke-dasharray="4 3"/>
-      <!-- 0-niveau buiten het blok -->
+      <!-- zero level outside the block -->
       <line x1="40" y1="70" x2="60" y2="70" stroke="#566187" stroke-width="2"/>
       <line x1="324" y1="70" x2="346" y2="70" stroke="#566187" stroke-width="2"/>
-      <!-- 5,5 golven: start op +1 (piek), eindig op -1 (dal) -->
+      <!-- 5.5 cycles: start at +1 (peak), end at -1 (trough) -->
       <path d="M60 46 C70 46 74 94 84 94 C94 94 98 46 108 46 C118 46 122 94 132 94 C142 94 146 46 156 46 C166 46 170 94 180 94 C190 94 194 46 204 46 C214 46 218 94 228 94 C238 94 242 46 252 46 C262 46 266 94 276 94 C286 94 290 46 300 46 C310 46 314 94 324 94"
         fill="none" stroke="#4ea1ff" stroke-width="2"/>
-      <!-- de grote stappen: 0→+1 aan het begin, -1→0 aan het einde -->
+      <!-- the big steps: 0→+1 at the start, -1→0 at the end -->
       <line x1="60" y1="70" x2="60" y2="46" stroke="#ffb454" stroke-width="3.5"/>
       <line x1="324" y1="94" x2="324" y2="70" stroke="#ffb454" stroke-width="3.5"/>
       <text x="54" y="44" text-anchor="end" class="mut" font-size="11">+1</text>
@@ -370,10 +370,10 @@
       <text x="324" y="120" text-anchor="middle" fill="#ffb454" font-size="11">big step</text>
       <text x="190" y="150" text-anchor="middle" class="mut">big steps &rarr; strong harmonics &rarr; leakage</text>
       <text x="570" y="24" text-anchor="middle">Hann window</text>
-      <!-- Hann-envelope (boven + onder, gestippeld): één zachte bel -->
+      <!-- Hann envelope (top + bottom, dotted): one soft bell -->
       <path d="M440 95 Q568 39 696 95" fill="none" stroke="#3ddc97" stroke-width="1.5" opacity=".8" stroke-dasharray="5 4"/>
       <path d="M440 95 Q568 151 696 95" fill="none" stroke="#3ddc97" stroke-width="1.5" opacity=".8" stroke-dasharray="5 4"/>
-      <!-- sinus met afzwakkende amplitude: klein → groot → klein -->
+      <!-- sine with fading amplitude: small → large → small -->
       <path d="M440 95 q16 -8 32 0 q16 22 32 0 q16 -42 32 0 q16 56 32 0 q16 -56 32 0 q16 42 32 0 q16 -22 32 0 q16 8 32 0"
         fill="none" stroke="#4ea1ff" stroke-width="2"/>
       <text x="570" y="150" text-anchor="middle" class="mut">&rarr; sharp, no leakage</text>
@@ -568,10 +568,10 @@
       <text x="190" y="24" text-anchor="middle">AM: read the envelope</text>
       <path d="M40 110 q6 -28 12 0 q6 38 12 0 q6 -48 12 0 q6 56 12 0 q6 -64 12 0 q6 70 12 0 q6 -74 12 0 q6 78 12 0 q6 -80 12 0 q6 80 12 0 q6 -78 12 0 q6 74 12 0 q6 -70 12 0 q6 64 12 0 q6 -56 12 0 q6 48 12 0 q6 -38 12 0 q6 28 12 0"
         fill="none" stroke="#4ea1ff" stroke-width="1.6"/>
-      <!-- bovenste omhullende: raakt de pieken van de draaggolf -->
+      <!-- upper envelope: touches the peaks of the carrier -->
       <path d="M46 96 C54 92 62 89 70 86 C78 83 86 80 94 78 C102 76 110 74 118 73 C126 71 134 70 142 70 C150 70 158 70 166 71 C174 72 182 73 190 75 C198 77 206 79 214 82 C222 85 230 88 238 91"
         fill="none" stroke="#ffb454" stroke-width="2.2"/>
-      <!-- onderste omhullende: spiegelbeeld, raakt de dalen -->
+      <!-- lower envelope: mirror image, touches the troughs -->
       <path d="M58 129 C66 133 74 135 82 138 C90 141 98 143 106 145 C114 147 122 148 130 149 C138 150 146 150 154 150 C162 150 170 149 178 147 C186 145 194 144 202 142 C210 139 218 137 226 134 C234 131 242 127 250 124"
         fill="none" stroke="#ffb454" stroke-width="2.2" opacity=".75"/>
       <text x="190" y="180" text-anchor="middle" class="mut">the orange envelope (top + bottom) touches the peaks — that is the sound</text>

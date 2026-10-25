@@ -20,6 +20,24 @@ pub const SWR_ALARM: AlarmTone = AlarmTone { hz: 880.0, level: 0.25, period_ms: 
 /// something entirely different (owner, 2026-09-16: "niet heel erg luid, wel
 /// hoorbaar").
 pub const PA_DRIVE_ALARM: AlarmTone = AlarmTone { hz: 660.0, level: 0.12, period_ms: 1500, on_ms: 200 };
+/// The press was let go because the session went (build 253): three short
+/// beeps, once. A pitch of its own between the other two and well apart from
+/// both, so it is not taken for the SWR or the drive warning (owner, 2026-10-18:
+/// "door die toon weet de gebruiker dat er iets is en ga je op het scherm kijken").
+pub const PTT_DROPPED_ALARM: AlarmTone = AlarmTone { hz: 520.0, level: 0.2, period_ms: 333, on_ms: 150 };
+/// Three beeps and part of the silence after the third (it ends at 816 ms). The
+/// mixer counts the hold down per callback, not per sample, so a hold of three
+/// whole periods would let a fourth beep start in the callback that crosses 999 ms;
+/// ending in the gap leaves room for callbacks of up to ~99 ms: one that starts
+/// just before 900 ms with a frame still on the counter plays its whole length,
+/// and has to be done before 999 ms (round 253).
+pub const PTT_DROPPED_ALARM_MS: u32 = 900;
+
+/// Samples of the dropped-press beeps, at the given rate.
+pub fn ptt_dropped_alarm_samples(sample_rate: u32) -> u32 {
+    sample_rate / 1000 * PTT_DROPPED_ALARM_MS
+}
+
 /// How long one alarm refresh keeps the beep alive. The engine re-arms it from
 /// every radio state push (200 ms), so this only expires when those stop.
 pub const SWR_ALARM_HOLD_MS: u32 = 1500;
@@ -92,7 +110,7 @@ pub fn mix_alarm(
 
 #[cfg(test)]
 mod alarm_tone_tests {
-    use super::{PA_DRIVE_ALARM, SWR_ALARM, SWR_ALARM_HOLD_MS};
+    use super::{PA_DRIVE_ALARM, PTT_DROPPED_ALARM, PTT_DROPPED_ALARM_MS, SWR_ALARM, SWR_ALARM_HOLD_MS};
 
     /// Both tones written out by value. A tone expressed only through its own
     /// constant can drift to anything and no test notices - the lesson from the
@@ -117,6 +135,55 @@ mod alarm_tone_tests {
         // The hold both tones live on between two pushes of the state.
         assert_eq!(SWR_ALARM_HOLD_MS, 1500);
     }
+
+    /// The dropped-press beeps (build 253), by value: a pitch of their own,
+    /// at least 100 Hz from the other two, and played once - three whole beeps,
+    /// none cut off by the end of the hold.
+    #[test]
+    fn the_dropped_press_sounds_three_beeps_of_its_own() {
+        assert_eq!(PTT_DROPPED_ALARM.hz, 520.0);
+        assert_eq!(PTT_DROPPED_ALARM.level, 0.2);
+        assert_eq!(PTT_DROPPED_ALARM.period_ms, 333);
+        assert_eq!(PTT_DROPPED_ALARM.on_ms, 150);
+        assert_eq!(PTT_DROPPED_ALARM_MS, 900);
+        for other in [SWR_ALARM.hz, PA_DRIVE_ALARM.hz] {
+            assert!((PTT_DROPPED_ALARM.hz - other).abs() >= 100.0, "its own pitch, not {other} Hz");
+        }
+        let third_ends = 2 * PTT_DROPPED_ALARM.period_ms + PTT_DROPPED_ALARM.on_ms;
+        assert!(PTT_DROPPED_ALARM_MS >= third_ends, "the third beep plays whole");
+        assert!(PTT_DROPPED_ALARM_MS < 3 * PTT_DROPPED_ALARM.period_ms, "and ends before a fourth would start");
+    }
+
+    /// Mixed in callbacks of 10 ms, as a device asks for them, the beeps sound
+    /// three times and then the counter is spent: once, not a latch.
+    #[test]
+    fn the_dropped_press_beeps_play_out_and_stop() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let rate = 48_000;
+        let left = AtomicU32::new(super::ptt_dropped_alarm_samples(rate));
+        let (mut pos, mut phase) = (0u32, 0.0f32);
+        let mut buf = vec![0.0f32; (rate / 1000 * 1200) as usize];
+        for chunk in buf.chunks_mut((rate / 100) as usize) {
+            super::mix_alarm(PTT_DROPPED_ALARM, chunk, 1, rate, &left, &mut pos, &mut phase);
+        }
+        assert_eq!(left.load(Ordering::Relaxed), 0, "spent");
+        // Count the starts of a beep: a sounding sample after a silent stretch.
+        let ms = |i: usize| i as u32 * 1000 / rate;
+        let mut starts = Vec::new();
+        let mut silent_since: Option<usize> = Some(0);
+        for (i, s) in buf.iter().enumerate() {
+            if s.abs() > 1e-6 {
+                if silent_since.is_some() {
+                    starts.push(ms(i));
+                }
+                silent_since = None;
+            } else if silent_since.is_none() {
+                silent_since = Some(i);
+            }
+        }
+        assert_eq!(starts, vec![0, 333, 666], "three beeps, a period apart");
+        assert!(buf[(rate / 1000 * 820) as usize..].iter().all(|s| *s == 0.0), "and silence after them");
+    }
 }
 
 /// Platform-agnostic audio backend trait.
@@ -127,6 +194,12 @@ pub trait AudioBackend: Send + 'static {
     fn capture_level(&self) -> f32;
     fn playback_level(&self) -> f32;
     fn has_error(&self) -> bool;
+    /// The chosen microphone that was not found, by the name it was chosen
+    /// under; `None` when there is no choice or it was found. Nothing else is
+    /// opened in its place (build 188). Android has no choice: always `None`.
+    fn missing_input(&self) -> Option<String> { None }
+    /// Whether that missing microphone is there again.
+    fn missing_input_is_back(&self) -> bool { false }
     fn capture_sample_rate(&self) -> u32;
     fn playback_sample_rate(&self) -> u32;
     /// Number of samples currently in the playback ring buffer.
@@ -156,4 +229,8 @@ pub trait AudioBackend: Send + 'static {
     /// The drive was raised while a PA may be amplifying out of reach: a softer,
     /// slower beep than the SWR one, on until the server clears it.
     fn set_pa_drive_alarm(&mut self, _on: bool) {}
+    /// The press was let go because the session went (build 253): three short
+    /// beeps, once, so an operator who is not looking at the screen knows the
+    /// transmitter is off and can press again. Not a latch: it plays out and stops.
+    fn sound_ptt_dropped(&mut self) {}
 }

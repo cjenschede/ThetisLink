@@ -1,4 +1,4 @@
-# ThetisLink v2.12.0 - User Manual
+# ThetisLink v2.13.0 - User Manual
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ ThetisLink is a remote control application for Thetis - whatever radio Thetis dr
 - **ThetisLink Client** — desktop client (Windows; on macOS from source, experimental) with spectrum, waterfall and full control
 - **ThetisLink Android** — mobile client app
 
-The server communicates with Thetis via TCI WebSocket for both control and audio. Audio is transmitted via the Opus codec over UDP with minimal latency.
+The server communicates with Thetis via TCI WebSocket for both control and audio. Audio is transmitted via the Opus codec over the encrypted QUIC connection with minimal latency.
 
 ### Thetis version
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.12.0.apk` | Android client app |
+| `ThetisLink-2.13.0.apk` | Android client app |
 | `Installatie.md` | Installation guide (Dutch) |
 | `User-Manual.md` | User manual (Dutch) |
 | `Technische-Referentie.md` | Technical reference (Dutch) |
@@ -84,8 +84,8 @@ flowchart TB
         Server[ThetisLink Server]
         Thetis <-->|"TCI WebSocket :40001<br>audio + IQ + control"| Server
     end
-    Server <-->|"UDP :4580"| Desktop[Desktop Client<br>egui]
-    Server <-->|"UDP :4580"| Android[Android Client<br>Compose]
+    Server <-->|"QUIC (UDP) :4580"| Desktop[Desktop Client<br>egui]
+    Server <-->|"QUIC (UDP) :4580"| Android[Android Client<br>Compose]
     Server <--> Amplitec[Amplitec 6/2<br>COM 19200]
     Server <--> Tuner1[JC-4s / JC-3s Tuner #1<br>MCP2221A USB-HID]
     Server <--> Tuner2[JC-4s / JC-3s Tuner #2<br>MCP2221A USB-HID]
@@ -140,11 +140,13 @@ amplitec_label6=UltraBeam
 3. Check the connection settings
 4. Check the desired devices
 5. Click **Start**
-6. The server listens on UDP port 4580
+6. The server listens with QUIC on UDP port 4580
 
 ### Server UI
 
 The server displays:
+- One light per transmitter in the status panel: red while that transmitter says it transmits; per radio the reason a port does not open; Thetis as "not configured" without a TCI address (v2.13.0)
+- A warning when an antenna position is RX-only and Thetis cannot be guarded against transmitting at that moment; with stock Thetis, ThetisLink switches on Thetis's own "Receive only" for this, and switches it back only if it set it itself (v2.13.0)
 - Connection status (TCI WebSocket)
 - Active device windows (Tuner, Amplitec, SPE, RF2K, UltraBeam, Rotor, Yaesu)
 - Macro buttons (2 rows of 12)
@@ -166,6 +168,43 @@ The client automatically receives:
 - Device status (Amplitec, UltraBeam, Yaesu, etc.)
 - DX cluster spots
 
+### Which way the connection takes (v2.13.0)
+
+Next to **Connected** you see how the connection runs at that moment. On the desktop
+the name is in the main window, with an explanation when you hover over it; on the
+phone you see the letters, and a tap shows the name with the explanation.
+
+| Letters | Name | Meaning |
+|---|---|---|
+| **L** | Local | Straight to the server on your own network |
+| **D** | Direct | Straight to the server over the internet (a forwarded port) |
+| **R** | Relay | All traffic goes through the relay |
+| **R** | Relay (coupling...) | Through the relay, while a direct path is being tried (amber) |
+| **D+R** | Direct, via relay | Coupled through the relay; the traffic now goes straight |
+| **L+R** | Local, via relay | Found through the relay; the traffic goes over your own network |
+| **R (TCP)** | Relay via TCP | All traffic through the relay over TCP: this network lets no UDP through. More delay |
+
+On every way that includes the relay, the chat and problem reports are available too.
+The server shows the same letters per client.
+
+### Messages when connecting (v2.13.0)
+
+- **"The server does not prove it knows the password"** / **"The server does not know
+  the password"**: since v2.13 the server proves that it knows the password too. If it
+  cannot, the app refuses the server. It is an older server, a different password on
+  the server, or something sitting in between.
+- **"The server runs ... and this client is ..."**: server and app are not the same
+  version or build. Update the older one.
+- **"Server not reachable"** can since v2.13 also mean that the other side runs a
+  version from before 2.13: the two do not get a connection. Update server, desktop
+  and app together.
+
+### Developer mode
+
+There is a developer mode for measuring and testing, opened with a code. Without it,
+its tools are not there. Only in that mode does the Android app ask for your location;
+the permission is declared in the app, so app information lists it.
+
 ### Auto-discovery not working (mDNS)
 
 If the mDNS dropdown stays empty but typing the IP manually works fine: mDNS uses UDP multicast (`224.0.0.251:5353`), which is sometimes blocked.
@@ -183,39 +222,53 @@ Manually entered IP addresses work regardless of mDNS, so you do not need to wai
 On the same network (LAN/WiFi) the client connects directly to the server — no relay needed. To connect **over the internet** from somewhere outside your own network there are two routes:
 
 1. **Port forward** on the home router to the server PC (UDP 4580). Only works if you have a public IP and can change the router config.
-2. **Relay** (new in v2.4.0). Both the server (station) and the client connect **outbound** to a small relay server on a VPS. No port forward needed, and it works behind **CGNAT** too (where your provider does not give you a public IP of your own). This is the recommended route for internet remote.
+2. **Relay**. Both the server (station) and the client connect **outbound** to a small relay server on a VPS. No port forward needed, and it works behind **CGNAT** too (where your provider does not give you a public IP of your own). This is the recommended route for internet remote.
 
 The relay runs on its own server (VPS) that you host yourself — it is not shipped as a ready-made download, but as source code + a Docker image (see the installation guide and `thetislink-relay/DEPLOY-wss.md`). One relay serves one or more stations; the server PC does not need to be reachable from the outside.
 
-The server supports both routes at the same time: once a relay is configured, **each client decides for itself** whether to connect directly or via the relay. A single server can therefore serve several clients at once, some direct and some via the relay — you do not have to pick one route for the whole setup.
+The server serves both routes at the same time: a client that types the server's address connects directly, a client with the relay set up connects through the relay. If you do not want guests to see your home address, switch off **Allow direct connections** on the server (in the relay settings; available only when a relay is set up). Everyone then comes in through the relay, and the connection does not look for a direct path either. This applies at the next start of the server.
 
 > **Want to try the relay without hosting your own?** For the first users who would like to try it out, PA3GHM can — on request and while slots last — temporarily add you to a test relay. Note this is a **temporary server with a limited number of slots**, so there is no guarantee of availability or continuity. PA3GHM may decline a request or stop the service, and a no needs no explanation. Contact PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM).
 
-### How it connects
+### How it connects (v2.13.0)
 
-Both the station (server) and the client open an outbound connection to the relay:
+Since v2.13 everything - audio, spectrum, controls and PTT - runs over **one encrypted
+QUIC connection**, directly or through the relay:
 
-- **Control + spectrum** run over a secure WebSocket (**wss**, TCP port 443) — encrypted by the relay's TLS (Caddy handles the certificate).
-- **Audio + PTT** run over **UDP** (port 443) for minimal latency, just like on the LAN.
+- **Signing in with the relay** runs over a secure WebSocket (**wss**, TCP port 443). The chat and problem reports run over it too.
+- **The connection itself** runs over **UDP port 443** to the relay. The relay passes it on and cannot look inside.
 
-The relay pairs the client with the right station based on a **room/station name** and a **station key**. You enter these once on the server and client (exact fields and steps: see `Installation.md`). As long as both are logged in to the relay with the same room and key, the connection behaves exactly like a direct LAN connection.
+The relay pairs the client with the right station based on a **room/station name** and a **station key**. You enter these once on the server and on the client (exact fields and steps: see `Installation.md`).
 
-### Automatic fallback to TCP (make-before-break)
+```mermaid
+flowchart LR
+    Client[App] -->|"Step 1: sign in + connect :443"| Relay[Relay VPS]
+    Relay --> Server[ThetisLink Server]
+    Client <==>|"Step 2: after the password, direct<br>D+R or L+R"| Server
+```
 
-Some networks (corporate WiFi, guest networks, restrictive mobile carriers) block UDP. Without a countermeasure the audio would drop while control and spectrum keep working. From v2.4.0 ThetisLink handles this automatically:
+**The connection finds the shortest way by itself.** After the password has been
+checked, the app tries a direct path to the server with the relay's help. When that
+works, the same connection carries on directly (**D+R**), without a break; when app and
+server sit behind the same router, over your own network (**L+R**). When the direct path
+falls silent, the connection goes back through the relay (**R**). What you see is
+described under "Which way the connection takes".
 
-- If the client notices that **no UDP audio** is arriving anymore, it asks the station to send the audio **through the wss (TCP) tunnel**. The switch is *make-before-break*: the new path is established before the old one is released, so you do not hear a gap in the audio.
-- As soon as UDP is available again, the connection switches **back automatically** to UDP (the lowest latency).
-- The fallback applies only to audio/PTT; control and spectrum already ran over wss.
+### Networks that block UDP (v2.13.0)
 
-**Transport indicator.** You can always see which path the audio is using now:
+Some networks (hotels, companies, guest networks) let no UDP through. The app then
+sends the same encrypted connection over the wss line with the relay (TCP 443), without
+waiting first. If UDP stays away, the app says after about ten seconds: **"This network lets
+no UDP through; ThetisLink uses a fallback route over TCP (more delay)"**. The way is then called **R (TCP)**. On TCP everything
+waits behind a lost packet, so you may hear an occasional hiccup; it is an emergency
+route. On a network where UDP works you notice nothing. There is nothing to set.
 
-- **Desktop:** in the **Server tab**, next to "Audio streams:" — grey **"Transport: UDP"** in the normal state, or amber **"TCP fallback"** when the audio is temporarily routed through the tunnel.
-- **Android:** in the statistics panel, next to "Statistics:" — the same amber **"TCP fallback"** message.
+### After a network change (v2.13.0)
 
-If you see "TCP fallback" during normal LAN use without a relay, nothing is wrong — the indicator is only meaningful on a relay connection. If it stays on "TCP fallback" on a relay connection, your network is blocking UDP structurally; the audio keeps working, just with slightly more latency.
-
-> **Disabling UDP (optional).** If you know in advance that your network blocks UDP, you can set the client/Android to **wss-only** so it does not try UDP first. By default UDP is on (lowest latency) with automatic fallback as a safety net.
+When the phone moves from Wi-Fi to mobile data (or back), the app starts a new relay
+session on the new network at once, with a few quick retries while the network is
+still coming up. The phone notices the moment the new network is there and tries again at once, instead
+of waiting for the next retry.
 
 ### Relay administration (dashboard)
 
@@ -363,6 +416,10 @@ In USB and LSB the low cut stays where it is while it lies between 0 and 500 Hz,
 range of "Default Low Cut" in Thetis. Outside that range the button puts it back to
 100 Hz. DIGU and DIGL widen and narrow around their centre.
 
+**Filter edges fit the mode (v2.13.0).** A band memory restores only edges that fit its
+mode, the server sends Thetis only edges that fit the mode, and an edge you drag in
+SSB, CW or DIG stops at the carrier.
+
 **Thetis filter preset (fork):** the PA3GHM fork sends the active filter preset (F1, F2, F3, VAR1, VAR2 or NONE) over TCI. **ThetisLink does not use that notification at the moment:** the clients show the width Thetis has, not the name of the preset, and there is no button to pick a preset.
 
 ### Volume
@@ -388,6 +445,17 @@ ThetisLink offers three PTT modes:
 **BLE transmit button (YPC21 / PTT-Z01 and the same class) - Android and, since v2.12.0, the desktop too:** the button ThetisLink connects to itself, and the one to prefer. Set it up on the phone under **Settings > BT PTT button**, on the desktop under the **Server** tab in the **BT PTT button** group; both with **Choose button**, pressing the button once to wake it so it turns up in the list; do not pair it in the Android Bluetooth settings. The app reconnects on its own after the button has been out of range or Bluetooth has been off. Because the connection is ThetisLink's own rather than the touch system's, this button also keys **while the screen is locked** - it is in your hand and you can let it go. Out of range, the transmitter is released rather than left keyed. On Android this needs Android 12 or newer; on the desktop it uses the Bluetooth adapter Windows already has.
 
 **Android — external BT remote (ZL-01 or similar):** a Bluetooth button that behaves as an external touch device can be used as a PTT button. ThetisLink intercepts the touch events and maps them to PTT down/up. Only works while the screen is active (touch events are only delivered to a wakeful screen on Android).
+
+**When the connection drops while you transmit (v2.13.0):** if you hold PTT and the
+session ends, you hear **three short beeps**, once: the transmitter is off, even if you
+are not looking at the screen. A press that gets no answer from the server for 3
+seconds is ended with the same tone. On the desktop, a key you held through a broken
+connection has to come up first before it transmits again.
+
+**Only the chosen microphone (desktop, v2.13.0):** ThetisLink uses only the microphone
+you chose in the settings, never the Windows default microphone by itself. If it is
+missing, the PTT buttons read **No mic** and transmitting is off; as soon as you plug it
+back in, it opens again by itself.
 
 **PTT spike suppression (v2.4.0):** on a tablet/laptop with a built-in speaker and microphone in one chassis, the switch-on plop at PTT-on can be transmitted. Enable **"Built-in speaker + mic (PTT spike protection)"** in the client: on PTT the speaker is muted instantly and the first few milliseconds of mic audio are discarded, so the spike is not transmitted. The **mic gate-delay** is separately adjustable for Thetis and Yaesu. Leave the option **off** for a headset or well-isolated audio (0 ms, no added latency). Since **v2.4.2** the receive audio of the other receivers stays audible during transmit; the internal-speaker mute applies **only** when this spike-protection option is enabled.
 
@@ -513,12 +581,12 @@ In addition to the two physical receivers (RX1/RX2), from v2.2.0 ThetisLink offe
 
 **Per-VRX settings:**
 - **On/off** per VRX — a VRX only consumes network and CPU once you enable it.
-- **Frequency:** its own listen frequency, freely set within the DDC bandwidth. The last-used VRX frequency is remembered per DDC position, so when you return to the same spot it resumes where you left off.
+- **Frequency:** its own listen frequency, freely set within the DDC bandwidth. The last-used VRX frequency is remembered per DDC position, so when you return to the same spot it resumes where you left off. When the DDC centre shifts a little (re-centering) and the VRX is still in view, it stays where it is. If it falls outside the range the server listens in, it moves to the frequency it had there before, or else to the VFO. The same holds when a wider VRX filter makes the range smaller.
 - **Mode:** USB, LSB, AM, SAM or FM.
 - **Filter:** its own filter width per VRX.
 - **Volume:** its own mix level; the VRX audio is mixed into the main audio alongside RX1/RX2 (and any connected Yaesu).
 
-**Spectrum, waterfall and S-meter:** each VRX has its own **high-resolution spectrum + waterfall** around its listen frequency and its own S-meter. The high-resolution view is requested per VRX; the client then shows a zoomed-in spectrum (with adjustable zoom, reference level, range and waterfall contrast).
+**Spectrum, waterfall and S-meter:** each VRX has its own **high-resolution spectrum + waterfall** around its listen frequency and its own S-meter. The spectrum belongs to the VRX window: open the window with the window button next to VRX1/VRX2 on the main screen and the spectrum comes with it, zoomed in (with adjustable zoom, reference level, range and waterfall contrast). The X closes the window and turns the spectrum off; the audio stays.
 
 **Narrow or wide audio:** the VRX audio is Opus narrowband (8 kHz) or wideband (16 kHz). From v2.3.0 you choose this **per VRX** (NB/WB/Auto) — see [Per-VRX audio bandwidth](#per-vrx-audio-bandwidth-v230) below.
 
@@ -568,6 +636,8 @@ The desktop client has a **theme selector** in the Server tab. Besides the defau
   - **Widgets** — the fill color of buttons and fields.
   - **Text** — the text color.
   - **Slider knob** — the accent color of the sliders and their rail.
+
+Since **v2.13.0** language, scale and theme sit together in the group **Language and appearance** of the Server tab. Every group in that tab folds open and closed, and remembers how you left it.
 
 The choice is saved in `thetislink-client.conf` and restored on the next start. The theme is purely cosmetic — spectrum and waterfall colors (the signal-level palette) stay unchanged so signals remain equally readable on any background.
 
@@ -732,6 +802,10 @@ TCP/IP connection (port 8080). ThetisLink supports both the original RF2K-S firm
 - Controller version with hardware revision
 
 ThetisLink automatically detects which firmware is active. With the original firmware everything works except drive control.
+
+**Editing the drive table (v2.13.0):** with the custom firmware, the desktop and the
+phone show the server's drive table. What you change goes to the server, which writes
+it to the RF2K-S; only the changed values are sent.
 
 The RF2K-S can be reset via the server UI when needed.
 
@@ -1015,6 +1089,22 @@ The Android client now has almost the same Yaesu control set as the desktop: a *
 
 To limit mobile data use, the server no longer sends the Thetis RX audio to clients that only listen to a Yaesu, and Yaesu data is streamed only while the Yaesu window is open/active (with a short spectrum grace on resume). So on 4G/5G you do not pay for streams you are not using.
 
+### Notice: the radio transmits on its USB lines (v2.13.0)
+
+Some menu settings make the radio transmit when Windows raises RTS or DTR on its USB
+port, for example when the PC starts: on the FT-991A menus 047, 060, 071, 076 and 108,
+on the FTX-1 RPTT SELECT and PC KEYING. ThetisLink keys by CAT and does not need them.
+If one is set that way, the server names the menu and what to choose: DAKY (FT-991A;
+060 PC KEYING: OFF) or OFF (FTX-1).
+
+### Transmitting with a Yaesu (v2.13.0)
+
+Since v2.13 a Yaesu's transmit audio goes through the same jitter buffer as Thetis's,
+waits until the radio actually transmits, and plays out what you said before the radio
+goes back to receive. Every transmission starts with **80 ms of lead** in the radio's
+sound card, so the first syllable is not lost. That is 80 ms of extra delay on every
+Yaesu transmission.
+
 ### Configuration
 
 ```
@@ -1273,6 +1363,9 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
+| **2.13.0** | **One encrypted connection, at home and on the road.** Everything runs over one QUIC connection, directly or through the relay, and the connection finds the shortest way by itself (L, D, R, D+R, L+R). A network that blocks UDP connects over an emergency route through TCP. After a network change the app reconnects at once. The password check runs both ways. A Yaesu transmits with the same buffer and timing as Thetis, with 80 ms of lead. **Update server, desktop and app together**: a 2.12 program does not connect to 2.13. Stock Thetis v2.10.3.15 suffices; the fork PA3GHM TL2-18 is released at the same time. |
+| **2.12.0** | **A real paddle, and it keys the radio itself.** See `CHANGELOG.md`. |
+| **2.11.0** | **One microphone can reach several transmitters, and a cable that comes loose no longer leaves a carrier behind.** See `CHANGELOG.md`. |
 | **2.10.0** | **A first start on the server claims nothing, and two radios stay apart.** While there is no config file yet the server starts **bare**: every device off, the second receiver off, no window opening by itself - you switch on what you have instead of switching off what you do not. The **language** follows the Windows display language where ThetisLink has it (NL/DE/FR) and English otherwise; with a config file already there, your own choice stays. **German and French** now reach the connect screen, the wizard and the status line under them. **Two Yaesu radios of the same type can hold different settings**: switch to SSB on PTT, permission to write memory channels and which side of the USB audio to take were shared, so granting a permission on one radio granted it on the other. ThetisLink now asks the **port** which radio is on it instead of deriving it from the slot number - an FTX-1 in slot 1 used to get a 991A's menu. **Rows that do not apply are not shown** (roger beep, DX spots without a cluster, diversity on a single-receiver radio), and a radio slot is called "Yaesu 1" until the server says what it is. The **chat** explains what a relay does and is always reachable; an answer from the administrator that you click away stays away (remembered per machine, so dismissing it on the phone leaves it standing in the server window), and the strip showing those answers is bounded and scrolls, so it no longer takes the whole window. And **a settings file that cannot be read is no longer overwritten**. One flag bit is added on the wire (server has no DX cluster), inverted so an older peer behaves exactly as before; stock Thetis v2.10.3.x suffices. |
 | **2.9.1** | **A gap is the codec again, and switching audio off is silent.** 2.9.0 added a noise generator that had never been part of ThetisLink; it is what made a dropout louder and harder-edged than the band it stood in for. Removed. What fills a gap is the codec's own concealment and nothing added to it, as it has been since the first build. **Switching audio off is quiet at once** - never the generator but the gate: turning audio off stops the stream at the server, the client read that as a dropout and kept filling the silence. **A stream you switch off forgets what it heard**, on all six channels and on a reconnect too. **A station listening only to a radio holds its connection** as well as any other: audio from a radio was not counted as a sign of life, so the check hung on the heartbeat alone. **60m is a band again**: the button stayed grey, 60m could hold no band memory, and the button landed 500 Hz below the band - now 5.354 MHz. The server writes the screen layout to its log at start-up. Wire protocol unchanged from 2.9.0; stock Thetis v2.10.3.x suffices. |
 | **2.9.0** | **A dropout sounds like the band again, a phone survives a network change, and chat + problem reporting.** Concealment always ran through the narrowband decoder, so with wideband audio it produced silence instead of noise - and only channel 0 tried at all. Every stream now decodes, corrects and conceals in its own format; both radios, both VRX and RX2 conceal at all. **Network change**: switching between WiFi and mobile data left the controls working and the sound gone until the app was killed - two faults, one on each side. **Chat and problem reporting** for stations on a relay: a room shared with the other users, and a report button that goes straight to the administrator with the log attached, cleaned first and shown to you before it goes. Both optional. **Android keeps its own log file** - the system log rolls away within minutes. The app is no longer debuggable, so `adb run-as` no longer works. The server says **why a radio is missing** when Windows hands its COM port to another program. Backwards-compatible with 2.8.x; stock Thetis v2.10.3.x suffices. |

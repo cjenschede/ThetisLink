@@ -16,3 +16,7 @@ tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpk
 # provider explicitly (default-features off avoids also pulling aws-lc-rs, which would
 # make it ambiguous). `ring` cross-compiles cleanly to Android.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[dev-dependencies]
+# Test certificates for the wss:// trust test (already in the tree via sdr-remote-quic).
+rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }

@@ -15,6 +15,7 @@ mod update;
 mod arranger;
 mod startup;
 mod app_state;
+mod developer_mode;
 
 pub(crate) use utils::*;
 use rotor::*;
@@ -151,11 +152,15 @@ pub struct ServerApp {
     /// session is still on screen. Switching a radio off must not take away the
     /// settings it had.
     probe_silent: [bool; 2],
+    /// Why the last probe on this port found no radio, when the port did not
+    /// open (`PORT_TROUBLE_*`; build 271): "in use by another program" is a
+    /// different next move than "switch the radio on".
+    probe_trouble: [u8; 2],
     /// The port each `probe_model` belongs to, so a changed selection invalidates
     /// the answer instead of describing the previous radio.
     probe_port: [String; 2],
-    probe_tx: std::sync::mpsc::Sender<(u8, String, Option<u8>)>,
-    probe_rx: std::sync::mpsc::Receiver<(u8, String, Option<u8>)>,
+    probe_tx: std::sync::mpsc::Sender<(u8, String, Option<u8>, u8)>,
+    probe_rx: std::sync::mpsc::Receiver<(u8, String, Option<u8>, u8)>,
     // Dual-radio slot 1 (radio 2) - now also in the settings GUI instead of conf-only.
     yaesu2_port: String,
     yaesu2_audio_device: String,
@@ -229,14 +234,13 @@ pub struct ServerApp {
     // VFO frequencies shared from network thread (for UltraBeam auto-track)
     vfo_freq_shared: Arc<AtomicU64>,
     vfo_b_freq_shared: Arc<AtomicU64>,
-    // RF2K-S debug/drive UI state (Fase D)
+    // RF2K-S debug/drive UI state (Phase D)
     rf2k_show_debug: bool,
     rf2k_show_drive_config: bool,
     rf2k_confirm_high_power: bool,
     rf2k_confirm_zero_fram: bool,
     rf2k_confirm_fw_close: bool,
-    rf2k_drive_edit: [[u8; 11]; 3], // local copy: [ssb, am, cont]
-    rf2k_drive_loaded: bool,
+    rf2k_drive_edit: sdr_remote_core::rf2k_drive::DriveEdit,
     // UltraBeam RCU-06
     ultrabeam_port: String,
     ultrabeam_enabled: bool,
@@ -292,13 +296,18 @@ pub struct ServerApp {
     relay_url: String,
     relay_station: String,
     relay_token: String,
-    relay_udp_enabled: bool,
+    allow_direct: bool,
     // UI theme (shared with the client via the sdr-remote-theme crate)
     theme_variant: sdr_remote_theme::ThemeVariant,
     theme_custom: sdr_remote_theme::Palette,
     // Autostart
     autostart: bool,
     pending_autostart: bool,
+    /// The developer mode (build 294), and what is typed in its code field.
+    developer_mode: bool,
+    dev_code: String,
+    /// Developer only: the TX arrival measurement (build 230).
+    tx_measurement: bool,
     // Main window position (persisted)
     main_window_pos: Option<[f32; 2]>,
     // Window sizes (persisted)

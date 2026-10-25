@@ -61,6 +61,34 @@ class MainActivity : ComponentActivity() {
         onBluetoothPermission = null
     }
 
+    /**
+     * Precise location, asked for only when a measurement starts (build 181):
+     * the cell identity and the GPS position in the measurement file need it.
+     * Refused, the measurement runs without them.
+     */
+    private var onLocationPermission: ((Boolean) -> Unit)? = null
+
+    private val requestLocation = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        onLocationPermission?.invoke(granted[Manifest.permission.ACCESS_FINE_LOCATION] == true)
+        onLocationPermission = null
+    }
+
+    fun requestLocationPermission(then: (Boolean) -> Unit) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            then(true)
+            return
+        }
+        onLocationPermission = then
+        // Both together: Android 12 and later refuse a request for precise alone.
+        requestLocation.launch(
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        )
+    }
+
     /** True when scanning and connecting are already allowed. */
     fun hasBluetoothPermission(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
@@ -116,6 +144,9 @@ class MainActivity : ComponentActivity() {
         // data could not be read back afterwards at all (2026-08-17).
         try {
             uniffi.sdr_remote.initLogging(filesDir.absolutePath)
+            // The developer mode, before anything can write a developer line:
+            // the logger reads it (build 298).
+            uniffi.sdr_remote.setDeveloperMode(com.sdrremote.prefs.DeveloperMode.saved(this))
         } catch (e: Throwable) {
             // A phone with no room for it still runs; only the log is missing.
             Log.w("MainActivity", "no log file: ${e.message}")

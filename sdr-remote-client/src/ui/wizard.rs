@@ -108,6 +108,9 @@ pub(crate) fn render_wizard(
                 state.step = match err {
                     ConnectError::WrongTotp => WizardStep::AwaitingTotp,
                     ConnectError::WrongPassword => WizardStep::EnterPassword,
+                    // Not a password problem: another server answered, or an
+                    // older one that cannot prove itself.
+                    ConnectError::ServerUnverified | ConnectError::ServerProvesNothing => WizardStep::DiscoverServer,
                     ConnectError::DnsResolutionFailed { .. }
                     | ConnectError::NoUdpResponse { .. }
                     | ConnectError::MalformedResponse { .. }
@@ -182,8 +185,20 @@ pub(crate) fn render_wizard(
     if skip_clicked {
         return WizardOutcome::SkipToManual;
     }
+    // What blocks the station, from the shared block. And when Connect cannot
+    // be offered, every step below would wait for ever - so stop here, below
+    // the skip row, which stays as the way out (review 59).
+    {
+        let s = state_rx.borrow();
+        for line in sdr_remote_logic::station_notice::station_notice_lines(&s, lang) {
+            ui.colored_label(Color32::RED, line);
+        }
+        if !sdr_remote_logic::station_notice::can_offer_connect(&s) {
+            return WizardOutcome::Continue;
+        }
+    }
     ui.add(egui::ProgressBar::new(step_idx as f32 / step_total as f32).desired_width(360.0));
-    ui.separator();
+    super::helpers::rule(ui);
 
     // ── Active pane ─────────────────────────────────────────────────────
     let mut outcome = WizardOutcome::Continue;
@@ -211,7 +226,7 @@ pub(crate) fn render_wizard(
     // ── Sticky error footer (PATCH-1 i18n) ──────────────────────────────
     if let Some(ref err) = state.last_error {
         let (headline, action) = connect_error_text(err, lang, Platform::Desktop);
-        ui.separator();
+        super::helpers::rule(ui);
         ui.label(
             RichText::new(&headline)
                 .size(16.0)

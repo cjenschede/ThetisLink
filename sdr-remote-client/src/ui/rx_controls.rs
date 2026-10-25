@@ -36,7 +36,7 @@ impl SdrRemoteApp {
                 let meter_pos = egui::pos2(start.x + controls_w + 4.0, start.y);
                 let meter_rect = egui::Rect::from_min_size(meter_pos, egui::vec2(meter_w, controls_h));
                 let mut right = ui.new_child(egui::UiBuilder::new().max_rect(meter_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
-                self.popout_rx1_smeter_rect = smeter_analog_sized(&mut right, self.smeter, self.smeter_peak, self.ptt, self.other_tx, Some((meter_w, controls_h)));
+                self.popout_rx1_smeter_rect = smeter_analog_sized(&mut right, self.smeter, self.smeter_peak, self.smeter_tx, self.other_tx, Some((meter_w, controls_h)));
             }
 
             ui.advance_cursor_after_rect(egui::Rect::from_min_size(start, egui::vec2(total_w, controls_h)));
@@ -101,7 +101,7 @@ impl SdrRemoteApp {
 
         // S-meter bar (only in bar mode)
         if !self.meter_analog[M_RX1] {
-            self.popout_rx1_smeter_rect = smeter_bar_popout(ui, self.smeter, self.smeter_peak, self.ptt, self.other_tx, self.thetis_swr_x100);
+            self.popout_rx1_smeter_rect = smeter_bar_popout(ui, self.smeter, self.smeter_peak, self.smeter_tx, self.other_tx, self.thetis_swr_x100);
         }
 
         // -- Controls row: audio on/off + VFO A Volume (toggle the s-meter type by
@@ -115,7 +115,7 @@ impl SdrRemoteApp {
             ) {
                 self.toggle_rx1_audio();
             }
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label("VFO A:");
             let vol_slider = egui::Slider::new(&mut self.vfo_a_volume, 0.001..=1.0)
                 .logarithmic(true)
@@ -143,7 +143,10 @@ impl SdrRemoteApp {
         // Disabled during own TX: a mid-TX mode change is dropped by the server
         // (Thetis-bug workaround), so block it in the UI too to avoid a misleading
         // indication.
-        let ptt_active = self.ptt;
+        // Until the transmission is really over - the tail and someone else's
+        // included: the server drops a mode change for as long as it transmits
+        // (owner, 2026-10-11; build 172).
+        let ptt_active = self.thetis_mode_locked();
         let mode_action = self.with_rx_ctx(
             controls::RxChannel::Rx1,
             controls::UiDensity::Extended,
@@ -279,7 +282,7 @@ impl SdrRemoteApp {
 
     pub(super) fn render_rx1_popout_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.render_rx1_controls(ui, controls::UiSurface::PopoutSeparate);
-        ui.separator();
+        super::helpers::rule(ui);
         // -- Spectrum + waterfall (placeholder when no bins yet, mirrors RX2) --
         if !self.spectrum_bins.is_empty() {
             self.render_spectrum_content(ui, ctx, 0.0, true);
@@ -395,7 +398,7 @@ impl SdrRemoteApp {
                 self.set_pending_freq_b(new_freq);
             }
 
-            ui.separator();
+            super::helpers::rule(ui);
 
             let mode_label = match self.rx2_mode {
                 0 => "LSB", 1 => "USB", 2 => "DSB", 3 => "CW-L", 4 => "CW-U",
@@ -448,7 +451,7 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetVfoSync(self.vfo_sync));
             }
 
-            ui.separator();
+            super::helpers::rule(ui);
 
             if Self::render_window_audio_toggle(
                 ui, self.rx2_enabled, self.connected,
@@ -456,7 +459,7 @@ impl SdrRemoteApp {
             ) {
                 self.toggle_rx2_audio();
             }
-            ui.separator();
+            super::helpers::rule(ui);
 
             ui.label("VFO B:");
             let vol_slider = egui::Slider::new(&mut self.vfo_b_volume, 0.001..=1.0)
@@ -623,32 +626,20 @@ impl SdrRemoteApp {
             use sdr_remote_core::protocol::ControlId;
             let drag_lo: Option<i32> = ctx.memory(|mem| mem.data.get_temp(egui::Id::new("spectrum_filter_low")));
             let drag_hi: Option<i32> = ctx.memory(|mem| mem.data.get_temp(egui::Id::new("spectrum_filter_high")));
-            // In symmetric modes (AM/SAM/DSB/FM/DRM) Thetis forces ±W around the
-            // carrier - dragging one edge there must mirror to both, otherwise
-            // TL2 shows an asymmetric band Thetis can't honour and narrowing one
-            // edge appears to do nothing (Thetis keeps the wider side).
-            let sym = is_symmetric_mode(self.mode);
+            // Mirrored in the symmetric modes, stopped at the carrier in SSB, CW
+            // and DIG - one rule for RX1 and RX2 (`filter_width::drag_edge`,
+            // build 245).
             if let Some(hz) = drag_lo {
-                if sym {
-                    let w = hz.abs();
-                    self.filter_low_hz = -w;
-                    self.filter_high_hz = w;
-                } else {
-                    self.filter_low_hz = hz;
-                }
+                (self.filter_low_hz, self.filter_high_hz) =
+                    sdr_remote_logic::filter_width::drag_edge(self.mode, self.filter_low_hz, self.filter_high_hz, true, hz);
                 let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterLow, self.filter_low_hz as i16 as u16));
                 let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterHigh, self.filter_high_hz as i16 as u16));
                 self.filter_changed_at = Some(std::time::Instant::now());
                 ctx.memory_mut(|mem| { mem.data.remove::<i32>(egui::Id::new("spectrum_filter_low")); });
             }
             if let Some(hz) = drag_hi {
-                if sym {
-                    let w = hz.abs();
-                    self.filter_low_hz = -w;
-                    self.filter_high_hz = w;
-                } else {
-                    self.filter_high_hz = hz;
-                }
+                (self.filter_low_hz, self.filter_high_hz) =
+                    sdr_remote_logic::filter_width::drag_edge(self.mode, self.filter_low_hz, self.filter_high_hz, false, hz);
                 let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterLow, self.filter_low_hz as i16 as u16));
                 let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterHigh, self.filter_high_hz as i16 as u16));
                 self.filter_changed_at = Some(std::time::Instant::now());
@@ -681,29 +672,18 @@ impl SdrRemoteApp {
         use sdr_remote_core::protocol::ControlId;
         let drag_lo: Option<i32> = ctx.memory(|mem| mem.data.get_temp(egui::Id::new("rx2_spectrum_filter_low")));
         let drag_hi: Option<i32> = ctx.memory(|mem| mem.data.get_temp(egui::Id::new("rx2_spectrum_filter_high")));
-        // Symmetric modes mirror a dragged edge to both sides (see RX1 above).
-        let sym = is_symmetric_mode(self.rx2_mode);
+        // The same rule as RX1 (`filter_width::drag_edge`, build 245).
         if let Some(hz) = drag_lo {
-            if sym {
-                let w = hz.abs();
-                self.rx2_filter_low_hz = -w;
-                self.rx2_filter_high_hz = w;
-            } else {
-                self.rx2_filter_low_hz = hz;
-            }
+            (self.rx2_filter_low_hz, self.rx2_filter_high_hz) =
+                sdr_remote_logic::filter_width::drag_edge(self.rx2_mode, self.rx2_filter_low_hz, self.rx2_filter_high_hz, true, hz);
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2FilterLow, self.rx2_filter_low_hz as i16 as u16));
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2FilterHigh, self.rx2_filter_high_hz as i16 as u16));
             self.rx2_filter_changed_at = Some(std::time::Instant::now());
             ctx.memory_mut(|mem| { mem.data.remove::<i32>(egui::Id::new("rx2_spectrum_filter_low")); });
         }
         if let Some(hz) = drag_hi {
-            if sym {
-                let w = hz.abs();
-                self.rx2_filter_low_hz = -w;
-                self.rx2_filter_high_hz = w;
-            } else {
-                self.rx2_filter_high_hz = hz;
-            }
+            (self.rx2_filter_low_hz, self.rx2_filter_high_hz) =
+                sdr_remote_logic::filter_width::drag_edge(self.rx2_mode, self.rx2_filter_low_hz, self.rx2_filter_high_hz, false, hz);
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2FilterLow, self.rx2_filter_low_hz as i16 as u16));
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2FilterHigh, self.rx2_filter_high_hz as i16 as u16));
             self.rx2_filter_changed_at = Some(std::time::Instant::now());
@@ -713,7 +693,7 @@ impl SdrRemoteApp {
 
     pub(super) fn render_rx2_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.render_rx2_controls_with_split(ui, false, true, controls::UiSurface::PopoutSeparate);
-        ui.separator();
+        super::helpers::rule(ui);
         self.render_rx2_spectrum_only(ui, ctx);
     }
 
@@ -781,6 +761,8 @@ impl SdrRemoteApp {
                     let max_pan = crate::ui::tuning::max_pan_fraction(self.rx2_spectrum_zoom);
                     self.rx2_spectrum_pan = self.rx2_spectrum_pan.clamp(-max_pan, max_pan);
                 }
+                // The same checkbox as RX1 and VRX (build 242: RX2 had none).
+                self.zoom_below_2x_checkbox(ui);
                 ui.label(rust_i18n::t!("main_pan_label").to_string());
                 let max_pan = crate::ui::tuning::max_pan_fraction(self.rx2_spectrum_zoom);
                 let pan_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_pan, -max_pan..=max_pan)
@@ -836,6 +818,8 @@ impl SdrRemoteApp {
                     self.rx2_zoom_pan_changed_at = Some(Instant::now());
                 }
             });
+            // A rule under the button rows, as the VRX panel has (owner, build 240).
+            super::helpers::rule(ui);
 
             // Debounce: send zoom/pan to server after 100ms
             if let Some(changed_at) = self.rx2_zoom_pan_changed_at {
@@ -857,8 +841,7 @@ impl SdrRemoteApp {
             // Dynamic spectrum + waterfall layout
             let available = ui.available_height();
             let spec_area = available.max(200.0);
-            let spec_h = (spec_area * 0.50).max(100.0);
-            let wf_h = (spec_area * 0.50).max(80.0);
+            let (spec_h, wf_h) = super::spectrum::plot_and_waterfall_heights(spec_area, ui.spacing().item_spacing.y);
 
             // Smooth RX2 display center (same algorithm as RX1)
             let rx2_target_center = Self::spectrum_target_center_hz(
@@ -925,7 +908,8 @@ impl SdrRemoteApp {
                     ),
                 );
             }
-            let (rx2_plot_bins, rx2_plot_center_hz, rx2_plot_span_hz) = if !rx2_tuning_active || self.rx2_full_spectrum_bins.is_empty() {
+            // As on RX1: only a row that still comes (build 234).
+            let (rx2_plot_bins, rx2_plot_center_hz, rx2_plot_span_hz) = if !rx2_tuning_active || !self.full_row_live(self.rx2_full_row_at) {
                 (&self.rx2_spectrum_bins, self.rx2_spectrum_center_hz, self.rx2_spectrum_span_hz)
             } else {
                 (&self.rx2_full_spectrum_bins, self.rx2_full_spectrum_center_hz, self.rx2_full_spectrum_span_hz)

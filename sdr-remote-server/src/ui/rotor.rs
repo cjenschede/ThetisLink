@@ -18,7 +18,7 @@ pub(super) fn render_rotor_panel(
             }
         });
     });
-    ui.separator();
+    sdr_remote_theme::rule(ui);
 
     let angle_deg = status.angle_x10 as f32 / 10.0;
     let target_deg = if status.rotating { Some(status.target_x10 as f32 / 10.0) } else { None };

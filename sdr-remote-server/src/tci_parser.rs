@@ -93,6 +93,13 @@ pub enum TciNotification {
     TxProfileEx { name: String },
     /// Server capability flags (Thetis extension)
     TciCapsEx { caps: Vec<String> },
+    /// What Thetis' TCI TX queue did in one MOX (fork TL2-5, build 212).
+    TxQueueReportEx(TxQueueReport),
+    /// A `tx_queue_report_ex` in a format version this server does not read.
+    TxQueueReportUnknownVersion { version: String },
+    /// A version-1 or version-2 `tx_queue_report_ex` that does not read
+    /// (review of 212).
+    TxQueueReportUnreadable { line: String },
     /// run_cat_ex response (stock v2.10.3.14 native CAT-relay over TCI):
     /// outgoing  `run_cat_ex:ZZxxx;` / incoming `run_cat_ex:ZZxxx;,response;`
     RunCatExResponse { cat_cmd: String, response: String },
@@ -118,6 +125,9 @@ pub enum TciNotification {
     /// TL-server to track the live RXOnly so it can snapshot/restore around
     /// an RX-only Amplitec position.
     RxOnlyEx { rx_only: bool },
+    /// vfo_source_ex:<rx>,tl|thetis - who changed this receiver's VFO last
+    /// (fork TL2-8, build 218).
+    VfoSourceEx { receiver: u32, source: crate::ctun_recenter::VfoSource },
     DiversityRefEx { rx1_ref: bool },
     DiversitySourceEx { source: u32 },
     DiversityGainEx { receiver: u32, gain: u16 },
@@ -130,6 +140,122 @@ pub enum TciNotification {
     TxChrono { samples_requested: u32, sample_rate: u32, channels: u32, format: u32 },
     // Connection events
     Disconnected,
+}
+
+/// Versions 1 and 2 are read. Version 2 (TL2-10, build 230) has four fields
+/// more before the trigger:
+/// `...,<open requests>,<average ms>,<gaps>,<longest gap ms>,<tail ms>,<trx|mox>`.
+///
+/// One `tx_queue_report_ex` from the Thetis fork (TL2-5, build 212): what its
+/// TCI TX queue did during one MOX. Format version 1, written by
+/// `cmaster.TakeTCITxOverReport` in the fork - the same agreement in two
+/// programs, so the first field is a version and anything else is refused out
+/// loud rather than read into the wrong fields:
+/// `tx_queue_report_ex:1,<rate>,<block samples>,<over ms>,<lead zero ms>,<lowest ms|-1>,<zero ms>,<underruns>,<left ms>,<open requests>,<trx|mox>`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxQueueReport {
+    pub rate: u32,
+    pub block_samples: u32,
+    pub over_ms: u32,
+    /// Zeros the DSP got before the first real sample of the over.
+    pub lead_zero_ms: u32,
+    /// The lowest the queue stood when the DSP asked for a block, after the
+    /// first audio; `None` when no audio came at all.
+    pub lowest_ms: Option<u32>,
+    /// Zeros after the first audio, in `underruns` blocks.
+    pub zero_ms: u32,
+    pub underruns: u32,
+    /// What was still queued when the over ended (dropped by Thetis).
+    pub left_ms: u32,
+    pub open_requests: u32,
+    /// `trx` (the client switched TRX off) or `mox` (MOX ended another way).
+    pub trigger: String,
+    /// What version 2 adds; `None` from version 1.
+    pub shape: Option<QueueShape>,
+}
+
+/// The shape of the queue over one MOX, from version 2 (build 230): what the
+/// field ride of 2026-10-16 could not tell - whether Thetis holds ~10-30 ms or
+/// ~100, and whether 138 ms of zeros was one gap or a hundred clicks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueShape {
+    /// The average level of the queue when the DSP asked for a block, after
+    /// the first audio.
+    pub average_ms: u32,
+    /// Runs of blocks with zeros after the first audio.
+    pub gaps: u32,
+    /// The longest of those runs.
+    pub longest_ms: u32,
+    /// The run still open when the over ended: the tail between the last
+    /// audio and MOX off, not a dropout.
+    pub tail_ms: u32,
+}
+
+impl TxQueueReport {
+    /// The fields after the version, in the order version 1 sends them.
+    fn from_v1(args: &[&str]) -> Option<TxQueueReport> {
+        if args.len() != 10 {
+            return None;
+        }
+        Self::from_fields(args, None)
+    }
+
+    /// Version 2: the nine numbers of version 1, four more, then the trigger.
+    fn from_v2(args: &[&str]) -> Option<TxQueueReport> {
+        if args.len() != 14 {
+            return None;
+        }
+        let n = |i: usize| args[i].trim().parse::<u32>().ok();
+        let shape = QueueShape { average_ms: n(9)?, gaps: n(10)?, longest_ms: n(11)?, tail_ms: n(12)? };
+        let mut fields: Vec<&str> = args[..9].to_vec();
+        fields.push(args[13]);
+        Self::from_fields(&fields, Some(shape))
+    }
+
+    /// The nine numbers and the trigger that both versions share.
+    fn from_fields(args: &[&str], shape: Option<QueueShape>) -> Option<TxQueueReport> {
+        let n = |i: usize| args[i].trim().parse::<u32>().ok();
+        let lowest = args[4].trim();
+        Some(TxQueueReport {
+            rate: n(0)?,
+            block_samples: n(1)?,
+            over_ms: n(2)?,
+            lead_zero_ms: n(3)?,
+            lowest_ms: if lowest == "-1" { None } else { Some(lowest.parse().ok()?) },
+            zero_ms: n(5)?,
+            underruns: n(6)?,
+            left_ms: n(7)?,
+            open_requests: n(8)?,
+            trigger: args[9].trim().to_string(),
+            shape,
+        })
+    }
+
+    /// The server log line, named in advance (`logregels-build212.md`; the
+    /// shape of version 2 in `logregels-build230.md`).
+    pub fn line(&self) -> String {
+        let shape = self.shape.map_or_else(String::new, |s| {
+            format!(
+                "; average {} ms queued, {} gap(s), longest {} ms, {} ms of it at the end",
+                s.average_ms, s.gaps, s.longest_ms, s.tail_ms
+            )
+        });
+        format!(
+            "Thetis TX queue, previous over ({}): {} ms, {} ms of zeros before the first audio, lowest {} ms queued, \
+             {} ms of zeros in {} underrun(s), {} ms left at the end, {} request(s) open{}; blocks of {} samples at {} Hz",
+            self.trigger,
+            self.over_ms,
+            self.lead_zero_ms,
+            self.lowest_ms.map_or_else(|| "-".to_string(), |v| v.to_string()),
+            self.zero_ms,
+            self.underruns,
+            self.left_ms,
+            self.open_requests,
+            shape,
+            self.block_samples,
+            self.rate
+        )
+    }
 }
 
 // ── Parser functions ────────────────────────────────────────────────
@@ -210,6 +336,20 @@ pub fn parse_tci_text(cmd: &str) -> Option<TciNotification> {
     let args: Vec<&str> = args_str.split(',').collect();
 
     match name {
+        "tx_queue_report_ex" => match args.first().map(|v| v.trim()) {
+            Some("1") => Some(
+                TxQueueReport::from_v1(&args[1..])
+                    .map(TciNotification::TxQueueReportEx)
+                    .unwrap_or_else(|| TciNotification::TxQueueReportUnreadable { line: args_str.to_string() }),
+            ),
+            Some("2") => Some(
+                TxQueueReport::from_v2(&args[1..])
+                    .map(TciNotification::TxQueueReportEx)
+                    .unwrap_or_else(|| TciNotification::TxQueueReportUnreadable { line: args_str.to_string() }),
+            ),
+            Some(version) => Some(TciNotification::TxQueueReportUnknownVersion { version: version.to_string() }),
+            None => None,
+        },
         "vfo" => {
             if args.len() >= 3 {
                 let receiver = args[0].trim().parse().ok()?;
@@ -736,6 +876,17 @@ pub fn parse_tci_text(cmd: &str) -> Option<TciNotification> {
                 Some(TciNotification::RxOnlyEx { rx_only })
             } else { None }
         }
+        "vfo_source_ex" => {
+            if args.len() >= 2 {
+                let receiver: u32 = args[0].trim().parse().ok()?;
+                let source = match args[1].trim() {
+                    "tl" => crate::ctun_recenter::VfoSource::ThetisLink,
+                    "thetis" => crate::ctun_recenter::VfoSource::Thetis,
+                    _ => return None,
+                };
+                Some(TciNotification::VfoSourceEx { receiver, source })
+            } else { None }
+        }
         "diversity_ref_ex" => {
             if !args.is_empty() {
                 let rx1_ref = args[0].trim() == "true";
@@ -1051,6 +1202,22 @@ pub fn mode_u8_to_str(mode: u8) -> &'static str {
 mod tests {
     use super::*;
 
+    /// Who tuned last, per receiver (fork TL2-8, build 218); anything else is
+    /// not a report.
+    #[test]
+    fn vfo_source_ex_reads_tl_and_thetis() {
+        use crate::ctun_recenter::VfoSource;
+        let read = |line: &str| match parse_tci_text(line) {
+            Some(TciNotification::VfoSourceEx { receiver, source }) => Some((receiver, source)),
+            _ => None,
+        };
+        assert_eq!(read("vfo_source_ex:0,thetis"), Some((0, VfoSource::Thetis)));
+        assert_eq!(read("vfo_source_ex:1,tl"), Some((1, VfoSource::ThetisLink)));
+        assert_eq!(read("vfo_source_ex:0,both"), None);
+        assert_eq!(read("vfo_source_ex:0"), None);
+        assert_eq!(read("vfo_source_ex:x,tl"), None);
+    }
+
     #[test]
     fn ddc_sample_rate_ex_valid() {
         for &rate in &[48000u32, 96000, 192000, 384000, 768000, 1536000] {
@@ -1074,6 +1241,108 @@ mod tests {
             let line = format!("ddc_sample_rate_ex:{},384000", rx);
             assert!(parse_tci_text(&line).is_none(), "should reject rx={}", rx);
         }
+    }
+
+    /// Version 1 from the fork reads into its named fields, and the server
+    /// line says each of them; another version is refused out loud, and a
+    /// short or broken line is not read at all (build 212).
+    #[test]
+    fn tx_queue_report_ex_reads_version_one_and_refuses_the_rest() {
+        let line = "tx_queue_report_ex:1,48000,720,3460,180,45,30,2,60,0,trx";
+        let want = TxQueueReport {
+            rate: 48000,
+            block_samples: 720,
+            over_ms: 3460,
+            lead_zero_ms: 180,
+            lowest_ms: Some(45),
+            zero_ms: 30,
+            underruns: 2,
+            left_ms: 60,
+            open_requests: 0,
+            trigger: "trx".to_string(),
+            shape: None,
+        };
+        match parse_tci_text(line) {
+            Some(TciNotification::TxQueueReportEx(r)) => {
+                assert_eq!(r, want);
+                assert_eq!(
+                    r.line(),
+                    "Thetis TX queue, previous over (trx): 3460 ms, 180 ms of zeros before the first audio, lowest 45 ms queued, \
+                     30 ms of zeros in 2 underrun(s), 60 ms left at the end, 0 request(s) open; blocks of 720 samples at 48000 Hz"
+                );
+            }
+            _ => panic!("version 1 not read"),
+        }
+        // No audio in the over: no lowest level.
+        match parse_tci_text("tx_queue_report_ex:1,48000,720,300,300,-1,0,0,0,5,mox") {
+            Some(TciNotification::TxQueueReportEx(r)) => {
+                assert_eq!(r.lowest_ms, None);
+                assert!(r.line().contains("lowest - ms queued"), "{}", r.line());
+            }
+            _ => panic!("a report without audio not read"),
+        }
+        // Version 2 is read since build 230; version 3 is the unknown one now.
+        assert!(matches!(
+            parse_tci_text("tx_queue_report_ex:3,48000,720,3460,180,45,30,2,60,0,trx,more"),
+            Some(TciNotification::TxQueueReportUnknownVersion { version }) if version == "3"
+        ));
+        // A version 1 that does not read is said, not dropped (review of 212).
+        for (line, why) in [
+            ("tx_queue_report_ex:1,48000,720,3460", "too short"),
+            ("tx_queue_report_ex:1,48000,720,3460,180,45,30,2,60,0,trx,more", "a field too many"),
+            ("tx_queue_report_ex:1,48000,720,3460,180,x,30,2,60,0,trx", "not a number"),
+        ] {
+            assert!(
+                matches!(parse_tci_text(line), Some(TciNotification::TxQueueReportUnreadable { .. })),
+                "{why}"
+            );
+        }
+    }
+
+    /// Version 2 (fork TL2-10, build 230): four fields more before the
+    /// trigger - the average level, the gaps, the longest and the one still
+    /// open at the end. Version 1 still reads; a version 2 that does not read
+    /// is said; version 3 is refused out loud.
+    #[test]
+    fn tx_queue_report_ex_reads_version_two_with_its_queue_shape() {
+        let line = "tx_queue_report_ex:2,48000,64,10148,2,13,124,93,0,4,21,3,96,12,trx";
+        match parse_tci_text(line) {
+            Some(TciNotification::TxQueueReportEx(r)) => {
+                assert_eq!((r.over_ms, r.lowest_ms, r.zero_ms, r.underruns, r.left_ms, r.open_requests), (10148, Some(13), 124, 93, 0, 4));
+                assert_eq!(r.trigger, "trx");
+                assert_eq!(r.shape, Some(QueueShape { average_ms: 21, gaps: 3, longest_ms: 96, tail_ms: 12 }));
+                assert_eq!(
+                    r.line(),
+                    "Thetis TX queue, previous over (trx): 10148 ms, 2 ms of zeros before the first audio, lowest 13 ms queued, \
+                     124 ms of zeros in 93 underrun(s), 0 ms left at the end, 4 request(s) open; \
+                     average 21 ms queued, 3 gap(s), longest 96 ms, 12 ms of it at the end; blocks of 64 samples at 48000 Hz"
+                );
+            }
+            _ => panic!("version 2 not read"),
+        }
+        // Version 1 reads as before, without a shape.
+        match parse_tci_text("tx_queue_report_ex:1,48000,720,3460,180,45,30,2,60,0,trx") {
+            Some(TciNotification::TxQueueReportEx(r)) => {
+                assert_eq!(r.shape, None);
+                assert!(!r.line().contains("average"), "{}", r.line());
+            }
+            _ => panic!("version 1 not read"),
+        }
+        for (line, why) in [
+            ("tx_queue_report_ex:2,48000,64,10148,2,13,124,93,0,4,21,3,96,trx", "a field short"),
+            ("tx_queue_report_ex:2,48000,64,10148,2,13,124,93,0,4,21,3,96,12,trx,more", "a field too many"),
+            ("tx_queue_report_ex:2,48000,64,10148,2,13,124,93,0,4,x,3,96,12,trx", "not a number"),
+            ("tx_queue_report_ex:2,48000,720,3460,180,45,30,2,60,0,trx", "a version 1 body under version 2"),
+        ] {
+            assert!(
+                matches!(parse_tci_text(line), Some(TciNotification::TxQueueReportUnreadable { .. })),
+                "{why}"
+            );
+        }
+        assert!(matches!(
+            parse_tci_text("tx_queue_report_ex:3,48000,64,10148,2,13,124,93,0,4,21,3,96,12,0,trx"),
+            Some(TciNotification::TxQueueReportUnknownVersion { version }) if version == "3"
+        ));
     }
 
     #[test]

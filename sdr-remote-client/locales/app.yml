@@ -453,6 +453,16 @@ screen_relay_connection:
   nl: "Relay-verbinding"
   de: "Relay-Verbindung"
   fr: "Connexion relais"
+screen_route_in_use:
+  en: "In use now: %{route}"
+  nl: "Nu in gebruik: %{route}"
+  de: "Jetzt in Gebrauch: %{route}"
+  fr: "Utilisé maintenant : %{route}"
+screen_route_restart:
+  en: "restart the app to apply the switch"
+  nl: "herstart de app om de schakelaar toe te passen"
+  de: "App neu starten, um den Schalter anzuwenden"
+  fr: "redémarrez l'app pour appliquer le réglage"
 screen_connect_via_relay:
   en: "Connect via relay (for clients that cannot port-forward)"
   nl: "Verbinden via relay (voor clients die niet kunnen port-forwarden)"
@@ -533,21 +543,6 @@ screen_multi_tx_tooltip:
   nl: "Uit: een zender tegelijk. Wie al zendt houdt hem - klik je op een andere, dan zie je kort 'TX op andere radio' en gebeurt er verder niets. Houd je een PTT-toets ingedrukt, dan begint die zodra de eerste vrijkomt. Aan: dezelfde microfoon gaat naar elke gekeyde zender, dus Thetis en beide Yaesu's samen. Alleen op de desktop; de telefoon keyt altijd een radio."
   de: "Aus: ein Sender zur Zeit. Wer schon sendet, behaelt ihn - eine andere Taste zeigt kurz 'TX auf anderem Geraet' und sonst passiert nichts. Ein: dasselbe Mikrofon geht an jeden getasteten Sender, also Thetis und beide Yaesu gleichzeitig. Nur Desktop; das Telefon tastet immer ein Geraet."
   fr: "Desactive : un emetteur a la fois. Celui qui emet deja le garde - appuyer sur un autre affiche brievement 'TX sur un autre poste' et rien de plus. Active : le meme microphone va vers chaque emetteur en TX, donc Thetis et les deux Yaesu ensemble. Bureau uniquement ; le telephone n'active qu'un poste."
-screen_audio_over_udp:
-  en: "Audio over UDP (low latency)"
-  nl: "Audio over UDP (lage latency)"
-  de: "Audio über UDP (niedrige Latenz)"
-  fr: "Audio via UDP (faible latence)"
-screen_audio_over_udp_tooltip:
-  en: "Route audio + PTT over plain UDP (port 443) instead of the wss tunnel: no retransmit, lower and steadier latency. Both this client and the server must have it on. Applies on restart."
-  nl: "Stuur audio + PTT over kale UDP (poort 443) in plaats van de wss-tunnel: geen retransmit, lagere en stabielere latency. Zowel deze client als de server moeten dit aan hebben. Wordt actief na herstart."
-  de: "Audio + PTT über reines UDP (Port 443) statt über den wss-Tunnel leiten: keine erneute Übertragung, niedrigere und stabilere Latenz. Sowohl dieser Client als auch der Server müssen es aktiviert haben. Wird nach Neustart wirksam."
-  fr: "Acheminer l'audio + PTT via UDP brut (port 443) au lieu du tunnel wss : pas de retransmission, latence plus faible et plus stable. Ce client et le serveur doivent tous deux l'activer. Prend effet au redémarrage."
-screen_audio_over_udp_off_tooltip:
-  en: "Only applies once Connect via relay is on. Switching that on brings this with it."
-  nl: "Geldt pas als Verbinden via relay aan staat. Dat aanzetten neemt dit mee."
-  de: "Gilt erst, wenn Verbindung über Relay aktiv ist. Das einzuschalten nimmt dies mit."
-  fr: "Ne s'applique qu'avec la connexion par relais active. L'activer active aussi ceci."
 screen_rec_needs_audio:
   en: "Switch this channel's audio on first. Recording writes what this client receives, so a channel it is not listening to would give an empty file."
   nl: "Zet eerst de audio van dit kanaal aan. Opnemen schrijft weg wat deze client ontvangt, dus een kanaal waar hij niet naar luistert levert een leeg bestand op."
@@ -728,11 +723,90 @@ screen_play_none_ticked:
   nl: "Vink minstens een opname aan om af te spelen"
   de: "Mindestens eine Aufnahme zum Abspielen ankreuzen"
   fr: "Cochez au moins un enregistrement a lire"
+screen_dev_section:
+  en: "Developer"
+  nl: "Ontwikkelaar"
+  de: "Entwickler"
+  fr: "Développeur"
+screen_dev_code:
+  en: "Code"
+  nl: "Code"
+  de: "Code"
+  fr: "Code"
+screen_dev_on:
+  en: "Developer mode: measurement, relay and TCP tests, and the extra log lines"
+  nl: "Ontwikkelstand: meten, relay- en TCP-proeven en de extra logregels"
+  de: "Entwicklermodus: Messung, Relay- und TCP-Tests und die zusätzlichen Protokollzeilen"
+  fr: "Mode développeur : mesure, essais relais et TCP, et lignes de journal supplémentaires"
+screen_dev_off:
+  en: "Switch off"
+  nl: "Uitzetten"
+  de: "Ausschalten"
+  fr: "Désactiver"
+screen_measure:
+  en: "Measurement:"
+  nl: "Meting:"
+  de: "Messung:"
+  fr: "Mesure :"
+screen_relay_only:
+  en: "Relay only"
+  nl: "Alleen relay"
+  de: "Nur Relay"
+  fr: "Relais uniquement"
+screen_relay_only_tooltip:
+  en: "On: no direct path is offered, and a direct one goes back to the relay at once - for comparing the two. Not kept after a restart."
+  nl: "Aan: er wordt geen rechtstreekse weg aangeboden, en een rechtstreekse weg gaat meteen terug naar de relay - om de twee te vergelijken. Wordt niet onthouden na een herstart."
+  de: "Ein: Es wird kein direkter Weg angeboten, und ein direkter Weg wechselt sofort zurück zum Relay - zum Vergleichen der beiden. Wird nach einem Neustart nicht gespeichert."
+  fr: "Activé : aucun chemin direct n'est proposé, et un chemin direct revient aussitôt au relais - pour comparer les deux. Non conservé après un redémarrage."
+screen_force_tcp:
+  en: "Force TCP"
+  nl: "TCP afdwingen"
+  de: "TCP erzwingen"
+  fr: "Forcer TCP"
+screen_force_tcp_tooltip:
+  en: "On: everything goes through the relay over TCP, as on a network that lets no UDP through - to measure what that route costs. Not kept after a restart."
+  nl: "Aan: alles gaat via de relay over TCP, zoals op een netwerk dat geen UDP doorlaat - om te meten wat die route kost. Wordt niet onthouden na een herstart."
+  de: "Ein: Alles läuft über das Relay per TCP, wie in einem Netzwerk, das kein UDP durchlässt - um zu messen, was dieser Weg kostet. Wird nach einem Neustart nicht gespeichert."
+  fr: "Activé : tout passe par le relais en TCP, comme sur un réseau qui ne laisse pas passer l'UDP - pour mesurer ce que coûte cette route. Non conservé après un redémarrage."
+screen_relay_only_no_relay_tooltip:
+  en: "Only when connected through the relay."
+  nl: "Alleen bij een verbinding via de relay."
+  de: "Nur bei einer Verbindung über das Relay."
+  fr: "Uniquement avec une connexion via le relais."
+screen_measure_start:
+  en: "Start"
+  nl: "Start"
+  de: "Start"
+  fr: "Demarrer"
+screen_measure_tooltip:
+  en: "Write every audio packet and round trip to a file (folder 'meting' next to the program), to compare the connection before and after a change"
+  nl: "Schrijf elk audiopakket en elke rondreistijd naar een bestand (map 'meting' naast het programma), om de verbinding voor en na een aanpassing te vergelijken"
+  de: "Jedes Audiopaket und jede Umlaufzeit in eine Datei schreiben (Ordner 'meting' neben dem Programm), um die Verbindung vor und nach einer Aenderung zu vergleichen"
+  fr: "Ecrire chaque paquet audio et chaque aller-retour dans un fichier (dossier 'meting' a cote du programme), pour comparer la liaison avant et apres un changement"
+screen_measure_stop_tooltip:
+  en: "Stop the measurement and close the file"
+  nl: "Meting stoppen en het bestand sluiten"
+  de: "Messung beenden und die Datei schliessen"
+  fr: "Arreter la mesure et fermer le fichier"
 screen_play_volume_tooltip:
   en: "WAV playback level (Play). 1.00 = recorded level. Lower = quieter, to avoid overmodulation on a loud recording."
   nl: "WAV-afspeelniveau (Afspelen). 1.00 = opgenomen niveau. Lager = zachter, om overmodulatie bij een luide opname te voorkomen."
   de: "WAV-Wiedergabepegel (Wiedergabe). 1,00 = aufgenommener Pegel. Niedriger = leiser, um Übermodulation bei einer lauten Aufnahme zu vermeiden."
   fr: "Niveau de lecture WAV (Lecture). 1,00 = niveau enregistré. Plus bas = plus faible, pour éviter la surmodulation d'un enregistrement fort."
+
+# --- server_screen.rs (build check) ---
+# Shown when the server does not run this client's build. It only tells; nothing
+# refuses to work over it.
+screen_build_mismatch:
+  en: "The server runs %{server} and this client is %{client} - they should be the same build."
+  nl: "De server draait %{server} en deze client %{client} - dat hoort dezelfde build te zijn."
+  de: "Der Server läuft mit %{server} und dieser Client mit %{client} - das sollte derselbe Build sein."
+  fr: "Le serveur exécute %{server} et ce client %{client} - ce devrait être la même version."
+screen_build_too_old:
+  en: "a build too old to say which"
+  nl: "een build die te oud is om te zeggen welke"
+  de: "ein Build, der zu alt ist, um es zu sagen"
+  fr: "une version trop ancienne pour le dire"
 
 # --- screens.rs (Statistics) ---
 screen_statistics:
@@ -755,16 +829,6 @@ screen_audio_streams:
   nl: "Audiostromen:"
   de: "Audio-Streams:"
   fr: "Flux audio :"
-screen_transport_tcp_fallback:
-  en: "- Transport: TCP fallback (UDP unavailable, higher latency)"
-  nl: "- Transport: TCP-fallback (UDP niet beschikbaar, hogere latency)"
-  de: "- Transport: TCP-Fallback (UDP nicht verfügbar, höhere Latenz)"
-  fr: "- Transport : repli TCP (UDP indisponible, latence plus élevée)"
-screen_transport_udp:
-  en: "- Transport: UDP"
-  nl: "- Transport: UDP"
-  de: "- Transport: UDP"
-  fr: "- Transport : UDP"
 screen_col_stream:
   en: "Stream"
   nl: "Stroom"
@@ -1075,16 +1139,6 @@ main_auto_tune_carrier_hover:
   nl: "SAM: volg de AM-draaggolf - de VFO klikt op de draaggolf zodat het filter er symmetrisch omheen blijft. Vergrendelt binnen ±3 kHz."
   de: "SAM: dem AM-Träger folgen - der VFO rastet auf den Träger, sodass der Filter symmetrisch darum bleibt. Rastet innerhalb ±3 kHz ein."
   fr: "SAM : suivre la porteuse AM - le VFO se cale sur la porteuse afin que le filtre reste symétrique autour d'elle. Verrouille à ±3 kHz près."
-main_high_res_spectrum:
-  en: "High-res spectrum"
-  nl: "Hoge-resolutiespectrum"
-  de: "Hochauflösendes Spektrum"
-  fr: "Spectre haute résolution"
-main_high_res_spectrum_hover:
-  en: "Request a server-extracted high-resolution VRX spectrum. Uses extra bandwidth."
-  nl: "Vraag een door de server geëxtraheerd hoge-resolutie-VRX-spectrum aan. Gebruikt extra bandbreedte."
-  de: "Ein vom Server extrahiertes hochauflösendes VRX-Spektrum anfordern. Benötigt zusätzliche Bandbreite."
-  fr: "Demander un spectre VRX haute résolution extrait par le serveur. Utilise de la bande passante supplémentaire."
 main_ref_label:
   en: "Ref:"
   nl: "Ref:"
@@ -1420,6 +1474,16 @@ main_audio_error:
   nl: "Audiofout"
   de: "Audiofehler"
   fr: "Erreur audio"
+main_mic_missing:
+  en: "Microphone '%{name}' not found - plug it in. Transmitting is off until it is back."
+  nl: "Microfoon '%{name}' niet gevonden - sluit hem aan. Zenden staat uit tot hij er weer is."
+  de: "Mikrofon '%{name}' nicht gefunden - bitte anschließen. Senden ist aus, bis es wieder da ist."
+  fr: "Microphone '%{name}' introuvable - branchez-le. L'émission est coupée jusqu'à son retour."
+main_ptt_no_mic:
+  en: "No mic"
+  nl: "Geen mic"
+  de: "Kein Mikro"
+  fr: "Pas de micro"
 main_tab_radio:
   en: "Radio"
   nl: "Radio"
@@ -1832,16 +1896,11 @@ dev_store:
   nl: "Opslaan"
   de: "Speichern"
   fr: "Mémoriser"
-dev_debug_expanded:
-  en: "Debug ▼"
-  nl: "Debug ▼"
-  de: "Debug ▼"
-  fr: "Debug ▼"
-dev_debug_collapsed:
-  en: "Debug ▶"
-  nl: "Debug ▶"
-  de: "Debug ▶"
-  fr: "Debug ▶"
+dev_debug_section:
+  en: "Debug"
+  nl: "Debug"
+  de: "Debug"
+  fr: "Debug"
 dev_system_info:
   en: "System Info"
   nl: "Systeeminfo"
@@ -1982,16 +2041,11 @@ dev_yes_zero_fram:
   nl: "Ja, Zero FRAM"
   de: "Ja, Zero FRAM"
   fr: "Oui, Zero FRAM"
-dev_drive_config_expanded:
-  en: "Drive Config ▼"
-  nl: "Drive-config ▼"
-  de: "Drive-Konfig ▼"
-  fr: "Config Drive ▼"
-dev_drive_config_collapsed:
-  en: "Drive Config ▶"
-  nl: "Drive-config ▶"
-  de: "Drive-Konfig ▶"
-  fr: "Config Drive ▶"
+dev_drive_config_section:
+  en: "Drive Config"
+  nl: "Drive-config"
+  de: "Drive-Konfig"
+  fr: "Config Drive"
 dev_band:
   en: "Band"
   nl: "Band"
@@ -2526,6 +2580,11 @@ screen_ble_ptt_mode:
   nl: "Knop-PTT:"
   de: "Tasten-PTT:"
   fr: "PTT du bouton :"
+screen_group_display:
+  en: "Language and appearance"
+  nl: "Taal en weergave"
+  de: "Sprache und Darstellung"
+  fr: "Langue et apparence"
 screen_group_audio:
   en: "Microphone and speaker"
   nl: "Microfoon en luidspreker"

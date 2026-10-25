@@ -8,14 +8,20 @@ license.workspace = true
 name = "ThetisLink-Server"
 path = "src/main.rs"
 
+[features]
+# The replay of the transmit chain (`--naspelen`, build 246): a tool for the
+# developer, never in a release build (owner, 2026-10-12: measuring is
+# development). Its module is also compiled for the tests.
+naspelen = []
+
 [dependencies]
 sdr-remote-core = { path = "../sdr-remote-core" }
 sdr-remote-relay = { path = "../sdr-remote-relay" }
+sdr-remote-quic = { path = "../sdr-remote-quic" }
 sdr-remote-chat = { path = "../sdr-remote-chat" }
 vrx-rs = { path = "../vrx-rs" }
 tokio = { workspace = true }
 cpal = { workspace = true }
-rubato = { workspace = true }
 ringbuf = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
@@ -45,11 +51,11 @@ mdns-sd = "=0.19.1"
 # Server only exposes a debug panel for now; full tuner integration is a
 # follow-up patch. See docs/internal/referentie/MCP2221A-JC4s-wiring.md.
 mcp2221-hal = "0.1"
-# UI-vertalingen (rust-i18n) - basis EN (fallback), keuze NL/DE/FR net als de client.
+# UI translations (rust-i18n) - EN as the base (fallback), NL/DE/FR to choose, like the client.
 rust-i18n = "3"
 
-# Monitor-enumeratie voor het "Vensters schikken"-raster (multi-monitor snap).
-# Alleen Gdi/HiDpi/Foundation nodig (EnumDisplayMonitors + GetDpiForSystem).
+# Monitor enumeration for the "Vensters schikken" (arrange windows) grid (multi-monitor snap).
+# Only Gdi/HiDpi/Foundation needed (EnumDisplayMonitors + GetDpiForSystem).
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",

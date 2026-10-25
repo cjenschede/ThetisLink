@@ -1,10 +1,10 @@
-# ThetisLink v2.12.0 - Installation Guide
+# ThetisLink v2.13.0 - Installation Guide
 
 ThetisLink is a remote control application for Thetis: audio, spectrum, PTT and full radio control over the network via TCI WebSocket. Whatever radio Thetis drives is the radio you operate - see the compatibility note below.
 
 **Compatibility:** ThetisLink talks only to **Thetis** (via TCI WebSocket) and not directly to the SDR hardware. It therefore works with any SDR device supported by **Thetis v2.10.3.15** (official release by ramdor) — both HPSDR Protocol 1 (Hermes, Angelia, Orion) and HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optional: Yaesu FT-991A / FTX-1 as a second radio (via COM port).
 
-**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.12.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
+**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.13.0 works fine with stock Thetis v2.10.3.15 over TCI alone — no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI extension behaviour is preserved (stock v2.10.3.15 — note the fork still carries its own build tag, release notes and About metadata). See the User Manual (`User-Manual-EN.md`) for details.
 
 **Disclaimer:** This software controls radio transmitters. Use at your own risk. The author is not responsible for damage to equipment, interference or violations of regulations resulting from the use of this software. Verify all safety features (PTT timeout, power limits) before transmitting.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for Thetis: audio, spectrum, PTT and 
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server - runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.12.0.apk | ThetisLink Android Client - phone/tablet |
+| ThetisLink-2.13.0.apk | ThetisLink Android Client - phone/tablet |
 | Installation.md | Installation guide (English, this document) |
 | User-Manual-EN.md | User manual (English) |
 | Technical-Reference.md | Technical reference (English) |
@@ -35,32 +35,62 @@ ThetisLink is a remote control application for Thetis: audio, spectrum, PTT and 
 
 ## Overview
 
-Thetis talks to the ThetisLink Server over a single TCI WebSocket connection; the client(s) then connect to that server. For the connection between client and server there are **two methods** — pick the one that suits your network.
+Thetis talks to the ThetisLink Server over a single TCI WebSocket connection; the client(s) then connect to that server. For the connection between client and server there are **two methods** — pick the one that suits your network. Through the relay, the connection then looks for a shorter way by itself (method 2b), and on a network without UDP it takes an emergency route.
 
 ### Method 1 — direct connection
 
 ```mermaid
 flowchart LR
     Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
-    Server <-->|"UDP :4580"| Desktop[ThetisLink Desktop Client<br>Windows]
-    Server <-->|"UDP :4580"| Android[ThetisLink Android Client<br>phone]
+    Server <-->|"QUIC (UDP) :4580"| Desktop[ThetisLink Desktop Client<br>Windows]
+    Server <-->|"QUIC (UDP) :4580"| Android[ThetisLink Android Client<br>phone]
 ```
 
-The client reaches the server **directly** over UDP port 4580. On your own network (LAN/WiFi) this works right away. From outside your network it can also be direct, provided you set up **port forwarding** (the router forwards UDP 4580 to the Server PC) and have your own public IP address.
+The client reaches the server **directly** over UDP port 4580, with an encrypted QUIC connection. On your own network (LAN/WiFi) this works right away. From outside your network it can also be direct, provided you set up **port forwarding** (the router forwards UDP 4580 to the Server PC) and have your own public IP address.
 
 ### Method 2 — via a relay (v2.4.0)
 
 ```mermaid
 flowchart LR
     Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
-    Server -->|"outbound :443"| Relay[Relay on external server<br>VPS]
-    Desktop[ThetisLink Desktop Client] -->|"outbound :443"| Relay
-    Android[ThetisLink Android Client] -->|"outbound :443"| Relay
+    Server -->|"outbound TCP + UDP :443"| Relay[Relay on external server<br>VPS]
+    Desktop[ThetisLink Desktop Client] -->|"outbound TCP + UDP :443"| Relay
+    Android[ThetisLink Android Client] -->|"outbound TCP + UDP :443"| Relay
 ```
 
 If a direct connection is **not an option** — for example behind **CGNAT** (you do not get your own public IP address) or without access to the router — the server and the client both connect *outbound* to a **relay on an external server (VPS)**; no port forward is then needed. This method therefore does carry a **dependency on that external relay server**. Host the relay yourself, or PA3GHM can temporarily add you on request (limited number of slots).
 
-> **The server supports both methods at the same time.** Once a relay is configured, each client decides for itself whether to connect directly or via the relay. A single server can therefore serve multiple clients concurrently — some direct, some via the relay.
+### Method 2b — found through the relay, then direct (v2.13.0)
+
+```mermaid
+flowchart LR
+    Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
+    Server -.->|"sign-in :443"| Relay[Relay on an external server<br>VPS]
+    Client[ThetisLink Client] -.->|"sign-in :443"| Relay
+    Client <==>|"QUIC direct<br>D+R: over the internet<br>L+R: own network :4580"| Server
+```
+
+With the relay set up, the client first connects through the relay (**R**). Once the password has been checked, it
+tries a direct path to the server with the relay's help: through both routers (**D+R**), or over your own network when
+client and server sit behind the same router (**L+R**). When that works, the same connection carries on directly,
+without a break; the relay stays as coordinator and safety net. No port needs to be forwarded for this. When it does
+not work - not every network allows it - the connection simply stays on the relay. With **Allow direct connections**
+switched off on the server, it is not tried.
+
+### Emergency route — through the relay over TCP (v2.13.0)
+
+```mermaid
+flowchart LR
+    Thetis[Thetis SDR] <-->|"TCI WebSocket :40001"| Server[ThetisLink Server]
+    Server -->|"outbound :443"| Relay[Relay on an external server<br>VPS]
+    Client[ThetisLink Client<br>network without UDP] -->|"TCP :443 only (wss)"| Relay
+```
+
+When the client's network lets no UDP through (some hotels, companies and guest networks), the same encrypted
+connection goes over the TCP line to the relay (**R (TCP)**). This happens by itself; there is nothing to set. It
+costs some delay, and you may hear an occasional hiccup.
+
+> **The server supports both methods at the same time.** A client that types the server's address connects directly, a client with the relay set up connects through the relay. Through the relay, the connection then looks for a direct path by itself. If you want no one to come in directly, switch off **Allow direct connections** on the server (only with a relay set up).
 
 > Both methods are detailed in full in [Network](#network) below (sections *Using via internet* and *... with the relay*).
 
@@ -70,7 +100,7 @@ If a direct connection is **not an option** — for example behind **CGNAT** (yo
 - Audio (RX and TX streams), spectrum/waterfall (IQ data), control (frequency, mode, controls)
 
 **ThetisLink Server -> ThetisLink Clients**:
-- Everything: audio, spectrum, control, device status - in a single connection per ThetisLink Client (directly over UDP 4580, or tunnelled through the relay)
+- Everything: audio, spectrum, control, device status - in a single connection per ThetisLink Client (one encrypted QUIC connection: directly over UDP 4580, or through the relay)
 
 ---
 
@@ -93,16 +123,16 @@ No administrator rights required for the ThetisLink Server or ThetisLink Clients
 
 ### 1.0 Installing the PA3GHM Thetis fork (recommended)
 
-The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.12.0 works best with Thetis-fork build PA3GHM TL2-4** — that build ships the wideband-IQ extension + modulation-filter fan-out that this release relies on. Earlier fork builds also work, with progressively fewer fork-only features available (TL2-3 without wideband, TL2-2 without rx_only_ex push-notify, etc.); stock Thetis v2.10.3.15 remains the fallback. Installation:
+The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.13.0 works best with Thetis-fork build PA3GHM TL2-18**, released at the same time as this release. Earlier fork builds also work, with fewer fork-only features; stock Thetis v2.10.3.15 remains the fallback. Installation:
 
 1. First install the official **Thetis v2.10.3.15** using the standard installer (if you have not already done so)
-2. Download `Thetis.exe` from the PA3GHM fork — **release tag `TL2-4`** at [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
-3. Make a **backup** of the original `Thetis.exe` in the Thetis installation folder (e.g. rename to `Thetis-original.exe`)
-4. Copy the PA3GHM `Thetis.exe` to the Thetis installation folder (overwrite the original)
+2. Download `Thetis.exe` and `ChannelMaster.dll` from the PA3GHM fork — **release `TL2-18`** at [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
+3. Make a **backup** of the original `Thetis.exe` and `ChannelMaster.dll` in the Thetis installation folder (e.g. rename to `Thetis-original.exe` and `ChannelMaster-original.dll`)
+4. Copy the PA3GHM `Thetis.exe` and `ChannelMaster.dll` to the Thetis installation folder (overwrite the originals). Copy them **together**: an older `ChannelMaster.dll` next to the new `Thetis.exe` does start, but misses part of the fork
 5. Copy `ReleaseNotes.txt` to the same folder (overwrite the existing file)
-6. Start Thetis - the title bar will show "PA3GHM TL2-4" after the version number
+6. Start Thetis - the title bar will show "PA3GHM TL2-18" after the version number
 
-> The fork only modifies `Thetis.exe`. All other files (DLLs, database, settings) remain unchanged. You can always revert to the original version by restoring the backup.
+> The fork modifies `Thetis.exe` and `ChannelMaster.dll`. All other files (database, settings) remain unchanged. You can always revert to the original version by restoring both backups. If you use the **TL Lean** button, switch it off before you close Thetis, if you will then start another Thetis on the same settings.
 
 ### 1.1 Enabling the TCI Server in Thetis
 
@@ -138,7 +168,7 @@ Copy `ThetisLink-Server.exe` to a folder on the Thetis PC. Double-click to start
 
 The ThetisLink Server opens a GUI window where you configure everything. While there is no `thetislink-server.conf` yet, it starts **bare**: every device (Amplitec, tuners, SPE, RF2K-S, UltraBeam, rotor, DX cluster), the second receiver and all "open window at startup" boxes are off. So there is nothing to switch off — you only switch on what you have actually connected. The **language** on that first start follows the Windows display language if ThetisLink has it (NL/DE/FR), and English otherwise.
 
-Nothing is written at startup: the config file appears the moment you click **Save & Start**. One thing is required before that — without a **password** the server will not start and refuses every client. It is the only setting you must fill in to be able to connect; see 2.6.
+Nothing is written at startup: the config file appears the moment you click **Save & Start**. One thing is required before that — without a **password** the server will not start from the GUI. (A server started with command-line arguments can run without one and then admits everyone; a later version closes that.) It is the only setting you must fill in to be able to connect; see 2.6.
 
 ### 2.2 Configuring the connection to Thetis
 
@@ -204,7 +234,7 @@ For Yaesu audio: in the ThetisLink Server GUI, select **USB Audio CODEC** as the
 
 On first start, Windows Firewall will ask for permission. Allow **private network**.
 
-The ThetisLink Server listens on **UDP port 4580**. If the firewall prompt does not appear:
+The ThetisLink Server listens on **UDP port 4580** (QUIC). Through the relay no inbound port is needed; the server then makes outbound connections only (TCP and UDP 443). If the firewall prompt does not appear:
 
 1. Windows Defender Firewall -> Advanced settings
 2. Inbound rules -> New rule -> Program
@@ -221,7 +251,7 @@ Windows Defender continuously scans `ThetisLink-Server.exe` because it is an unk
 
 ### 2.6 Password and 2FA
 
-A password is **required**. The ThetisLink Server will not start without a valid password (minimum 8 characters, letters and digits). Set the password in the ThetisLink Server GUI under **Security**. ThetisLink Clients must enter the same password to connect.
+A password is **required**. The ThetisLink Server GUI will not start without a valid password (minimum 8 characters, letters and digits); only a server started with command-line arguments can run without one, and then admits everyone. Set the password in the ThetisLink Server GUI under **Security**. ThetisLink Clients must enter the same password to connect.
 
 Authentication uses HMAC-SHA256 challenge-response: the password is never sent over the network. Brute-force protection is built in per ThetisLink Client.
 
@@ -302,14 +332,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 > information in Settings.
 
 **Via file manager:**
-1. Copy `ThetisLink-2.12.0.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.13.0.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.12.0.apk
+adb install ThetisLink-2.13.0.apk
 ```
 
 ### 4.2 Connecting — guided setup wizard
@@ -387,7 +417,9 @@ The lower the network latency, the better the experience - especially for PTT an
 |---------|-------------|
 | LAN / home WiFi | Excellent (< 5 ms) |
 | 4G/5G mobile | Good (adaptive jitter buffer adjusts) |
-| Internet with port forwarding | Good, depending on route |
+| Internet with port forwarding (D) or direct found through the relay (D+R) | Good, depending on route |
+| Through the relay (R) | Good; a detour via the VPS |
+| Through the relay over TCP (R (TCP)) | Usable; more delay, an occasional hiccup |
 
 ### Using via internet (port forwarding)
 
@@ -419,7 +451,7 @@ The relay is not a ready-made download but source code + Docker. On a Linux VPS 
 1. Put the relay source on the VPS (clone the repo or extract `thetislink-relay-source.tar.gz`).
 2. Copy `.env.example` to `.env` and fill in: a **station key** (the token shared by the station and the client), an **admin password** for the dashboard, and your **domain name** for Caddy/TLS.
 3. Start: `docker compose up -d --build`. Caddy automatically obtains a TLS certificate for your domain.
-4. The relay then listens on **port 443** (wss for control/spectrum + UDP for audio).
+4. The relay then listens on **port 443**: TCP for wss (sign-in, chat, and the emergency route when UDP is blocked) and UDP for the QUIC connection itself.
 
 > The full VPS recipe (domain, Caddy, ports, updating) is in `thetislink-relay/DEPLOY-wss.md`. The `.env` file holds secrets and must **never** be made public or committed to a repository.
 
@@ -442,7 +474,8 @@ In the server settings GUI, the **"Relay"** block:
 2. **Relay URL:** the address of your relay (e.g. `wss://your-relay.duckdns.org` via Caddy, or `ws://<vps-ip>:18080` directly without TLS).
 3. **Station name:** a name for this station (e.g. `home-anan`) — the client and station must use exactly the same name.
 4. **Relay token:** the station key from the relay `.env`.
-5. Leave **"Audio over UDP (low latency)"** on (recommended). Restart the server; the **"Relay:"** field in the status panel shows the connection state.
+5. Restart the server; the **"Relay:"** field in the status panel shows the connection state.
+6. Optional: switch off **"Allow direct connections"** if everyone should come in through the relay (your home address then stays out of sight of guests).
 
 **C. Pointing the client at the relay**
 
@@ -452,9 +485,9 @@ In the desktop client, Server tab, the collapsible **"Relay connection"** block:
 2. **Relay URL:** the same relay address as the station.
 3. **Station name:** exactly the same station name as the station.
 4. **Token:** the same station key.
-5. Leave **"Audio over UDP (low latency)"** on; restart the client. On Android the same fields are in the settings.
+5. Restart the client. On Android the same fields are in the settings.
 
-As long as the station and client are logged in to the relay with the same name and token, you operate everything just like a direct connection. If your network blocks UDP, the audio automatically switches to the TCP tunnel (indicator "TCP fallback") and back once UDP is available again — see the user manual.
+As long as the station and client are logged in to the relay with the same name and token, you operate everything just like a direct connection. The app shows which way the connection takes (R, D+R, L+R, ...). If your network lets no UDP through, the connection moves to an emergency route over TCP by itself (R (TCP)) — see the user manual.
 
 **D. Relay dashboard (administration)**
 
@@ -468,7 +501,7 @@ The admin password from the `.env` grants access to the relay's web dashboard (b
 |---------|----------|
 | No audio after connect | Check that the Thetis TCI Server is active (Setup -> Serial/Network/Midi CAT -> Network) and the Bind IP:Port field is set to `0.0.0.0:40001` or `127.0.0.1:40001` |
 | Frequency does not change | Check that the Thetis TCI Server is enabled (Setup -> Serial/Network/Midi CAT -> Network, port 40001) and the address in the ThetisLink Server GUI matches (default `ws://127.0.0.1:40001`) |
-| ThetisLink Client cannot connect | Firewall is blocking UDP 4580 - check firewall rules on the ThetisLink Server PC |
+| ThetisLink Client cannot connect | Firewall is blocking UDP 4580 - check firewall rules on the ThetisLink Server PC. Do server and client run the same version? A program from before 2.13 does not connect to 2.13 and reports only "Server not reachable" |
 | Disconnect after a few seconds | Unstable WiFi or firewall block. Check loss% at the bottom of the ThetisLink Client |
 | Spectrum shows nothing | The Thetis TCI Server must be active. Also check the TCI port in the ThetisLink Server GUI |
 | External devices not responding | Check COM port setting in the ThetisLink Server GUI and whether the device is powered on |

@@ -23,6 +23,129 @@ const WIDEBAND_SAMPLES: usize = 16_384;
 /// the same value — they previously drifted (RX2 was 0.6, sluggish).
 const PEAK_DECAY: f32 = 0.35;
 
+/// A measurement (build 172): the RX1 spectrum in the first moments after the
+/// transmitter goes on or off. The owner sees the spectrum shoot up for a
+/// moment when the PTT goes down, on both clients and not in Thetis itself;
+/// the hypothesis is that the smoothing below holds every rise at once
+/// (`update_from_fft`) and so holds the own signal in the receive data of the
+/// first moments. One line per change, so the field log can tell.
+#[derive(Debug, Default)]
+pub struct TxProbe {
+    tx: bool,
+    since: Option<Instant>,
+    frames: Vec<(u64, SpectrumLevels)>,
+}
+
+/// One frame's levels for `TxProbe`: the highest and the mean bin in dB
+/// (calibrated, as the clients draw it), and how many bins sat on the pack
+/// scale's ceiling - a peak there says "at least", not "this much" (review of
+/// 172: in pack units the line could not tell a clipped frame; build 174).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpectrumLevels {
+    pub peak_db: f32,
+    pub mean_db: f32,
+    pub at_ceiling: usize,
+}
+
+/// How long after a change the probe looks.
+pub const TX_PROBE_MS: u64 = 1500;
+
+/// `SpectrumLevels` of a buffer in pack units.
+fn levels_of(packed: &[f32], cal_offset_db: f32) -> SpectrumLevels {
+    if packed.is_empty() {
+        return SpectrumLevels { peak_db: SPECTRUM_PACK_FLOOR_DB, mean_db: SPECTRUM_PACK_FLOOR_DB, at_ceiling: 0 };
+    }
+    let to_db = |v: f32| v / SPECTRUM_PACK_MAX * SPECTRUM_PACK_RANGE_DB + SPECTRUM_PACK_FLOOR_DB + cal_offset_db;
+    let peak = packed.iter().cloned().fold(f32::MIN, f32::max);
+    let mean = packed.iter().sum::<f32>() / packed.len() as f32;
+    let at_ceiling = packed.iter().filter(|&&v| v >= SPECTRUM_PACK_MAX).count();
+    SpectrumLevels { peak_db: to_db(peak), mean_db: to_db(mean), at_ceiling }
+}
+
+impl TxProbe {
+    /// Whether the next frame is wanted: a change of the transmitter, or a
+    /// window open - so the levels are only computed then (review of 172:
+    /// they were computed on every frame, under the spectrum's lock).
+    pub fn wants(&self, tx: bool) -> bool {
+        tx != self.tx || self.since.is_some()
+    }
+
+    /// One spectrum frame: whether the transmitter is on, and the frame's
+    /// levels. The line of a window once it is over - also when a change ends
+    /// it early, and then this frame opens the next window (review of 172: it
+    /// was lost).
+    pub fn frame(&mut self, tx: bool, levels: SpectrumLevels, now: Instant) -> Option<String> {
+        let mut line = None;
+        if tx != self.tx {
+            line = self.finish();
+            self.tx = tx;
+            self.since = Some(now);
+        }
+        let since = self.since?;
+        let ms = now.saturating_duration_since(since).as_millis() as u64;
+        if ms > TX_PROBE_MS {
+            return line.or_else(|| self.finish());
+        }
+        self.frames.push((ms, levels));
+        line
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        self.since.take()?;
+        let frames: Vec<String> = self
+            .frames
+            .drain(..)
+            .map(|(ms, l)| format!("{ms}:{:.0}/{:.0}/{}", l.peak_db, l.mean_db, l.at_ceiling))
+            .collect();
+        // Named in advance (working rule 11, builds 172 and 174).
+        Some(format!("Spectrum around TX {}: {}", if self.tx { "on" } else { "off" }, frames.join(" ")))
+    }
+}
+
+/// A jump of the DDC centre - a band change - and what it does to the FFT
+/// window (build 236). The window is `ddc_fft_size` samples, ~0.34 s at every
+/// DDC rate, and slides by an eighth: after a jump it still held the old band
+/// for most of that time, and the first frames showed the old band under the
+/// new centre. The loop that fills the window drops it on a new jump, and a
+/// frame built from a window of before the jump is not taken.
+#[derive(Debug, Default)]
+pub struct BandJump {
+    generation: u32,
+    last: Option<JumpSeen>,
+    waiting_since: Option<Instant>,
+}
+
+/// One jump, as the loop that fills the window sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JumpSeen {
+    pub generation: u32,
+    pub from_hz: u64,
+    pub to_hz: u64,
+}
+
+impl BandJump {
+    fn jumped(&mut self, from_hz: u64, to_hz: u64) {
+        self.generation = self.generation.wrapping_add(1);
+        self.last = Some(JumpSeen { generation: self.generation, from_hz, to_hz });
+        self.waiting_since = Some(Instant::now());
+    }
+
+    /// The jump a window of generation `seen` has not dropped yet.
+    pub fn since(&self, seen: u32) -> Option<JumpSeen> {
+        self.last.filter(|j| j.generation != seen)
+    }
+
+    /// A frame from a window of generation `window` is of the current band.
+    fn takes(&self, window: u32) -> bool {
+        window == self.generation
+    }
+
+    /// The first frame of the new band: how long the gap was, once per jump.
+    fn first_frame(&mut self) -> Option<u128> {
+        self.waiting_since.take().map(|t| t.elapsed().as_millis())
+    }
+}
+
 /// Spectrum processor: generates test data or processes real FFT data.
 /// Rate-limited to configured FPS.
 /// Supports server-side zoom/pan extraction from 262k-bin smoothed buffer.
@@ -35,6 +158,8 @@ pub struct SpectrumProcessor {
     smoothed: Vec<f32>,
     /// Whether we have real HPSDR data (false = use test generator)
     has_real_data: bool,
+    /// Whether real data ever came: then a gap sends nothing (build 239).
+    had_real_data: bool,
     /// FFT pipeline for processing real ADC samples (wideband)
     fft_pipeline: Option<FftPipeline>,
     /// FFT pipeline for DDC I/Q data
@@ -51,6 +176,9 @@ pub struct SpectrumProcessor {
     ddc_mode: bool,
     /// Whether DDC center is being set from HP packets (true = use HP data, false = use CAT/heuristic)
     has_hp_center: bool,
+    /// The centre came from a `dds` or from the VFO with CTUN off, not from the
+    /// starting value (build 232): only a measured centre goes to the clients.
+    centre_measured: bool,
     /// Skip N FFT frames after frequency change (stale pipeline data)
     skip_fft_frames: u8,
     /// TCI mode: IQ data is always at correct frequency, no shift/skip needed
@@ -60,6 +188,8 @@ pub struct SpectrumProcessor {
     /// Calibration offset in dB (from TCI calibration_ex display_offset)
     /// Added to spectrum bins to compensate for hardware attenuator/preamp
     cal_offset_db: f32,
+    /// Band jumps and the FFT window (build 236).
+    band_jump: BandJump,
 }
 
 impl SpectrumProcessor {
@@ -71,6 +201,7 @@ impl SpectrumProcessor {
             last_frame: Instant::now(),
             smoothed: vec![0.0; SPECTRUM_BINS],
             has_real_data: false,
+            had_real_data: false,
             fft_pipeline: None,
             ddc_pipeline: None,
             test_phase: 0.0,
@@ -79,11 +210,18 @@ impl SpectrumProcessor {
             sample_rate_hz: 1_536_000,
             ddc_mode: false,
             has_hp_center: false,
+            centre_measured: false,
             skip_fft_frames: 0,
             tci_mode: false,
             custom_fft_size: None,
             cal_offset_db: 0.0,
+            band_jump: BandJump::default(),
         }
+    }
+
+    /// The jump the window of generation `seen` has not dropped (`BandJump`).
+    pub fn band_jump_since(&self, seen: u32) -> Option<JumpSeen> {
+        self.band_jump.since(seen)
     }
 
     /// Get current calibration offset (dB).
@@ -177,6 +315,7 @@ impl SpectrumProcessor {
             let bins = pipeline.process(samples);
             self.update_from_fft(&bins);
             self.has_real_data = true;
+            self.had_real_data = true;
         }
     }
 
@@ -198,12 +337,26 @@ impl SpectrumProcessor {
         self.ddc_center_hz
     }
 
-    /// Process DDC I/Q samples from HPSDR DDC capture
-    pub fn process_ddc_frame(&mut self, samples: &[(f32, f32)]) {
+    /// The centre is a measurement, not the starting value (build 232).
+    pub fn ddc_center_measured(&self) -> bool {
+        self.centre_measured
+    }
+
+    /// Process DDC I/Q samples from HPSDR DDC capture. `window` is the
+    /// generation of the window they came from (`BandJump`).
+    pub fn process_ddc_frame(&mut self, samples: &[(f32, f32)], window: u32) {
+        if !self.band_jump.takes(window) {
+            return;
+        }
         if let Some(ref mut pipeline) = self.ddc_pipeline {
             let bins = pipeline.process(samples);
             self.update_from_fft(&bins);
             self.has_real_data = true;
+            self.had_real_data = true;
+            if let Some(ms) = self.band_jump.first_frame() {
+                // Named in advance (`logregels-build236.md`).
+                log::info!("Spectrum RX1: first frame of the new band after {} ms", ms);
+            }
         }
     }
 
@@ -218,6 +371,7 @@ impl SpectrumProcessor {
                 // CTUN off: DDC center = VFO (normal behavior)
                 let old_center = self.ddc_center_hz;
                 self.ddc_center_hz = freq_hz;
+                self.centre_measured = true;
 
                 if !self.tci_mode && old_center != 0 && old_center != freq_hz {
                     self.shift_smoothed(old_center, freq_hz);
@@ -233,6 +387,7 @@ impl SpectrumProcessor {
         let old = self.ddc_center_hz;
         self.ddc_center_hz = freq_hz;
         self.has_hp_center = true;
+        self.centre_measured = true;
 
         if old != 0 && old != freq_hz {
             self.shift_smoothed(old, freq_hz);
@@ -251,6 +406,15 @@ impl SpectrumProcessor {
     /// Call this once per tick, then use extract_view() for each client.
     pub fn is_frame_ready(&mut self) -> bool {
         if !self.enabled {
+            return false;
+        }
+        // A gap after real data - a band jump, another DDC rate or FFT size -
+        // sends nothing until the first real frame (build 239). The frame it
+        // sent lay on the floor of the scale: the clients drew an empty
+        // picture and a dark waterfall row, and the auto-ref settled on it
+        // (round 238). The test spectrum stays for a server that never had a
+        // radio.
+        if self.had_real_data && !self.has_real_data {
             return false;
         }
 
@@ -516,6 +680,11 @@ impl SpectrumProcessor {
         }
     }
 
+    /// The levels of what is sent, for `TxProbe`, in calibrated dB.
+    pub fn levels(&self) -> SpectrumLevels {
+        levels_of(&self.smoothed, self.cal_offset_db)
+    }
+
     /// Compute total power in the receiver passband from the smoothed FFT bins.
     /// filter_low/high are in Hz relative to VFO (e.g. 50..2850 for USB, -2850..-50 for LSB).
     /// Edge bins are weighted by their fractional overlap with the passband.
@@ -583,9 +752,10 @@ impl SpectrumProcessor {
         let shift_bins = ((new_center as f64 - old_center as f64) / hz_per_bin).round() as isize;
 
         if delta > self.sample_rate_hz as u64 / 4 || shift_bins.unsigned_abs() >= total {
-            // Band change: reset
+            // Band change: reset, and the FFT window goes too (build 236)
             self.smoothed.fill(0.0);
             self.has_real_data = false;
+            self.band_jump.jumped(old_center, new_center);
             return;
         }
 
@@ -735,16 +905,23 @@ pub struct Rx2SpectrumProcessor {
     last_frame: Instant,
     smoothed: Vec<f32>,
     has_real_data: bool,
+    /// Whether real data ever came: then a gap sends nothing (build 239).
+    had_real_data: bool,
     ddc_pipeline: Option<DdcFftPipeline>,
     vfo_freq_hz: u64,
     ddc_center_hz: u64,
     sample_rate_hz: u32,
     skip_fft_frames: u8,
     has_hp_center: bool,
+    /// The centre came from a `dds` or from the VFO with CTUN off, not from the
+    /// starting value (build 232): only a measured centre goes to the clients.
+    centre_measured: bool,
     tci_mode: bool,
     custom_fft_size: Option<usize>,
     /// Calibration offset in dB (from TCI calibration_ex display_offset for RX2)
     cal_offset_db: f32,
+    /// Band jumps and the FFT window (build 236).
+    band_jump: BandJump,
 }
 
 impl Rx2SpectrumProcessor {
@@ -756,16 +933,24 @@ impl Rx2SpectrumProcessor {
             last_frame: Instant::now(),
             smoothed: Vec::new(),
             has_real_data: false,
+            had_real_data: false,
             ddc_pipeline: None,
             vfo_freq_hz: 7_050_000,
             ddc_center_hz: 7_050_000,
             sample_rate_hz: 1_536_000,
             skip_fft_frames: 0,
             has_hp_center: false,
+            centre_measured: false,
             tci_mode: false,
             custom_fft_size: None,
             cal_offset_db: 0.0,
+            band_jump: BandJump::default(),
         }
+    }
+
+    /// The jump the window of generation `seen` has not dropped (`BandJump`).
+    pub fn band_jump_since(&self, seen: u32) -> Option<JumpSeen> {
+        self.band_jump.since(seen)
     }
 
     /// Get current calibration offset (dB).
@@ -787,6 +972,11 @@ impl Rx2SpectrumProcessor {
     /// bin-offset against the IQ stream's centre.
     pub fn ddc_center_hz(&self) -> u64 {
         self.ddc_center_hz
+    }
+
+    /// The centre is a measurement, not the starting value (build 232).
+    pub fn ddc_center_measured(&self) -> bool {
+        self.centre_measured
     }
 
     pub fn set_tci_mode(&mut self, enabled: bool) {
@@ -846,7 +1036,12 @@ impl Rx2SpectrumProcessor {
         self.ddc_pipeline.as_ref().map(|p| p.window.len()).unwrap_or(65536)
     }
 
-    pub fn process_ddc_frame(&mut self, samples: &[(f32, f32)]) {
+    /// `window`: the generation of the window the samples came from
+    /// (`BandJump`, build 236).
+    pub fn process_ddc_frame(&mut self, samples: &[(f32, f32)], window: u32) {
+        if !self.band_jump.takes(window) {
+            return;
+        }
         if let Some(ref mut pipeline) = self.ddc_pipeline {
             let bins = pipeline.process(samples);
             // Skip stale FFT frames after frequency change (pipeline had old I/Q data)
@@ -866,6 +1061,11 @@ impl Rx2SpectrumProcessor {
                 }
             }
             self.has_real_data = true;
+            self.had_real_data = true;
+            if let Some(ms) = self.band_jump.first_frame() {
+                // Named in advance (`logregels-build236.md`).
+                log::info!("Spectrum RX2: first frame of the new band after {} ms", ms);
+            }
         }
     }
 
@@ -917,6 +1117,7 @@ impl Rx2SpectrumProcessor {
                 // CTUN off: DDC center = VFO (normal behavior)
                 let old_center = self.ddc_center_hz;
                 self.ddc_center_hz = freq_hz;
+                self.centre_measured = true;
 
                 if !self.tci_mode && old_center != 0 && old_center != freq_hz {
                     log::debug!("RX2 set_vfo_freq: vfo {} -> {}, ddc_center {} -> {} (no HP, CTUN off)",
@@ -936,6 +1137,7 @@ impl Rx2SpectrumProcessor {
         let old = self.ddc_center_hz;
         self.ddc_center_hz = freq_hz;
         self.has_hp_center = true;
+        self.centre_measured = true;
 
         if old != 0 && old != freq_hz {
             log::debug!("RX2 set_ddc_center (HP): {} -> {} (vfo={})", old, freq_hz, self.vfo_freq_hz);
@@ -952,6 +1154,7 @@ impl Rx2SpectrumProcessor {
         if delta > self.sample_rate_hz as u64 / 4 || shift_bins.unsigned_abs() >= total {
             self.smoothed.fill(0.0);
             self.has_real_data = false;
+            self.band_jump.jumped(old_center, new_center);
             return;
         }
         if shift_bins == 0 { return; }
@@ -979,6 +1182,15 @@ impl Rx2SpectrumProcessor {
 
     pub fn is_frame_ready(&mut self) -> bool {
         if !self.enabled || self.smoothed.is_empty() {
+            return false;
+        }
+        // A gap after real data - a band jump, another DDC rate or FFT size -
+        // sends nothing until the first real frame (build 239). The frame it
+        // sent lay on the floor of the scale: the clients drew an empty
+        // picture and a dark waterfall row, and the auto-ref settled on it
+        // (round 238). The test spectrum stays for a server that never had a
+        // radio.
+        if self.had_real_data && !self.has_real_data {
             return false;
         }
         let interval_ms = 1000 / self.fps as u64;
@@ -1338,5 +1550,196 @@ impl DdcFftPipeline {
         }
 
         output
+    }
+}
+
+#[cfg(test)]
+mod centre_measured_tests {
+    use super::{Rx2SpectrumProcessor, SpectrumProcessor};
+
+    /// Only a measured centre goes to the clients (build 232, review of 231):
+    /// the starting value of a processor is not one - seen in the field as
+    /// `DDC centre from the server: RX2 7050 kHz`.
+    #[test]
+    fn a_starting_value_is_not_a_measured_centre() {
+        // RX1 outside the DDC mode keeps its starting value, whatever comes.
+        let mut sp = SpectrumProcessor::new();
+        assert!(!sp.ddc_center_measured());
+        sp.set_vfo_freq(7_100_000, false);
+        sp.set_ddc_center(7_138_162);
+        assert!(!sp.ddc_center_measured(), "not in the DDC mode");
+        // In the DDC mode: CTUN on keeps the start, a dds measures.
+        let mut sp = SpectrumProcessor::new();
+        sp.init_ddc_fft(384_000);
+        assert!(!sp.ddc_center_measured(), "the VFO's starting value");
+        sp.set_vfo_freq(7_100_000, true);
+        assert!(!sp.ddc_center_measured(), "CTUN on: the centre did not follow");
+        sp.set_ddc_center(7_138_162);
+        assert!(sp.ddc_center_measured());
+        // CTUN off: the centre is the VFO, a measurement.
+        let mut sp = SpectrumProcessor::new();
+        sp.init_ddc_fft(384_000);
+        sp.set_vfo_freq(7_100_000, false);
+        assert!(sp.ddc_center_measured());
+        assert_eq!(sp.ddc_center_hz(), 7_100_000);
+        // RX2 the same way.
+        let mut rx2 = Rx2SpectrumProcessor::new();
+        assert!(!rx2.ddc_center_measured(), "7050 kHz is a starting value");
+        rx2.set_vfo_freq(7_073_000, true);
+        assert!(!rx2.ddc_center_measured());
+        rx2.set_ddc_center(7_073_000);
+        assert!(rx2.ddc_center_measured());
+        let mut rx2 = Rx2SpectrumProcessor::new();
+        rx2.set_vfo_freq(7_073_000, false);
+        assert!(rx2.ddc_center_measured());
+    }
+}
+
+#[cfg(test)]
+mod band_jump_tests {
+    use super::{BandJump, Rx2SpectrumProcessor, SpectrumProcessor};
+
+    /// A band jump drops the FFT window's old samples (build 236): the owner
+    /// saw "first empty, then the old spectrum, then the right one" on every
+    /// band change, RX and VRX alike, with the full-band row on or off.
+    #[test]
+    fn a_band_jump_drops_the_old_window() {
+        let mut j = BandJump::default();
+        assert_eq!(j.since(0), None, "no jump yet");
+        assert!(j.takes(0));
+        j.jumped(7_100_000, 14_200_000);
+        let seen = j.since(0).expect("a jump the window has not dropped");
+        assert_eq!((seen.from_hz, seen.to_hz), (7_100_000, 14_200_000));
+        assert!(!j.takes(0), "a frame from the old window is not taken");
+        assert!(j.takes(seen.generation));
+        assert_eq!(j.since(seen.generation), None, "dropped once");
+        assert!(j.first_frame().is_some(), "the gap is measured");
+        assert!(j.first_frame().is_none(), "once per jump");
+
+        // Both processors: a band change jumps, a small shift does not.
+        let mut rx1 = SpectrumProcessor::new();
+        rx1.init_ddc_fft(384_000);
+        // (starts at 14 200 kHz)
+        rx1.set_ddc_center(14_230_000);
+        assert_eq!(rx1.band_jump_since(0), None, "30 kHz shifts, it does not jump");
+        rx1.set_ddc_center(7_100_000);
+        assert!(rx1.band_jump_since(0).is_some(), "RX1 band change");
+        let mut rx2 = Rx2SpectrumProcessor::new();
+        rx2.init_ddc_fft(384_000);
+        // (starts at 7050 kHz)
+        rx2.set_ddc_center(7_080_000);
+        assert_eq!(rx2.band_jump_since(0), None);
+        rx2.set_ddc_center(14_200_000);
+        assert!(rx2.band_jump_since(0).is_some(), "RX2 band change");
+
+        // The loop drops each receiver's own window, before it builds a frame,
+        // and hands the window's generation to the processor.
+        let src = include_str!("audio_loops.rs");
+        for (rx, accum, gen, lock) in [
+            ("RX1", "rx1_accum", "rx1_window_gen", "spectrum"),
+            ("RX2", "rx2_accum", "rx2_window_gen", "rx2_spectrum"),
+        ] {
+            let check = format!("if let Some(jump) = {lock}.lock().await.band_jump_since({gen}) {{");
+            let line = format!("info!(\"Spectrum {rx}: band jump {{}} -> {{}} kHz, {{}} old samples dropped\"");
+            let clear = format!("{gen} = jump.generation;\n                    {accum}.clear();");
+            let feed = format!("{lock}.lock().await.process_ddc_frame(&frame, {gen});");
+            for needle in [&check, &line, &clear, &feed] {
+                assert_eq!(src.matches(needle.as_str()).count(), 1, "{needle}");
+            }
+            assert!(src.find(&check).unwrap() < src.find(&feed).unwrap(), "{rx}: drop before build");
+        }
+    }
+
+    /// After real data a gap sends nothing until the first real frame (build
+    /// 239): no frame on the floor of the scale. A processor that never had
+    /// real data still sends its frames (both ways, working rule 13).
+    #[test]
+    fn a_gap_after_real_data_sends_nothing() {
+        use std::time::{Duration, Instant};
+        macro_rules! check {
+            ($p:expr, $rx:literal) => {{
+                let mut p = $p;
+                p.init_ddc_fft(384_000);
+                p.set_enabled(true);
+                macro_rules! ready {
+                    ($q:expr) => {{
+                        $q.last_frame = Instant::now() - Duration::from_secs(1);
+                        $q.is_frame_ready()
+                    }};
+                }
+                assert!(ready!(p), "{}: no radio yet - frames go out", $rx);
+                let frame = vec![(0.1f32, 0.0f32); p.ddc_fft_size()];
+                p.process_ddc_frame(&frame, 0);
+                assert!(ready!(p), "{}: real data", $rx);
+                let mut gen = 0;
+                // Twice (working rule 9): to another band and back.
+                for to in [3_600_000u64, 7_100_000] {
+                    p.set_ddc_center(to);
+                    gen = p.band_jump_since(gen).expect("a jump").generation;
+                    assert!(!ready!(p), "{}: the gap sends nothing", $rx);
+                    assert!(!ready!(p), "{}: still nothing", $rx);
+                    p.process_ddc_frame(&frame, gen);
+                    assert!(ready!(p), "{}: the first real frame goes out", $rx);
+                }
+                p.update_sample_rate(192_000);
+                assert!(!ready!(p), "{}: another rate is a gap too", $rx);
+            }};
+        }
+        check!(SpectrumProcessor::new(), "RX1");
+        check!(Rx2SpectrumProcessor::new(), "RX2");
+    }
+}
+
+#[cfg(test)]
+mod tx_probe_tests {
+    use super::{levels_of, SpectrumLevels, TxProbe, TX_PROBE_MS};
+    use sdr_remote_core::{SPECTRUM_PACK_FLOOR_DB, SPECTRUM_PACK_MAX};
+    use std::time::{Duration, Instant};
+
+    fn lv(peak_db: f32, mean_db: f32, at_ceiling: usize) -> SpectrumLevels {
+        SpectrumLevels { peak_db, mean_db, at_ceiling }
+    }
+
+    /// One line per change, after its window, with every frame in it - also
+    /// the first frame of a window that a change opened early (builds 172,
+    /// 174).
+    #[test]
+    fn the_probe_writes_one_line_per_change() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut p = TxProbe::default();
+        assert!(!p.wants(false), "nothing to look at yet");
+        assert_eq!(p.frame(false, lv(-60.0, -100.0, 0), at(0)), None, "no change yet");
+        assert!(p.wants(true), "a change is wanted");
+        assert_eq!(p.frame(true, lv(-20.0, -90.0, 3), at(100)), None, "the change opens the window");
+        assert!(p.wants(true), "and the window stays wanted");
+        assert_eq!(p.frame(true, lv(-30.0, -95.0, 0), at(167)), None);
+        let line = p.frame(true, lv(-40.0, -95.0, 0), at(100 + TX_PROBE_MS + 1)).expect("the line after the window");
+        assert_eq!(line, "Spectrum around TX on: 0:-20/-90/3 67:-30/-95/0");
+        assert!(!p.wants(true), "closed");
+        // A change inside a window ends it, and its own first frame is kept.
+        assert_eq!(p.frame(false, lv(-60.0, -100.0, 0), at(3000)), None);
+        let line = p.frame(true, lv(-10.0, -90.0, 0), at(3300)).expect("the off window ended by a new change");
+        assert_eq!(line, "Spectrum around TX off: 0:-60/-100/0");
+        let line = p.frame(true, lv(-50.0, -90.0, 0), at(3300 + TX_PROBE_MS + 1)).expect("its own line");
+        assert!(line.starts_with("Spectrum around TX on: 0:-10/-90/0"), "{line}");
+    }
+
+    /// The levels are calibrated dB, and a bin on the ceiling is counted
+    /// (review of 172: the line printed raw pack units).
+    #[test]
+    fn the_levels_are_db_and_count_the_ceiling() {
+        let full = SPECTRUM_PACK_MAX;
+        let l = levels_of(&[0.0, full / 2.0, full, full], 0.0);
+        assert_eq!(l.peak_db, -30.0);
+        assert_eq!(l.at_ceiling, 2);
+        assert!((l.mean_db - (SPECTRUM_PACK_FLOOR_DB + 0.625 * 120.0)).abs() < 0.01, "{}", l.mean_db);
+        assert_eq!(levels_of(&[full / 2.0], 5.0).peak_db, -85.0);
+        // Just under the ceiling is not on it (review of 174, S17/S18).
+        assert_eq!(levels_of(&[full - 1.0], 0.0).at_ceiling, 0);
+        // The processor hands its calibration on (S8).
+        let code = include_str!("spectrum.rs");
+        let code = &code[..code.find("mod tx_probe_tests").unwrap()];
+        assert_eq!(code.matches("levels_of(&self.smoothed, self.cal_offset_db)").count(), 1);
     }
 }

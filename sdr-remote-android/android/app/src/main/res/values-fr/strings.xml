@@ -43,8 +43,8 @@
     <string name="settings_token">Jeton</string>
     <string name="settings_device_name">Nom de l\'appareil</string>
     <string name="settings_device_name_hint">Affiché dans les journaux du relais. Redémarrez l\'app pour appliquer.</string>
-    <string name="settings_audio_udp">Audio via UDP (faible latence) :</string>
-    <string name="settings_audio_udp_hint">Activé : audio à latence minimale via UDP. Désactivé : l\'audio reste sur le canal de relais chiffré. Redémarrez l\'app pour appliquer.</string>
+    <string name="settings_route_in_use">Utilisé maintenant : %1$s</string>
+    <string name="settings_route_restart">redémarrez l\'app pour appliquer</string>
     <string name="settings_ptt_mode">Mode PTT :</string>
     <string name="settings_push_to_talk">Push-to-talk</string>
     <string name="settings_toggle">Bascule</string>
@@ -72,6 +72,9 @@
     <string name="settings_gate_thetis_mic">Micro téléphone Thetis</string>
     <string name="settings_gate_yaesu_mic">Micro téléphone Yaesu</string>
     <string name="settings_mic_gate_hint">Le PTT est immédiat ; l\'audio du micro s\'ouvre après ce délai. Plage de test : 0-800 ms.</string>
+    <string name="settings_dev_code">Code</string>
+    <string name="settings_dev_on">Mode développeur : mesure, essais relais et TCP, et lignes de journal supplémentaires</string>
+    <string name="settings_dev_off">Désactiver</string>
     <string name="settings_remote_server_pc">PC serveur distant :</string>
     <string name="settings_reboot">Redémarrer</string>
     <string name="settings_shutdown">Éteindre</string>
@@ -105,7 +108,14 @@
     <string name="stats_tx_gain">Gain TX</string>
     <string name="stats_audio_levels">Niveaux audio :</string>
     <string name="stats_statistics">Statistiques :</string>
-    <string name="stats_tcp_fallback">Repli TCP</string>
+    <string name="stats_measure">Mesure</string>
+    <string name="stats_measure_start">Démarrer</string>
+    <string name="stats_measure_stop">Arrêter</string>
+    <string name="stats_relay_only">Relais uniquement</string>
+    <string name="stats_relay_only_hint">Aucun chemin direct tant que c\'est activé ; un chemin direct revient aussitôt au relais. Non conservé après un redémarrage.</string>
+    <string name="stats_force_tcp">Forcer TCP</string>
+    <string name="stats_force_tcp_hint">Tout passe par le relais en TCP tant que c\'est activé, comme sur un réseau sans UDP - pour mesurer ce que cela coûte. Non conservé après un redémarrage.</string>
+    <string name="stats_relay_only_no_relay">Uniquement avec une connexion via le relais.</string>
     <string name="stats_link_loss">Perte de liaison</string>
     <string name="stats_down">Desc.</string>
     <string name="stats_up">Mont.</string>
@@ -314,4 +324,8 @@
     <string name="settings_ui_scale">Taille d\'affichage :</string>
     <string name="settings_ui_scale_landscape_on">À cette taille, l\'application suit l\'appareil. Verrouillez la rotation pour rester en portrait.</string>
     <string name="settings_ui_scale_landscape_off">À cette taille, l\'application reste en portrait. Une taille plus petite permet la rotation.</string>
+    <!-- Shown when the server is not running this app's build. It only tells;
+         nothing on this screen refuses to work over it. -->
+    <string name="stats_build_mismatch">Le serveur exécute %1$s et cette application %2$s - ce devrait être la même version.</string>
+    <string name="stats_build_too_old">une version trop ancienne pour le dire</string>
 </resources>

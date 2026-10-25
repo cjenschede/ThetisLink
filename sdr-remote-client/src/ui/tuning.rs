@@ -104,6 +104,13 @@ impl SdrRemoteApp {
         Self::full_span_hz(self.ddc_sample_rate_rx2, self.rx2_full_spectrum_span_hz)
     }
 
+    /// Whether a receiver's full-band row is of now (`RowLive`); `at` is that
+    /// receiver's `full_row_at`. The VRX centre and width and the spectrum's
+    /// tuning fallback all ask this (build 234).
+    pub(super) fn full_row_live(&self, at: Option<Instant>) -> bool {
+        RowLive { switched_on: self.full_spectrum_enabled, age: at.map(|t| t.elapsed()) }.live()
+    }
+
     /// What a new session does to the view, in one place.
     ///
     /// This existed twice - once for the automatic reconnect and once behind
@@ -119,11 +126,13 @@ impl SdrRemoteApp {
     pub(super) fn reset_view_for_new_session(&mut self) {
         self.full_spectrum_span_hz = 0;
         self.full_spectrum_bins.clear();
+        self.full_row_at = None;
         self.last_sent_zoom = 0.0;
         self.last_sent_pan = 0.0;
         self.zoom_pan_changed_at = Some(Instant::now());
         self.rx2_full_spectrum_span_hz = 0;
         self.rx2_full_spectrum_bins.clear();
+        self.rx2_full_row_at = None;
         self.rx2_last_sent_zoom = 0.0;
         self.rx2_last_sent_pan = 0.0;
         self.rx2_zoom_pan_changed_at = Some(Instant::now());
@@ -331,6 +340,74 @@ impl SdrRemoteApp {
         if pending.is_none() {
             *current = state_freq;
         }
+    }
+}
+
+/// How long a full-band row stays of now after its last packet. The server
+/// sends it on a 50 ms tick, so 2 s is many packets missed.
+const ROW_FRESH: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether a receiver's full-band row is of now (build 234, review of 233).
+/// Switched on is not enough: the server sends a receiver's row only while
+/// that receiver's spectrum or VRX window is open as well, and the client
+/// keeps the last row it got. A row that no longer comes kept its old centre,
+/// on another band perhaps, and after a lost session that centre passed for
+/// a measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RowLive {
+    /// The full-band spectrum is switched on.
+    pub switched_on: bool,
+    /// How long ago the last row of this receiver came (None: none yet).
+    pub age: Option<std::time::Duration>,
+}
+
+impl RowLive {
+    pub(super) fn live(self) -> bool {
+        self.switched_on && matches!(self.age, Some(a) if a < ROW_FRESH)
+    }
+}
+
+#[cfg(test)]
+mod row_live_tests {
+    use super::RowLive;
+    use std::time::Duration;
+
+    /// A row counts while it comes and is switched on (build 234, the probe
+    /// of the review of 233: the RX2 row stopped when its windows closed).
+    #[test]
+    fn a_row_counts_only_while_it_still_comes() {
+        let l = |switched_on, age: Option<u64>| RowLive { switched_on, age: age.map(Duration::from_millis) }.live();
+        assert!(l(true, Some(100)), "a row of now");
+        assert!(!l(true, Some(5_000)), "a row that stopped coming");
+        assert!(!l(true, None), "no row yet");
+        assert!(!l(false, Some(100)), "switched off");
+        assert!(!l(true, Some(2_000)), "the edge is not of now");
+        // Taken over with each new row, forgotten with the session.
+        let src = include_str!("sync_state.rs");
+        assert_eq!(src.matches("self.full_row_at = Some(Instant::now());").count(), 1);
+        assert_eq!(src.matches("self.rx2_full_row_at = Some(Instant::now());").count(), 1);
+        let tuning = include_str!("tuning.rs");
+        let reset = &tuning[tuning.find("fn reset_view_for_new_session").unwrap()..];
+        let reset = &reset[..reset.find("\n    }\n").unwrap()];
+        assert!(reset.contains("self.full_row_at = None;"));
+        assert!(reset.contains("self.rx2_full_row_at = None;"));
+        // The spectrum's fallback while tuning asks it too (review of 233).
+        let rx1 = include_str!("spectrum_content.rs");
+        let rx2 = include_str!("rx_controls.rs");
+        assert_eq!(rx1.matches("if !rx1_tuning_active || !self.full_row_live(self.full_row_at) {").count(), 1);
+        assert_eq!(rx2.matches("if !rx2_tuning_active || !self.full_row_live(self.rx2_full_row_at) {").count(), 1);
+        // And the VRX waterfall's backdrop, each with its own receiver (build
+        // 235, review of 234); the switch alone no longer decides it.
+        let sync = &src[..src.find("#[cfg(test)]").unwrap()];
+        let at = |needle: &str| sync.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert_eq!(sync.matches("if self.full_row_live(self.full_row_at) {").count(), 1);
+        assert_eq!(sync.matches("if self.full_row_live(self.rx2_full_row_at) {").count(), 1);
+        assert!(at("if self.full_row_live(self.full_row_at) {") < at("self.vrx1_spectrum.set_backdrop("));
+        assert!(at("self.vrx1_spectrum.clear_backdrop();") < at("if self.full_row_live(self.rx2_full_row_at) {"));
+        assert!(at("if self.full_row_live(self.rx2_full_row_at) {") < at("self.vrx2_spectrum.set_backdrop("));
+        assert!(at("self.vrx2_spectrum.set_backdrop(") < at("self.vrx2_spectrum.clear_backdrop();"));
+        assert_eq!(sync.matches("_spectrum.clear_backdrop();").count(), 2, "one per VRX");
+        assert!(!sync.contains("if state.full_spectrum_enabled {"), "the switch alone");
     }
 }
 

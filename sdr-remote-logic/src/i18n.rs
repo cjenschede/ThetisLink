@@ -245,6 +245,44 @@ pub fn connect_error_text(
             )),
         ),
 
+        ConnectError::ServerUnverified => (
+            lang.pick(
+                "The server does not know the password",
+                "De server kent het wachtwoord niet",
+                "Der Server kennt das Passwort nicht",
+                "Le serveur ne connaît pas le mot de passe",
+            ),
+            Some(lang.pick(
+                "This is not the server the password belongs to, or something sits in \
+                 between. Not connected.",
+                "Dit is niet de server waar het wachtwoord bij hoort, of er zit iets tussen. \
+                 Niet verbonden.",
+                "Dies ist nicht der Server, zu dem das Passwort gehört, oder etwas sitzt \
+                 dazwischen. Nicht verbunden.",
+                "Ce n'est pas le serveur auquel appartient le mot de passe, ou quelque chose \
+                 s'interpose. Non connecté.",
+            )),
+        ),
+
+        ConnectError::ServerProvesNothing => (
+            lang.pick(
+                "The server does not prove it knows the password",
+                "De server bewijst niet dat hij het wachtwoord kent",
+                "Der Server weist nicht nach, dass er das Passwort kennt",
+                "Le serveur ne prouve pas qu'il connaît le mot de passe",
+            ),
+            Some(lang.pick(
+                "An older server, from before the mutual check - or something sits in between. \
+                 Update the server; this client does not connect without the proof.",
+                "Een oudere server, van vóór de wederzijdse controle - of er zit iets tussen. \
+                 Werk de server bij; deze client verbindt niet zonder het bewijs.",
+                "Ein älterer Server, von vor der gegenseitigen Prüfung - oder etwas sitzt \
+                 dazwischen. Server aktualisieren; dieser Client verbindet nicht ohne den Nachweis.",
+                "Un serveur plus ancien, d'avant la vérification mutuelle - ou quelque chose \
+                 s'interpose. Mettez le serveur à jour ; ce client ne se connecte pas sans la preuve.",
+            )),
+        ),
+
         // Which side is behind is the whole message here, so the two cases get
         // their own headline rather than one "version mismatch" for both.
         ConnectError::ProtocolVersionMismatch {
@@ -463,6 +501,8 @@ mod tests {
             ConnectError::MalformedResponse { .. } => {}
             ConnectError::WrongPassword => {}
             ConnectError::WrongTotp => {}
+            ConnectError::ServerUnverified => {}
+            ConnectError::ServerProvesNothing => {}
             ConnectError::ProtocolVersionMismatch { .. } => {}
             ConnectError::TciUnreachable { .. } => {}
             ConnectError::Other { .. } => {}
@@ -498,6 +538,8 @@ mod tests {
             },
             ConnectError::WrongPassword,
             ConnectError::WrongTotp,
+            ConnectError::ServerUnverified,
+            ConnectError::ServerProvesNothing,
             ConnectError::ProtocolVersionMismatch {
                 server_version: 2,
                 client_version: 1,

@@ -135,7 +135,7 @@ fn chat_files() -> sdr_remote_chat::ChatFiles {
         .and_then(|e| e.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     sdr_remote_chat::ChatFiles {
-        log: dir.join("thetislink-server.log").to_string_lossy().to_string(),
+        log: crate::server_log_path().to_string_lossy().to_string(),
         conf: dir.join("thetislink-server.conf").to_string_lossy().to_string(),
     }
 }

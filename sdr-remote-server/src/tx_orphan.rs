@@ -66,13 +66,27 @@ mod tests {
     }
 
     /// The front-panel operator. Nobody holds the radio and it is transmitting,
-    /// but the server did not key it - so this must never fire.
+    /// but the server did not key it - so this must never fire. `observe` cannot
+    /// tell that from an idle radio (both are `(false, false)`); what keeps the
+    /// promise is that only a client's accepted PTT sets the "server keyed it"
+    /// flag, never a poll of the radio. Pinned there (round 101): since build 282
+    /// that is `key_radio`, right after it keys, reached from the audio of the
+    /// client that holds the radio.
     #[test]
     fn a_local_transmission_is_never_taken_away() {
-        let mut w = OrphanWatch::default();
-        for _ in 0..10 {
-            assert!(!w.observe(false, false));
+        let src = include_str!("network.rs");
+        let body = &sdr_remote_core::source_text::production_code(src);
+        for flag in ["self.yaesu_ptt_flag.store(true", "self.yaesu2_ptt_flag.store(true", "ptt_flag.store(true"] {
+            assert_eq!(body.matches(flag).count(), 0, "{flag}");
         }
+        assert_eq!(body.matches("flag.store(true, Ordering::Relaxed);").count(), 1, "one place raises it");
+        let at = body.find("    fn key_radio(").expect("the one place that keys a radio");
+        let key = &body[at..at + body[at..].find("
+    }
+").unwrap()];
+        let keyed = key.find("y.send_command(crate::yaesu::YaesuCmd::SetPtt(true));").unwrap();
+        assert!(keyed < key.find("flag.store(true, Ordering::Relaxed);").expect("in key_radio"), "after keying");
+        assert_eq!(body.matches("self.key_radio(").count(), 1, "from the audio arm only");
     }
 
     /// The race in a normal release: for one tick the owner is already gone

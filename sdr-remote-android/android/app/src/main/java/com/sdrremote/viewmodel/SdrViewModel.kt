@@ -4,6 +4,8 @@ package com.sdrremote.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.util.Log
 import com.sdrremote.prefs.LocalAudioPrefs
 import com.sdrremote.prefs.YaesuTxPrefs
@@ -41,6 +43,10 @@ private const val CONTROL_POWER = 0x02
 class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private var bridge: SdrBridge? = null
+    /** Tells the bridge when the phone has a network again; see [watchNetwork]. */
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    /** The default network the callback reported last (build 186). */
+    private var defaultNetwork: Network? = null
     private var initError: String? = null
     val audioRouting = AudioRouting(application)
 
@@ -78,6 +84,30 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(SdrUiState())
     val state: StateFlow<SdrUiState> = _state.asStateFlow()
+
+    /** The developer mode (build 298): its tools are drawn only while it is on. */
+    private val _developerMode = MutableStateFlow(com.sdrremote.prefs.DeveloperMode.saved(application))
+    val developerMode: StateFlow<Boolean> = _developerMode.asStateFlow()
+
+    /**
+     * The one way the app switches the mode: the setting, the process's switch
+     * for the log (with the line that says so), and - closing it - an end to
+     * what only the mode can start, so nothing keeps running out of sight: the
+     * measurement, "relay only" and "force TCP". The desktop's
+     * `switch_developer_mode`; here and not in the settings dialog, which
+     * closes.
+     */
+    fun switchDeveloperMode(on: Boolean) {
+        _developerMode.value = on
+        com.sdrremote.prefs.DeveloperMode.save(getApplication(), on)
+        uniffi.sdr_remote.setDeveloperMode(on)
+        if (!on) {
+            val st = _state.value
+            if (st.measurementFile != null) setMeasurement(false)
+            if (st.relayOnly) setRelayOnly(false)
+            if (st.forceTcp) setForceTcp(false)
+        }
+    }
 
     /**
      * The chat, on its own clock and its own flow.
@@ -122,6 +152,31 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     private var subbed0 = false
     private var subbed1 = false
     private var wasConnected = false
+    // The session generation last seen; a change is a new session on a link
+    // that never went down (a server restart inside the time-out, a network
+    // switch) - see the state collector.
+    private var sessionGenerationSeen: ULong = 0u
+
+    // One exit for everything a session leaves behind on this side, whatever
+    // ends it: the link dying, or a new session on a link that never went down.
+    // Next to the fields it resets. What the server has to be told again, the
+    // engine replays itself (session_intent); this side only has to stop
+    // believing. The subscriptions are asked for again on the next poll
+    // (wasConnected), so the ViewModel's bookkeeping agrees with the server
+    // again; a held PTT is let go, as the engine let go of its flags
+    // (PTT-NOOIT-HANGEN 2). Until build 62 only the dying link did all of this
+    // (reviews 61 and 62). No condition on the resets: a condition is a way for
+    // this exit to go quiet with its guard still green (review 62).
+    private fun sessionGone(why: String) {
+        subbed0 = false
+        subbed1 = false
+        if (ptt.asking() != null) {
+            Log.i(TAG, "$why while transmitting - releasing PTT")
+            ptt.disconnected()
+            pttEnded()
+        }
+        wasConnected = false
+    }
     // Presence auto-switch tracking (change detection for switching subscription and audio along).
     private var prevYaesuSel = 0
     private var prevPresent0 = false
@@ -187,9 +242,6 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 deviceName = android.os.Build.MODEL ?: "Android"
                 prefs.edit().putString("relay_device_name", deviceName).apply()
             }
-            // Audio over UDP (low latency) vs wss (encrypted). Default on; matches the
-            // desktop toggle. Applied at bridge creation, so a change needs an app restart.
-            val relayUdpEnabled = prefs.getBoolean("relay_udp_enabled", true)
             // Record whether the relay is actually the active transport THIS session
             // (mirrors the bridge condition below). The settings dialog compares the
             // live toggle against this to show a "restart to apply" notice - symmetric
@@ -197,7 +249,18 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             val relayActiveSession =
                 uniffi.sdr_remote.relayIsConfigured(relayEnabled, relayUrl, relayStation, relayToken)
             prefs.edit().putBoolean("relay_active_session", relayActiveSession).apply()
-            bridge = SdrBridge(relayEnabled, relayUrl, relayStation, relayToken, relayInstance, deviceName, relayUdpEnabled)
+            // Since build 133 the connection is always QUIC: straight to the
+            // address typed, or through the relay when it is set up. The old
+            // switches (quic_enabled, relay_quic, relay_udp_enabled) are no longer read.
+            // By name: five strings in a row go by position otherwise (review of 211).
+            bridge = SdrBridge(
+                relayEnabled = relayEnabled,
+                relayUrl = relayUrl,
+                relayStation = relayStation,
+                relayToken = relayToken,
+                relayInstance = relayInstance,
+                relayName = deviceName,
+            )
             // The few strings the Rust side produces (the connect status line) must
             // match the strings.xml Android already resolved, so we read the language
             // out of that same file rather than guessing from the system locale: if
@@ -241,13 +304,55 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 Log.w(TAG, "Saved local settings could not be restored", e)
             }
-            Log.i(TAG, "SdrBridge created successfully (relay=$relayEnabled, udp=$relayUdpEnabled, lang=$uiLang)")
+            Log.i(TAG, "SdrBridge created successfully (relay=$relayEnabled, lang=$uiLang)")
             startPolling()
             startChatPolling()
+            watchNetwork()
         } catch (e: Exception) {
             initError = e.message ?: "Unknown error"
             Log.e(TAG, "Failed to create SdrBridge", e)
             _state.value = SdrUiState(initError = initError)
+        }
+    }
+
+    /**
+     * After a network switch the relay connection waits for the new network on a
+     * short ladder of retries. Only the phone knows the moment that network is
+     * there, so it says so: the relay side then tries at once instead of at the
+     * next step (measured 2026-10-04: up to half a second of waiting too long).
+     * A failure here costs only that speed-up, never the connection - its own try.
+     */
+    private fun watchNetwork() {
+        try {
+            val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java) ?: return
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    // Another default network than before - not the first report
+                    // when the callback is registered: the relay session still
+                    // runs over the old one and starts again on this one (build 186).
+                    val before = defaultNetwork
+                    defaultNetwork = network
+                    if (before != null && before != network) {
+                        bridge?.networkChanged()
+                    }
+                    bridge?.networkAvailable()
+                }
+            }
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (e: Exception) {
+            Log.w(TAG, "Network events not available - reconnecting after a switch uses the retry ladder only", e)
+        }
+    }
+
+    private fun stopWatchingNetwork() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        try {
+            getApplication<Application>().getSystemService(ConnectivityManager::class.java)
+                ?.unregisterNetworkCallback(callback)
+        } catch (e: Exception) {
+            Log.w(TAG, "Network callback could not be unregistered", e)
         }
     }
 
@@ -443,25 +548,25 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val s = bridge?.getState() ?: continue
                     // On disconnect, reset the subscription state (the server forgets subs);
-                    // bij (her)connect opnieuw abonneren volgens window/actief-state.
+                    // on (re)connect, subscribe again according to the window/active state.
+                    // A new session on a link that never went down: the server
+                    // authenticated us again (a restart inside the time-out, a
+                    // network switch). Everything the old session left here goes
+                    // the way it goes when the link dies - BEFORE the connected
+                    // branch below, so it subscribes again in this same poll.
+                    if (s.sessionGeneration != sessionGenerationSeen) {
+                        sessionGenerationSeen = s.sessionGeneration
+                        sessionGone("New session")
+                    }
                     if (!s.connected) {
-                        if (subbed0 || subbed1) { subbed0 = false; subbed1 = false }
-                        // And let go of any PTT. The link is gone, so we are not
-                        // transmitting whatever this side still believes - and
-                        // the belief is what keeps the button red and makes
-                        // the next press return early. Same
-                        // gap as on the desktop: a refusal and a radio leaving TX
-                        // could end a press, a dying link could not.
-                        if (ptt.asking() != null) {
-                            Log.i(TAG, "Connection lost while transmitting - releasing PTT")
-                            ptt.disconnected()
-                            pttEnded()
-                        }
-                        wasConnected = false
+                        sessionGone("Connection lost")
                     } else if (!wasConnected) {
                         wasConnected = true
                         updateYaesuSubscriptions()
                     }
+                    // The measurement's readings run while the engine writes a file
+                    // - also when it ends one by itself (build 182).
+                    bridge?.let { networkMeter.follow(s.measurementFile != null, it) }
                     // A refusal means we are not transmitting, so stop
                     // believing we are. The red on this button is local and
                     // optimistic - deliberately, so a press needs no round trip
@@ -495,8 +600,11 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                     // pttReleasedByServer set. Handled above.
                     _state.value = SdrUiState(
                         connected = s.connected,
-                        relayTransportFallback = s.relayTransportFallback,
+                        route = s.route,
+                        sessionGeneration = s.sessionGeneration,
                         pttDenied = s.pttDenied,
+                        stationNotices = s.stationNotices,
+                        canConnect = s.canConnect,
                         yaesuHeldByOther = s.yaesuHeldByOther,
                         yaesu2HeldByOther = s.yaesu2HeldByOther,
                         audioError = s.audioError,
@@ -506,6 +614,16 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         connectStatusAction = s.connectStatusAction,
                         connectStatusIsError = s.connectStatusIsError,
                         connectStatusIsAwaitingTotp = s.connectStatusIsAwaitingTotp,
+                        serverBuildDiffers = s.serverBuildDiffers,
+                        serverBuild = s.serverBuild,
+                        measurementFile = s.measurementFile,
+                        relayOnly = s.relayOnly,
+                        forceTcp = s.forceTcp,
+                        viaRelay = s.viaRelay,
+                        pathShort = s.pathShort,
+                        pathName = s.pathName,
+                        pathHint = s.pathHint,
+                        pathCoupling = s.pathCoupling,
                         rttMs = s.rttMs.toInt(),
                         jitterMs = s.jitterMs,
                         bufferDepth = s.bufferDepth.toInt(),
@@ -552,6 +670,8 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         rxAfGain = s.rxAfGain.toInt(),
                         agcEnabled = s.agcEnabled,
                         otherTx = s.otherTx,
+                        meterTx = s.smeterTx,
+                        autoRefPaused = s.autoRefPaused,
                         transmitting = ptt.asking() != null,
                         filterLowHz = s.filterLowHz,
                         filterHighHz = s.filterHighHz,
@@ -725,8 +845,8 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                     // Auto-switch TX profile + Yaesu EQ on headset connect/disconnect
                     checkMicProfileSwitch()
                     checkYaesuEqAutoSwitch()
-                    // Presence-autocorrectie: subscription/audio meeschakelen als een
-                    // radio wegvalt/bijkomt.
+                    // Presence auto-correction: subscription/audio follow along when a
+                    // radio drops out or comes back.
                     checkYaesuPresenceAutoSwitch()
                     syncThetisAutostart()
                     // Keep the engine's TX chain on the radio that is actually
@@ -931,7 +1051,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // about what was actually sent.
         Log.i(
             TAG,
-            "Yaesu EQ geladen (radio=${sel()}, headset=$headsetNow, preset=$presetName, on=$enableEq, " +
+            "Yaesu EQ loaded (radio=${sel()}, headset=$headsetNow, preset=$presetName, on=$enableEq, " +
                 if (enableEq) {
                     // Locale.ROOT and a separator that is not a decimal comma.
                     // The first field log of this line read
@@ -957,6 +1077,33 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             loadAssignedYaesuEqPreset()
         }
         lastHeadsetForEq = headsetNow
+    }
+
+    /**
+     * Measurement mode (open point 34): every audio arrival and round trip to a
+     * file. A new file each time it is switched on, in the app's own folder on
+     * shared storage (Android/data/com.sdrremote/files/meting), so it can be
+     * fetched without root - the log in filesDir cannot.
+     */
+    fun setMeasurement(on: Boolean) {
+        val app = getApplication<Application>()
+        val dir = app.getExternalFilesDir("meting") ?: java.io.File(app.filesDir, "meting")
+        bridge?.setMeasurement(if (on) dir.absolutePath else null)
+        // The cell, signal and GPS readings follow the engine's state in the
+        // poll, not this button (build 182).
+    }
+
+    /** The phone's network and position for the measurement file (build 181). */
+    private val networkMeter = com.sdrremote.measure.NetworkMeter(getApplication())
+
+    /** "Relay only" from the measurement screen (build 137). */
+    fun setRelayOnly(on: Boolean) {
+        bridge?.setRelayOnly(on)
+    }
+
+    /** "Force TCP" from the measurement screen (build 146). */
+    fun setForceTcp(on: Boolean) {
+        bridge?.setForceTcp(on)
     }
 
     fun connect(addr: String, password: String = "") {
@@ -998,7 +1145,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 muteThetisLocally(false)
                 bridge?.enableSpectrum(true)
                 bridge?.setSpectrumFps(prefs.getInt("spectrum_fps", 15).toUByte())
-                bridge?.setSpectrumMaxBins(2048u) // anders default (hoge) bin-count → hoge datarate
+                bridge?.setSpectrumMaxBins(2048u) // otherwise the default (high) bin count → a high data rate
                 sendSavedRogerBeep()
                 delay(200)
                 bridge?.yaesuEnable(false)
@@ -1032,7 +1179,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         if (sel() == 1) bridge?.yaesu2TxAgc(on) else bridge?.yaesuTxAgc(on)
     }
 
-    // ── Radio-selectie & audio-routing (Android bedient één Yaesu-radio tegelijk) ──
+    // ── Radio selection & audio routing (Android operates one Yaesu radio at a time) ──
     // Both slots are subscribed after connect (discovery). "Yaesu active" and the selector
     // handle the audio purely through volume (only the active and chosen radio audible) plus a Thetis mute.
     private fun sel(): Int = _state.value.selectedRadio
@@ -1060,7 +1207,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         updateYaesuSubscriptions()
     }
 
-    /** Eén stream (databesparing, PATCH-android-yaesu-presence-datasaver): abonneer
+    /** One stream (data saving, PATCH-android-yaesu-presence-datasaver): subscribe
      *  ONLY the selected radio, and only when it is present (presence arrives
      *  separately through YaesuPresence, not through the stream) and the window is
      *  open or that radio is actually being listened to. The selector leans on
@@ -1104,7 +1251,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             prevYaesuSel = sel
             prevPresent0 = p0
             prevPresent1 = p1
-            updateYaesuSubscriptions() // (bevat presence-gate; nul present → nul streams)
+            updateYaesuSubscriptions() // (holds the presence gate; none present → no streams)
             applyYaesuAudio()
             // On an (automatic) radio change, also load the new radio's EQ from storage, just
             // as manual selectRadio() does.
@@ -1124,12 +1271,12 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // roughly 20 kB/s of audio nobody could hear kept arriving over mobile
         // data while the label beside the switch said "Thetis off".
         bridge?.setYaesuIsListeningRadio(on)
-        updateYaesuSubscriptions() // actieve radio blijft geabonneerd ook als window dichtgaat
+        updateYaesuSubscriptions() // the active radio stays subscribed even when the window closes
         val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
         viewModelScope.launch(Dispatchers.IO) {
             if (on) {
                 applyYaesuAudio()
-                muteThetisLocally(true)      // mute lokale Thetis-audio
+                muteThetisLocally(true)      // mute the local Thetis audio
                 // No enableSpectrum(false) here any more. It used to stop the
                 // spectrum at once, with no grace at all - the opposite mistake
                 // from the audio, which never stopped. The engine now does both
@@ -1138,8 +1285,8 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                 muteThetisLocally(false)
                 bridge?.enableSpectrum(true)
                 bridge?.setSpectrumFps(prefs.getInt("spectrum_fps", 15).toUByte())
-                bridge?.setSpectrumMaxBins(2048u) // anders default (hoge) bin-count → hoge datarate
-                applyYaesuAudio()            // beide Yaesu-radio's stil
+                bridge?.setSpectrumMaxBins(2048u) // otherwise the default (high) bin count → a high data rate
+                applyYaesuAudio()            // both Yaesu radios silent
             }
         }
     }
@@ -1159,7 +1306,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (st.selectedRadio == slot) return
         _state.value = st.copy(selectedRadio = slot)
-        updateYaesuSubscriptions() // bij window-dicht+actief: abonneer de nieuwe, meld de oude af
+        updateYaesuSubscriptions() // with the window closed and active: subscribe the new one, unsubscribe the old one
         applyYaesuAudio()
         // Load the currently selected radio's EQ from storage: the sliders show those
         // values and the engine transmits with them on PTT (operator's wish: each radio
@@ -1298,7 +1445,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      * that is still on, and the speaker back. What happens to the request itself
      * has already been decided by [ptt], and that is exactly the separation this
      * step makes - there is no path left that quietly cleans up the button in its
-     * manier opruimt.
+     * own way.
      */
     private fun pttEnded() {
         activePttTarget?.let { sendActualPtt(it, false) }
@@ -1551,7 +1698,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
             bridge?.enableSpectrum(true)
             bridge?.setSpectrumFps(prefs.getInt("spectrum_fps", 15).toUByte())
-            bridge?.setSpectrumMaxBins(2048u) // anders default (hoge) bin-count → hoge datarate
+            bridge?.setSpectrumMaxBins(2048u) // otherwise the default (high) bin count → a high data rate
         } else {
             bridge?.enableSpectrum(false)
         }
@@ -1612,6 +1759,11 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // any other way of losing the link, so a teardown mid-press cannot
         // leave a transmitter keyed.
         blePtt?.close()
+        // Before the bridge goes, so no network event reaches a bridge that is shutting down.
+        stopWatchingNetwork()
+        // The same for the measurement's readings (build 181), for good: a poll
+        // round still running may post a start after this (review of 182).
+        networkMeter.close()
         bridge?.shutdown()
         super.onCleared()
     }

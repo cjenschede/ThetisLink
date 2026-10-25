@@ -9,6 +9,7 @@
 use log::{debug, info};
 use crate::tci::TciConnection;
 use crate::tci_parser::mode_u8_to_str;
+use std::time::Instant;
 
 impl TciConnection {
     pub async fn set_vfo_a_freq(&mut self, hz: u64) {
@@ -21,6 +22,7 @@ impl TciConnection {
         let mode_str = mode_u8_to_str(mode);
         let cmd = format!("MODULATION:0,{};", mode_str);
         debug!("TCI: set VFO A mode = {} ({})", mode_str, mode);
+        self.asked_mode_a = Some((mode, Instant::now()));
         self.send(&cmd).await;
     }
 
@@ -79,6 +81,7 @@ impl TciConnection {
         let mode_str = mode_u8_to_str(mode);
         let cmd = format!("MODULATION:1,{};", mode_str);
         debug!("TCI: set VFO B mode = {} ({})", mode_str, mode);
+        self.asked_mode_b = Some((mode, Instant::now()));
         self.send(&cmd).await;
     }
 
@@ -347,7 +350,7 @@ impl TciConnection {
         self.send(&cmd).await;
         // Through the same rule as the notification, so receiver 1 is not
         // pushed aside by a TUNE OFF the server sent for receiver 0.
-        self.tune_active = crate::tci::merge_tune(&mut self.tune_rx, 0, on);
+        self.tune_from_us(0, on);
     }
 
     pub async fn set_tune_drive(&mut self, level: u8) {

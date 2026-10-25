@@ -14,6 +14,7 @@ macro_rules! ctrl_log {
 }
 
 use std::net::SocketAddr;
+use sdr_remote_core::dev_info;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
@@ -29,7 +30,8 @@ use crate::tracked_socket::TrackedSocket;
 use tokio::sync::{watch, Mutex};
 use tokio::time::{interval, Duration};
 
-use sdr_remote_core::jitter::{BufferedFrame, JitterBuffer, JitterResult};
+use sdr_remote_core::jitter::{BufferedFrame, JitterBuffer, TX_MAX_DEPTH, TX_MIN_DEPTH};
+use sdr_remote_core::resample::{resampler, UpFilter};
 use sdr_remote_core::protocol::*;
 use sdr_remote_core::{FRAME_SAMPLES_WIDEBAND, FULL_SPECTRUM_BINS, MAX_PACKET_SIZE, NETWORK_SAMPLE_RATE_WIDEBAND};
 
@@ -73,12 +75,50 @@ fn dbm_to_deci(dbm: f32) -> i16 {
 /// thetislink-server.log next to the executable, bypassing `log::` macros for
 /// consistency with panic-hook and to ensure visibility even if logger state
 /// is partially initialised.
+const BIND_TIMEOUT_SECS: u64 = 30;
+const BIND_RETRY_MS: u64 = 250;
+
+/// Bind the server's UDP port, retrying a port that is not yet free for up to
+/// [`BIND_TIMEOUT_SECS`] - and giving up within one retry when the server is
+/// stopped meanwhile (`Ok(None)`). Until build 131 a stop during this wait went unheard
+/// for up to 30 s (review 130, measured).
+async fn bind_with_retry(
+    bind_addr: SocketAddr,
+    shutdown: watch::Receiver<bool>,
+) -> std::io::Result<Option<UdpSocket>> {
+    let started = std::time::Instant::now();
+    let deadline = Duration::from_secs(BIND_TIMEOUT_SECS);
+    loop {
+        if *shutdown.borrow() {
+            return Ok(None);
+        }
+        match UdpSocket::bind(bind_addr).await {
+            Ok(s) => return Ok(Some(s)),
+            Err(e) => {
+                // Identify transient port-not-yet-released errors so we
+                // distinguish them from "no such interface" etc.
+                let kind = e.kind();
+                let transient = matches!(
+                    kind,
+                    std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+                );
+                if !transient || started.elapsed() >= deadline {
+                    return Err(e);
+                }
+                info!(
+                    "bind {} transient error ({:?}: {}), retrying in {}ms",
+                    bind_addr, kind, e, BIND_RETRY_MS
+                );
+                // The stop is looked at before every try: heard within one
+                // retry, a quarter of a second.
+                tokio::time::sleep(Duration::from_millis(BIND_RETRY_MS)).await;
+            }
+        }
+    }
+}
+
 fn write_bind_diag(entry: &str) {
-    let log_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("thetislink-server.log");
+    let log_path = crate::server_log_path();
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true).append(true).open(&log_path)
     {
@@ -133,6 +173,15 @@ fn blob_push_targets(
             if fresh.is_empty() { (None, Vec::new(), false) } else { (stored(), fresh, false) }
         }
     }
+}
+
+/// Whether the server's copy of a radio's memories can stand in for a read: it
+/// lists at least one channel. A cold FTX-1 that answers no channel in three
+/// passes still gives `Ok` with the header alone, and that copy kept the
+/// radio from ever being read again once the phone asked for the copy too
+/// (build 170; review of 169).
+fn memory_copy_has_channels(copy: Option<&str>) -> bool {
+    copy.is_some_and(|text| text.lines().skip(1).any(|line| !line.trim().is_empty()))
 }
 
 /// Send one blob to a set of clients, chunked, and report who took EVERY chunk.
@@ -302,7 +351,7 @@ fn send_own_report_inner(
         .ok()
         .and_then(|e| e.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let log = dir.join("thetislink-server.log");
+    let log = crate::server_log_path();
     let conf = dir.join("thetislink-server.conf");
     // The relay address is read from the config the same way the GUI does, so
     // the one host that must never travel is removed here too.
@@ -378,6 +427,11 @@ fn send_own_report_inner(
         }
     }
 }
+
+/// Step 4's way in (build 256): set where the socket is made, taken when the
+/// service runs.
+#[cfg(feature = "naspelen")]
+static TRIAL_INBOUND: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>> = std::sync::OnceLock::new();
 
 /// Server network service
 pub struct NetworkService {
@@ -479,12 +533,9 @@ impl NetworkService {
         tci_probe: Arc<crate::audio_stats::TciStatusProbe>,
         server_start: Instant,
         bind_status_slot: Arc<std::sync::OnceLock<crate::audio_stats::BindStatus>>,
-        // Phase C: when the relay is on, the tunnel channels to/from the relay monitor.
-        // uplink = TrackedSocket -> monitor (send to sentinel); inbound = monitor -> TrackedSocket.
-        relay_socket: Option<(
-            tokio::sync::mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
-            tokio::sync::mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>,
-        )>,
+        // When the relay is on: its grants, for the QUIC endpoint's route layer
+        // (phase 3b).
+        quic_relay: Option<sdr_remote_quic::RelayRoute>,
     ) -> Result<Self> {
         // The CW playout: a thread that hands due edges to a task that sends
         // them to Thetis. The thread keeps the moments; the task holds the PTT
@@ -531,51 +582,21 @@ impl NetworkService {
         // transient errors so the auto-restart path doesn't lose the race
         // when the previous instance's socket is still in TIME_WAIT or the
         // process slot is briefly held. Other errors fail immediately.
-        const BIND_TIMEOUT_SECS: u64 = 30;
-        const BIND_RETRY_MS: u64 = 250;
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let bind_loop = async {
-            let started = std::time::Instant::now();
-            let deadline = Duration::from_secs(BIND_TIMEOUT_SECS);
-            loop {
-                match UdpSocket::bind(bind_addr).await {
-                    Ok(s) => return Ok(s),
-                    Err(e) => {
-                        // Identify transient port-not-yet-released errors so we
-                        // distinguish them from "no such interface" etc.
-                        let kind = e.kind();
-                        let transient = matches!(
-                            kind,
-                            std::io::ErrorKind::AddrInUse
-                                | std::io::ErrorKind::PermissionDenied
-                        );
-                        if !transient || started.elapsed() >= deadline {
-                            return Err(e);
-                        }
-                        info!(
-                            "bind {} transient error ({:?}: {}), retrying in {}ms",
-                            bind_addr, kind, e, BIND_RETRY_MS
-                        );
-                        tokio::time::sleep(Duration::from_millis(BIND_RETRY_MS)).await;
-                    }
-                }
-            }
-        };
         let socket = match tokio::time::timeout(
             Duration::from_secs(BIND_TIMEOUT_SECS + 2),
-            bind_loop,
+            bind_with_retry(bind_addr, shutdown.clone()),
         )
         .await
         {
-            Ok(Ok(s)) => {
-                let _ = bind_status_slot.set(
-                    crate::audio_stats::BindStatus::Ok { addr: bind_addr.to_string() },
-                );
-                s
+            Ok(Ok(None)) => {
+                info!("Stopped while waiting for port {} - not started", bind_addr);
+                return Err(anyhow::anyhow!("stopped while waiting for port {}", bind_addr));
             }
+            Ok(Ok(Some(s))) => s,
             Ok(Err(e)) => {
                 let entry = format!("[BIND-FAIL] ts={} addr={} error={}\n", ts, bind_addr, e);
                 write_bind_diag(&entry);
@@ -585,7 +606,7 @@ impl NetworkService {
                         error: format!("{}", e),
                     },
                 );
-                return Err(anyhow::Error::new(e)).context("bind UDP socket");
+                return Err(anyhow::Error::new(e)).context("bind the server's port");
             }
             Err(_elapsed) => {
                 let entry = format!(
@@ -600,13 +621,14 @@ impl NetworkService {
                     },
                 );
                 return Err(anyhow::anyhow!(
-                    "bind UDP socket timed out after {}s on {}",
+                    "bind the server's port timed out after {}s on {}",
                     BIND_TIMEOUT_SECS, bind_addr
                 ));
             }
         };
-        // Enlarge UDP buffers: default Windows buffer (8KB) overflows with
-        // spectrum packets (4-8KB each x clients), dropping audio packets.
+        // Enlarge the socket buffers: the default Windows buffer (8KB) overflows
+        // with spectrum packets (4-8KB each x clients), dropping audio packets.
+        // QUIC runs on this same socket.
         {
             use socket2::SockRef;
             let sock_ref = SockRef::from(&socket);
@@ -614,9 +636,9 @@ impl NetworkService {
             let _ = sock_ref.set_recv_buffer_size(512 * 1024);
             let send = sock_ref.send_buffer_size().unwrap_or(0);
             let recv = sock_ref.recv_buffer_size().unwrap_or(0);
-            info!("UDP socket bound to {} (send_buf={}KB, recv_buf={}KB)", bind_addr, send/1024, recv/1024);
+            info!("Socket bound to {} (send_buf={}KB, recv_buf={}KB)", bind_addr, send/1024, recv/1024);
         }
-        // Mark the UDP socket non-inheritable on Windows. Default WSASocket
+        // Mark the socket non-inheritable on Windows. Default WSASocket
         // handles are inheritable, which means any child process we spawn
         // (e.g. the auto-restart helper) keeps the socket alive after we
         // exit, blocking the new process from binding the same port for
@@ -642,13 +664,64 @@ impl NetworkService {
             }
         }
 
-        Ok(Self {
-            socket: Arc::new(match relay_socket {
-                Some((uplink_tx, inbound_rx)) => {
-                    TrackedSocket::with_relay(socket, uplink_tx, inbound_rx)
+        // The QUIC endpoint on that socket (since build 133 the server's only
+        // one, on the port the operator set - 4580 by default), and with the
+        // relay also the relay's: one endpoint for both. A server that cannot
+        // run it does not start: there is nothing else for a client to reach.
+        let via_relay = quic_relay.is_some();
+        let direct = crate::config::direct_connections(&config);
+        let started = socket
+            .into_std()
+            .and_then(|std_socket| sdr_remote_quic::QuicServer::start_on(std_socket, sdr_remote_quic::Congestion::Bbr, quic_relay, direct));
+        let socket = match started {
+            Ok((server, link)) => {
+                // Named in the brief before it was built (working rule 11, build 133).
+                info!(
+                    "QUIC: listening on {}{}{}",
+                    bind_addr,
+                    if via_relay { " and via the relay" } else { "" },
+                    // Named in the brief before it was built (working rule 11, build 135).
+                    if direct == sdr_remote_quic::Direct::RelayOnly { " - direct connections refused (relay only)" } else { "" }
+                );
+                let _ = bind_status_slot.set(
+                    crate::audio_stats::BindStatus::Ok { addr: bind_addr.to_string() },
+                );
+                // The permit to punch follows the session (build 127).
+                {
+                    let mut s = session.lock().await;
+                    s.watch_admissions(Arc::new(crate::tracked_socket::PunchPermits(server.punch_gate())));
+                    // The way each client takes, for the status panel (build 143).
+                    s.see_ways(Arc::new(crate::tracked_socket::WaysOf(server.ways())));
                 }
-                None => TrackedSocket::new(socket),
-            }),
+                let sock = TrackedSocket::new(server, link);
+                // Step 4's way in, a development build only (build 256).
+                #[cfg(feature = "naspelen")]
+                let sock = match crate::trial::get().and_then(|t| t.replay.clone()) {
+                    Some(_) => {
+                        let (sock, to_server) = sock.with_trial_inbound();
+                        let _ = TRIAL_INBOUND.set(to_server);
+                        sock
+                    }
+                    None => sock,
+                };
+                sock
+            }
+            Err(e) => {
+                let entry = format!("[QUIC-FAIL] ts={} addr={} error={}\n", ts, bind_addr, e);
+                write_bind_diag(&entry);
+                let _ = bind_status_slot.set(
+                    crate::audio_stats::BindStatus::Failed {
+                        addr: bind_addr.to_string(),
+                        error: format!("QUIC: {}", e),
+                    },
+                );
+                error!("QUIC: could not start on {} ({}) - the server does not start", bind_addr, e);
+                return Err(anyhow::Error::new(e)).context("start QUIC");
+            }
+        };
+
+        Ok(Self {
+            socket: Arc::new(socket),
             session,
             ptt,
             spectrum,
@@ -735,8 +808,289 @@ impl NetworkService {
         );
     }
 
+    /// Let go of one transmitter, now - the radio side of a release; who held
+    /// it is the session's business. Exhaustive on purpose: a new transmitter
+    /// does not compile until it says how it is let go.
+    async fn release_transmitter(&self, target: crate::session::TxTarget) {
+        match target {
+            crate::session::TxTarget::Thetis => {
+                let mut p = self.ptt.lock().await;
+                p.cancel_prefill();
+                p.release().await;
+            }
+            crate::session::TxTarget::Yaesu1 => {
+                if let Some(ref y) = self.yaesu {
+                    y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
+                }
+                self.yaesu_ptt_flag.store(false, Ordering::Relaxed);
+            }
+            crate::session::TxTarget::Yaesu2 => {
+                if let Some(ref y) = self.yaesu2 {
+                    y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
+                }
+                self.yaesu2_ptt_flag.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// A radio and the flag that says this server keyed it (build 282).
+    fn radio_and_flag(&self, target: crate::session::TxTarget) -> Option<(&crate::yaesu::YaesuRadio, &std::sync::atomic::AtomicBool)> {
+        match target {
+            crate::session::TxTarget::Yaesu1 => self.yaesu.as_deref().map(|y| (y, &*self.yaesu_ptt_flag)),
+            crate::session::TxTarget::Yaesu2 => self.yaesu2.as_deref().map(|y| (y, &*self.yaesu2_ptt_flag)),
+            crate::session::TxTarget::Thetis => None,
+        }
+    }
+
+    /// Key a radio for `addr`, which holds it now: its first packet with the
+    /// flag came in (`radio_audio!`, build 282). The mirror of
+    /// `release_played`. Auto-DFM (FM <-> DATA-FM) and the memory-mode skip
+    /// are `YaesuCmd::SetPtt`'s own (build 12).
+    fn key_radio(&self, target: crate::session::TxTarget, addr: SocketAddr) {
+        let Some((y, flag)) = self.radio_and_flag(target) else { return };
+        let label = {
+            let st = y.status_arc();
+            let st = st.lock().unwrap();
+            st.tx_timing.request(true);
+            st.tx_timing.label()
+        };
+        y.send_command(crate::yaesu::YaesuCmd::SetPtt(true));
+        flag.store(true, Ordering::Relaxed);
+        // Named in advance (working rule 11, build 282).
+        info!("{} PTT: keyed by the first PTT frame from {}", label, addr);
+    }
+
+    /// A packet with the flag asks for its transmitter (`tx_intake::Intake::Claim`,
+    /// build 285): the radio's own refusal first (`radio_refusal`: a Yaesu's
+    /// `tx_start_refusal`, none for Thetis), then the session's. A refusal is
+    /// told to the client at the pace `denied` allows; a grant ends the
+    /// attempt. Whether it was granted. Thetis and the radios each had their
+    /// own copy of this until build 285.
+    async fn claim_tx(
+        &self,
+        target: crate::session::TxTarget,
+        addr: SocketAddr,
+        radio_refusal: Option<&'static str>,
+        denied: &mut crate::tx_denial::DenialLog,
+    ) -> bool {
+        let refusal = match radio_refusal {
+            Some(why) => Some((why, Denial::Refused)),
+            None => {
+                let mut s = self.session.lock().await;
+                if s.try_acquire_tx(target, addr) {
+                    None
+                } else {
+                    let r = s.acquire_refusal();
+                    Some((r.why, r.denial))
+                }
+            }
+        };
+        let Some((why, denial)) = refusal else {
+            denied.attempt_over(&addr);
+            return true;
+        };
+        let first = denied.is_first(&addr);
+        let now_ms = self.server_start.elapsed().as_millis() as u64;
+        if denied.should_send(addr, now_ms) {
+            if first {
+                info!("Client {} asked for {} TX but {} - refused", addr, target.radio_name(), why);
+            }
+            let mut buf = [0u8; PttDeniedPacket::SIZE];
+            PttDeniedPacket::serialize(&mut buf, denied_target_of(target), denial);
+            let _ = self.socket.send_to(&buf, addr).await;
+        }
+        false
+    }
+
+    /// The holder's release frame came out of the radio's buffer (build 282):
+    /// everything before it is with the sound card. The holder lets go, and
+    /// the radio goes off once the sound card played it (`asked_release`, the
+    /// wait in the poll loop). Nothing when the radio was let go another way
+    /// meanwhile, or a new press keyed it again (`over`).
+    async fn release_played(&self, played: crate::tx_recover::ReleasePlayed) {
+        let target = played.target;
+        let Some((y, flag)) = self.radio_and_flag(target) else { return };
+        if y.status_arc().lock().unwrap().tx_timing.over() != played.over {
+            return;
+        }
+        if !self.session.lock().await.release_tx(target, played.from) {
+            return;
+        }
+        let label = {
+            let st = y.status_arc();
+            let st = st.lock().unwrap();
+            st.tx_timing.request(false);
+            st.tx_timing.label()
+        };
+        y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
+        flag.store(false, Ordering::Relaxed);
+        // Named in advance (working rule 11, build 282).
+        info!("{} PTT: the release frame from {} played - TX0 after the sound card", label, played.from);
+    }
+
+    /// The safety task stopped while the server runs. That task is what ends a
+    /// transmission nobody ends: the heartbeat watchdog (`check_safety`), the
+    /// time-out that takes a transmitter from a client gone silent
+    /// (`check_timeout`) and the CW key watchdog. Without it a client that
+    /// vanishes mid-transmission leaves the radio on the air - and a Yaesu
+    /// keyed on its RTS line has no watchdog of its own at all.
+    ///
+    /// So everything is let go, and transmitting stays refused until the
+    /// server is restarted (owner's decision, 2026-09-29). The one block for
+    /// this; `PTT-NOOIT-HANGEN.md` §4.6.
+    async fn safety_task_lost(&self, task: &str, why: &str) {
+        error!(
+            "SAFETY: {} stopped ({}) - every transmitter that is ours released, transmitting refused until the server is restarted (the [PANIC] entry in this log says where)",
+            task, why
+        );
+        // What the server keys on its own (tune carrier, ZZTX1) goes past the
+        // session; this gate stops it. The dead task was the one that set it.
+        self.ptt.lock().await.tx_blocked_handle().store(true, Ordering::Relaxed);
+        let closed = self.session.lock().await.close_tx();
+        for (target, addr) in &closed.held {
+            error!("SAFETY: {} held {} - taken away", addr, target.radio_name());
+        }
+        // Every transmitter that is ours: held by a client, or keyed by this
+        // server with nobody holding it (the orphan case). Not one that is on
+        // the air by an operator at the radio - forcing RX there cuts them off,
+        // the same rule as `release_on_reopen` and the orphan watch.
+        // None of these waits on the radio - TCI goes out with `try_send`, a Yaesu
+        // command is a channel send - so the key lines below are reached at once
+        // (review build 57: said here, so a change that makes one wait is seen).
+        for target in crate::session::TxTarget::ALL {
+            let server_keyed = match target {
+                crate::session::TxTarget::Thetis => self.ptt.lock().await.is_transmitting(),
+                crate::session::TxTarget::Yaesu1 => self.yaesu_ptt_flag.load(Ordering::Relaxed),
+                crate::session::TxTarget::Yaesu2 => self.yaesu2_ptt_flag.load(Ordering::Relaxed),
+            };
+            if ours_to_let_go(closed.held.iter().any(|(t, _)| *t == target), server_keyed) {
+                self.release_transmitter(target).await;
+            }
+        }
+        // A CW key that is down comes up through the one writer, then the
+        // Yaesu key lines go down and stay closed for this run.
+        if let Some(up) = crate::cw_playout::lock(&self.cw).release_owner(Instant::now()) {
+            let _ = self.cw_due.send(up);
+        }
+        let down = lower_all_key_lines(&self.cw_lines);
+        self.tell_all_closed(closed, down).await;
+    }
+
+    /// Told LAST: the radios first, the clients after - a send that waits on a
+    /// full socket must not stand between a loss and a key line going down
+    /// (review 61). The order is a type, not an anchor: `KeyLinesDown` exists
+    /// only once the lines are down, and `closed.tell` only once the server is
+    /// closed, so this cannot be called earlier (review 63). Every client,
+    /// holder or not: a holder's button lets go (one of the refusals names the
+    /// transmitter it asks for) and a held key does not keep asking; a listener
+    /// notes the closed server instead of learning it at its first press - the
+    /// phone, listening, was told nothing (field test build 60).
+    async fn tell_all_closed(&self, closed: crate::session::TxClosed, _after: KeyLinesDown) {
+        for addr in closed.tell {
+            self.tell_if_closed(addr).await;
+        }
+    }
+
+    /// Step 4 (build 256, a development build only): play the drive of
+    /// `--inspelen` in through the trial's way in, `START_DELAY` after the start,
+    /// as the trial client, whose session is let in again before a packet if it
+    /// went (a time-out between overs).
+    #[cfg(feature = "naspelen")]
+    fn start_trial_replay(&self) {
+        let Some(path) = crate::trial::get().and_then(|t| t.replay.clone()) else { return };
+        let Some(to_server) = TRIAL_INBOUND.get().cloned() else {
+            warn!("Trial: no way in for {} - the replay does not start", path);
+            return;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("Trial: {}: {} - the replay does not start", path, e);
+                return;
+            }
+        };
+        let arrivals = crate::tx_replay::parse_measurement(&text);
+        let sound = match crate::trial::get().and_then(|t| t.sound.clone()) {
+            None => None,
+            Some(p) => match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| crate::trial::read_wav_16k(&b)) {
+                Ok(s) => {
+                    // Named in advance (working rule 11, build 257).
+                    info!("Trial: the played-in packets carry {} ({} s of sound)", p, s.len() / 16_000);
+                    Some(s)
+                }
+                Err(e) => {
+                    warn!("Trial: {}: {} - the replay does not start", p, e);
+                    return;
+                }
+            },
+        };
+        let audio = match crate::trial::audio_sends(&arrivals, sound.as_deref()) {
+            Ok(a) => a,
+            Err(e) => {
+                warn!("Trial: no Opus encoder ({}) - the replay does not start", e);
+                return;
+            }
+        };
+        let ptt: Vec<bool> = arrivals.iter().map(|a| a.ptt).collect();
+        let sends = crate::trial::schedule(audio, &ptt);
+        // Named in advance (working rule 11, build 256).
+        info!(
+            "Trial: replaying {} TX arrivals from {} in {} s, as client {}",
+            arrivals.len(),
+            path,
+            crate::trial::START_DELAY.as_secs(),
+            crate::trial::TRIAL_CLIENT
+        );
+        let session = self.session.clone();
+        let admit = move || {
+            if session.blocking_lock().admit_trial_client(crate::trial::TRIAL_CLIENT) {
+                info!("Trial: client {} admitted", crate::trial::TRIAL_CLIENT);
+            }
+        };
+        let done = |n: usize, took: Duration| info!("Trial: replay done - {} packets in {} s", n, took.as_secs());
+        crate::trial::play(sends, Instant::now() + crate::trial::START_DELAY, to_server, admit, done);
+    }
+
+    /// Tell this client that transmitting is closed, if it is: a refusal per
+    /// transmitter, `Denial::Closed`. The one way a client learns it, for a
+    /// client that has just authenticated (after the accept, so its clean-up
+    /// of the new session - `session_lost!` on AUTH_ACCEPTED - has happened)
+    /// and for every client at the moment of the loss (`safety_task_lost`). A
+    /// client asking for none of the transmitters lets go of nothing and notes
+    /// the closed server; one asking for a transmitter lets that one go.
+    async fn tell_if_closed(&self, addr: SocketAddr) {
+        if self.session.lock().await.acquire_refusal().denial != Denial::Closed {
+            return;
+        }
+        for target in crate::session::TxTarget::ALL {
+            let mut buf = [0u8; PttDeniedPacket::SIZE];
+            PttDeniedPacket::serialize(&mut buf, denied_target_of(target), Denial::Closed);
+            let _ = self.socket.send_to(&buf, addr).await;
+        }
+    }
+
     pub async fn run(mut self) -> Result<()> {
         let start = Instant::now();
+        // Step 4, a development build only (build 256): a drive played in.
+        #[cfg(feature = "naspelen")]
+        self.start_trial_replay();
+        // Developer only (build 230): the arrival of every Thetis TX packet.
+        let mut tx_measure = if self.config.measuring() {
+            let dir = crate::server_log_path().parent().map(|d| d.to_path_buf()).unwrap_or_default();
+            match crate::tx_arrivals::TxArrivals::start(&dir, &sdr_remote_core::version_string()) {
+                Ok(m) => {
+                    // Named in advance (`logregels-build230.md`).
+                    info!("Measurement (server) on: {}", m.path().display());
+                    Some(m)
+                }
+                Err(e) => {
+                    warn!("Measurement (server) could not start in {}: {}", dir.display(), e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let yaesu = self.yaesu.clone();
         let yaesu2 = self.yaesu2.clone();
 
@@ -845,12 +1199,16 @@ impl NetworkService {
             let server_start = self.server_start;
             let mut shutdown = self.shutdown.clone();
             tokio::spawn(async move {
-                let mut tick = interval(Duration::from_millis(1000));
+                // 250 ms since build 272: the panel shows Thetis transmitting
+                // from here, and a second was late for a press.
+                let mut tick = interval(Duration::from_millis(250));
                 loop {
                     tokio::select! {
                         _ = tick.tick() => {
                             let tci_up = {
                                 let p = ptt.lock().await;
+                                // One definition of "Thetis transmits" (build 273).
+                                probe.set_transmitting(p.tx_now().thetis);
                                 p.tci_connected()
                             };
                             probe.update(tci_up, server_start);
@@ -862,7 +1220,7 @@ impl NetworkService {
         };
 
         // Spawn Yaesu state broadcast task (separate from Thetis broadcast)
-        let _yaesu_state_handle = {
+        let yaesu_state_handle = {
             let yaesu = yaesu.clone();
             let ptt_flag = self.yaesu_ptt_flag.clone();
             let socket = self.socket.clone();
@@ -892,10 +1250,10 @@ impl NetworkService {
                     // the last one leaves. In per-PTT mode the SetPtt handler does this.
                     let mut ssb_applied0 = false;
                     let mut absent_ticks0: u32 = 0;
-                    let mut orphan0 = crate::tx_orphan::OrphanWatch::default();
-                    // Last `auto_release` seen from the poller - see the use below.
-                    let mut last_auto_release0: u32 = 0;
-                    let mut last_conn_gen0: u64 = 0;
+                    // Its safety nets (`RadioSafety`, one block for both radios
+                    // since build 289).
+                    let mut safety = RadioSafety::new(crate::session::TxTarget::Yaesu1);
+                    let mut joined0 = crate::session::GenerationWatch::new();
                     // Why the blob tick-list was last cleared, so the log names the real
                     // cause instead of always blaming the safety net.
                     let mut blob_reason0: &'static str = "safety-net top-up";
@@ -924,8 +1282,7 @@ impl NetworkService {
                                 // everything again instead; it is kilobytes on a rare event.
                                 {
                                     let gen = session.lock().await.connect_generation();
-                                    if gen != last_conn_gen0 {
-                                        last_conn_gen0 = gen;
+                                    if joined0.changed(gen) {
                                         sent_features0.clear();
                                         sent_memory0.clear();
                                         sent_menu0.clear();
@@ -942,70 +1299,13 @@ impl NetworkService {
                                         s.tx_holder(crate::session::TxTarget::Yaesu1),
                                     )
                                 };
-                                // The owner is gone but the radio is still keyed.
-                                // Nothing else would end this: a Yaesu's PTT is a
-                                // command, not a stream that dries up, so it would
-                                // transmit until its own time-out timer expires -
-                                // and on a 991A that timer is often off. Thetis has
-                                // its own dead-man switch; this is the Yaesu's.
-                                // The server let go of this radio itself.
-                                //
-                                // Unkeying it is half the job. Without this the
-                                // session still has the client down as the holder
-                                // and the client still believes it transmits, so it
-                                // keeps sending TX audio at a radio that is off and
-                                // its button stays red - the complaint from
-                                // 2026-08-07, which survived five attempts at fixing
-                                // it on the client side (2026-09-05).
-                                //
-                                // A counter and not a flag: two of these between
-                                // ticks must not collapse into one, and one must not
-                                // be seen twice.
-                                if let Some(ref y) = yaesu {
-                                    let seen = y.status().auto_release;
-                                    if seen != last_auto_release0 {
-                                        last_auto_release0 = seen;
-                                        if let Some(holder) = tx_holder {
-                                            session
-                                                .lock()
-                                                .await
-                                                .release_tx(crate::session::TxTarget::Yaesu1, holder);
-                                            let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio1, true);
-                                            let sent = socket.try_send_to(&buf, holder);
-                                            // Whether it actually went out, not just
-                                            // that we tried. `try_send_to` returns a
-                                            // Result and it was being discarded, so a
-                                            // refusal from the socket looked exactly
-                                            // like a delivery.
-                                            info!(
-                                                concat!(
-                                                    "Yaesu radio 0 released by the server ",
-                                                    "(time-out timer or the radio stopping) - told {} ({})",
-                                                ),
-                                                holder,
-                                                match sent {
-                                                    Ok(n) => format!("{n} bytes sent"),
-                                                    Err(e) => format!("SEND FAILED: {e}"),
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                if orphan0.observe(ptt_flag.load(Ordering::Relaxed), tx_holder.is_some()) {
-                                    if let Some(ref y) = yaesu {
-                                        log::error!(
-                                            "SAFETY: Yaesu radio 0 still keyed with no client holding it - releasing PTT"
-                                        );
-                                        y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
-                                    }
-                                    ptt_flag.store(false, Ordering::Relaxed);
-                                }
+                                safety.tick(&session, &socket, yaesu.as_deref(), &ptt_flag, tx_holder).await;
                                 if let Some(ref y) = yaesu {
                                     let st = y.status();
                                     if !st.ssb_switch_on_ptt {
                                         absent_ticks0 = if audio_addrs.is_empty() { absent_ticks0.saturating_add(1) } else { 0 };
-                                        if let Some(on) = presence_routing_step(ssb_applied0, !audio_addrs.is_empty(), absent_ticks0, &st) {
+                                        let step = PresenceRouting { applied: ssb_applied0, clients: !audio_addrs.is_empty(), absent_ticks: absent_ticks0 };
+                                        if let Some(on) = step.step(&st) {
                                             y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(on));
                                             ssb_applied0 = on;
                                         }
@@ -1135,7 +1435,7 @@ impl NetworkService {
 
         // Slot-1 state broadcast (Option B-prime) - mirror of slot 0, but as
         // YaesuState2 / YaesuMemoryData2 to yaesu2_addrs (subscription-gated).
-        let _yaesu2_state_handle = {
+        let yaesu2_state_handle = {
             let yaesu2 = yaesu2.clone();
             let ptt_flag = self.yaesu2_ptt_flag.clone();
             let socket = self.socket.clone();
@@ -1157,9 +1457,10 @@ impl NetworkService {
                     // Presence-based SSB routing (opt-out mode) for radio 2 (FTX-1).
                     let mut ssb_applied1 = false;
                     let mut absent_ticks1: u32 = 0;
-                    let mut orphan1 = crate::tx_orphan::OrphanWatch::default();
-                    let mut last_auto_release1: u32 = 0;
-                    let mut last_conn_gen1: u64 = 0;
+                    // Its safety nets (`RadioSafety`, one block for both radios
+                    // since build 289).
+                    let mut safety = RadioSafety::new(crate::session::TxTarget::Yaesu2);
+                    let mut joined1 = crate::session::GenerationWatch::new();
                     // Why the blob tick-list was last cleared, so the log names the real
                     // cause instead of always blaming the safety net.
                     let mut blob_reason1: &'static str = "safety-net top-up";
@@ -1188,8 +1489,7 @@ impl NetworkService {
                                 // everything again instead; it is kilobytes on a rare event.
                                 {
                                     let gen = session.lock().await.connect_generation();
-                                    if gen != last_conn_gen1 {
-                                        last_conn_gen1 = gen;
+                                    if joined1.changed(gen) {
                                         sent_features1.clear();
                                         sent_memory1.clear();
                                         sent_menu1.clear();
@@ -1204,65 +1504,13 @@ impl NetworkService {
                                         s.tx_holder(crate::session::TxTarget::Yaesu2),
                                     )
                                 };
-                                // The owner is gone but the radio is still keyed.
-                                // Nothing else would end this: a Yaesu's PTT is a
-                                // command, not a stream that dries up, so it would
-                                // transmit until its own time-out timer expires -
-                                // and on a 991A that timer is often off. Thetis has
-                                // its own dead-man switch; this is the Yaesu's.
-                                // The server let go of this radio itself.
-                                //
-                                // Unkeying it is half the job. Without this the
-                                // session still has the client down as the holder
-                                // and the client still believes it transmits, so it
-                                // keeps sending TX audio at a radio that is off and
-                                // its button stays red - the complaint from
-                                // 2026-08-07, which survived five attempts at fixing
-                                // it on the client side (2026-09-05).
-                                //
-                                // A counter and not a flag: two of these between
-                                // ticks must not collapse into one, and one must not
-                                // be seen twice.
-                                if let Some(ref y) = yaesu2 {
-                                    let seen = y.status().auto_release;
-                                    if seen != last_auto_release1 {
-                                        last_auto_release1 = seen;
-                                        if let Some(holder) = tx_holder {
-                                            session
-                                                .lock()
-                                                .await
-                                                .release_tx(crate::session::TxTarget::Yaesu2, holder);
-                                            let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio2, true);
-                                            let sent = socket.try_send_to(&buf, holder);
-                                            info!(
-                                                concat!(
-                                                    "Yaesu radio 1 released by the server ",
-                                                    "(time-out timer or the radio stopping) - told {} ({})",
-                                                ),
-                                                holder,
-                                                match sent {
-                                                    Ok(n) => format!("{n} bytes sent"),
-                                                    Err(e) => format!("SEND FAILED: {e}"),
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                if orphan1.observe(ptt_flag.load(Ordering::Relaxed), tx_holder.is_some()) {
-                                    if let Some(ref y) = yaesu2 {
-                                        log::error!(
-                                            "SAFETY: Yaesu radio 1 still keyed with no client holding it - releasing PTT"
-                                        );
-                                        y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
-                                    }
-                                    ptt_flag.store(false, Ordering::Relaxed);
-                                }
+                                safety.tick(&session, &socket, yaesu2.as_deref(), &ptt_flag, tx_holder).await;
                                 if let Some(ref y) = yaesu2 {
                                     let st = y.status();
                                     if !st.ssb_switch_on_ptt {
                                         absent_ticks1 = if audio_addrs.is_empty() { absent_ticks1.saturating_add(1) } else { 0 };
-                                        if let Some(on) = presence_routing_step(ssb_applied1, !audio_addrs.is_empty(), absent_ticks1, &st) {
+                                        let step = PresenceRouting { applied: ssb_applied1, clients: !audio_addrs.is_empty(), absent_ticks: absent_ticks1 };
+                                        if let Some(on) = step.step(&st) {
                                             y.send_command(crate::yaesu::YaesuCmd::SetSsbRouting(on));
                                             ssb_applied1 = on;
                                         }
@@ -1452,7 +1700,7 @@ impl NetworkService {
                     let mut sent_addrs: std::collections::HashSet<std::net::SocketAddr> =
                         std::collections::HashSet::new();
                     let mut last_presence_resend = std::time::Instant::now();
-                    let mut last_conn_gen_presence: u64 = 0;
+                    let mut joined_presence = crate::session::GenerationWatch::new();
                     // Who has been TOLD about, as opposed to who has been sent to. The
                     // safety net clears `sent_addrs` every STATE_RESEND_SECS so the value
                     // goes out again, which is the point - but it meant every client was
@@ -1473,8 +1721,7 @@ impl NetworkService {
                                 // session timeout is invisible to the address pruning.
                                 {
                                     let gen = session.lock().await.connect_generation();
-                                    if gen != last_conn_gen_presence {
-                                        last_conn_gen_presence = gen;
+                                    if joined_presence.changed(gen) {
                                         sent_addrs.clear();
                                         logged_addrs.clear();
                                     }
@@ -1538,8 +1785,9 @@ impl NetworkService {
             }
         };
 
-        // Spawn the safety check task
-        let safety_handle = {
+        // Spawn the safety check task. The main loop watches it: if it ends while
+        // the server runs, everything it guards is released (`safety_task_lost`).
+        let mut safety_handle = {
             let ptt = self.ptt.clone();
             let session = self.session.clone();
             let socket = self.socket.clone();
@@ -1586,6 +1834,9 @@ impl NetworkService {
                 let mut pa_startup_done = false;
                 let mut pa_startup_waiting_logged = false;
                 let mut pa_prev_thetis_known = false;
+                // Thetis.exe's process id in the run the startup check was made
+                // for (build 226).
+                let mut pa_thetis_pid: Option<u32> = None;
                 let mut pa_last_standby_cmd: Option<std::time::Instant> = None;
                 let mut pa_waiting_for_rx_logged = false;
                 // What the RF2K-S was last seen doing, and the drive at the moment
@@ -1612,9 +1863,33 @@ impl NetworkService {
                 let mut last_vfo_freq: u64 = 0; // cached VFO A for tuner stale check
                 let mut last_vfo_b_freq: u64 = 0; // cached VFO B for DX cluster band filter
                 let mut tci_spots_sent: std::collections::HashSet<(String, u64)> = std::collections::HashSet::new();
+                // Logged once per stretch without a client (build 219).
+                let mut dx_spots_alone_logged = false;
+                // The TCI connection the spots in `tci_spots_sent` went to (build 220).
+                let mut dx_spots_tci_conn: u64 = 0;
+                // The RX-only stop of Thetis' own TX, logged once per stretch (build 220).
+                let mut thetis_tx_off_logged = false;
+                // Stock "Receive only" through CAT ZZTI (build 221): the TCI
+                // connection it was last said on, and when.
+                let mut stock_rx_only_conn: u64 = 0;
+                let mut stock_rx_only_said = std::time::Instant::now();
+                // This server sent ZZTI1 and has not turned it off since: only then
+                // does it send ZZTI0 (build 222, review of 221).
+                let mut stock_rx_only_ours = false;
                 let _last_sync_freq: u64 = 0; // last freq synced B=A
                 let mut prev_controls: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
                 let mut prev_client_count: usize = 0;
+                // A rejoin inside the session timeout keeps the client COUNT the
+                // same (over the relay the address too), so the count check below
+                // cannot see it; the presence loop already watches the connect
+                // generation for that reason. Without it the TX filter band and the
+                // rest of this family came back only with the 10 s resend (review 83).
+                let mut joined_state = crate::session::GenerationWatch::new();
+                // The equipment status keeps a tick-list per device and needs the
+                // same: since build 83 a client clears its device panels with the
+                // session, and a rejoin waited for the 10 s safety net to see them
+                // again (review 84).
+                let mut joined_equipment = crate::session::GenerationWatch::new();
                 let mut last_state_resend = std::time::Instant::now();
                 let mut prev_smeter_count: usize = 0;
                 let mut prev_freq: u64 = 0;
@@ -1655,8 +1930,12 @@ impl NetworkService {
                 // (PTT packet, ZZTX1, ZZTU1) never send Thetis a TX-on
                 // command on a blocked position.
                 let tx_blocked_gate = ptt.lock().await.tx_blocked_handle();
+                // Written right below, where `RxOnlyGuard` is computed; the
+                // heartbeat and the server window read it (build 217).
+                let rx_only_unguarded_gate = ptt.lock().await.rx_only_unguarded_handle();
                 // Diagnostics: previous gate value for on-change logging.
                 let mut prev_pos_is_blocked = false;
+                let mut prev_rx_only_unguarded = false;
                 // Previous availability of the rx_only_ex cap. When the
                 // operator ticks the ThetisLink-extensions checkbox in Thetis
                 // while the Amplitec is already on an RX-only position,
@@ -1680,10 +1959,47 @@ impl NetworkService {
                         cfg.amplitec_tx_blocked, cfg.amplitec_max_w
                     );
                 }
+                // Test switch, deliberately not in the UI: the task panics after
+                // this many seconds, to see the main loop catch it in the field.
+                //   set THETISLINK_TEST_STOP_SAFETY_TASK=30  before starting the server
+                let test_stop_after = std::env::var("THETISLINK_TEST_STOP_SAFETY_TASK")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .map(Duration::from_secs);
+                if let Some(d) = test_stop_after {
+                    warn!(
+                        "THETISLINK_TEST_STOP_SAFETY_TASK is set: the safety task stops itself in {} s - a test of the safety net, not a fault",
+                        d.as_secs()
+                    );
+                }
+                let task_started = Instant::now();
+                // The spectrum around a change of the transmitter (a
+                // measurement, build 172): the freq tick knows `is_tx`, the
+                // spectrum tick writes the line.
+                let mut probe_is_tx = false;
+                let mut tx_probe = crate::spectrum::TxProbe::default();
                 loop {
                     tokio::select! {
                         _ = safety_tick.tick() => {
-                            ptt.lock().await.check_safety().await;
+                            if test_stop_after.map_or(false, |d| task_started.elapsed() >= d) {
+                                panic!("THETISLINK_TEST_STOP_SAFETY_TASK: the safety task stops here on purpose");
+                            }
+                            if ptt.lock().await.check_safety().await {
+                                if let Some(holder) = session.lock().await.release_after_safety() {
+                                    // Named in advance (working rule 11, build 251).
+                                    info!("SAFETY: {} held Thetis when its transmitter was released - the ownership goes with it", holder);
+                                }
+                            }
+                            // The 2 s clock of each Yaesu, in the same tick as
+                            // Thetis's (build 290, owner 2026-10-23; until then in
+                            // each radio's 200 ms status task, and a radio went off
+                            // up to 200 ms after the window instead of 100).
+                            for (target, radio, flag) in [
+                                (crate::session::TxTarget::Yaesu1, &_yaesu, &yaesu_ptt_flag),
+                                (crate::session::TxTarget::Yaesu2, &_yaesu2, &yaesu2_ptt_flag),
+                            ] {
+                                let_a_silent_holder_go(&session, target, radio.as_deref(), flag).await;
+                            }
                             // Every 100 ms, not on the 1 s CAT tick it ran on until
                             // build 134: a deadline of 3 s was met anywhere between
                             // 3 and 4 s, and the PTT of a dead link hung that long
@@ -1830,6 +2146,11 @@ impl NetworkService {
                                 let mut sp = spectrum.lock().await;
                                 if sp.is_frame_ready() {
                                     rx1_frame_count = rx1_frame_count.wrapping_add(1);
+                                    if tx_probe.wants(probe_is_tx) {
+                                        if let Some(line) = tx_probe.frame(probe_is_tx, sp.levels(), Instant::now()) {
+                                            dev_info!("{}", line);
+                                        }
+                                    }
                                     for (addr, zoom, pan, max_bins, loss) in &client_info {
                                         if *loss > 15 { continue; }
                                         if *loss > 5 && rx1_frame_count % 2 != 0 { continue; }
@@ -1918,11 +2239,488 @@ impl NetworkService {
                         }
                         _ = equipment_tick.tick() => {
                             // Get client addresses ONCE for all equipment broadcasts
-                            let eq_addrs = session.lock().await.active_addrs();
+                            let (eq_addrs, eq_gen) = {
+                                let s = session.lock().await;
+                                (s.active_addrs(), s.connect_generation())
+                            };
+                            // The protection per antenna position runs with or without a
+                            // client (review of 217): whoever keys at the radio PC - the
+                            // footswitch, MOX in Thetis - often has no client open, and
+                            // the skip below used to stop all of it.
+                            let active_amplitec_pos = amplitec
+                                .as_ref()
+                                .map(|a| a.status().switch_a)
+                                .filter(|p| (1..=6).contains(p));
+                            // Generic RF-power cap per Amplitec-A position -
+                            // reactive drive reduction when the active
+                            // antenna position has a max_w in
+                            // `config.amplitec_max_w` and the PA meter is
+                            // above it. Also reactive TX-block for
+                            // positions marked in `config.amplitec_tx_blocked`
+                            // (RX-only antennas).
+                            //
+                            // Cap operation: we send the PA's OWN drive knob
+                            // (same command as the "-" button in the client's
+                            // SPE/RF2K tab). Not Thetis ZZPC: the PA
+                            // determines the drive via a TCI loop back to
+                            // Thetis, so a ZZPC reduction from the server
+                            // gets pushed back straight to the PA-determined
+                            // value. Only active on the PA set in
+                            // `config.active_pa`.
+                            //
+                            // TX-block: if Thetis goes into TX on an
+                            // RX-only position we send `ZZTX0;` directly
+                            // (translates to `trx:0,false;`). Reactive -
+                            // preventive client-side gating comes later.
+                            {
+                                let live_config = crate::config::load();
+                                let active_pa = live_config.active_pa;
+                                let (pa_in_operate, pa_fwd_watts) = match active_pa {
+                                    1 => spe
+                                        .as_ref()
+                                        .map(|s| {
+                                            let st = s.status();
+                                            (st.state == 2, Some(st.forward_power))
+                                        })
+                                        .unwrap_or((false, None)),
+                                    2 => rf2k
+                                        .as_ref()
+                                        .map(|r| {
+                                            let st = r.status();
+                                            (st.operate, Some(st.forward_w))
+                                        })
+                                        .unwrap_or((false, None)),
+                                    _ => (false, None),
+                                };
+                                // By name (build 226, review of 224).
+                                let crate::ptt::TxNow { mode: mode_u8, ours: tx_active, thetis: thetis_tx } = ptt.lock().await.tx_now();
+                                // Preventive TX-gate: push the current
+                                // "is the current Amplitec position RX-only?"
+                                // status into the Ptt gate so that no
+                                // server-initiated PTT path can send a TX
+                                // command to Thetis.
+                                let pos_is_blocked = active_amplitec_pos
+                                    .map(|p| {
+                                        live_config
+                                            .amplitec_tx_blocked
+                                            .get((p - 1) as usize)
+                                            .copied()
+                                            .unwrap_or(false)
+                                    })
+                                    .unwrap_or(false);
+                                tx_blocked_gate.store(
+                                    pos_is_blocked,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                // On a change of the RX-only status:
+                                // push Thetis' "Receive only" preventive
+                                // TX-inhibit via the fork command `rx_only_ex`.
+                                // With fork-extensions Thetis then blocks ALL
+                                // TX sources (MOX/spacebar/hardware-PTT/VOX)
+                                // at the source - no more TX window. Against
+                                // stock Thetis (no cap) set_rx_only returns
+                                // false and the reactive ZZTX0 below remains
+                                // the only (best-effort) protection.
+                                // Snapshot/restore of Thetis' RXOnly. TL2 is
+                                // the only one that knows the pre-takeover state, so
+                                // the whole decision sits here; the fork simply
+                                // sets whatever we send.
+                                //
+                                // - Takeover (position becomes RX-only): save the
+                                //   current Thetis-RXOnly as snapshot (only
+                                //   on the first takeover), set RXOnly=true.
+                                // - Release (position no longer RX-only):
+                                //   restore the snapshot (NOT blindly false) -
+                                //   this keeps a manually set RXOnly
+                                //   respected.
+                                // - Cap appears (extensions off->on while
+                                //   already on RX-only position): treat as
+                                //   takeover.
+                                // - Cap disappears (extensions off) while TL2
+                                //   had taken over: we can no longer
+                                //   restore (fork ignores rx_only_ex). RXOnly
+                                //   stays on for safety; warn the
+                                //   operator instead of removing the protection.
+                                let has_rx_only_cap =
+                                    ptt.lock().await.has_cap("rx_only_ex");
+                                let crate::ptt::TciLinkNow { up: tci_up_now, answers_run_cat_ex, connections: tci_conn_now } =
+                                    ptt.lock().await.tci_link_now();
+                                let unguarded_now = crate::ptt::RxOnlyGuard {
+                                    position_rx_only: pos_is_blocked,
+                                    tci_connected: tci_up_now,
+                                    has_rx_only_ex: has_rx_only_cap,
+                                    answers_run_cat_ex,
+                                }
+                                .unguarded();
+                                rx_only_unguarded_gate.store(unguarded_now, Ordering::Relaxed);
+                                if unguarded_now != prev_rx_only_unguarded {
+                                    prev_rx_only_unguarded = unguarded_now;
+                                    if unguarded_now {
+                                        // Named in advance (`logregels-build215.md`).
+                                        log::warn!(
+                                            "TX-gate: RX-only position without rx_only_ex in Thetis - only a TCI PTT can be stopped; clients are warned"
+                                        );
+                                    }
+                                }
+                                let cap_just_appeared =
+                                    has_rx_only_cap && !prev_had_rx_only_cap;
+                                let cap_just_disappeared =
+                                    !has_rx_only_cap && prev_had_rx_only_cap;
+                                prev_had_rx_only_cap = has_rx_only_cap;
+
+                                let pos_changed = pos_is_blocked != prev_pos_is_blocked;
+                                prev_pos_is_blocked = pos_is_blocked;
+
+                                // Stock Thetis (v2.10.3.14+): the same "Receive only"
+                                // through CAT ZZTI over run_cat_ex, where the fork has
+                                // rx_only_ex (build 221, review of 220). An older Thetis
+                                // ignores it and stays "unguarded" with the warning.
+                                // Off only to undo our own on (build 222).
+                                if !has_rx_only_cap && tci_up_now {
+                                    let new_conn = tci_conn_now != stock_rx_only_conn;
+                                    stock_rx_only_conn = tci_conn_now;
+                                    let input = crate::ptt::StockRxOnlyInput {
+                                        new_conn,
+                                        pos_changed,
+                                        pos_is_blocked,
+                                        we_set_it: stock_rx_only_ours,
+                                    };
+                                    if let Some(step) = input.step(stock_rx_only_said.elapsed()) {
+                                        stock_rx_only_said = std::time::Instant::now();
+                                        ptt.lock().await.set_rx_only_cat(step).await;
+                                        stock_rx_only_ours = step.ours();
+                                        // Named in advance (`logregels-build221.md`).
+                                        match step {
+                                            crate::ptt::StockRxOnly::TakeOver => info!(
+                                                "TX-gate: RX-only takeover pos={:?} through CAT ZZTI1 (stock Thetis)",
+                                                active_amplitec_pos
+                                            ),
+                                            crate::ptt::StockRxOnly::Release => info!(
+                                                "TX-gate: RX-only release pos={:?} through CAT ZZTI0 (stock Thetis)",
+                                                active_amplitec_pos
+                                            ),
+                                            crate::ptt::StockRxOnly::Reassert => {}
+                                        }
+                                    }
+                                }
+
+                                if has_rx_only_cap && (pos_changed || cap_just_appeared) {
+                                    let mut p = ptt.lock().await;
+                                    if pos_is_blocked {
+                                        if rx_only_saved.is_none() {
+                                            // At bootstrap (cap_just_appeared, first detect
+                                            // since server-start) `thetis_rx_only` is an
+                                            // unreliable pre-state: it may be stale residue
+                                            // from a previous TL session that itself turned
+                                            // RXOnly on and did not clean up (process crash,
+                                            // PC reboot, etc.). Default at bootstrap is therefore
+                                            // `false` - on release RXOnly turns off cleanly
+                                            // and Thetis does not stay stuck. Outside
+                                            // bootstrap (mid-session cap-toggle) we do
+                                            // snapshot the current state so a manual
+                                            // RXOnly stays respected.
+                                            rx_only_saved = Some(if cap_just_appeared {
+                                                false
+                                            } else {
+                                                p.thetis_rx_only()
+                                            });
+                                        }
+                                        p.set_rx_only(true).await;
+                                        info!(
+                                            "TX-gate: RX-only takeover pos={:?} (saved pre-state={:?})",
+                                            active_amplitec_pos, rx_only_saved,
+                                        );
+                                    } else if let Some(prev) = rx_only_saved.take() {
+                                        p.set_rx_only(prev).await;
+                                        info!(
+                                            "TX-gate: RX-only release pos={:?} -> restored RXOnly={}",
+                                            active_amplitec_pos, prev,
+                                        );
+                                    } else if cap_just_appeared {
+                                        // Bootstrap edge: cap became available and TL2 did
+                                        // not take over (rx_only_saved is None) - pos is
+                                        // not RX-only. Always send `rx_only_ex:false`,
+                                        // regardless of `p.thetis_rx_only()`: at bootstrap
+                                        // the echo arrives only seconds AFTER the cap-detect, so
+                                        // `thetis_rx_only` here may still be its default
+                                        // `false` while Thetis in reality has a stale
+                                        // RXOnly from a previous session. An
+                                        // unconditional reset is idempotent if Thetis
+                                        // was already off, and clears the residue without waiting
+                                        // for the echo timing. Any deliberately-manually-
+                                        // set RXOnly is overruled; acceptable per
+                                        // the earlier trade-off - the operator can tick it
+                                        // again.
+                                        p.set_rx_only(false).await;
+                                        info!(
+                                            "TX-gate: cleared possible stale RXOnly at bootstrap (pos={:?})",
+                                            active_amplitec_pos,
+                                        );
+                                    }
+                                } else if has_rx_only_cap && pos_is_blocked {
+                                    // Level-maintain during active takeover. Edge-triggered
+                                    // only (pos_changed / cap_just_appeared) would leave
+                                    // the preventive TX-inhibit if the operator in
+                                    // Thetis manually unchecks 'Receive only'
+                                    // (setup.cs:6493) or a second TCI client sends a
+                                    // `rx_only_ex:false;` - the protection would then
+                                    // only come back on the next position change,
+                                    // until then falling back on the reactive ZZTX0
+                                    // catch-all (~100 ms TX window). Re-assert only
+                                    // when the TCI echo indicates RXOnly was actually
+                                    // cleared externally - avoids 5 Hz unnecessary
+                                    // TCI traffic and repeated UI invokes in the Thetis
+                                    // fork on a stable takeover.
+                                    let mut p = ptt.lock().await;
+                                    if !p.thetis_rx_only() {
+                                        p.set_rx_only(true).await;
+                                        log::warn!(
+                                            "TX-gate: RXOnly externally cleared on blocked pos {:?} - re-asserting preventive TX-inhibit",
+                                            active_amplitec_pos,
+                                        );
+                                    }
+                                }
+
+                                // Extensions turned off while TL2 had taken
+                                // over RXOnly: protection stays (safe),
+                                // but TL2 can no longer restore -> warn.
+                                if cap_just_disappeared {
+                                    if let Some(prev) = rx_only_saved.take() {
+                                        log::warn!(
+                                            // Named in advance (`logregels-build221.md`): since 221 the
+                                            // stock path keeps it through CAT ZZTI and releases it.
+                                            "ThetisLink extensions turned off while RX-only was active (pre-state was {}). \
+                                             Receive only is kept through CAT ZZTI from now on and turned off when the position is left.",
+                                            prev,
+                                        );
+                                    }
+                                }
+                                // Reactive catch-all for a ThetisLink TX that
+                                // was already on when the position became
+                                // RX-only (`tx_active` is our own PTT state).
+                                // New server-initiated TX is closed off by the
+                                // preventive gate above; a spacebar or
+                                // hardware PTT at Thetis is stopped in the TRX
+                                // arm of tci.rs, through `tx_blocked`.
+                                // A TX Thetis was already making itself is stopped
+                                // here too since build 220 (review of 219): the
+                                // TRX arm only answers a new "on".
+                                let rx_only_off = crate::ptt::RxOnlyTxInput {
+                                    pos_is_blocked,
+                                    our_tx: tx_active,
+                                    thetis_tx,
+                                }
+                                .tx_off();
+                                match rx_only_off {
+                                    Some(crate::ptt::RxOnlyTxOff::Ours) => {
+                                        log::warn!(
+                                            "Amplitec pos={:?} is RX-only and Thetis is in TX; forcing TX off",
+                                            active_amplitec_pos
+                                        );
+                                        ptt.lock().await.send_cat("ZZTX0").await;
+                                    }
+                                    Some(crate::ptt::RxOnlyTxOff::Thetis) => {
+                                        let mut p = ptt.lock().await;
+                                        // Once per stretch: a MOX by the button stays
+                                        // on in stock Thetis, and this runs every tick.
+                                        if !thetis_tx_off_logged {
+                                            thetis_tx_off_logged = true;
+                                            if p.tune_is_ours() {
+                                                // Named in advance (`logregels-build221.md`).
+                                                log::warn!(
+                                                    "Amplitec pos={:?} is RX-only and ThetisLink's own TUNE is on (receiver {}); forcing it off",
+                                                    active_amplitec_pos,
+                                                    p.thetis_tx_receiver()
+                                                );
+                                            } else {
+                                                // Named in advance (`logregels-build220.md`).
+                                                log::warn!(
+                                                    "Amplitec pos={:?} is RX-only and Thetis was already transmitting on receiver {}; forcing TRX off",
+                                                    active_amplitec_pos,
+                                                    p.thetis_tx_receiver()
+                                                );
+                                            }
+                                        }
+                                        p.force_thetis_tx_off().await;
+                                    }
+                                    None => {}
+                                }
+                                if rx_only_off != Some(crate::ptt::RxOnlyTxOff::Thetis) {
+                                    thetis_tx_off_logged = false;
+                                }
+                                // Switch detector - when switching away from a
+                                // position with an active cap cycle we send
+                                // as many DriveUp commands as we had sent
+                                // DriveDowns, so the
+                                // PA drive is back at the pre-cap position.
+                                if let Some(restore) =
+                                    crate::power_cap::on_position_change(
+                                        &mut power_cap_state,
+                                        active_amplitec_pos,
+                                    )
+                                {
+                                    if let Some(ref s) = spe {
+                                        for _ in 0..restore.spe_drive_up {
+                                            s.send_command(
+                                                crate::spe_expert::SpeCmd::DriveUp,
+                                            );
+                                        }
+                                    }
+                                    if let Some(ref r) = rf2k {
+                                        for _ in 0..restore.rf2k_drive_up {
+                                            r.send_command(
+                                                crate::rf2k::Rf2kCmd::DriveUp,
+                                            );
+                                        }
+                                    }
+                                }
+                                // Reactive cap-check
+                                if let Some(action) = crate::power_cap::tick(
+                                    &mut power_cap_state,
+                                    crate::power_cap::PowerCapReading {
+                                        active_pos: active_amplitec_pos,
+                                        max_w_table: &live_config.amplitec_max_w,
+                                        active_pa,
+                                        pa_in_operate,
+                                        pa_fwd_watts,
+                                        mode: mode_u8,
+                                    },
+                                ) {
+                                    match action {
+                                        crate::power_cap::PowerCapAction::SpeDriveDown => {
+                                            if let Some(ref s) = spe {
+                                                s.send_command(
+                                                    crate::spe_expert::SpeCmd::DriveDown,
+                                                );
+                                            }
+                                        }
+                                        crate::power_cap::PowerCapAction::Rf2kDriveDown => {
+                                            if let Some(ref r) = rf2k {
+                                                r.send_command(
+                                                    crate::rf2k::Rf2kCmd::DriveDown,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Forward NEW DX spots to Thetis via TCI SPOT (only once per spot).
+                            // Independent of TL2-client subscriptions, and of any
+                            // client at all - the fork's own DX-spot display must
+                            // always be fed as long as the DX cluster is on. Before
+                            // the no-client skip below since build 219 (review of 218).
+                            let dx_spots = dxcluster
+                                .as_ref()
+                                .map(|cluster| cluster.spots_for_bands(last_vfo_freq, last_vfo_b_freq));
+                            // A spot counts as sent only while TCI is up, and a new
+                            // TCI connection (a restarted Thetis) gets the current
+                            // spots again (build 220, review of 219).
+                            let (tci_up, tci_conn) = {
+                                let p = ptt.lock().await;
+                                (p.tci_connected(), p.tci_connection_count())
+                            };
+                            if tci_conn != dx_spots_tci_conn {
+                                dx_spots_tci_conn = tci_conn;
+                                if !tci_spots_sent.is_empty() {
+                                    // Named in advance (`logregels-build220.md`).
+                                    info!(
+                                        "DX spots: new TCI connection - the current spots go to Thetis again ({} went to the previous one)",
+                                        tci_spots_sent.len()
+                                    );
+                                }
+                                tci_spots_sent.clear();
+                            }
+                            if let Some(spots) = dx_spots.as_ref().filter(|_| tci_up) {
+                                if !spots.is_empty() {
+                                    let mut new_spots: Vec<&crate::dxcluster::DxSpot> = Vec::new();
+                                    for spot in spots {
+                                        let key = (spot.callsign.clone(), spot.frequency_hz);
+                                        if tci_spots_sent.insert(key) {
+                                            new_spots.push(spot);
+                                        }
+                                    }
+                                    if !new_spots.is_empty() {
+                                        if eq_addrs.is_empty() && !dx_spots_alone_logged {
+                                            dx_spots_alone_logged = true;
+                                            // Named in advance (`logregels-build219.md`).
+                                            info!(
+                                                "DX spots: forwarding to Thetis with no client connected ({} new)",
+                                                new_spots.len()
+                                            );
+                                        }
+                                        let mut ptt_guard = ptt.lock().await;
+                                        for spot in &new_spots {
+                                            let color = crate::dxcluster::mode_color_argb(&spot.mode);
+                                            let text = if spot.comment.is_empty() {
+                                                spot.spotter.clone()
+                                            } else {
+                                                format!("{} {}", spot.spotter, spot.comment)
+                                            };
+                                            ptt_guard.send_tci_spot(&spot.callsign, &spot.mode, spot.frequency_hz, color, &text).await;
+                                        }
+                                    }
+                                    // Clean expired spots from tracking set
+                                    let active_keys: std::collections::HashSet<(String, u64)> = spots.iter()
+                                        .map(|s| (s.callsign.clone(), s.frequency_hz))
+                                        .collect();
+                                    tci_spots_sent.retain(|k| active_keys.contains(k));
+                                }
+                            }
+                            if !eq_addrs.is_empty() {
+                                dx_spots_alone_logged = false;
+                            }
+
+                            // Tuner: track tune frequency, show stale if VFO moved >25kHz.
+                            // Multi-tuner: pick the tuner bound to the active Amplitec-A
+                            // position; fall back to the primary (first enabled) tuner so
+                            // the panel still works without an Amplitec mapping configured.
+                            // Before the no-client skip since build 220 (review of
+                            // 219): the server window shows "Tune OK" from `stale` too,
+                            // and the tuned frequency is taken when the tune ends.
+                            let active_tuner = active_amplitec_pos
+                                .and_then(|p| tuners.for_amplitec_pos(p))
+                                .or_else(|| tuners.primary());
+                            let tuner_broadcast = if let Some(tuner_ref) = active_tuner.as_ref() {
+                                let ts = tuner_ref.status();
+                                let current_freq = last_vfo_freq;
+                                let tuner_done = ts.state == crate::tuner::TUNER_DONE_OK;
+                                // Per-tuner stale-check: the slot's last-tune VFO is
+                                // remembered across Amplitec switches, so a second tuner
+                                // does not see the first tuner's tune freq.
+                                let done_slot = tuner_ref.slot_index().min(tuner_done_freqs.len() - 1);
+                                let tuner_done_freq = if tuner_done {
+                                    if tuner_done_freqs[done_slot] == 0 {
+                                        tuner_done_freqs[done_slot] = current_freq;
+                                    }
+                                    tuner_done_freqs[done_slot]
+                                } else {
+                                    tuner_done_freqs[done_slot] = 0;
+                                    0
+                                };
+                                let is_stale = tuner_done
+                                    && tuner_done_freq > 0 && current_freq > 0
+                                    && (current_freq as i64 - tuner_done_freq as i64).unsigned_abs() > 25_000;
+                                let broadcast_state = if is_stale { crate::tuner::TUNER_IDLE } else { ts.state };
+                                tuner_ref.set_stale(is_stale);
+                                let ts_for_broadcast = crate::tuner::TunerStatus {
+                                    state: broadcast_state,
+                                    ..ts
+                                };
+                                Some(ts_for_broadcast)
+                            } else {
+                                None
+                            };
+
                             if eq_addrs.is_empty() { continue; }
                             // Safety net: forget who has what every so often, so one
                             // lost datagram cannot leave a client stale indefinitely.
                             // The payloads are kept - only the tick-lists are cleared.
+                            // And at once when someone joined: a rejoin on the same
+                            // address is still ticked off here.
+                            if joined_equipment.changed(eq_gen) {
+                                for (_, sent) in prev_equipment.values_mut() { sent.clear(); }
+                            }
                             if last_equipment_resend.elapsed().as_secs() >= STATE_RESEND_SECS {
                                 last_equipment_resend = std::time::Instant::now();
                                 for (_, sent) in prev_equipment.values_mut() { sent.clear(); }
@@ -2044,43 +2842,8 @@ impl NetworkService {
                                 };
                                 send_if_changed!(DeviceType::Rf2k, pkt, &eq_addrs);
                             }
-                            // Tuner: track tune frequency, show stale if VFO moved >25kHz.
-                            // Multi-tuner: pick the tuner bound to the active Amplitec-A
-                            // position; fall back to the primary (first enabled) tuner so
-                            // the panel still works without an Amplitec mapping configured.
-                            let active_amplitec_pos = amplitec
-                                .as_ref()
-                                .map(|a| a.status().switch_a)
-                                .filter(|p| (1..=6).contains(p));
-                            let active_tuner = active_amplitec_pos
-                                .and_then(|p| tuners.for_amplitec_pos(p))
-                                .or_else(|| tuners.primary());
-                            if let Some(tuner_ref) = active_tuner.as_ref() {
-                                let ts = tuner_ref.status();
-                                let current_freq = last_vfo_freq;
-                                let tuner_done = ts.state == crate::tuner::TUNER_DONE_OK;
-                                // Per-tuner stale-check: the slot's last-tune VFO is
-                                // remembered across Amplitec switches, so a second tuner
-                                // does not see the first tuner's tune freq.
-                                let done_slot = tuner_ref.slot_index().min(tuner_done_freqs.len() - 1);
-                                let tuner_done_freq = if tuner_done {
-                                    if tuner_done_freqs[done_slot] == 0 {
-                                        tuner_done_freqs[done_slot] = current_freq;
-                                    }
-                                    tuner_done_freqs[done_slot]
-                                } else {
-                                    tuner_done_freqs[done_slot] = 0;
-                                    0
-                                };
-                                let is_stale = tuner_done
-                                    && tuner_done_freq > 0 && current_freq > 0
-                                    && (current_freq as i64 - tuner_done_freq as i64).unsigned_abs() > 25_000;
-                                let broadcast_state = if is_stale { crate::tuner::TUNER_IDLE } else { ts.state };
-                                tuner_ref.set_stale(is_stale);
-                                let ts_for_broadcast = crate::tuner::TunerStatus {
-                                    state: broadcast_state,
-                                    ..ts
-                                };
+                            // The tuner packet to the clients (its state computed above).
+                            if let Some(ts_for_broadcast) = tuner_broadcast {
                                 // can_tune: a tuner is available for the active antenna iff
                                 // a tuner-config slot is bound to that position. Without an
                                 // Amplitec mapping at all, the primary tuner is always usable.
@@ -2096,266 +2859,6 @@ impl NetworkService {
                                     labels: None,
                                 };
                                 send_if_changed!(DeviceType::Tuner, pkt, &eq_addrs);
-                            }
-
-                            // Generic RF-power cap per Amplitec-A position -
-                            // reactive drive reduction when the active
-                            // antenna position has a max_w in
-                            // `config.amplitec_max_w` and the PA meter is
-                            // above it. Also reactive TX-block for
-                            // positions marked in `config.amplitec_tx_blocked`
-                            // (RX-only antennas).
-                            //
-                            // Cap operation: we send the PA's OWN drive knob
-                            // (same command as the "-" button in the client's
-                            // SPE/RF2K tab). Not Thetis ZZPC: the PA
-                            // determines the drive via a TCI loop back to
-                            // Thetis, so a ZZPC reduction from the server
-                            // gets pushed back straight to the PA-determined
-                            // value. Only active on the PA set in
-                            // `config.active_pa`.
-                            //
-                            // TX-block: if Thetis goes into TX on an
-                            // RX-only position we send `ZZTX0;` directly
-                            // (translates to `trx:0,false;`). Reactive -
-                            // preventive client-side gating comes later.
-                            {
-                                let live_config = crate::config::load();
-                                let active_pa = live_config.active_pa;
-                                let (pa_in_operate, pa_fwd_watts) = match active_pa {
-                                    1 => spe
-                                        .as_ref()
-                                        .map(|s| {
-                                            let st = s.status();
-                                            (st.state == 2, Some(st.forward_power))
-                                        })
-                                        .unwrap_or((false, None)),
-                                    2 => rf2k
-                                        .as_ref()
-                                        .map(|r| {
-                                            let st = r.status();
-                                            (st.operate, Some(st.forward_w))
-                                        })
-                                        .unwrap_or((false, None)),
-                                    _ => (false, None),
-                                };
-                                let (mode_u8, tx_active) = {
-                                    let p = ptt.lock().await;
-                                    (p.vfo_a_mode(), p.is_transmitting())
-                                };
-                                // Preventive TX-gate: push the current
-                                // "is the current Amplitec position RX-only?"
-                                // status into the Ptt gate so that no
-                                // server-initiated PTT path can send a TX
-                                // command to Thetis.
-                                let pos_is_blocked = active_amplitec_pos
-                                    .map(|p| {
-                                        live_config
-                                            .amplitec_tx_blocked
-                                            .get((p - 1) as usize)
-                                            .copied()
-                                            .unwrap_or(false)
-                                    })
-                                    .unwrap_or(false);
-                                tx_blocked_gate.store(
-                                    pos_is_blocked,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                                // On a change of the RX-only status:
-                                // push Thetis' "Receive only" preventive
-                                // TX-inhibit via the fork command `rx_only_ex`.
-                                // With fork-extensions Thetis then blocks ALL
-                                // TX sources (MOX/spacebar/hardware-PTT/VOX)
-                                // at the source - no more TX window. Against
-                                // stock Thetis (no cap) set_rx_only returns
-                                // false and the reactive ZZTX0 below remains
-                                // the only (best-effort) protection.
-                                // Snapshot/restore of Thetis' RXOnly. TL2 is
-                                // the only one that knows the pre-takeover state, so
-                                // the whole decision sits here; the fork simply
-                                // sets whatever we send.
-                                //
-                                // - Takeover (position becomes RX-only): save the
-                                //   current Thetis-RXOnly as snapshot (only
-                                //   on the first takeover), set RXOnly=true.
-                                // - Release (position no longer RX-only):
-                                //   restore the snapshot (NOT blindly false) -
-                                //   this keeps a manually set RXOnly
-                                //   respected.
-                                // - Cap appears (extensions off->on while
-                                //   already on RX-only position): treat as
-                                //   takeover.
-                                // - Cap disappears (extensions off) while TL2
-                                //   had taken over: we can no longer
-                                //   restore (fork ignores rx_only_ex). RXOnly
-                                //   stays on for safety; warn the
-                                //   operator instead of removing the protection.
-                                let has_rx_only_cap =
-                                    ptt.lock().await.has_cap("rx_only_ex");
-                                let cap_just_appeared =
-                                    has_rx_only_cap && !prev_had_rx_only_cap;
-                                let cap_just_disappeared =
-                                    !has_rx_only_cap && prev_had_rx_only_cap;
-                                prev_had_rx_only_cap = has_rx_only_cap;
-
-                                let pos_changed = pos_is_blocked != prev_pos_is_blocked;
-                                prev_pos_is_blocked = pos_is_blocked;
-
-                                if has_rx_only_cap && (pos_changed || cap_just_appeared) {
-                                    let mut p = ptt.lock().await;
-                                    if pos_is_blocked {
-                                        if rx_only_saved.is_none() {
-                                            // At bootstrap (cap_just_appeared, first detect
-                                            // since server-start) `thetis_rx_only` is an
-                                            // unreliable pre-state: it may be stale residue
-                                            // from a previous TL session that itself turned
-                                            // RXOnly on and did not clean up (process crash,
-                                            // PC reboot, etc.). Default at bootstrap is therefore
-                                            // `false` - on release RXOnly turns off cleanly
-                                            // and Thetis does not stay stuck. Outside
-                                            // bootstrap (mid-session cap-toggle) we do
-                                            // snapshot the current state so a manual
-                                            // RXOnly stays respected.
-                                            rx_only_saved = Some(if cap_just_appeared {
-                                                false
-                                            } else {
-                                                p.thetis_rx_only()
-                                            });
-                                        }
-                                        p.set_rx_only(true).await;
-                                        info!(
-                                            "TX-gate: RX-only takeover pos={:?} (saved pre-state={:?})",
-                                            active_amplitec_pos, rx_only_saved,
-                                        );
-                                    } else if let Some(prev) = rx_only_saved.take() {
-                                        p.set_rx_only(prev).await;
-                                        info!(
-                                            "TX-gate: RX-only release pos={:?} -> restored RXOnly={}",
-                                            active_amplitec_pos, prev,
-                                        );
-                                    } else if cap_just_appeared {
-                                        // Bootstrap edge: cap became available and TL2 did
-                                        // not take over (rx_only_saved is None) - pos is
-                                        // not RX-only. Always send `rx_only_ex:false`,
-                                        // regardless of `p.thetis_rx_only()`: at bootstrap
-                                        // the echo arrives only seconds AFTER the cap-detect, so
-                                        // `thetis_rx_only` here may still be its default
-                                        // `false` while Thetis in reality has a stale
-                                        // RXOnly from a previous session. An
-                                        // unconditional reset is idempotent if Thetis
-                                        // was already off, and clears the residue without waiting
-                                        // for the echo timing. Any deliberately-manually-
-                                        // set RXOnly is overruled; acceptable per
-                                        // the earlier trade-off - the operator can tick it
-                                        // again.
-                                        p.set_rx_only(false).await;
-                                        info!(
-                                            "TX-gate: cleared possible stale RXOnly at bootstrap (pos={:?})",
-                                            active_amplitec_pos,
-                                        );
-                                    }
-                                } else if has_rx_only_cap && pos_is_blocked {
-                                    // Level-maintain during active takeover. Edge-triggered
-                                    // only (pos_changed / cap_just_appeared) would leave
-                                    // the preventive TX-inhibit if the operator in
-                                    // Thetis manually unchecks 'Receive only'
-                                    // (setup.cs:6493) or a second TCI client sends a
-                                    // `rx_only_ex:false;` - the protection would then
-                                    // only come back on the next position change,
-                                    // until then falling back on the reactive ZZTX0
-                                    // catch-all (~100 ms TX window). Re-assert only
-                                    // when the TCI echo indicates RXOnly was actually
-                                    // cleared externally - avoids 5 Hz unnecessary
-                                    // TCI traffic and repeated UI invokes in the Thetis
-                                    // fork on a stable takeover.
-                                    let mut p = ptt.lock().await;
-                                    if !p.thetis_rx_only() {
-                                        p.set_rx_only(true).await;
-                                        log::warn!(
-                                            "TX-gate: RXOnly externally cleared on blocked pos {:?} - re-asserting preventive TX-inhibit",
-                                            active_amplitec_pos,
-                                        );
-                                    }
-                                }
-
-                                // Extensions turned off while TL2 had taken
-                                // over RXOnly: protection stays (safe),
-                                // but TL2 can no longer restore -> warn.
-                                if cap_just_disappeared {
-                                    if let Some(prev) = rx_only_saved.take() {
-                                        log::warn!(
-                                            "ThetisLink extensions turned off while RX-only was active (pre-state was {}). \
-                                             Thetis stays on RXOnly; uncheck 'Receive only' manually to be able to transmit.",
-                                            prev,
-                                        );
-                                    }
-                                }
-                                // Reactive catch-all for Thetis-direct PTT
-                                // (spacebar, hardware-PTT on the radio).
-                                // Server-initiated paths are already closed off
-                                // via the preventive gate above;
-                                // this branch only catches TX events that
-                                // arose at Thetis outside our control.
-                                if pos_is_blocked && tx_active {
-                                    log::warn!(
-                                        "Amplitec pos={:?} is RX-only and Thetis is in TX; forcing TX off",
-                                        active_amplitec_pos
-                                    );
-                                    ptt.lock().await.send_cat("ZZTX0").await;
-                                }
-                                // Switch detector - when switching away from a
-                                // position with an active cap cycle we send
-                                // as many DriveUp commands as we had sent
-                                // DriveDowns, so the
-                                // PA drive is back at the pre-cap position.
-                                if let Some(restore) =
-                                    crate::power_cap::on_position_change(
-                                        &mut power_cap_state,
-                                        active_amplitec_pos,
-                                    )
-                                {
-                                    if let Some(ref s) = spe {
-                                        for _ in 0..restore.spe_drive_up {
-                                            s.send_command(
-                                                crate::spe_expert::SpeCmd::DriveUp,
-                                            );
-                                        }
-                                    }
-                                    if let Some(ref r) = rf2k {
-                                        for _ in 0..restore.rf2k_drive_up {
-                                            r.send_command(
-                                                crate::rf2k::Rf2kCmd::DriveUp,
-                                            );
-                                        }
-                                    }
-                                }
-                                // Reactive cap-check
-                                if let Some(action) = crate::power_cap::tick(
-                                    &mut power_cap_state,
-                                    active_amplitec_pos,
-                                    &live_config.amplitec_max_w,
-                                    active_pa,
-                                    pa_in_operate,
-                                    pa_fwd_watts,
-                                    mode_u8,
-                                ) {
-                                    match action {
-                                        crate::power_cap::PowerCapAction::SpeDriveDown => {
-                                            if let Some(ref s) = spe {
-                                                s.send_command(
-                                                    crate::spe_expert::SpeCmd::DriveDown,
-                                                );
-                                            }
-                                        }
-                                        crate::power_cap::PowerCapAction::Rf2kDriveDown => {
-                                            if let Some(ref r) = rf2k {
-                                                r.send_command(
-                                                    crate::rf2k::Rf2kCmd::DriveDown,
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
                             }
 
                             // UltraBeam status broadcast
@@ -2394,7 +2897,7 @@ impl NetworkService {
                             // clients can opt out of the stream via the
                             // DxSpotsEnabled control for metered links.
                             if let Some(ref cluster) = dxcluster {
-                                let spots = cluster.spots_for_bands(last_vfo_freq, last_vfo_b_freq);
+                                let spots = dx_spots.unwrap_or_default();
                                 let spot_addrs = session.lock().await.dx_spots_addrs();
                                 if !spot_addrs.is_empty() {
                                     let expiry = cluster.expiry_secs() as u16;
@@ -2443,36 +2946,6 @@ impl NetworkService {
                                     prev_spot_keys.clear();
                                     prev_spot_client_count = 0;
                                 }
-                                // Forward NEW spots to Thetis via TCI SPOT command (only once per spot).
-                                // Independent of TL2-client subscriptions -
-                                // the fork's own DX-spot display must always
-                                // be fed as long as the DX cluster is on.
-                                if !spots.is_empty() {
-                                    let mut new_spots: Vec<&crate::dxcluster::DxSpot> = Vec::new();
-                                    for spot in &spots {
-                                        let key = (spot.callsign.clone(), spot.frequency_hz);
-                                        if tci_spots_sent.insert(key) {
-                                            new_spots.push(spot);
-                                        }
-                                    }
-                                    if !new_spots.is_empty() {
-                                        let mut ptt_guard = ptt.lock().await;
-                                        for spot in &new_spots {
-                                            let color = crate::dxcluster::mode_color_argb(&spot.mode);
-                                            let text = if spot.comment.is_empty() {
-                                                spot.spotter.clone()
-                                            } else {
-                                                format!("{} {}", spot.spotter, spot.comment)
-                                            };
-                                            ptt_guard.send_tci_spot(&spot.callsign, &spot.mode, spot.frequency_hz, color, &text).await;
-                                        }
-                                    }
-                                    // Clean expired spots from tracking set
-                                    let active_keys: std::collections::HashSet<(String, u64)> = spots.iter()
-                                        .map(|s| (s.callsign.clone(), s.frequency_hz))
-                                        .collect();
-                                    tci_spots_sent.retain(|k| active_keys.contains(k));
-                                }
                             }
                         }
                         // Tuner CAT commands (ZZTU1/ZZTU0) forwarded to Thetis
@@ -2504,21 +2977,24 @@ impl NetworkService {
                             let rf_seen = rf_st.as_ref().map(|r| r.connected).unwrap_or(false);
                             let spe_operate = spe_st.as_ref().map(|s| s.connected && s.state == 2).unwrap_or(false);
                             let rf_operate = rf_st.as_ref().map(|r| r.connected && r.operate).unwrap_or(false);
-                            let active_pa = pa_policy::effective_active_pa(
-                                active_pa_shared.as_ref().map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
-                                spe.is_some(),
-                                rf2k.is_some(),
-                            );
+                            let active_pa = pa_policy::ActiveMark {
+                                marked: active_pa_shared.as_ref().map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
+                                spe_present: spe.is_some(),
+                                rf2k_present: rf2k.is_some(),
+                            }
+                            .effective();
                             // "Transmitting" from every side that can know it; see
                             // `TxSources` for why each one is there. Standby with RF
                             // going through a PA is the switching this project exists to
                             // avoid, so any one of them is enough to wait.
-                            let (is_tx, drive_now, thetis_known) = {
+                            // By name, in and out (build 226, review of 224).
+                            let pa_policy::ThetisReading { tx_active: is_tx, drive: drive_now, known: thetis_known } = {
                                 let g = ptt.lock().await;
+                                let (thetis_trx, thetis_tune) = g.tci.thetis_trx_and_tune();
                                 let tx = pa_policy::TxSources {
                                     client: g.is_transmitting(),
-                                    thetis_trx: g.tci.thetis_tx_active,
-                                    thetis_tune: g.tci.tune_active,
+                                    thetis_trx,
+                                    thetis_tune,
                                     spe_ptt: spe_st.as_ref().map(|s| s.connected && s.ptt).unwrap_or(false),
                                     rf2k_ptt: rf_st.as_ref().map(|r| r.connected && r.ptt).unwrap_or(false),
                                     yaesu_ptt: yaesu_ptt_flag.load(Ordering::Relaxed),
@@ -2529,14 +3005,43 @@ impl NetworkService {
                                     yaesu_tx: _yaesu.as_ref().map(|y| y.status().reported_tx()).unwrap_or(false),
                                     yaesu2_tx: _yaesu2.as_ref().map(|y| y.status().reported_tx()).unwrap_or(false),
                                 };
-                                (tx.any(), g.drive_level(), g.power_on())
+                                pa_policy::ThetisReading { tx_active: tx.any(), drive: g.drive_level(), known: g.power_on() }
                             };
 
                             // One startup attempt per Thetis run, not per server run.
-                            if pa_policy::new_thetis_run(pa_prev_thetis_known, thetis_known) && pa_startup_done {
-                                info!("PA drive: Thetis is back - the startup check runs again");
-                                pa_startup_done = false;
-                                pa_startup_waiting_logged = false;
+                            // A run is a process since build 226: TCI back to the same
+                            // Thetis.exe leaves the drive as it is.
+                            if (pa_policy::ThetisKnown { before: pa_prev_thetis_known, now: thetis_known }).became_known() {
+                                let pids_now = crate::ptt::thetis_process_ids();
+                                let back_input = pa_policy::ThetisBackInput { run_pid: pa_thetis_pid, pids_now: &pids_now };
+                                let back = back_input.back();
+                                if pa_startup_done {
+                                    // Named in advance (`logregels-build226.md`).
+                                    match back {
+                                        pa_policy::ThetisBack::NewProcess { pid, was } => info!(
+                                            "PA drive: Thetis is back as a new process (Thetis.exe {}, was {}) - the startup check runs again",
+                                            pid,
+                                            was.map_or_else(|| "none".to_string(), |w| w.to_string())
+                                        ),
+                                        pa_policy::ThetisBack::SameProcess { pid } => info!(
+                                            "PA drive: TCI is back to the same Thetis (Thetis.exe {}) - the drive is left as it is",
+                                            pid
+                                        ),
+                                        pa_policy::ThetisBack::NotSeen => info!(
+                                            "PA drive: Thetis is back and its process is not seen on this PC - the startup check runs again"
+                                        ),
+                                        // Named in advance (`logregels-build227.md`).
+                                        pa_policy::ThetisBack::Several { count } => info!(
+                                            "PA drive: Thetis is back and {} Thetis.exe processes run on this PC - the startup check runs again",
+                                            count
+                                        ),
+                                    }
+                                    if back.new_run() {
+                                        pa_startup_done = false;
+                                        pa_startup_waiting_logged = false;
+                                    }
+                                }
+                                pa_thetis_pid = back_input.run_pid_now();
                             }
                             pa_prev_thetis_known = thetis_known;
 
@@ -2547,7 +3052,12 @@ impl NetworkService {
                                 pa_policy::Amplifying::No
                             };
                             let rf_amp = if rf2k.is_some() {
-                                pa_policy::rf2k_amplifying(rf_seen, rf_operate, pa_rf2k_last_seen)
+                                pa_policy::Rf2kReading {
+                                    reachable: rf_seen,
+                                    reports_operate: rf_operate,
+                                    last_seen_operate: pa_rf2k_last_seen,
+                                }
+                                .amplifying()
                             } else {
                                 pa_policy::Amplifying::No
                             };
@@ -2566,11 +3076,16 @@ impl NetworkService {
                             // about what happened and stays until the PA is back in
                             // reach (owner, after hearing it in the field).
                             let out_of_reach = matches!(rf_amp, pa_policy::Amplifying::Unknown);
-                            pa_drive_when_lost = pa_policy::alarm_baseline(
-                                pa_drive_when_lost, out_of_reach, thetis_known, drive_now);
+                            pa_drive_when_lost = pa_policy::AlarmBaseline {
+                                prev: pa_drive_when_lost,
+                                out_of_reach,
+                                drive_known: thetis_known,
+                                drive_now,
+                            }
+                            .next();
                             let mut pa_drive_alarm_now = false;
                             if let Some(base) = pa_drive_when_lost {
-                                pa_drive_alarm_now = pa_policy::drive_alarm(rf_amp, base, drive_now);
+                                pa_drive_alarm_now = pa_policy::DriveAlarm { state: rf_amp, drive_when_lost: base, drive_now }.raised();
                                 if pa_drive_alarm_now && !pa_drive_warning {
                                     warn!("PA drive warning: drive went from {}% to {}% while the RF2K-S is out of reach - it may be amplifying and cannot be told",
                                         base, drive_now);
@@ -2580,8 +3095,12 @@ impl NetworkService {
                                     info!("PA drive back to {}% - the beep stops, the warning stays until the RF2K-S is reachable", drive_now);
                                 }
                             }
-                            let warning_now =
-                                pa_policy::warning_stays(pa_drive_warning, pa_drive_alarm_now, !out_of_reach);
+                            let warning_now = pa_policy::DriveWarning {
+                                was_up: pa_drive_warning,
+                                alarm_now: pa_drive_alarm_now,
+                                reachable: !out_of_reach,
+                            }
+                            .stays();
                             if pa_drive_warning && !warning_now {
                                 info!("PA drive warning cleared - the RF2K-S can be reached again");
                             }
@@ -2649,13 +3168,33 @@ impl NetworkService {
                             // the Thetis drive, with different values, and it keeps
                             // flipping between them.
                             if pa_single_operate {
+                                // By name (build 224, review of 223).
                                 let rows = [
-                                    (PA_SPE, spe_seen, spe_operate, "SPE Expert"),
-                                    (PA_RF2K, rf_seen, rf_operate, "RF2K-S"),
+                                    (
+                                        pa_policy::EnforceInput {
+                                            active_pa,
+                                            pa_id: PA_SPE,
+                                            connected: spe_seen,
+                                            in_operate: spe_operate,
+                                            tx_active: is_tx,
+                                        },
+                                        "SPE Expert",
+                                    ),
+                                    (
+                                        pa_policy::EnforceInput {
+                                            active_pa,
+                                            pa_id: PA_RF2K,
+                                            connected: rf_seen,
+                                            in_operate: rf_operate,
+                                            tx_active: is_tx,
+                                        },
+                                        "RF2K-S",
+                                    ),
                                 ];
                                 let mut waiting = false;
-                                for (pa_id, seen, in_operate, name) in rows {
-                                    match pa_policy::enforce(active_pa, pa_id, seen, in_operate, is_tx) {
+                                for (input, name) in rows {
+                                    let pa_id = input.pa_id;
+                                    match input.decide() {
                                         Enforce::Standby => {
                                             let ready = pa_last_standby_cmd
                                                 .map_or(true, |t| t.elapsed() >= Duration::from_secs(5))
@@ -2730,6 +3269,7 @@ impl NetworkService {
                             let freq = ptt_guard.vfo_a_freq();
                             let mode = ptt_guard.vfo_a_mode();
                             let is_tx = ptt_guard.is_transmitting();
+                            probe_is_tx = is_tx;
                             // S-meter packet `level` is signed deci-units on the wire:
                             //  - RX (PTT flag clear): dBm x 10  (e.g. -730 = -73 dBm = S9)
                             //  - TX (PTT flag set):   watts x 10 (e.g. 1000 = 100.0 W FWD)
@@ -2907,9 +3447,9 @@ impl NetworkService {
 
                             // smeter_addrs: clients that should receive S-meter (not Yaesu-only)
                             // all_addrs: all clients (receive freq, mode, controls, equipment)
-                            let (smeter_addrs, rx2_addrs, rx2_spectrum_addrs, all_addrs) = {
+                            let (smeter_addrs, rx2_addrs, rx2_spectrum_addrs, all_addrs, conn_gen) = {
                                 let sess = session.lock().await;
-                                (sess.smeter_addrs(), sess.rx2_addrs(), sess.rx2_spectrum_addrs(), sess.active_addrs())
+                                (sess.smeter_addrs(), sess.rx2_addrs(), sess.rx2_spectrum_addrs(), sess.active_addrs(), sess.connect_generation())
                             };
                             // RX2 freq/mode/smeter/controls are DISPLAY data that both the
                             // RX2-audio and the RX2-spectrum subscribers need. Otherwise a
@@ -2936,7 +3476,9 @@ impl NetworkService {
                                 last_state_resend.elapsed().as_secs() >= STATE_RESEND_SECS;
                             if periodic_resend { last_state_resend = std::time::Instant::now(); }
                             // New client or Yaesu mode change: force full state resend
+                            let rejoined = joined_state.changed(conn_gen);
                             if periodic_resend
+                                || rejoined
                                 || all_addrs.len() != prev_client_count
                                 || smeter_addrs.len() != prev_smeter_count {
                                 prev_freq = 0;
@@ -2945,6 +3487,14 @@ impl NetworkService {
                                 prev_vfo_b_mode = 255;
                                 prev_controls.clear();
                                 prev_tx_profile_names.clear();
+                                // The TX filter band was the one push in this family
+                                // that this block did not forget, so a client that
+                                // arrived later - or lost its session and came back -
+                                // heard it only when the band next changed. Since
+                                // build 82 the client forgets "the server has a TX
+                                // filter" with the session, so without this the
+                                // control stayed away after every reconnect.
+                                prev_tx_filter = None;
                                 prev_client_count = all_addrs.len();
                                 prev_smeter_count = smeter_addrs.len();
                             }
@@ -3055,6 +3605,18 @@ impl NetworkService {
                                 }
                             }
 
+                            // The DDC centres the server's own VRX uses (build 231),
+                            // only once measured (build 232: a starting value went
+                            // out as one); RX2's is the last tick's.
+                            let ddc_centre_rx1 = {
+                                let sp = spectrum.lock().await;
+                                if sp.ddc_center_measured() { sp.ddc_center_hz() } else { 0 }
+                            };
+                            let ddc_centre_rx2 = {
+                                let sp = rx2_spectrum.lock().await;
+                                if sp.ddc_center_measured() { sp.ddc_center_hz() } else { 0 }
+                            };
+
                             // Broadcast control states (to ALL clients)
                             let controls: &[(ControlId, u16)] = &[
                                 (ControlId::PowerOnOff, power_on as u16),
@@ -3095,6 +3657,8 @@ impl NetworkService {
                                 (ControlId::TuneDrive, tune_drive as u16),
                                 (ControlId::DdcSampleRateRx1, (ddc_rate_rx1 / 1000) as u16),
                                 (ControlId::DdcSampleRateRx2, (ddc_rate_rx2 / 1000) as u16),
+                                (ControlId::DdcCentreRx1, sdr_remote_core::protocol::ddc_centre_to_khz(ddc_centre_rx1)),
+                                (ControlId::DdcCentreRx2, sdr_remote_core::protocol::ddc_centre_to_khz(ddc_centre_rx2)),
                                 (ControlId::AgcAutoRx1, agc_auto_rx1 as u16),
                                 (ControlId::AgcAutoRx2, agc_auto_rx2 as u16),
                                 (ControlId::DiversityEnable, diversity_enabled as u16),
@@ -3236,25 +3800,45 @@ impl NetworkService {
         };
 
         // TX resampler: 16kHz wideband -> TCI rate (for mic audio from client)
-        let tx_sinc = rubato::SincInterpolationParameters {
-            sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
-            interpolation: rubato::SincInterpolationType::Cubic,
-            window: rubato::WindowFunction::Blackman,
-        };
-        let mut tx_resampler_out = rubato::SincFixedIn::<f32>::new(
-            playback_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64,
-            1.0,
-            tx_sinc,
-            FRAME_SAMPLES_WIDEBAND,
-            1,
-        )
-        .context("create 16k->device TX resampler")?;
+        let mut tx_resampler_out = resampler(NETWORK_SAMPLE_RATE_WIDEBAND, playback_rate, FRAME_SAMPLES_WIDEBAND, UpFilter::Long)
+            .context("create 16k->device TX resampler")?;
+        info!(
+            "Thetis TX resampler: {} Hz to {} Hz, {}",
+            NETWORK_SAMPLE_RATE_WIDEBAND, playback_rate, tx_resampler_out
+        );
 
         // Main RX loop
+        // Whether the safety task has ended (watched in the loop below).
+        let mut safety_lost = false;
+        // The two Yaesu state tasks carry the orphan watch (PTT-NOOIT-HANGEN 4.3)
+        // and the release on the radio's own time-out: watched the same way
+        // (review build 57, both reviewers). A slot without a radio gets a task
+        // that never ends.
+        let mut yaesu_state_watch = watched(yaesu_state_handle);
+        let mut yaesu2_state_watch = watched(yaesu2_state_handle);
+        let mut yaesu_state_lost = false;
+        let mut yaesu2_state_lost = false;
         let mut recv_buf = vec![0u8; MAX_PACKET_SIZE];
-        let mut opus_decoder = sdr_remote_core::codec::OpusDecoderWideband::new()?;
-        let mut jitter_buf = JitterBuffer::new(3, 20);
+        // The microphone's decoder: the core's, so a lost frame has the client's
+        // one rule - rebuilt from the next packet's redundancy, else concealed
+        // (build 166, `tx_recover::fill_gap`).
+        let mut opus_decoder = sdr_remote_core::stream::StreamDecoder::new()?;
+        let mut thetis_tx_loss = crate::tx_recover::TxLoss::new("Thetis");
+        // A transmit buffer: the release is played out, so it does not wait
+        // for its target with the release in hand (build 237). Tuning B, and no
+        // slow trim of its own (`Tuning::transmit`, build 258).
+        let mut jitter_buf = JitterBuffer::for_transmit(TX_MIN_DEPTH, TX_MAX_DEPTH);
+        // It catches up in the pauses of speech instead (`pause_trim.rs`, build
+        // 258): the tick lets a quiet frame go. The fast trim and the cap stay.
+        let mut pause_trim = crate::pause_trim::PauseTrim::new(Instant::now());
+        // Named in advance (working rule 11, build 258); one text with the
+        // radios' since build 263.
+        dev_info!("{}", crate::tx_recover::buffer_line("Thetis", Some(crate::tci::TX_HOLD_MAX)));
         let mut tx_holder_addr: Option<SocketAddr> = None;
+        // Whose line the jitter buffer has learned: the same sender pressing
+        // again keeps it, as a Yaesu does (owner, 2026-10-11: "thetis gaat met
+        // yaesu mee. Voor zekerheid van geen verlies van audio"; build 175).
+        let mut line_learned_from: Option<SocketAddr> = None;
         // Who has been told their transmit request was refused, and when.
         //
         // A named type rather than a bare map, so its lifetime can be tested
@@ -3262,6 +3846,10 @@ impl NetworkService {
         // client that fell silent while the interval test stayed green
         // (review finding, round 2). The exits live with it.
         let mut denied = crate::tx_denial::DenialLog::default();
+        // When a client was last told about in the log for a repeated control:
+        // a repeat is normal on a lossy path, one line per five minutes is plenty.
+        let mut control_repeat_said: std::collections::HashMap<SocketAddr, Instant> =
+            std::collections::HashMap::new();
 
         let mut shutdown = self.shutdown.clone();
         let mut playout_tick = interval(Duration::from_millis(20));
@@ -3269,8 +3857,6 @@ impl NetworkService {
         let mut pending_rx2_filter_low: Option<i32> = None;
         let mut pending_tx_filter_low: Option<i32> = None;
 
-        // Yaesu TX audio: forward AudioYaesu packets to a separate decode task
-        let mut yaesu_ptt_active = false;
         let mut yaesu_write = MemoryWrite::default();
         // If the YaesuWriteMemories control arrives BEFORE the
         // YaesuMemoryData packet (the data is ~2.7kB, IP-fragmented;
@@ -3279,64 +3865,22 @@ impl NetworkService {
         // finally lands. Otherwise the trigger was silently dropped.
 
         let yaesu_mic_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits())); // Yaesu gain now lives before Opus in the client
-        // Slot-1 TX audio (Option B-prime) + memory-write latch (Phase B).
-        let mut yaesu2_ptt_active = false;
-        // Frames turned away because the sender did not hold that radio.
-        //
-        // Counted rather than only refused: "two clients on one Yaesu is rare
-        // and nobody reported it" was a feeling, and a feeling cannot be
-        // checked. With a number it can (review finding, part A).
-        let mut yaesu_frames_refused: u64 = 0;
         let yaesu2_mic_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
+        // Slot-1 memory-write latch (Phase B).
         let mut yaesu2_write = MemoryWrite::default();
 
+        // The release frames the radios' tasks played (build 282), back to
+        // this loop, which owns the transmitters.
+        let (released_tx, mut released_rx) = tokio::sync::mpsc::unbounded_channel::<crate::tx_recover::ReleasePlayed>();
         let yaesu_tx_packet_tx = {
             let tx_audio_tx = yaesu.as_ref().and_then(|y| y.tx_audio_tx.clone());
             let tx_rate = yaesu.as_ref().map(|y| y.tx_sample_rate).unwrap_or(0);
-            if tx_audio_tx.is_some() && tx_rate > 0 {
-                let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-                let tx_audio = tx_audio_tx.unwrap();
-                let gain_shared = yaesu_mic_gain.clone();
-                tokio::spawn(async move {
-                    let mut decoder = match sdr_remote_core::codec::OpusDecoderWideband::new() {
-                        Ok(d) => d,
-                        Err(e) => { log::error!("Yaesu TX wideband decoder init: {}", e); return; }
-                    };
-                    let sinc_params = rubato::SincInterpolationParameters {
-                        sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
-                        interpolation: rubato::SincInterpolationType::Cubic,
-                        window: rubato::WindowFunction::Blackman,
-                    };
-                    let mut resampler = match rubato::SincFixedIn::<f32>::new(
-                        tx_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0,
-                        sinc_params, FRAME_SAMPLES_WIDEBAND, 1,
-                    ) {
-                        Ok(r) => r,
-                        Err(e) => { log::error!("Yaesu TX resampler init: {}", e); return; }
-                    };
-                    info!("Yaesu TX task started (wideband Opus 16kHz -> {}Hz)", tx_rate);
-                    while let Some(opus_data) = pkt_rx.recv().await {
-                        let gain = f32::from_bits(gain_shared.load(Ordering::Relaxed));
-                        // Decode wideband Opus (16kHz)
-                        let pcm_i16 = match decoder.decode(&opus_data) {
-                            Ok(p) => p,
-                            Err(e) => { log::warn!("Yaesu TX decode: {}", e); continue; }
-                        };
-                        // Convert to f32; Yaesu mic gain is applied before Opus in the client.
-                        let pcm_f32: Vec<f32> = pcm_i16.iter()
-                            .map(|&s| (s as f32 / 32768.0 * gain).clamp(-1.0, 1.0))
-                            .collect();
-                        // Resample 16kHz -> tx_rate (48kHz)
-                        use rubato::Resampler;
-                        let resampled = match resampler.process(&[pcm_f32], None) {
-                            Ok(r) => r.into_iter().next().unwrap_or_default(),
-                            Err(e) => { log::warn!("Yaesu TX resample: {}", e); continue; }
-                        };
-                        if !resampled.is_empty() {
-                            let _ = tx_audio.try_send(resampled);
-                        }
-                    }
-                });
+            let timing = yaesu.as_ref().map(|y| y.status_arc().lock().unwrap().tx_timing.clone());
+            if let (Some(tx_audio), true) = (tx_audio_tx, tx_rate > 0) {
+                let (pkt_tx, pkt_rx) = tokio::sync::mpsc::channel::<crate::tx_recover::TxPacket>(64);
+                // One task for both radios, with the jitter buffer and the gap
+                // rule Thetis's transmit audio has (build 166).
+                tokio::spawn(crate::tx_recover::radio_tx_task("Radio 1", crate::session::TxTarget::Yaesu1, pkt_rx, tx_audio, yaesu_mic_gain.clone(), timing, tx_rate, released_tx.clone()));
                 Some(pkt_tx)
             } else {
                 None
@@ -3348,73 +3892,195 @@ impl NetworkService {
         let yaesu2_tx_packet_tx = {
             let tx_audio_tx = yaesu2.as_ref().and_then(|y| y.tx_audio_tx.clone());
             let tx_rate = yaesu2.as_ref().map(|y| y.tx_sample_rate).unwrap_or(0);
-            if tx_audio_tx.is_some() && tx_rate > 0 {
-                let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-                let tx_audio = tx_audio_tx.unwrap();
-                let gain_shared = yaesu2_mic_gain.clone();
-                tokio::spawn(async move {
-                    let mut decoder = match sdr_remote_core::codec::OpusDecoderWideband::new() {
-                        Ok(d) => d,
-                        Err(e) => { log::error!("[radio1] TX wideband decoder init: {}", e); return; }
-                    };
-                    let sinc_params = rubato::SincInterpolationParameters {
-                        sinc_len: 128, f_cutoff: 0.95, oversampling_factor: 128,
-                        interpolation: rubato::SincInterpolationType::Cubic,
-                        window: rubato::WindowFunction::Blackman,
-                    };
-                    let mut resampler = match rubato::SincFixedIn::<f32>::new(
-                        tx_rate as f64 / NETWORK_SAMPLE_RATE_WIDEBAND as f64, 1.0,
-                        sinc_params, FRAME_SAMPLES_WIDEBAND, 1,
-                    ) {
-                        Ok(r) => r,
-                        Err(e) => { log::error!("[radio1] TX resampler init: {}", e); return; }
-                    };
-                    info!("[radio1] TX task started (wideband Opus 16kHz -> {}Hz)", tx_rate);
-                    while let Some(opus_data) = pkt_rx.recv().await {
-                        let gain = f32::from_bits(gain_shared.load(Ordering::Relaxed));
-                        let pcm_i16 = match decoder.decode(&opus_data) {
-                            Ok(p) => p,
-                            Err(e) => { log::warn!("[radio1] TX decode: {}", e); continue; }
-                        };
-                        let pcm_f32: Vec<f32> = pcm_i16.iter()
-                            .map(|&s| (s as f32 / 32768.0 * gain).clamp(-1.0, 1.0))
-                            .collect();
-                        use rubato::Resampler;
-                        let resampled = match resampler.process(&[pcm_f32], None) {
-                            Ok(r) => r.into_iter().next().unwrap_or_default(),
-                            Err(e) => { log::warn!("[radio1] TX resample: {}", e); continue; }
-                        };
-                        if !resampled.is_empty() {
-                            let _ = tx_audio.try_send(resampled);
-                        }
-                    }
-                });
+            let timing = yaesu2.as_ref().map(|y| y.status_arc().lock().unwrap().tx_timing.clone());
+            if let (Some(tx_audio), true) = (tx_audio_tx, tx_rate > 0) {
+                let (pkt_tx, pkt_rx) = tokio::sync::mpsc::channel::<crate::tx_recover::TxPacket>(64);
+                // One task for both radios, with the jitter buffer and the gap
+                // rule Thetis's transmit audio has (build 166).
+                tokio::spawn(crate::tx_recover::radio_tx_task("Radio 2", crate::session::TxTarget::Yaesu2, pkt_rx, tx_audio, yaesu2_mic_gain.clone(), timing, tx_rate, released_tx.clone()));
                 Some(pkt_tx)
             } else {
                 None
             }
         };
 
+        // Forgetting Thetis's holder, in one place (build 248, working rule 18):
+        // the playout buffer with that client's last audio - it carries the PTT
+        // bit and keys Thetis when it is played - who held it, and what the
+        // buffer learned of its line. Used by a goodbye, a lost guard task, and
+        // a holder the session let go elsewhere.
+        macro_rules! forget_thetis_holder {
+            () => {
+                jitter_buf.reset();
+                tx_holder_addr = None;
+                line_learned_from = None;
+            };
+        }
+        // The holder this loop remembers lost the transmitter elsewhere - a
+        // time-out, the end of a CW run (build 247). Asked before anyone takes
+        // Thetis again, with the session's holder read before that: the audio
+        // arm and the CW gate (build 248).
+        macro_rules! forget_thetis_holder_if_outlived {
+            ($holder_now:expr) => {
+                if let Some(old) = tx_holder_addr.filter(|_| crate::session::holder_outlived(tx_holder_addr, $holder_now)) {
+                    // Named in advance (working rule 11, build 247).
+                    info!("TX holder {} lost the transmitter while silent - its buffered audio goes, as at a goodbye", old);
+                    forget_thetis_holder!();
+                }
+            };
+        }
+        // The one reaction for every task that carries a PTT safety net: when it
+        // ends while the server runs, everything that is ours is let go and
+        // transmitting is closed (`safety_task_lost`). The playout buffer goes
+        // too: buffered audio carries the PTT bit and keyed Thetis again after a
+        // release once (see the goodbye).
+        macro_rules! on_guard_task_end {
+            ($svc:expr, $end:expr, $task:expr) => {
+                if let Some(why) = safety_task_end($end.as_ref().err().map(|e| e.is_panic()), *shutdown.borrow()) {
+                    forget_thetis_holder!();
+                    $svc.safety_task_lost($task, why).await;
+                }
+            };
+        }
+        // The newest packet each transmitter had from its sender, and how many
+        // of its packets with the flag were ignored since it was last taken -
+        // Thetis's and both radios' (`tx_intake::Senders`, build 285; the
+        // radios' since 282). Declared before `radio_audio!`, which binds the
+        // locals it sees at its definition.
+        let mut senders = crate::tx_intake::Senders::default();
+        // What an arriving transmit packet does, for Thetis's arm and the
+        // radios' (build 286; round 285: the four ways out were pinned in the
+        // radios' block only). The decision (`tx_intake::intake`) and its four
+        // ways out - nothing, too late, let go by the radio, a refused claim -
+        // in one block; it gives whether the packet claimed its transmitter.
+        // `$label` and `$radio_refusal` are evaluated only where they are used:
+        // the label for the first of a run of ignored packets, the radio's own
+        // refusal only for a claim (round 265: a refused client's packets come
+        // fifty times a second).
+        macro_rules! intake_gate {
+            ($target:expr, $addr:expr, $seq:expr, $arrival:expr, $label:expr, $radio_refusal:expr) => {{
+                let (target, addr, seq) = ($target, $addr, $seq);
+                match crate::tx_intake::intake($arrival) {
+                    crate::tx_intake::Intake::Pass => continue,
+                    crate::tx_intake::Intake::Stale => {
+                        if senders.ignored(target) {
+                            // Named in advance (working rule 11, builds 282 and 285).
+                            info!("{}", crate::tx_intake::stale_line($label, addr, seq));
+                        }
+                        continue;
+                    }
+                    crate::tx_intake::Intake::LetGoByRadio => {
+                        if senders.ignored(target) {
+                            // Named in advance (working rule 11, build 282).
+                            info!("{}", crate::tx_intake::let_go_line($label, addr));
+                        }
+                        continue;
+                    }
+                    crate::tx_intake::Intake::Claim => {
+                        // A statement of its own: a Yaesu's refusal is read
+                        // under its status lock, and a temporary in the `if`
+                        // below would live across the claim's `.await` - the
+                        // serial thread of the holder waiting on a refused
+                        // client's packets (round 286).
+                        let radio_refusal: Option<&'static str> = $radio_refusal;
+                        if !self.claim_tx(target, addr, radio_refusal, &mut denied).await {
+                            continue;
+                        }
+                        true
+                    }
+                    crate::tx_intake::Intake::Play => false,
+                }
+            }};
+        }
+        // A radio's transmit audio and its PTT, both radios through this one
+        // block (build 282, open point 39): the PTT is the flag on the packet,
+        // as Thetis's. The first packet with the flag takes the radio and keys
+        // it on arrival - not at playout as Thetis does: the serial line and
+        // the 991A's USB routing cost 40-100 ms, and that now overlaps the
+        // buffer's fill. The holder's packets go to the radio's task, the
+        // release among them: the first without the flag, let go when it
+        // plays (`release_played`). Until build 282 the PTT was a control of
+        // its own, and its "off" could arrive before the last of the audio.
+        macro_rules! radio_audio {
+            ($pkt:expr, $addr:expr, $slot:expr, $target:expr, $packet_tx:expr, $stream:expr) => {{
+                let (pkt, addr, slot, target) = ($pkt, $addr, $slot as usize, $target);
+                // No radio in this slot: no claim on its transmitter (review
+                // 2120A3).
+                let Some((radio, flag)) = self.radio_and_flag(target) else { continue };
+                let ptt = pkt.flags.ptt();
+                if !ptt {
+                    // Not asking any more: the next refusal is a first one again.
+                    denied.attempt_over(&addr);
+                }
+                let (holder, let_go_by_radio) = {
+                    let mut s = self.session.lock().await;
+                    s.heard_on(target, addr, Instant::now());
+                    if !ptt {
+                        s.let_go_seen(target, addr);
+                    }
+                    (s.tx_holder(target), s.let_go_by_the_radio_and_still_pressing(target, addr))
+                };
+                // What the packet does, decided where Thetis's is (build 285).
+                let stale = senders.stale(target, addr, pkt.sequence, Instant::now());
+                let arrival = crate::tx_intake::Arrival {
+                    ptt,
+                    from_holder: holder == Some(addr),
+                    keyed: flag.load(Ordering::Relaxed),
+                    stale,
+                    let_go_by_radio,
+                };
+                // The radio's own refusal, asked of its state in place:
+                // `status()` copies the whole state (round 265).
+                let claimed = intake_gate!(
+                    target,
+                    addr,
+                    pkt.sequence,
+                    arrival,
+                    radio.status_arc().lock().unwrap().tx_timing.label(),
+                    radio.status_arc().lock().unwrap().tx_start_refusal()
+                );
+                if claimed && !flag.load(Ordering::Relaxed) {
+                    senders.taken(target);
+                    self.key_radio(target, addr);
+                }
+                // The holder's packet, with the flag or its release.
+                if !stale {
+                    senders.played(target, addr, pkt.sequence, Instant::now());
+                }
+                // The server's measurement sees a radio's packets too (build
+                // 263), as they go to its task - with their flag (build 282).
+                if let Some(m) = tx_measure.as_mut() {
+                    m.record(crate::tx_arrivals::TxArrival {
+                        wall_ms: crate::tx_arrivals::wall_ms_now(),
+                        mono_ms: start.elapsed().as_millis() as u64,
+                        seq: pkt.sequence,
+                        ts: pkt.timestamp,
+                        bytes: pkt.opus_data.len(),
+                        ptt,
+                        stream: $stream,
+                    });
+                }
+                if let Some(ref tx) = $packet_tx {
+                    let audio = !pkt.opus_data.is_empty();
+                    // Only tick on successful enqueue - dropped frames
+                    // (channel full) didn't reach the radio.
+                    if tx.try_send(crate::tx_recover::TxPacket { from: addr, sequence: pkt.sequence, timestamp: pkt.timestamp, opus: pkt.opus_data, ptt }).is_ok() && audio {
+                        self.audio_stats.yaesu_tx[slot].tick(self.server_start);
+                    }
+                }
+            }};
+        }
         loop {
             tokio::select! {
                 result = self.socket.recv_from(&mut recv_buf) => {
                     let (len, addr) = match result {
                         Ok(v) => v,
-                        // Windows UDP quirk: when a client (peer) disappears, a prior
-                        // send to its now-closed port makes the NEXT recv_from return
-                        // WSAECONNRESET / WSAECONNABORTED (ErrorKind::ConnectionReset /
-                        // ConnectionAborted). It is a spurious per-datagram error, not a
-                        // real socket failure — skip it and keep serving the other
-                        // clients instead of tearing the whole server down (fixes the
-                        // "force-stop the app -> server crashes" report).
-                        Err(e) if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::ConnectionReset
-                                | std::io::ErrorKind::ConnectionAborted
-                        ) => {
-                            log::debug!("recv_from transient error (ignored): {}", e);
-                            continue;
-                        }
+                        // The only error left is the QUIC endpoint itself gone
+                        // (BrokenPipe). The Windows UDP quirk this loop used to
+                        // skip (a reset after a client vanished, the "force-stop
+                        // the app -> server crashes" report) is quinn's to skip
+                        // now, on its own socket (build 133): quinn 0.11.9,
+                        // src/endpoint.rs:839-843, "Ignore ECONNRESET".
                         Err(e) => return Err(e).context("recv_from"),
                     };
                     let data = &recv_buf[..len];
@@ -3525,15 +4191,27 @@ impl NetworkService {
                     {
                         let mut session = self.session.lock().await;
 
-                        // Rate-limit check
-                        if session.is_blocked(addr) {
+                        // Rate-limit check - on the real peer behind a QUIC sentinel.
+                        if session.is_blocked(self.socket.throttle_key(addr)) {
                             continue; // Silently drop
                         }
 
                         // Handle auth packets regardless of state
                         match &packet {
-                            Packet::AuthResponse(hmac) => {
-                                let result = session.verify_auth(addr, hmac);
+                            Packet::AuthResponse { hmac, client_nonce } => {
+                                // Over QUIC: the binding of the connection this
+                                // response came in on, or nothing at all when that
+                                // connection is gone - then nothing is answered.
+                                let Ok(channel) = self.socket.auth_channel(addr) else {
+                                    continue;
+                                };
+                                let verdict = session.verify_auth(addr, hmac, *client_nonce, channel);
+                                let result = verdict.code;
+                                if result == crate::session::AUTH_NOT_ANSWERED {
+                                    // Nothing pending for this address: nothing to say.
+                                    // Its next packet gets a fresh challenge the usual way.
+                                    continue;
+                                }
                                 // PATCH-2: record outcome in Status-panel ringbuffer.
                                 let outcome = match result {
                                     sdr_remote_core::protocol::AUTH_ACCEPTED => {
@@ -3551,14 +4229,22 @@ impl NetworkService {
                                     session.record_connect_attempt(addr, o);
                                 }
                                 drop(session);
-                                // Send AuthResult
-                                let mut buf = [0u8; 5];
-                                let header = Header::new(PacketType::AuthResult, Flags::NONE);
-                                let mut hdr = [0u8; 4];
-                                header.serialize(&mut hdr);
-                                buf[..4].copy_from_slice(&hdr);
-                                buf[4] = result;
-                                let _ = self.socket.try_send_to(&buf, addr);
+                                // Test switch: hand the client a false proof, to see its
+                                // "server proof invalid" line in the field
+                                // (THETISLINK_TEST_BAD_PROOF=1). Nothing else can produce one.
+                                let proof = verdict.proof.map(|mut p| {
+                                    if std::env::var("THETISLINK_TEST_BAD_PROOF").map_or(false, |v| v == "1") {
+                                        warn!("THETISLINK_TEST_BAD_PROOF is set: a false proof goes to {} - a test, not a fault", addr);
+                                        p[0] ^= 0xff;
+                                    }
+                                    p
+                                });
+                                let mut buf = [0u8; AUTH_RESULT_SIZE_WITH_PROOF];
+                                let n = serialize_auth_result(&mut buf, result, proof.as_ref());
+                                let _ = self.socket.try_send_to(&buf[..n], addr);
+                                if result == sdr_remote_core::protocol::AUTH_ACCEPTED {
+                                    self.tell_if_closed(addr).await;
+                                }
                                 // If TOTP required, also send TotpChallenge
                                 if result == sdr_remote_core::protocol::AUTH_TOTP_REQUIRED {
                                     let mut totp_buf = [0u8; 4];
@@ -3569,7 +4255,11 @@ impl NetworkService {
                                 continue;
                             }
                             Packet::TotpResponse(code) => {
-                                let accepted = session.verify_totp(addr, code);
+                                let accepted = match session.verify_totp(addr, code, self.socket.throttle_key(addr)) {
+                                    Some(a) => a,
+                                    // Nothing pending: nothing to say (see AUTH_NOT_ANSWERED).
+                                    None => continue,
+                                };
                                 // PATCH-2: record TOTP outcome in Status-panel ringbuffer.
                                 let outcome = if accepted {
                                     crate::session::ConnectOutcome::Accepted
@@ -3578,14 +4268,15 @@ impl NetworkService {
                                 };
                                 session.record_connect_attempt(addr, outcome);
                                 drop(session);
-                                // Send AuthResult with final verdict
-                                let mut buf = [0u8; 5];
-                                let header = Header::new(PacketType::AuthResult, Flags::NONE);
-                                let mut hdr = [0u8; 4];
-                                header.serialize(&mut hdr);
-                                buf[..4].copy_from_slice(&hdr);
-                                buf[4] = if accepted { sdr_remote_core::protocol::AUTH_ACCEPTED } else { sdr_remote_core::protocol::AUTH_REJECTED };
-                                let _ = self.socket.try_send_to(&buf, addr);
+                                // The final verdict. No proof here: it went with the
+                                // password step, and the code step adds nothing to it.
+                                let code = if accepted { sdr_remote_core::protocol::AUTH_ACCEPTED } else { sdr_remote_core::protocol::AUTH_REJECTED };
+                                let mut buf = [0u8; AUTH_RESULT_SIZE_WITH_PROOF];
+                                let n = serialize_auth_result(&mut buf, code, None);
+                                let _ = self.socket.try_send_to(&buf[..n], addr);
+                                if accepted {
+                                    self.tell_if_closed(addr).await;
+                                }
                                 continue;
                             }
                             _ => {}
@@ -3593,10 +4284,10 @@ impl NetworkService {
 
                         if session.auth_required() {
                             if !session.is_authenticated(addr) {
-                                // New unknown client or pending challenge - send challenge
-                                // Don't overwrite PendingTotp state with a new challenge
-                                if session.get_auth_state(addr).is_none()
-                                    || matches!(session.get_auth_state(addr), Some(crate::session::AuthState::NoAuth)) {
+                                // A stranger, or a knock at the code step, gets a
+                                // challenge; a client answering one does not. The rule
+                                // is the session manager's (`wants_challenge`).
+                                if session.wants_challenge(addr, &packet) {
                                     let nonce = session.create_challenge(addr);
                                     // PATCH-2: record diagnostic "client started handshake".
                                     session.record_connect_attempt(
@@ -3604,13 +4295,8 @@ impl NetworkService {
                                         crate::session::ConnectOutcome::ChallengeSent,
                                     );
                                     drop(session);
-                                    // Send AuthChallenge
-                                    let mut buf = [0u8; 20];
-                                    let header = Header::new(PacketType::AuthChallenge, Flags::NONE);
-                                    let mut hdr = [0u8; 4];
-                                    header.serialize(&mut hdr);
-                                    buf[..4].copy_from_slice(&hdr);
-                                    buf[4..20].copy_from_slice(&nonce);
+                                    let mut buf = [0u8; AUTH_CHALLENGE_SIZE];
+                                    serialize_auth_challenge(&mut buf, &nonce);
                                     let _ = self.socket.try_send_to(&buf, addr);
                                 }
                                 continue; // Drop all non-auth packets from unauthenticated clients
@@ -3620,108 +4306,180 @@ impl NetworkService {
                         session.touch(addr);
                     }
 
+                    // Phase 2b: a numbered control is acknowledged whatever happens
+                    // to it - the client wants to stop repeating - and applied only
+                    // if it is newer than what this session applied for the same
+                    // control. That last part keeps a late repeat of "Yaesu PTT on"
+                    // from keying the radio after "off" (control_ack.rs).
+                    if let Some((key, seq)) = sdr_remote_core::protocol::numbered_control(data) {
+                        let mut ack = [0u8; ControlAckPacket::SIZE];
+                        ControlAckPacket::serialize(seq, &mut ack);
+                        let _ = self.socket.try_send_to(&ack, addr);
+                        let verdict = self.session.lock().await.judge_control(addr, key, seq);
+                        if let Some(v) = verdict {
+                            if v != sdr_remote_core::control_ack::Verdict::Apply {
+                                let say = control_repeat_said
+                                    .get(&addr)
+                                    .map_or(true, |t| t.elapsed() >= Duration::from_secs(300));
+                                if say {
+                                    control_repeat_said.insert(addr, Instant::now());
+                                    info!(
+                                        "Control {:?} seq {} from {} not applied ({:?}) - a repeat; once per 5 minutes",
+                                        key, seq, addr, v
+                                    );
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
                     match packet {
                         Packet::Audio(audio_pkt) => {
-                            // Thetis-only audio path - Yaesu TX handled via AudioYaesu packets
+                            // Thetis's transmit audio. What the packet does is decided
+                            // where a radio's is (`tx_intake`, build 285); the buffer,
+                            // the decoder and the keying at playout stay here.
+                            let target = crate::session::TxTarget::Thetis;
                             let ptt_requested = audio_pkt.flags.ptt();
                             if !ptt_requested {
                                 // Not asking any more, so this attempt is over and
                                 // the next refusal counts as a first one again.
                                 denied.attempt_over(&addr);
                             }
+                            // How long the client was silent before this packet, read
+                            // before the session's lock: for every audio packet (builds
+                            // 248, 249).
+                            let silence = self.ptt.lock().await.packet_silence(Instant::now());
                             let mut session = self.session.lock().await;
 
                             if ptt_requested {
-                                if !session.try_acquire_tx(crate::session::TxTarget::Thetis, addr) {
-                                    drop(session);
-                                    let first = denied.is_first(&addr);
-                                    let now_ms = self.server_start.elapsed().as_millis() as u64;
-                                    if denied.should_send(addr, now_ms) {
-                                        if first {
-                                            info!(
-                                                "Client {} asked for Thetis TX while another client holds it - refused",
-                                                addr
-                                            );
-                                        }
-                                        let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                        PttDeniedPacket::serialize(&mut buf, DeniedTarget::Thetis, false);
-                                        let _ = self.socket.send_to(&buf, addr).await;
-                                    }
-                                    continue;
-                                }
-                                drop(session);
-                                // Granted: this attempt is over as far as refusals go.
-                                denied.attempt_over(&addr);
+                                forget_thetis_holder_if_outlived!(session.tx_holder(crate::session::TxTarget::Thetis));
+                            }
+                            // A silence past the safety's packet window inside a press
+                            // (build 248): what waits in the buffer is from before it -
+                            // packets under the target when the line went - and would
+                            // play first, with PTT. It goes before this packet goes in,
+                            // with PTT or without: a release packet first after the
+                            // silence lets the buffer play below its target (build 237),
+                            // the oldest first (build 249; round 248). What the buffer
+                            // learned of the line stays.
+                            if tx_holder_addr == Some(addr) && crate::ptt::silence_ended_the_over(silence) {
+                                // Named in advance (working rule 11, builds 248 and 249).
+                                info!("TX holder {} silent for {} ms, past the packet window - its buffered audio goes", addr, silence.map_or(0, |d| d.as_millis()));
+                                jitter_buf.discard();
+                            }
+                            session.heard_on(target, addr, Instant::now());
+                            if !ptt_requested {
+                                session.let_go_seen(target, addr);
+                            }
+                            let holder = session.tx_holder(target);
+                            let let_go_by_radio = session.let_go_by_the_radio_and_still_pressing(target, addr);
+                            drop(session);
 
-                                if tx_holder_addr != Some(addr) {
+                            let stale = senders.stale(target, addr, audio_pkt.sequence, Instant::now());
+                            // Thetis keys when its buffer plays: its holder's packets play.
+                            let arrival = crate::tx_intake::Arrival {
+                                ptt: ptt_requested,
+                                from_holder: holder == Some(addr),
+                                keyed: holder == Some(addr),
+                                stale,
+                                let_go_by_radio,
+                            };
+                            if intake_gate!(target, addr, audio_pkt.sequence, arrival, "Thetis", None) {
+                                senders.taken(target);
+                            }
+                            if !stale {
+                                senders.played(target, addr, audio_pkt.sequence, Instant::now());
+                            }
+
+                            if ptt_requested && tx_holder_addr != Some(addr) {
+                                if line_learned_from == Some(addr) {
+                                    // Named in advance (working rule 11, build 175).
+                                    info!("TX holder {} again, keeping what the jitter buffer learned", addr);
+                                    jitter_buf.discard();
+                                } else {
                                     info!("New TX holder {}, resetting jitter buffer and decoder", addr);
                                     jitter_buf.reset();
-                                    opus_decoder = sdr_remote_core::codec::OpusDecoderWideband::new().unwrap();
-                                    tx_holder_addr = Some(addr);
+                                    line_learned_from = Some(addr);
                                 }
-
-                                self.ptt.lock().await.record_ptt_packet();
-
-                                let arrival_ms = start.elapsed().as_millis() as u64;
-                                let wideband = audio_pkt.flags.wideband();
-                                jitter_buf.push(
-                                    BufferedFrame {
-                                        sequence: audio_pkt.sequence,
-                                        timestamp: audio_pkt.timestamp,
-                                        opus_data: audio_pkt.opus_data,
-                                        ptt: true,
-                                        wideband,
-                                    },
-                                    arrival_ms,
-                                );
-                            } else if session.tx_holder(crate::session::TxTarget::Thetis) == Some(addr) {
-                                // This client held TX - push non-PTT frame so tail
-                                // audio plays out, then release will trigger from playout
-                                drop(session);
-
-                                self.ptt.lock().await.record_ptt_packet();
-
-                                let arrival_ms = start.elapsed().as_millis() as u64;
-                                let wideband = audio_pkt.flags.wideband();
-                                jitter_buf.push(
-                                    BufferedFrame {
-                                        sequence: audio_pkt.sequence,
-                                        timestamp: audio_pkt.timestamp,
-                                        opus_data: audio_pkt.opus_data,
-                                        ptt: false,
-                                        wideband,
-                                    },
-                                    arrival_ms,
-                                );
+                                opus_decoder = sdr_remote_core::stream::StreamDecoder::new().unwrap();
+                                tx_holder_addr = Some(addr);
                             }
-                            // else: non-PTT audio from non-TX-holder - ignore
+
+                            // A press, or the holder's release: its tail audio plays
+                            // out, and the release triggers from playout.
+                            self.ptt.lock().await.record_ptt_packet();
+
+                            let arrival_ms = start.elapsed().as_millis() as u64;
+                            if let Some(m) = tx_measure.as_mut() {
+                                m.record(crate::tx_arrivals::TxArrival {
+                                    wall_ms: crate::tx_arrivals::wall_ms_now(),
+                                    mono_ms: arrival_ms,
+                                    seq: audio_pkt.sequence,
+                                    ts: audio_pkt.timestamp,
+                                    bytes: audio_pkt.opus_data.len(),
+                                    ptt: ptt_requested,
+                                    stream: crate::tx_arrivals::TxStream::Thetis,
+                                });
+                            }
+                            let wideband = audio_pkt.flags.wideband();
+                            jitter_buf.push(
+                                BufferedFrame {
+                                    sequence: audio_pkt.sequence,
+                                    timestamp: audio_pkt.timestamp,
+                                    opus_data: audio_pkt.opus_data,
+                                    ptt: ptt_requested,
+                                    wideband,
+                                },
+                                arrival_ms,
+                            );
                         }
                         Packet::Heartbeat(hb) => {
-                            let thetis_configured = self.config.tci_addr
-                                .as_deref()
-                                .map(|s| !s.trim().is_empty())
-                                .unwrap_or(false);
+                            let thetis_configured = self.config.thetis_configured();
                             // Acquire PTT lock once: signal heartbeat received + read TCI/process/launch status
                             // in the same scope so we don't lock multiple times per heartbeat.
-                            let (tci_connected, thetis_running, thetis_starting) = {
+                            // By name (build 217): a tuple of four booleans let two of them swap.
+                            let crate::ptt::ThetisStatus {
+                                tci_connected,
+                                thetis_running,
+                                thetis_starting,
+                                rx_only_unguarded,
+                            } = {
                                 let mut ptt = self.ptt.lock().await;
                                 ptt.heartbeat_received();
                                 if thetis_configured {
-                                    (ptt.tci_connected(), ptt.thetis_process_running(), ptt.thetis_starting())
+                                    ptt.thetis_status()
                                 } else {
-                                    (false, false, false)
+                                    crate::ptt::ThetisStatus::default()
                                 }
                             };
                             // PATCH-2: feed the Status-panel TCI probe.
                             // Idempotent - only stamps last_state_change on real flips.
                             self.tci_probe.update(tci_connected, self.server_start);
-                            self.session.lock().await.update_heartbeat(
-                                addr,
-                                hb.sequence,
-                                hb.rtt_ms,
-                                hb.loss_percent,
-                                hb.jitter_ms,
-                            );
+                            {
+                                let mut session = self.session.lock().await;
+                                session.update_heartbeat(
+                                    addr,
+                                    hb.sequence,
+                                    hb.rtt_ms,
+                                    hb.loss_percent,
+                                    hb.jitter_ms,
+                                );
+                                // Only speaks up when the judgement changes, so
+                                // a mismatch is stated once per client and not
+                                // twice a second for as long as it stays on.
+                                if let Some((was, now)) =
+                                    session.note_client_build(addr, hb.version)
+                                {
+                                    let who = format!("The client at {addr}");
+                                    if let Some((bad, line)) = now.change_line(&was, &who) {
+                                        if bad {
+                                            warn!("{}", line);
+                                        } else {
+                                            info!("{}", line);
+                                        }
+                                    }
+                                }
+                            }
 
                             // PATCH-1: report TCI + Thetis process status in HeartbeatAck.
                             // The two bits together let the client give a targeted hint:
@@ -3743,6 +4501,12 @@ impl NetworkService {
                             if thetis_starting {
                                 state_flags = state_flags
                                     .with(sdr_remote_core::protocol::ServerStateFlags::THETIS_STARTING);
+                            }
+                            // An RX-only position that Thetis cannot guard by itself
+                            // (build 215): the clients say so on screen.
+                            if rx_only_unguarded {
+                                state_flags = state_flags
+                                    .with(sdr_remote_core::protocol::ServerStateFlags::RX_ONLY_UNGUARDED);
                             }
                             // Single-receiver radio: advertise so clients hide RX2 + VRX2.
                             // Inverted flag (absent = normal 2-RX default). Startup snapshot;
@@ -3780,9 +4544,16 @@ impl NetworkService {
                                     .with(Capabilities::REPORTS_STATE_FLAGS),
                                 state_flags,
                                 subs: Some(subs),
+                                // What this server calls itself. The client does
+                                // its own comparing: the operator is usually
+                                // sitting at the client, and often nowhere near
+                                // this screen.
+                                version: Some(
+                                    sdr_remote_core::protocol::VersionTag::mine(),
+                                ),
                             };
-                            let mut ack_buf = [0u8; HeartbeatAck::SIZE_WITH_SUBS];
-                            ack.serialize_with_subs(&mut ack_buf);
+                            let mut ack_buf = [0u8; HeartbeatAck::SIZE_WITH_VERSION];
+                            ack.serialize_with_version(&mut ack_buf);
                             let _ = self.socket.send_to(&ack_buf, addr).await;
                         }
                         Packet::Frequency(freq_pkt) => {
@@ -3795,7 +4566,19 @@ impl NetworkService {
                             // gets a mid-TX mode change (covers stock + fork, any client).
                             let mut ptt = self.ptt.lock().await;
                             if ptt.is_transmitting() {
-                                info!("Client {} VFO-A mode change ignored during TX", addr);
+                                // The client already shows the mode it asked for,
+                                // and the regular mode packet only goes out on a
+                                // change - so without this the wrong mode stayed
+                                // on its screen. Every sender of the command is
+                                // covered here: the buttons, the memories, MIDI,
+                                // the phone (owner, 2026-10-11, choice a; build 174).
+                                let mode = ptt.vfo_a_mode();
+                                drop(ptt);
+                                let mut buf = [0u8; ModePacket::SIZE];
+                                ModePacket { mode }.serialize(&mut buf);
+                                let _ = self.socket.send_to(&buf, addr).await;
+                                // Named in advance (working rule 11, build 174).
+                                info!("Client {} VFO-A mode change ignored during TX - sent mode {} back", addr, mode);
                             } else {
                                 ptt.set_vfo_a_mode(mode_pkt.mode).await;
                             }
@@ -3803,6 +4586,9 @@ impl NetworkService {
                         Packet::Smeter(_) => {} // server-only, ignore from clients
                         Packet::Spectrum(_) | Packet::FullSpectrum(_) => {} // server-only, ignore from clients
                         Packet::EquipmentStatus(_) => {} // server-only, ignore from clients
+                        Packet::ControlAck(_) => {} // server -> client only
+                        // Phase 3c: punching, wired in build 124.
+                        Packet::PunchOffer(_) | Packet::PunchReady(_) | Packet::PunchLocal(_) => {}
                         Packet::EquipmentCommand(eq_cmd) => {
                             info!("Equipment command from {}: device={:?} cmd=0x{:02X} data={:?}",
                                 addr, eq_cmd.device_type, eq_cmd.command_id, eq_cmd.data);
@@ -3906,12 +4692,13 @@ impl NetworkService {
                                         let operate_blocked = eq_cmd.command_id == CMD_SPE_OPERATE
                                             && spe_ref.status().state != 2
                                             && !crate::pa_policy::operate_allowed(
-                                                crate::pa_policy::effective_active_pa(
-                                                    self.active_pa_shared.as_ref()
+                                                crate::pa_policy::ActiveMark {
+                                                    marked: self.active_pa_shared.as_ref()
                                                         .map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
-                                                    self.spe.is_some(),
-                                                    self.rf2k.is_some(),
-                                                ),
+                                                    spe_present: self.spe.is_some(),
+                                                    rf2k_present: self.rf2k.is_some(),
+                                                }
+                                                .effective(),
                                                 crate::pa_policy::PA_SPE,
                                             );
                                         let spe_cmd = match eq_cmd.command_id {
@@ -3951,12 +4738,13 @@ impl NetworkService {
                                                 // active PA may amplify. Standby is always allowed.
                                                 let allowed = !to_operate
                                                     || crate::pa_policy::operate_allowed(
-                                                        crate::pa_policy::effective_active_pa(
-                                                            self.active_pa_shared.as_ref()
+                                                        crate::pa_policy::ActiveMark {
+                                                            marked: self.active_pa_shared.as_ref()
                                                                 .map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
-                                                            self.spe.is_some(),
-                                                            self.rf2k.is_some(),
-                                                        ),
+                                                            spe_present: self.spe.is_some(),
+                                                            rf2k_present: self.rf2k.is_some(),
+                                                        }
+                                                        .effective(),
                                                         crate::pa_policy::PA_RF2K,
                                                     );
                                                 if !allowed {
@@ -4010,20 +4798,11 @@ impl NetworkService {
                                             CMD_RF2K_DAC_ALC_UP => Some(crate::rf2k::Rf2kCmd::DacAlcUp),
                                             CMD_RF2K_DAC_ALC_DOWN => Some(crate::rf2k::Rf2kCmd::DacAlcDown),
                                             CMD_RF2K_ZERO_FRAM => Some(crate::rf2k::Rf2kCmd::ZeroFRAM),
-                                            CMD_RF2K_SET_DRIVE_SSB => {
-                                                if eq_cmd.data.len() >= 2 {
-                                                    Some(crate::rf2k::Rf2kCmd::SetDriveConfig { category: 0, band: eq_cmd.data[0], value: eq_cmd.data[1] })
-                                                } else { None }
-                                            }
-                                            CMD_RF2K_SET_DRIVE_AM => {
-                                                if eq_cmd.data.len() >= 2 {
-                                                    Some(crate::rf2k::Rf2kCmd::SetDriveConfig { category: 1, band: eq_cmd.data[0], value: eq_cmd.data[1] })
-                                                } else { None }
-                                            }
-                                            CMD_RF2K_SET_DRIVE_CONT => {
-                                                if eq_cmd.data.len() >= 2 {
-                                                    Some(crate::rf2k::Rf2kCmd::SetDriveConfig { category: 2, band: eq_cmd.data[0], value: eq_cmd.data[1] })
-                                                } else { None }
+                                            // Row, band and value from the one place
+                                            // the client encodes with (`rf2k_drive`,
+                                            // build 205-207).
+                                            c if sdr_remote_core::rf2k_drive::category_of(c).is_some() => {
+                                                sdr_remote_core::rf2k_drive::decode(c, &eq_cmd.data).map(crate::rf2k::Rf2kCmd::SetDriveConfig)
                                             }
                                             _ => {
                                                 debug!("Unknown RF2K command: 0x{:02X}", eq_cmd.command_id);
@@ -4149,7 +4928,7 @@ impl NetworkService {
                         // Server->client only, ignore if received
                         Packet::Spot(_) | Packet::TxProfiles(_) | Packet::YaesuState(_)
                         | Packet::AmplitecPowerTable(_)
-                        | Packet::AuthChallenge(_) | Packet::AuthResponse(_) | Packet::AuthResult(_)
+                        | Packet::AuthChallenge(_) | Packet::AuthResponse { .. } | Packet::AuthResult { .. }
                         | Packet::TotpChallenge | Packet::TotpResponse(_) => {}
                         // Sent by this server, never received by it.
                         Packet::ServerReportPart(..) => {}
@@ -4191,42 +4970,10 @@ impl NetworkService {
                                 }
                             }
                         }
-                        // Yaesu TX audio: forward to separate decode task
+                        // Yaesu TX audio, with its PTT (build 282): one block for
+                        // both radios, `radio_audio!`.
                         Packet::AudioYaesu(pkt) => {
-                            // Only from the client that holds this radio. Without
-                            // this, every client's frames went in while the PTT
-                            // flag was up and interleaved in one Opus decoder -
-                            // the server sending two audio channels into one
-                            // radio, which is the one thing it must never do.
-                            // Ownership is checked inside the same condition the
-                            // forwarding already had. Outside it, an idle client's
-                            // frames - which were silently dropped before - would
-                            // count as refusals and fill the counter with ordinary
-                            // traffic, which is the opposite of what it is for.
-                            if yaesu_ptt_active && !pkt.opus_data.is_empty() {
-                                let mine = self
-                                    .session
-                                    .lock()
-                                    .await
-                                    .accepts(crate::session::TxTarget::Yaesu1, addr);
-                                if !mine {
-                                    yaesu_frames_refused += 1;
-                                    if yaesu_frames_refused == 1 || yaesu_frames_refused % 100 == 0 {
-                                        warn!(
-                                            "Yaesu TX audio from {} refused - it does not hold that radio ({} frame(s) so far)",
-                                            addr, yaesu_frames_refused
-                                        );
-                                    }
-                                    continue;
-                                }
-                                if let Some(ref tx) = yaesu_tx_packet_tx {
-                                    // Only tick on successful enqueue - dropped
-                                    // frames (channel full) didn't reach Yaesu.
-                                    if tx.try_send(pkt.opus_data).is_ok() {
-                                        self.audio_stats.yaesu_tx.tick(self.server_start);
-                                    }
-                                }
-                            }
+                            radio_audio!(pkt, addr, 0, crate::session::TxTarget::Yaesu1, yaesu_tx_packet_tx, crate::tx_arrivals::TxStream::Radio1);
                         }
                         Packet::FrequencyYaesu(freq_pkt) => {
                             if let Some(ref yaesu) = yaesu {
@@ -4251,33 +4998,7 @@ impl NetworkService {
                         Packet::AudioMultiCh(_) => {} // server->client only, ignore
                         // Dual-radio slot 1 (Option B-prime) - mirror of AudioYaesu/FrequencyYaesu.
                         Packet::AudioYaesu2(pkt) => {
-                            // Ownership is checked inside the same condition the
-                            // forwarding already had. Outside it, an idle client's
-                            // frames - which were silently dropped before - would
-                            // count as refusals and fill the counter with ordinary
-                            // traffic, which is the opposite of what it is for.
-                            if yaesu2_ptt_active && !pkt.opus_data.is_empty() {
-                                let mine = self
-                                    .session
-                                    .lock()
-                                    .await
-                                    .accepts(crate::session::TxTarget::Yaesu2, addr);
-                                if !mine {
-                                    yaesu_frames_refused += 1;
-                                    if yaesu_frames_refused == 1 || yaesu_frames_refused % 100 == 0 {
-                                        warn!(
-                                            "Yaesu2 TX audio from {} refused - it does not hold that radio ({} frame(s) so far)",
-                                            addr, yaesu_frames_refused
-                                        );
-                                    }
-                                    continue;
-                                }
-                                if let Some(ref tx) = yaesu2_tx_packet_tx {
-                                    if tx.try_send(pkt.opus_data).is_ok() {
-                                        self.audio_stats.yaesu_tx.tick(self.server_start);
-                                    }
-                                }
-                            }
+                            radio_audio!(pkt, addr, 1, crate::session::TxTarget::Yaesu2, yaesu2_tx_packet_tx, crate::tx_arrivals::TxStream::Radio2);
                         }
                         Packet::FrequencyYaesu2(freq_pkt) => {
                             if let Some(ref yaesu) = yaesu2 {
@@ -4338,36 +5059,17 @@ impl NetworkService {
                             // 2026-09-17 14:47:04 -> 14:47:06), and a Yaesu until the
                             // orphan check came round.
                             for target in released {
-                                match target {
-                                    crate::session::TxTarget::Thetis => {
-                                        info!("Client {} said goodbye while keying Thetis - releasing PTT now", addr);
-                                        // What is still in the playout buffer is the last of
-                                        // this client's audio, with its PTT bit set - the
-                                        // client clears its flags after sending. Left there,
-                                        // playout keyed the radio again 37 ms after this
-                                        // release (field test, 2026-09-17 15:02:55). It goes
-                                        // with the client.
-                                        jitter_buf.reset();
-                                        tx_holder_addr = None;
-                                        let mut p = self.ptt.lock().await;
-                                        p.cancel_prefill();
-                                        p.release().await;
-                                    }
-                                    crate::session::TxTarget::Yaesu1 => {
-                                        info!("Client {} said goodbye while keying Yaesu radio 0 - releasing PTT now", addr);
-                                        if let Some(ref y) = self.yaesu {
-                                            y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
-                                        }
-                                        self.yaesu_ptt_flag.store(false, Ordering::Relaxed);
-                                    }
-                                    crate::session::TxTarget::Yaesu2 => {
-                                        info!("Client {} said goodbye while keying Yaesu radio 1 - releasing PTT now", addr);
-                                        if let Some(ref y) = self.yaesu2 {
-                                            y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
-                                        }
-                                        self.yaesu2_ptt_flag.store(false, Ordering::Relaxed);
-                                    }
+                                info!("Client {} said goodbye while keying {} - releasing PTT now", addr, target.radio_name());
+                                if target == crate::session::TxTarget::Thetis {
+                                    // What is still in the playout buffer is the last of
+                                    // this client's audio, with its PTT bit set - the
+                                    // client clears its flags after sending. Left there,
+                                    // playout keyed the radio again 37 ms after this
+                                    // release (field test, 2026-09-17 15:02:55). It goes
+                                    // with the client.
+                                    forget_thetis_holder!();
                                 }
+                                self.release_transmitter(target).await;
                             }
                             // And its CW key, if it was down - on whichever radio its
                             // run keyed (step 6: a Yaesu has no keying watchdog of its
@@ -4410,7 +5112,7 @@ impl NetworkService {
                                     if self.cw_denied.should_send(addr, now_ms) {
                                         warn!("Client {} keys CW while a run of another client or on another radio is playing - refused", addr);
                                         let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                        PttDeniedPacket::serialize(&mut buf, match pkt.target { 1 => DeniedTarget::Radio1, 2 => DeniedTarget::Radio2, _ => DeniedTarget::Thetis }, false);
+                                        PttDeniedPacket::serialize(&mut buf, match pkt.target { 1 => DeniedTarget::Radio1, 2 => DeniedTarget::Radio2, _ => DeniedTarget::Thetis }, Denial::Refused);
                                         let _ = self.socket.send_to(&buf, addr).await;
                                     }
                                     break 'gate None;
@@ -4427,8 +5129,9 @@ impl NetworkService {
                                         Err(why) => {
                                             if self.cw_denied.should_send(addr, now_ms) {
                                                 warn!("Client {} keys CW to Yaesu slot {} but {} - refused", addr, pkt.target.saturating_sub(1), why);
+                                                let denial = self.session.lock().await.acquire_refusal().denial;
                                                 let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                                PttDeniedPacket::serialize(&mut buf, if pkt.target == 1 { DeniedTarget::Radio1 } else { DeniedTarget::Radio2 }, false);
+                                                PttDeniedPacket::serialize(&mut buf, if pkt.target == 1 { DeniedTarget::Radio1 } else { DeniedTarget::Radio2 }, denial);
                                                 let _ = self.socket.send_to(&buf, addr).await;
                                             }
                                             break 'gate None;
@@ -4440,13 +5143,20 @@ impl NetworkService {
                                     (p.tx_blocked(), p.vfo_a_mode(), p.is_transmitting())
                                 };
                                 let mut thetis_held_before = false;
-                                let refuse = if blocked {
+                                // Closed first: a closed server also has the
+                                // receive-only gate shut, and that is not the reason.
+                                let closed = self.session.lock().await.acquire_refusal();
+                                let refuse = if closed.denial == Denial::Closed {
+                                    Some(closed.why)
+                                } else if blocked {
                                     Some("the Amplitec position is receive-only")
                                 } else if !crate::tci_parser::is_cw_mode(mode) {
                                     Some("Thetis is not in a CW mode")
                                 } else {
-                                    match self.session.lock().await.acquire_for_attempt(crate::session::TxTarget::Thetis, addr) {
-                                        None => Some("another client holds Thetis"),
+                                    let mut s = self.session.lock().await;
+                                    forget_thetis_holder_if_outlived!(s.tx_holder(crate::session::TxTarget::Thetis));
+                                    match s.acquire_for_attempt(crate::session::TxTarget::Thetis, addr) {
+                                        None => Some(s.acquire_refusal().why),
                                         Some(held) => {
                                             thetis_held_before = held;
                                             None
@@ -4457,7 +5167,7 @@ impl NetworkService {
                                     if self.cw_denied.should_send(addr, now_ms) {
                                         warn!("Client {} keys CW but {} - refused", addr, why);
                                         let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                        PttDeniedPacket::serialize(&mut buf, DeniedTarget::Thetis, false);
+                                        PttDeniedPacket::serialize(&mut buf, DeniedTarget::Thetis, closed.denial);
                                         let _ = self.socket.send_to(&buf, addr).await;
                                     }
                                     break 'gate None;
@@ -4615,8 +5325,19 @@ impl NetworkService {
                                     let high = ctrl.value as i16 as i32;
                                     let low = pending_filter_low.take()
                                         .unwrap_or(ptt.filter_low_hz());
-                                    ctrl_log!(opening, "Client {} filter: {} .. {} Hz", addr, low, high);
-                                    ptt.set_filter(low, high).await;
+                                    // Only edges that fit the mode Thetis has or was
+                                    // just asked for (build 244): a late repeat, a
+                                    // stale low edge, a lost mode packet or a mode
+                                    // change dropped during TX put another mode's
+                                    // filter in.
+                                    let mode = crate::tci::mode_for_filter(ptt.tci.asked_mode_a, ptt.vfo_a_mode(), Instant::now());
+                                    if sdr_remote_core::filter_fit::edges_fit_mode(mode, low, high) {
+                                        ctrl_log!(opening, "Client {} filter: {} .. {} Hz", addr, low, high);
+                                        ptt.set_filter(low, high).await;
+                                    } else {
+                                        // Named in advance (`logregels-build244.md`).
+                                        info!("Client {} filter: {} .. {} Hz does not fit mode {} - not sent to Thetis", addr, low, high, mode);
+                                    }
                                 }
                                 ControlId::TxFilterLow => {
                                     // Buffer low edge; apply combined with high edge.
@@ -4638,6 +5359,7 @@ impl NetworkService {
                                 }
                                 ControlId::ThetisStarting => {} // server->client only
                                 ControlId::PaDriveWarning => {} // server->client only
+                                ControlId::DdcCentreRx1 | ControlId::DdcCentreRx2 => {} // server->client only
                                 ControlId::Rx1Enable => {
                                     let enabled = ctrl.value != 0;
                                     self.session.lock().await.set_rx1_enabled(addr, enabled);
@@ -4756,8 +5478,15 @@ impl NetworkService {
                                     let high = ctrl.value as i16 as i32;
                                     let low = pending_rx2_filter_low.take()
                                         .unwrap_or(ptt.filter_rx2_low_hz());
-                                    ctrl_log!(opening, "Client {} RX2 filter: {} .. {} Hz", addr, low, high);
-                                    ptt.set_rx2_filter(low, high).await;
+                                    // As RX1 (build 244).
+                                    let mode = crate::tci::mode_for_filter(ptt.tci.asked_mode_b, ptt.vfo_b_mode(), Instant::now());
+                                    if sdr_remote_core::filter_fit::edges_fit_mode(mode, low, high) {
+                                        ctrl_log!(opening, "Client {} RX2 filter: {} .. {} Hz", addr, low, high);
+                                        ptt.set_rx2_filter(low, high).await;
+                                    } else {
+                                        // Named in advance (`logregels-build244.md`).
+                                        info!("Client {} RX2 filter: {} .. {} Hz does not fit mode {} - not sent to Thetis", addr, low, high, mode);
+                                    }
                                 }
                                 ControlId::VfoSync => {
                                     let enabled = ctrl.value != 0;
@@ -5069,73 +5798,14 @@ impl NetworkService {
                                         ctrl_log!(opening, "Client {} Yaesu2 power: {}", addr, if on { "ON" } else { "OFF" });
                                     }
                                 }
-                                ControlId::YaesuPtt => {
-                                    if let Some(ref yaesu) = yaesu {
-                                        let on = ctrl.value != 0;
-                                        if on {
-                                            if let Some(why) = yaesu.status().tx_start_refusal() {
-                                                ctrl_log!(opening, "Client {} Yaesu PTT refused - {}", addr, why);
-                                                let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                                PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio1, false);
-                                                let _ = self.socket.send_to(&buf, addr).await;
-                                                continue;
-                                            }
-                                        }
-                                        // Claim on, release on off, and neither
-                                        // reaches the radio without it. Until now
-                                        // this handler knew the sender's address
-                                        // - it logged it - and checked nothing,
-                                        // so any client could key another's radio
-                                        // and switch it off again mid-sentence.
-                                        let allowed = {
-                                            let mut sess = self.session.lock().await;
-                                            if on {
-                                                sess.try_acquire_tx(
-                                                    crate::session::TxTarget::Yaesu1,
-                                                    addr,
-                                                )
-                                            } else {
-                                                let held = sess.accepts(
-                                                    crate::session::TxTarget::Yaesu1,
-                                                    addr,
-                                                );
-                                                sess.release_tx(
-                                                    crate::session::TxTarget::Yaesu1,
-                                                    addr,
-                                                );
-                                                held
-                                            }
-                                        };
-                                        if !allowed {
-                                            ctrl_log!(
-                                                opening,
-                                                "Client {} Yaesu PTT {} refused - another client holds that radio",
-                                                addr,
-                                                if on { "TX" } else { "RX" }
-                                            );
-                                            // Tell the client, or its button stays
-                                            // red over a request that never
-                                            // happened. Part A closed the hole and
-                                            // left the screen lying about it; the
-                                            // owner saw exactly that. Only on a
-                                            // refused claim - a refused release
-                                            // means it was not transmitting anyway.
-                                            if on {
-                                                let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                                PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio1, false);
-                                                let _ = self.socket.send_to(&buf, addr).await;
-                                            }
-                                            continue;
-                                        }
-                                        // Auto-DFM (FM <-> DATA-FM) is now fully
-                                        // handled in YaesuCmd::SetPtt itself (build 12) -
-                                        // single source of truth for the mode toggle, no race
-                                        // between network.rs and yaesu_poll_loop. The memory-mode skip
-                                        // is also in SetPtt.
-                                        yaesu.send_command(crate::yaesu::YaesuCmd::SetPtt(on));
-                                        yaesu_ptt_active = on;
-                                        self.yaesu_ptt_flag.store(on, Ordering::Relaxed);
-                                        ctrl_log!(opening, "Client {} Yaesu PTT: {}", addr, if on { "TX" } else { "RX" });
+                                // A radio's PTT is the flag on its audio since
+                                // build 282 (`radio_audio!`); the ids stay
+                                // reserved. A client from before that keys
+                                // nothing here - safe, and said once per press
+                                // with the build to look at.
+                                ControlId::YaesuPtt | ControlId::Yaesu2Ptt => {
+                                    if ctrl.value != 0 {
+                                        warn!("Client {} sent a Yaesu PTT control - this server keys a Yaesu by the flag on its audio (build 282); the client needs the same build", addr);
                                     }
                                 }
                                 ControlId::YaesuFreq => {} // handled via FrequencyYaesu packet
@@ -5167,11 +5837,15 @@ impl NetworkService {
                                         // client would wait forever: the connect-time read can
                                         // fail (radio in standby, FTX-1 cold scan). Fall back to
                                         // a real read in that case.
-                                        if ctrl.value == 1 && yaesu.status().last_memory_blob.is_some() {
+                                        let copy = yaesu.status().last_memory_blob.clone();
+                                        if ctrl.value == 1 && memory_copy_has_channels(copy.as_deref()) {
                                             ctrl_log!(opening, "Client {} will get the Yaesu memories from the server's copy", addr);
                                         } else {
-                                            if ctrl.value == 1 {
+                                            if ctrl.value == 1 && copy.is_none() {
                                                 warn!("Client {} wanted the server's copy of the Yaesu memories, but there is none - reading the radio", addr);
+                                            } else if ctrl.value == 1 {
+                                                // Named in advance (working rule 11, build 170).
+                                                warn!("Client {} wanted the server's copy of the Yaesu memories, but it has no channels - reading the radio", addr);
                                             }
                                             ctrl_log!(opening, "Client {} requested Yaesu memory read", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
@@ -5246,7 +5920,7 @@ impl NetworkService {
                                         if let Some(why) = refused {
                                             warn!("Client {} asked Yaesu radio 0 to tune but {} - refused", addr, why);
                                             let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio1, false);
+                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio1, Denial::Refused);
                                             let _ = self.socket.send_to(&buf, addr).await;
                                         }
                                         if !cat.is_empty() {
@@ -5515,62 +6189,6 @@ impl NetworkService {
                                     self.session.lock().await.set_yaesu2_enabled(addr, enabled);
                                     ctrl_log!(opening, "Client {} [radio1]: {}", addr, if enabled { "ON" } else { "OFF" });
                                 }
-                                ControlId::Yaesu2Ptt => {
-                                    // Same rule as slot 0; see ControlId::YaesuPtt -
-                                    // including "no radio in this slot, no claim on
-                                    // its transmitter". Slot 0 gets that by sitting
-                                    // inside its own `if let Some(..)`; here the
-                                    // claim was taken first and the radio looked for
-                                    // afterwards, so without a second radio a client
-                                    // came to hold a transmitter that does not exist
-                                    // - and with it the TX holder's 3 s deadline
-                                    // instead of a listener's (review 2120A3).
-                                    if yaesu2.is_none() {
-                                        continue;
-                                    }
-                                    let on2 = ctrl.value != 0;
-                                    if on2 {
-                                        if let Some(why) = yaesu2.as_ref().and_then(|y| y.status().tx_start_refusal()) {
-                                            ctrl_log!(opening, "Client {} Yaesu2 PTT refused - {}", addr, why);
-                                            let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio2, false);
-                                            let _ = self.socket.send_to(&buf, addr).await;
-                                            continue;
-                                        }
-                                    }
-                                    let allowed2 = {
-                                        let mut sess = self.session.lock().await;
-                                        if on2 {
-                                            sess.try_acquire_tx(crate::session::TxTarget::Yaesu2, addr)
-                                        } else {
-                                            let held =
-                                                sess.accepts(crate::session::TxTarget::Yaesu2, addr);
-                                            sess.release_tx(crate::session::TxTarget::Yaesu2, addr);
-                                            held
-                                        }
-                                    };
-                                    if !allowed2 {
-                                        ctrl_log!(
-                                            opening,
-                                            "Client {} Yaesu2 PTT {} refused - another client holds that radio",
-                                            addr,
-                                            if on2 { "TX" } else { "RX" }
-                                        );
-                                        if on2 {
-                                            let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio2, false);
-                                            let _ = self.socket.send_to(&buf, addr).await;
-                                        }
-                                        continue;
-                                    }
-                                    if let Some(ref yaesu) = yaesu2 {
-                                        let on = ctrl.value != 0;
-                                        yaesu.send_command(crate::yaesu::YaesuCmd::SetPtt(on));
-                                        yaesu2_ptt_active = on;
-                                        self.yaesu2_ptt_flag.store(on, Ordering::Relaxed);
-                                        ctrl_log!(opening, "Client {} [radio1] PTT: {}", addr, if on { "TX" } else { "RX" });
-                                    }
-                                }
                                 ControlId::Yaesu2Freq => {} // handled via FrequencyYaesu2 packet
                                 ControlId::Yaesu2MicGain => {
                                     let gain = ctrl.value as f32 / 100.0;
@@ -5649,7 +6267,7 @@ impl NetworkService {
                                         if let Some(why) = refused {
                                             warn!("Client {} asked Yaesu radio 1 to tune but {} - refused", addr, why);
                                             let mut buf = [0u8; PttDeniedPacket::SIZE];
-                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio2, false);
+                                            PttDeniedPacket::serialize(&mut buf, DeniedTarget::Radio2, Denial::Refused);
                                             let _ = self.socket.send_to(&buf, addr).await;
                                         }
                                         if !cat.is_empty() {
@@ -5674,11 +6292,15 @@ impl NetworkService {
                                     if let Some(ref yaesu) = yaesu2 {
                                         // Same rule as slot 0, including the fall-back when
                                         // the server has no copy yet.
-                                        if ctrl.value == 1 && yaesu.status().last_memory_blob.is_some() {
+                                        let copy = yaesu.status().last_memory_blob.clone();
+                                        if ctrl.value == 1 && memory_copy_has_channels(copy.as_deref()) {
                                             ctrl_log!(opening, "Client {} [radio1] will get the memories from the server's copy", addr);
                                         } else {
-                                            if ctrl.value == 1 {
+                                            if ctrl.value == 1 && copy.is_none() {
                                                 warn!("Client {} [radio1] wanted the server's copy of the memories, but there is none - reading the radio", addr);
+                                            } else if ctrl.value == 1 {
+                                                // Named in advance (working rule 11, build 170).
+                                                warn!("Client {} [radio1] wanted the server's copy of the memories, but it has no channels - reading the radio", addr);
                                             }
                                             ctrl_log!(opening, "Client {} [radio1] requested memory read", addr);
                                             yaesu.send_command(crate::yaesu::YaesuCmd::ReadAllMemories);
@@ -5729,77 +6351,120 @@ impl NetworkService {
                     }
                 }
 
-                // Playout: pull exactly 1 frame per 20ms tick (smooth, regular cadence)
+                // Playout: one frame per 20 ms tick (smooth, regular cadence), a
+                // second only to rebuild Thetis's ring (build 193).
                 // PTT state changes are driven by jitter buffer output, not packet arrival.
                 _ = playout_tick.tick() => {
                     // Check if prefill delay elapsed -> send ZZTX1; now
                     self.ptt.lock().await.check_prefill().await;
-
-                    match jitter_buf.pull() {
-                        JitterResult::Frame(frame) => {
-                            // PTT trigger from playout: frame.ptt drives prefill/release.
-                            // Only while somebody holds the transmitter: a frame with the
-                            // PTT bit from a client that has since left - said goodbye, or
-                            // timed out - keys nothing. The session's ownership table is
-                            // the named decision (`accepts`); this asks the same table.
-                            let owner = self.session.lock().await.tx_holder(crate::session::TxTarget::Thetis);
-                            if crate::session::playout_keys(frame.ptt, owner, tx_holder_addr) {
-                                self.ptt.lock().await.activate_from_playout();
-                            } else if self.ptt.lock().await.is_tx_or_prefill() {
-                                if crate::cw_playout::lock(&self.cw).holds_transmitter(Instant::now()) {
-                                    // The microphone is done, but a CW run holds the
-                                    // transmitter (keyed within the microphone's tail).
-                                    // Its tail frames must not re-arm the release that
-                                    // activate_for_cw cancelled: that dropped MOX in the
-                                    // middle of the run (found reading for review 313).
-                                    // The run hands MOX and the lock back itself, and
-                                    // always does (CwPlayout::holds_transmitter).
-                                    if tx_holder_addr.take().is_some() {
-                                        info!("PTT: microphone done while a CW run holds the transmitter - the run hands it back");
-                                    }
-                                } else {
-                                    // First non-PTT frame after TX/prefill: cancel prefill, start tail delay, release session
-                                    let depth = jitter_buf.depth();
-                                    let mut ptt = self.ptt.lock().await;
-                                    ptt.cancel_prefill();
-                                    ptt.release_from_playout(depth);
-                                    drop(ptt);
-                                    if let Some(addr) = tx_holder_addr.take() {
-                                        self.session.lock().await.release_tx(crate::session::TxTarget::Thetis, addr);
-                                    }
-                                }
-                            }
-
-                            if frame.opus_data.is_empty() {
-                                continue; // PTT-only packet
-                            }
-                            match opus_decoder.decode(&frame.opus_data) {
-                                Ok(pcm) => {
-                                    let resampled = resample_to_device(
-                                        &mut tx_resampler_out,
-                                        &pcm,
-                                    );
-                                    self.ptt.lock().await.write_tx_audio(&resampled);
-                                    self.audio_stats.tx.tick(self.server_start);
-                                }
-                                Err(e) => warn!("Opus decode error: {}", e),
-                            }
-                        }
-                        JitterResult::Missing => {
-                            match opus_decoder.decode_plc() {
-                                Ok(pcm) => {
-                                    let resampled = resample_to_device(
-                                        &mut tx_resampler_out,
-                                        &pcm,
-                                    );
-                                    self.ptt.lock().await.write_tx_audio(&resampled);
-                                    self.audio_stats.tx.tick(self.server_start);
-                                }
-                                Err(e) => warn!("PLC error: {}", e),
-                            }
-                        }
-                        JitterResult::NotReady => {}
+                    // The same playout as a radio's (`tx_recover::play_tick`, build
+                    // 288; step 1b of `KOPPELING` 18): the buffer, a gap, catching
+                    // up in the pauses, the release frame and a press behind it.
+                    // One frame per tick, two when Thetis's ring stood low at the
+                    // tick's start and the buffer holds more than its target
+                    // (build 193, `TX_RING_LOW`). What Thetis does with it stays
+                    // here: it keys when the press plays, and lets go when the
+                    // release does.
+                    let ring_at_tick = self.ptt.lock().await.tx_ring_level();
+                    let ring = ring_at_tick.map(|level| (level as u64, crate::tci::TX_RING_LOW as u64));
+                    let played = crate::tx_recover::play_tick(&mut jitter_buf, &mut opus_decoder, &mut thetis_tx_loss, &mut pause_trim, Instant::now(), ring);
+                    for pcm in played.pcm {
+                        let resampled = resample_to_device(&mut tx_resampler_out, &pcm);
+                        self.ptt.lock().await.write_tx_audio(&resampled);
+                        self.audio_stats.tx.tick(self.server_start);
                     }
+                    if played.pressed_again {
+                        // Named in advance (working rule 11, build 288).
+                        info!("Thetis TX: pressed again behind the release frame - it plays on, the radio stays keyed");
+                    }
+                    // PTT trigger from playout: the press, then its release - the
+                    // order they played in. Only while somebody holds the
+                    // transmitter: a frame with the PTT bit from a client that has
+                    // since left - said goodbye, or timed out - keys nothing. The
+                    // session's ownership table is the named decision (`accepts`);
+                    // this asks the same table.
+                    for frame_ptt in played.pressed.then_some(true).into_iter().chain(played.release.map(|_| false)) {
+                        let owner = self.session.lock().await.tx_holder(crate::session::TxTarget::Thetis);
+                        if crate::session::playout_keys(frame_ptt, owner, tx_holder_addr) {
+                            self.ptt.lock().await.activate_from_playout();
+                        } else if self.ptt.lock().await.is_tx_or_prefill() {
+                            if crate::cw_playout::lock(&self.cw).holds_transmitter(Instant::now()) {
+                                // The microphone is done, but a CW run holds the
+                                // transmitter (keyed within the microphone's tail).
+                                // Its tail frames must not re-arm the release that
+                                // activate_for_cw cancelled: that dropped MOX in the
+                                // middle of the run (found reading for review 313).
+                                // The run hands MOX and the lock back itself, and
+                                // always does (CwPlayout::holds_transmitter).
+                                if tx_holder_addr.take().is_some() {
+                                    info!("PTT: microphone done while a CW run holds the transmitter - the run hands it back");
+                                }
+                            } else {
+                                // First non-PTT frame after TX/prefill (or a press
+                                // whose holder is gone): cancel prefill, start tail
+                                // delay, release session. The tail is reckoned on
+                                // what stood behind that frame, as before build 288:
+                                // for the release the buffer before it went
+                                // (`release_depth`), for a press the buffer now.
+                                let depth = if frame_ptt { jitter_buf.depth() } else { played.release_depth };
+                                let mut ptt = self.ptt.lock().await;
+                                ptt.cancel_prefill();
+                                let started = ptt.release_from_playout(depth);
+                                let tail = ptt.tail_delay();
+                                drop(ptt);
+                                // End the tail when it is over, not on the next
+                                // 100 ms safety tick (0-100 ms late until build
+                                // 103). The tick stays as the net under it. One
+                                // timer per tail (round 103).
+                                if started {
+                                    let ptt = self.ptt.clone();
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(tail).await;
+                                        ptt.lock().await.finish_tail_if_due().await;
+                                    });
+                                }
+                                if let Some(addr) = tx_holder_addr.take() {
+                                    self.session.lock().await.release_tx(crate::session::TxTarget::Thetis, addr);
+                                }
+                            }
+                        // Nothing transmitted, and the holder's release frame plays:
+                        // the safety let go in a silence and the operator let go in
+                        // it. The ownership goes back as at any release (build 250).
+                        } else if crate::session::playout_hands_back(frame_ptt, owner, tx_holder_addr) {
+                            if let Some(addr) = tx_holder_addr.take() {
+                                // Named in advance (working rule 11, build 250).
+                                info!("PTT: {} let go while nothing was transmitted - Thetis handed back", addr);
+                                self.session.lock().await.release_tx(crate::session::TxTarget::Thetis, addr);
+                            }
+                        }
+                    }
+                    thetis_tx_loss.maybe_log();
+                    if let Some((in_pause, fallback)) = pause_trim.counts_to_say(Instant::now()) {
+                        // Named in advance (working rule 11, builds 257 and 258).
+                        dev_info!("{}", crate::tx_recover::pause_line("Thetis", in_pause, fallback));
+                    }
+                }
+
+                // A radio's release frame played (build 282).
+                Some(played) = released_rx.recv() => {
+                    self.release_played(played).await;
+                }
+
+                // The safety task ended. On a shutdown that is its normal way
+                // out; any other time it is the thing that ends transmissions
+                // nobody lets go of, gone - see `safety_task_lost`. Polled once:
+                // a finished JoinHandle may not be polled again.
+                end = &mut safety_handle, if !safety_lost => {
+                    safety_lost = true;
+                    on_guard_task_end!(self, end, "the safety task");
+                }
+                end = &mut yaesu_state_watch, if !yaesu_state_lost => {
+                    yaesu_state_lost = true;
+                    on_guard_task_end!(self, end, "the state task of Yaesu radio 0 (its orphan watch)");
+                }
+                end = &mut yaesu2_state_watch, if !yaesu2_state_lost => {
+                    yaesu2_state_lost = true;
+                    on_guard_task_end!(self, end, "the state task of Yaesu radio 1 (its orphan watch)");
                 }
 
                 _ = shutdown.changed() => {
@@ -5819,6 +6484,8 @@ impl NetworkService {
 
         tx_handle.abort();
         safety_handle.abort();
+        yaesu_state_watch.abort();
+        yaesu2_state_watch.abort();
         tci_iq_handle.abort();
         Ok(())
     }
@@ -5957,7 +6624,7 @@ pub(crate) trait YaesuCwAdmission {
     fn radio_refusal(&self) -> Option<String>;
     /// Take the transmitter for this attempt: `None` when another client holds
     /// it, else whether this client held it already.
-    async fn take_slot(&mut self) -> Option<bool>;
+    async fn take_slot(&mut self) -> Result<bool, &'static str>;
     /// Give back what `take_slot` took - only that.
     async fn give_back_slot(&mut self, held_before: bool);
     /// Is the key line of this radio open (and menu 060 set with it)?
@@ -5976,7 +6643,7 @@ pub(crate) async fn admit_yaesu_cw_steps<A: YaesuCwAdmission>(a: &mut A) -> Resu
     if let Some(why) = a.radio_refusal() {
         return Err(why);
     }
-    let held_before = a.take_slot().await.ok_or("another client holds this radio")?;
+    let held_before = a.take_slot().await?;
     if !a.line_open() {
         if let Err(why) = a.open_line().await {
             a.give_back_slot(held_before).await;
@@ -6007,8 +6674,12 @@ impl YaesuCwAdmission for ServiceAdmission<'_> {
             .or_else(|| st.tx_start_refusal())
             .map(str::to_string)
     }
-    async fn take_slot(&mut self) -> Option<bool> {
-        self.svc.session.lock().await.acquire_for_attempt(self.tx, self.addr)
+    async fn take_slot(&mut self) -> Result<bool, &'static str> {
+        let mut s = self.svc.session.lock().await;
+        match s.acquire_for_attempt(self.tx, self.addr) {
+            Some(held) => Ok(held),
+            None => Err(s.acquire_refusal().why),
+        }
     }
     async fn give_back_slot(&mut self, held_before: bool) {
         self.svc.session.lock().await.give_back_attempt(self.tx, self.addr, held_before);
@@ -6023,6 +6694,271 @@ impl YaesuCwAdmission for ServiceAdmission<'_> {
         // Under the YaesuState lock, like ChannelWalk::begin: the two cannot
         // both start.
         self.radio.status_arc().lock().unwrap_or_else(|e| e.into_inner()).begin_cw_keying(Instant::now())
+    }
+}
+
+#[cfg(test)]
+mod tx_line_tests {
+    /// The decision on an arriving transmit packet and its four ways out are
+    /// one block for Thetis's arm and the radios' (build 286; round 285: in
+    /// Thetis's arm `Pass => {}`, a `Stale` that played on and a refused claim
+    /// that played on all stayed green). The gate: each way out ends the
+    /// packet. Its users: exactly the two arms, once each, and Thetis's arm
+    /// has no way out of its own - so nothing it reads after the gate can be
+    /// skipped or reached around it. And Thetis's `keyed` is its holder (round
+    /// 285: `false` would log every relay duplicate as late). A text
+    /// guard: the receive loop runs no test; the decision is tested in
+    /// `tx_intake`.
+    #[test]
+    fn both_arms_go_through_the_one_gate() {
+        let src = include_str!("network.rs");
+        let code = &sdr_remote_core::source_text::production_code(src);
+        let at = code.find("        macro_rules! intake_gate {").expect("the gate");
+        let gate = &code[at..at + code[at..].find("\n        }\n").unwrap()];
+        for way_out in [
+            "crate::tx_intake::Intake::Pass => continue,",
+            "crate::tx_intake::Intake::Stale => {\n                        if senders.ignored(target) {",
+            "crate::tx_intake::Intake::LetGoByRadio => {\n                        if senders.ignored(target) {",
+            "let radio_refusal: Option<&'static str> = $radio_refusal;\n                        if !self.claim_tx(target, addr, radio_refusal, &mut denied).await {\n                            continue;\n                        }\n                        true",
+            "crate::tx_intake::Intake::Play => false,",
+        ] {
+            assert_eq!(gate.matches(way_out).count(), 1, "in the gate: {way_out}");
+        }
+        assert_eq!(gate.matches("continue").count(), 4, "nothing, too late, let go by the radio, refused");
+        // No lock read inside the claim's condition (round 286): `$radio_refusal`
+        // only in its own statement.
+        assert_eq!(gate.matches("$radio_refusal").count(), 2, "the parameter and its one statement");
+        assert!(!gate.contains("claim_tx(target, addr, $radio_refusal"));
+        assert_eq!(code.matches("intake_gate!(").count(), 2, "Thetis's arm and the radios'");
+        let thetis = &code[code.find("Packet::Audio(audio_pkt) => {").unwrap()..];
+        let thetis = &thetis[..thetis.find("Packet::Heartbeat(hb) => {").unwrap()];
+        assert_eq!(thetis.matches("intake_gate!(target, addr, audio_pkt.sequence, arrival, \"Thetis\", None)").count(), 1);
+        assert_eq!(thetis.matches("continue").count(), 0, "no way out of its own");
+        assert_eq!(thetis.matches("keyed: holder == Some(addr),").count(), 1, "Thetis keys when its holder's audio plays");
+        let at = code.find("        macro_rules! radio_audio {").unwrap();
+        let radios = &code[at..at + code[at..].find("\n        }\n").unwrap()];
+        assert_eq!(radios.matches("let claimed = intake_gate!(").count(), 1);
+        // What both arms give the decision, and what they keep of a packet
+        // that plays (round 286: the holder's own, the filter, the newest -
+        // each one word from a second client playing along or the filter off).
+        for (arm, seq) in [(thetis, "audio_pkt.sequence"), (radios, "pkt.sequence")] {
+            assert_eq!(arm.matches("from_holder: holder == Some(addr),").count(), 1, "{seq}: from its holder");
+            assert_eq!(arm.matches("\n                    stale,\n").count() + arm.matches("\n                                stale,\n").count(), 1, "{seq}: the filter's answer");
+            let played = format!("if !stale {{\n");
+            assert_eq!(arm.matches(&played).count(), 1, "{seq}: the newest, only when not late");
+            assert_eq!(arm.matches(&format!("senders.played(target, addr, {seq}, Instant::now());")).count(), 1, "{seq}: the newest kept");
+        }
+    }
+    /// Thetis's transmit buffer keeps what it learned for the same sender
+    /// pressing again, and forgets it for another sender, a goodbye or a lost
+    /// guard task - as a Yaesu's (owner, 2026-10-11, choice a; build 175). A
+    /// text guard: the receive loop runs no test.
+    #[test]
+    fn the_same_sender_keeps_what_thetis_learned() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        assert!(network.contains(
+            "if ptt_requested && tx_holder_addr != Some(addr) {\n                                if line_learned_from == Some(addr) {\n                                    // Named in advance (working rule 11, build 175).\n                                    info!(\"TX holder {} again, keeping what the jitter buffer learned\", addr);\n                                    jitter_buf.discard();\n                                } else {\n                                    info!(\"New TX holder {}, resetting jitter buffer and decoder\", addr);\n                                    jitter_buf.reset();\n                                    line_learned_from = Some(addr);"
+        ));
+        // Forgetting the holder is one macro (build 248), and its users are
+        // counted: a goodbye, a lost guard task and a holder the session let go.
+        assert_eq!(network.matches("line_learned_from = None;").count(), 1, "only in the macro");
+        assert_eq!(network.matches("line_learned_from = ").count(), 2);
+        assert!(network.contains(
+            "        macro_rules! forget_thetis_holder {\n            () => {\n                jitter_buf.reset();\n                tx_holder_addr = None;\n                line_learned_from = None;\n            };\n        }"
+        ));
+        assert_eq!(network.matches("forget_thetis_holder!();").count(), 3);
+        assert_eq!(network.matches("tx_holder_addr = None;").count(), 1, "only in the macro");
+    }
+
+    /// A PTT packet from a client while the loop still remembers a holder the
+    /// session no longer has (a time-out, build 247): the loop forgets it as at
+    /// a goodbye - buffer, holder, what it learned - before it asks for the
+    /// transmitter, and so before the new holder's branch. Asked after the
+    /// acquisition, the session would say "held" again. A text guard: the
+    /// receive loop runs no test.
+    #[test]
+    fn a_holder_that_timed_out_is_forgotten_before_it_holds_again() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        let arm = network.find("Packet::Audio(audio_pkt) => {").unwrap();
+        let arm = &network[arm..arm + 6000];
+        let forget = "forget_thetis_holder_if_outlived!(session.tx_holder(crate::session::TxTarget::Thetis));";
+        let at = arm.find(forget).expect("the forgetting, in the audio arm");
+        // The claim is `claim_tx` since build 285, inside the one gate since 286.
+        let acquire = arm.find("if intake_gate!(target, addr, audio_pkt.sequence, arrival, \"Thetis\", None) {").unwrap();
+        let new_holder = arm.find("if ptt_requested && tx_holder_addr != Some(addr) {").unwrap();
+        assert!(at < acquire && acquire < new_holder, "forget, then acquire, then the new holder's branch");
+        // The question and its line, in one place (build 248).
+        assert!(network.contains(
+            "                if let Some(old) = tx_holder_addr.filter(|_| crate::session::holder_outlived(tx_holder_addr, $holder_now)) {\n                    // Named in advance (working rule 11, build 247).\n                    info!(\"TX holder {} lost the transmitter while silent - its buffered audio goes, as at a goodbye\", old);\n                    forget_thetis_holder!();\n                }"
+        ));
+        assert_eq!(network.matches("forget_thetis_holder_if_outlived!(").count(), 2, "the audio arm and the CW gate");
+    }
+
+    /// The safety's release takes the Thetis ownership with it, in the same
+    /// tick (build 251; rounds 249 and 250): only when `check_safety` released,
+    /// and through the session's own block. A text guard: the safety task runs
+    /// no test.
+    #[test]
+    fn the_safety_release_takes_the_thetis_ownership_with_it() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        assert!(network.contains(
+            "if ptt.lock().await.check_safety().await {\n                                if let Some(holder) = session.lock().await.release_after_safety() {\n                                    // Named in advance (working rule 11, build 251).\n                                    info!(\"SAFETY: {} held Thetis when its transmitter was released - the ownership goes with it\", holder);\n                                }\n                            }\n                            // The 2 s clock of each Yaesu, in the same tick as"
+        ), "the safety tick hands the ownership back when it released");
+        assert_eq!(network.matches("check_safety().await").count(), 1, "one caller");
+        assert_eq!(network.matches("release_after_safety()").count(), 1, "one place");
+    }
+
+    /// A release frame played while nothing is transmitted - after a safety
+    /// release in a silence - hands Thetis back, as the release while
+    /// transmitting does (build 250; round 249). The branch comes after the
+    /// transmitting one, so it is asked only when nothing is transmitted. A text
+    /// guard: the playout tick runs no test.
+    #[test]
+    fn a_release_while_nothing_transmits_hands_thetis_back() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        // Since build 288 per played press and release (`play_tick`), in that order.
+        let tick = network.find("for frame_ptt in played.pressed.then_some(true).into_iter().chain(played.release.map(|_| false)) {").unwrap();
+        let tick = &network[tick..tick + 5000];
+        assert!(tick.contains("if crate::session::playout_keys(frame_ptt, owner, tx_holder_addr) {"));
+        let transmitting = tick.find("} else if self.ptt.lock().await.is_tx_or_prefill() {").unwrap();
+        let back = tick.find("} else if crate::session::playout_hands_back(frame_ptt, owner, tx_holder_addr) {\n                            if let Some(addr) = tx_holder_addr.take() {\n                                // Named in advance (working rule 11, build 250).\n                                info!(\"PTT: {} let go while nothing was transmitted - Thetis handed back\", addr);\n                                self.session.lock().await.release_tx(crate::session::TxTarget::Thetis, addr);\n                            }\n                        }").expect("the hand-back branch");
+        // The tail on what stood behind the release frame, as before 288.
+        assert!(tick.contains("let depth = if frame_ptt { jitter_buf.depth() } else { played.release_depth };"));
+        assert!(transmitting < back, "asked only when nothing is transmitted");
+    }
+
+    /// What Thetis's playout tick does with a played press and release, in
+    /// order (build 289; round 288: keying, the cancelled prefill and the
+    /// ownership going back were pinned by nothing - each one line from Thetis
+    /// never keying on the microphone, a short press keying it after the
+    /// release, or a client that keeps Thetis after it let go). A text guard:
+    /// the tick runs no test; the tail is pinned in `ptt.rs`.
+    #[test]
+    fn thetis_keys_and_lets_go_in_its_tick() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        let at = network.find("for frame_ptt in played.pressed.then_some(true).into_iter().chain(played.release.map(|_| false)) {").unwrap();
+        let tick = &network[at..at + 5000];
+        let order = [
+            "if crate::session::playout_keys(frame_ptt, owner, tx_holder_addr) {
+                            self.ptt.lock().await.activate_from_playout();
+                        } else if self.ptt.lock().await.is_tx_or_prefill() {",
+            "ptt.cancel_prefill();
+                                let started = ptt.release_from_playout(depth);",
+            "if let Some(addr) = tx_holder_addr.take() {
+                                    self.session.lock().await.release_tx(crate::session::TxTarget::Thetis, addr);
+                                }",
+            "} else if crate::session::playout_hands_back(frame_ptt, owner, tx_holder_addr) {",
+        ];
+        let mut last = 0;
+        for what in order {
+            let here = tick.find(what).unwrap_or_else(|| panic!("in the tick: {what}"));
+            assert!(here >= last, "in order: {what}");
+            last = here;
+        }
+        assert_eq!(network.matches("activate_from_playout()").count(), 1, "one place keys Thetis from playout");
+        assert_eq!(tick.matches("cancel_prefill()").count(), 1);
+    }
+
+    /// The CW gate takes Thetis too (`acquire_for_attempt`): it asks the same
+    /// question first, so a holder back with CW after a time-out does not find
+    /// its old buffer playable (build 248; round 247).
+    #[test]
+    fn the_cw_gate_forgets_a_holder_that_timed_out_before_it_takes_thetis() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        let gate = network.find("let mut s = self.session.lock().await;\n                                    forget_thetis_holder_if_outlived!(s.tx_holder(crate::session::TxTarget::Thetis));\n                                    match s.acquire_for_attempt(crate::session::TxTarget::Thetis, addr) {");
+        assert!(gate.is_some(), "asked in the CW gate, before the attempt takes Thetis");
+    }
+
+    /// A silence past the safety's packet window inside a press (build 248):
+    /// what the buffer holds is from before it and goes before the next packet
+    /// of the holder goes in - with PTT or without (build 249: a release packet
+    /// first after the silence played the old audio too, round 248). The
+    /// silence is read for every audio packet, before the session's lock, and
+    /// the buffer emptied before the split into PTT and release, so before
+    /// either push. A text guard: the receive loop runs no test.
+    #[test]
+    fn a_silence_inside_a_press_empties_the_buffer_before_the_next_packet() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        // The whole arm, to the next one (it grew past a fixed window in build 285).
+        let arm = &network[network.find("Packet::Audio(audio_pkt) => {").unwrap()..];
+        let arm = &arm[..arm.find("Packet::Heartbeat(hb) => {").unwrap()];
+        let read = arm.find("let silence = self.ptt.lock().await.packet_silence(Instant::now());").expect("the silence, read for every packet");
+        let lock = arm.find("let mut session = self.session.lock().await;").unwrap();
+        let ends = arm.find("if tx_holder_addr == Some(addr) && crate::ptt::silence_ended_the_over(silence) {\n                                // Named in advance (working rule 11, builds 248 and 249).\n                                info!(\"TX holder {} silent for {} ms, past the packet window - its buffered audio goes\", addr, silence.map_or(0, |d| d.as_millis()));\n                                jitter_buf.discard();\n                            }").expect("the silence empties the buffer, whatever the packet");
+        // Since build 285 one decision (`tx_intake`) and one push for the press
+        // and the release, the frame carrying the packet's own flag.
+        let split = arm.find("if intake_gate!(target, addr, audio_pkt.sequence, arrival, \"Thetis\", None) {").unwrap();
+        let push = arm.find("jitter_buf.push(").unwrap();
+        assert!(read < lock && lock < ends && ends < split && split < push, "read, lock, empty, then the decision and the push");
+        assert_eq!(arm.matches("jitter_buf.push(").count(), 1, "one push");
+        assert!(arm.contains("ptt: ptt_requested,\n                                    wideband,"), "with the packet's flag");
+        assert!(!arm.contains("silence_ended_the_over(silence) {\n                                // Named in advance (working rule 11, build 248)."), "no PTT-only rule left");
+    }
+}
+
+#[cfg(test)]
+mod mode_refusal_tests {
+    /// A mode change refused during TX sends the current mode back to that
+    /// client, so a screen that already shows the asked-for mode is put right
+    /// (owner, 2026-10-11, choice a; build 174). A text guard: the receive
+    /// loop runs no test.
+    #[test]
+    fn a_refused_mode_change_sends_the_current_mode_back() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        assert_eq!(
+            network
+                .matches("                            if ptt.is_transmitting() {\n                                // The client already shows the mode it asked for,")
+                .count(),
+            1
+        );
+        assert_eq!(
+            network
+                .matches("let mode = ptt.vfo_a_mode();\n                                drop(ptt);\n                                let mut buf = [0u8; ModePacket::SIZE];\n                                ModePacket { mode }.serialize(&mut buf);\n                                let _ = self.socket.send_to(&buf, addr).await;")
+                .count(),
+            1
+        );
+        // And the line named in advance (review of 174, M1/M2).
+        assert_eq!(network.matches("info!(\"Client {} VFO-A mode change ignored during TX - sent mode {} back\", addr, mode);").count(), 1);
+        // The probe's wiring (review of 174, S5).
+        assert_eq!(network.matches("if tx_probe.wants(probe_is_tx) {").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod memory_copy_tests {
+    use super::memory_copy_has_channels;
+
+    /// A copy with only the header - a cold FTX-1's empty scan - does not
+    /// stand in for a read; one channel does (build 170; review of 169).
+    #[test]
+    fn an_empty_memory_copy_is_read_again() {
+        let header = sdr_remote_core::YAESU_MEMORY_TAB_HEADER;
+        assert!(!memory_copy_has_channels(None));
+        assert!(!memory_copy_has_channels(Some(&format!("{header}
+"))));
+        assert!(!memory_copy_has_channels(Some(&format!("{header}
+
+"))));
+        assert!(memory_copy_has_channels(Some(&format!("{header}
+001	145500000
+"))));
+        // Both handlers ask it (a text guard).
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        assert_eq!(network.matches("ctrl.value == 1 && memory_copy_has_channels(copy.as_deref())").count(), 2);
+        assert_eq!(network.matches("last_memory_blob.is_some()").count(), 0);
+        // Each line with its own case (review of 170: D3).
+        assert_eq!(network.matches("if ctrl.value == 1 && copy.is_none() {\n                                                warn!(\"Client {} wanted the server's copy of the Yaesu memories, but there is none").count(), 1);
+        assert_eq!(network.matches("if ctrl.value == 1 && copy.is_none() {\n                                                warn!(\"Client {} [radio1] wanted the server's copy of the memories, but there is none").count(), 1);
+        assert_eq!(network.matches("but it has no channels - reading the radio").count(), 2);
     }
 }
 
@@ -6049,12 +6985,12 @@ mod admission_tests {
         fn radio_refusal(&self) -> Option<String> {
             self.refuse.then(|| "the radio is not in a CW mode".to_string())
         }
-        async fn take_slot(&mut self) -> Option<bool> {
+        async fn take_slot(&mut self) -> Result<bool, &'static str> {
             if self.held_by_other {
-                return None;
+                return Err("another client holds it");
             }
             self.slot_taken = true;
-            Some(self.held_before)
+            Ok(self.held_before)
         }
         async fn give_back_slot(&mut self, held_before: bool) {
             if !held_before {
@@ -6132,34 +7068,376 @@ mod admission_tests {
     }
 }
 
-/// Why a CW run may not key this Yaesu, from what the radio's status says. The
-/// transmitter lock and the key line come after this.
-/// Lower every Yaesu key line now: the end of the server, before the radios are
-/// put back. Taking a line out of its slot drops it, and its `Drop` lowers RTS
-/// and DTR. Until review 316 this happened only when the runtime was torn down,
-/// after the put-back's wait of up to 2 s - harmless once menu 060 is back on
-/// OFF, but not on a radio that was on RTS before this server.
-pub(crate) fn lower_all_key_lines(lines: &CwKeyLines) {
-    let mut g = lines.lock().unwrap_or_else(|e| e.into_inner());
-    // Under the lock, so an edge that waits for it finds the set closed.
-    g.closed_at_exit = true;
-    for (slot, l) in g.slots.iter_mut().enumerate() {
-        if let Some(mut line) = l.take() {
-            // Lower first, then say what the port said. Until build 152 this
-            // line was printed from inside the `if let`, one statement before
-            // the drop that does the writing, and the drop threw its result
-            // away: the line said "lowered at exit" whether or not RTS had
-            // moved (review 2120A1). It is the line the card and the
-            // release notes lean on, and under it there is no net - a Yaesu
-            // has no keying watchdog of its own.
-            match line.lower_now() {
-                Ok(()) => info!("cw: key line {} of Yaesu slot {} lowered at exit", line.name(), slot),
-                Err(e) => error!(
-                    "cw: key line {} of Yaesu slot {} did NOT go down at exit ({}) - check the radio is not transmitting",
-                    line.name(), slot, e
-                ),
+pub(crate) use key_lines::{lower_all_key_lines, KeyLinesDown};
+
+/// The key lines go down in here, and the proof that they did is made in here
+/// only. A private field is private to its MODULE, and `network.rs` is one
+/// module: a `KeyLinesDown(())` written next to `safety_task_lost` compiled, with
+/// the clients told before the lines went down - the order build 63's anchor pair
+/// still caught (review 64, both reviewers). Nothing else lives here, so the
+/// constructor is out of reach of everything that has to come after it.
+mod key_lines {
+    use super::*;
+
+    /// Proof that `lower_all_key_lines` has run: the Yaesu key lines are down and the
+    /// set is closed. Made only in this module. What has to happen AFTER the lines are down
+    /// (telling the clients at a loss) takes one by value, so the compiler keeps the
+    /// order (review 63: an anchor on two lines kept their order to each other, not
+    /// their place in the function).
+    #[must_use]
+    pub(crate) struct KeyLinesDown(());
+
+    /// Lower every Yaesu key line now: the end of the server, before the radios are
+    /// put back. Taking a line out of its slot drops it, and its `Drop` lowers RTS
+    /// and DTR. Until review 316 this happened only when the runtime was torn down,
+    /// after the put-back's wait of up to 2 s - harmless once menu 060 is back on
+    /// OFF, but not on a radio that was on RTS before this server.
+    pub(crate) fn lower_all_key_lines(lines: &CwKeyLines) -> KeyLinesDown {
+        let mut g = lines.lock().unwrap_or_else(|e| e.into_inner());
+        // Under the lock, so an edge that waits for it finds the set closed.
+        g.closed_at_exit = true;
+        for (slot, l) in g.slots.iter_mut().enumerate() {
+            if let Some(mut line) = l.take() {
+                // Lower first, then say what the port said. Until build 152 this
+                // line was printed from inside the `if let`, one statement before
+                // the drop that does the writing, and the drop threw its result
+                // away: the line said "lowered at exit" whether or not RTS had
+                // moved (review 2120A1). It is the line the card and the
+                // release notes lean on, and under it there is no net - a Yaesu
+                // has no keying watchdog of its own.
+                match line.lower_now() {
+                    Ok(()) => info!("cw: key line {} of Yaesu slot {} lowered at exit", line.name(), slot),
+                    Err(e) => error!(
+                        "cw: key line {} of Yaesu slot {} did NOT go down at exit ({}) - check the radio is not transmitting",
+                        line.name(), slot, e
+                    ),
+                }
             }
         }
+        KeyLinesDown(())
+    }
+}
+
+/// Why the safety task's end is a loss, or `None` when it is not: on a
+/// shutdown it ends by design. `panicked` is `None` when it ended by itself.
+fn safety_task_end(panicked: Option<bool>, shutting_down: bool) -> Option<&'static str> {
+    if shutting_down {
+        return None;
+    }
+    Some(match panicked {
+        Some(true) => "panic",
+        Some(false) => "cancelled",
+        None => "it ended without a shutdown",
+    })
+}
+
+/// A task to watch in the main loop's `select!`; a slot without one gets a
+/// task that never ends, so the branch stays the same shape.
+fn watched(handle: Option<tokio::task::JoinHandle<()>>) -> tokio::task::JoinHandle<()> {
+    handle.unwrap_or_else(|| tokio::spawn(std::future::pending::<()>()))
+}
+
+/// The transmitter a refusal names, for a transmitter of the session.
+fn denied_target_of(target: crate::session::TxTarget) -> DeniedTarget {
+    match target {
+        crate::session::TxTarget::Thetis => DeniedTarget::Thetis,
+        crate::session::TxTarget::Yaesu1 => DeniedTarget::Radio1,
+        crate::session::TxTarget::Yaesu2 => DeniedTarget::Radio2,
+    }
+}
+
+/// The safety nets of one Yaesu, run by its status task on every tick (build
+/// 289, step 1c of `KOPPELING` 18; until then a copy in each of the two
+/// tasks). In this order, as both copies had it:
+/// - the radio let go by itself (`auto_release`): its own time-out timer, or
+///   the radio stopping. Unkeying it is half the job. Without the rest the
+///   session still has the client down as the holder and the client still
+///   believes it transmits, so it keeps sending TX audio at a radio that is
+///   off and its button stays red - the complaint from 2026-08-07, which
+///   survived five attempts at fixing it on the client side (2026-09-05);
+/// - the watchdog: the owner is gone but the radio is still keyed. Nothing
+///   else would end this: it would transmit until its own time-out timer
+///   expires, and on a 991A that timer is often off. Thetis has its own
+///   dead-man switch; this is the Yaesu's.
+///
+/// The 2 s clock of a silent holder ran here too until build 290; it runs in
+/// the 100 ms safety tick now, beside Thetis's (owner, 2026-10-23). The
+/// watchdog looks twice before it fires (`OrphanWatch`), so a clock in
+/// another task that is half way through its release is not taken for an
+/// orphan.
+struct RadioSafety {
+    target: crate::session::TxTarget,
+    /// The last `auto_release` seen from the poller. A counter and not a
+    /// flag: two of these between ticks must not collapse into one, and one
+    /// must not be seen twice.
+    last_auto_release: u32,
+    orphan: crate::tx_orphan::OrphanWatch,
+}
+
+impl RadioSafety {
+    fn new(target: crate::session::TxTarget) -> Self {
+        Self { target, last_auto_release: 0, orphan: crate::tx_orphan::OrphanWatch::default() }
+    }
+
+    async fn tick(
+        &mut self,
+        session: &Mutex<SessionManager>,
+        socket: &crate::tracked_socket::TrackedSocket,
+        radio: Option<&crate::yaesu::YaesuRadio>,
+        ptt_flag: &std::sync::atomic::AtomicBool,
+        tx_holder: Option<SocketAddr>,
+    ) {
+        let index = radio_index(self.target);
+        if let Some(y) = radio {
+            let seen = y.status().auto_release;
+            if seen != self.last_auto_release {
+                self.last_auto_release = seen;
+                if let Some(holder) = tx_holder {
+                    // Its packets still carry the flag until it hears of this,
+                    // and must not key the radio again (build 282); and the
+                    // radio is off, so the next press keys it.
+                    session.lock().await.let_go_by_the_radio(self.target, holder);
+                    ptt_flag.store(false, Ordering::Relaxed);
+                    let mut buf = [0u8; PttDeniedPacket::SIZE];
+                    PttDeniedPacket::serialize(&mut buf, denied_target_of(self.target), Denial::ServerReleased);
+                    let sent = socket.try_send_to(&buf, holder);
+                    // Whether it actually went out, not just that we tried.
+                    // `try_send_to` returns a Result and it was being
+                    // discarded, so a refusal from the socket looked exactly
+                    // like a delivery.
+                    info!(
+                        "Yaesu radio {} released by the server (time-out timer or the radio stopping) - told {} ({})",
+                        index,
+                        holder,
+                        match sent {
+                            Ok(n) => format!("{n} bytes sent"),
+                            Err(e) => format!("SEND FAILED: {e}"),
+                        },
+                    );
+                }
+            }
+        }
+        if self.orphan.observe(ptt_flag.load(Ordering::Relaxed), tx_holder.is_some()) {
+            if let Some(y) = radio {
+                log::error!("SAFETY: Yaesu radio {} still keyed with no client holding it - releasing PTT", index);
+                y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
+            }
+            ptt_flag.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
+/// The 2 s clock of a radio, from its status task (build 265): a holder not
+/// heard past the packet window lets go (`release_silent_radio`) and the radio
+/// goes off at once - no asked release, so no waiting for its buffer. Its
+/// next packet with the flag keys it again (build 282). Only while
+/// the server keyed it: a CW run keys a radio on its own line, with its own
+/// watchdogs. Mirrored in the two status tasks, like the orphan watch.
+async fn let_a_silent_holder_go(
+    session: &Mutex<SessionManager>,
+    target: crate::session::TxTarget,
+    radio: Option<&crate::yaesu::YaesuRadio>,
+    ptt_flag: &std::sync::atomic::AtomicBool,
+) {
+    if !ptt_flag.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some((holder, silence)) = session.lock().await.release_silent_radio(target, Instant::now()) else {
+        return;
+    };
+    // Named in advance (working rule 11, build 265).
+    warn!(
+        "SAFETY: Yaesu radio {}: nothing from its holder {} for {} ms (window {} ms) - PTT off, back on if it returns inside the press",
+        radio_index(target),
+        holder,
+        silence.as_millis(),
+        crate::ptt::PTT_PACKET_TIMEOUT_MS
+    );
+    if let Some(y) = radio {
+        y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));
+    }
+    ptt_flag.store(false, Ordering::Relaxed);
+}
+
+/// The index a radio has in the server's own log lines ("Yaesu radio 0").
+fn radio_index(target: crate::session::TxTarget) -> u8 {
+    match target {
+        crate::session::TxTarget::Yaesu2 => 1,
+        crate::session::TxTarget::Yaesu1 | crate::session::TxTarget::Thetis => 0,
+    }
+}
+
+/// Whether a transmitter is ThetisLink's to release when the safety task is
+/// gone: a client held it, or this server keyed it. A radio on the air by
+/// its own operator is not ours, and stays as it is.
+fn ours_to_let_go(held: bool, server_keyed: bool) -> bool {
+    held || server_keyed
+}
+
+#[cfg(test)]
+mod silent_radio_holder_tests {
+    /// Both radios run the 2 s clock in their status task, before the orphan
+    /// watch (build 265). Since build 282 a radio's PTT is the flag on its
+    /// audio: the one arm takes and keys a radio in a fixed order, the release
+    /// frame lets it go when it played, the radio's own release waits for its
+    /// holder to let go, and the old control keys nothing. The loop, which no
+    /// test drives; the decisions are tested in `session.rs` and
+    /// `tx_recover.rs`, the client's side in the engine's tests.
+    #[test]
+    fn both_radios_run_the_two_second_clock_and_key_by_the_flag() {
+        let src = include_str!("network.rs");
+        let src = &sdr_remote_core::source_text::production_code(src);
+        // Since build 289 one block for both radios (`RadioSafety`), each task
+        // calling it once with its own radio.
+        for (target, radio) in [("Yaesu1", "yaesu"), ("Yaesu2", "yaesu2")] {
+            assert_eq!(src.matches(&format!("let mut safety = RadioSafety::new(crate::session::TxTarget::{target});")).count(), 1, "{target}");
+            assert_eq!(src.matches(&format!("safety.tick(&session, &socket, {radio}.as_deref(), &ptt_flag, tx_holder).await;")).count(), 1, "{target}");
+        }
+        assert_eq!(src.matches("safety.tick(").count(), 2);
+        // The block: the radio's own release marks its holder and lowers the
+        // flag; then the clock; then the orphan watch, which unkeys and lowers
+        // the flag.
+        let at = src.find("impl RadioSafety {").unwrap();
+        let block = &src[at..at + src[at..].find("\n}\n").unwrap()];
+        let order = [
+            "let seen = y.status().auto_release;",
+            "session.lock().await.let_go_by_the_radio(self.target, holder);
+                    ptt_flag.store(false, Ordering::Relaxed);",
+            "PttDeniedPacket::serialize(&mut buf, denied_target_of(self.target), Denial::ServerReleased);",
+            "if self.orphan.observe(ptt_flag.load(Ordering::Relaxed), tx_holder.is_some()) {",
+            "y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));",
+            "ptt_flag.store(false, Ordering::Relaxed);
+        }",
+        ];
+        let mut last = 0;
+        for what in order {
+            let here = block.find(what).unwrap_or_else(|| panic!("in RadioSafety: {what}"));
+            assert!(here >= last, "in order: {what}");
+            last = here;
+        }
+        // The clock is not in the block any more, but in the safety tick for
+        // both radios, right after Thetis's (build 290).
+        assert!(!block.contains("let_a_silent_holder_go("), "not in the 200 ms status task");
+        assert_eq!(src.matches("let_a_silent_holder_go(").count(), 2, "its definition and the one call");
+        let at = src.find("if ptt.lock().await.check_safety().await {").unwrap();
+        let tick = &src[at..at + 2000];
+        let clock = tick.find("let_a_silent_holder_go(&session, target, radio.as_deref(), flag).await;").expect("in the safety tick");
+        assert!(tick[..clock].contains("(crate::session::TxTarget::Yaesu1, &_yaesu, &yaesu_ptt_flag),"));
+        assert!(tick[..clock].contains("(crate::session::TxTarget::Yaesu2, &_yaesu2, &yaesu2_ptt_flag),"));
+        assert!(src.contains("let mut safety_tick = interval(Duration::from_millis(100));"));
+        assert_eq!(src.matches("back_inside_the_press").count(), 0, "no way back of its own");
+        // The arm: a stale packet, the radio's own release, a refusal, the
+        // claim - and only then the key, and only when not keyed.
+        let at = src.find("macro_rules! radio_audio {").unwrap();
+        let arm = &src[at..at + src[at..].find("
+        }
+").unwrap()];
+        // What the packet does is `tx_intake::intake` since build 285 (its
+        // rule tested there); here the order of what the arm does with it.
+        let order = [
+            "s.heard_on(target, addr, Instant::now());",
+            "s.let_go_seen(target, addr);",
+            "let stale = senders.stale(target, addr, pkt.sequence, Instant::now());",
+            "keyed: flag.load(Ordering::Relaxed),",
+            "let claimed = intake_gate!(",
+            "radio.status_arc().lock().unwrap().tx_start_refusal()",
+            "if claimed && !flag.load(Ordering::Relaxed) {
+                    senders.taken(target);
+                    self.key_radio(target, addr);",
+            "senders.played(target, addr, pkt.sequence, Instant::now());",
+            "tx.try_send(crate::tx_recover::TxPacket {",
+        ];
+        let mut last = 0;
+        for what in order {
+            let here = arm.find(what).unwrap_or_else(|| panic!("in the arm: {what}"));
+            assert!(here >= last, "in order: {what}");
+            last = here;
+        }
+        assert_eq!(arm.matches("continue").count(), 1, "no radio; the other four ways out are the gate's (build 286)");
+        // The claim, Thetis's and the radios': the radio's refusal first, then
+        // the session's, a refusal told with its transmitter, a grant ends the
+        // attempt (build 285).
+        let at = src.find("    async fn claim_tx(").unwrap();
+        let claim = &src[at..at + src[at..].find("
+    }
+").unwrap()];
+        let order = [
+            "let refusal = match radio_refusal {",
+            "Some(why) => Some((why, Denial::Refused)),",
+            "if s.try_acquire_tx(target, addr) {",
+            "denied.attempt_over(&addr);
+            return true;",
+            "PttDeniedPacket::serialize(&mut buf, denied_target_of(target), denial);",
+            // What a refusal gives: not granted (round 286, T6b). The window
+            // ends before the function's closing brace, so this is its last line.
+            "let _ = self.socket.send_to(&buf, addr).await;\n        }\n        false",
+        ];
+        let mut last = 0;
+        for what in order {
+            let here = claim.find(what).unwrap_or_else(|| panic!("in claim_tx: {what}"));
+            assert!(here >= last, "in order: {what}");
+            last = here;
+        }
+        assert!(claim.ends_with("\n        false"), "a refusal is not granted: the last line");
+        assert_eq!(src.matches("self.claim_tx(").count(), 1, "in the gate, for Thetis's arm and the radios' (build 286)");
+        // The release: not a press that came in meanwhile, only its holder's,
+        // then the request (the wait for the sound card), the radio, the flag.
+        let at = src.find("    async fn release_played(").unwrap();
+        let rel = &src[at..at + src[at..].find("
+    }
+").unwrap()];
+        let order = [
+            "tx_timing.over() != played.over",
+            "release_tx(target, played.from)",
+            "st.tx_timing.request(false);",
+            "y.send_command(crate::yaesu::YaesuCmd::SetPtt(false));",
+            "flag.store(false, Ordering::Relaxed);",
+        ];
+        let mut last = 0;
+        for what in order {
+            let here = rel.find(what).unwrap_or_else(|| panic!("in release_played: {what}"));
+            assert!(here >= last, "in order: {what}");
+            last = here;
+        }
+        assert_eq!(src.matches("self.release_played(played).await;").count(), 1);
+        // The old control keys nothing.
+        let at = src.find("ControlId::YaesuPtt | ControlId::Yaesu2Ptt => {").expect("the old control, answered");
+        let old = &src[at..at + src[at..].find("
+                                }
+").unwrap()];
+        assert!(!old.contains("SetPtt") && !old.contains("try_acquire_tx"), "it keys nothing");
+        // The clock lowers the flag after it unkeys.
+        let at = src.find("async fn let_a_silent_holder_go(").unwrap();
+        let clock = &src[at..at + src[at..].find("\n}\n").unwrap()];
+        let off = clock.find("SetPtt(false)").unwrap();
+        assert!(off < clock.find("ptt_flag.store(false, Ordering::Relaxed);").expect("the clock lowers the flag"));
+    }
+
+}
+
+#[cfg(test)]
+mod safety_task_end_tests {
+    use super::{ours_to_let_go, safety_task_end};
+
+    #[test]
+    fn only_a_transmitter_that_is_ours_is_let_go() {
+        assert!(ours_to_let_go(true, true));
+        assert!(ours_to_let_go(true, false), "held by a client, not keyed yet");
+        assert!(ours_to_let_go(false, true), "keyed by the server, nobody holds it");
+        assert!(!ours_to_let_go(false, false), "an operator at the radio is not cut off");
+    }
+
+    #[test]
+    fn a_safety_task_that_ends_while_the_server_runs_is_a_loss() {
+        assert!(safety_task_end(Some(true), false).is_some(), "a panic");
+        assert!(safety_task_end(Some(false), false).is_some(), "cancelled");
+        assert!(safety_task_end(None, false).is_some(), "ended by itself");
+    }
+
+    #[test]
+    fn a_safety_task_that_ends_on_a_shutdown_is_not() {
+        assert_eq!(safety_task_end(None, true), None);
+        assert_eq!(safety_task_end(Some(true), true), None);
     }
 }
 
@@ -6176,23 +7454,75 @@ pub(crate) fn lower_all_key_lines(lines: &CwKeyLines) {
 ///   by any account (`on_the_air`): no automatic writes under a keyed radio
 ///   (review 317). An apply may go out under a microphone PTT - that
 ///   transmission is what the routing is for.
-pub(crate) fn presence_routing_step(applied: bool, clients: bool, absent_ticks: u32, st: &crate::yaesu::YaesuState) -> Option<bool> {
-    if st.cw_keyed_at.is_some() {
-        return None;
+///
+/// Named fields since build 228 (review of 226): by position, `applied` and
+/// `clients` swapped wrote the 991A route at the wrong moments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PresenceRouting {
+    /// The routing is applied now.
+    pub applied: bool,
+    /// A client listens.
+    pub clients: bool,
+    /// 200 ms ticks since the last client left.
+    pub absent_ticks: u32,
+}
+
+impl PresenceRouting {
+    pub(crate) fn step(self, st: &crate::yaesu::YaesuState) -> Option<bool> {
+        if st.cw_keyed_at.is_some() {
+            return None;
+        }
+        if self.clients {
+            (!self.applied && st.power_on).then_some(true)
+        } else if self.applied && self.absent_ticks >= 10 && !st.on_the_air() {
+            Some(false)
+        } else {
+            None
+        }
     }
-    if clients {
-        (!applied && st.power_on).then_some(true)
-    } else if applied && absent_ticks >= 10 && !st.on_the_air() {
-        Some(false)
-    } else {
-        None
+}
+
+#[cfg(test)]
+mod ddc_centre_send_tests {
+    /// Each receiver's DDC centre goes out under its own control, and only
+    /// once Thetis has told something (build 231).
+    #[test]
+    fn each_ddc_centre_goes_out_under_its_own_control() {
+        let net = include_str!("network.rs");
+        let net = &sdr_remote_core::source_text::production_code(net);
+        for line in [
+            "(ControlId::DdcCentreRx1, sdr_remote_core::protocol::ddc_centre_to_khz(ddc_centre_rx1)),",
+            "(ControlId::DdcCentreRx2, sdr_remote_core::protocol::ddc_centre_to_khz(ddc_centre_rx2)),",
+            "let ddc_centre_rx1 = {\n                                let sp = spectrum.lock().await;\n                                if sp.ddc_center_measured() { sp.ddc_center_hz() } else { 0 }",
+            "let ddc_centre_rx2 = {\n                                let sp = rx2_spectrum.lock().await;\n                                if sp.ddc_center_measured() { sp.ddc_center_hz() } else { 0 }",
+        ] {
+            assert_eq!(net.matches(line).count(), 1, "{line}");
+        }
     }
 }
 
 #[cfg(test)]
 mod presence_routing_tests {
-    use super::presence_routing_step;
+    use super::PresenceRouting;
     use crate::yaesu::YaesuState;
+
+    // Spelled by position below; built by name here, as the loop does (build 228).
+    fn presence_routing_step(applied: bool, clients: bool, absent_ticks: u32, st: &YaesuState) -> Option<bool> {
+        PresenceRouting { applied, clients, absent_ticks }.step(st)
+    }
+
+    /// Both slots hand their state over by name (build 228, review of 226).
+    #[test]
+    fn both_slots_hand_the_presence_routing_over_by_name() {
+        let net = include_str!("network.rs");
+        let net = &sdr_remote_core::source_text::production_code(net);
+        for line in [
+            "PresenceRouting { applied: ssb_applied0, clients: !audio_addrs.is_empty(), absent_ticks: absent_ticks0 };",
+            "PresenceRouting { applied: ssb_applied1, clients: !audio_addrs.is_empty(), absent_ticks: absent_ticks1 };",
+        ] {
+            assert_eq!(net.matches(line).count(), 1, "{line}");
+        }
+    }
 
     #[test]
     fn the_presence_routing_waits_for_the_radio_and_for_a_cw_run() {
@@ -6347,6 +7677,8 @@ mod memory_write_tests {
     }
 }
 
+/// Why a CW run may not key this Yaesu, from what the radio's status says. The
+/// transmitter lock and the key line come after this.
 pub(crate) fn yaesu_cw_refusal(connected: bool, power_on: bool, mode: u8) -> Option<&'static str> {
     // Both models key the same way - RTS of the port beside the CAT port -
     // with their own PC KEYING menu (ex_menu::pc_keying_menu). The FTX-1 was
@@ -6555,12 +7887,69 @@ impl NetworkService {
         // from the code: settle 250 ms + batch 150 + one read_ftx1_ex_value of
         // 3x715+60 = 2205, so ~2.6 s. At 1000 a first CW stroke in the first
         // minute after connecting was refused, with a reason naming the wrong
-        // cause (review 319; found still un-applied in 2120A2).
+        // cause (review 319; found still un-applied in 2120A2). Since build
+        // 284 a batch gives way between items and between attempts, so the
+        // wait is one attempt (~0.7 s); 3000 is kept as the margin.
         tokio::task::spawn_blocking(move || r.prepare_cw_keying(std::time::Duration::from_millis(3000)))
             .await
             .map_err(|e| format!("preparing the radio failed: {}", e))??;
         info!("cw: Yaesu slot {} keys on RTS of {} (CAT on {})", slot, line.name(), cat);
         self.cw_lines.lock().unwrap_or_else(|e| e.into_inner()).slots[slot] = Some(line);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod quic_endpoint {
+    /// The server's one endpoint is QUIC, on the port it binds, with the
+    /// relay's route when there is one - and a QUIC endpoint that cannot start
+    /// stops the server, it is not a warning (build 133; until then it was,
+    /// beside the plain UDP socket). Pinned, not run: the start-up block runs
+    /// in no test.
+    #[test]
+    fn the_start_up_runs_quic_or_does_not_start() {
+        let src = include_str!("network.rs");
+        let call = "sdr_remote_quic::QuicServer::start_on(std_socket, sdr_remote_quic::Congestion::Bbr, quic_relay, direct)";
+        assert_eq!(src.matches(call).count(), 2, "the call, and this line quoting it");
+        let at = src.find(call).unwrap();
+        let rest = &src[at..];
+        let fail = rest.find("Err(e) => {").expect("the failure arm");
+        let arm = &rest[fail..fail + rest[fail..].find("
+            }
+").expect("the arm ends")];
+        assert!(arm.contains("return Err("), "a QUIC endpoint that cannot start stops the server: {arm}");
+    }
+}
+
+#[cfg(test)]
+mod bind_with_retry_tests {
+    use super::bind_with_retry;
+    use std::time::Duration;
+
+    /// A port that is taken: the wait ends at once on a stop, not after 30 s.
+    /// And a free port binds. Both states (review 130).
+    #[tokio::test]
+    async fn a_stop_ends_the_wait_for_a_taken_port() {
+        let taken = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let wait = tokio::spawn(bind_with_retry(addr, rx));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(!wait.is_finished(), "still waiting for the taken port");
+        tx.send(true).unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(1), wait).await.expect("stopped within a second").unwrap();
+        assert!(matches!(got, Ok(None)), "a stop, not a socket and not an error");
+        drop(taken);
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        let free = bind_with_retry("127.0.0.1:0".parse().unwrap(), rx).await;
+        assert!(matches!(free, Ok(Some(_))), "a free port binds");
+        // A lasting error (an address this machine does not have) fails at
+        // once, not after 30 s of retries (review 131: the sorting of errors
+        // into lasting and passing ran no test).
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        let elsewhere = tokio::time::timeout(Duration::from_secs(1), bind_with_retry("192.0.2.1:0".parse().unwrap(), rx))
+            .await
+            .expect("a lasting error is not retried");
+        assert!(elsewhere.is_err(), "and it is an error");
     }
 }

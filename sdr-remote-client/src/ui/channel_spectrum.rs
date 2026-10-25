@@ -99,6 +99,9 @@ pub(crate) struct ChannelSpectrum {
     auto_ref_frames: u32,
     auto_ref_initialized: bool,
     auto_ref_state: AutoRefState,
+    /// The band of the frequency this channel listens on, as `update_auto_ref`
+    /// last saw it: a change restarts the fast phase (build 238).
+    auto_ref_band: Option<String>,
 }
 
 impl ChannelSpectrum {
@@ -122,6 +125,7 @@ impl ChannelSpectrum {
             auto_ref_frames: 0,
             auto_ref_initialized: false,
             auto_ref_state: AutoRefState::NoData,
+            auto_ref_band: None,
         }
     }
 
@@ -129,7 +133,7 @@ impl ChannelSpectrum {
     /// wrong source fails the assert (test) and is silently ignored in release
     /// instead of shown incorrectly.
     pub(crate) fn ingest(&mut self, snap: SpectrumSnapshot) {
-        debug_assert_eq!(snap.channel, self.channel, "spectrum-bron != kanaal");
+        debug_assert_eq!(snap.channel, self.channel, "spectrum source != channel");
         if snap.channel != self.channel {
             return;
         }
@@ -352,6 +356,15 @@ impl ChannelSpectrum {
         if !enabled {
             return None;
         }
+        // Each channel restarts the fast phase on its own band change (build
+        // 238). Until then only RX1 did, from `sync_state.rs`, and RX2 and the
+        // VRX channels crept to the new floor at the slow rate until "auto" was
+        // switched off and on (owner, 2026-10-17).
+        let band = super::helpers::freq_to_band(listen_freq_hz);
+        if band != self.auto_ref_band {
+            self.auto_ref_band = band;
+            self.reset_auto_ref();
+        }
         if self.bins.is_empty() || self.span_hz == 0 {
             self.auto_ref_state = AutoRefState::NoData;
             return None;
@@ -414,7 +427,7 @@ impl ChannelSpectrum {
 
 #[cfg(test)]
 mod boundary_guard {
-    use super::{ChannelId, ChannelSpectrum, SpectrumSnapshot};
+    use super::{AutoRefState, ChannelId, ChannelSpectrum, SpectrumSnapshot};
 
     // CI boundary (REFACTOR-audio-spectrum-per-channel §6.7): the channel-spectrum logic
     // may NEVER read the flat RX fields of another channel. This test fails the
@@ -451,6 +464,33 @@ mod boundary_guard {
         let rb = b.update_auto_ref(true, center as u64, -3_000, 3_000, 60.0);
         assert_eq!(ra, rb, "the same input must derive the same ref on any channel");
         assert!(ra.is_some(), "a seeded channel must produce a ref");
+    }
+
+    /// Every channel settles fast after its own band change, and slowly within
+    /// a band (build 238). The band change is the only restart besides "auto"
+    /// switched on: `sync_state.rs` no longer restarts RX1 by itself.
+    #[test]
+    fn every_channel_settles_fast_after_its_own_band_change() {
+        let settle = |cs: &mut ChannelSpectrum, freq: u64| {
+            for _ in 0..50 {
+                cs.update_auto_ref(true, freq, -3_000, 3_000, 60.0);
+            }
+            cs.auto_ref_state()
+        };
+        for ch in [ChannelId::Rx1, ChannelId::Rx2, ChannelId::Vrx1, ChannelId::Vrx2] {
+            let mut cs = seeded(ch, 14_200_000, 192_000);
+            assert_eq!(settle(&mut cs, 14_200_000), AutoRefState::Settled, "{ch:?}");
+            cs.update_auto_ref(true, 14_250_000, -3_000, 3_000, 60.0);
+            assert_eq!(cs.auto_ref_state(), AutoRefState::Settled, "{ch:?}: the same band stays slow");
+            // Twice (working rule 9): to another band and back.
+            for freq in [7_100_000u64, 14_200_000] {
+                cs.update_auto_ref(true, freq, -3_000, 3_000, 60.0);
+                assert_eq!(cs.auto_ref_state(), AutoRefState::Converging, "{ch:?}: a new band at {freq}");
+                assert_eq!(settle(&mut cs, freq), AutoRefState::Settled, "{ch:?}");
+            }
+        }
+        let sync = include_str!("sync_state.rs");
+        assert_eq!(sync.matches("reset_auto_ref()").count(), 0, "one place restarts on a band change");
     }
 
     #[test]
@@ -517,7 +557,7 @@ mod boundary_guard {
     }
 
     #[test]
-    fn geen_cross_kanaal_rx_veld_referenties() {
+    fn no_cross_channel_rx_field_references() {
         let src = include_str!("channel_spectrum.rs");
         let forbidden = [
             concat!("full", "_spectrum"),
@@ -527,8 +567,8 @@ mod boundary_guard {
         for needle in forbidden {
             assert!(
                 !src.contains(needle),
-                "channel_spectrum.rs bevat een verboden cross-kanaal RX-referentie: '{}'. \
-                 Kanaal-spectrum-logica moet UITSLUITEND uit self.bins afleiden (§6.1/§6.7).",
+                "channel_spectrum.rs holds a forbidden cross-channel RX reference: '{}'. \
+                 Channel spectrum logic must derive ONLY from self.bins (§6.1/§6.7).",
                 needle
             );
         }

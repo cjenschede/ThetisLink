@@ -119,7 +119,7 @@ impl VrxFeedTimer {
         }
 
         if active > 0 && now.duration_since(self.last_heartbeat).as_secs() >= 30 {
-            log::info!(
+            sdr_remote_core::dev_info!(
                 "VRX {} heartbeat: feed ~{:.0}% of budget (EMA), peak {:.0}% this window, {} active runtime(s)",
                 self.label, self.ema_ratio * 100.0, self.peak_ratio * 100.0, active
             );

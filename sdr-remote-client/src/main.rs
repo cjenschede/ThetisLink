@@ -40,7 +40,9 @@ struct GuiLogger {
 
 impl log::Log for GuiLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
+        // The developer mode's one rule (build 295): a developer line only
+        // while the mode is on, before the line reaches the screen or the file.
+        metadata.level() <= log::Level::Info && sdr_remote_core::dev_mode::record_passes(metadata.target())
     }
 
     fn log(&self, record: &log::Record) {
@@ -198,6 +200,9 @@ fn main() -> Result<()> {
     // Seed this profile's config from the default (copy) on first use, so
     // `--profile B` starts as a copy of the current settings. No-op for default.
     ui::config::seed_profile_config_if_absent();
+    // The developer mode as saved (build 295), before anything is logged that
+    // it holds back.
+    sdr_remote_core::dev_mode::set(ui::config::load_config().developer_mode);
     if let Some(p) = ui::config::profile() {
         info!("Instance profile: {}", p);
     }
@@ -212,9 +217,10 @@ fn main() -> Result<()> {
     // thread - UI-thread can NOT block on a write-syscall. Guard must
     // stay in scope until the end of main otherwise events are lost.
     //
-    // Gated by `RUST_LOG` via EnvFilter; default (empty) filters everything out
-    // -> zero-cost in prod.
-    let _tracing_guard = {
+    // Gated by `RUST_LOG` via EnvFilter. Without it there is nothing to write,
+    // and since build 295 no file is made either (it was an empty file at every
+    // start).
+    let _tracing_guard = tracing_subscriber::EnvFilter::try_from_default_env().ok().and_then(|filter| {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -229,10 +235,7 @@ fn main() -> Result<()> {
             Ok(f) => {
                 let (non_blocking, guard) = tracing_appender::non_blocking(f);
                 let _ = tracing_subscriber::fmt()
-                    .with_env_filter(
-                        tracing_subscriber::EnvFilter::try_from_default_env()
-                            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("")),
-                    )
+                    .with_env_filter(filter)
                     .with_writer(non_blocking)
                     .json()
                     .try_init();
@@ -241,36 +244,37 @@ fn main() -> Result<()> {
             }
             Err(_) => None,
         }
-    };
+    });
 
     info!("ThetisLink Client v{} starting", sdr_remote_core::version_string());
+    // Named in advance (`logregels-build295.md`): in which mode this log is written.
+    info!("{}", sdr_remote_core::dev_mode::state_line(sdr_remote_core::dev_mode::is_on()));
 
     let (engine, state_rx, cmd_tx) = ClientEngine::new();
 
     // Shutdown signal
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Phase C: relay as transport. If the relay-config is complete, we set up a
-    // client-relay-monitor with tunnel (role Client); the engine gets the tunnel as
-    // ClientTransport::Relay, the UI gets the status-handle. Otherwise: direct-UDP (default).
+    // The relay, when it is set up: a client relay monitor signs in and hands its
+    // grants to the engine's QUIC client (phase 3b), and the UI gets its status.
+    // Otherwise QUIC straight to the address typed. Chosen once at start.
     let relay_cfg_loaded = ui::config::load_config();
     // Apply the persisted UI language before the egui app starts.
     rust_i18n::set_locale(&relay_cfg_loaded.language);
     let mut _relay_monitor_keepalive: Option<sdr_remote_relay::RelayMonitor> = None;
-    let (relay_tunnel, relay_status_handle): (
-        Option<sdr_remote_logic::engine::ClientRelayTunnel>,
-        Option<sdr_remote_relay::RelayStatusHandle>,
-    ) = if sdr_remote_relay::is_configured(
+    let mut relay_quic_grants = None;
+    let mut relay_tcp_line = None;
+    // The one rule the connect screen compares its "in use" line against.
+    use sdr_remote_logic::measure::Route;
+    let asked = Route::asked_for(sdr_remote_relay::is_configured(
         relay_cfg_loaded.relay_enabled,
         &relay_cfg_loaded.relay_url,
         &relay_cfg_loaded.relay_station,
         &relay_cfg_loaded.relay_token,
-    ) {
-        let (uplink_tx, uplink_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
-        // Placeholder server address: display-label, ignored by the Relay-transport.
-        let server_placeholder: std::net::SocketAddr = "203.0.113.1:4580".parse().unwrap();
+    ));
+    let relay_status_handle: Option<sdr_remote_relay::RelayStatusHandle> = if asked == Route::QuicRelay {
         let relay_cfg = sdr_remote_relay::RelayConfig {
+            quic: false,
             enabled: true,
             url: relay_cfg_loaded.relay_url.clone(),
             station: relay_cfg_loaded.relay_station.clone(),
@@ -278,31 +282,23 @@ fn main() -> Result<()> {
             role: sdr_remote_relay::RelayRole::Client,
             instance: relay_cfg_loaded.relay_instance_id.clone(),
             name: relay_cfg_loaded.relay_device_name.clone(),
-            udp_port: sdr_remote_relay::relay_udp_port_resolve(relay_cfg_loaded.relay_udp_enabled),
+            // QUIC through the relay always needs the relay's UDP port.
+            udp_port: sdr_remote_relay::relay_udp_port_resolve(true),
         };
-        let tunnel = sdr_remote_relay::RelayTunnel {
-            sentinel: server_placeholder,
-            inbound_tx,
-            uplink_rx,
-        };
-        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_tunnel(relay_cfg, tunnel);
+        let (grant_tx, grant_rx) = tokio::sync::watch::channel(None);
+        // The TCP line for a network that lets no UDP through (build 144).
+        let (tcp, tcp_monitor) = sdr_remote_relay::tcp_line();
+        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_quic(relay_cfg, grant_tx, Some(tcp_monitor));
         let status = monitor.status_handle();
         _relay_monitor_keepalive = Some(monitor);
-        // The address is deliberately not written: see the same line on the
-        // Android side. The log file it lands in is the one place it would
-        // survive in plain text.
-        info!("Client transport: relay tunnel (via <relay>)");
-        (
-            Some(sdr_remote_logic::engine::ClientRelayTunnel {
-                uplink_tx,
-                inbound_rx,
-                server_addr: server_placeholder,
-            }),
-            Some(status),
-        )
+        relay_quic_grants = Some(grant_rx);
+        relay_tcp_line = Some(tcp);
+        Some(status)
     } else {
-        (None, None)
+        None
     };
+    // Which transport is logged by the engine, once, for both front ends.
+    let engine = engine.with_quic_relay(relay_quic_grants, relay_tcp_line);
 
     // The CW sidetone is shared between the paddle reader (in the UI's
     // ownership) and the playback callback (in the engine's audio backend).
@@ -311,28 +307,34 @@ fn main() -> Result<()> {
         sdr_remote_logic::sidetone::SidetoneSettings::default(),
     ));
     let sidetone_for_audio = sidetone.clone();
+    // The engine's very first opening comes before the settings reach it: give
+    // it the chosen devices, so the default microphone never opens first - it
+    // did, for ~1.3 s, in the field log of 13-10 (build 189).
+    let first_devices = std::sync::Mutex::new(Some((relay_cfg_loaded.input_device.clone(), relay_cfg_loaded.output_device.clone())));
 
-    // Start engine in background thread (tokio runtime)
+    // Start engine in background thread (tokio runtime). Through the reporter, so
+    // a panic leaves "no connection" on screen instead of the last state.
+    let engine_stop = engine.stop_reporter();
     let network_thread = std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine_stop.run(|| {
+            let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+            // The result goes to the reporter: an error is a stopped engine,
+            // like a panic, and it says so on screen.
             rt.block_on(async {
-                if let Err(e) = engine.run(
+                engine.run(
                     |input, output| {
-                        let audio = audio::ClientAudio::new(input, output, sidetone_for_audio.clone())?;
-                        audio.start()?;
-                        Ok(Box::new(audio) as Box<dyn sdr_remote_logic::audio::AudioBackend>)
+                        let open = |i: Option<&str>, o: Option<&str>| -> anyhow::Result<Box<dyn sdr_remote_logic::audio::AudioBackend>> {
+                            let audio = audio::ClientAudio::new(i, o, sidetone_for_audio.clone())?;
+                            audio.start()?;
+                            Ok(Box::new(audio) as Box<dyn sdr_remote_logic::audio::AudioBackend>)
+                        };
+                        let first = first_devices.lock().unwrap().take();
+                        audio::first_open(first, input, output, open)
                     },
                     shutdown_rx,
-                    relay_tunnel,
-                ).await {
-                    log::error!("Engine error: {}", e);
-                }
-            });
-        }));
-        if let Err(e) = result {
-            log::error!("Network thread PANICKED: {:?}", e);
-        }
+                ).await
+            })
+        });
     });
 
     // Run egui on the main thread

@@ -16,6 +16,200 @@ hardware notes, see `docs-book/src/technical-reference.md` and
 
 ---
 
+## [2.13.0] — 2026-10-25 (One encrypted connection, at home and on the road)
+
+> **Who this release changes things for.** **Everyone**, because the connection
+> itself is new. Desktop, phone and server now talk over a single encrypted QUIC
+> connection — straight to the server on your own network, through a forwarded
+> port, or through the relay — and when the relay can find a shorter way it moves
+> the running connection over without dropping it. **Anyone operating from a
+> phone on the move**, where a change of network used to mean a silent link for
+> seconds: the app reconnects at once. **Anyone
+> on a hotel or company network that blocks UDP**, which now still connects, over
+> an emergency route through the relay. **Anyone with a Yaesu**, whose transmit
+> audio is now buffered and timed the way Thetis's always was. And **anyone who
+> wants to know the server is the one they think it is**: the password check now
+> runs both ways.
+>
+> **Breaking change — update everything at once.** This is the first release
+> that does not talk to the previous one. A 2.12 app or desktop client cannot
+> connect to a 2.13 server, and a 2.13 app cannot connect to a 2.12 server. The
+> older side does not say why: it reports "Server not reachable" with advice
+> about the firewall, which has nothing to do with it. Through the relay, the 2.13
+> side does say it — "The other side runs an older version of ThetisLink" — and
+> the older side says nothing. So update the server, the desktop client and the
+> Android app together. Keep the old ZIP until all three are done.
+>
+> **Your settings are kept.** The switches for "Audio over UDP", "connect via
+> QUIC" and "QUIC via the relay" are gone; their keys are no longer read and
+> disappear at the next save. An old settings file simply gives you QUIC. The
+> relay settings, the password and the 2FA key carry over unchanged. The server
+> still listens on **port 4580**, now as QUIC over UDP, so a port you forwarded
+> keeps working.
+>
+> **Going back to 2.12.0** works only for all three programs together, as above.
+> 2.12 ignores the settings it does not know — including the new **Allow direct
+> connections** switch, so a 2.12 server accepts direct connections whatever you
+> chose here. On Android, a lower version cannot be installed over a higher one:
+> going back means uninstalling the app first, and that removes its settings.
+>
+> **Thetis.** Stock Thetis v2.10.3.15 still suffices. The Thetis fork **PA3GHM
+> TL2-18** is released at the same time, as its own release in
+> [`cjenschede/Thetis`](https://github.com/cjenschede/Thetis); with its
+> ThetisLink extensions switched on you get the extras listed at the end.
+
+### Added
+
+- **One encrypted connection for everything.** Audio, spectrum, controls and PTT
+  travel over one QUIC connection (TLS 1.3), directly or through the relay. The
+  relay passes it on and cannot read it. Plain, unencrypted UDP is gone.
+- **The connection finds the shortest way by itself.** With the relay set up, the
+  app connects through it and then tries a direct path, with the relay's help to
+  get through both routers. When that works, the same connection carries on
+  directly; when the direct path falls silent, it goes back through the relay.
+  If app and server sit behind the same router, the traffic stays on your own
+  network. A direct path is only tried after the password has been checked.
+- **You can see which way the connection takes.** The phone shows the letters,
+  the desktop the full name:
+  - **L** — straight to the server on your own network;
+  - **D** — straight to the server over the internet (a forwarded port);
+  - **R** — everything through the relay, also while a direct path is being tried;
+  - **D+R** — found through the relay, the traffic now straight;
+  - **L+R** — found through the relay, the traffic over your own network;
+  - **R (TCP)** — everything through the relay over TCP (see the next item).
+
+  The server shows the same letters per client.
+- **A network that blocks UDP still connects.** Some hotel, company and guest
+  networks let no UDP through. The app then sends the same encrypted connection
+  over the relay's TCP line on port 443, without waiting; when no UDP has come
+  through after about ten seconds, it says so: "This
+  network lets no UDP through; ThetisLink uses a fallback route over TCP (more
+  delay)". On a network where UDP works you never see it.
+- **The password check runs both ways.** The server now proves that it knows the
+  password too, and the proof is tied to the encrypted connection it was made on.
+  A server that cannot prove it is refused, with a message that says so — which
+  is what you see against something sitting in between.
+- **Allow direct connections** (server settings, under the relay). Switch it off and
+  clients reach the server through the relay only: your home address stays out
+  of sight of guests. Available only when a relay is set up, so it cannot lock
+  everyone out. Applies at the next start.
+- **After a network change the app reconnects at once.** When the phone moves
+  from Wi-Fi to mobile data, or back, the relay session ends and a new one starts
+  on the new network straight away, with a short retry ladder while the new
+  network is still coming up. The phone notices the moment the new network is
+  there and tries again at once, instead of waiting for the next retry.
+- **Both ends say when they are not the same version.** Each program tells the
+  other its version and build; if they differ, the connect screen and the
+  statistics say so.
+- **A transmitter that loses its connection lets you hear it.** When a session
+  ends while you are pressing PTT, the app sounds three short beeps, once, so you
+  know the transmitter is off without looking at the screen. And a press that
+  gets no answer from the server ends after 3 seconds, with the same tone.
+- **The desktop only uses the microphone you chose.** If it is missing, the PTT
+  buttons read **No mic**, transmitting is off, and it opens again by itself when
+  you plug it back in. ThetisLink no longer falls back to the Windows default
+  microphone.
+- **A warning when an RX-only antenna position cannot be guarded.** On an
+  antenna position marked receive-only, ThetisLink keeps Thetis from
+  transmitting. With stock Thetis it now does so through Thetis's own "Receive
+  only" (CAT `ZZTI`), and it switches that back only if it set it itself. If
+  Thetis cannot be guarded at that moment, every screen says so.
+- **A notice when a Yaesu would transmit on its USB lines.** Some menu settings
+  of the FT-991A (047, 060, 071, 076, 108) and the FTX-1 (RPTT SELECT, PC KEYING)
+  make the radio transmit when Windows raises RTS or DTR on its USB port, for
+  example at start-up. ThetisLink keys by CAT and does not need them; the server
+  now names the menus and the setting to choose.
+- **The RF2K-S drive table can be edited from the desktop and the phone.** Both
+  show the server's table, send only what you changed, and the server writes it
+  to the amplifier with the names it reads it with.
+- **The server's status panel shows each transmitter.** One chip per
+  transmitter, red while that transmitter says it transmits; per radio the
+  reason a port does not open; Thetis shown as not configured when there is no
+  TCI address.
+- **DX cluster spots go to Thetis** also when no client is connected.
+- **A developer mode** for measuring and testing, opened with a code. Without it
+  none of its tools or log lines are there. It is not described further here.
+
+### Changed
+
+- **Yaesu transmit audio is buffered and timed like Thetis's.** It goes through
+  the same jitter buffer, waits for the radio to be on the air before it plays,
+  and plays out what you said before the radio goes back to receive. Each
+  transmission starts with **80 ms of lead** in the radio's sound card, so the
+  first syllable is not cut — that is 80 ms of extra delay on every Yaesu
+  transmission.
+- **A lost audio packet is rebuilt where possible.** All receive streams rebuild
+  a lost frame from the redundancy carried in the next packet before falling
+  back to concealment.
+- **The playback buffer aims at 40 ms** on desktop and phone alike, and lets go of
+  extra delay only when it has not been needed for a while, one frame at a time —
+  so a delay built up after a bad stretch shrinks again without a gap.
+- **Cleaner resampling.** Every rate change uses one anti-alias filter chosen for
+  its direction; a stream at the same rate goes through untouched.
+- **Filter edges always fit the mode.** A band memory restores only edges that fit
+  its mode, the server sends Thetis only edges that fit, and a dragged edge stops
+  at the carrier. This ends LSB coming back with a USB filter on 60 m and 160 m,
+  and MIDI "wider" stopping after two presses.
+- **The spectrum after a band change starts clean**: no frame of the old band
+  under the new centre, no empty picture or dark waterfall row, and every channel
+  re-runs its fast auto-reference.
+- **Desktop settings are grouped** under fold-outs that remember whether they
+  were open; language, scale and theme have their own group. One line style runs
+  through the client, the server and the chat.
+- **A command-line start of the server** reads the password, the 2FA key and the
+  relay from the saved settings, and does not start without a password.
+- **2FA**: a client at the code step gets two minutes; a code that gets no answer
+  starts a new attempt; after a mistyped password you can try again at once.
+
+### Fixed
+
+- **No old speech after a silence.** Audio that waited in a transmit buffer
+  through a gap no longer keys Thetis or a radio when the next packet arrives,
+  and a press no longer runs into a new session after a network change.
+- **A PTT or TUNE left behind by a client that vanished** is released at
+  Thetis's next report — on stock Thetis too.
+- **Controls are not repeated into a new session.** A control the old session
+  left unacknowledged is no longer sent again after a network change, where a
+  repeated PTT or tune could key a transmitter.
+- **A VRX on an odd carrier bin** sounds as clean as one on an even bin. A VRX
+  also follows the receiver's real DDC centre now.
+- **A Yaesu that was on standby** is recognised once it is switched on.
+- **The FTX-1 menu scan** gives way to a waiting command and carries on under a
+  microphone transmission.
+- **The Amplitec switch** clears its port before asking, like the other serial
+  devices.
+- **Security**: the dependency advisories reachable from ThetisLink are closed
+  (TLS included), and certificates from the distrusted eMudhra intermediates are
+  no longer accepted.
+
+### Known limitations
+
+- **A mix of 2.12 and 2.13 clients on one station** makes the station's relay line
+  switch between the version message and green every few seconds: the relay
+  messages do not say which client they come from.
+- **Against an older version you get two messages that do not refer to each
+  other**: the relay line names the older version, and after 5 seconds the
+  connection reports "Server not reachable".
+- **The phone does not show the relay's messages**; the desktop shows them on the
+  connect screen, the server as a tooltip on its status panel.
+- **Two servers started with the same relay station push each other out.** A
+  command-line start now registers with the station in the saved settings.
+- **A TUNE from a client on an RX-only antenna position** is stopped within
+  200 ms, not refused beforehand. This is older than 2.13.
+- **The Android app asks for location only in the developer mode**, but the
+  permission is declared in the app, so app information lists it.
+
+### With the Thetis fork TL2-18 (ThetisLink extensions on)
+
+- The spectrum follows whoever tuned last: tune in Thetis and Thetis scrolls its
+  own display, tune in ThetisLink and ThetisLink recentres.
+- **TL Lean**: one button turns Thetis's displays and meters off on a station
+  where Thetis only serves ThetisLink, and back again.
+- Receive audio comes back 30–40 ms sooner after a PTT release.
+- Two fixes in the fork that apply with the extensions off as well: a TCI client
+  that keyed or tuned and went away no longer leaves MOX or TUNE on, and Thetis
+  no longer stops at close on an ADC overload message.
+
 ## [2.12.0] — 2026-09-20 (A real paddle, and it keys the radio itself)
 
 > **Who this release changes things for.** **Anyone who sends CW.** A paddle on

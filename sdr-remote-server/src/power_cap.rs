@@ -129,13 +129,46 @@ pub fn mode_factor(mode: u8) -> Option<f32> {
 ///
 /// Returns `Some(watts)` if the position has a max AND the mode has a
 /// factor; otherwise `None` (no cap).
-pub fn cap_for(amplitec_pos: u8, max_w_table: &[Option<u16>; 6], mode: u8) -> Option<u16> {
-    if !(1..=6).contains(&amplitec_pos) {
-        return None;
+///
+/// Named fields since build 229 (review of 228): by position, the position and
+/// the mode - both a `u8` from 1 to 6-ish - swapped gave the cap of another
+/// position, or none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapFor {
+    /// Amplitec-A position, 1..=6.
+    pub amplitec_pos: u8,
+    /// Thetis `vfo_a_mode`.
+    pub mode: u8,
+}
+
+impl CapFor {
+    pub fn cap(self, max_w_table: &[Option<u16>; 6]) -> Option<u16> {
+        if !(1..=6).contains(&self.amplitec_pos) {
+            return None;
+        }
+        let max_w = max_w_table[(self.amplitec_pos - 1) as usize]?;
+        let factor = mode_factor(self.mode)?;
+        Some(((max_w as f32) * factor).round() as u16)
     }
-    let max_w = max_w_table[(amplitec_pos - 1) as usize]?;
-    let factor = mode_factor(mode)?;
-    Some(((max_w as f32) * factor).round() as u16)
+}
+
+/// What one cap check reads (build 229, review of 228): `active_pa` and
+/// `mode` are both a `u8`, three arguments apart, and swapped the cap chose
+/// its PA from the mode.
+#[derive(Debug, Clone, Copy)]
+pub struct PowerCapReading<'a> {
+    /// Current Amplitec-A position (1..6) or None.
+    pub active_pos: Option<u8>,
+    /// `config.amplitec_max_w` (6 Option<u16> values).
+    pub max_w_table: &'a [Option<u16>; 6],
+    /// `config.active_pa` (0=none, 1=SPE, 2=RF2K).
+    pub active_pa: u8,
+    /// The active PA is in Operate.
+    pub pa_in_operate: bool,
+    /// PA-meter value (None = sensor unknown).
+    pub pa_fwd_watts: Option<u16>,
+    /// Current Thetis `vfo_a_mode`.
+    pub mode: u8,
 }
 
 /// Per-tick cap-check. Call from the broadcast-loop on every
@@ -144,24 +177,10 @@ pub fn cap_for(amplitec_pos: u8, max_w_table: &[Option<u16>; 6], mode: u8) -> Op
 /// then sends the correct `SpeCmd::DriveDown` or `Rf2kCmd::DriveDown`
 /// command); `None` means "no action".
 ///
-/// Arguments:
-/// - `state` - shared controller-state.
-/// - `active_pos` - current Amplitec-A position (1..6) or None.
-/// - `max_w_table` - `config.amplitec_max_w` (6 Option<u16> values).
-/// - `active_pa` - `config.active_pa` (0=none, 1=SPE, 2=RF2K).
-/// - `pa_in_operate` - active PA is in Operate.
-/// - `pa_fwd_watts` - PA-meter value (None = sensor unknown).
-/// - `mode` - current Thetis `vfo_a_mode`.
-pub fn tick(
-    state: &mut PowerCapState,
-    active_pos: Option<u8>,
-    max_w_table: &[Option<u16>; 6],
-    active_pa: u8,
-    pa_in_operate: bool,
-    pa_fwd_watts: Option<u16>,
-    mode: u8,
-) -> Option<PowerCapAction> {
-    let cap = active_pos.and_then(|p| cap_for(p, max_w_table, mode));
+/// The reading comes by name (`PowerCapReading`).
+pub fn tick(state: &mut PowerCapState, reading: PowerCapReading<'_>) -> Option<PowerCapAction> {
+    let PowerCapReading { active_pos, max_w_table, active_pa, pa_in_operate, pa_fwd_watts, mode } = reading;
+    let cap = active_pos.and_then(|p| CapFor { amplitec_pos: p, mode }.cap(max_w_table));
 
     // State-change-log: only when (pos, mode, pa_in_operate, cap)
     // has changed relative to the previous tick. Operator wants to see
@@ -280,6 +299,44 @@ pub fn on_position_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Spelled by position below; built by name here (build 229).
+    fn cap_for(amplitec_pos: u8, max_w_table: &[Option<u16>; 6], mode: u8) -> Option<u16> {
+        CapFor { amplitec_pos, mode }.cap(max_w_table)
+    }
+
+    /// The cap check gets its reading by name, and passes position and mode on
+    /// by name (build 229, review of 228: K2 and K3 stayed green by position).
+    #[test]
+    fn the_cap_check_reads_position_pa_and_mode_by_name() {
+        let pc = include_str!("power_cap.rs");
+        let pc = &pc[..pc.find("#[cfg(test)]").unwrap()];
+        assert_eq!(pc.matches("CapFor { amplitec_pos: p, mode }.cap(max_w_table)").count(), 1);
+        assert_eq!(
+            pc.matches("let PowerCapReading { active_pos, max_w_table, active_pa, pa_in_operate, pa_fwd_watts, mode } = reading;").count(),
+            1
+        );
+        let net = include_str!("network.rs");
+        for line in [
+            "active_pos: active_amplitec_pos,",
+            "max_w_table: &live_config.amplitec_max_w,\n                                        active_pa,\n",
+            "mode: mode_u8,\n",
+        ] {
+            assert_eq!(net.matches(line).count(), 1, "{line}");
+        }
+        // And what the reading decides: the active PA, not the mode.
+        let table: [Option<u16>; 6] = [Some(100), None, None, None, None, None];
+        let mut st = PowerCapState::new();
+        let r = PowerCapReading {
+            active_pos: Some(1),
+            max_w_table: &table,
+            active_pa: 2,
+            pa_in_operate: true,
+            pa_fwd_watts: Some(500),
+            mode: 1,
+        };
+        assert_eq!(tick(&mut st, r), Some(PowerCapAction::Rf2kDriveDown), "the RF2K-S, whatever the mode");
+    }
 
     #[test]
     fn mode_factor_covers_thetis_modes() {

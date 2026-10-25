@@ -114,7 +114,7 @@ pub struct RotorSnapshot {
 struct Inner {
     device: Option<MCP2221>,
     status: Status,
-    /// USB serial of the board to open (`rot_<naam>`). `None` falls
+    /// USB serial of the board to open (`rot_<name>`). `None` falls
     /// back to "first board on the bus" - only useful for the
     /// standalone test-spike binary.
     target_serial: Option<String>,
@@ -203,7 +203,7 @@ pub struct YaesuRotorDriver {
 
 impl YaesuRotorDriver {
     /// Create a new driver instance bound to a specific MCP2221A
-    /// USB serial (typically `rot_<naam>` per ThetisLink convention). `None`
+    /// USB serial (typically `rot_<name>` per ThetisLink convention). `None`
     /// falls back to "first board on the bus" - only sensible for one-off
     /// hardware tests; production must always go through a serial.
     pub fn with_target_serial(target_serial: Option<String>) -> Self {

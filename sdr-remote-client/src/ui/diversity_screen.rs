@@ -27,7 +27,7 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetControl(
                     ControlId::DiversityEnable, self.diversity_enabled as u16));
             }
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label("Ref:");
             egui::ComboBox::from_id_salt("div_ref")
                 .width(60.0)
@@ -42,7 +42,7 @@ impl SdrRemoteApp {
                         let _ = self.cmd_tx.send(Command::SetControl(ControlId::DiversityRef, 0));
                     }
                 });
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label(rust_i18n::t!("screen_source").to_string());
             egui::ComboBox::from_id_salt("div_src")
                 .width(80.0)
@@ -159,7 +159,7 @@ impl SdrRemoteApp {
                 }
             }
 
-            ui.separator();
+            super::helpers::rule(ui);
 
             // === Sliders column ===
             ui.vertical(|ui| {

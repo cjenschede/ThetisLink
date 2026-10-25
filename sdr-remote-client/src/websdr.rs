@@ -279,7 +279,7 @@ fn run_webview_loop(url: &str, sdr_type: SdrType, rx: mpsc::Receiver<WebSdrCmd>)
             Err(e) => {
                 DestroyWindow(hwnd);
                 UnregisterClassW(class_name.as_ptr(), hinstance);
-                anyhow::bail!("WebView2 niet beschikbaar: {}", e);
+                anyhow::bail!("WebView2 not available: {}", e);
             }
         };
 

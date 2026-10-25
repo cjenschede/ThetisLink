@@ -172,6 +172,21 @@ pub enum PacketType {
     /// cannot tell a complete transfer from a lossy one would attach a
     /// truncated log to a report and call it the server's log.
     ServerReportPart = 0x36,
+    /// "Got your control number n" (server -> client), `header(4) + seq u32`.
+    /// Phase 2b of the direct connection: a `Control` or `YaesuControl` with a
+    /// sequence number in its four-byte tail is acknowledged with this; see
+    /// `control_ack`. An older client does not know the type and ignores it.
+    ControlAck = 0x37,
+    /// Phase 3c, punching: "this is my public address" (client -> server),
+    /// `header(4) + address`, see [`PunchPacket`]. Only inside the QUIC
+    /// connection, which carries it end to end and to this one peer.
+    PunchOffer = 0x38,
+    /// Phase 3c: "punched - send to this address" (server -> client), same shape.
+    PunchReady = 0x39,
+    /// L+R (build 142): "we are behind the same router - send to my own port
+    /// at this local address" (server -> client), same shape. The answer to an
+    /// offer instead of a punch.
+    PunchLocal = 0x3A,
 }
 
 impl PacketType {
@@ -310,7 +325,9 @@ pub enum ControlId {
     /// Yaesu AUDIO subscription (value 0/1). State (freq/s-meter/CAT) has run since the
     /// audio/state split via YaesuStateEnable; this control only sets the audio stream.
     YaesuEnable = 0x20,
-    /// Yaesu PTT (value 0/1: TX0/TX1 via Yaesu CAT)
+    /// Yaesu PTT (value 0/1: TX0/TX1 via Yaesu CAT). Reserved since build 282:
+    /// a radio's PTT is the flag on its `AudioYaesu` packets, as Thetis's is on
+    /// `Audio`; a server ignores this one, so a client from before keys nothing.
     YaesuPtt = 0x21,
     /// Yaesu frequency set (uses FrequencyPacket, not ControlPacket)
     YaesuFreq = 0x22,
@@ -324,7 +341,7 @@ pub enum ControlId {
     YaesuRecallMemory = 0x26,
     /// Yaesu write all memories to radio (value: ignored)
     YaesuWriteMemories = 0x27,
-    /// Yaesu select VFO (value: 0=VFO A, 1=VFO B, 2=swap)
+    /// Yaesu select VFO (value: 0=VFO A, 1=VFO B, 2=swap, 3=V/M toggle between VFO and memory)
     YaesuSelectVfo = 0x28,
     /// Yaesu squelch (value: 0-255)
     YaesuSquelch = 0x29,
@@ -549,7 +566,8 @@ pub enum ControlId {
     // slot-1 state/audio/memory after it sends this control with value=1.
     /// Slot-1 stream enable + subscription gate (value 0/1). Mirror of YaesuEnable.
     Yaesu2Enable = 0x80,
-    /// Slot-1 PTT (value 0/1). Mirror of YaesuPtt.
+    /// Slot-1 PTT (value 0/1). Mirror of YaesuPtt, and reserved like it since
+    /// build 282 (the flag on `AudioYaesu2`).
     Yaesu2Ptt = 0x81,
     /// Slot-1 frequency set (uses FrequencyYaesu2 packet). Mirror of YaesuFreq.
     Yaesu2Freq = 0x82,
@@ -563,7 +581,7 @@ pub enum ControlId {
     Yaesu2RecallMemory = 0x86,
     /// Slot-1 write all memories. Mirror of YaesuWriteMemories.
     Yaesu2WriteMemories = 0x87,
-    /// Slot-1 select VFO (0=A, 1=B, 2=swap). Mirror of YaesuSelectVfo.
+    /// Slot-1 select VFO (0=A, 1=B, 2=swap, 3=V/M). Mirror of YaesuSelectVfo.
     Yaesu2SelectVfo = 0x88,
     /// Slot-1 squelch (0-255). Mirror of YaesuSquelch.
     Yaesu2Squelch = 0x89,
@@ -647,6 +665,14 @@ pub enum ControlId {
     /// clients say so out loud until contact is back. The SPE does not need this -
     /// it drops to Standby by itself when its link goes away.
     PaDriveWarning = 0x9B,
+    /// The DDC centre of RX1, server -> client (build 231): whole kHz
+    /// (`ddc_centre_to_khz`). The centre the server's own VRX uses, sent
+    /// whether or not the client has the full-band spectrum on - without it a
+    /// client took the VFO, and a VRX did not follow its receiver to another
+    /// band. 0: not known yet.
+    DdcCentreRx1 = 0x9C,
+    /// The DDC centre of RX2 (same encoding as `DdcCentreRx1`).
+    DdcCentreRx2 = 0x9D,
 }
 
 /// Controls that carry PER-SESSION server state.
@@ -712,6 +738,36 @@ pub const SESSION_SCOPED_CONTROLS: &[ControlId] = &[
 
 /// Hertz per step of [`ControlId::VrxSpectrumPan`].
 pub const VRX_PAN_STEP_HZ: i32 = 10;
+
+/// The DDC centre in a control value (build 231): whole kHz, rounded, so a
+/// `u16` reaches 65.535 MHz - the whole range of the radio. One place for both
+/// sides: the server encodes, the client decodes with `ddc_centre_from_khz`.
+pub fn ddc_centre_to_khz(hz: u64) -> u16 {
+    ((hz + 500) / 1000).min(u16::MAX as u64) as u16
+}
+
+/// The DDC centre back in Hz from `DdcCentreRx1/2`.
+pub fn ddc_centre_from_khz(khz: u16) -> u64 {
+    khz as u64 * 1000
+}
+
+#[cfg(test)]
+mod ddc_centre_tests {
+    use super::{ddc_centre_from_khz, ddc_centre_to_khz};
+
+    /// Rounded to the nearest kHz, and the field case of 2026-10-16 comes back
+    /// within 500 Hz; past 65.535 MHz it stops at the top instead of wrapping.
+    #[test]
+    fn the_ddc_centre_travels_in_whole_khz() {
+        assert_eq!(ddc_centre_to_khz(7_138_162), 7138);
+        assert_eq!(ddc_centre_to_khz(7_138_500), 7139);
+        assert_eq!(ddc_centre_to_khz(54_000_000), 54_000);
+        assert_eq!(ddc_centre_to_khz(70_000_000), u16::MAX, "no wrap");
+        assert_eq!(ddc_centre_to_khz(0), 0, "not known");
+        assert_eq!(ddc_centre_from_khz(7138), 7_138_000);
+        assert!(ddc_centre_from_khz(ddc_centre_to_khz(14_282_000)).abs_diff(14_282_000) <= 500);
+    }
+}
 
 /// Pack a pan offset in Hz into the control value, clamped to what fits.
 pub fn pack_vrx_pan(offset_hz: i32) -> u16 {
@@ -852,6 +908,23 @@ impl Flags {
 
     pub fn server_released(self) -> bool {
         self.0 & 0x08 != 0
+    }
+
+    /// Transmitting is closed on this server until it is restarted.
+    ///
+    /// Set on a `PttDenied` together with `SERVER_RELEASED`, never alone: a
+    /// task that keeps a transmitter from hanging stopped on the server, and it
+    /// refuses every transmitter from then on (`safety_task_lost` in the server).
+    /// `SERVER_RELEASED` makes a held key let go; this bit is what lets the
+    /// screen say why, and that the cure is a restart of the server - not
+    /// waiting, and not another client letting go.
+    ///
+    /// A spare bit, so an older client reads it as `SERVER_RELEASED` alone,
+    /// which is what it got before this existed.
+    pub const SERVER_CLOSED: Self = Self(0x40);
+
+    pub fn server_closed(self) -> bool {
+        self.0 & 0x40 != 0
     }
 
     /// Which transmitter a `PttDenied` is about, in bits 4 and 5.
@@ -1218,6 +1291,207 @@ impl MultiChannelAudioPacket {
     }
 }
 
+/// Width of the version tag on the wire.
+pub const VERSION_TAG_LEN: usize = 32;
+
+/// The build a binary calls itself, as it travels between the two ends.
+///
+/// The decision worth reading here is not the byte count but what travels: the
+/// TEXT of `version_string()`, not a version parsed into numbers. Numbers would
+/// mean two places know what a ThetisLink version looks like - whatever packs it
+/// and whatever has to spell it back out for the operator - and this is the one
+/// subject where those two drifting apart is the whole point of the field. It
+/// also keeps the `-dev` suffix, and `2.13.0-dev (build 1)` is not the same
+/// binary as `2.13.0`.
+///
+/// Fixed width rather than length-prefixed so every packet in this file keeps
+/// the shape it has: one `SIZE` constant and a fixed array to serialise into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct VersionTag {
+    bytes: [u8; VERSION_TAG_LEN],
+}
+
+/// This binary's own version text, built once.
+///
+/// `version_string()` allocates on every call, and the comparison below runs on
+/// every heartbeat in both directions. Twice a second is not the audio path and
+/// would have been harmless, but there is nothing to weigh here: caching it is
+/// free and it makes the comparison a plain byte compare.
+fn mine_text() -> &'static str {
+    static MINE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    MINE.get_or_init(crate::version_string)
+}
+
+impl VersionTag {
+    pub const LEN: usize = VERSION_TAG_LEN;
+
+    /// What this binary calls itself. `version_string()` stays the only place
+    /// that knows the format.
+    pub fn mine() -> Self {
+        Self::from_text(mine_text())
+    }
+
+    /// Truncates rather than fails: a version name that outgrows the field must
+    /// never be able to stop a heartbeat. The test
+    /// `a_version_string_fits_on_the_wire` is what says so out loud, and it
+    /// fails in the suite long before such a build reaches anyone.
+    pub fn from_text(s: &str) -> Self {
+        let mut bytes = [0u8; VERSION_TAG_LEN];
+        for (slot, b) in bytes.iter_mut().zip(s.bytes()) {
+            *slot = if (0x20..=0x7E).contains(&b) { b } else { b'?' };
+        }
+        Self { bytes }
+    }
+
+    /// The text as it arrived, up to the first padding byte.
+    ///
+    /// Anything outside printable ASCII becomes `?`. This string is written to
+    /// the log and shown on screen; on the server it only arrives from a peer
+    /// that has already been admitted, on the client from whatever answers at
+    /// the server's address - the same exposure every other ack field has - and
+    /// a newline in a log line is still a newline either way.
+    ///
+    /// **Printable is not the same as safe as a format string.** `%`, `{` and
+    /// `}` survive, so this belongs in an ARGUMENT and never in the template
+    /// position. The three places that show it today all pass it as an argument
+    /// (`warn!("{}", line)`, `t!(.., server = ..)`, `stringResource(id, ..)`).
+    /// (raised in review.)
+    pub fn text(&self) -> String {
+        self.bytes
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| if (0x20..=0x7E).contains(&b) { b as char } else { '?' })
+            .collect()
+    }
+
+    /// True when the other end runs exactly this build.
+    ///
+    /// Compares bytes rather than building a `String`: this runs on every
+    /// heartbeat, and the answer is "yes" almost always.
+    pub fn is_mine(&self) -> bool {
+        let mine = mine_text().as_bytes();
+        mine.len() <= VERSION_TAG_LEN
+            && self.bytes[..mine.len()] == *mine
+            && self.bytes[mine.len()..].iter().all(|&b| b == 0)
+    }
+
+    fn write_into(&self, dst: &mut [u8]) {
+        dst[..VERSION_TAG_LEN].copy_from_slice(&self.bytes);
+    }
+
+    fn read_from(src: &[u8]) -> Self {
+        let mut bytes = [0u8; VERSION_TAG_LEN];
+        bytes.copy_from_slice(&src[..VERSION_TAG_LEN]);
+        Self { bytes }
+    }
+}
+
+impl std::fmt::Debug for VersionTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "VersionTag({:?})", self.text())
+    }
+}
+
+/// What the other end is running, as far as this end can tell.
+///
+/// One type for both directions. The server judges its clients and the client
+/// judges its server, and "is that my build?" is the same question either way -
+/// keeping the answer here is what stops the two from drifting apart, which is
+/// the very thing the version tag exists to notice.
+///
+/// This never refuses a connection. All ThetisLink binaries of a release are
+/// meant to be the same build, and this is how that shows itself; it is not a
+/// compatibility check. Refusing would lock an operator out of their own
+/// station over a half-finished update, at a distance, with no way back.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PeerBuild {
+    /// Nothing heard from the other end yet.
+    #[default]
+    Unknown,
+    /// Heard, but from a build that predates this field.
+    ///
+    /// That is itself a difference and not an unknown: any peer of this build
+    /// would have said which one it is.
+    Older,
+    /// The same build. Nothing to report.
+    Same,
+    /// A different build, which calls itself this.
+    Different(String),
+}
+
+impl PeerBuild {
+    /// Judge what arrived on a heartbeat. `None` is a packet that stopped
+    /// before the version field.
+    pub fn of(tag: Option<VersionTag>) -> Self {
+        match tag {
+            None => Self::Older,
+            Some(t) if t.is_mine() => Self::Same,
+            Some(t) => Self::Different(t.text()),
+        }
+    }
+
+    /// True when the operator should be told.
+    pub fn is_trouble(&self) -> bool {
+        matches!(self, Self::Older | Self::Different(_))
+    }
+
+    /// What the other end calls itself, where it said so.
+    pub fn theirs(&self) -> Option<&str> {
+        match self {
+            Self::Different(t) => Some(t.as_str()),
+            _ => None,
+        }
+    }
+
+    /// What to write when the judgement about a peer changes from `was` to
+    /// this one. `None` when there is nothing to say.
+    ///
+    /// `true` in the pair means it is a warning; `false` is the relief line for
+    /// a peer that disagreed and now agrees. Both ends call this, so a change
+    /// is reported in the same words, and - the half that is easy to get wrong
+    /// - with the same silence.
+    pub fn change_line(&self, was: &Self, peer: &str) -> Option<(bool, String)> {
+        if self == was || matches!(self, Self::Unknown) {
+            // Unknown says nothing on purpose, and the relief line below would
+            // otherwise claim it does: going from a complaint to "heard nothing
+            // yet" is a link that went away, not a peer that upgraded. No path
+            // reaches it today - both ends reset to Unknown directly rather
+            // than through here - which is exactly why it is worth closing now
+            // (raised in review).
+            return None;
+        }
+        match self.log_line(peer) {
+            Some(line) => Some((true, line)),
+            // Only worth saying when it was a complaint before. Otherwise this
+            // is the first heartbeat of a connection that is simply fine.
+            None if was.is_trouble() => {
+                Some((false, format!("{peer} now runs this same build")))
+            }
+            None => None,
+        }
+    }
+
+    /// One line for the log, or `None` when there is nothing to say.
+    ///
+    /// Logs only. A screen says this in the operator's own language, so the
+    /// front end builds that sentence from the parts above - a sentence made
+    /// here could never be translated.
+    pub fn log_line(&self, peer: &str) -> Option<String> {
+        match self {
+            Self::Unknown | Self::Same => None,
+            Self::Older => Some(format!(
+                "{peer} runs a build older than this one ({}) - too old to say which. \
+                 All ThetisLink binaries should be the same build.",
+                crate::version_string()
+            )),
+            Self::Different(theirs) => Some(format!(
+                "{peer} runs {theirs} and this is {} - they should be the same build.",
+                crate::version_string()
+            )),
+        }
+    }
+}
+
 /// Heartbeat packet: header(4) + sequence(4) + local_time(4) + rtt(u16) + loss(u8) + jitter(u8) + capabilities(4)
 /// Total: 20 bytes (backward compatible: 16 bytes without capabilities)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1234,6 +1508,12 @@ pub struct Heartbeat {
     pub jitter_ms: u8,
     /// Client capabilities (0 if not present)
     pub capabilities: Capabilities,
+    /// The build this client calls itself.
+    ///
+    /// `None` from a client older than this field, and absent is "did not say",
+    /// never "does not match" - reading it the other way would report a
+    /// disagreement against every older client, twice a second.
+    pub version: Option<VersionTag>,
 }
 
 impl Heartbeat {
@@ -1241,6 +1521,9 @@ impl Heartbeat {
     pub const MIN_SIZE: usize = 16;
     /// Full size including capabilities
     pub const SIZE: usize = 20;
+    /// With the version tag. Same additive shape as the growth to
+    /// `capabilities` before it: an older reader simply stops at 20 bytes.
+    pub const SIZE_WITH_VERSION: usize = Self::SIZE + VERSION_TAG_LEN;
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         let header = Header::new(PacketType::Heartbeat, self.flags);
@@ -1251,6 +1534,21 @@ impl Heartbeat {
         buf[14] = self.loss_percent;
         buf[15] = self.jitter_ms;
         buf[16..20].copy_from_slice(&self.capabilities.0.to_be_bytes());
+    }
+
+    /// Serialise including the version tag. Separate from `serialize` so the
+    /// older, shorter form stays exactly what it was.
+    ///
+    /// A heartbeat with no version of its own is stamped with this binary's -
+    /// the sender is always in a position to know, so an empty field here would
+    /// only ever mean the caller forgot.
+    pub fn serialize_with_version(&self, buf: &mut [u8; Self::SIZE_WITH_VERSION]) {
+        let mut head = [0u8; Self::SIZE];
+        self.serialize(&mut head);
+        buf[..Self::SIZE].copy_from_slice(&head);
+        self.version
+            .unwrap_or_else(VersionTag::mine)
+            .write_into(&mut buf[Self::SIZE..]);
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -1268,6 +1566,12 @@ impl Heartbeat {
             Capabilities::NONE
         };
 
+        let version = if buf.len() >= Self::SIZE_WITH_VERSION {
+            Some(VersionTag::read_from(&buf[Self::SIZE..Self::SIZE_WITH_VERSION]))
+        } else {
+            None
+        };
+
         Ok(Self {
             flags: header.flags,
             sequence: u32::from_be_bytes(buf[4..8].try_into().unwrap()),
@@ -1276,6 +1580,7 @@ impl Heartbeat {
             loss_percent: buf[14],
             jitter_ms: buf[15],
             capabilities,
+            version,
         })
     }
 }
@@ -1326,6 +1631,12 @@ impl ServerStateFlags {
     /// DX-spot subscription and hide its toggle - a tick offering spots that
     /// cannot come is a promise the station cannot keep.
     pub const NO_DX_CLUSTER: u32 = 1 << 5;
+    /// The active Amplitec position is receive-only, TCI is up, and Thetis has
+    /// no `rx_only_ex` (stock Thetis, or the extensions switched off): Thetis
+    /// cannot refuse transmitting by itself, and the server can stop only a TCI
+    /// PTT - not a footswitch or the MOX button in Thetis (build 215). Clients
+    /// say so. Absent on older servers, which never warned.
+    pub const RX_ONLY_UNGUARDED: u32 = 1 << 6;
 
     pub fn has(self, flag: u32) -> bool {
         self.0 & flag != 0
@@ -1333,6 +1644,38 @@ impl ServerStateFlags {
 
     pub fn with(self, flag: u32) -> Self {
         Self(self.0 | flag)
+    }
+}
+
+#[cfg(test)]
+mod server_state_flags_tests {
+    use super::ServerStateFlags as F;
+
+    /// Each flag is one bit of its own (review of 215: `RX_ONLY_UNGUARDED` on
+    /// the bit of `NO_DX_CLUSTER` stayed green, and an RX-only position would
+    /// have hidden the DX spots). The list counts the constants in the impl, so
+    /// a new one that is not added here is caught too.
+    #[test]
+    fn every_server_state_flag_is_one_bit_of_its_own() {
+        let all = [
+            F::TCI_CONNECTED,
+            F::THETIS_RUNNING,
+            F::THETIS_STARTING,
+            F::THETIS_CONFIGURED,
+            F::SINGLE_RECEIVER,
+            F::NO_DX_CLUSTER,
+            F::RX_ONLY_UNGUARDED,
+        ];
+        let mut seen = 0u32;
+        for flag in all {
+            assert_eq!(flag.count_ones(), 1, "{flag:#x} is not one bit");
+            assert_eq!(seen & flag, 0, "{flag:#x} is used twice");
+            seen |= flag;
+        }
+        let src = include_str!("protocol.rs");
+        let body = &src[src.find("impl ServerStateFlags {").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert_eq!(body.matches("    pub const ").count(), all.len() + 1, "a flag not in this list (NONE is the +1)");
     }
 }
 
@@ -1362,6 +1705,9 @@ pub struct HeartbeatAck {
     /// same as "nothing subscribed", and reading it as such would report a
     /// disagreement with every old server.
     pub subs: Option<SubscriptionMask>,
+    /// The build this server calls itself. Same reading as on `Heartbeat`:
+    /// `None` is "did not say", not "does not match".
+    pub version: Option<VersionTag>,
 }
 
 /// The subscriptions a client can hold, as the server sees them.
@@ -1428,6 +1774,9 @@ impl HeartbeatAck {
     /// With the subscription mask (build 99). Same forward-compatible shape as
     /// the two growths before it: an older server simply stops at 20 bytes.
     pub const SIZE_WITH_SUBS: usize = 22;
+    /// With the version tag. The fourth growth of this packet, and the same
+    /// shape as the three before it.
+    pub const SIZE_WITH_VERSION: usize = Self::SIZE_WITH_SUBS + VERSION_TAG_LEN;
 
     pub fn serialize(&self, buf: &mut [u8; Self::SIZE]) {
         let header = Header::new(PacketType::HeartbeatAck, self.flags);
@@ -1446,6 +1795,31 @@ impl HeartbeatAck {
         buf[..Self::SIZE].copy_from_slice(&head);
         let mask = self.subs.unwrap_or_default().0;
         buf[20..22].copy_from_slice(&mask.to_be_bytes());
+    }
+
+    /// Serialise including the version tag. As on `Heartbeat`, a packet with no
+    /// version of its own is stamped with this binary's.
+    ///
+    /// **This form always carries subs**, because it builds on
+    /// `serialize_with_subs` - and that one writes `unwrap_or_default()`, so a
+    /// `subs: None` leaves here as an EMPTY MASK, which the reader takes as
+    /// "subscribed to nothing" rather than "did not say". Those two are
+    /// deliberately different everywhere else in this file. Every sender today
+    /// fills it in; the assert is here so the first one that does not finds out
+    /// in a debug build instead of publishing a claim it never made.
+    /// (Both reviewers, review handdruk-versie.)
+    pub fn serialize_with_version(&self, buf: &mut [u8; Self::SIZE_WITH_VERSION]) {
+        debug_assert!(
+            self.subs.is_some(),
+            "an ack long enough to carry a version always carries subs too, and \
+             None becomes an empty mask on the wire - say what you mean"
+        );
+        let mut head = [0u8; Self::SIZE_WITH_SUBS];
+        self.serialize_with_subs(&mut head);
+        buf[..Self::SIZE_WITH_SUBS].copy_from_slice(&head);
+        self.version
+            .unwrap_or_else(VersionTag::mine)
+            .write_into(&mut buf[Self::SIZE_WITH_SUBS..]);
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -1478,6 +1852,14 @@ impl HeartbeatAck {
             None
         };
 
+        let version = if buf.len() >= Self::SIZE_WITH_VERSION {
+            Some(VersionTag::read_from(
+                &buf[Self::SIZE_WITH_SUBS..Self::SIZE_WITH_VERSION],
+            ))
+        } else {
+            None
+        };
+
         Ok(Self {
             flags: header.flags,
             echo_sequence: u32::from_be_bytes(buf[4..8].try_into().unwrap()),
@@ -1485,6 +1867,7 @@ impl HeartbeatAck {
             capabilities,
             state_flags,
             subs,
+            version,
         })
     }
 }
@@ -1521,6 +1904,111 @@ impl ControlPacket {
     }
 }
 
+/// The punch messages of phase 3c (and L+R, build 142): `header(4) + family u8 (4 or 6) + the
+/// address (4 or 16 bytes) + port u16`. An unknown family or a short packet is
+/// refused, never read as some address.
+pub struct PunchPacket;
+
+impl PunchPacket {
+    /// The largest one: an IPv6 address.
+    pub const MAX_SIZE: usize = Header::SIZE + 1 + 16 + 2;
+
+    /// `kind` is [`PacketType::PunchOffer`], [`PacketType::PunchReady`] or
+    /// [`PacketType::PunchLocal`]; returns the length written.
+    pub fn serialize(kind: PacketType, addr: std::net::SocketAddr, buf: &mut [u8; Self::MAX_SIZE]) -> usize {
+        debug_assert!(matches!(kind, PacketType::PunchOffer | PacketType::PunchReady | PacketType::PunchLocal));
+        Header::new(kind, Flags::NONE).serialize(buf);
+        let ip_len = match addr.ip() {
+            std::net::IpAddr::V4(ip) => {
+                buf[4] = 4;
+                buf[5..9].copy_from_slice(&ip.octets());
+                4
+            }
+            std::net::IpAddr::V6(ip) => {
+                buf[4] = 6;
+                buf[5..21].copy_from_slice(&ip.octets());
+                16
+            }
+        };
+        let at = 5 + ip_len;
+        buf[at..at + 2].copy_from_slice(&addr.port().to_be_bytes());
+        at + 2
+    }
+
+    fn address(buf: &[u8]) -> Result<std::net::SocketAddr> {
+        let (ip, at): (std::net::IpAddr, usize) = match buf.get(4) {
+            Some(4) if buf.len() >= 5 + 4 + 2 => {
+                let o: [u8; 4] = buf[5..9].try_into().unwrap();
+                (o.into(), 9)
+            }
+            Some(6) if buf.len() >= 5 + 16 + 2 => {
+                let o: [u8; 16] = buf[5..21].try_into().unwrap();
+                (o.into(), 21)
+            }
+            Some(f) if *f == 4 || *f == 6 => bail!("punch packet too short"),
+            Some(f) => bail!("punch packet with an unknown address family {f}"),
+            None => bail!("punch packet too short"),
+        };
+        let port = u16::from_be_bytes(buf[at..at + 2].try_into().unwrap());
+        Ok(std::net::SocketAddr::new(ip, port))
+    }
+}
+
+/// "Got control number n": `header(4) + seq u32` (phase 2b).
+pub struct ControlAckPacket;
+
+impl ControlAckPacket {
+    pub const SIZE: usize = Header::SIZE + 4;
+
+    pub fn serialize(seq: u32, buf: &mut [u8; Self::SIZE]) {
+        Header::new(PacketType::ControlAck, Flags::NONE).serialize(buf);
+        buf[4..8].copy_from_slice(&seq.to_be_bytes());
+    }
+}
+
+/// The sequence number of a numbered control, and which control it sets - or
+/// `None` for a control without a number (an older client) or any other packet.
+/// A `ControlPacket` is numbered when it is 11 bytes (7 + four), a
+/// `YaesuControlPacket` when it is 12 (8 + four). The number is a tail, so a
+/// reader that knows nothing of it - an older server, the session replay -
+/// reads the first bytes as before.
+///
+/// A `ControlPacket` that is an act (`control_ack::is_action`) gets a key of its
+/// own number. Client and server both read the key here, so they cannot tell a
+/// setting from an act differently.
+pub fn numbered_control(buf: &[u8]) -> Option<(crate::control_ack::ControlKey, u32)> {
+    use crate::control_ack::{is_action, is_yaesu_action, ControlKey};
+    let ty = PacketType::from_u8(*buf.get(2)?)?;
+    let at = match ty {
+        PacketType::Control => ControlPacket::SIZE,
+        PacketType::YaesuControl => YaesuControlPacket::SIZE,
+        _ => return None,
+    };
+    let tail = buf.get(at..at + 4)?;
+    let seq = u32::from_be_bytes(tail.try_into().ok()?);
+    let key = match ty {
+        PacketType::Control => {
+            let id = *buf.get(4)?;
+            let value = u16::from_be_bytes([*buf.get(5)?, *buf.get(6)?]);
+            if is_action(id, value) {
+                ControlKey::Action { id, seq }
+            } else {
+                ControlKey::Control(id)
+            }
+        }
+        _ => {
+            let (slot, control) = (*buf.get(4)?, *buf.get(5)?);
+            let value = u16::from_be_bytes([*buf.get(6)?, *buf.get(7)?]);
+            if is_yaesu_action(control, value) {
+                ControlKey::YaesuAction { slot, control, seq }
+            } else {
+                ControlKey::Yaesu { slot, control }
+            }
+        }
+    };
+    Some((key, seq))
+}
+
 /// Disconnect packet: just a header (4 bytes)
 pub struct DisconnectPacket;
 
@@ -1533,6 +2021,23 @@ impl DisconnectPacket {
     }
 }
 
+/// Why a transmitter was refused, as the client has to answer it.
+///
+/// An enum and not a `bool`, so every place that refuses says which of the
+/// three it is - a `true` at a call site does not say "the server let go" or
+/// "the server is closed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Denial {
+    /// Not now - typically another client holds it. A held key may keep asking.
+    Refused,
+    /// The server let go (the radio's time-out, the radio stopping). A held key
+    /// lets go and waits for a fresh press. `Flags::SERVER_RELEASED`.
+    ServerReleased,
+    /// Transmitting is closed until the server is restarted.
+    /// `Flags::SERVER_RELEASED | Flags::SERVER_CLOSED`.
+    Closed,
+}
+
 /// PTT denied packet: just a header (4 bytes)
 /// Sent by server when a client's PTT request is rejected because another client holds TX.
 pub struct PttDeniedPacket;
@@ -1542,17 +2047,19 @@ impl PttDeniedPacket {
 
     /// One refusal, about one transmitter.
     ///
-    /// `server_released` says WHY (see [`Flags::SERVER_RELEASED`]), `target`
-    /// says WHICH (see [`Flags::TX_MASK`]). Both are flag bits, so this packet
-    /// is still four bytes of header and nothing else.
+    /// `denial` says WHY (see [`Denial`]), `target` says WHICH (see
+    /// [`Flags::TX_MASK`]). All flag bits, so this packet is still four bytes
+    /// of header and nothing else.
     pub fn serialize(
         buf: &mut [u8; Self::SIZE],
         target: DeniedTarget,
-        server_released: bool,
+        denial: Denial,
     ) {
         let mut bits = target.bits();
-        if server_released {
-            bits |= Flags::SERVER_RELEASED.0;
+        match denial {
+            Denial::Refused => {}
+            Denial::ServerReleased => bits |= Flags::SERVER_RELEASED.0,
+            Denial::Closed => bits |= Flags::SERVER_RELEASED.0 | Flags::SERVER_CLOSED.0,
         }
         let header = Header::new(PacketType::PttDenied, Flags(bits));
         header.serialize(buf);
@@ -2752,6 +3259,9 @@ pub enum Packet {
     PttDenied {
         server_released: bool,
         target: DeniedTarget,
+        /// Transmitting is closed on the server until a restart
+        /// ([`Flags::SERVER_CLOSED`]).
+        server_closed: bool,
     },
     Frequency(FrequencyPacket),
     Mode(ModePacket),
@@ -2785,6 +3295,14 @@ pub enum Packet {
     ServerReportRequest,
     /// (part, parts, bytes) - see `PacketType::ServerReportPart`.
     ServerReportPart(u16, u16, Vec<u8>),
+    /// The server acknowledges a numbered control (phase 2b).
+    ControlAck(u32),
+    /// Phase 3c: the client's public address (see `PacketType::PunchOffer`).
+    PunchOffer(std::net::SocketAddr),
+    /// Phase 3c: the address the server punched from (see `PacketType::PunchReady`).
+    PunchReady(std::net::SocketAddr),
+    /// L+R: the server's own port at its local address (see `PacketType::PunchLocal`).
+    PunchLocal(std::net::SocketAddr),
     // Dual-radio slot 1 (Option B-prime): same payload structs, own packet types.
     AudioYaesu2(AudioPacket),
     YaesuState2(YaesuStatePacket),
@@ -2794,8 +3312,15 @@ pub enum Packet {
     /// 0 = FT-991A, 1 = FTX-1. For panel naming in the client.
     RadioInfo { slot: u8, model: u8 },
     AuthChallenge([u8; 16]),    // nonce
-    AuthResponse([u8; 32]),     // HMAC
-    AuthResult(u8),             // 0=rejected, 1=accepted, 2=totp_required
+    /// The HMAC over the server's nonce, and - since phase 2 of the direct
+    /// connection - the client's own nonce as a tail. A client from before
+    /// sends 36 bytes and the tail is `None`; a server from before reads the
+    /// first 36 and never sees it.
+    AuthResponse { hmac: [u8; 32], client_nonce: Option<[u8; 16]> },
+    /// 0=rejected, 1=accepted, 2=totp_required, and - since phase 2 - the
+    /// server's proof that it knows the password as a tail, for a client that
+    /// sent its nonce. Same back-compat as `AuthResponse`.
+    AuthResult { code: u8, proof: Option<[u8; 32]> },
     TotpChallenge,              // server requests TOTP code
     TotpResponse(String),       // 6-digit TOTP code
     AudioVrx(VrxAudioPacket),
@@ -2813,6 +3338,59 @@ pub const AUTH_REJECTED: u8 = 0;
 pub const AUTH_ACCEPTED: u8 = 1;
 pub const AUTH_TOTP_REQUIRED: u8 = 2;
 
+/// `AuthChallenge`: header and the server's nonce.
+pub const AUTH_CHALLENGE_SIZE: usize = Header::SIZE + 16;
+/// `AuthResponse` without and with its tail (the client's nonce).
+pub const AUTH_RESPONSE_SIZE: usize = Header::SIZE + 32;
+pub const AUTH_RESPONSE_SIZE_WITH_NONCE: usize = AUTH_RESPONSE_SIZE + 16;
+/// `AuthResult` without and with its tail (the server's proof).
+pub const AUTH_RESULT_SIZE: usize = Header::SIZE + 1;
+pub const AUTH_RESULT_SIZE_WITH_PROOF: usize = AUTH_RESULT_SIZE + 32;
+
+/// The one place that writes an `AuthChallenge`. The last of the three
+/// authentication packets to get a writer (review 66): the shape is fixed, but
+/// a tail is exactly what phase 5 may want to hang on it.
+pub fn serialize_auth_challenge(buf: &mut [u8; AUTH_CHALLENGE_SIZE], nonce: &[u8; 16]) {
+    Header::new(PacketType::AuthChallenge, Flags::NONE).serialize(buf);
+    buf[Header::SIZE..AUTH_CHALLENGE_SIZE].copy_from_slice(nonce);
+}
+
+/// The one place that writes an `AuthResponse`; returns the length to send.
+/// Without a nonce it is the 36-byte shape from before phase 2, byte for byte.
+pub fn serialize_auth_response(
+    buf: &mut [u8; AUTH_RESPONSE_SIZE_WITH_NONCE],
+    hmac: &[u8; 32],
+    client_nonce: Option<&[u8; 16]>,
+) -> usize {
+    Header::new(PacketType::AuthResponse, Flags::NONE).serialize(buf);
+    buf[Header::SIZE..AUTH_RESPONSE_SIZE].copy_from_slice(hmac);
+    match client_nonce {
+        Some(n) => {
+            buf[AUTH_RESPONSE_SIZE..AUTH_RESPONSE_SIZE_WITH_NONCE].copy_from_slice(n);
+            AUTH_RESPONSE_SIZE_WITH_NONCE
+        }
+        None => AUTH_RESPONSE_SIZE,
+    }
+}
+
+/// The one place that writes an `AuthResult`; returns the length to send.
+/// Without a proof it is the 5-byte shape from before phase 2, byte for byte.
+pub fn serialize_auth_result(
+    buf: &mut [u8; AUTH_RESULT_SIZE_WITH_PROOF],
+    code: u8,
+    proof: Option<&[u8; 32]>,
+) -> usize {
+    Header::new(PacketType::AuthResult, Flags::NONE).serialize(buf);
+    buf[Header::SIZE] = code;
+    match proof {
+        Some(p) => {
+            buf[AUTH_RESULT_SIZE..AUTH_RESULT_SIZE_WITH_PROOF].copy_from_slice(p);
+            AUTH_RESULT_SIZE_WITH_PROOF
+        }
+        None => AUTH_RESULT_SIZE,
+    }
+}
+
 impl Packet {
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
         let header = Header::deserialize(buf)?;
@@ -2825,6 +3403,7 @@ impl Packet {
             PacketType::PttDenied => Ok(Packet::PttDenied {
                 server_released: header.flags.server_released(),
                 target: header.flags.denied_target(),
+                server_closed: header.flags.server_closed(),
             }),
             PacketType::Frequency => Ok(Packet::Frequency(FrequencyPacket::deserialize(buf)?)),
             PacketType::Mode => Ok(Packet::Mode(ModePacket::deserialize(buf)?)),
@@ -2882,14 +3461,24 @@ impl Packet {
                 Ok(Packet::AuthChallenge(nonce))
             }
             PacketType::AuthResponse => {
-                if buf.len() < 36 { bail!("AuthResponse too short"); }
+                if buf.len() < AUTH_RESPONSE_SIZE { bail!("AuthResponse too short"); }
                 let mut hmac = [0u8; 32];
-                hmac.copy_from_slice(&buf[4..36]);
-                Ok(Packet::AuthResponse(hmac))
+                hmac.copy_from_slice(&buf[Header::SIZE..AUTH_RESPONSE_SIZE]);
+                let client_nonce = (buf.len() >= AUTH_RESPONSE_SIZE_WITH_NONCE).then(|| {
+                    let mut n = [0u8; 16];
+                    n.copy_from_slice(&buf[AUTH_RESPONSE_SIZE..AUTH_RESPONSE_SIZE_WITH_NONCE]);
+                    n
+                });
+                Ok(Packet::AuthResponse { hmac, client_nonce })
             }
             PacketType::AuthResult => {
-                if buf.len() < 5 { bail!("AuthResult too short"); }
-                Ok(Packet::AuthResult(buf[4]))
+                if buf.len() < AUTH_RESULT_SIZE { bail!("AuthResult too short"); }
+                let proof = (buf.len() >= AUTH_RESULT_SIZE_WITH_PROOF).then(|| {
+                    let mut p = [0u8; 32];
+                    p.copy_from_slice(&buf[AUTH_RESULT_SIZE..AUTH_RESULT_SIZE_WITH_PROOF]);
+                    p
+                });
+                Ok(Packet::AuthResult { code: buf[Header::SIZE], proof })
             }
             PacketType::TotpChallenge => {
                 Ok(Packet::TotpChallenge)
@@ -2902,6 +3491,13 @@ impl Packet {
                 Ok(Packet::TotpResponse(code))
             }
             PacketType::ServerReportRequest => Ok(Packet::ServerReportRequest),
+            PacketType::ControlAck => {
+                if buf.len() < ControlAckPacket::SIZE { bail!("ControlAck too short"); }
+                Ok(Packet::ControlAck(u32::from_be_bytes(buf[4..8].try_into().unwrap())))
+            }
+            PacketType::PunchOffer => Ok(Packet::PunchOffer(PunchPacket::address(buf)?)),
+            PacketType::PunchReady => Ok(Packet::PunchReady(PunchPacket::address(buf)?)),
+            PacketType::PunchLocal => Ok(Packet::PunchLocal(PunchPacket::address(buf)?)),
             PacketType::ServerReportPart => {
                 if buf.len() < 10 { bail!("ServerReportPart too short"); }
                 let part = u16::from_be_bytes(buf[4..6].try_into().unwrap());
@@ -3164,6 +3760,7 @@ mod tests {
             loss_percent: 2,
             jitter_ms: 10,
             capabilities: Capabilities::NONE.with(Capabilities::WIDEBAND_AUDIO),
+            version: None,
         };
         let mut buf = [0u8; Heartbeat::SIZE];
         hb.serialize(&mut buf);
@@ -3202,6 +3799,7 @@ mod tests {
             capabilities: Capabilities::NONE.with(Capabilities::WIDEBAND_AUDIO),
             state_flags: ServerStateFlags::NONE.with(ServerStateFlags::TCI_CONNECTED),
             subs: None,
+            version: None,
         };
         let mut buf = [0u8; HeartbeatAck::SIZE];
         ack.serialize(&mut buf);
@@ -3278,6 +3876,7 @@ mod tests {
             loss_percent: 0,
             jitter_ms: 0,
             capabilities: Capabilities::NONE,
+            version: None,
         };
         let mut buf = [0u8; Heartbeat::SIZE];
         hb.serialize(&mut buf);
@@ -3294,6 +3893,7 @@ mod tests {
             capabilities: Capabilities::NONE,
             state_flags: ServerStateFlags::NONE,
             subs: None,
+            version: None,
         };
         let mut buf = [0u8; HeartbeatAck::SIZE];
         ack.serialize(&mut buf);
@@ -3350,6 +3950,7 @@ mod subscription_mask_tests {
             capabilities: Capabilities::NONE,
             state_flags: ServerStateFlags::NONE,
             subs: Some(SubscriptionMask(SubscriptionMask::RX1_AUDIO)),
+            version: None,
         };
         let mut old_buf = [0u8; HeartbeatAck::SIZE];
         ack.serialize(&mut old_buf);
@@ -3369,6 +3970,7 @@ mod subscription_mask_tests {
             capabilities: Capabilities::NONE,
             state_flags: ServerStateFlags::NONE,
             subs: Some(mine),
+            version: None,
         };
         let mut buf = [0u8; HeartbeatAck::SIZE_WITH_SUBS];
         ack.serialize_with_subs(&mut buf);
@@ -3388,6 +3990,7 @@ mod subscription_mask_tests {
             capabilities: Capabilities::NONE.with(Capabilities::REPORTS_STATE_FLAGS),
             state_flags: ServerStateFlags::NONE.with(ServerStateFlags::TCI_CONNECTED),
             subs: Some(SubscriptionMask(0)),
+            version: None,
         };
         let mut buf = [0u8; HeartbeatAck::SIZE_WITH_SUBS];
         ack.serialize_with_subs(&mut buf);
@@ -3505,11 +4108,16 @@ mod held_by_other_tests {
             DeniedTarget::Radio1,
             DeniedTarget::Radio2,
         ] {
-            for released in [false, true] {
-                PttDeniedPacket::serialize(&mut buf, target, released);
+            for (denial, released, closed) in [
+                (Denial::Refused, false, false),
+                (Denial::ServerReleased, true, false),
+                (Denial::Closed, true, true),
+            ] {
+                PttDeniedPacket::serialize(&mut buf, target, denial);
                 match Packet::deserialize(&buf).unwrap() {
-                    Packet::PttDenied { server_released, target: got } => {
-                        assert_eq!(server_released, released, "{:?}", target);
+                    Packet::PttDenied { server_released, target: got, server_closed } => {
+                        assert_eq!(server_released, released, "{:?} {:?}", target, denial);
+                        assert_eq!(server_closed, closed, "{:?} {:?}", target, denial);
                         assert_eq!(got, target);
                     }
                     _ => panic!("not a refusal"),
@@ -3539,8 +4147,9 @@ mod held_by_other_tests {
         let header = Header::new(PacketType::PttDenied, Flags::NONE);
         header.serialize(&mut buf);
         match Packet::deserialize(&buf).unwrap() {
-            Packet::PttDenied { server_released, target } => {
+            Packet::PttDenied { server_released, target, server_closed } => {
                 assert!(!server_released);
+                assert!(!server_closed);
                 assert_eq!(target, DeniedTarget::NotStated, "must not read as Thetis");
             }
             _ => panic!("not a refusal"),
@@ -3564,15 +4173,24 @@ mod held_by_other_tests {
             DeniedTarget::Radio1,
             DeniedTarget::Radio2,
         ] {
-            for released in [false, true] {
-                PttDeniedPacket::serialize(&mut buf, target, released);
+            for (denial, released) in [
+                (Denial::Refused, false),
+                (Denial::ServerReleased, true),
+                // An older client reads a closed server as a server that let go:
+                // its held key lets go, which is the right answer for it too.
+                (Denial::Closed, true),
+            ] {
+                PttDeniedPacket::serialize(&mut buf, target, denial);
                 let flags = Header::deserialize(&buf).unwrap().flags;
                 assert!(!flags.ptt(), "{:?}", target);
                 assert!(!flags.held_by_other(), "{:?}", target);
                 assert_eq!(flags.0 & Flags::AUDIO_WIDEBAND.0, 0, "{:?}", target);
                 assert_eq!(flags.server_released(), released, "{:?}", target);
-                // The two bits this change owns, and nothing else.
-                assert_eq!(flags.0 & !(Flags::TX_MASK.0 | Flags::SERVER_RELEASED.0), 0);
+                // The bits refusals own, and nothing else.
+                assert_eq!(
+                    flags.0 & !(Flags::TX_MASK.0 | Flags::SERVER_RELEASED.0 | Flags::SERVER_CLOSED.0),
+                    0
+                );
             }
         }
     }
@@ -3585,7 +4203,429 @@ mod held_by_other_tests {
         let taken = Flags::PTT.0 | Flags::AUDIO_WIDEBAND.0 | Flags::HELD_BY_OTHER.0
             | Flags::SERVER_RELEASED.0;
         assert_eq!(taken & Flags::TX_MASK.0, 0, "the transmitter bits overlap an older flag");
-        assert_eq!(taken | Flags::TX_MASK.0, 0x3F, "0x40 and 0x80 are the spare ones left");
+        assert_eq!(taken | Flags::TX_MASK.0, 0x3F, "0x40 and 0x80 were the spare ones left");
+        assert_eq!((taken | Flags::TX_MASK.0) & Flags::SERVER_CLOSED.0, 0, "SERVER_CLOSED took a used bit");
+        assert_eq!(taken | Flags::TX_MASK.0 | Flags::SERVER_CLOSED.0, 0x7F, "0x80 is the one spare left");
     }
 
+}
+
+#[cfg(test)]
+mod version_tag_tests {
+    use super::*;
+
+    /// The one that makes the fixed width a mechanism rather than a hope.
+    ///
+    /// The field truncates instead of failing, because a heartbeat must never
+    /// be stoppable by a version name. That is the right behaviour on the wire
+    /// and the wrong place to find out, so the suite is where it is noticed: a
+    /// version scheme that outgrows the field fails here, in every build, long
+    /// before anyone ships one.
+    #[test]
+    fn a_version_string_fits_on_the_wire() {
+        let mine = crate::version_string();
+        assert!(
+            mine.len() <= VERSION_TAG_LEN,
+            "version_string() is {} bytes and the wire field is {}. Widen \
+             VERSION_TAG_LEN (both packets grow with it) or shorten the version.",
+            mine.len(),
+            VERSION_TAG_LEN
+        );
+        assert_eq!(
+            VersionTag::mine().text(),
+            mine,
+            "what we send must read back as exactly what we call ourselves"
+        );
+        assert!(VersionTag::mine().is_mine());
+    }
+
+    /// Both states of the same check (working rule 13): a heartbeat that
+    /// carries the field, and one that stops before it.
+    #[test]
+    fn a_heartbeat_says_which_build_sent_it() {
+        let hb = Heartbeat {
+            flags: Flags::NONE,
+            sequence: 7,
+            local_time: 8,
+            rtt_ms: 9,
+            loss_percent: 1,
+            jitter_ms: 2,
+            capabilities: Capabilities::NONE,
+            version: Some(VersionTag::from_text("2.13.0-dev (build 140)")),
+        };
+
+        let mut long_buf = [0u8; Heartbeat::SIZE_WITH_VERSION];
+        hb.serialize_with_version(&mut long_buf);
+        let read = Heartbeat::deserialize(&long_buf).unwrap();
+        assert_eq!(read.version.unwrap().text(), "2.13.0-dev (build 140)");
+        assert_eq!(read.sequence, 7, "the older fields are where they were");
+
+        let mut short_buf = [0u8; Heartbeat::SIZE];
+        hb.serialize(&mut short_buf);
+        let read = Heartbeat::deserialize(&short_buf).unwrap();
+        assert_eq!(
+            read.version, None,
+            "a client older than this field said nothing, which is not the \
+             same as disagreeing"
+        );
+        assert_eq!(
+            long_buf[..Heartbeat::SIZE],
+            short_buf,
+            "growing the packet must leave the shorter form byte-identical"
+        );
+    }
+
+    /// Same two states for the ack, which is now on its fourth growth.
+    #[test]
+    fn the_ack_says_which_build_answered() {
+        let ack = HeartbeatAck {
+            flags: Flags::NONE,
+            echo_sequence: 1,
+            echo_time: 2,
+            capabilities: Capabilities::NONE,
+            state_flags: ServerStateFlags::NONE,
+            subs: Some(SubscriptionMask(SubscriptionMask::RX1_AUDIO)),
+            version: Some(VersionTag::from_text("2.13.0-dev (build 164)")),
+        };
+
+        let mut long_buf = [0u8; HeartbeatAck::SIZE_WITH_VERSION];
+        ack.serialize_with_version(&mut long_buf);
+        let read = HeartbeatAck::deserialize(&long_buf).unwrap();
+        assert_eq!(read.version.unwrap().text(), "2.13.0-dev (build 164)");
+        assert_eq!(
+            read.subs.unwrap().0,
+            SubscriptionMask::RX1_AUDIO,
+            "the field added before this one still reads"
+        );
+
+        let mut subs_buf = [0u8; HeartbeatAck::SIZE_WITH_SUBS];
+        ack.serialize_with_subs(&mut subs_buf);
+        let read = HeartbeatAck::deserialize(&subs_buf).unwrap();
+        assert_eq!(read.version, None);
+        assert_eq!(
+            long_buf[..HeartbeatAck::SIZE_WITH_SUBS],
+            subs_buf,
+            "the shorter form must not have moved"
+        );
+    }
+
+    /// This string is written to a log line and painted on a screen. It arrives
+    /// only from a peer that has already been admitted, but a newline in a log
+    /// line is still a newline, so the decoder is what keeps it one line.
+    #[test]
+    fn a_tag_off_the_wire_cannot_break_a_log_line() {
+        let mut raw = [0u8; VERSION_TAG_LEN];
+        raw[..13].copy_from_slice(b"2.13.0\n\r\x1b[2Jx");
+        let tag = VersionTag::read_from(&raw);
+        let text = tag.text();
+        assert!(!text.contains('\n') && !text.contains('\r'));
+        assert!(!text.contains('\x1b'));
+        assert_eq!(text, "2.13.0???[2Jx");
+    }
+
+    /// Padding is where the text stops, so a shorter name cannot pick up the
+    /// tail of a longer one.
+    #[test]
+    fn the_text_stops_at_the_padding() {
+        let tag = VersionTag::from_text("2.13.0");
+        assert_eq!(tag.text(), "2.13.0");
+        assert_eq!(tag.text().len(), 6);
+    }
+
+    /// The comparison the whole field exists for: same version, different
+    /// build, is a difference.
+    #[test]
+    fn a_different_build_of_the_same_version_is_a_difference() {
+        let mine = crate::version_string();
+        assert!(VersionTag::from_text(&mine).is_mine());
+        assert!(
+            !VersionTag::from_text(&format!("{mine} ")).is_mine(),
+            "anything that is not the same text is a different build"
+        );
+        assert!(!VersionTag::from_text("2.11.0 (build 93)").is_mine());
+    }
+
+    /// The send side sanitises too, and nothing reached that arm before.
+    ///
+    /// The read side had a test and the write side did not, which is the wrong
+    /// half to leave open: what we SEND is what another station's log prints
+    /// (raised in review).
+    #[test]
+    fn what_we_send_is_cleaned_as_well_as_what_we_read() {
+        let tag = VersionTag::from_text("2.13.0\n\r\t(build 2)");
+        assert_eq!(tag.text(), "2.13.0???(build 2)");
+        assert!(!tag.text().contains('\n'));
+    }
+
+    /// The length guard inside `is_mine`, which no test had entered.
+    ///
+    /// It stands between a version name longer than the field and a panic
+    /// twice a second. `a_version_string_fits_on_the_wire` keeps us from ever
+    /// relying on it; this one proves it holds if we ever do.
+    #[test]
+    fn a_name_too_long_to_fit_never_reads_as_ours() {
+        let long = "x".repeat(VERSION_TAG_LEN + 1);
+        let tag = VersionTag::from_text(&long);
+        // No panic, and a truncated name is not a match for anything.
+        assert!(!tag.is_mine());
+        assert_eq!(tag.text().len(), VERSION_TAG_LEN);
+    }
+
+    /// A packet built without a version is stamped with this binary's, rather
+    /// than going out with 32 zero bytes that would read as an empty name.
+    /// Documented behaviour, and until now only documented.
+    #[test]
+    fn a_packet_that_names_no_version_is_stamped_with_ours() {
+        let hb = Heartbeat {
+            flags: Flags::NONE,
+            sequence: 1,
+            local_time: 2,
+            rtt_ms: 3,
+            loss_percent: 0,
+            jitter_ms: 0,
+            capabilities: Capabilities::NONE,
+            version: None,
+        };
+        let mut buf = [0u8; Heartbeat::SIZE_WITH_VERSION];
+        hb.serialize_with_version(&mut buf);
+        let read = Heartbeat::deserialize(&buf).unwrap();
+        assert_eq!(read.version.unwrap().text(), crate::version_string());
+        assert!(read.version.unwrap().is_mine());
+
+        let ack = HeartbeatAck {
+            flags: Flags::NONE,
+            echo_sequence: 1,
+            echo_time: 2,
+            capabilities: Capabilities::NONE,
+            state_flags: ServerStateFlags::NONE,
+            subs: Some(SubscriptionMask(0)),
+            version: None,
+        };
+        let mut buf = [0u8; HeartbeatAck::SIZE_WITH_VERSION];
+        ack.serialize_with_version(&mut buf);
+        let read = HeartbeatAck::deserialize(&buf).unwrap();
+        assert!(read.version.unwrap().is_mine());
+    }
+
+    /// A name longer than the field is cut, never a panic and never a refusal:
+    /// the heartbeat keeps going. `a_version_string_fits_on_the_wire` is what
+    /// makes sure we never rely on this.
+    #[test]
+    fn an_over_long_name_is_cut_and_not_fatal() {
+        let long = "9.99.99-release-candidate-with-a-very-long-name (build 100000)";
+        assert!(long.len() > VERSION_TAG_LEN);
+        let tag = VersionTag::from_text(long);
+        assert_eq!(tag.text().len(), VERSION_TAG_LEN);
+        assert_eq!(tag.text(), &long[..VERSION_TAG_LEN]);
+    }
+}
+
+#[cfg(test)]
+mod peer_build_tests {
+    use super::*;
+
+    #[test]
+    fn a_peer_of_this_build_is_nothing_to_report() {
+        let judged = PeerBuild::of(Some(VersionTag::mine()));
+        assert_eq!(judged, PeerBuild::Same);
+        assert!(!judged.is_trouble());
+        assert_eq!(judged.log_line("The server"), None);
+    }
+
+    /// The reading that matters: silence is not an unknown here. A peer of this
+    /// build would have said which one it is, so saying nothing IS a difference.
+    #[test]
+    fn a_peer_too_old_to_say_is_still_a_difference() {
+        let judged = PeerBuild::of(None);
+        assert_eq!(judged, PeerBuild::Older);
+        assert!(judged.is_trouble());
+        let line = judged.log_line("The client at 192.168.1.5").unwrap();
+        assert!(line.contains("192.168.1.5"));
+        assert!(line.contains(&crate::version_string()));
+    }
+
+    #[test]
+    fn a_different_build_is_named_in_the_line() {
+        let judged = PeerBuild::of(Some(VersionTag::from_text("2.12.0")));
+        assert_eq!(judged, PeerBuild::Different("2.12.0".into()));
+        assert!(judged.is_trouble());
+        assert_eq!(judged.theirs(), Some("2.12.0"));
+        let line = judged.log_line("The server").unwrap();
+        assert!(line.contains("2.12.0"), "the line names their build");
+        assert!(
+            line.contains(&crate::version_string()),
+            "and ours, because one number alone tells the operator nothing"
+        );
+    }
+
+    /// Nothing heard yet is the only state that is genuinely unknown, and it
+    /// must stay quiet - a client is judged from its first heartbeat, not from
+    /// the moment its address appears.
+    /// Both states of the rule, and the silence between them: a change that
+    /// complains, a change that takes it back, and the ninety-nine acks in
+    /// between that say nothing at all.
+    #[test]
+    fn a_change_is_said_once_and_the_repeats_are_silent() {
+        let same = PeerBuild::Same;
+        let odd = PeerBuild::Different("2.11.0".into());
+
+        let (bad, line) = odd.change_line(&PeerBuild::Unknown, "The server").unwrap();
+        assert!(bad, "a peer that disagrees is a warning");
+        assert!(line.contains("2.11.0"));
+
+        assert_eq!(
+            odd.change_line(&odd, "The server"),
+            None,
+            "the same complaint twice a second is not a complaint, it is noise"
+        );
+
+        let (bad, line) = same.change_line(&odd, "The server").unwrap();
+        assert!(!bad, "agreeing again is not a warning");
+        assert!(line.contains("now runs this same build"));
+
+        assert_eq!(
+            same.change_line(&PeerBuild::Unknown, "The server"),
+            None,
+            "the first ack of a connection that is simply fine says nothing"
+        );
+        assert_eq!(same.change_line(&same, "The server"), None);
+    }
+
+    /// Losing the link is not the peer upgrading.
+    ///
+    /// Both ends reset their memory to `Unknown` when a session goes away, and
+    /// they do it by assignment rather than through here - so this arm is
+    /// unreachable today. It is closed anyway, because the day someone routes
+    /// that reset through `change_line` the log would announce that a station
+    /// which just disappeared now runs the right build (raised in review).
+    #[test]
+    fn forgetting_a_peer_is_not_good_news_about_it() {
+        let odd = PeerBuild::Different("2.11.0".into());
+        assert_eq!(PeerBuild::Unknown.change_line(&odd, "The server"), None);
+        assert_eq!(PeerBuild::Unknown.change_line(&PeerBuild::Older, "The server"), None);
+        assert_eq!(PeerBuild::Unknown.change_line(&PeerBuild::Same, "The server"), None);
+    }
+
+    #[test]
+    fn nothing_heard_yet_says_nothing() {
+        let judged = PeerBuild::Unknown;
+        assert!(!judged.is_trouble());
+        assert_eq!(judged.log_line("The server"), None);
+        assert_eq!(PeerBuild::default(), PeerBuild::Unknown);
+    }
+}
+
+#[cfg(test)]
+mod punch_packet_tests {
+    use super::*;
+
+    /// The punch messages carry an address both ways, in both families, and a
+    /// packet that is short or names an unknown family is refused rather than
+    /// read as some address (phase 3c).
+    #[test]
+    fn punch_messages_carry_an_address() {
+        for kind in [PacketType::PunchOffer, PacketType::PunchReady, PacketType::PunchLocal] {
+            for addr in ["192.0.2.33:40123", "[2001:db8::7]:443"] {
+                let addr: std::net::SocketAddr = addr.parse().unwrap();
+                let mut buf = [0u8; PunchPacket::MAX_SIZE];
+                let n = PunchPacket::serialize(kind, addr, &mut buf);
+                let back = Packet::deserialize(&buf[..n]).unwrap();
+                match (kind, back) {
+                    (PacketType::PunchOffer, Packet::PunchOffer(a))
+                    | (PacketType::PunchReady, Packet::PunchReady(a))
+                    | (PacketType::PunchLocal, Packet::PunchLocal(a)) => {
+                        assert_eq!(a, addr)
+                    }
+                    (k, _) => panic!("{k:?} came back as another packet"),
+                }
+                assert!(Packet::deserialize(&buf[..n - 1]).is_err(), "{kind:?} {addr}: one byte short");
+                let mut bad = buf;
+                bad[4] = 5;
+                assert!(Packet::deserialize(&bad[..n]).is_err(), "{kind:?}: an unknown family");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod auth_packet_tests {
+    use super::*;
+
+    #[test]
+    fn auth_response_reads_with_and_without_the_client_nonce() {
+        let hmac = [7u8; 32];
+        let nonce = [9u8; 16];
+        let mut buf = [0u8; AUTH_RESPONSE_SIZE_WITH_NONCE];
+        let n = serialize_auth_response(&mut buf, &hmac, None);
+        assert_eq!(n, AUTH_RESPONSE_SIZE);
+        match Packet::deserialize(&buf[..n]).unwrap() {
+            Packet::AuthResponse { hmac: h, client_nonce } => {
+                assert_eq!(h, hmac);
+                assert_eq!(client_nonce, None, "no tail, no nonce");
+            }
+            _ => panic!("not an AuthResponse"),
+        }
+        let n = serialize_auth_response(&mut buf, &hmac, Some(&nonce));
+        assert_eq!(n, AUTH_RESPONSE_SIZE_WITH_NONCE);
+        match Packet::deserialize(&buf[..n]).unwrap() {
+            Packet::AuthResponse { hmac: h, client_nonce } => {
+                assert_eq!(h, hmac);
+                assert_eq!(client_nonce, Some(nonce));
+            }
+            _ => panic!("not an AuthResponse"),
+        }
+    }
+
+    #[test]
+    fn auth_result_reads_with_and_without_the_proof() {
+        let proof = [5u8; 32];
+        let mut buf = [0u8; AUTH_RESULT_SIZE_WITH_PROOF];
+        let n = serialize_auth_result(&mut buf, AUTH_TOTP_REQUIRED, None);
+        assert_eq!(n, AUTH_RESULT_SIZE);
+        match Packet::deserialize(&buf[..n]).unwrap() {
+            Packet::AuthResult { code, proof: p } => {
+                assert_eq!(code, AUTH_TOTP_REQUIRED);
+                assert_eq!(p, None, "no tail, no proof");
+            }
+            _ => panic!("not an AuthResult"),
+        }
+        let n = serialize_auth_result(&mut buf, AUTH_ACCEPTED, Some(&proof));
+        assert_eq!(n, AUTH_RESULT_SIZE_WITH_PROOF);
+        match Packet::deserialize(&buf[..n]).unwrap() {
+            Packet::AuthResult { code, proof: p } => {
+                assert_eq!(code, AUTH_ACCEPTED);
+                assert_eq!(p, Some(proof));
+            }
+            _ => panic!("not an AuthResult"),
+        }
+    }
+
+    #[test]
+    fn auth_challenge_round_trips() {
+        let nonce = [3u8; 16];
+        let mut buf = [0u8; AUTH_CHALLENGE_SIZE];
+        serialize_auth_challenge(&mut buf, &nonce);
+        match Packet::deserialize(&buf).unwrap() {
+            Packet::AuthChallenge(n) => assert_eq!(n, nonce),
+            _ => panic!("not an AuthChallenge"),
+        }
+    }
+
+    /// The shape an older peer sends and reads: byte-identical to before.
+    #[test]
+    fn the_old_shape_of_both_packets_is_unchanged() {
+        let mut buf = [0u8; AUTH_RESPONSE_SIZE_WITH_NONCE];
+        let n = serialize_auth_response(&mut buf, &[1u8; 32], None);
+        let mut old = [0u8; 36];
+        Header::new(PacketType::AuthResponse, Flags::NONE).serialize(&mut old);
+        old[4..36].copy_from_slice(&[1u8; 32]);
+        assert_eq!(&buf[..n], &old[..]);
+
+        let mut buf = [0u8; AUTH_RESULT_SIZE_WITH_PROOF];
+        let n = serialize_auth_result(&mut buf, AUTH_ACCEPTED, None);
+        let mut old = [0u8; 5];
+        Header::new(PacketType::AuthResult, Flags::NONE).serialize(&mut old);
+        old[4] = AUTH_ACCEPTED;
+        assert_eq!(&buf[..n], &old[..]);
+    }
 }

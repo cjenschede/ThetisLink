@@ -77,7 +77,7 @@ impl SdrRemoteApp {
         // Same line as the Yaesu slots below: one per transition, with what
         // caused it.
         log::info!(
-            "PTT thetis -> {} (mouse={} space={} midi={} bluetooth={} wait={} want={} blocked_own={} other_tx={} multi_tx={})",
+            "PTT thetis -> {} (mouse={} space={} midi={} bluetooth={} wait={} want={} blocked_own={} other_tx={} multi_tx={} mic_missing={})",
             if new_ptt { "ON" } else { "OFF" },
             self.thetis_latches.mouse,
             self.thetis_latches.space,
@@ -88,29 +88,10 @@ impl SdrRemoteApp {
             self.ptt_blocked_by_own,
             self.other_tx,
             self.multi_tx,
+            self.mic_missing.is_some(),
         );
-        // TX spectrum override
-        if new_ptt {
-            // Entering TX: save ref, range, auto - then set TX defaults
-            self.tx_spectrum_saved_ref_db = Some(self.spectrum_ref_db);
-            self.tx_spectrum_saved_range = Some(self.spectrum_range_db);
-            self.tx_spectrum_saved_auto_ref = Some(self.auto_ref_enabled);
-            self.tx_spectrum_restore_auto_at = None;
-            self.auto_ref_enabled = false;
-            self.spectrum_ref_db = -30.0;
-            self.spectrum_range_db = 120.0;
-        } else {
-            // Leaving TX: restore ref+range immediately, auto_ref after 200ms
-            if let Some(saved) = self.tx_spectrum_saved_ref_db.take() {
-                self.spectrum_ref_db = saved;
-            }
-            if let Some(saved) = self.tx_spectrum_saved_range.take() {
-                self.spectrum_range_db = saved;
-            }
-            if self.tx_spectrum_saved_auto_ref.is_some() {
-                self.tx_spectrum_restore_auto_at = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
-            }
-        }
+        // The spectrum keeps its receive settings while transmitting; only its
+        // automatic reference pauses (`RadioState::auto_ref_paused`, build 176).
         // Auto-switch TX profile for current mic before PTT on
         if new_ptt {
             let mic = if self.selected_input.is_empty() { "(Default)" } else { &self.selected_input };
@@ -126,6 +107,14 @@ impl SdrRemoteApp {
         self.apply_ptt_spike_protection(false, new_ptt);
         let _ = self.cmd_tx.send(Command::SetPtt(new_ptt));
         self.ptt = new_ptt;
+    }
+
+    /// Whether Thetis's mode may not be changed now: while our own
+    /// transmission is going on - its tail included - or someone else's.
+    /// The server drops a mode change for as long as it transmits, so a
+    /// click then would show a mode the radio does not get (build 172).
+    pub(crate) fn thetis_mode_locked(&self) -> bool {
+        self.ptt || self.tx_window_open || self.other_tx
     }
 
     fn drive_ptt(&mut self) {
@@ -148,10 +137,12 @@ impl SdrRemoteApp {
             // one of them - the midi latch of slot 1 - and the whole workspace stayed green.
             // That is impossible now rather than untested: the latches go in as a whole and
             // come out as a whole (Lane 6 step 2c).
+            // A missing microphone refuses the press as a transmitter held by
+            // someone else does: no latch stays, nothing is sent (build 188).
             let d = desktop_frame(
                 self.yaesu_latches[slot],
                 popout,
-                held,
+                held || self.mic_missing.is_some(),
                 self.yaesu_ptt_last_sent[slot],
             );
             self.yaesu_latches[slot] = d.latches;
@@ -165,7 +156,7 @@ impl SdrRemoteApp {
         // table, and it is what makes "busy" let go of every latch - including a
         // Bluetooth button in a pocket, which used to come back on by itself when
         // the other station stopped (review finding, 307 round 2).
-        let d = desktop_frame(self.thetis_latches, true, self.other_tx, self.ptt);
+        let d = desktop_frame(self.thetis_latches, true, self.other_tx || self.mic_missing.is_some(), self.ptt);
         self.thetis_latches = d.latches;
         self.thetis_want = d.want_tx && self.thetis_ptt_allowed;
 
@@ -219,7 +210,7 @@ impl SdrRemoteApp {
             // reproduce, and a story is not evidence (2026-09-04).
             let l = self.yaesu_latches[slot];
             log::info!(
-                "PTT yaesu{} -> {} (mouse={} space={} midi={} bluetooth={} wait={} blocked_own={} held_by_other={} multi_tx={})",
+                "PTT yaesu{} -> {} (mouse={} space={} midi={} bluetooth={} wait={} blocked_own={} held_by_other={} multi_tx={} mic_missing={})",
                 slot + 1,
                 if want { "ON" } else { "OFF" },
                 l.mouse,
@@ -230,6 +221,7 @@ impl SdrRemoteApp {
                 self.yaesu_blocked_by_own[slot],
                 if slot == 0 { self.yaesu_held_by_other } else { self.yaesu2_held_by_other },
                 self.multi_tx,
+                self.mic_missing.is_some(),
             );
             // A slot that loses does not keep its latches: otherwise it fires as
             // soon as the other one lets go. AFTER the line above, so the log
@@ -251,6 +243,15 @@ impl SdrRemoteApp {
 }
 
 impl eframe::App for SdrRemoteApp {
+    /// The colour the window is wiped with before the panels paint. eframe's
+    /// default is near-black. Hypothesis: with the panels' own border lines
+    /// off (build 201) it showed as the thin black line in the seam above the
+    /// tab row (owner, 2026-10-15), and the theme's panel colour closes that
+    /// seam. Refuted if the line is still there with this in place.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Bump UI frame id - stamps all UiEvents with a monotonic frame id for
         // timeline correlation.
@@ -476,7 +477,7 @@ impl eframe::App for SdrRemoteApp {
         }
 
         // Sticky top panel: PTT button + local volume (always visible)
-        egui::TopBottomPanel::top("ptt_panel").show(ctx, |ui| {
+        egui::TopBottomPanel::top("ptt_panel").show_separator_line(false).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // Is the current Amplitec-A position RX-only? The client knows this
                 // itself from the power-cap table (switch_a + tx_blocked), so no
@@ -505,6 +506,7 @@ impl eframe::App for SdrRemoteApp {
                             self.paddle_last_edge_at.map(|t| t.elapsed().as_millis() as u64),
                             self.cw_hang_ms,
                         ),
+                    mic_missing: self.mic_missing.is_some(),
                     ..Default::default()
                 });
                 let (ptt_color, ptt_text, ptt_locked) = if face != sdr_remote_logic::ptt_button::PttFace::Normal {
@@ -632,7 +634,7 @@ impl eframe::App for SdrRemoteApp {
 
                 // SPE Expert compact status (only when active PA)
                 if self.spe_connected && self.spe_active {
-                    ui.separator();
+                    super::helpers::rule(ui);
                     // Operate/Standby toggle button with status text
                     let (btn_text, btn_color) = match self.spe_state {
                         2 => ("SPE OPR", Color32::from_rgb(0, 150, 0)),
@@ -666,7 +668,7 @@ impl eframe::App for SdrRemoteApp {
 
                 // RF2K-S compact status (only when active PA)
                 if self.rf2k_connected && self.rf2k_active {
-                    ui.separator();
+                    super::helpers::rule(ui);
                     if self.rf2k_error_state != 0 {
                         // Error: red reset button + error text
                         let err = if self.rf2k_error_text.is_empty() {
@@ -713,11 +715,23 @@ impl eframe::App for SdrRemoteApp {
                 if self.ptt_denied {
                     ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("main_ptt_blocked").to_string());
                 }
+                // What blocks the station and what helps: decided in the shared
+                // block (sdr_remote_logic::station_notice), drawn here. Each its
+                // own line, so nothing here hides anything else.
+                {
+                    let lang = sdr_remote_logic::i18n::Lang::from_code(&self.ui_language);
+                    let s = self.state_rx.borrow();
+                    for line in sdr_remote_logic::station_notice::station_notice_lines(&s, lang) {
+                        ui.colored_label(Color32::RED, line);
+                    }
+                }
             });
+            // The panel's edge, as `rule` (its own border line is off).
+            super::helpers::rule(ui);
         });
 
         // Thetis volume/RX2 controls + Connect row (between PTT bar and tabs).
-        egui::TopBottomPanel::top("vol_rx2_panel").show(ctx, |ui| {
+        egui::TopBottomPanel::top("vol_rx2_panel").show_separator_line(false).show(ctx, |ui| {
           ui.vertical(|ui| {
             // Row 1: VFO A-volume. The channel chips are on row 2 (RX1 left, under VFO A),
             // so this row stays narrow and the window can be made smaller.
@@ -777,7 +791,7 @@ impl eframe::App for SdrRemoteApp {
                         self.save_full_config();
                     }
 
-                    ui.separator();
+                    super::helpers::rule(ui);
 
                     // RX2 + VRX2 only if the radio has a second receiver
                     // (rx2_present; server on single-receiver = gone). VRX2 hangs off
@@ -802,7 +816,7 @@ impl eframe::App for SdrRemoteApp {
                         self.save_full_config();
                     }
 
-                    ui.separator();
+                    super::helpers::rule(ui);
                     } // end rx2_present gate for RX2 (VRX2 follows below)
 
                     // VRX1/VRX2: same uniform [audio][spec] chips as RX1/RX2,
@@ -818,7 +832,7 @@ impl eframe::App for SdrRemoteApp {
                     if vrx1_audio_click { self.toggle_vrx_audio(VrxChannel::Vrx1); }
                     if vrx1_spec_click { self.toggle_vrx_spectrum(VrxChannel::Vrx1); }
 
-                    ui.separator();
+                    super::helpers::rule(ui);
 
                     if self.rx2_present {
                         let (vrx2_audio_click, vrx2_spec_click) =
@@ -829,7 +843,7 @@ impl eframe::App for SdrRemoteApp {
                         if vrx2_audio_click { self.toggle_vrx_audio(VrxChannel::Vrx2); }
                         if vrx2_spec_click { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
 
-                        ui.separator();
+                        super::helpers::rule(ui);
                     }
                 } else {
                     // RX2 + VRX popouts are derived (model B); no imperative force-close.
@@ -855,7 +869,7 @@ impl eframe::App for SdrRemoteApp {
                         self.yaesu_popout = !self.yaesu_popout;
                         self.save_full_config();
                     }
-                    ui.separator();
+                    super::helpers::rule(ui);
                 }
                 if self.yaesu2_present_last {
                     let full = self.yaesu_slot_label(1);
@@ -869,10 +883,26 @@ impl eframe::App for SdrRemoteApp {
                         self.yaesu2_popout = !self.yaesu2_popout;
                         self.save_ptt_config();
                     }
-                    ui.separator();
+                    super::helpers::rule(ui);
                 }
 
-                // Connect/Disconnect button + status
+            }); // end row 2
+
+            // Row 3 between two lines, as the Chat button on the server screen
+            // (owner, 13-10).
+            super::helpers::rule(ui);
+
+            // A missing microphone on a row of its own, right above the connection
+            // details - behind them it fell off the visible screen (owner, 13-10).
+            // Named in advance (working rule 11, builds 188 and 189).
+            if let Some(name) = &self.mic_missing {
+                ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("main_mic_missing", name = name).to_string());
+            }
+
+            // Row 3: Connect/Disconnect, the status and the way the connection
+            // takes, on a row of their own under the audio and window chips
+            // (owner, 13-10; they ended the chip row and fell out of view).
+            ui.horizontal(|ui| {
                 if self.connected {
                     if ui.button(rust_i18n::t!("main_disconnect").to_string()).clicked() {
                         let _ = self.cmd_tx.send(Command::Disconnect);
@@ -884,6 +914,21 @@ impl eframe::App for SdrRemoteApp {
                         self.catsync.force_unmute();
                     }
                     ui.colored_label(Color32::GREEN, rust_i18n::t!("main_connected").to_string());
+                    // The connection name (build 139): the way the traffic takes
+                    // now, in the plain text colour; only coupling is amber, for
+                    // it is a wait. The hover says what it means.
+                    let path = self.state_rx.borrow().path;
+                    if let Some(kind) = path {
+                        let lang = sdr_remote_logic::i18n::Lang::from_code(&self.ui_language);
+                        let name = sdr_remote_logic::path_name::long_name(kind, lang);
+                        let text = egui::RichText::new(format!("\u{b7} {name}"));
+                        let text = if kind == sdr_remote_core::path::PathKind::RelayCoupling {
+                            text.color(Color32::from_rgb(200, 160, 40))
+                        } else {
+                            text
+                        };
+                        ui.label(text).on_hover_text(sdr_remote_logic::path_name::hint(kind, lang));
+                    }
                 } else {
                     // PATCH-1 smoke-test fix (2026-05-12): when we are mid-auth in
                     // AwaitingTotp, Connect must not be clickable - the user should
@@ -899,9 +944,12 @@ impl eframe::App for SdrRemoteApp {
                         self.state_rx.borrow().connect_status,
                         sdr_remote_logic::state::ConnectStatus::Connecting
                     );
+                    // Whether Connect may be offered at all is the shared
+                    // block's to say (a stopped engine takes no command).
                     let can_connect = !self.password_input.is_empty()
                         && !in_awaiting_totp
-                        && !in_connecting;
+                        && !in_connecting
+                        && sdr_remote_logic::station_notice::can_offer_connect(&self.state_rx.borrow());
                     if ui.add_enabled(can_connect, egui::Button::new(rust_i18n::t!("main_connect").to_string())).clicked() {
                         // Reset span to 0 so first spectrum packet triggers zoom calculation.
                         // The bins go with the span. They are the twin of that
@@ -925,6 +973,7 @@ impl eframe::App for SdrRemoteApp {
                 if self.audio_error {
                     ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("main_audio_error").to_string());
                 }
+
                 // PATCH-1 smoke-test fix (2026-05-13): auto-switch to the
                 // Server tab when connect_status transitions into a state
                 // that demands user attention (AwaitingTotp, Failed). Without
@@ -974,7 +1023,8 @@ impl eframe::App for SdrRemoteApp {
                     }
                 }
             });
-          }); // end ui.vertical (row 1 + row 2)
+            super::helpers::rule(ui);
+          }); // end ui.vertical (rows 1 to 3)
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1017,7 +1067,7 @@ impl eframe::App for SdrRemoteApp {
                     // VRX popouts are derived (model B): no imperative force-close.
                 });
             });
-            ui.separator();
+            super::helpers::rule(ui);
 
             if self.active_tab == Tab::Devices {
                 self.render_devices_screen(ui);
@@ -1056,7 +1106,7 @@ impl eframe::App for SdrRemoteApp {
             }
 
             // VFO A frequency
-            ui.separator();
+            super::helpers::rule(ui);
             {
                 // -- Inline freq display + edit + scroll (via render_frequency_display) --
                 // Combines scroll-tuning + inline-edit in one helper.
@@ -1091,7 +1141,7 @@ impl eframe::App for SdrRemoteApp {
                 }
 
                 // S-meter / TX power / other TX
-                smeter_bar(ui, self.smeter, self.smeter_peak, self.ptt, self.other_tx, self.thetis_swr_x100);
+                smeter_bar(ui, self.smeter, self.smeter_peak, self.smeter_tx, self.other_tx, self.thetis_swr_x100);
 
                 // RX1's own volume. The core transceiver has to be complete in the
                 // main window (UI-STYLE-GUIDE §3.5), so it can be set without
@@ -1164,7 +1214,10 @@ impl eframe::App for SdrRemoteApp {
             // Mode buttons (via controls::render_mode_selector - Basic density = 4 modes)
             // Tab::Radio mode-block previously had `ui.add(btn)` without a
             // connected-guard.
-            let ptt_active = self.ptt;
+            // Until the transmission is really over - the tail and someone else's
+            // included: the server drops a mode change for as long as it transmits
+            // (owner, 2026-10-11; build 172).
+            let ptt_active = self.thetis_mode_locked();
             let mode_action = self.with_rx_ctx(
                 controls::RxChannel::Rx1,
                 controls::UiDensity::Basic,
@@ -1306,7 +1359,7 @@ impl eframe::App for SdrRemoteApp {
                     self.save_full_config();
                 }
 
-                ui.separator();
+                super::helpers::rule(ui);
 
                 // Drive level slider (inline)
                 ui.label(rust_i18n::t!("main_drive_label").to_string());
@@ -1329,22 +1382,18 @@ impl eframe::App for SdrRemoteApp {
             // than sit there doing nothing - the same signal that already hides
             // RX2 and VRX2 everywhere (the server's SINGLE_RECEIVER flag).
             if self.rx2_present {
-                ui.separator();
-                if helpers::chevron_label(
+                super::helpers::rule(ui);
+                self.folds_open = helpers::settings_group(
                     ui,
-                    self.collapse_diversity,
+                    self.folds_open,
+                    config::Fold::Diversity,
                     RichText::new(rust_i18n::t!("main_diversity").to_string()).strong().size(14.0),
-                )
-                .clicked()
-                {
-                    self.collapse_diversity = !self.collapse_diversity;
-                    self.save_full_config();
-                }
-                if self.collapse_diversity {
-                    ui.indent("diversity_body", |ui| {
-                        self.render_diversity(ui);
-                    });
-                }
+                    |ui| {
+                        ui.indent("diversity_body", |ui| {
+                            self.render_diversity(ui);
+                        });
+                    },
+                );
             }
 
             }); // end of Radio-tab ScrollArea
@@ -1438,68 +1487,9 @@ impl eframe::App for SdrRemoteApp {
         self.handle_rx2_spectrum_keys(ctx);
         self.handle_rx1_spectrum_keys(ctx);
 
-        // VRX DDC-bucket tracking: detect ANY DDC center change of
-        // ≥100 kHz (= bucket size), not just amateur-band boundaries.
-        // CTUN re-centering within the same band still trips the
-        // detector. When the bucket changes, save the previous freq
-        // under the OLD bucket and restore the LAST-USED freq for the
-        // new bucket. Defaults to VFO if no memory or restored value
-        // falls outside the new DDC range.
-        const BUCKET_HZ: u64 = 100_000;
-        {
-            let vrx1_center = if self.full_spectrum_center_hz > 0 {
-                self.full_spectrum_center_hz as u64
-            } else { self.frequency_hz };
-            let vrx1_span = if self.full_spectrum_span_hz > 0 {
-                self.full_spectrum_span_hz as u64
-            } else { 384_000 };
-            if vrx1_center > 0 {
-                let cur_bucket = vrx1_center / BUCKET_HZ;
-                let last_bucket = self.last_vrx1_ddc_center_hz / BUCKET_HZ;
-                if cur_bucket != last_bucket && self.last_vrx1_ddc_center_hz > 0 {
-                    if self.vrx1_freq_hz > 0 {
-                        self.vrx1_freq_by_bucket.insert(last_bucket, self.vrx1_freq_hz);
-                    }
-                    let new_min = vrx1_center.saturating_sub(vrx1_span / 2);
-                    let new_max = vrx1_center + vrx1_span / 2;
-                    let restored = self.vrx1_freq_by_bucket.get(&cur_bucket).copied()
-                        .filter(|&f| f >= new_min && f <= new_max)
-                        .unwrap_or(self.frequency_hz);
-                    // Commit the restored freq only after a confirmed send (no drift).
-                    if self.cmd_tx.send(Command::SetVrxFrequency(restored)).is_ok() {
-                        self.vrx1_freq_hz = restored;
-                    }
-                }
-                self.last_vrx1_ddc_center_hz = vrx1_center;
-            }
-        }
-        {
-            let vrx2_center = if self.rx2_full_spectrum_center_hz > 0 {
-                self.rx2_full_spectrum_center_hz as u64
-            } else { self.rx2_frequency_hz };
-            let vrx2_span = if self.rx2_full_spectrum_span_hz > 0 {
-                self.rx2_full_spectrum_span_hz as u64
-            } else { 384_000 };
-            if vrx2_center > 0 {
-                let cur_bucket = vrx2_center / BUCKET_HZ;
-                let last_bucket = self.last_vrx2_ddc_center_hz / BUCKET_HZ;
-                if cur_bucket != last_bucket && self.last_vrx2_ddc_center_hz > 0 {
-                    if self.vrx2_freq_hz > 0 {
-                        self.vrx2_freq_by_bucket.insert(last_bucket, self.vrx2_freq_hz);
-                    }
-                    let new_min = vrx2_center.saturating_sub(vrx2_span / 2);
-                    let new_max = vrx2_center + vrx2_span / 2;
-                    let restored = self.vrx2_freq_by_bucket.get(&cur_bucket).copied()
-                        .filter(|&f| f >= new_min && f <= new_max)
-                        .unwrap_or(self.rx2_frequency_hz);
-                    // Commit the restored freq only after a confirmed send (no drift).
-                    if self.cmd_tx.send(Command::SetVrx2Frequency(restored)).is_ok() {
-                        self.vrx2_freq_hz = restored;
-                    }
-                }
-                self.last_vrx2_ddc_center_hz = vrx2_center;
-            }
-        }
+        // A VRX follows a moved DDC centre (one rule for both, `ui/vrx.rs`).
+        self.vrx_follow_ddc_centre(VrxChannel::Vrx1);
+        self.vrx_follow_ddc_centre(VrxChannel::Vrx2);
 
         // Detached VRX windows: VRX1 (on RX1+VFO-A) and VRX2 (on RX2+VFO-B) each in
         // their own viewport, independently placeable. Closing (X/button/spec-chip-off)
@@ -1533,11 +1523,16 @@ impl eframe::App for SdrRemoteApp {
                         ui.vertical_centered(|ui| {
                             ui.label(RichText::new("ThetisLink").size(22.0).strong());
                             ui.label(RichText::new(format!("v{}", sdr_remote_core::version_string())).size(14.0));
+                            // The sign of the developer mode (build 295), where a
+                            // screenshot of the version would show it.
+                            if sdr_remote_core::dev_mode::is_on() {
+                                ui.label(RichText::new("DEV").color(super::developer_mode::DEV_COLOUR).strong());
+                            }
                             ui.add_space(4.0);
                             ui.label(rust_i18n::t!("main_about_tagline").to_string());
                         });
                         ui.add_space(8.0);
-                        ui.separator();
+                        super::helpers::rule(ui);
 
                         ui.label(RichText::new(rust_i18n::t!("main_about_author").to_string()).size(13.0).strong());
                         ui.label("Chiron van der Burgt - PA3GHM");
@@ -1627,7 +1622,9 @@ impl eframe::App for SdrRemoteApp {
         }
 
         // Log panel (collapsible, bottom of window)
-        egui::TopBottomPanel::bottom("log_panel").show_animated(ctx, self.show_log, |ui| {
+        egui::TopBottomPanel::bottom("log_panel").show_separator_line(false).show_animated(ctx, self.show_log, |ui| {
+            // The panel's edge, as `rule` (its own border line is off).
+            super::helpers::rule(ui);
             ui.set_max_height(150.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(rust_i18n::t!("main_log").to_string()).strong().size(11.0));
@@ -1637,7 +1634,7 @@ impl eframe::App for SdrRemoteApp {
                     }
                 }
             });
-            ui.separator();
+            super::helpers::rule(ui);
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
                 .max_height(120.0)

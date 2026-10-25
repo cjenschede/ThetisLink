@@ -132,7 +132,7 @@ impl SdrRemoteApp {
                 ui.selectable_value(&mut self.device_tab, *id, *label);
             }
         });
-        ui.separator();
+        super::helpers::rule(ui);
 
         match self.device_tab {
             0 if show_amplitec => self.render_device_amplitec(ui),
@@ -158,7 +158,7 @@ impl SdrRemoteApp {
                 }
             });
         });
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Port A - TX+RX
         ui.add_space(4.0);
@@ -229,63 +229,56 @@ impl SdrRemoteApp {
             }
         });
 
-        ui.add_space(8.0);
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Power-cap table (collapsing section). Server pushes the current
         // table via AmplitecPowerTablePacket; edit state is tracked locally
         // and only sent to the server on "Save to server".
-        if super::helpers::chevron_label(
+        self.folds_open = super::helpers::settings_group(
             ui,
-            self.amplitec_power_show,
+            self.folds_open,
+            super::config::Fold::AmplitecPower,
             RichText::new(rust_i18n::t!("dev_power_cap_table").to_string()).strong(),
-        )
-        .clicked()
-        {
-            self.amplitec_power_show = !self.amplitec_power_show;
-            self.save_full_config();
-        }
-        if self.amplitec_power_show {
-            ui.indent("amplitec_power_table", |ui| {
-                if !self.amplitec_power_loaded {
-                    ui.colored_label(
-                        Color32::from_rgb(180, 180, 180),
-                        rust_i18n::t!("dev_waiting_for_server").to_string(),
-                    );
-                } else {
-                    // Read-only view: the server owns this config (at the
-                    // Amplitec hardware) and pushes it via AmplitecPowerTablePacket.
-                    // Editing happens in the server's Amplitec window.
-                    egui::Grid::new("amplitec_power_grid")
-                        .striped(true)
-                        .min_col_width(40.0)
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("Pos").strong());
-                            ui.label(RichText::new(rust_i18n::t!("dev_label").to_string()).strong());
-                            ui.label(RichText::new(rust_i18n::t!("dev_max_w").to_string()).strong());
-                            ui.label(RichText::new(rust_i18n::t!("dev_rx_only").to_string()).strong());
-                            ui.end_row();
-                            for i in 0..6 {
-                                let pos = (i as u8) + 1;
-                                ui.label(format!("A-{}", pos));
-                                ui.label(self.amplitec_label_a(pos));
-                                let w = self.amplitec_power_max_w[i];
-                                ui.label(if w == 0 { "-".to_string() } else { format!("{} W", w) });
-                                ui.label(if self.amplitec_power_tx_blocked[i] { "X" } else { "-" });
+            |ui| {
+                ui.indent("amplitec_power_table", |ui| {
+                    if !self.amplitec_power_loaded {
+                        ui.colored_label(
+                            Color32::from_rgb(180, 180, 180),
+                            rust_i18n::t!("dev_waiting_for_server").to_string(),
+                        );
+                    } else {
+                        // Read-only view: the server owns this config (at the
+                        // Amplitec hardware) and pushes it via AmplitecPowerTablePacket.
+                        // Editing happens in the server's Amplitec window.
+                        egui::Grid::new("amplitec_power_grid")
+                            .striped(true)
+                            .min_col_width(40.0)
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("Pos").strong());
+                                ui.label(RichText::new(rust_i18n::t!("dev_label").to_string()).strong());
+                                ui.label(RichText::new(rust_i18n::t!("dev_max_w").to_string()).strong());
+                                ui.label(RichText::new(rust_i18n::t!("dev_rx_only").to_string()).strong());
                                 ui.end_row();
-                            }
-                        });
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(rust_i18n::t!("dev_edit_on_server").to_string())
-                            .size(10.0)
-                            .color(Color32::from_rgb(160, 160, 160)),
-                    );
-                }
-            });
-            ui.add_space(8.0);
-            ui.separator();
-        }
+                                for i in 0..6 {
+                                    let pos = (i as u8) + 1;
+                                    ui.label(format!("A-{}", pos));
+                                    ui.label(self.amplitec_label_a(pos));
+                                    let w = self.amplitec_power_max_w[i];
+                                    ui.label(if w == 0 { "-".to_string() } else { format!("{} W", w) });
+                                    ui.label(if self.amplitec_power_tx_blocked[i] { "X" } else { "-" });
+                                    ui.end_row();
+                                }
+                            });
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(rust_i18n::t!("dev_edit_on_server").to_string())
+                                .size(10.0)
+                                .color(Color32::from_rgb(160, 160, 160)),
+                        );
+                    }
+                });
+            },
+        );
 
         // Log
         ui.label(RichText::new(rust_i18n::t!("dev_log").to_string()).strong());
@@ -315,7 +308,7 @@ impl SdrRemoteApp {
                 }
             });
         });
-        ui.separator();
+        super::helpers::rule(ui);
         ui.add_space(4.0);
 
         // Status
@@ -392,7 +385,7 @@ impl SdrRemoteApp {
                 }
             });
         });
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Warning / Alarm (prominent, above everything)
         if self.spe_alarm != b'N' && self.spe_alarm != 0 {
@@ -476,7 +469,7 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SpePower);
             }
 
-            ui.separator();
+            super::helpers::rule(ui);
 
             // Drive level +/-
             let drive_enabled = self.spe_connected && self.spe_state == 2 && self.spe_active;
@@ -599,7 +592,7 @@ impl SdrRemoteApp {
                 }
             });
         });
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Error bar
         if self.rf2k_error_state != 0 {
@@ -673,7 +666,7 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::Rf2kAntExt);
             }
 
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label(RichText::new(rf2k_band_name(self.rf2k_band)).strong());
             if self.rf2k_frequency_khz > 0 {
                 ui.label(format!("{} kHz", self.rf2k_frequency_khz));
@@ -815,7 +808,7 @@ impl SdrRemoteApp {
                 if ui.add_enabled(tuner_edit, egui::Button::new("K").small()).clicked() {
                     let _ = self.cmd_tx.send(Command::Rf2kTunerK);
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.label(format!("L:{}", self.rf2k_tuner_l_nh));
                 if ui.add_enabled(tuner_edit, egui::Button::new("−").small()).clicked() {
                     let _ = self.cmd_tx.send(Command::Rf2kTunerLDown);
@@ -823,7 +816,7 @@ impl SdrRemoteApp {
                 if ui.add_enabled(tuner_edit, egui::Button::new("+").small()).clicked() {
                     let _ = self.cmd_tx.send(Command::Rf2kTunerLUp);
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.label(format!("C:{}", self.rf2k_tuner_c_pf));
                 if ui.add_enabled(tuner_edit, egui::Button::new("−").small()).clicked() {
                     let _ = self.cmd_tx.send(Command::Rf2kTunerCDown);
@@ -884,125 +877,128 @@ impl SdrRemoteApp {
 
         // --- Debug section (Phase D) ---
         if self.rf2k_debug_available {
-            ui.add_space(6.0);
-            let debug_header = if self.rf2k_show_debug { rust_i18n::t!("dev_debug_expanded").to_string() } else { rust_i18n::t!("dev_debug_collapsed").to_string() };
-            if ui.selectable_label(self.rf2k_show_debug, RichText::new(debug_header).strong()).clicked() {
-                self.rf2k_show_debug = !self.rf2k_show_debug;
-            }
-
-            if self.rf2k_show_debug {
-                ui.indent("rf2k_debug_c", |ui| {
-                    ui.label(RichText::new(rust_i18n::t!("dev_system_info").to_string()).strong());
-                    ui.horizontal(|ui| {
-                        ui.label(format!("FW: v{}", self.rf2k_controller_version));
-                        if !self.rf2k_hw_revision.is_empty() {
-                            ui.label(format!("HW: {}", self.rf2k_hw_revision));
-                        }
-                        ui.label(format!("BIAS: {:.1}%", self.rf2k_bias_pct_x10 as f32 / 10.0));
-                        let psu: String = match self.rf2k_psu_source { 0 => rust_i18n::t!("dev_internal").to_string(), 1 => rust_i18n::t!("dev_external").to_string(), 2 => "CAN Ctrl".to_string(), _ => "?".to_string() };
-                        ui.label(format!("PSU: {}", psu));
-                    });
-                    ui.horizontal(|ui| {
-                        let hours = self.rf2k_uptime_s / 3600;
-                        let mins = (self.rf2k_uptime_s % 3600) / 60;
-                        if hours >= 24 {
-                            let d = hours / 24; let h = hours % 24; let m = mins;
-                            ui.label(rust_i18n::t!("dev_uptime_dhm", d = d, h = h, m = m).to_string());
-                        } else {
-                            let h = hours; let m = mins;
-                            ui.label(rust_i18n::t!("dev_uptime_hm", h = h, m = m).to_string());
-                        }
-                        let tx_h = self.rf2k_tx_time_s / 3600;
-                        let tx_m = (self.rf2k_tx_time_s % 3600) / 60;
-                        ui.label(format!("TX: {}h {:02}m", tx_h, tx_m));
-                        let count = self.rf2k_error_count;
-                        ui.label(rust_i18n::t!("dev_errors_fmt", count = count).to_string());
-                    });
-                    ui.horizontal(|ui| {
-                        let n = self.rf2k_storage_bank;
-                        ui.label(rust_i18n::t!("dev_bank_fmt", n = n).to_string());
-                        ui.label(rust_i18n::t!("dev_frq_delay").to_string());
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new("−").small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kFrqDelayDown);
-                        }
-                        ui.label(format!("{}", self.rf2k_frq_delay));
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new("+").small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kFrqDelayUp);
-                        }
-                    });
-
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(rust_i18n::t!("dev_settings").to_string()).strong());
-                    ui.horizontal(|ui| {
-                        ui.label(rust_i18n::t!("dev_power_colon").to_string());
-                        let (pe5_text, pe5_color): (String, Color32) = if self.rf2k_high_power {
-                            (rust_i18n::t!("dev_high_upper").to_string(), Color32::from_rgb(255, 80, 80))
-                        } else {
-                            (rust_i18n::t!("dev_low_upper").to_string(), Color32::from_rgb(50, 180, 50))
-                        };
-                        let pe5_btn = egui::Button::new(RichText::new(pe5_text).strong().color(Color32::WHITE)).fill(pe5_color);
-                        if ui.add_enabled(self.rf2k_connected, pe5_btn).clicked() {
-                            if self.rf2k_high_power {
-                                let _ = self.cmd_tx.send(Command::Rf2kSetHighPower(false));
-                            } else {
-                                self.rf2k_confirm_high_power = true;
+            // The same chevron and lines as every other fold, and remembered
+            // (owner, 2026-10-15).
+            super::helpers::rule(ui);
+            self.folds_open = super::helpers::settings_group(
+                ui,
+                self.folds_open,
+                super::config::Fold::Rf2kDebug,
+                RichText::new(rust_i18n::t!("dev_debug_section").to_string()).strong(),
+                |ui| {
+                    ui.indent("rf2k_debug_c", |ui| {
+                        ui.label(RichText::new(rust_i18n::t!("dev_system_info").to_string()).strong());
+                        ui.horizontal(|ui| {
+                            ui.label(format!("FW: v{}", self.rf2k_controller_version));
+                            if !self.rf2k_hw_revision.is_empty() {
+                                ui.label(format!("HW: {}", self.rf2k_hw_revision));
                             }
-                        }
-                        ui.separator();
-                        ui.label(rust_i18n::t!("dev_tuner_6m").to_string());
-                        let t6m = if self.rf2k_tuner_6m { rust_i18n::t!("dev_on_upper").to_string() } else { rust_i18n::t!("dev_off_upper").to_string() };
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new(t6m).small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kSetTuner6m(!self.rf2k_tuner_6m));
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(rust_i18n::t!("dev_band_gap").to_string());
-                        let bg = if self.rf2k_band_gap_allowed { rust_i18n::t!("dev_on_upper").to_string() } else { rust_i18n::t!("dev_off_upper").to_string() };
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new(bg).small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kSetBandGap(!self.rf2k_band_gap_allowed));
-                        }
-                        ui.separator();
-                        ui.label("AT thresh:");
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new("−").small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kAutotuneThresholdDown);
-                        }
-                        ui.label(format!("{:.1} dB", self.rf2k_autotune_threshold_x10 as f32 / 10.0));
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new("+").small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kAutotuneThresholdUp);
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("DAC ALC:");
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new("−").small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kDacAlcDown);
-                        }
-                        ui.label(format!("{}", self.rf2k_dac_alc));
-                        if ui.add_enabled(self.rf2k_connected, egui::Button::new("+").small()).clicked() {
-                            let _ = self.cmd_tx.send(Command::Rf2kDacAlcUp);
-                        }
-                    });
-
-                    if !self.rf2k_error_history.is_empty() {
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(rust_i18n::t!("dev_error_history").to_string()).strong());
-                        egui::ScrollArea::vertical().max_height(100.0).id_salt("rf2k_err_hist_c").show(ui, |ui| {
-                            for (time, err) in self.rf2k_error_history.iter().rev() {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(time).monospace());
-                                    ui.colored_label(amber, err);
-                                });
+                            ui.label(format!("BIAS: {:.1}%", self.rf2k_bias_pct_x10 as f32 / 10.0));
+                            let psu: String = match self.rf2k_psu_source { 0 => rust_i18n::t!("dev_internal").to_string(), 1 => rust_i18n::t!("dev_external").to_string(), 2 => "CAN Ctrl".to_string(), _ => "?".to_string() };
+                            ui.label(format!("PSU: {}", psu));
+                        });
+                        ui.horizontal(|ui| {
+                            let hours = self.rf2k_uptime_s / 3600;
+                            let mins = (self.rf2k_uptime_s % 3600) / 60;
+                            if hours >= 24 {
+                                let d = hours / 24; let h = hours % 24; let m = mins;
+                                ui.label(rust_i18n::t!("dev_uptime_dhm", d = d, h = h, m = m).to_string());
+                            } else {
+                                let h = hours; let m = mins;
+                                ui.label(rust_i18n::t!("dev_uptime_hm", h = h, m = m).to_string());
+                            }
+                            let tx_h = self.rf2k_tx_time_s / 3600;
+                            let tx_m = (self.rf2k_tx_time_s % 3600) / 60;
+                            ui.label(format!("TX: {}h {:02}m", tx_h, tx_m));
+                            let count = self.rf2k_error_count;
+                            ui.label(rust_i18n::t!("dev_errors_fmt", count = count).to_string());
+                        });
+                        ui.horizontal(|ui| {
+                            let n = self.rf2k_storage_bank;
+                            ui.label(rust_i18n::t!("dev_bank_fmt", n = n).to_string());
+                            ui.label(rust_i18n::t!("dev_frq_delay").to_string());
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new("−").small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kFrqDelayDown);
+                            }
+                            ui.label(format!("{}", self.rf2k_frq_delay));
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new("+").small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kFrqDelayUp);
                             }
                         });
-                    }
 
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(rust_i18n::t!("dev_dangerous").to_string()).strong());
-                    let zero_btn = egui::Button::new(RichText::new(rust_i18n::t!("dev_zero_fram").to_string()).color(Color32::from_rgb(255, 100, 100)));
-                    if ui.add_enabled(self.rf2k_connected, zero_btn).clicked() {
-                        self.rf2k_confirm_zero_fram = true;
-                    }
-                });
-            }
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(rust_i18n::t!("dev_settings").to_string()).strong());
+                        ui.horizontal(|ui| {
+                            ui.label(rust_i18n::t!("dev_power_colon").to_string());
+                            let (pe5_text, pe5_color): (String, Color32) = if self.rf2k_high_power {
+                                (rust_i18n::t!("dev_high_upper").to_string(), Color32::from_rgb(255, 80, 80))
+                            } else {
+                                (rust_i18n::t!("dev_low_upper").to_string(), Color32::from_rgb(50, 180, 50))
+                            };
+                            let pe5_btn = egui::Button::new(RichText::new(pe5_text).strong().color(Color32::WHITE)).fill(pe5_color);
+                            if ui.add_enabled(self.rf2k_connected, pe5_btn).clicked() {
+                                if self.rf2k_high_power {
+                                    let _ = self.cmd_tx.send(Command::Rf2kSetHighPower(false));
+                                } else {
+                                    self.rf2k_confirm_high_power = true;
+                                }
+                            }
+                            super::helpers::rule(ui);
+                            ui.label(rust_i18n::t!("dev_tuner_6m").to_string());
+                            let t6m = if self.rf2k_tuner_6m { rust_i18n::t!("dev_on_upper").to_string() } else { rust_i18n::t!("dev_off_upper").to_string() };
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new(t6m).small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kSetTuner6m(!self.rf2k_tuner_6m));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(rust_i18n::t!("dev_band_gap").to_string());
+                            let bg = if self.rf2k_band_gap_allowed { rust_i18n::t!("dev_on_upper").to_string() } else { rust_i18n::t!("dev_off_upper").to_string() };
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new(bg).small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kSetBandGap(!self.rf2k_band_gap_allowed));
+                            }
+                            super::helpers::rule(ui);
+                            ui.label("AT thresh:");
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new("−").small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kAutotuneThresholdDown);
+                            }
+                            ui.label(format!("{:.1} dB", self.rf2k_autotune_threshold_x10 as f32 / 10.0));
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new("+").small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kAutotuneThresholdUp);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("DAC ALC:");
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new("−").small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kDacAlcDown);
+                            }
+                            ui.label(format!("{}", self.rf2k_dac_alc));
+                            if ui.add_enabled(self.rf2k_connected, egui::Button::new("+").small()).clicked() {
+                                let _ = self.cmd_tx.send(Command::Rf2kDacAlcUp);
+                            }
+                        });
+
+                        if !self.rf2k_error_history.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(RichText::new(rust_i18n::t!("dev_error_history").to_string()).strong());
+                            egui::ScrollArea::vertical().max_height(100.0).id_salt("rf2k_err_hist_c").show(ui, |ui| {
+                                for (time, err) in self.rf2k_error_history.iter().rev() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(time).monospace());
+                                        ui.colored_label(amber, err);
+                                    });
+                                }
+                            });
+                        }
+
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(rust_i18n::t!("dev_dangerous").to_string()).strong());
+                        let zero_btn = egui::Button::new(RichText::new(rust_i18n::t!("dev_zero_fram").to_string()).color(Color32::from_rgb(255, 100, 100)));
+                        if ui.add_enabled(self.rf2k_connected, zero_btn).clicked() {
+                            self.rf2k_confirm_zero_fram = true;
+                        }
+                    });
+                },
+            );
 
             // Confirmation dialogs
             if self.rf2k_confirm_high_power {
@@ -1043,58 +1039,47 @@ impl SdrRemoteApp {
             }
 
             // --- Drive Config section ---
-            ui.add_space(6.0);
-            let drive_header = if self.rf2k_show_drive_config { rust_i18n::t!("dev_drive_config_expanded").to_string() } else { rust_i18n::t!("dev_drive_config_collapsed").to_string() };
-            if ui.selectable_label(self.rf2k_show_drive_config, RichText::new(drive_header).strong()).clicked() {
-                self.rf2k_show_drive_config = !self.rf2k_show_drive_config;
-                if self.rf2k_show_drive_config && !self.rf2k_drive_loaded {
-                    self.rf2k_drive_edit[0] = self.rf2k_drive_config_ssb;
-                    self.rf2k_drive_edit[1] = self.rf2k_drive_config_am;
-                    self.rf2k_drive_edit[2] = self.rf2k_drive_config_cont;
-                    self.rf2k_drive_loaded = true;
-                }
-            }
-
-            if self.rf2k_show_drive_config {
-                if !self.rf2k_drive_loaded {
-                    self.rf2k_drive_edit[0] = self.rf2k_drive_config_ssb;
-                    self.rf2k_drive_edit[1] = self.rf2k_drive_config_am;
-                    self.rf2k_drive_edit[2] = self.rf2k_drive_config_cont;
-                    self.rf2k_drive_loaded = true;
-                }
-                ui.indent("rf2k_drive_c", |ui| {
-                    let bands = ["160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"];
-                    let categories = ["SSB", "AM", "CONT"];
-                    egui::Grid::new("rf2k_drive_grid_c").striped(true).min_col_width(40.0).show(ui, |ui| {
-                        ui.label(RichText::new(rust_i18n::t!("dev_band").to_string()).strong());
-                        for cat in &categories { ui.label(RichText::new(*cat).strong()); }
-                        ui.end_row();
-                        for band_idx in 0..11 {
-                            ui.label(bands[band_idx]);
-                            for cat_idx in 0..3 {
-                                let mut val = self.rf2k_drive_edit[cat_idx][band_idx] as i32;
-                                let drag = egui::DragValue::new(&mut val).range(0..=100).suffix("W").speed(0.5);
-                                if ui.add(drag).changed() {
-                                    self.rf2k_drive_edit[cat_idx][band_idx] = val.clamp(0, 100) as u8;
-                                }
-                            }
+            // The Debug group's line below is this one's line above. The edit
+            // buffers follow the server's table (`DriveEdit::follow`), also
+            // in a group that opens from the conf.
+            self.folds_open = super::helpers::settings_group(
+                ui,
+                self.folds_open,
+                super::config::Fold::Rf2kDriveConfig,
+                RichText::new(rust_i18n::t!("dev_drive_config_section").to_string()).strong(),
+                |ui| {
+                    // The order of the rows, their names and what Save sends
+                    // all come from `rf2k_drive`, shared with the server.
+                    use sdr_remote_core::rf2k_drive;
+                    self.rf2k_drive_edit.follow(&self.rf2k_drive_config);
+                    ui.indent("rf2k_drive_c", |ui| {
+                        let bands = rf2k_drive::BAND_NAMES;
+                        let categories = rf2k_drive::CATEGORY_NAMES;
+                        egui::Grid::new("rf2k_drive_grid_c").striped(true).min_col_width(40.0).show(ui, |ui| {
+                            ui.label(RichText::new(rust_i18n::t!("dev_band").to_string()).strong());
+                            for cat in &categories { ui.label(RichText::new(*cat).strong()); }
                             ui.end_row();
+                            for band_idx in 0..rf2k_drive::BANDS {
+                                ui.label(bands[band_idx]);
+                                for cat_idx in 0..categories.len() {
+                                    let mut val = self.rf2k_drive_edit.cells[cat_idx][band_idx] as i32;
+                                    let drag = egui::DragValue::new(&mut val).range(0..=100).suffix("W").speed(0.5);
+                                    if ui.add(drag).changed() {
+                                        self.rf2k_drive_edit.cells[cat_idx][band_idx] = val.clamp(0, 100) as u8;
+                                    }
+                                }
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(4.0);
+                        if ui.add_enabled(self.rf2k_connected, egui::Button::new(rust_i18n::t!("dev_save_to_pi").to_string())).clicked() {
+                            for change in self.rf2k_drive_edit.changed(&self.rf2k_drive_config) {
+                                let _ = self.cmd_tx.send(Command::Rf2kSetDriveConfig(change));
+                            }
                         }
                     });
-                    ui.add_space(4.0);
-                    if ui.add_enabled(self.rf2k_connected, egui::Button::new(rust_i18n::t!("dev_save_to_pi").to_string())).clicked() {
-                        for cat_idx in 0..3u8 {
-                            let current = match cat_idx { 0 => &self.rf2k_drive_config_ssb, 1 => &self.rf2k_drive_config_am, _ => &self.rf2k_drive_config_cont };
-                            for band_idx in 0..11u8 {
-                                let new_val = self.rf2k_drive_edit[cat_idx as usize][band_idx as usize];
-                                if new_val != current[band_idx as usize] {
-                                    let _ = self.cmd_tx.send(Command::Rf2kSetDriveConfig { category: cat_idx, band: band_idx, value: new_val });
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+                },
+            );
         }
 
         // FW Close confirmation popup
@@ -1133,17 +1118,17 @@ impl SdrRemoteApp {
                 if self.ub_fw_major > 0 {
                     ui.label(format!("FW {}.{}", self.ub_fw_major, self.ub_fw_minor));
                 }
-                ui.separator();
-                if super::helpers::chevron_label(ui, self.ub_show_menu, rust_i18n::t!("dev_menu").to_string()).clicked() {
-                    self.ub_show_menu = !self.ub_show_menu;
-                    if self.ub_show_menu {
-                        let _ = self.cmd_tx.send(Command::UbReadElements);
-                    }
-                    self.save_full_config();
+                super::helpers::rule(ui);
+                let menu = super::config::Fold::UltrabeamMenu;
+                let was_open = self.folds_open.is_open(menu);
+                self.folds_open =
+                    super::helpers::fold(ui, self.folds_open, menu, rust_i18n::t!("dev_menu").to_string());
+                if !was_open && self.folds_open.is_open(menu) {
+                    let _ = self.cmd_tx.send(Command::UbReadElements);
                 }
             });
         });
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Frequency display
         if self.ub_frequency_khz > 0 {
@@ -1191,7 +1176,7 @@ impl SdrRemoteApp {
                     let _ = self.cmd_tx.send(Command::UbSetFrequency(new_khz, self.ub_direction));
                 }
             }
-            ui.separator();
+            super::helpers::rule(ui);
             let (track_hz, track_label) = self.ub_track_vfo();
             let track_khz = (track_hz / 1000) as u16;
             let can_sync = self.ub_connected && track_khz >= 1800 && track_khz <= 54000
@@ -1291,9 +1276,9 @@ impl SdrRemoteApp {
         // Collapsible Menu section - mirrors the server window so the
         // operator only has to learn one UX. Editable element lengths +/-,
         // Refresh, plus read-only Controller Info.
-        if self.ub_show_menu {
+        if self.folds_open.is_open(super::config::Fold::UltrabeamMenu) {
             ui.add_space(8.0);
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label(RichText::new(rust_i18n::t!("dev_menu").to_string()).strong().size(16.0));
 
             ui.add_space(4.0);
@@ -1357,7 +1342,7 @@ impl SdrRemoteApp {
                 }
             });
         });
-        ui.separator();
+        super::helpers::rule(ui);
 
         let angle_deg = self.rotor_angle_x10 as f32 / 10.0;
         let target_deg = if self.rotor_rotating { Some(self.rotor_target_x10 as f32 / 10.0) } else { None };

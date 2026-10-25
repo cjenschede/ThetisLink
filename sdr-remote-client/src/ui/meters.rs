@@ -130,14 +130,8 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
                 format!("+{}", db_over), tick_font.clone(), Color32::from_rgb(200, 100, 100));
         }
 
-        // S-value text on the bar - derived directly from dBm.
-        let s_text = if dbm <= -73.0 {
-            let s_unit = ((dbm + 127.0) / 6.0).floor().clamp(0.0, 9.0) as u8;
-            format!("S{}", s_unit)
-        } else {
-            let db_over = (dbm + 73.0).round() as i32;
-            format!("S9+{} dB", db_over.max(0))
-        };
+        // S-value text on the bar - the one rule for every meter (build 218).
+        let s_text = sdr_remote_core::s_meter::text(dbm);
         painter.text(bar_rect.center(), egui::Align2::CENTER_CENTER,
             s_text, egui::FontId::proportional(if is_popout { 16.0 } else { 11.0 }), Color32::WHITE);
     }
@@ -145,15 +139,9 @@ pub(crate) fn smeter_bar_sized(ui: &mut egui::Ui, value: f32, peak_value: f32, t
 }
 
 
-/// Yaesu CAT S-meter bar. The radio reports a raw 0..255-ish SM value;
-/// render it on the same S1..S9 / S9+dB visual scale as the main RX meter.
-/// The Yaesu s-meter value is already the 0-228 display scale (S0=0, S9=108, S9+60=228).
-/// The analog meter expects dBm and converts internally via `dbm_to_display`; this is
-/// the inverse, so we can display the raw value through the shared analog meter.
-pub(crate) fn yaesu_raw_to_dbm(raw: u16) -> f32 {
-    let disp = (raw as f32).clamp(0.0, 228.0);
-    if disp <= 108.0 { disp / 2.0 - 127.0 } else { (disp - 108.0) / 2.0 - 73.0 }
-}
+/// The Yaesu CAT S-meter value in dBm, for the shared analog meter; lives in
+/// core since build 218, next to the S reading it feeds.
+pub(crate) use sdr_remote_core::s_meter::yaesu_raw_to_dbm;
 
 pub(crate) fn yaesu_smeter_bar(ui: &mut egui::Ui, raw: u16, peak_raw: u16) -> egui::Rect {
     let label_h = 12.0;
@@ -253,13 +241,7 @@ pub(crate) fn yaesu_smeter_bar(ui: &mut egui::Ui, raw: u16, peak_raw: u16) -> eg
         );
     }
 
-    let text = if raw_value <= 108.0 {
-        let s_unit = (raw_value / 12.0).floor().clamp(0.0, 9.0) as u8;
-        format!("S{}", s_unit)
-    } else {
-        let db_over = ((raw_value - 108.0) * 0.5).max(0.0);
-        format!("S9+{:.0} dB", db_over)
-    };
+    let text = sdr_remote_core::s_meter::text(yaesu_raw_to_dbm(raw));
     painter.text(
         bar_rect.center(),
         egui::Align2::CENTER_CENTER,

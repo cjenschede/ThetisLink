@@ -250,6 +250,16 @@ impl PttIntent {
         self.clear_all();
     }
 
+    /// The link went while this was asking, on the desktop (build 268; owner's
+    /// decision 2026-10-20). Like `radio_left_tx`: the press ends, and a key
+    /// still down has to come up first - with three seconds to the fall
+    /// (build 265) the key is usually still down, mid-sentence, and the next
+    /// frame put the press straight back on a link that was not there. The
+    /// phone keeps `disconnected`: its controls are edges.
+    pub fn link_gone(&mut self, resampled: &[PttSource]) {
+        self.stop_and_wait_for_release(resampled);
+    }
+
     /// The radio reports it is no longer transmitting.
     ///
     /// Not the same as us letting go: the radio can stop on its own - a time-out
@@ -523,7 +533,7 @@ pub fn desktop_frame(
 /// Slot order: 0 = Thetis, 1 = Yaesu slot 0, 2 = Yaesu slot 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TxArbitration {
-    /// Wie er mag zenden.
+    /// Who may transmit.
     pub granted: [bool; 3],
     /// Who asked and does not get it - because this client allows only one.
     pub blocked: [bool; 3],
@@ -553,8 +563,8 @@ pub fn arbitrate(
     }
 
     // Who is already transmitting and wants to keep doing so? They keep it.
-    let zittend = (0..3).find(|&i| want[i] && last_sent[i]);
-    let winnaar = match zittend {
+    let holder = (0..3).find(|&i| want[i] && last_sent[i]);
+    let winner = match holder {
         Some(i) => Some(i),
         // Nobody was there already: the lowest one asking. Arbitrary, but predictable,
         // and it has to fall somewhere.
@@ -563,7 +573,7 @@ pub fn arbitrate(
 
     let mut granted = [false; 3];
     let mut blocked = [false; 3];
-    if let Some(w) = winnaar {
+    if let Some(w) = winner {
         granted[w] = true;
         for i in 0..3 {
             if i != w && want[i] {
@@ -847,7 +857,7 @@ mod phone_tests {
     use super::*;
 
     #[test]
-    fn een_zender_tegelijk() {
+    fn one_transmitter_at_a_time() {
         let mut p = PhonePtt::new();
         p.set(PttTarget::Thetis, PttSource::Screen, true);
         assert_eq!(p.asking(), Some(PttTarget::Thetis));
@@ -859,7 +869,7 @@ mod phone_tests {
     }
 
     #[test]
-    fn twee_bronnen_op_dezelfde_zender_zijn_onafhankelijk() {
+    fn two_sources_on_one_transmitter_are_independent() {
         // Releasing the on-screen button while the Bluetooth button is still held must
         // not end the transmission. That is the reason a source has a place of its own
         // rather than a shared boolean.
@@ -873,37 +883,37 @@ mod phone_tests {
     /// The table the architecture review asks for: from every state, every exit must
     /// end at idle. That is exactly the check two earlier commits failed.
     #[test]
-    fn elke_uitgang_eindigt_bij_stil() {
-        let bronnen = [PttSource::Screen, PttSource::Bluetooth];
-        let uitgangen: [(&str, fn(&mut PhonePtt, PttTarget)); 3] = [
+    fn every_exit_ends_at_idle() {
+        let sources = [PttSource::Screen, PttSource::Bluetooth];
+        let exit_table: [(&str, fn(&mut PhonePtt, PttTarget)); 3] = [
             ("refused", |p, _| p.refused()),
             ("busy", |p, t| p.busy(t)),
             ("radio_left_tx", |p, t| p.radio_left_tx(t)),
         ];
 
-        for doel in PttTarget::ALL {
+        for target in PttTarget::ALL {
             // Every subset of the sources, including both at once.
             for bits in 0u8..4 {
-                for (naam, uitgang) in uitgangen {
+                for (name, exit_fn) in exit_table {
                     let mut p = PhonePtt::new();
-                    for (i, b) in bronnen.iter().enumerate() {
+                    for (i, b) in sources.iter().enumerate() {
                         if bits & (1 << i) != 0 {
-                            p.set(doel, *b, true);
+                            p.set(target, *b, true);
                         }
                     }
-                    uitgang(&mut p, doel);
+                    exit_fn(&mut p, target);
                     assert!(
-                        !p.want_tx(doel),
-                        "exit {naam} left a request standing on {doel:?}, sources {bits:02b}"
+                        !p.want_tx(target),
+                        "exit {name} left a request standing on {target:?}, sources {bits:02b}"
                     );
-                    assert_eq!(p.asking(), None, "exit {naam} left something standing somewhere");
+                    assert_eq!(p.asking(), None, "exit {name} left something standing somewhere");
                 }
             }
         }
     }
 
     #[test]
-    fn verbinding_weg_laat_alles_los() {
+    fn connection_gone_releases_everything() {
         let mut p = PhonePtt::new();
         p.set(PttTarget::Yaesu1, PttSource::Bluetooth, true);
         p.disconnected();
@@ -918,7 +928,7 @@ mod phone_tests {
     /// the on-screen button it does not: the phone locks and you have to type a
     /// password before you can switch your transmitter off.
     #[test]
-    fn scherm_weg_laat_bluetooth_staan_en_het_scherm_niet() {
+    fn screen_gone_keeps_bluetooth_but_not_the_screen() {
         let mut p = PhonePtt::new();
         p.set(PttTarget::Yaesu0, PttSource::Bluetooth, true);
         p.screen_gone();
@@ -933,7 +943,7 @@ mod phone_tests {
     /// Switching the on-screen button off ends everything - including a Bluetooth
     /// button that is still being held. That is the way out when that button jams.
     #[test]
-    fn schermknop_uit_eindigt_ook_de_bluetooth_druk() {
+    fn screen_button_off_also_ends_the_bluetooth_press() {
         let mut p = PhonePtt::new();
         p.set(PttTarget::Thetis, PttSource::Bluetooth, true);
         p.set(PttTarget::Thetis, PttSource::Screen, true);
@@ -946,7 +956,7 @@ mod phone_tests {
     /// ordinary path too: releasing the Bluetooth button while the screen is still
     /// held does NOT end the transmission.
     #[test]
-    fn bluetooth_loslaten_eindigt_een_schermdruk_niet() {
+    fn bluetooth_release_does_not_end_a_screen_press() {
         let mut p = PhonePtt::new();
         p.set(PttTarget::Thetis, PttSource::Screen, true);
         p.set(PttTarget::Thetis, PttSource::Bluetooth, true);
@@ -1216,13 +1226,13 @@ mod tests {
     /// copies and not others. Here there is one copy and the test is exhaustive.
     #[test]
     fn every_exit_ends_every_state() {
-        for (naam, exit) in total_exits() {
+        for (name, exit) in total_exits() {
             // Each source alone.
             for s in PttSource::ALL {
                 let mut i = PttIntent::default();
                 i.press(s);
                 exit(&mut i);
-                assert!(!i.want_tx(), "{naam} left {s:?} held");
+                assert!(!i.want_tx(), "{name} left {s:?} held");
             }
             // And everything at once, which is the state a real fault reaches.
             let mut i = PttIntent::default();
@@ -1230,17 +1240,17 @@ mod tests {
                 i.press(s);
             }
             exit(&mut i);
-            assert!(!i.want_tx(), "{naam} left something held");
+            assert!(!i.want_tx(), "{name} left something held");
         }
     }
 
     /// An exit that arrives when nothing is happening changes nothing.
     #[test]
     fn an_exit_on_an_idle_intent_is_harmless() {
-        for (naam, exit) in total_exits() {
+        for (name, exit) in total_exits() {
             let mut i = PttIntent::default();
             exit(&mut i);
-            assert!(!i.want_tx(), "{naam} on an idle intent");
+            assert!(!i.want_tx(), "{name} on an idle intent");
         }
     }
 
@@ -1318,7 +1328,7 @@ mod tests {
     /// three things the real loop does: the per-frame suppressors, the clearing
     /// of latches inside the tick, and the level-sampled spacebar. A model that
     /// omits exactly the parts where the faults live proves less than it looks
-    /// like it does (review finding, Lane 6 stap 1).
+    /// like it does (review finding, Lane 6 step 1).
     ///
     /// The real thing needs `drive_yaesu_ptt` to be reachable from a test, and
     /// today no client test constructs an `SdrRemoteApp` at all. That is the
@@ -1362,13 +1372,13 @@ mod tests {
     /// the radio stayed keyed because nothing ever sent the off.
     #[test]
     fn every_exit_puts_an_off_on_the_wire() {
-        for (naam, exit) in total_exits() {
+        for (name, exit) in total_exits() {
             let mut d = Driver::new();
             d.intent.press(PttSource::Mouse);
             d.tick();
             exit(&mut d.intent);
             d.tick();
-            assert_eq!(d.sent, vec![true, false], "{naam} did not reach the wire");
+            assert_eq!(d.sent, vec![true, false], "{name} did not reach the wire");
         }
     }
 
@@ -1501,7 +1511,7 @@ mod arbitrate_tests {
     fn a_radio_held_by_someone_else_never_wins_and_never_blocks_ours() {
         // Thetis belongs to somebody else; we want Thetis and Yaesu 1.
         let a = arbitrate([true, true, false], [false; 3], [true, false, false], false);
-        assert_eq!(a.granted, [false, true, false], "Yaesu 1 mag gewoon");
+        assert_eq!(a.granted, [false, true, false], "Yaesu 1 simply may");
         assert_eq!(a.blocked, [false; 3], "and nothing is refused by ourselves");
     }
 
@@ -1538,7 +1548,7 @@ mod desktop_frame_tests {
     /// That is what makes the comparison below a real equivalence test and not an
     /// echo: if the extraction does anything differently from the original, these two
     /// diverge.
-    fn zoals_het_was(
+    fn as_it_was(
         mouse: bool,
         space: bool,
         midi: bool,
@@ -1622,10 +1632,10 @@ mod desktop_frame_tests {
                 held,
                 last_sent,
             );
-            let expected = zoals_het_was(mouse, space, midi, window_open, held, last_sent);
+            let expected = as_it_was(mouse, space, midi, window_open, held, last_sent);
             assert_eq!(
                 got, expected,
-                "rij {bits}: mouse={mouse} space={space} midi={midi} \
+                "row {bits}: mouse={mouse} space={space} midi={midi} \
                  window={window_open} held={held} last_sent={last_sent}"
             );
             gecontroleerd += 1;
@@ -1705,16 +1715,16 @@ mod desktop_frame_tests {
     /// Grabbing the spacebar while a latching control is on takes it over.
     #[test]
     fn a_hold_control_takes_over_from_a_latch() {
-        let getoggeld = Latches { midi: true, ..Default::default() };
-        let na = getoggeld.hold(PttSource::Space, true, &[PttSource::Space]);
+        let latched_midi = Latches { midi: true, ..Default::default() };
+        let after_hold = latched_midi.hold(PttSource::Space, true, &[PttSource::Space]);
 
-        assert!(!na.midi, "the latch stayed behind the spacebar");
-        assert!(na.space);
+        assert!(!after_hold.midi, "the latch stayed behind the spacebar");
+        assert!(after_hold.space);
 
         // Letting go stops it - there is nothing left holding it up.
-        let los = na.hold(PttSource::Space, false, &[PttSource::Space]);
-        assert!(!los.space && !los.midi);
-        let d = desktop_frame(los, true, false, true);
+        let let_go = after_hold.hold(PttSource::Space, false, &[PttSource::Space]);
+        assert!(!let_go.space && !let_go.midi);
+        let d = desktop_frame(let_go, true, false, true);
         assert!(!d.want_tx);
         assert_eq!(d.send, Some(false));
     }
@@ -1742,16 +1752,16 @@ mod desktop_frame_tests {
     #[test]
     fn a_latching_press_while_another_source_keys_means_stop() {
         let keying = Latches { space: true, ..Default::default() };
-        let na = keying.latching_press(PttSource::Mouse, &[PttSource::Space]);
+        let after_click = keying.latching_press(PttSource::Mouse, &[PttSource::Space]);
 
-        assert!(!na.mouse, "the click armed its own latch instead of stopping");
-        assert!(na.needs_new_press, "the spacebar is still down, so it has to wait");
+        assert!(!after_click.mouse, "the click armed its own latch instead of stopping");
+        assert!(after_click.needs_new_press, "the spacebar is still down, so it has to wait");
 
         // And letting the spacebar go leaves nothing behind. Released through
         // hold(), because that is where a release is observed - building a
         // struct with space: false is a reconstruction and says nothing.
-        let los = na.hold(PttSource::Space, false, &[PttSource::Space]);
-        let d = desktop_frame(los, true, false, false);
+        let let_go = after_click.hold(PttSource::Space, false, &[PttSource::Space]);
+        let d = desktop_frame(let_go, true, false, false);
         assert!(!d.want_tx, "the transmitter came back on its own");
         assert!(!d.latches.needs_new_press);
     }
@@ -1793,10 +1803,10 @@ mod desktop_frame_tests {
         b.set(PttSource::Space, true);
         b.radio_left_tx(&[PttSource::Space]);
 
-        for (naam, i) in [("exit first", &a), ("re-read first", &b)] {
-            assert!(!i.want_tx(), "{naam}: it keyed the radio again");
-            assert!(i.needs_new_press(), "{naam}: the wait was lost");
-            assert!(i.is_held(PttSource::Space), "{naam}: the key is still down");
+        for (name, i) in [("exit first", &a), ("re-read first", &b)] {
+            assert!(!i.want_tx(), "{name}: it keyed the radio again");
+            assert!(i.needs_new_press(), "{name}: the wait was lost");
+            assert!(i.is_held(PttSource::Space), "{name}: the key is still down");
         }
     }
 
@@ -1817,6 +1827,41 @@ mod desktop_frame_tests {
             i.press(source);
             assert!(i.want_tx(), "{source:?} could not transmit again");
         }
+    }
+
+    /// The link went while a key was held (build 268; owner's decision
+    /// 2026-10-20): the press ends, and a key that is still down does not put
+    /// it straight back - it has to come up first, as when the radio stops.
+    /// A click is a moment, and is gone with the link.
+    #[test]
+    fn a_key_held_through_a_lost_link_has_to_come_up_first() {
+        let mut i = PttIntent::default();
+        i.press(PttSource::Space);
+        i.press(PttSource::Mouse);
+        i.link_gone(&[PttSource::Space]);
+        assert!(!i.want_tx(), "the press ends with the link");
+        assert!(i.needs_new_press(), "the held key waits");
+        assert!(!i.is_held(PttSource::Mouse), "a click is gone");
+        // The next frame reads the key again: still down, still waiting.
+        i.press(PttSource::Space);
+        i.settle(&[PttSource::Space]);
+        assert!(!i.want_tx(), "a key held through the fall does not transmit");
+        // Up, then down: a fresh press transmits.
+        i.release(PttSource::Space);
+        i.settle(&[PttSource::Space]);
+        i.press(PttSource::Space);
+        assert!(i.want_tx());
+        // Nothing held when the link went: nothing to wait for.
+        let mut j = PttIntent::default();
+        j.press(PttSource::Mouse);
+        j.link_gone(&[PttSource::Space]);
+        assert!(!j.needs_new_press());
+        j.press(PttSource::Mouse);
+        assert!(j.want_tx(), "the next click transmits");
+        // The desktop's link-gone exit is this one.
+        let sync = include_str!("../../sdr-remote-client/src/ui/sync_state.rs");
+        assert_eq!(sync.matches("PttRelease::LinkGone => intent.link_gone(resampled),").count(), 1);
+        assert_eq!(sync.matches("intent.disconnected()").count(), 0);
     }
 
     /// Closure: after an exit that ends the asking, one fresh press transmits.
@@ -1843,21 +1888,21 @@ mod desktop_frame_tests {
             ("window_gone", |i| i.window_gone()),
         ];
 
-        for (naam, exit) in exits {
+        for (name, exit) in exits {
             // A wait is running: the radio stopped while the key was held.
             let mut i = PttIntent::default();
             i.press(PttSource::Space);
             i.radio_left_tx(&[PttSource::Space]);
-            assert!(i.needs_new_press(), "{naam}: the setup did not arm a wait");
+            assert!(i.needs_new_press(), "{name}: the setup did not arm a wait");
 
             exit(&mut i);
             assert!(
                 !i.needs_new_press(),
-                "{naam}: left a wait behind with nothing held to release"
+                "{name}: left a wait behind with nothing held to release"
             );
 
             i.press(PttSource::Space);
-            assert!(i.want_tx(), "{naam}: a fresh press did not transmit");
+            assert!(i.want_tx(), "{name}: a fresh press did not transmit");
         }
     }
 
@@ -1913,21 +1958,21 @@ mod desktop_frame_tests {
         let mut i = PttIntent::default();
         i.set(PttSource::Space, true);
         i.radio_left_tx(&[PttSource::Space]);
-        let na = Latches::from_intent(&i);
+        let latches = Latches::from_intent(&i);
 
         // Next frame, spacebar still down.
-        let d2 = desktop_frame(Latches { space: true, ..na }, true, false, true);
+        let d2 = desktop_frame(Latches { space: true, ..latches }, true, false, true);
         assert!(!d2.want_tx, "it keyed the radio again while the key was still down");
         assert_eq!(d2.send, Some(false), "and it has to tell the server once");
 
         // Released - through hold(), the one place that observes it.
-        let los = d2.latches.hold(PttSource::Space, false, &[PttSource::Space]);
-        let d3 = desktop_frame(los, true, false, false);
+        let let_go = d2.latches.hold(PttSource::Space, false, &[PttSource::Space]);
+        let d3 = desktop_frame(let_go, true, false, false);
         assert!(!d3.latches.needs_new_press, "the wait ends on release");
 
         // Fresh press.
-        let opnieuw = d3.latches.hold(PttSource::Space, true, &[PttSource::Space]);
-        let d4 = desktop_frame(opnieuw, true, false, false);
+        let pressed_again = d3.latches.hold(PttSource::Space, true, &[PttSource::Space]);
+        let d4 = desktop_frame(pressed_again, true, false, false);
         assert!(d4.want_tx, "a fresh press must work");
     }
 
@@ -1942,21 +1987,21 @@ mod desktop_frame_tests {
     /// `want_tx` - that is intended behaviour, not a gap in this test.
     #[test]
     fn a_press_made_while_busy_does_not_fire_afterwards() {
-        let tijdens = desktop_frame(Latches { mouse: true, ..Default::default() }, true, true, false);
-        assert!(!tijdens.want_tx);
+        let during = desktop_frame(Latches { mouse: true, ..Default::default() }, true, true, false);
+        assert!(!during.want_tx);
         // The other one lets go; the latches are what the previous frame left of them.
-        let erna = desktop_frame(tijdens.latches, true, false, false);
-        assert!(!erna.want_tx, "the press made while busy is gone");
-        assert_eq!(erna.send, None);
+        let after = desktop_frame(during.latches, true, false, false);
+        assert!(!after.want_tx, "the press made while busy is gone");
+        assert_eq!(after.send, None);
     }
 
     #[test]
     fn only_a_change_goes_out() {
-        let aan = desktop_frame(Latches { midi: true, ..Default::default() }, true, false, false);
-        assert_eq!(aan.send, Some(true));
-        let nog_steeds = desktop_frame(Latches { midi: true, ..Default::default() }, true, false, true);
-        assert_eq!(nog_steeds.send, None, "niets veranderd, niets sturen");
-        let uit = desktop_frame(Latches::default(), true, false, true);
-        assert_eq!(uit.send, Some(false));
+        let on = desktop_frame(Latches { midi: true, ..Default::default() }, true, false, false);
+        assert_eq!(on.send, Some(true));
+        let still = desktop_frame(Latches { midi: true, ..Default::default() }, true, false, true);
+        assert_eq!(still.send, None, "nothing changed, nothing to send");
+        let off = desktop_frame(Latches::default(), true, false, true);
+        assert_eq!(off.send, Some(false));
     }
 }

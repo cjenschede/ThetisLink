@@ -5,16 +5,30 @@ pub mod thetis_power;
 pub mod audio_channels;
 pub mod auth;
 pub mod codec;
+pub mod control_ack;
 pub mod conf_layout;
+pub mod dev_mode;
 pub mod diagnose;
+pub mod filter_fit;
 pub mod ftx1_ex_chart;
 pub mod jitter;
 pub mod oslang;
+pub mod path;
 pub mod protocol;
+pub mod resample;
+pub mod rf2k_drive;
+pub mod rx_only_notice;
+pub mod s_meter;
+#[doc(hidden)]
+pub mod source_text;
 pub mod stream;
 
+// For `dev_info!`, so a crate that uses the macro needs no `log` of its own.
+#[doc(hidden)]
+pub use log as __log;
+
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.12.0";
+pub const VERSION: &str = "2.13.0";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).
@@ -58,6 +72,44 @@ pub const FRAME_SAMPLES_WIDEBAND: usize =
 
 /// Samples per frame at device sample rate (48kHz * 20ms = 960)
 pub const DEVICE_FRAME_SAMPLES: usize = (DEVICE_SAMPLE_RATE * FRAME_DURATION_MS / 1000) as usize;
+
+/// Copy a frame that came over QUIC into a receive
+/// buffer, or say it does not fit: too large is dropped whole, never cut off
+/// into a packet that parses as something else. One rule for the server and the
+/// client (review 109, review 110).
+pub fn take_frame(data: &[u8], buf: &mut [u8]) -> Option<usize> {
+    if data.len() > buf.len() {
+        log::debug!("a {} B tunnel frame does not fit the {} B receive buffer - dropped", data.len(), buf.len());
+        return None;
+    }
+    buf[..data.len()].copy_from_slice(data);
+    Some(data.len())
+}
+
+#[cfg(test)]
+mod take_frame_tests {
+    /// Fits: copied whole. Too large: dropped, never cut.
+    #[test]
+    fn a_frame_is_taken_whole_or_not_at_all() {
+        let mut buf = [0u8; 8];
+        assert_eq!(super::take_frame(&[1, 2, 3], &mut buf), Some(3));
+        assert_eq!(&buf[..3], &[1, 2, 3]);
+        assert_eq!(super::take_frame(&[0u8; 9], &mut buf), None, "too large: dropped, not cut");
+        assert_eq!(super::take_frame(&[7u8; 8], &mut buf), Some(8), "exactly the buffer fits");
+    }
+
+    /// The server and the client both take their tunnel frames through this one
+    /// rule (a text pin: their receive paths need a running transport).
+    #[test]
+    fn both_ends_use_it() {
+        let server = include_str!("../../sdr-remote-server/src/tracked_socket.rs");
+        let engine = include_str!("../../sdr-remote-logic/src/engine.rs");
+        // Twice since build 256: the QUIC endpoint, and the trial's way in of a
+        // development build (`trial.rs`) - the same helper, not a copy.
+        assert_eq!(server.matches(concat!("take_", "frame(&data, buf)")).count(), 2, "the server");
+        assert_eq!(engine.matches(concat!("sdr_remote_core::take_", "frame(&data, buf)")).count(), 1, "the client");
+    }
+}
 
 /// Default server port
 pub const DEFAULT_PORT: u16 = 4580;

@@ -42,6 +42,7 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import uniffi.sdr_remote.yaesuSMeterDbm
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -234,7 +235,7 @@ private fun AmplitecTab(
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-    // Poort A — TX+RX
+    // Port A — TX+RX
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             stringResource(R.string.dev_port_a),
@@ -268,7 +269,7 @@ private fun AmplitecTab(
 
     Spacer(Modifier.height(12.dp))
 
-    // Poort B — RX
+    // Port B — RX
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             stringResource(R.string.dev_port_b),
@@ -303,11 +304,11 @@ private fun AmplitecTab(
 
 /**
  * Two-line antenna button - visually matched to the server and
- * desktop-versie (`antenna_button` in `amplitec.rs` / `devices.rs`).
- * Bovenste regel: `Ant<N>` (klein, identifier).
- * Onderste regel: alias (groter, functionele naam) — alleen als de
+ * desktop version (`antenna_button` in `amplitec.rs` / `devices.rs`).
+ * Top line: `Ant<N>` (small, identifier).
+ * Bottom line: alias (larger, functional name) — only when the
  * alias differs from the Ant<N> default, because otherwise it visually becomes a
- * dubbele regel.
+ * double line.
  *
  * No rename here: labels are managed server-side only.
  */
@@ -770,21 +771,25 @@ private fun speBandName(band: Int): String = when (band) {
     8 -> "12m"
     9 -> "10m"
     10 -> "6m"
+    11 -> "4m"
     else -> "?"
 }
 
+// The server's band index (0 = 160 m up to 10 = 6 m), the same list as
+// BAND_NAMES in the shared rf2k_drive module; a test there compares the two.
+// Until build 204 this ran the other way round and showed 15 m for 40 m.
 private fun rf2kBandName(band: Int): String = when (band) {
-    0 -> "6m"
-    1 -> "10m"
-    2 -> "12m"
-    3 -> "15m"
-    4 -> "17m"
+    0 -> "160m"
+    1 -> "80m"
+    2 -> "60m"
+    3 -> "40m"
+    4 -> "30m"
     5 -> "20m"
-    6 -> "30m"
-    7 -> "40m"
-    8 -> "60m"
-    9 -> "80m"
-    10 -> "160m"
+    6 -> "17m"
+    7 -> "15m"
+    8 -> "12m"
+    9 -> "10m"
+    10 -> "6m"
     else -> "?"
 }
 
@@ -1206,7 +1211,16 @@ private fun Rf2kTab(
                 Text("$nr", fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal)
             }
         }
+    }
 
+    // Ext, the band and the frequency on a line of their own: on a phone the
+    // antenna row is full at button 4, and they fell off the edge (owner,
+    // 2026-10-15; Ext stayed off until build 206).
+    Spacer(Modifier.height(4.dp))
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         val extActive = state.rf2kAntennaType == 1
         Button(
             onClick = onRf2kAntExt,
@@ -1221,8 +1235,6 @@ private fun Rf2kTab(
         ) {
             Text("Ext", fontWeight = if (extActive) FontWeight.Bold else FontWeight.Normal)
         }
-
-        Spacer(Modifier.width(6.dp))
         Text(rf2kBandName(state.rf2kBand), fontWeight = FontWeight.Bold, fontSize = 16.sp)
         if (state.rf2kFrequencyKhz > 0) {
             Text("${state.rf2kFrequencyKhz} kHz", fontSize = 14.sp)
@@ -1775,10 +1787,10 @@ private fun YaesuTab(
     onEqEnabled: (Boolean) -> Unit = {},
     onTxGain: (Float) -> Unit = {},
     onSelectRadio: (Int) -> Unit = {},
-    onDspControl: (Int, Int) -> Unit = { _, _ -> }, // getypt YaesuControl-kanaal (control, value)
-    onCompressor: (Int) -> Unit = {}, // client-side spraakcompressor 0-100 (gedeeld)
-    onTxAgc: (Boolean) -> Unit = {},  // client-side TX-AGC aan/uit (gedeeld)
-    onPowerOnOff: (Boolean) -> Unit = {}, // radio power on/off (CAT PS) - alleen 991A klikbaar
+    onDspControl: (Int, Int) -> Unit = { _, _ -> }, // typed YaesuControl channel (control, value)
+    onCompressor: (Int) -> Unit = {}, // client-side speech compressor 0-100 (shared)
+    onTxAgc: (Boolean) -> Unit = {},  // client-side TX AGC on/off (shared)
+    onPowerOnOff: (Boolean) -> Unit = {}, // radio power on/off (CAT PS) - only clickable on the 991A
 ) {
     // Android works one Yaesu radio at a time. For radio 2 we show the yaesu2_* state
     // through the existing yaesu_* field, so the rest of this composable stays
@@ -1949,7 +1961,13 @@ private fun YaesuTab(
             // is transmitting" and every client read it as "you may not touch
             // anything" (owner, build 24).
             val switchLocked = fullState.transmitting
-            val activeColor = ButtonDefaults.buttonColors(containerColor = Color(0xFF005AC8))
+            // The active radio stays blue while locked: the line below says why
+            // nothing can be pressed, and a grey button read as "radio gone" (owner).
+            val activeColor = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF005AC8),
+                disabledContainerColor = Color(0xFF005AC8),
+                disabledContentColor = Color.White,
+            )
             Column(modifier = Modifier.padding(bottom = 6.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1967,9 +1985,13 @@ private fun YaesuTab(
                         colors = if (sel == 1) activeColor else ButtonDefaults.outlinedButtonColors(),
                     ) { Text("2 - $r2") }
                 }
-                if (switchLocked) {
-                    Text(stringResource(R.string.dev_radio_locked), fontSize = 11.sp, color = Color.Gray)
-                }
+                // Always laid out, only visible while locked: a line that comes and
+                // goes moved everything below it at every PTT press (owner).
+                Text(
+                    stringResource(R.string.dev_radio_locked),
+                    fontSize = 11.sp,
+                    color = if (switchLocked) Color.Gray else Color.Transparent,
+                )
             }
         }
 
@@ -2080,16 +2102,10 @@ private fun YaesuTab(
             }
         }
 
-        // Yaesu S-meter (same layout as Thetis). The Yaesu CAT scale is a raw
-        // 0..255 display unit that historically lined up with the old 0..228
-        // ThetisLink scale; we re-use the inverse of `dbmToDisplay` so the
-        // widget can present it on the same dBm axis as Thetis without a
-        // second widget variant.
-        val yaesuDbm = if (state.yaesuSmeter <= 108) {
-            state.yaesuSmeter.toFloat() / 2f - 127f
-        } else {
-            (state.yaesuSmeter - 108).toFloat() * 0.5f - 73f
-        }
+        // Yaesu S-meter (same layout as Thetis). The raw CAT value converted
+        // to dBm by the desktop's rule, through the bridge, capped at S9+60
+        // (build 219).
+        val yaesuDbm = yaesuSMeterDbm(state.yaesuSmeter.coerceAtLeast(0).toUInt())
         com.sdrremote.ui.components.SmeterBar(
             value = yaesuDbm,
             transmitting = state.yaesuTxActive,
@@ -2180,7 +2196,7 @@ private fun YaesuTab(
                     else ButtonDefaults.buttonColors(containerColor = inactiveColor),
                 contentPadding = PaddingValues(4.dp),
             ) { Text("ATU", fontSize = 11.sp) }
-            Spacer(Modifier.weight(3f)) // uitlijnen met de 5-koloms band-rij
+            Spacer(Modifier.weight(3f)) // line up with the 5-column band row
         }
 
         Spacer(Modifier.height(8.dp))
@@ -2292,7 +2308,7 @@ private fun YaesuTab(
         val eqGains = remember(eqRadio) {
             Array(5) { i -> mutableFloatStateOf(YaesuTxPrefs.band(eqPrefs, eqRadio, i)) }
         }
-        // Client-side TX-keten AGC-toggle, per radio (net als EQ + compressor).
+        // Client-side TX chain AGC toggle, per radio (like EQ + compressor).
         var txAgc by remember(eqRadio) {
             mutableStateOf(YaesuTxPrefs.txAgc(eqPrefs, eqRadio))
         }
@@ -2784,10 +2800,10 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
     fun frq(n: Int) = freqs.getOrElse(n) { 0 }
     val isFtx1 = state.yaesuModel == 1
     val isCw = state.yaesuMode == 3 || state.yaesuMode == 4
-    // Band/mode-beschikbaarheid (FT-991A/FTX-1): IPO/ATT alleen op HF+6m (<54 MHz);
+    // Band/mode availability (FT-991A/FTX-1): IPO/ATT only on HF+6m (<54 MHz);
     // NB/DNF/Notch/Contour not in FM (mode 5); NAR/AGC/DNR work according to the 991A OM
-    // wel in FM. BK-IN is CW-only. Buiten bereik -> uitgrijzen.
-    val isFm = state.yaesuMode == 5 || state.yaesuMode == 12  // 12 = C4FM (FM-familie)
+    // in FM too. BK-IN is CW-only. Out of range -> greyed out.
+    val isFm = state.yaesuMode == 5 || state.yaesuMode == 12  // 12 = C4FM (FM family)
     val hf6m = state.yaesuFreqA in 1L until 54_000_000L
 
     Column {
@@ -2829,7 +2845,7 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
             DspFreqRow("APF", 16, bit(16), 19, frq(1), 0f, 50f, isCw, onDspControl)
             DspFreqRow("Notch", 17, bit(17), 20, frq(2), 1f, 320f, !isFm, onDspControl)
 
-            // Clarifier (Fase 3): RIT/XIT aan/uit (bits 21/22) + offset (freqs[3], signed) + stap.
+            // Clarifier (phase 3): RIT/XIT on/off (bits 21/22) + offset (freqs[3], signed) + step.
             val ritOn = bit(21)
             val xitOn = bit(22)
             val off = frq(3).let { if (it > 32767) it - 65536 else it } // i16-as-u16 → signed Hz
@@ -2879,7 +2895,7 @@ private fun DspToggleBtn(label: String, on: Boolean, enabled: Boolean = true, on
 @Composable
 private fun DspLevelRow(
     label: String,
-    toggleCtrl: Int?,   // 991A on/off control-index; null = alleen slider
+    toggleCtrl: Int?,   // 991A on/off control index; null = slider only
     toggleOn: Boolean,
     levelCtrl: Int, levelValue: Int, min: Float, max: Float,
     onDspControl: (Int, Int) -> Unit,
@@ -2953,7 +2969,7 @@ private fun YaesuDigitTuner(freqHz: Long, onLongPress: () -> Unit, onDelta: (Lon
             Box(
                 modifier = Modifier
                     .pointerInput(power) {
-                        // Tik boven/onder = decade omhoog/omlaag; lang indrukken = typen.
+                        // Tap the top/bottom half = decade up/down; long press = type it.
                         detectTapGestures(
                             onTap = { offset -> cb(if (offset.y < size.height / 2f) step else -step) },
                             onLongPress = { lp() },

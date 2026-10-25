@@ -80,7 +80,7 @@ impl SdrRemoteApp {
             }
         });
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // TX Profile dropdown
         if !self.tx_profiles.is_empty() {
@@ -106,7 +106,7 @@ impl SdrRemoteApp {
 
         // TX modulation bandwidth (main-radio TX) - PATCH-tx-modulation-bandwidth.
         // "Volg RX" mirrors the RX filter 1:1; otherwise set low/high directly.
-        ui.separator();
+        super::helpers::rule(ui);
         ui.label(RichText::new(rust_i18n::t!("screen_tx_modulation_bandwidth").to_string()).strong());
         if !self.tx_filter_supported {
             ui.label(RichText::new(rust_i18n::t!("screen_tx_filter_unavailable").to_string()).weak());
@@ -213,7 +213,7 @@ impl SdrRemoteApp {
             }
         });
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // RX1 Volume slider
         ui.horizontal(|ui| {
@@ -271,7 +271,7 @@ impl SdrRemoteApp {
             }
         });
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // --- Thetis PTT mode ---
         ui.horizontal(|ui| {
@@ -288,7 +288,8 @@ impl SdrRemoteApp {
 
         self.render_websdr_controls(ui, CatSyncTarget::Thetis, self.frequency_hz, self.mode);
 
-        ui.separator();
+        // No line here: the RX1 frame below is the boundary, and a line 6 px
+        // above its edge drew two (review of 201).
 
         // --- TCI controls ---
         use sdr_remote_core::protocol::ControlId as CId;
@@ -300,7 +301,7 @@ impl SdrRemoteApp {
         }
 
         // ===== RX1 =====
-        ui.group(|ui| {
+        sdr_remote_theme::group(ui).show(ui, |ui| {
             ui.label(RichText::new("RX1").strong());
 
             // Row 1: AGC mode + NB + BIN + APF + Lock
@@ -352,7 +353,7 @@ impl SdrRemoteApp {
                     });
 
                 if self.binaural {
-                    ui.separator();
+                    super::helpers::rule(ui);
                     ui.label("Bal:");
                     let mut bal = self.rx_balance as f32;
                     let bal_slider = egui::Slider::new(&mut bal, -40.0..=40.0)
@@ -425,7 +426,7 @@ impl SdrRemoteApp {
                     tci_set!(self, CId::RitOffset, 0);
                 }
 
-                ui.separator();
+                super::helpers::rule(ui);
 
                 let mut xit = self.xit_enable;
                 if ui.checkbox(&mut xit, "XIT").changed() {
@@ -474,7 +475,7 @@ impl SdrRemoteApp {
                     tci_set!(self, CId::SqlLevel, self.sql_level as u16);
                 }
 
-                ui.separator();
+                super::helpers::rule(ui);
 
                 ui.label("CW:");
                 let mut cw_spd = self.cw_keyer_speed as f32;
@@ -503,7 +504,7 @@ impl SdrRemoteApp {
                     tci_set!(self, CId::TuneDrive, self.tune_drive as u16);
                 }
 
-                ui.separator();
+                super::helpers::rule(ui);
 
                 ui.label("Mon:");
                 let mut mv = self.mon_volume as f32;
@@ -542,7 +543,7 @@ impl SdrRemoteApp {
         });
 
         // ===== RX2 =====
-        ui.group(|ui| {
+        sdr_remote_theme::group(ui).show(ui, |ui| {
             ui.label(RichText::new("RX2").strong());
 
             // Row 1: AGC mode + NB + BIN + APF

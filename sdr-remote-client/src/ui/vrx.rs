@@ -9,7 +9,324 @@
 use super::*;
 use crate::ui::controls::frequency::step_on_grid;
 
+/// The width of one DDC bucket: a VRX keeps its last frequency per 100 kHz of
+/// DDC centre, for when the operator comes back to that part of the band.
+const BUCKET_HZ: u64 = 100_000;
+
+/// A DDC centre as one VRX sees it on this frame (build 226).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DdcMove {
+    pub center_hz: u64,
+    pub last_center_hz: u64,
+    /// Where the server lets this VRX listen around `center_hz`:
+    /// `vrx_tune_limits`, the same guard as the server's (build 227, review of
+    /// 226 - not the half span, which reaches past it).
+    pub reach_lo_hz: u64,
+    pub reach_hi_hz: u64,
+    /// The reach of the previous frame (build 228).
+    pub last_reach_lo_hz: u64,
+    pub last_reach_hi_hz: u64,
+    /// Centre and span came from a spectrum packet (build 229, review of 228).
+    /// Without the full-band spectrum - off for a fresh install - the centre
+    /// is the VFO, and with CTUN every tuning step looked like a move.
+    pub measured: bool,
+    /// Where the VRX listens now (0: never set).
+    pub vrx_hz: u64,
+    /// The VFO of the receiver the VRX sits on.
+    pub vfo_hz: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VrxAfterMove {
+    /// Nothing to do: the centre did not move, or moved within its bucket
+    /// with the VRX still in reach.
+    Unchanged,
+    /// Another bucket, but the VRX is still in reach.
+    Stays,
+    /// Out of reach: to the frequency last used in the new bucket, or the VFO.
+    To { hz: u64, saved: bool },
+}
+
+impl DdcMove {
+    /// Every move of the centre is looked at (build 227, owner after the
+    /// review of 226): a re-centering within one bucket can take a VRX out of
+    /// reach too. And every change of the reach with the centre standing still
+    /// (build 228): another VRX filter, or the first spectrum packet. A VRX still in reach stays where it is (build 226); one out
+    /// of reach goes to the frequency saved for the bucket, when that is in
+    /// reach, or to the VFO. Into another bucket the old bucket keeps the
+    /// frequency, for a later band change. A VRX never set (0) moves only at a
+    /// bucket change, as before.
+    pub(super) fn follow(self, saved: &mut std::collections::HashMap<u64, u64>) -> VrxAfterMove {
+        let reach_same = (self.reach_lo_hz, self.reach_hi_hz) == (self.last_reach_lo_hz, self.last_reach_hi_hz);
+        if self.last_center_hz == 0 || (self.center_hz == self.last_center_hz && reach_same) {
+            return VrxAfterMove::Unchanged;
+        }
+        let cur = self.center_hz / BUCKET_HZ;
+        let last = self.last_center_hz / BUCKET_HZ;
+        let new_bucket = cur != last;
+        // An estimated centre is looked at only at a bucket change, as up to
+        // build 226 (build 229).
+        if !self.measured && !new_bucket {
+            return VrxAfterMove::Unchanged;
+        }
+        if new_bucket && self.vrx_hz > 0 {
+            saved.insert(last, self.vrx_hz);
+        }
+        let in_reach = |f: u64| f >= self.reach_lo_hz && f <= self.reach_hi_hz;
+        if self.vrx_hz > 0 && in_reach(self.vrx_hz) {
+            return if new_bucket { VrxAfterMove::Stays } else { VrxAfterMove::Unchanged };
+        }
+        if self.vrx_hz == 0 && !new_bucket {
+            return VrxAfterMove::Unchanged;
+        }
+        match saved.get(&cur).copied().filter(|&f| in_reach(f)) {
+            Some(hz) => VrxAfterMove::To { hz, saved: true },
+            None => VrxAfterMove::To { hz: self.vfo_hz, saved: false },
+        }
+    }
+}
+
+/// How wide the DDC of a VRX is (build 232, review of 231): the rate the
+/// server says first - it travels always, and the full-band row's span stays
+/// behind when that row is switched off - then the row's span, then a guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DdcWidth {
+    /// `DdcSampleRateRx1/2`, kHz; 0 until the server said it.
+    pub server_rate_khz: u16,
+    /// The full-band row's span, Hz; 0 without that row.
+    pub row_span_hz: u32,
+    /// The full-band row is of now (`RowLive`, build 233/234): its span stays
+    /// behind when it is switched off or stops coming, and then it is no source.
+    pub row_on: bool,
+}
+
+impl DdcWidth {
+    pub(super) fn hz(self) -> f64 {
+        if self.server_rate_khz > 0 {
+            self.server_rate_khz as f64 * 1000.0
+        } else if self.row_on && self.row_span_hz > 0 {
+            self.row_span_hz as f64
+        } else {
+            384_000.0
+        }
+    }
+}
+
+/// How long a connected server may leave a measured centre unsaid before the
+/// estimate takes over: it says the centre on every change and every 10 s.
+const FALLBACK_HOLD: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// A measured centre that is no longer there (build 232, review of 231).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FallBackInput {
+    /// The previous frame's centre was measured.
+    pub last_measured: bool,
+    /// This frame's centre is measured.
+    pub measured: bool,
+    /// The client has a session.
+    pub connected: bool,
+    /// How long the connected server has left it unsaid (None: not counting).
+    pub unsaid_for: Option<std::time::Duration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FallBack {
+    /// Nothing to hold: follow as usual.
+    Follow,
+    /// A lost session, or a server that has not said it yet: no move, and the
+    /// last measured centre stays.
+    Hold,
+    /// A connected server that stays silent (before 231, or no DDC mode): the
+    /// estimate becomes the starting point, without moving the VRX.
+    Rebase,
+}
+
+impl FallBackInput {
+    pub(super) fn decide(self) -> FallBack {
+        if !(self.last_measured && !self.measured) {
+            return FallBack::Follow;
+        }
+        match (self.connected, self.unsaid_for) {
+            (true, Some(d)) if d >= FALLBACK_HOLD => FallBack::Rebase,
+            _ => FallBack::Hold,
+        }
+    }
+}
+
+/// Where a VRX's DDC stands, from what the client has (build 231). The DDC of
+/// a VRX is its receiver's: a VRX never listens outside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DdcSources {
+    /// What the server says (`DdcCentreRx1/2`); 0 from a server before 231.
+    pub sent_hz: u64,
+    /// The full-band spectrum's centre and span (0 without that row).
+    pub full_hz: u64,
+    pub full_span_hz: u64,
+    /// The full-band row is of now (`RowLive`; build 233, review of 232, and
+    /// 234, review of 233): switched off or no longer coming, its centre and
+    /// span stay behind, and after a lost session that old centre passed for a
+    /// measurement.
+    pub row_on: bool,
+    /// The receiver's VFO: the estimate when nothing else is known.
+    pub vfo_hz: u64,
+}
+
+impl DdcSources {
+    /// The centre, and whether it is measured. The server's word first; then
+    /// the full-band row, as up to build 230; then the VFO as an estimate.
+    pub(super) fn centre(self) -> (u64, bool) {
+        if self.sent_hz > 0 {
+            (self.sent_hz, true)
+        } else if self.row_on && self.full_hz > 0 && self.full_span_hz > 0 {
+            (self.full_hz, true)
+        } else {
+            (self.vfo_hz, false)
+        }
+    }
+}
+
 impl SdrRemoteApp {
+    /// Where the DDC of this VRX's receiver stands, and whether that was
+    /// measured (`DdcSources`). The one place the VRX follow, the VRX window and
+    /// MIDI ask (build 231): with the full-band spectrum off the window took
+    /// the VFO, and after a band change it held the tuning to the old band.
+    pub(super) fn vrx_ddc_centre(&self, ch: VrxChannel) -> (u64, bool) {
+        match ch {
+            VrxChannel::Vrx1 => DdcSources {
+                sent_hz: self.ddc_centre_rx1_hz,
+                full_hz: self.full_spectrum_center_hz as u64,
+                full_span_hz: self.full_spectrum_span_hz as u64,
+                row_on: self.full_row_live(self.full_row_at),
+                vfo_hz: self.frequency_hz,
+            },
+            VrxChannel::Vrx2 => DdcSources {
+                sent_hz: self.ddc_centre_rx2_hz,
+                full_hz: self.rx2_full_spectrum_center_hz as u64,
+                full_span_hz: self.rx2_full_spectrum_span_hz as u64,
+                row_on: self.full_row_live(self.rx2_full_row_at),
+                vfo_hz: self.rx2_frequency_hz,
+            },
+        }
+        .centre()
+    }
+
+    /// One VRX follows the DDC centre of its receiver, once per frame
+    /// (`DdcMove::follow`). One rule for both VRXs: they were two copies in
+    /// `update.rs` until build 226.
+    pub(super) fn vrx_follow_ddc_centre(&mut self, ch: VrxChannel) {
+        let (vfo, last, last_reach, vrx_hz, last_measured) = match ch {
+            VrxChannel::Vrx1 => (
+                self.frequency_hz, self.last_vrx1_ddc_center_hz, self.last_vrx1_reach_hz, self.vrx1_freq_hz,
+                self.last_vrx1_measured,
+            ),
+            VrxChannel::Vrx2 => (
+                self.rx2_frequency_hz, self.last_vrx2_ddc_center_hz, self.last_vrx2_reach_hz, self.vrx2_freq_hz,
+                self.last_vrx2_measured,
+            ),
+        };
+        let (center_hz, measured) = self.vrx_ddc_centre(ch);
+        if center_hz == 0 {
+            return;
+        }
+        // A measured centre falling back to the estimate is a lost session,
+        // not a move (build 232, review of 231): nothing happens, and the last
+        // measured centre and reach stay for when the server speaks again. A
+        // connected server that stays silent becomes the estimate's start.
+        let connected = self.connected;
+        let since = match ch {
+            VrxChannel::Vrx1 => &mut self.vrx1_fallback_since,
+            VrxChannel::Vrx2 => &mut self.vrx2_fallback_since,
+        };
+        if !(last_measured && !measured) || !connected {
+            *since = None;
+        } else if since.is_none() {
+            *since = Some(std::time::Instant::now());
+        }
+        let unsaid_for = since.map(|t| t.elapsed());
+        match (FallBackInput { last_measured, measured, connected, unsaid_for }).decide() {
+            FallBack::Follow => {}
+            FallBack::Hold => return,
+            FallBack::Rebase => {
+                *since = None;
+                let reach = self.vrx_tune_limits(ch, center_hz);
+                match ch {
+                    VrxChannel::Vrx1 => {
+                        self.last_vrx1_ddc_center_hz = center_hz;
+                        self.last_vrx1_reach_hz = reach;
+                        self.last_vrx1_measured = false;
+                    }
+                    VrxChannel::Vrx2 => {
+                        self.last_vrx2_ddc_center_hz = center_hz;
+                        self.last_vrx2_reach_hz = reach;
+                        self.last_vrx2_measured = false;
+                    }
+                }
+                return;
+            }
+        }
+        // The server's own guard, one place (review of 226).
+        let (reach_lo_hz, reach_hi_hz) = self.vrx_tune_limits(ch, center_hz);
+        let saved = match ch {
+            VrxChannel::Vrx1 => &mut self.vrx1_freq_by_bucket,
+            VrxChannel::Vrx2 => &mut self.vrx2_freq_by_bucket,
+        };
+        let after = DdcMove {
+            center_hz,
+            last_center_hz: last,
+            reach_lo_hz,
+            reach_hi_hz,
+            last_reach_lo_hz: last_reach.0,
+            last_reach_hi_hz: last_reach.1,
+            measured,
+            vrx_hz,
+            vfo_hz: vfo,
+        }
+        .follow(saved);
+        // Named in advance (`logregels-build226.md`, `logregels-build227.md`).
+        match after {
+            VrxAfterMove::Unchanged => {}
+            VrxAfterMove::Stays => log::info!(
+                "{}: DDC centre to {:.3} kHz, still within reach - VRX stays on {:.3} kHz",
+                ch.label(), center_hz as f64 / 1000.0, vrx_hz as f64 / 1000.0
+            ),
+            VrxAfterMove::To { hz, saved } => {
+                // Commit only after a confirmed send (no drift).
+                if self.vrx_send_freq(ch, hz) {
+                    match ch {
+                        VrxChannel::Vrx1 => self.vrx1_freq_hz = hz,
+                        VrxChannel::Vrx2 => self.vrx2_freq_hz = hz,
+                    }
+                }
+                let to = if saved { "saved" } else { "the VFO" };
+                if center_hz == last {
+                    // Named in advance (`logregels-build228.md`).
+                    log::info!(
+                        "{}: reach now {:.3}-{:.3} kHz - VRX to {:.3} kHz ({})",
+                        ch.label(), reach_lo_hz as f64 / 1000.0, reach_hi_hz as f64 / 1000.0,
+                        hz as f64 / 1000.0, to
+                    );
+                } else {
+                    log::info!(
+                        "{}: DDC centre to {:.3} kHz - VRX to {:.3} kHz ({})",
+                        ch.label(), center_hz as f64 / 1000.0, hz as f64 / 1000.0, to
+                    );
+                }
+            }
+        }
+        match ch {
+            VrxChannel::Vrx1 => {
+                self.last_vrx1_ddc_center_hz = center_hz;
+                self.last_vrx1_reach_hz = (reach_lo_hz, reach_hi_hz);
+                self.last_vrx1_measured = measured;
+            }
+            VrxChannel::Vrx2 => {
+                self.last_vrx2_ddc_center_hz = center_hz;
+                self.last_vrx2_reach_hz = (reach_lo_hz, reach_hi_hz);
+                self.last_vrx2_measured = measured;
+            }
+        }
+    }
+
     /// Model B `can(VRX)`: VRX spectra are produced only from the Thetis DDC-IQ,
     /// so a VRX window can exist iff Thetis is configured. This is *availability*,
     /// not connection - `connected` gates the wire subscription + live-vs-placeholder
@@ -123,7 +440,6 @@ impl SdrRemoteApp {
         let filter_low = match ch { VrxChannel::Vrx1 => self.vrx1_filter_low_hz, VrxChannel::Vrx2 => self.vrx2_filter_low_hz };
         let filter_high = match ch { VrxChannel::Vrx1 => self.vrx1_filter_high_hz, VrxChannel::Vrx2 => self.vrx2_filter_high_hz };
         let mut volume = match ch { VrxChannel::Vrx1 => self.vrx1_volume, VrxChannel::Vrx2 => self.vrx2_volume };
-        let high_res = match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum };
         let smeter = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum.smeter_dbm(), VrxChannel::Vrx2 => self.vrx2_spectrum.smeter_dbm() };
         let smeter_peak = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum.smeter_peak(), VrxChannel::Vrx2 => self.vrx2_spectrum.smeter_peak() };
         let source_freq = match ch { VrxChannel::Vrx1 => self.frequency_hz, VrxChannel::Vrx2 => self.rx2_frequency_hz };
@@ -228,7 +544,7 @@ impl SdrRemoteApp {
             ) {
                 if self.vrx_send_mode(ch, mode_val) {
                     match ch { VrxChannel::Vrx1 => self.vrx1_mode = mode_val, VrxChannel::Vrx2 => self.vrx2_mode = mode_val };
-                    let (lo, hi) = vrx_mode_default_filter(mode_val, cur_bw);
+                    let (lo, hi) = vrx_mode_default_filter(mode, mode_val, cur_bw);
                     // Default filter for this mode: only commit local filter state + persist
                     // after a confirmed send (dispatch-return discipline -
                     // no UI/server drift on a failed send).
@@ -273,17 +589,6 @@ impl SdrRemoteApp {
                     };
                     self.save_full_config();
                 }
-            }
-        });
-
-        // High-res spectrum toggle (server-side extracted view)
-        ui.horizontal(|ui| {
-            let mut hr = high_res;
-            if ui.add_enabled(connected, egui::Checkbox::new(&mut hr, rust_i18n::t!("main_high_res_spectrum").to_string()))
-                .on_hover_text(rust_i18n::t!("main_high_res_spectrum_hover").to_string())
-                .changed()
-            {
-                self.toggle_vrx_spectrum(ch);
             }
         });
     }
@@ -437,22 +742,26 @@ impl SdrRemoteApp {
     /// stop there too - otherwise the readout and the spectrum keep travelling
     /// while the audio stands still, which is exactly what it sounds like.
     pub(super) fn vrx_tune_limits(&self, ch: VrxChannel, ddc_center: u64) -> (u64, u64) {
+        // The same number as the server's; a test holds the two together
+        // (build 228): the client does not depend on `vrx-rs`.
         const DDC_USABLE_FRACTION: f64 = 0.9;
-        // Width comes from the spectrum packets the server actually sends, not
-        // from `vrx_ddc_span_hz()`: that guesses 384 kHz while the DDC rate is
-        // still unknown, and a guess wider than the real band re-opens exactly
-        // the gap build 61 closed - tuning past where the server listens, silently.
-        // Only when no packet has arrived yet do we fall back, and then to the
-        // narrower of the two so the limit errs inward.
-        let packet_span = match ch {
-            VrxChannel::Vrx1 => self.full_spectrum_span_hz,
-            VrxChannel::Vrx2 => self.rx2_full_spectrum_span_hz,
-        } as f64;
-        let span = if packet_span > 0.0 {
-            packet_span
-        } else {
-            packet_span.max(0.0).max(self.vrx_ddc_span_hz(ch) as f64)
-        };
+        // The width: the server's DDC rate, then the full-band row, then a
+        // guess (`DdcWidth`, build 232). A guess wider than the real band
+        // re-opens the gap build 61 closed - tuning past where the server
+        // listens - so it is the last resort.
+        let span = match ch {
+            VrxChannel::Vrx1 => DdcWidth {
+                server_rate_khz: self.ddc_sample_rate_rx1,
+                row_span_hz: self.full_spectrum_span_hz,
+                row_on: self.full_row_live(self.full_row_at),
+            },
+            VrxChannel::Vrx2 => DdcWidth {
+                server_rate_khz: self.ddc_sample_rate_rx2,
+                row_span_hz: self.rx2_full_spectrum_span_hz,
+                row_on: self.full_row_live(self.rx2_full_row_at),
+            },
+        }
+        .hz();
         let (lo_hz, hi_hz) = match ch {
             VrxChannel::Vrx1 => (self.vrx1_filter_low_hz, self.vrx1_filter_high_hz),
             VrxChannel::Vrx2 => (self.vrx2_filter_low_hz, self.vrx2_filter_high_hz),
@@ -479,7 +788,9 @@ impl SdrRemoteApp {
         let connected = self.connected;
         let rx_label = match ch { VrxChannel::Vrx1 => "RX1", VrxChannel::Vrx2 => "RX2" };
         let allow_zoom_below_2x = self.allow_zoom_below_2x;
-        let fft_size_k = self.spectrum_fft_size_k;
+        // The FFT size of the receiver this channel rides (build 242: VRX2
+        // showed RX1's).
+        let fft_size_k = match ch { VrxChannel::Vrx1 => self.spectrum_fft_size_k, VrxChannel::Vrx2 => self.rx2_spectrum_fft_size_k };
         // No ui.group() frame: RX spectrum panels don't have one either (parity).
         {
             // Row 1: Ref + Auto + Range
@@ -558,19 +869,9 @@ impl SdrRemoteApp {
                     }
                     changed = true;
                 }
-                // Same shared client flag as the RX panel (RX1/RX2/VRX share
-                // it). Now also settable here so the VRX is usable standalone
-                // without the RX spectrum panel alongside (§6, each channel independent).
-                if ui.checkbox(&mut self.allow_zoom_below_2x, rust_i18n::t!("main_allow_zoom_2x").to_string())
-                    .on_hover_text(rust_i18n::t!("hover_zoom_below_2x").to_string())
-                    .changed()
-                {
-                    crate::ui::config::save_allow_zoom_below_2x(self.allow_zoom_below_2x);
-                    let _ = self.cmd_tx.send(Command::SetControl(
-                        sdr_remote_core::protocol::ControlId::AllowZoomBelow2x,
-                        if self.allow_zoom_below_2x { 1 } else { 0 },
-                    ));
-                }
+                // Same shared client flag as the RX panels, settable here too so
+                // the VRX is usable standalone (§6, each channel independent).
+                self.zoom_below_2x_checkbox(ui);
                 ui.label(rust_i18n::t!("main_pan_label").to_string());
                 let zoom_now = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
                 let max_pan = crate::ui::tuning::max_pan_fraction(zoom_now);
@@ -599,12 +900,11 @@ impl SdrRemoteApp {
                     .on_disabled_hover_text(rust_i18n::t!("main_hover_server_wide_fft", rx = rx_label).to_string());
                 if changed { self.save_full_config(); }
             });
-            ui.separator();
+            super::helpers::rule(ui);
             let remaining = ui.available_height();
-            // Plot and waterfall equal height (operator wish); 16 px = the label strip in the
-            // spectrum, TL_INNER_GAP_Y = space between plot and waterfall.
-            let spec_h = ((remaining - 16.0 - theme::TL_INNER_GAP_Y) / 2.0).max(40.0);
-            let wf_h = spec_h;
+            // Plot and waterfall equal height (operator wish), the one rule for every
+            // spectrum panel (build 241).
+            let (spec_h, wf_h) = super::spectrum::plot_and_waterfall_heights(remaining, ui.spacing().item_spacing.y);
             let new_freq = match ch {
                 VrxChannel::Vrx1 => {
                     // VRX renders EXCLUSIVELY its own extracted spectrum (§6.1
@@ -653,5 +953,330 @@ impl SdrRemoteApp {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// One "Zoom <2x" checkbox for every spectrum panel, the VRX2 FFT label
+    /// from RX2, and a rule above the RX2 half of the joined window (build 242).
+    #[test]
+    fn every_spectrum_panel_has_the_same_zoom_row() {
+        let cut = |s: &'static str| &s[..s.find("#[cfg(test)]").unwrap_or(s.len())];
+        let rx1 = cut(include_str!("spectrum_content.rs"));
+        let rx2 = cut(include_str!("rx_controls.rs"));
+        let vrx = cut(include_str!("vrx.rs"));
+        let label = "rust_i18n::t!(\"main_allow_zoom_2x\")";
+        assert_eq!(rx1.matches(label).count() + rx2.matches(label).count() + vrx.matches(label).count(), 1, "one checkbox");
+        let call = "self.zoom_below_2x_checkbox(ui);";
+        let zoom = "ui.label(rust_i18n::t!(\"main_zoom_label\").to_string());";
+        let pan = "ui.label(rust_i18n::t!(\"main_pan_label\").to_string());";
+        for (name, body) in [("RX1", rx1), ("RX2", rx2), ("VRX", vrx)] {
+            assert_eq!(body.matches(call).count(), 1, "{name}");
+            let z = body.find(zoom).expect(name);
+            let p = z + body[z..].find(pan).expect(name);
+            assert!(body[z..p].contains(call), "{name}: in the zoom row, before Pan");
+        }
+        assert!(vrx.contains("VrxChannel::Vrx2 => self.rx2_spectrum_fft_size_k"), "VRX2 shows RX2's FFT size");
+        let joined = cut(include_str!("popouts.rs"));
+        assert!(joined.contains("super::helpers::rule(ui);\n            self.render_rx2_spectrum_only(ui, ctx);"), "a rule above RX2");
+    }
+
+    /// Every spectrum panel - RX1, RX2 and the VRX - has a rule under its
+    /// button rows, between the zoom row and the plot (owner, 2026-10-17,
+    /// build 240: the RX panels had only the one above).
+    #[test]
+    fn every_spectrum_panel_has_a_rule_under_its_buttons() {
+        let rule = "super::helpers::rule(ui);";
+        let zoom = "ui.label(rust_i18n::t!(\"main_zoom_label\").to_string());";
+        for (name, src, plot) in [
+            ("RX1", include_str!("spectrum_content.rs"), "spectrum_plot("),
+            ("RX2", include_str!("rx_controls.rs"), "spectrum_plot("),
+            ("VRX", include_str!("vrx.rs"), "spectrum::render_vrx_strip("),
+        ] {
+            let body = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            let body = match name {
+                "RX2" => &body[body.find("fn render_rx2_spectrum_only").unwrap()..],
+                "VRX" => &body[body.find("fn render_vrx_spectrum_panel").unwrap()..],
+                _ => body,
+            };
+            assert_eq!(body.matches(zoom).count(), 1, "{name}");
+            let z = body.find(zoom).unwrap();
+            let p = z + body[z..].find(plot).expect(name);
+            assert!(body[z..p].contains(rule), "{name}: a rule between the zoom row and the plot");
+        }
+    }
+
+    /// The VRX window has no checkbox of its own for its spectrum (owner,
+    /// 2026-10-16, build 225): unticking it closed the window, which must not
+    /// happen. The window opens with the chip on the main screen and closes
+    /// with its X; both still go through `toggle_vrx_spectrum` and
+    /// `close_vrx_popout`.
+    #[test]
+    fn the_vrx_window_closes_only_with_its_x() {
+        let src = include_str!("vrx.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(!body.contains("main_high_res_spectrum"));
+        assert!(!body.contains("Checkbox::new(&mut hr"));
+        let yml = include_str!("../../locales/app.yml");
+        assert!(!yml.contains("main_high_res_spectrum"), "the text goes with it");
+        let update = include_str!("update.rs");
+        assert_eq!(update.matches("if vrx1_spec_click { self.toggle_vrx_spectrum(VrxChannel::Vrx1); }").count(), 1);
+        assert_eq!(update.matches("if vrx2_spec_click { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }").count(), 1);
+    }
+
+    /// A re-centering across a 100 kHz line no longer moves a VRX that is
+    /// still within reach (build 226, owner after the review of 225); out of
+    /// reach it goes to the frequency saved for the new bucket, or the VFO.
+    /// Reach is the server's guard (build 227): 384 kHz x 0.45 less a 3 kHz
+    /// filter edge here. The second pass: back across the line, and a band
+    /// change and back.
+    #[test]
+    fn a_vrx_within_reach_stays_when_the_centre_crosses_a_bucket_line() {
+        use super::{DdcMove, VrxAfterMove};
+        let mut saved = std::collections::HashMap::new();
+        const REACH: u64 = 169_800;
+        let mv = |center_hz: u64, last_center_hz: u64, vrx_hz, vfo_hz| DdcMove {
+            center_hz,
+            last_center_hz,
+            reach_lo_hz: center_hz - REACH,
+            reach_hi_hz: center_hz + REACH,
+            last_reach_lo_hz: last_center_hz.saturating_sub(REACH),
+            last_reach_hi_hz: last_center_hz + REACH,
+            measured: true,
+            vrx_hz,
+            vfo_hz,
+        };
+        // Nothing moved, and the first frame.
+        assert_eq!(mv(7_099_900, 7_099_000, 7_050_000, 7_090_000).follow(&mut saved), VrxAfterMove::Unchanged);
+        assert_eq!(mv(7_099_900, 0, 7_050_000, 7_090_000).follow(&mut saved), VrxAfterMove::Unchanged);
+        assert!(saved.is_empty());
+        // 7099.9 -> 7100.1: another bucket, the VRX at 7050 still in range.
+        assert_eq!(mv(7_100_100, 7_099_900, 7_050_000, 7_100_000).follow(&mut saved), VrxAfterMove::Stays);
+        assert_eq!(saved.get(&70), Some(&7_050_000), "the old bucket keeps it");
+        // And back: stays again.
+        assert_eq!(mv(7_099_900, 7_100_100, 7_050_000, 7_100_000).follow(&mut saved), VrxAfterMove::Stays);
+        // A band change: out of range, nothing saved there yet -> the VFO.
+        assert_eq!(
+            mv(14_200_000, 7_099_900, 7_050_000, 14_200_000).follow(&mut saved),
+            VrxAfterMove::To { hz: 14_200_000, saved: false }
+        );
+        // On 20 m the VRX went to 14 150; back to 40 m -> what 40 m had.
+        assert_eq!(
+            mv(7_099_900, 14_200_000, 14_150_000, 7_090_000).follow(&mut saved),
+            VrxAfterMove::To { hz: 7_050_000, saved: true }
+        );
+        assert_eq!(saved.get(&142), Some(&14_150_000));
+        // A saved frequency out of the new range is not used.
+        saved.insert(71, 6_000_000);
+        assert_eq!(
+            mv(7_150_000, 14_200_000, 14_150_000, 7_140_000).follow(&mut saved),
+            VrxAfterMove::To { hz: 7_140_000, saved: false }
+        );
+        // A VRX never set (0) goes where it went before 226.
+        assert_eq!(
+            mv(7_250_000, 7_150_000, 0, 7_240_000).follow(&mut saved),
+            VrxAfterMove::To { hz: 7_240_000, saved: false }
+        );
+        // Between the server's guard and the half span (review of 226, the
+        // probe): 6920 kHz under a centre of 7100.1 is held at 6930.3 by the
+        // server, so it does not stay.
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(
+            mv(7_100_100, 7_099_900, 6_920_000, 7_100_000).follow(&mut fresh),
+            VrxAfterMove::To { hz: 7_100_000, saved: false }
+        );
+        // Within one bucket (build 227): in reach nothing happens, out of reach
+        // it moves; a VRX never set does nothing there.
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(mv(7_160_000, 7_150_000, 7_100_000, 7_160_000).follow(&mut fresh), VrxAfterMove::Unchanged);
+        assert_eq!(
+            mv(7_160_000, 7_150_000, 6_985_000, 7_160_000).follow(&mut fresh),
+            VrxAfterMove::To { hz: 7_160_000, saved: false }
+        );
+        assert_eq!(mv(7_170_000, 7_160_000, 0, 7_170_000).follow(&mut fresh), VrxAfterMove::Unchanged);
+        assert!(fresh.is_empty(), "within a bucket nothing is saved");
+        // The reach changes with the centre standing still (build 228): a
+        // wider filter takes 6990 kHz out of reach under 7160 -> the VFO; in
+        // reach nothing happens, and a VRX never set does nothing either.
+        let still = |vrx_hz, lo: u64, last_lo: u64| DdcMove {
+            center_hz: 7_160_000,
+            last_center_hz: 7_160_000,
+            reach_lo_hz: lo,
+            reach_hi_hz: 7_160_000 + (7_160_000 - lo),
+            last_reach_lo_hz: last_lo,
+            last_reach_hi_hz: 7_160_000 + (7_160_000 - last_lo),
+            measured: true,
+            vrx_hz,
+            vfo_hz: 7_160_000,
+        };
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(still(6_990_000, 6_990_200, 6_990_200).follow(&mut fresh), VrxAfterMove::Unchanged, "nothing changed");
+        assert_eq!(
+            still(6_990_000, 6_995_000, 6_985_000).follow(&mut fresh),
+            VrxAfterMove::To { hz: 7_160_000, saved: false },
+            "a wider filter, out of reach"
+        );
+        assert_eq!(still(7_100_000, 6_995_000, 6_985_000).follow(&mut fresh), VrxAfterMove::Unchanged, "in reach");
+        assert_eq!(still(0, 6_995_000, 6_985_000).follow(&mut fresh), VrxAfterMove::Unchanged, "never set");
+        // An estimated centre (no full-band spectrum: the VFO) is looked at
+        // only at a bucket change (build 229, the probe of the review of 228):
+        // DDC really on 7100, VRX on 6935, the VFO from 7100 to 7150.
+        let est = |center_hz: u64, last_center_hz: u64, lo_shift: u64, vrx_hz| DdcMove {
+            center_hz,
+            last_center_hz,
+            reach_lo_hz: center_hz - REACH + lo_shift,
+            reach_hi_hz: center_hz + REACH,
+            last_reach_lo_hz: last_center_hz - REACH,
+            last_reach_hi_hz: last_center_hz + REACH,
+            measured: false,
+            vrx_hz,
+            vfo_hz: center_hz,
+        };
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(est(7_150_000, 7_100_000, 0, 6_935_000).follow(&mut fresh), VrxAfterMove::Unchanged, "a tuning step");
+        assert_eq!(est(7_100_000, 7_100_000, 5_000, 6_935_000).follow(&mut fresh), VrxAfterMove::Unchanged, "a reach change");
+        assert_eq!(
+            est(7_250_000, 7_150_000, 0, 6_935_000).follow(&mut fresh),
+            VrxAfterMove::To { hz: 7_250_000, saved: false },
+            "a bucket change still counts"
+        );
+        // Measured, the same step does move it.
+        let mut m = est(7_150_000, 7_100_000, 0, 6_935_000);
+        m.measured = true;
+        assert_eq!(m.follow(&mut fresh), VrxAfterMove::To { hz: 7_150_000, saved: false });
+        // Reach comes from the one guard.
+        let src = include_str!("vrx.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert_eq!(body.matches("let (reach_lo_hz, reach_hi_hz) = self.vrx_tune_limits(ch, center_hz);").count(), 1);
+        // Measured: what `vrx_ddc_centre` says (build 231; a centre and a span
+        // from a packet in build 229).
+        assert_eq!(body.matches("let (center_hz, measured) = self.vrx_ddc_centre(ch);").count(), 1);
+        // And remembered per VRX for the next frame (build 228).
+        assert_eq!(body.matches("self.last_vrx1_reach_hz = (reach_lo_hz, reach_hi_hz);").count(), 1);
+        assert_eq!(body.matches("self.last_vrx2_reach_hz = (reach_lo_hz, reach_hi_hz);").count(), 1);
+        // Both VRXs through the one rule.
+        let update = include_str!("update.rs");
+        assert_eq!(update.matches("self.vrx_follow_ddc_centre(VrxChannel::Vrx1);").count(), 1);
+        assert_eq!(update.matches("self.vrx_follow_ddc_centre(VrxChannel::Vrx2);").count(), 1);
+        assert!(!update.contains("_freq_by_bucket"), "no second copy");
+    }
+
+    /// A lost session does not move a VRX (build 232, review of 231): the
+    /// centre falling back from measured to the estimate is no move, and the
+    /// width of the reach comes from the server's DDC rate before the row.
+    #[test]
+    fn a_lost_session_does_not_move_a_vrx() {
+        use super::DdcWidth;
+        let w = |server_rate_khz, row_span_hz| DdcWidth { server_rate_khz, row_span_hz, row_on: true }.hz();
+        assert_eq!(w(768, 384_000), 768_000.0, "the server's rate wins over a stale row");
+        assert_eq!(w(0, 768_000), 768_000.0, "a server that has not said it yet: the row");
+        assert_eq!(w(0, 0), 384_000.0, "nothing: the guess");
+        // A row switched off is no source (build 233).
+        assert_eq!(DdcWidth { server_rate_khz: 0, row_span_hz: 768_000, row_on: false }.hz(), 384_000.0);
+        let src = include_str!("vrx.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        // Hold while away or not yet said; a silent connected server rebases
+        // after FALLBACK_HOLD, without a move.
+        use super::{FallBack, FallBackInput};
+        let fb = |last_measured, measured, connected, secs: Option<u64>| {
+            FallBackInput { last_measured, measured, connected, unsaid_for: secs.map(std::time::Duration::from_secs) }.decide()
+        };
+        assert_eq!(fb(false, false, true, None), FallBack::Follow, "never measured: the estimate's rules");
+        assert_eq!(fb(true, true, true, None), FallBack::Follow, "still measured");
+        assert_eq!(fb(false, true, true, None), FallBack::Follow, "the server speaks again");
+        assert_eq!(fb(true, false, false, None), FallBack::Hold, "a lost session");
+        assert_eq!(fb(true, false, false, Some(60)), FallBack::Hold, "away for long: still held");
+        assert_eq!(fb(true, false, true, Some(3)), FallBack::Hold, "connected, not said yet");
+        assert_eq!(fb(true, false, true, Some(15)), FallBack::Rebase, "a server that stays silent");
+        for line in [
+            "            FallBack::Hold => return,",
+            "self.last_vrx1_measured = measured;",
+            "self.last_vrx2_measured = measured;",
+            "server_rate_khz: self.ddc_sample_rate_rx1,\n                row_span_hz: self.full_spectrum_span_hz,\n                row_on: self.full_row_live(self.full_row_at),",
+            "server_rate_khz: self.ddc_sample_rate_rx2,\n                row_span_hz: self.rx2_full_spectrum_span_hz,\n                row_on: self.full_row_live(self.rx2_full_row_at),",
+        ] {
+            assert_eq!(body.matches(line).count(), 1, "{line}");
+        }
+        // The fall back comes before anything moves or is remembered.
+        let fall = body.find("FallBack::Hold => return,").unwrap();
+        assert!(fall < body.find("}\n        .follow(saved);").unwrap());
+        assert!(fall < body.find("self.last_vrx1_ddc_center_hz = center_hz;").unwrap());
+    }
+
+    /// The DDC centre of a VRX comes from one place (build 231): the server's
+    /// word, then the full-band row (a server before 231), then the VFO as an
+    /// estimate. The VRX follow, the VRX window and MIDI all ask it.
+    #[test]
+    fn a_vrx_knows_its_ddc_centre_without_the_full_band_spectrum() {
+        use super::DdcSources;
+        let c = |sent_hz, full_hz, full_span_hz, vfo_hz| DdcSources { sent_hz, full_hz, full_span_hz, row_on: true, vfo_hz }.centre();
+        // A row switched off is no source, even with a centre and a span left
+        // behind (build 233, the probe of the review of 232: the row off on 40 m,
+        // the radio since on 20 m, the session lost).
+        assert_eq!(
+            DdcSources { sent_hz: 0, full_hz: 7_100_000, full_span_hz: 384_000, row_on: false, vfo_hz: 14_250_000 }.centre(),
+            (14_250_000, false),
+            "an old row is no measurement"
+        );
+        // Switched on, but the RX2 row stopped coming when its windows closed
+        // (build 234, the probe of the review of 233): no measurement either.
+        let stopped = super::super::tuning::RowLive {
+            switched_on: true,
+            age: Some(std::time::Duration::from_secs(30)),
+        };
+        assert_eq!(
+            DdcSources { sent_hz: 0, full_hz: 7_073_000, full_span_hz: 384_000, row_on: stopped.live(), vfo_hz: 14_250_000 }.centre(),
+            (14_250_000, false),
+            "a row that no longer comes is no measurement"
+        );
+        assert_eq!(c(14_282_000, 7_138_000, 384_000, 14_250_000), (14_282_000, true), "the server's word wins over a stale row");
+        assert_eq!(c(14_282_000, 0, 0, 14_250_000), (14_282_000, true), "the row off: still measured");
+        assert_eq!(c(0, 7_138_000, 384_000, 7_100_000), (7_138_000, true), "a server before 231");
+        assert_eq!(c(0, 7_138_000, 0, 7_100_000), (7_100_000, false), "a centre without a span is not a measurement");
+        assert_eq!(c(0, 0, 0, 7_100_000), (7_100_000, false), "nothing known: the VFO");
+        // The three readers.
+        let vrx = include_str!("vrx.rs");
+        let vrx = &vrx[..vrx.find("#[cfg(test)]").unwrap()];
+        let popouts = include_str!("popouts.rs");
+        let midi = include_str!("midi_screen.rs");
+        assert_eq!(vrx.matches("self.vrx_ddc_centre(ch);").count(), 1, "the follow");
+        // Each VRX asks its own receiver.
+        for line in [
+            "sent_hz: self.ddc_centre_rx1_hz,
+                full_hz: self.full_spectrum_center_hz as u64,
+                full_span_hz: self.full_spectrum_span_hz as u64,
+                row_on: self.full_row_live(self.full_row_at),
+                vfo_hz: self.frequency_hz,",
+            "sent_hz: self.ddc_centre_rx2_hz,
+                full_hz: self.rx2_full_spectrum_center_hz as u64,
+                full_span_hz: self.rx2_full_spectrum_span_hz as u64,
+                row_on: self.full_row_live(self.rx2_full_row_at),
+                vfo_hz: self.rx2_frequency_hz,",
+        ] {
+            assert_eq!(vrx.matches(line).count(), 1, "{line}");
+        }
+        assert_eq!(popouts.matches("let (ddc_center, _) = self.vrx_ddc_centre(ch);").count(), 1, "the VRX window");
+        assert_eq!(midi.matches("let (center, _) = self.vrx_ddc_centre(ch);").count(), 1, "MIDI");
+        assert!(!midi.contains("full_spectrum_center_hz"), "MIDI has no second source");
+    }
+
+    /// The share of the DDC band a VRX may use is one number on both sides
+    /// (build 228, review of 227): the server clamps with it in `vrx-rs`, and
+    /// the client's reach - which since 226 also decides whether a VRX stays -
+    /// mirrors it. The client does not depend on `vrx-rs`, so this reads both.
+    #[test]
+    fn the_client_and_the_server_use_the_same_usable_share_of_the_ddc_band() {
+        fn value(src: &str, decl: &str) -> f64 {
+            let at = src.find(decl).unwrap_or_else(|| panic!("{decl}"));
+            let rest = &src[at + decl.len()..];
+            rest[..rest.find(';').unwrap()].trim().parse().unwrap()
+        }
+        let server = value(include_str!("../../../vrx-rs/src/runtime.rs"), "const DDC_USABLE_FRACTION: f32 =");
+        let client = value(include_str!("vrx.rs"), "const DDC_USABLE_FRACTION: f64 =");
+        assert_eq!(server, client);
+        let src = include_str!("vrx.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert_eq!(body.matches("const DDC_USABLE_FRACTION").count(), 1, "one place in the client");
     }
 }

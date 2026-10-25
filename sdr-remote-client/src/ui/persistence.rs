@@ -49,7 +49,10 @@ impl SdrRemoteApp {
             role: sdr_remote_relay::RelayRole::Client,
             instance: self.relay_instance_id.clone(),
             name: self.relay_device_name.clone(),
-            udp_port: sdr_remote_relay::relay_udp_port_resolve(self.relay_udp_enabled),
+            udp_port: sdr_remote_relay::relay_udp_port_resolve(true),
+            // The QUIC form, as the monitor was started with (app_state.rs):
+            // an update with `false` would switch it back to the classic form.
+            quic: true,
         }
     }
 
@@ -70,7 +73,9 @@ impl SdrRemoteApp {
         if let Some(monitor) = self.relay_monitor.as_ref() {
             monitor.update_config(cfg);
         } else {
-            let monitor = sdr_remote_relay::RelayMonitor::start_threaded(cfg);
+            // A grant sender nobody reads, as in app_state.rs: the relay only
+            // ever `send_replace`s into it, which needs no receiver.
+            let monitor = sdr_remote_relay::RelayMonitor::start_threaded_quic(cfg, tokio::sync::watch::channel(None).0, None);
             self.relay_status = Some(monitor.status_handle());
             self.relay_monitor = Some(monitor);
         }
@@ -91,13 +96,11 @@ impl SdrRemoteApp {
             &self.selected_output,
             self.agc_enabled,
             self.spectrum_enabled,
-            // During a TX spectrum override ref/range/auto are temporarily at
-            // TX defaults (auto=false); then write out the SAVED pre-TX values,
-            // so a save in that window (or closing during/right-after TX) does not
-            // overwrite the user setting (auto-ref "didn't always remember").
-            self.tx_spectrum_saved_ref_db.unwrap_or(self.spectrum_ref_db),
-            self.tx_spectrum_saved_range.unwrap_or(self.spectrum_range_db),
-            self.tx_spectrum_saved_auto_ref.unwrap_or(self.auto_ref_enabled),
+            // Since build 176 the spectrum keeps its receive settings while
+            // transmitting, so these are always the operator's.
+            self.spectrum_ref_db,
+            self.spectrum_range_db,
+            self.auto_ref_enabled,
             self.waterfall_contrast,
             self.spectrum_max_bins,
             self.spectrum_fft_size_k,
@@ -154,15 +157,6 @@ impl SdrRemoteApp {
             self.meter_analog,
             self.spectrum_popout,
             self.main_window_pos.map(|p| (p.x, p.y)),
-            self.ub_show_menu,
-            self.collapse_diversity,
-            self.collapse_yaesu_eq,
-            self.collapse_yaesu_memories,
-            self.collapse_yaesu_menu,
-            self.collapse_yaesu2_memories,
-            self.collapse_yaesu2_menu,
-            self.amplitec_power_show,
-            self.bw_breakdown_expanded,
             self.yaesu_memories_h,
             self.yaesu2_memories_h,
             &arranger::layout_grids_to_config(&self.layout_grid_per_monitor),
@@ -210,6 +204,14 @@ impl SdrRemoteApp {
         if freq == 0 { return; }
         let bl = band_label(freq);
         if bl.is_empty() { return; }
+        // Only edges that fit the mode are kept (build 243); 0..0 restores none.
+        let (flo, fhi) = if (flo, fhi) == (0, 0) || sdr_remote_logic::filter_width::edges_fit_mode(mode, flo, fhi) {
+            (flo, fhi)
+        } else {
+            // Named in advance (`logregels-build243.md`).
+            log::info!("Band memory {}: filter {} .. {} Hz does not fit mode {} - not kept", bl, flo, fhi, mode);
+            (0, 0)
+        };
         self.band_mem.insert(bl.to_string(), BandMemory {
             frequency_hz: freq, mode, filter_low_hz: flo, filter_high_hz: fhi, nr_level: nr,
         });
@@ -226,7 +228,7 @@ impl SdrRemoteApp {
             // mode change during own TX: the server drops it (Thetis-bug
             // workaround) and Thetis won't echo, so an optimistic update would
             // leave the indication stuck out of sync. RX2 is RX-only.
-            let block_mode = matches!(vfo, Vfo::A) && self.ptt;
+            let block_mode = matches!(vfo, Vfo::A) && self.thetis_mode_locked();
             if mem.mode != cur_mode && !block_mode {
                 let _ = self.cmd_tx.send(match vfo {
                     Vfo::A => Command::SetMode(mem.mode),
@@ -242,8 +244,20 @@ impl SdrRemoteApp {
                 Vfo::A => { self.set_pending_freq_a(mem.frequency_hz); }
                 Vfo::B => { self.set_pending_freq_b(mem.frequency_hz); }
             }
-            // Restore filter
-            if mem.filter_low_hz != 0 || mem.filter_high_hz != 0 {
+            // Restore filter - only edges that fit the mode (build 243): Thetis
+            // takes what it is sent, and an LSB with a USB filter came back on
+            // every return to the band. Otherwise Thetis keeps its own filter for
+            // the mode.
+            // The mode Thetis keeps: the remembered one, unless its change was
+            // skipped above while transmitting (build 244, review of 243).
+            let kept_mode = if mem.mode != cur_mode && block_mode { cur_mode } else { mem.mode };
+            let fits = sdr_remote_logic::filter_width::edges_fit_mode(kept_mode, mem.filter_low_hz, mem.filter_high_hz);
+            if (mem.filter_low_hz != 0 || mem.filter_high_hz != 0) && !fits {
+                // Named in advance (`logregels-build243.md`).
+                log::info!("Band memory {}: filter {} .. {} Hz does not fit mode {} - not restored",
+                    label, mem.filter_low_hz, mem.filter_high_hz, kept_mode);
+            }
+            if fits {
                 let (flo_id, fhi_id) = match vfo {
                     Vfo::A => (ControlId::FilterLow, ControlId::FilterHigh),
                     Vfo::B => (ControlId::Rx2FilterLow, ControlId::Rx2FilterHigh),

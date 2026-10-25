@@ -215,6 +215,7 @@ pub(super) fn render_amplitec_panel(
     tx_blocked: &mut [bool; 6],
     log_entries: &[(String, String)],
     show_log: &mut bool,
+    rx_only_unguarded: bool,
 ) -> bool {
     let mut power_changed = false;
     // Header
@@ -229,7 +230,14 @@ pub(super) fn render_amplitec_panel(
             ui.checkbox(show_log, rust_i18n::t!("srv_log_cb").to_string());
         });
     });
-    ui.separator();
+    sdr_remote_theme::rule(ui);
+
+    // An RX-only position Thetis cannot guard by itself (build 217): whoever
+    // keys from the radio PC - footswitch, MOX in Thetis - looks here, not at a
+    // client. Same words as the clients.
+    if rx_only_unguarded {
+        ui.colored_label(Color32::RED, sdr_remote_core::rx_only_notice::text(&rust_i18n::locale()));
+    }
 
     // Port A (TX+RX)
     ui.add_space(4.0);
@@ -364,7 +372,7 @@ pub(super) fn render_amplitec_panel(
     // Log (collapsible, toggled via header checkbox)
     if *show_log {
         ui.add_space(4.0);
-        ui.separator();
+        sdr_remote_theme::rule(ui);
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .max_height(150.0)

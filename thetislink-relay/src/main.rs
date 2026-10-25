@@ -79,7 +79,7 @@ enum Mode {
     SetAdminPassword { db: String, password: String },
 }
 
-/// Admin CLI subcommands for the Fase 1 station registry (SQLite).
+/// Admin CLI subcommands for the Phase 1 station registry (SQLite).
 #[derive(Debug)]
 enum StationCmd {
     Add { db: String, label: String, owner: String },
@@ -99,6 +99,10 @@ struct Hello {
     /// Human-readable device label (optional, may contain spaces). Metadata only -
     /// never used for auth/routing; purely for the log/dashboard.
     name: Option<String>,
+    /// `proto=quic` in the hello: the peer runs QUIC via the relay (phase 3b).
+    /// Such a connection is told the address its UDP comes from (`udp-seen`,
+    /// phase 3c, punching); a classic one is told nothing new.
+    quic: bool,
 }
 
 /// Upper bound on simultaneous clients per station room. The sentinel address
@@ -171,10 +175,10 @@ pub(crate) type Rooms = Arc<Mutex<HashMap<String, Room>>>;
 /// wrapping after 2^64 connections is not a concern anyone needs to have.
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 
-/// Fase 0 (PATCH-relay-audio-udp): a live UDP audio session, keyed by its capability
+/// Phase 0 (PATCH-relay-audio-udp): a live UDP audio session, keyed by its capability
 /// token. Issued on the wss handshake (S1), bound to the peer's identity (S2), valid
 /// only while the wss session lives (S3 lease) and until its TTL (S4). The UDP data
-/// path (fase 1) validates against this table before forwarding; `src` is learned from
+/// path (phase 1) validates against this table before forwarding; `src` is learned from
 /// the first valid datagram (source-binding S5).
 #[allow(dead_code)] // station_id is metadata for logging/future use
 struct UdpSession {
@@ -203,6 +207,28 @@ struct UdpSession {
     /// existing periodic/disconnect flush (swap(0)) - no per-packet DB write (hot-path
     /// write guard). Uplink counts against the sender client, downlink against the target.
     bytes: Arc<AtomicU64>,
+    /// The wss connection to tell where this token's UDP comes from, once it is
+    /// learned (`udp-seen <ip:port>`). Only for a `proto=quic` connection: the
+    /// address is what the other side has to punch to (phase 3c). `None` for a
+    /// classic one, which never sees the line.
+    seen_tx: Option<mpsc::UnboundedSender<Message>>,
+}
+
+/// How long a connection may go without its first UDP before the log says so.
+const NO_UDP_REPORT_AFTER: Duration = Duration::from_secs(30);
+
+/// Whether a connection's UDP has arrived: `Some(true)` if any of its tokens
+/// learned a source, `Some(false)` if it holds tokens and none did, `None` if it
+/// holds none (it is gone, and there is nothing to say).
+fn udp_state_of(toks: &HashMap<String, UdpSession>, conn: u64) -> Option<bool> {
+    let mut any = false;
+    for s in toks.values().filter(|s| s.conn == conn) {
+        if s.src.is_some() {
+            return Some(true);
+        }
+        any = true;
+    }
+    any.then_some(false)
 }
 
 /// Drop every UDP token issued by one wss connection, and say how many are left.
@@ -215,10 +241,54 @@ fn revoke_tokens_of(toks: &mut HashMap<String, UdpSession>, conn: u64) -> usize 
     toks.len()
 }
 
-// --- Fase 1 (PATCH-relay-audio-udp): relay UDP data path ---
+/// A new connection took over a slot - same room, role and client id: every token
+/// an EARLIER connection issued for that slot goes at once, and says how many are left.
+///
+/// After a network switch the phone registers again while its old connection still
+/// stands half open; that one only leaves at `PEER_DEAD_TIMEOUT`. Until then its
+/// token, bound to the address of the network that is gone, stood next to the new
+/// one, and the downlink picked either - measured 2026-10-03: UDP audio missing for
+/// 2 to 20 s after a switch, until the old connection timed out
+/// (`DIAGNOSE-udp-na-wissel.md`). A slot holds one live connection after a
+/// replace, so the earlier tokens can only point at a dead address.
+fn revoke_superseded(
+    toks: &mut HashMap<String, UdpSession>,
+    room: &str,
+    role: Role,
+    client_id: Option<u8>,
+    newer_conn: u64,
+) -> usize {
+    toks.retain(|_, s| !(same_slot(s, room, role, client_id) && s.conn < newer_conn));
+    toks.len()
+}
+
+/// Whether a token belongs to the slot (room, role, client id). One room has one
+/// station, so for a station the client id does not take part. The one definition
+/// both `revoke_superseded` and `udp_target` use - they read it differently until
+/// round 97, harmless only because a station's client id is always `None`.
+fn same_slot(s: &UdpSession, room: &str, role: Role, client_id: Option<u8>) -> bool {
+    s.room_key == room && s.role == role && (role == Role::Station || s.client_id == client_id)
+}
+
+/// Where a datagram for (room, role, client id) goes: the session of the NEWEST
+/// connection, and within one connection the token whose source is known and that
+/// was issued last. Not the first match - a `HashMap` has no order, and with two
+/// candidates that made the destination a coin toss (2026-10-03).
+fn udp_target<'a>(
+    toks: &'a HashMap<String, UdpSession>,
+    room: &str,
+    role: Role,
+    client_id: Option<u8>,
+) -> Option<&'a UdpSession> {
+    toks.values()
+        .filter(|s| same_slot(s, room, role, client_id))
+        .max_by_key(|s| (s.conn, s.src.is_some(), s.expires_at))
+}
+
+// --- Phase 1 (PATCH-relay-audio-udp): relay UDP data path ---
 
 /// TLU1 outer header: magic(4) | version(1) | flags(1) | client_id(1) | seq(4 LE) |
-/// token(32 raw bytes) | payload. The token is the 256-bit capability from fase 0
+/// token(32 raw bytes) | payload. The token is the 256-bit capability from phase 0
 /// (looked up hex-encoded); `client_id` is the TARGET client when the sender is a
 /// station, ignored otherwise. `seq` drives the replay window.
 const TLU1_MAGIC: &[u8; 4] = b"TLU1";
@@ -261,7 +331,7 @@ fn parse_tlu1(data: &[u8]) -> Option<(u8, u32, String, &[u8])> {
     Some((client_id, seq, token, &data[TLU1_HEADER_LEN..]))
 }
 
-/// Relay UDP data path (fase 1): validate each datagram against the token registry and
+/// Relay UDP data path (phase 1): validate each datagram against the token registry and
 /// forward it **statelessly, per-datagram** (R1) to the peer's learned UDP address.
 /// Invalid datagrams are dropped cheaply with no reply (S7, S9).
 async fn serve_udp(socket: UdpSocket, tokens: UdpTokens) {
@@ -297,6 +367,11 @@ async fn serve_udp(socket: UdpSocket, tokens: UdpTokens) {
             if let Some(s) = toks.get_mut(&token) {
                 if s.src.is_none() {
                     s.src = Some(src);
+                    // Phase 3c: a QUIC connection learns the address its UDP
+                    // comes from - once per token (a rotation brings a new one).
+                    if let Some(tx) = &s.seen_tx {
+                        let _ = tx.send(Message::Text(format!("{LINE_UDP_SEEN} {src}").into()));
+                    }
                 }
                 if s.last_seq.map_or(true, |last| seq_before(last, seq)) {
                     s.last_seq = Some(seq);
@@ -309,19 +384,13 @@ async fn serve_udp(socket: UdpSocket, tokens: UdpTokens) {
             let (dst, cid, counter) = match sender_role {
                 // client -> the room's station; stamp + charge the SENDER client.
                 Role::Client => (
-                    toks.values()
-                        .find(|s| s.room_key == room && s.role == Role::Station)
-                        .and_then(|s| s.src),
+                    udp_target(&toks, &room, Role::Station, None).and_then(|s| s.src),
                     sender_cid.unwrap_or(0),
                     toks.get(&token).map(|s| s.bytes.clone()),
                 ),
                 // station -> the addressed client; stamp + charge the TARGET client.
                 Role::Station => {
-                    let target = toks.values().find(|s| {
-                        s.room_key == room
-                            && s.role == Role::Client
-                            && s.client_id == Some(target_client_id)
-                    });
+                    let target = udp_target(&toks, &room, Role::Client, Some(target_client_id));
                     (
                         target.and_then(|s| s.src),
                         target_client_id,
@@ -349,7 +418,7 @@ async fn serve_udp(socket: UdpSocket, tokens: UdpTokens) {
     }
 }
 
-/// Token -> session. std Mutex: touched only at wss connect/disconnect (fase 0) and,
+/// Token -> session. std Mutex: touched only at wss connect/disconnect (phase 0) and,
 /// later, per-datagram validation on the UDP path - never held across an `.await`.
 pub(crate) type UdpTokens = Arc<std::sync::Mutex<HashMap<String, UdpSession>>>;
 
@@ -472,7 +541,7 @@ fn unix_now() -> i64 {
 }
 
 /// Run a station-registry admin command against the SQLite store. Synchronous
-/// (rusqlite); does not touch the live relay auth path (Fase 1 foundation).
+/// (rusqlite); does not touch the live relay auth path (Phase 1 foundation).
 fn run_station_cmd(cmd: StationCmd) -> Result<()> {
     match cmd {
         StationCmd::Add { db, label, owner } => {
@@ -536,11 +605,11 @@ async fn serve(listen: &str) -> Result<()> {
     // device the instant it is blocked), not only the accept loop.
     let rooms = Rooms::default();
 
-    // Fase 0 (PATCH-relay-audio-udp): UDP capability-token registry, issued on the wss
-    // handshake and revoked on disconnect. Shared with the UDP data path (fase 1).
+    // Phase 0 (PATCH-relay-audio-udp): UDP capability-token registry, issued on the wss
+    // handshake and revoked on disconnect. Shared with the UDP data path (phase 1).
     let udp_tokens = UdpTokens::default();
 
-    // Fase 1: relay UDP data path. Binds only when THETISLINK_RELAY_UDP_LISTEN is set
+    // Phase 1: relay UDP data path. Binds only when THETISLINK_RELAY_UDP_LISTEN is set
     // (e.g. "0.0.0.0:443"), so the change is fully additive - no UDP, no behaviour change.
     if let Ok(udp_listen) = env::var("THETISLINK_RELAY_UDP_LISTEN") {
         match UdpSocket::bind(&udp_listen).await {
@@ -553,7 +622,7 @@ async fn serve(listen: &str) -> Result<()> {
         }
     }
 
-    // Fase 2 admin dashboard API: only when a registry (store) exists. Bound to an
+    // Phase 2 admin dashboard API: only when a registry (store) exists. Bound to an
     // internal address (default 0.0.0.0:18081, reached only via Caddy over the compose
     // network - not published to the host/internet). SECURITY: 0.0.0.0 is safe ONLY in
     // that compose topology (the port is not host-published and X-Forwarded-For is set by
@@ -653,7 +722,7 @@ async fn handle_connection(
     // byte accounting (legacy token mode has no station row, so no device tracking).
     let (room_key, station_id) = match authorize(&store, &hello, &required_token) {
         AuthOutcome::Reject => {
-            let _ = ws_tx.send(Message::Text("ERR unauthorized".into())).await;
+            let _ = ws_tx.send(Message::Text(format!("{LINE_ERR} unauthorized").into())).await;
             bail!(
                 "unauthorized station={} role={}",
                 hello.station,
@@ -668,6 +737,7 @@ async fn handle_connection(
 
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
     let role = hello.role;
+    let hello_quic = hello.quic;
     let station = hello.station.clone();
     // Short, stable per-install label for the logs so a device can be tracked even
     // as its slot id rotates (all clients often share one public IP). Prefix 'a' =
@@ -723,13 +793,13 @@ async fn handle_connection(
             // `enabled` as the manual block. A blocked device is refused; a genuinely new
             // device beyond max_devices is refused.
             if existing == Some(false) {
-                let _ = ws_tx.send(Message::Text("ERR device blocked".into())).await;
+                let _ = ws_tx.send(Message::Text(format!("{LINE_ERR} device blocked").into())).await;
                 bail!("device blocked station={st_id} inst={inst_label}");
             }
             if existing.is_none() {
                 if let Some(md) = max_dev {
                     if enabled_count >= md {
-                        let _ = ws_tx.send(Message::Text("ERR too many devices".into())).await;
+                        let _ = ws_tx.send(Message::Text(format!("{LINE_ERR} too many devices").into())).await;
                         bail!("device cap reached station={st_id} count={enabled_count} cap={md}");
                     }
                 }
@@ -739,7 +809,7 @@ async fn handle_connection(
             if let Some(cap) = max_monthly {
                 if used >= cap {
                     let _ = ws_tx
-                        .send(Message::Text("ERR station data limit reached".into()))
+                        .send(Message::Text(format!("{LINE_ERR} station data limit reached").into()))
                         .await;
                     bail!("monthly data cap reached station={st_id} used={used} cap={cap}");
                 }
@@ -758,7 +828,7 @@ async fn handle_connection(
             match enrolled {
                 Ok((id, _enabled)) => Some(id),
                 Err(err) => {
-                    let _ = ws_tx.send(Message::Text("ERR device check failed".into())).await;
+                    let _ = ws_tx.send(Message::Text(format!("{LINE_ERR} device check failed").into())).await;
                     bail!("device enroll failed station={st_id} inst={inst_label}: {err:#}");
                 }
             }
@@ -768,7 +838,7 @@ async fn handle_connection(
 
     // Register before spawning the writer so a full-room rejection can reply on
     // `ws_tx` directly (the writer takes ownership of `ws_tx`).
-    let client_id = match register_peer(
+    let (registration, conn) = register_peer(
         &rooms,
         &room_key,
         role,
@@ -777,10 +847,10 @@ async fn handle_connection(
         bytes.clone(),
         client_cap,
     )
-    .await
-    {
+    .await;
+    let client_id = match registration {
         Registration::Full => {
-            let _ = ws_tx.send(Message::Text("ERR relay full".into())).await;
+            let _ = ws_tx.send(Message::Text(format!("{LINE_ERR} relay full").into())).await;
             bail!("relay room full for station={station}");
         }
         Registration::Station => None,
@@ -801,11 +871,7 @@ async fn handle_connection(
         }
     });
 
-    // This connection's serial, stamped on every token it issues so that only
-    // this connection can revoke them (see UdpSession::conn).
-    let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
-
-    // Fase 0: issue a UDP capability token bound to this session (S1-S4) and hand it to
+    // Phase 0: issue a UDP capability token bound to this session (S1-S4) and hand it to
     // the peer in the ready-reply (over the TLS wss channel). Revoked on disconnect
     // below (S3 lease). The token is never logged in full (S11).
     let udp_token = gen_udp_token();
@@ -825,9 +891,11 @@ async fn handle_connection(
                 src: None,
                 last_seq: None,
                 bytes: bytes.clone(),
+                seen_tx: hello_quic.then(|| out_tx.clone()),
             },
         );
-        toks.len()
+        // This connection now holds the slot: an earlier one's tokens go (A, 2026-10-03).
+        revoke_superseded(&mut toks, &room_key, role, client_id, conn)
     };
 
     // The chat ticket rides along on the ready-reply (design §3). Additive by
@@ -844,13 +912,30 @@ async fn handle_connection(
         None => String::new(),
     };
     let _ = out_tx.send(Message::Text(
-        format!("OK relay-ready udp_token={udp_token}{chat_field}").into(),
+        format!("{LINE_OK} relay-ready udp_token={udp_token}{chat_field}").into(),
     ));
     info!(
         "{addr} registered station={station} role={} id={client_id:?} ip={client_ip} inst={inst_label}{name_label} (clients now {}, udp sessions {udp_session_count})",
         role.as_str(),
         room_client_count(&rooms, &room_key).await
     );
+    // The measurement of the always-QUIC design (§6): a connection that signs in
+    // and sends no UDP within 30 s is a network that gives no UDP. Said once,
+    // without an address (S11). Never seeing this line is the evidence that the
+    // TCP route can carry no audio.
+    {
+        let (tokens, station, role_name) = (udp_tokens.clone(), station.clone(), role.as_str());
+        tokio::spawn(async move {
+            tokio::time::sleep(NO_UDP_REPORT_AFTER).await;
+            let toks = tokens.lock().unwrap_or_else(|e| e.into_inner());
+            if udp_state_of(&toks, conn) == Some(false) {
+                info!(
+                    "station={station} role={role_name} id={client_id:?} quic={hello_quic}: registered, but no UDP within {} s",
+                    NO_UDP_REPORT_AFTER.as_secs()
+                );
+            }
+        });
+    }
 
     // Read loop with keepalive. IMPORTANT: EVERY exit path must fall through to
     // unregister_peer below - otherwise the peer's client_id slot leaks and the room
@@ -918,7 +1003,7 @@ async fn handle_connection(
                         &key, sid, &station, &new_jti(), unix_now().max(0) as u64,
                     );
                     let _ = out_tx.send(Message::Text(
-                        format!("chat-ticket-rotate chat_ticket={t}").into(),
+                        format!("{LINE_CHAT_TICKET_ROTATE} chat_ticket={t}").into(),
                     ));
                 }
             }
@@ -951,12 +1036,13 @@ async fn handle_connection(
                             src: None,
                             last_seq: None,
                             bytes: bytes.clone(),
+                            seen_tx: hello_quic.then(|| out_tx.clone()),
                         },
                     );
                     toks.len()
                 };
                 let _ = out_tx.send(Message::Text(
-                    format!("udp-token-rotate udp_token={new_token}").into(),
+                    format!("{LINE_UDP_TOKEN_ROTATE} udp_token={new_token}").into(),
                 ));
                 current_udp_token = new_token;
                 // Observability: token-free rotation trace so a future drop-around-rotation
@@ -997,8 +1083,8 @@ async fn handle_connection(
         }
     }
 
-    // Fase 0: revoke this session's UDP token(s) - they are valid only while the wss
-    // session lives (S3 lease). Once gone, the UDP data path (fase 1) drops any datagram
+    // Phase 0: revoke this session's UDP token(s) - they are valid only while the wss
+    // session lives (S3 lease). Once gone, the UDP data path (phase 1) drops any datagram
     // bearing them. Rotation (S4) can leave more than one live token for this connection
     // (the current one plus a just-superseded one still inside its overlap), so drop ALL
     // tokens matching this exact connection (room + role + client_id), not just the
@@ -1051,10 +1137,17 @@ async fn register_peer(
     instance: Option<String>,
     bytes: Arc<AtomicU64>,
     client_cap: usize,
-) -> Registration {
+) -> (Registration, u64) {
     let mut rooms = rooms.lock().await;
+    // This connection's serial, stamped on every token it issues so that only this
+    // connection can revoke them (see UdpSession::conn). Taken HERE, under the lock
+    // that hands out the slot, so the connection that holds a slot always has the
+    // higher serial: `revoke_superseded` relies on that. Taken after this lock, two
+    // registrations for one slot could get their serials the other way round, and
+    // the older connection would retire the live one's token (round 97).
+    let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
     let room = rooms.entry(key.to_string()).or_default();
-    match role {
+    let registration = match role {
         Role::Station => {
             if let Some(previous) = room.station.replace(Peer { tx, instance, bytes }) {
                 warn!("replacing existing station peer in room");
@@ -1078,7 +1171,7 @@ async fn register_peer(
                     warn!("replacing existing client (same instance) id={old_id}");
                     let _ = old_tx.send(Message::Close(None));
                     room.clients.insert(old_id, Peer { tx, instance, bytes });
-                    return Registration::Client(old_id);
+                    return (Registration::Client(old_id), conn);
                 }
             }
             match room.alloc_client_id(client_cap) {
@@ -1089,7 +1182,8 @@ async fn register_peer(
                 None => Registration::Full,
             }
         }
-    }
+    };
+    (registration, conn)
 }
 
 async fn unregister_peer(
@@ -1212,6 +1306,25 @@ async fn flush_active(rooms: &Rooms, store: &Arc<std::sync::Mutex<store::Store>>
     }
 }
 
+/// The lines the relay itself sends a peer over its wss, by their first word.
+/// One list: every place that sends one builds it from these, and
+/// [`route_message`] refuses a peer's text that starts with one - otherwise a
+/// station or client could pass the relay's own lines to the other side and
+/// set its token, chat ticket or public address (review 123). The relay
+/// library reads them by the same words (`RELAY_CONTROL_WORDS`, pinned against
+/// this list there).
+const LINE_OK: &str = "OK";
+const LINE_ERR: &str = "ERR";
+const LINE_UDP_TOKEN_ROTATE: &str = "udp-token-rotate";
+const LINE_CHAT_TICKET_ROTATE: &str = "chat-ticket-rotate";
+const LINE_UDP_SEEN: &str = "udp-seen";
+const RELAY_LINES: [&str; 5] = [LINE_OK, LINE_ERR, LINE_UDP_TOKEN_ROTATE, LINE_CHAT_TICKET_ROTATE, LINE_UDP_SEEN];
+
+/// Whether a text frame looks like one of the relay's own lines.
+fn is_relay_line(text: &str) -> bool {
+    RELAY_LINES.iter().any(|w| text.starts_with(w))
+}
+
 /// Route a frame through the room. TLT1 tunnel frames are addressed per client via
 /// their `client_id` byte; every other frame (text status/heartbeat, TLB1 probes)
 /// fans out station->all-clients and funnels client->station.
@@ -1223,6 +1336,12 @@ async fn route_message(
     self_bytes: &Arc<AtomicU64>,
     message: Message,
 ) {
+    if let Message::Text(text) = &message {
+        if is_relay_line(text) {
+            warn!("dropping a {} text that poses as a relay line (station room {key})", role.as_str());
+            return;
+        }
+    }
     match role {
         Role::Client => {
             // Uplink counts against this client's own counter (lock-free, no DB).
@@ -1477,7 +1596,7 @@ where
 }
 
 /// Like `expect_text` but matches the ready-reply prefix, since it now carries a
-/// per-session `udp_token=...` suffix (fase 0).
+/// per-session `udp_token=...` suffix (phase 0).
 async fn expect_ok_ready<S>(rx: &mut S) -> Result<()>
 where
     S: StreamExt<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
@@ -1488,7 +1607,7 @@ where
         .context("waiting for self-test ready reply")?
         .ok_or_else(|| anyhow!("self-test peer disconnected"))??;
     match message {
-        Message::Text(text) if text.starts_with("OK relay-ready") => Ok(()),
+        Message::Text(text) if text.starts_with(&format!("{LINE_OK} relay-ready")) => Ok(()),
         other => bail!("expected OK relay-ready, got {}", printable_message(other)),
     }
 }
@@ -1600,6 +1719,7 @@ fn parse_hello(text: &str) -> Result<Hello> {
     let mut role = None;
     let mut token = None;
     let mut instance = None;
+    let mut quic = false;
 
     for part in parts {
         // Tolerate stray tokens without '=' (forward-compat), same spirit as the
@@ -1612,6 +1732,7 @@ fn parse_hello(text: &str) -> Result<Hello> {
             "role" => role = Some(Role::parse(value)?),
             "token" => token = Some(value.to_string()),
             "instance" => instance = Some(value.to_string()),
+            "proto" => quic = value == "quic",
             // Ignore unknown fields for forward-compat: a newer client adding a hello
             // field must not be rejected by an older relay (that was the cause of the
             // 'instance' skew). Known fields above are still parsed.
@@ -1630,6 +1751,7 @@ fn parse_hello(text: &str) -> Result<Hello> {
         token: token.ok_or_else(|| anyhow!("hello missing token"))?,
         instance: instance.filter(|s| !s.is_empty() && s.len() <= 128),
         name,
+        quic,
     })
 }
 
@@ -1762,6 +1884,21 @@ fn positional_id(args: &[String], from: usize) -> Result<i64> {
 mod udp_lease_tests {
     use super::*;
 
+    /// The 30-second line asks this: a connection that holds tokens and none
+    /// with a source is one without UDP; one with a source has it; one with no
+    /// tokens left is gone and gets no line.
+    #[test]
+    fn a_connection_without_udp_is_told_apart() {
+        let mut toks = HashMap::new();
+        toks.insert("a".to_string(), client_session(7, 1));
+        assert_eq!(udp_state_of(&toks, 7), Some(false), "a token, no source");
+        let mut bound = client_session(7, 1);
+        bound.src = Some("192.0.2.1:5000".parse().unwrap());
+        toks.insert("b".to_string(), bound);
+        assert_eq!(udp_state_of(&toks, 7), Some(true), "one token with a source is enough");
+        assert_eq!(udp_state_of(&toks, 8), None, "another connection, gone");
+    }
+
     fn client_session(conn: u64, client_id: u8) -> UdpSession {
         UdpSession {
             room_key: "db:1".into(),
@@ -1773,6 +1910,7 @@ mod udp_lease_tests {
             src: None,
             last_seq: None,
             bytes: Arc::new(AtomicU64::new(0)),
+            seen_tx: None,
         }
     }
 
@@ -1795,6 +1933,105 @@ mod udp_lease_tests {
         assert_eq!(left, 1, "the live token should have survived");
         assert!(toks.contains_key("new"), "the live connection lost its token");
         assert!(!toks.contains_key("old"), "the dead connection kept its token");
+    }
+
+    /// A new connection for the same slot takes the earlier connection's tokens
+    /// away at once - not at its keepalive timeout - and leaves every other slot,
+    /// and its own rotated tokens, alone (2026-10-03).
+    #[test]
+    fn a_new_connection_retires_the_tokens_of_the_one_it_replaced() {
+        let mut toks: HashMap<String, UdpSession> = HashMap::new();
+        toks.insert("old".into(), client_session(7, 2));
+        toks.insert("older".into(), client_session(5, 2));
+        toks.insert("new".into(), client_session(8, 2));
+        toks.insert("new rotated".into(), client_session(8, 2));
+        toks.insert("other client".into(), client_session(6, 3));
+        assert_eq!(revoke_superseded(&mut toks, "db:1", Role::Client, Some(2), 8), 3);
+        assert!(toks.contains_key("new") && toks.contains_key("new rotated"));
+        assert!(toks.contains_key("other client"), "another slot is not touched");
+        assert!(!toks.contains_key("old") && !toks.contains_key("older"));
+    }
+
+    /// With two candidates for one client, the newest connection gets the datagram,
+    /// whatever order the map holds them in; within one connection, the token
+    /// whose source is known (2026-10-03).
+    #[test]
+    fn the_downlink_goes_to_the_newest_connection() {
+        let a: SocketAddr = "198.51.100.1:5000".parse().unwrap();
+        let b: SocketAddr = "198.51.100.2:6000".parse().unwrap();
+        // A fresh map each time: one `HashMap` keeps one order for its whole life,
+        // so the same map twenty times is one draw. With three replaced candidates
+        // and one new, a first-match lookup survives twenty fresh maps with odds of
+        // about (1/4)^20 (round 97: two maps let it through one time in four).
+        for round in 0..20 {
+            let mut toks: HashMap<String, UdpSession> = HashMap::new();
+            for conn in [5, 6, 7] {
+                let mut s = client_session(conn, 2);
+                s.src = Some(a);
+                toks.insert(format!("old {conn} {round}"), s);
+            }
+            let mut s = client_session(8, 2);
+            s.src = Some(b);
+            toks.insert(format!("new {round}"), s);
+            assert_eq!(udp_target(&toks, "db:1", Role::Client, Some(2)).and_then(|s| s.src), Some(b));
+        }
+        // One connection, a rotated token not yet heard from: the one with a source.
+        let mut toks: HashMap<String, UdpSession> = HashMap::new();
+        let mut heard = client_session(8, 2);
+        heard.src = Some(b);
+        toks.insert("heard".into(), heard);
+        let mut fresh = client_session(8, 2);
+        fresh.expires_at += Duration::from_secs(60);
+        toks.insert("fresh".into(), fresh);
+        assert_eq!(udp_target(&toks, "db:1", Role::Client, Some(2)).and_then(|s| s.src), Some(b));
+        assert!(udp_target(&toks, "db:1", Role::Client, Some(3)).is_none(), "another client id");
+        // One connection, both tokens heard from: the one issued last. Fresh maps
+        // again - with a tie in the rest of the key, map order decides.
+        for round in 0..20 {
+            let mut toks: HashMap<String, UdpSession> = HashMap::new();
+            let mut earlier = client_session(8, 2);
+            earlier.src = Some(b);
+            toks.insert(format!("earlier {round}"), earlier);
+            let mut later = client_session(8, 2);
+            later.src = Some(a);
+            later.expires_at += Duration::from_secs(120);
+            toks.insert(format!("later {round}"), later);
+            assert_eq!(udp_target(&toks, "db:1", Role::Client, Some(2)).and_then(|s| s.src), Some(a));
+        }
+    }
+
+    /// The connection that takes a slot later always has the higher serial: the
+    /// serial is taken under the lock that hands out the slot (round 97).
+    #[tokio::test]
+    async fn the_later_registration_for_a_slot_has_the_higher_serial() {
+        let rooms: Rooms = Arc::new(Mutex::new(HashMap::new()));
+        let mut last = 0;
+        for _ in 0..3 {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let bytes = Arc::new(AtomicU64::new(0));
+            let (reg, conn) =
+                register_peer(&rooms, "db:9", Role::Client, tx, Some("same".into()), bytes, MAX_CLIENTS).await;
+            assert!(matches!(reg, Registration::Client(_)));
+            assert!(conn > last, "{conn} after {last}");
+            last = conn;
+        }
+    }
+
+    /// The two places that use A and B, which no test drives end to end: both
+    /// UDP directions pick through `udp_target`, and a new connection retires the
+    /// earlier tokens of its slot. That they are there, not that they run.
+    #[test]
+    fn the_udp_path_and_the_connection_use_the_newest_rules() {
+        let src = include_str!("main.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert_eq!(body.matches("udp_target(&toks, &room,").count(), 2, "uplink and downlink");
+        assert_eq!(body.matches("revoke_superseded(&mut toks, &room_key, role, client_id, conn)").count(), 1);
+        assert!(!body.contains(".find(|s| s.room_key == room"), "no first-match lookup left");
+        // The serial is taken in one place, inside register_peer (round 97).
+        assert_eq!(body.matches("NEXT_CONN.fetch_add").count(), 1);
+        let reg = &body[body.find("async fn register_peer(").unwrap()..];
+        let reg = &reg[..reg.find("async fn unregister_peer(").unwrap()];
+        assert!(reg.contains("NEXT_CONN.fetch_add"), "the serial is taken where the slot is decided");
     }
 
     /// And a connection does clean up after itself: every token it issued goes,
@@ -1823,6 +2060,7 @@ mod auth_tests {
             token: token.to_string(),
             instance: None,
             name: None,
+            quic: false,
         }
     }
 
@@ -1901,13 +2139,13 @@ mod auth_tests {
         let rooms = Rooms::default();
         let key = "room";
         let (tx1, _rx1) = mpsc::unbounded_channel();
-        let id1 = match register_peer(&rooms, key, Role::Client, tx1, Some("dev-A".to_string()), zero(), MAX_CLIENTS).await {
+        let id1 = match register_peer(&rooms, key, Role::Client, tx1, Some("dev-A".to_string()), zero(), MAX_CLIENTS).await.0 {
             Registration::Client(id) => id,
             _ => panic!("expected Client"),
         };
         // Same install id reconnects -> same slot, still one client (no pile-up).
         let (tx2, _rx2) = mpsc::unbounded_channel();
-        let id2 = match register_peer(&rooms, key, Role::Client, tx2, Some("dev-A".to_string()), zero(), MAX_CLIENTS).await {
+        let id2 = match register_peer(&rooms, key, Role::Client, tx2, Some("dev-A".to_string()), zero(), MAX_CLIENTS).await.0 {
             Registration::Client(id) => id,
             _ => panic!("expected Client"),
         };
@@ -1916,14 +2154,14 @@ mod auth_tests {
         // A different install id -> a genuinely new slot.
         let (tx3, _rx3) = mpsc::unbounded_channel();
         assert!(matches!(
-            register_peer(&rooms, key, Role::Client, tx3, Some("dev-B".to_string()), zero(), MAX_CLIENTS).await,
+            register_peer(&rooms, key, Role::Client, tx3, Some("dev-B".to_string()), zero(), MAX_CLIENTS).await.0,
             Registration::Client(_)
         ));
         assert_eq!(room_client_count(&rooms, key).await, 2);
         // A client with no instance always allocates a new slot (legacy).
         let (tx4, _rx4) = mpsc::unbounded_channel();
         assert!(matches!(
-            register_peer(&rooms, key, Role::Client, tx4, None, zero(), MAX_CLIENTS).await,
+            register_peer(&rooms, key, Role::Client, tx4, None, zero(), MAX_CLIENTS).await.0,
             Registration::Client(_)
         ));
         assert_eq!(room_client_count(&rooms, key).await, 3);
@@ -1935,10 +2173,10 @@ mod auth_tests {
         let key = "room";
         // One station, one client.
         let (stx, mut _srx) = mpsc::unbounded_channel();
-        register_peer(&rooms, key, Role::Station, stx, None, zero(), MAX_CLIENTS).await;
+        register_peer(&rooms, key, Role::Station, stx, None, zero(), MAX_CLIENTS).await.0;
         let client_bytes = zero();
         let (ctx, mut _crx) = mpsc::unbounded_channel();
-        let cid = match register_peer(&rooms, key, Role::Client, ctx, Some("dev".into()), client_bytes.clone(), MAX_CLIENTS).await {
+        let cid = match register_peer(&rooms, key, Role::Client, ctx, Some("dev".into()), client_bytes.clone(), MAX_CLIENTS).await.0 {
             Registration::Client(id) => id,
             _ => panic!("expected Client"),
         };
@@ -1956,13 +2194,42 @@ mod auth_tests {
         assert_eq!(station_bytes.load(Ordering::Relaxed), 0);
     }
 
+    /// A peer cannot pass the relay's own lines to the other side: every one of
+    /// them is dropped in both directions, and a peer frame still goes through
+    /// (review 123: a station could set its clients' token, chat ticket or
+    /// public address, and a client the station's).
+    #[tokio::test]
+    async fn a_peer_cannot_pose_as_the_relay() {
+        let rooms = Rooms::default();
+        let key = "room";
+        let (stx, mut srx) = mpsc::unbounded_channel();
+        register_peer(&rooms, key, Role::Station, stx, None, zero(), MAX_CLIENTS).await.0;
+        let (ctx, mut crx) = mpsc::unbounded_channel();
+        let cid = match register_peer(&rooms, key, Role::Client, ctx, Some("dev".into()), zero(), MAX_CLIENTS).await.0 {
+            Registration::Client(id) => id,
+            _ => panic!("expected Client"),
+        };
+        for word in RELAY_LINES {
+            let line = format!("{word} 203.0.113.9:1");
+            route_message(&rooms, key, Role::Client, Some(cid), &zero(), Message::Text(line.clone().into())).await;
+            route_message(&rooms, key, Role::Station, None, &zero(), Message::Text(line.into())).await;
+            assert!(srx.try_recv().is_err(), "{word} from a client reached the station");
+            assert!(crx.try_recv().is_err(), "{word} from the station reached a client");
+        }
+        let peer = "TLR2 kind=ping role=station seq=1";
+        route_message(&rooms, key, Role::Station, None, &zero(), Message::Text(peer.into())).await;
+        assert!(matches!(crx.try_recv(), Ok(Message::Text(t)) if t.as_str() == peer), "a peer frame no longer goes through");
+        route_message(&rooms, key, Role::Client, Some(cid), &zero(), Message::Text(peer.into())).await;
+        assert!(srx.try_recv().is_ok(), "and the other way");
+    }
+
     #[tokio::test]
     async fn live_install_ids_sees_station_and_clients_of_the_right_room() {
         let rooms = Rooms::default();
         let (stx, _srx) = mpsc::unbounded_channel();
-        register_peer(&rooms, "db:7", Role::Station, stx, Some("srv-dev".into()), zero(), MAX_CLIENTS).await;
+        register_peer(&rooms, "db:7", Role::Station, stx, Some("srv-dev".into()), zero(), MAX_CLIENTS).await.0;
         let (ctx, _crx) = mpsc::unbounded_channel();
-        register_peer(&rooms, "db:7", Role::Client, ctx, Some("cli-dev".into()), zero(), MAX_CLIENTS).await;
+        register_peer(&rooms, "db:7", Role::Client, ctx, Some("cli-dev".into()), zero(), MAX_CLIENTS).await.0;
 
         let live = live_install_ids(&rooms, 7).await;
         assert!(live.contains("srv-dev"), "the station's own session counts too");
@@ -1977,7 +2244,7 @@ mod auth_tests {
         let rooms = Rooms::default();
         let key = "db:7"; // station_id 7 -> kick_device builds this same key
         let (tx, mut rx) = mpsc::unbounded_channel();
-        match register_peer(&rooms, key, Role::Client, tx, Some("a-dev".into()), zero(), MAX_CLIENTS).await {
+        match register_peer(&rooms, key, Role::Client, tx, Some("a-dev".into()), zero(), MAX_CLIENTS).await.0 {
             Registration::Client(_) => {}
             _ => panic!("expected Client"),
         };
@@ -1996,20 +2263,20 @@ mod auth_tests {
         for i in 0..2 {
             let (tx, _rx) = mpsc::unbounded_channel();
             assert!(matches!(
-                register_peer(&rooms, key, Role::Client, tx, Some(format!("dev-{i}")), zero(), 2).await,
+                register_peer(&rooms, key, Role::Client, tx, Some(format!("dev-{i}")), zero(), 2).await.0,
                 Registration::Client(_)
             ));
         }
         // A third distinct device is refused at the cap.
         let (tx, _rx) = mpsc::unbounded_channel();
         assert!(matches!(
-            register_peer(&rooms, key, Role::Client, tx, Some("dev-x".into()), zero(), 2).await,
+            register_peer(&rooms, key, Role::Client, tx, Some("dev-x".into()), zero(), 2).await.0,
             Registration::Full
         ));
         // A reconnect of an existing device still reclaims its own slot at the cap.
         let (tx, _rx) = mpsc::unbounded_channel();
         assert!(matches!(
-            register_peer(&rooms, key, Role::Client, tx, Some("dev-0".into()), zero(), 2).await,
+            register_peer(&rooms, key, Role::Client, tx, Some("dev-0".into()), zero(), 2).await.0,
             Registration::Client(_)
         ));
         assert_eq!(room_client_count(&rooms, key).await, 2);
@@ -2068,6 +2335,7 @@ mod auth_tests {
         let station_tok = [0xaau8; 32];
         let client_tok = [0xbbu8; 32];
         let client_bytes = Arc::new(AtomicU64::new(0));
+        let (seen_tx, mut seen_rx) = mpsc::unbounded_channel::<Message>();
         let tokens = UdpTokens::default();
         {
             let mut t = tokens.lock().unwrap();
@@ -2078,6 +2346,7 @@ mod auth_tests {
                     role: Role::Station, conn: 1, expires_at: Instant::now() + Duration::from_secs(60),
                     src: Some(station_addr), last_seq: None,
                     bytes: Arc::new(AtomicU64::new(0)),
+                    seen_tx: None,
                 },
             );
             t.insert(
@@ -2087,6 +2356,8 @@ mod auth_tests {
                     role: Role::Client, conn: 2, expires_at: Instant::now() + Duration::from_secs(60),
                     src: None, last_seq: None,
                     bytes: client_bytes.clone(),
+                    // A QUIC client: told where its UDP comes from (phase 3c).
+                    seen_tx: Some(seen_tx),
                 },
             );
         }
@@ -2114,6 +2385,30 @@ mod auth_tests {
         // and replay packets cost nothing.
         let expected = build_tlu1(0, 1, &client_tok, b"hello-udp").len() as u64;
         assert_eq!(client_bytes.load(Ordering::Relaxed), expected);
+
+        // Phase 3c: the QUIC client was told, once, the address its UDP comes
+        // from - the first datagram bound it; later ones change nothing.
+        let client_addr = client.local_addr().unwrap();
+        match seen_rx.try_recv() {
+            Ok(Message::Text(t)) => assert_eq!(t.as_str(), format!("udp-seen {client_addr}")),
+            other => panic!("no udp-seen line: {other:?}"),
+        }
+        client.send_to(&build_tlu1(0, 3, &client_tok, b"again"), relay_addr).await.unwrap();
+        let _ = timeout(Duration::from_secs(2), station.recv_from(&mut buf)).await;
+        assert!(seen_rx.try_recv().is_err(), "told twice for one token");
+    }
+
+    /// `proto=quic` in the hello marks a QUIC connection; anything else, or
+    /// nothing, a classic one (which is never sent `udp-seen`).
+    #[test]
+    fn the_hello_says_whether_it_is_quic() {
+        let base = "TLR1 station=X role=client token=t instance=a1";
+        assert!(parse_hello(&format!("{base} proto=quic name=Phone One")).unwrap().quic);
+        assert!(!parse_hello(base).unwrap().quic);
+        assert!(!parse_hello(&format!("{base} proto=tl")).unwrap().quic);
+        // After the free-form name it is part of the name, not a field.
+        let h = parse_hello(&format!("{base} name=Phone proto=quic")).unwrap();
+        assert!(!h.quic);
     }
 
     #[test]
@@ -2179,7 +2474,7 @@ fn print_help() {
          Serve:\n  thetislink-relay --listen 0.0.0.0:18080\n\n\
          Self-test:\n  thetislink-relay --self-test\n\n\
          Connect test client:\n  thetislink-relay --connect ws://127.0.0.1:18080 --station test --role station --token secret\n\n\
-         Station registry (Fase 1 admin):\n  thetislink-relay station add --label PA3GHM [--owner name] [--db PATH]\n  thetislink-relay station list\n  thetislink-relay station disable <id>\n  thetislink-relay station enable <id>\n  thetislink-relay station rm <id>\n\n\
+         Station registry (Phase 1 admin):\n  thetislink-relay station add --label PA3GHM [--owner name] [--db PATH]\n  thetislink-relay station list\n  thetislink-relay station disable <id>\n  thetislink-relay station enable <id>\n  thetislink-relay station rm <id>\n\n\
          Environment:\n  THETISLINK_RELAY_TOKEN   Optional required token for server mode\n  THETISLINK_RELAY_LISTEN  Optional listen address for server mode\n  THETISLINK_RELAY_DB      Path to the station registry db (default stations.db)"
     );
 }

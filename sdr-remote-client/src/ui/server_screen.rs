@@ -40,12 +40,9 @@ impl SdrRemoteApp {
         let ms = if self.connected { 33 } else { 500 };
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(ms));
 
-        // Server address + password, plus a right-anchored "Re-run setup
-        // wizard" button. Right-to-left layout keeps the wizard button
-        // glued to the right edge regardless of window width and never
-        // pushes the address/password fields off-screen on narrow windows
-        // - PATCH-4 follow-up: the previous bottom-of-screen placement
-        // disappeared off the visible viewport on short windows.
+        // Server address + password. The "Wizard" and "Recenter windows"
+        // buttons stood on the right of this row until build 197; they are on
+        // the relay group's header row now (owner, 2026-10-14).
         ui.horizontal(|ui| {
             let enabled = !self.connected;
             if self.relay_external {
@@ -84,20 +81,6 @@ impl SdrRemoteApp {
             ui.label(rust_i18n::t!("screen_password").to_string());
             ui.add_enabled(enabled, egui::TextEdit::singleline(&mut self.password_input)
                 .desired_width(100.0).password(true).hint_text(rust_i18n::t!("screen_required_hint").to_string()));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let tip = rust_i18n::t!("screen_rerun_setup_wizard").to_string();
-                if ui.small_button(rust_i18n::t!("screen_wizard").to_string()).on_hover_text(tip).clicked() {
-                    self.wizard_state = Some(super::wizard::WizardState::new(
-                        self.server_input.clone(),
-                        self.password_input.clone(),
-                    ));
-                }
-                let recenter_tip = rust_i18n::t!("screen_recenter_windows_tooltip").to_string();
-                if ui.small_button(rust_i18n::t!("screen_recenter_windows").to_string()).on_hover_text(recenter_tip).clicked() {
-                    let ctx = ui.ctx().clone();
-                    self.recenter_popouts(&ctx);
-                }
-            });
         });
 
         // PATCH-3: mDNS-discovered servers shown progressively as they
@@ -141,18 +124,60 @@ impl SdrRemoteApp {
                 });
             }
         }
-        ui.add_space(6.0);
+        super::helpers::rule(ui);
 
-        ui.collapsing(rust_i18n::t!("screen_relay_connection").to_string(), |ui| {
+        // The relay group, a group like the others (build 198; owner: generic
+        // where it can be), with "Wizard" and "Recenter windows" on the right
+        // of its header row (owner, 2026-10-14). The header reports the two
+        // clicks; they are handled below, after the body has had `self`.
+        let relay_title = RichText::new(rust_i18n::t!("screen_relay_connection").to_string()).strong();
+        let (folds_open, (wizard_clicked, recenter_clicked)) = super::helpers::settings_group_with(
+            ui,
+            self.folds_open,
+            super::config::Fold::Relay,
+            relay_title,
+            |ui| {
+                let tip = rust_i18n::t!("screen_rerun_setup_wizard").to_string();
+                let wizard = ui.small_button(rust_i18n::t!("screen_wizard").to_string()).on_hover_text(tip).clicked();
+                let recenter_tip = rust_i18n::t!("screen_recenter_windows_tooltip").to_string();
+                let recenter = ui
+                    .small_button(rust_i18n::t!("screen_recenter_windows").to_string())
+                    .on_hover_text(recenter_tip)
+                    .clicked();
+                (wizard, recenter)
+            },
+            |ui| {
             // All fields save immediately on change (no separate "Apply" button anymore).
             let mut relay_changed = false;
-            // Audio over UDP comes along with the relay switch, the way the
-            // server's does. It is the lower-latency route and decides nothing
-            // at all while the relay is off, so leaving it as a second step
-            // only costs latency when it is forgotten - and both ends have to
-            // have it on for it to be used. It stays a real checkbox below: a
-            // firewall that drops UDP 443 is a good reason to turn it off, and
-            // that choice holds until this switch is next touched.
+            // What the engine actually runs on: the relay setting applies at the
+            // next start, and the line says so while the two differ (review 110).
+            let route = self.state_rx.borrow().route;
+            // The route the settings ask for, by the rule main.rs chooses with.
+            let expected = sdr_remote_logic::measure::Route::asked_for(sdr_remote_relay::is_configured(
+                self.relay_enabled,
+                &self.relay_url,
+                &self.relay_station,
+                &self.relay_token,
+            ));
+            let differs = expected != route;
+            // The way the traffic takes now (build 139) while a session runs;
+            // before that, what the engine was started with.
+            let lang = sdr_remote_logic::i18n::Lang::from_code(&self.ui_language);
+            let in_use = match self.state_rx.borrow().path {
+                Some(kind) => sdr_remote_logic::path_name::long_name(kind, lang),
+                None => route.label().to_string(),
+            };
+            let text = rust_i18n::t!("screen_route_in_use", route = in_use).to_string();
+            let text = if differs {
+                format!("{text} - {}", rust_i18n::t!("screen_route_restart"))
+            } else {
+                text
+            };
+            ui.label(
+                egui::RichText::new(text)
+                    .size(11.0)
+                    .color(if differs { egui::Color32::from_rgb(200, 160, 40) } else { ui.visuals().weak_text_color() }),
+            );
             if ui
                 .checkbox(
                     &mut self.relay_enabled,
@@ -161,7 +186,6 @@ impl SdrRemoteApp {
                 .changed()
             {
                 relay_changed = true;
-                self.relay_udp_enabled = self.relay_enabled;
             }
             ui.horizontal(|ui| {
                 ui.label(rust_i18n::t!("screen_relay_url").to_string());
@@ -200,7 +224,6 @@ impl SdrRemoteApp {
                     &self.relay_url,
                     &self.relay_station,
                     &self.relay_token,
-                    self.relay_udp_enabled,
                 );
             }
             ui.horizontal(|ui| {
@@ -212,34 +235,6 @@ impl SdrRemoteApp {
                 {
                     super::config::save_relay_device_name(&self.relay_device_name);
                 }
-            });
-            ui.horizontal(|ui| {
-                // Greyed while the relay is off: it applies to relay traffic and
-                // nothing else, so an operator toggling it there is changing a
-                // setting that does nothing yet. The tooltip says so.
-                let on = self.relay_enabled;
-                ui.add_enabled_ui(on, |ui| {
-                    if ui
-                        .checkbox(
-                            &mut self.relay_udp_enabled,
-                            rust_i18n::t!("screen_audio_over_udp").to_string(),
-                        )
-                        .on_hover_text(if on {
-                            rust_i18n::t!("screen_audio_over_udp_tooltip").to_string()
-                        } else {
-                            rust_i18n::t!("screen_audio_over_udp_off_tooltip").to_string()
-                        })
-                        .changed()
-                    {
-                        super::config::save_relay_config(
-                            self.relay_enabled,
-                            &self.relay_url,
-                            &self.relay_station,
-                            &self.relay_token,
-                            self.relay_udp_enabled,
-                        );
-                    }
-                });
             });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(rust_i18n::t!("screen_status").to_string()).strong());
@@ -292,7 +287,19 @@ impl SdrRemoteApp {
                 .size(11.0)
                 .color(Color32::from_rgb(150, 150, 150)),
             );
-        });
+            },
+        );
+        self.folds_open = folds_open;
+        if wizard_clicked {
+            self.wizard_state = Some(super::wizard::WizardState::new(
+                self.server_input.clone(),
+                self.password_input.clone(),
+            ));
+        }
+        if recenter_clicked {
+            let ctx = ui.ctx().clone();
+            self.recenter_popouts(&ctx);
+        }
         // PATCH-1: read connect_status from logic-state and render via
         // i18n helper. Single source of truth - same NL/EN text as Android
         // bridge. The legacy `auth_rejected` / `totp_required` booleans are
@@ -305,6 +312,8 @@ impl SdrRemoteApp {
         // thetislink-client.conf). Defaults to English when unset.
         let lang = Lang::from_code(&self.ui_language);
 
+        // Whether the match below draws a line of status (build 198).
+        let mut status_shown = true;
         // PATCH-1 smoke-test fix (2026-05-12 #2): show the TOTP input + Verify
         // button in BOTH AwaitingTotp AND Failed(WrongTotp) states. Without
         // that, a user who types a wrong TOTP code has no way to retry: the
@@ -372,11 +381,17 @@ impl SdrRemoteApp {
             ConnectStatus::Disconnected | ConnectStatus::Connected => {
                 if !self.connected && self.password_input.is_empty() {
                     ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("screen_password_required_to_connect").to_string());
+                } else {
+                    status_shown = false;
                 }
             }
         }
 
-        ui.separator();
+        // The relay group's line below is the line above the chat when no
+        // status stands in between (build 198): one line, not two.
+        if status_shown {
+            super::helpers::rule(ui);
+        }
 
         // Chat, with the unread count on it (design §1.7): without a number
         // where people already look, nobody opens the window - and one channel
@@ -416,107 +431,116 @@ impl SdrRemoteApp {
                 );
             }
         });
-        ui.separator();
+        super::helpers::rule(ui);
 
-        // UI language: English base + choice of NL/DE/FR. Applies immediately
-        // (rust_i18n::set_locale) and persists (language= in the client conf).
-        ui.horizontal(|ui| {
-            ui.label(rust_i18n::t!("language").to_string());
-            let langs = [("en", "English"), ("nl", "Nederlands"), ("de", "Deutsch"), ("fr", "Francais")];
-            let cur_name = langs.iter().find(|(c, _)| *c == self.ui_language).map(|(_, n)| *n).unwrap_or("English");
-            let mut picked: Option<&str> = None;
-            egui::ComboBox::from_id_salt("ui_language_select")
-                .selected_text(cur_name)
-                .show_ui(ui, |ui| {
-                    for (code, name) in langs {
-                        if ui.selectable_label(self.ui_language == code, name).clicked() {
-                            picked = Some(code);
-                        }
-                    }
-                });
-            if let Some(code) = picked {
-                self.ui_language = code.to_string();
-                rust_i18n::set_locale(code);
-                self.save_full_config();
-            }
-        });
-
-        // UI scale, independent of the Windows display scaling. A high-DPI screen at
-        // 200% gives the app FEWER points to lay out in than an ordinary 1080p monitor
-        // at 100%, so less fits despite the higher resolution - this scales the app
-        // down without touching the system-wide setting. egui's Ctrl+/Ctrl- does the
-        // same thing and is picked up and stored (see update.rs).
-        ui.horizontal(|ui| {
-            ui.label(rust_i18n::t!("screen_ui_scale").to_string());
-            // One step list, shared with the server GUI, so the two cannot end up
-            // offering different scales.
-            let picked = sdr_remote_layout::ui_scale_picker(ui, "ui_zoom_select", self.ui_zoom);
-            if let Some(v) = picked {
-                self.ui_zoom = v;
-                self.ui_zoom_pending = true;
-                self.save_full_config();
-            }
-            ui.label(
-                egui::RichText::new(rust_i18n::t!("screen_ui_scale_hint").to_string())
-                    .size(11.0)
-                    .color(egui::Color32::GRAY),
-            );
-        });
-
-        // UI theme: pick a preset (Classic/Dark/Slate) or Custom. Applies immediately and
-        // persists. Custom exposes colour pickers for the base slots; the per-element
-        // colours join the palette in later migration steps.
-        ui.horizontal(|ui| {
-            ui.label(rust_i18n::t!("screen_theme").to_string());
-            let mut sel = self.theme_variant;
-            egui::ComboBox::from_id_salt("theme_select")
-                .selected_text(sel.label())
-                .show_ui(ui, |ui| {
-                    for v in theme::ThemeVariant::ALL {
-                        ui.selectable_value(&mut sel, v, v.label());
-                    }
-                });
-            if sel != self.theme_variant {
-                self.theme_variant = sel;
-                self.save_full_config();
-            }
-        });
-        if self.theme_variant == theme::ThemeVariant::Custom {
+        // Language, UI scale and theme as one group, behind a chevron like the
+        // others below it (owner, 2026-10-14). The audio group directly after
+        // shares this group's line below as its line above.
+        self.folds_open = super::helpers::settings_group(
+            ui,
+            self.folds_open,
+            super::config::Fold::Display,
+            RichText::new(rust_i18n::t!("screen_group_display").to_string()).strong(),
+            |ui| {
+            // UI language: English base + choice of NL/DE/FR. Applies immediately
+            // (rust_i18n::set_locale) and persists (language= in the client conf).
             ui.horizontal(|ui| {
-                ui.label(rust_i18n::t!("screen_custom_colours").to_string());
-                let mut p = self.theme_custom;
-                let mut changed = false;
-                ui.label(rust_i18n::t!("screen_background").to_string());
-                changed |= ui.color_edit_button_srgba(&mut p.background).changed();
-                ui.label(rust_i18n::t!("screen_widgets").to_string());
-                changed |= ui.color_edit_button_srgba(&mut p.widget).changed();
-                ui.label(rust_i18n::t!("screen_text").to_string());
-                changed |= ui.color_edit_button_srgba(&mut p.text).changed();
-                ui.label(rust_i18n::t!("screen_slider_knob").to_string());
-                changed |= ui.color_edit_button_srgba(&mut p.accent).changed();
-                if ui.button(rust_i18n::t!("screen_reset").to_string()).clicked() {
-                    p = theme::Palette::slate();
-                    changed = true;
-                }
-                if changed {
-                    self.theme_custom = p; // live preview
-                    self.theme_custom_dirty = true;
+                ui.label(rust_i18n::t!("language").to_string());
+                let langs = [("en", "English"), ("nl", "Nederlands"), ("de", "Deutsch"), ("fr", "Francais")];
+                let cur_name = langs.iter().find(|(c, _)| *c == self.ui_language).map(|(_, n)| *n).unwrap_or("English");
+                let mut picked: Option<&str> = None;
+                egui::ComboBox::from_id_salt("ui_language_select")
+                    .selected_text(cur_name)
+                    .show_ui(ui, |ui| {
+                        for (code, name) in langs {
+                            if ui.selectable_label(self.ui_language == code, name).clicked() {
+                                picked = Some(code);
+                            }
+                        }
+                    });
+                if let Some(code) = picked {
+                    self.ui_language = code.to_string();
+                    rust_i18n::set_locale(code);
+                    self.save_full_config();
                 }
             });
-            // Persist once the user releases the picker (avoids per-frame disk I/O while
-            // dragging the hue/saturation sliders).
-            if self.theme_custom_dirty && ui.input(|i| i.pointer.any_released()) {
-                self.save_full_config();
-                self.theme_custom_dirty = false;
+
+            // UI scale, independent of the Windows display scaling. A high-DPI screen at
+            // 200% gives the app FEWER points to lay out in than an ordinary 1080p monitor
+            // at 100%, so less fits despite the higher resolution - this scales the app
+            // down without touching the system-wide setting. egui's Ctrl+/Ctrl- does the
+            // same thing and is picked up and stored (see update.rs).
+            ui.horizontal(|ui| {
+                ui.label(rust_i18n::t!("screen_ui_scale").to_string());
+                // One step list, shared with the server GUI, so the two cannot end up
+                // offering different scales.
+                let picked = sdr_remote_layout::ui_scale_picker(ui, "ui_zoom_select", self.ui_zoom);
+                if let Some(v) = picked {
+                    self.ui_zoom = v;
+                    self.ui_zoom_pending = true;
+                    self.save_full_config();
+                }
+                ui.label(
+                    egui::RichText::new(rust_i18n::t!("screen_ui_scale_hint").to_string())
+                        .size(11.0)
+                        .color(egui::Color32::GRAY),
+                );
+            });
+
+            // UI theme: pick a preset (Classic/Dark/Slate) or Custom. Applies immediately and
+            // persists. Custom exposes colour pickers for the base slots; the per-element
+            // colours join the palette in later migration steps.
+            ui.horizontal(|ui| {
+                ui.label(rust_i18n::t!("screen_theme").to_string());
+                let mut sel = self.theme_variant;
+                egui::ComboBox::from_id_salt("theme_select")
+                    .selected_text(sel.label())
+                    .show_ui(ui, |ui| {
+                        for v in theme::ThemeVariant::ALL {
+                            ui.selectable_value(&mut sel, v, v.label());
+                        }
+                    });
+                if sel != self.theme_variant {
+                    self.theme_variant = sel;
+                    self.save_full_config();
+                }
+            });
+            if self.theme_variant == theme::ThemeVariant::Custom {
+                ui.horizontal(|ui| {
+                    ui.label(rust_i18n::t!("screen_custom_colours").to_string());
+                    let mut p = self.theme_custom;
+                    let mut changed = false;
+                    ui.label(rust_i18n::t!("screen_background").to_string());
+                    changed |= theme::colour_button(ui, &mut p.background).changed();
+                    ui.label(rust_i18n::t!("screen_widgets").to_string());
+                    changed |= theme::colour_button(ui, &mut p.widget).changed();
+                    ui.label(rust_i18n::t!("screen_text").to_string());
+                    changed |= theme::colour_button(ui, &mut p.text).changed();
+                    ui.label(rust_i18n::t!("screen_slider_knob").to_string());
+                    changed |= theme::colour_button(ui, &mut p.accent).changed();
+                    if ui.button(rust_i18n::t!("screen_reset").to_string()).clicked() {
+                        p = theme::Palette::slate();
+                        changed = true;
+                    }
+                    if changed {
+                        self.theme_custom = p; // live preview
+                        self.theme_custom_dirty = true;
+                    }
+                });
+                // Persist once the user releases the picker (avoids per-frame disk I/O while
+                // dragging the hue/saturation sliders).
+                if self.theme_custom_dirty && ui.input(|i| i.pointer.any_released()) {
+                    self.save_full_config();
+                    self.theme_custom_dirty = false;
+                }
             }
-        }
+            },
+        );
 
-        super::helpers::group_rule(ui);
-
-        let group_open = self.group_audio_open;
-        if super::helpers::settings_group(
+        self.folds_open = super::helpers::settings_group(
             ui,
-            group_open,
+            self.folds_open,
+            super::config::Fold::Audio,
             RichText::new(rust_i18n::t!("screen_group_audio").to_string()).strong(),
             |ui| {
             // Audio device selection - refresh device list only when combo opened or first time
@@ -591,7 +615,7 @@ impl SdrRemoteApp {
 
             // Mic -> TX Profile auto-switch mapping
             if !self.tx_profiles.is_empty() && !self.input_devices.is_empty() {
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.label(rust_i18n::t!("screen_mic_tx_profile_mapping").to_string());
                 let mut changed = false;
                 for dev_name in &self.input_devices {
@@ -622,7 +646,7 @@ impl SdrRemoteApp {
                 }
             }
 
-            ui.separator();
+            super::helpers::rule(ui);
             // PTT switch-on spike protection for a built-in speaker + mic in one chassis
             // (tablets/laptops). Off by default so nobody pays extra latency.
             let mut sp_changed = ui
@@ -671,10 +695,7 @@ impl SdrRemoteApp {
                 );
             }
             },
-        ) {
-            self.group_audio_open = !group_open;
-            super::config::save_group_open("group_audio_open", !group_open);
-        }
+        );
         // (The group's own line below separates it from what follows.)
 
         // Audio levels: hide Thetis-only streams in Yaesu-only setups.
@@ -778,11 +799,11 @@ impl SdrRemoteApp {
         // the Bluetooth group depends on the same answer.
         let roger_shown = roger_thetis || roger_radio1 || roger_radio2;
         if roger_shown {
-            super::helpers::group_rule(ui);
-            let group_open = self.group_roger_open;
-            if super::helpers::settings_group(
+            super::helpers::rule(ui);
+            self.folds_open = super::helpers::settings_group(
                 ui,
-                group_open,
+                self.folds_open,
+                super::config::Fold::Roger,
                 RichText::new(rust_i18n::t!("screen_group_roger").to_string()).strong(),
                 |ui| {
                 let roger_before = self.roger;
@@ -834,10 +855,7 @@ impl SdrRemoteApp {
                     let _ = self.cmd_tx.send(Command::SetRogerBeep(self.roger));
                 }
                 },
-            ) {
-                self.group_roger_open = !group_open;
-                super::config::save_group_open("group_roger_open", !group_open);
-            }
+            );
         }
 
         // The Bluetooth PTT button. On this tab and not with MIDI, because it is
@@ -845,33 +863,27 @@ impl SdrRemoteApp {
         // mapping (owner, 2026-09-17). The line above it is the roger group's
         // line below, when that group is there.
         if !roger_shown {
-            super::helpers::group_rule(ui);
+            super::helpers::rule(ui);
         }
-        let group_open = self.group_ble_open;
-        if super::helpers::settings_group(
+        self.folds_open = super::helpers::settings_group(
             ui,
-            group_open,
+            self.folds_open,
+            super::config::Fold::Ble,
             RichText::new(rust_i18n::t!("screen_group_ble").to_string()).strong(),
             |ui| self.render_ble_section(ui),
-        ) {
-            self.group_ble_open = !group_open;
-            super::config::save_group_open("group_ble_open", !group_open);
-        }
+        );
 
         // The Morse paddle: station equipment too, like the button above. Its
         // line above is the Bluetooth group's line below - which is there
         // because the Bluetooth group is always drawn. Should that ever become
         // conditional, this group needs its own line above in that case.
-        let group_open = self.group_cw_open;
-        if super::helpers::settings_group(
+        self.folds_open = super::helpers::settings_group(
             ui,
-            group_open,
+            self.folds_open,
+            super::config::Fold::Cw,
             RichText::new(rust_i18n::t!("screen_group_cw").to_string()).strong(),
             |ui| self.render_cw_section(ui),
-        ) {
-            self.group_cw_open = !group_open;
-            super::config::save_group_open("group_cw_open", !group_open);
-        }
+        );
 
         // Audio recording
         let rec_yaesu_label = self.yaesu_slot_label(0);
@@ -1010,12 +1022,12 @@ impl SdrRemoteApp {
         //
         // Desktop only. The phone keys one radio at a time, and there that is the
         // intention.
-        let zenders = [self.thetis_configured, self.yaesu_present_last, self.yaesu2_present_last]
+        let transmitters = [self.thetis_configured, self.yaesu_present_last, self.yaesu2_present_last]
             .iter()
             .filter(|&&p| p)
             .count();
-        if zenders > 1 {
-            ui.separator();
+        if transmitters > 1 {
+            super::helpers::rule(ui);
             if ui
                 .checkbox(&mut self.multi_tx, rust_i18n::t!("screen_multi_tx").to_string())
                 .on_hover_text(rust_i18n::t!("screen_multi_tx_tooltip").to_string())
@@ -1026,7 +1038,29 @@ impl SdrRemoteApp {
             }
         }
 
-        ui.separator();
+        super::helpers::rule(ui);
+
+        // The server is not running this build. Said here, next to everything
+        // else about the connection, and said only - nothing refuses to work
+        // over it. An operator locked out of their own station at a distance by
+        // a half-finished update is worse off than one reading this line.
+        if self.server_build.is_trouble() {
+            let theirs = self
+                .server_build
+                .theirs()
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| rust_i18n::t!("screen_build_too_old").to_string());
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 150, 40),
+                rust_i18n::t!(
+                    "screen_build_mismatch",
+                    server = theirs,
+                    client = sdr_remote_core::version_string()
+                )
+                .to_string(),
+            );
+            super::helpers::rule(ui);
+        }
 
         // Stats
         ui.label(rust_i18n::t!("screen_statistics").to_string());
@@ -1039,10 +1073,12 @@ impl SdrRemoteApp {
                 ui.end_row();
 
                 // Down (RX) is clickable for per-PacketType breakdown of the last 5 s.
-                if super::helpers::chevron_label(ui, self.bw_breakdown_expanded, rust_i18n::t!("screen_down_rx").to_string()).clicked() {
-                    self.bw_breakdown_expanded = !self.bw_breakdown_expanded;
-                    self.save_full_config();
-                }
+                self.folds_open = super::helpers::fold(
+                    ui,
+                    self.folds_open,
+                    super::config::Fold::BandwidthBreakdown,
+                    rust_i18n::t!("screen_down_rx").to_string(),
+                );
                 ui.label(format!("{} Kbit/s", self.down_kbps));
                 ui.end_row();
 
@@ -1054,22 +1090,6 @@ impl SdrRemoteApp {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(rust_i18n::t!("screen_audio_streams").to_string());
-            // Fase 3c: transport indicator (relay only). Normal = low-latency UDP; when the
-            // network blocks/degrades UDP the audio auto-falls back to the reliable (slower)
-            // wss/TCP path. Honest wording: a brief gap can occur on a sudden total UDP loss.
-            if let Some(handle) = self.relay_status.as_ref() {
-                let st = handle.snapshot();
-                if st.connected {
-                    if st.transport_fallback {
-                        ui.colored_label(
-                            theme::TL_AMBER_TEXT,
-                            rust_i18n::t!("screen_transport_tcp_fallback").to_string(),
-                        );
-                    } else {
-                        ui.weak(rust_i18n::t!("screen_transport_udp").to_string());
-                    }
-                }
-            }
         });
         egui::Grid::new("audio_stream_stats_grid")
             .num_columns(4)
@@ -1152,7 +1172,7 @@ impl SdrRemoteApp {
         // Per-stream breakdown - only show when the user
         // has clicked "Down". List is empty for the first ~5 s
         // after connect (engine fills it on every 5 s window rollover).
-        if self.bw_breakdown_expanded {
+        if self.folds_open.is_open(super::config::Fold::BandwidthBreakdown) {
             ui.add_space(2.0);
             egui::Grid::new("bw_breakdown_grid")
                 .num_columns(2)
@@ -1252,7 +1272,7 @@ impl SdrRemoteApp {
 
         if self.thetis_configured {
             // TCI Status
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label(rust_i18n::t!("screen_tci_status").to_string());
             egui::Grid::new("tci_grid")
             .num_columns(2)
@@ -1282,7 +1302,7 @@ impl SdrRemoteApp {
         }
 
         // Remote reboot / shutdown
-        ui.separator();
+        super::helpers::rule(ui);
         ui.horizontal(|ui| {
             if self.connected {
                 if self.reboot_confirm {
@@ -1304,5 +1324,85 @@ impl SdrRemoteApp {
             }
         });
 
+        // The developer mode, together and last, behind its own chevron
+        // (owner, 2026-10-24): the code field or the sign, and the tools that
+        // only measure.
+        //
+        // Measurement mode (open point 34): every audio arrival and heartbeat
+        // round trip to a file, for comparing the link before and after a
+        // change. Off by default; a new file each time it is switched on, in a
+        // folder next to the program.
+        super::helpers::rule(ui);
+        self.folds_open = super::helpers::settings_group(
+            ui,
+            self.folds_open,
+            super::config::Fold::Developer,
+            rust_i18n::t!("screen_dev_section").to_string(),
+            |ui| {
+                self.render_developer_mode(ui);
+                if self.developer_mode {
+                    ui.horizontal(|ui| {
+                        ui.label(rust_i18n::t!("screen_measure").to_string());
+                        match self.measurement_file.clone() {
+                            Some(path) => {
+                                if ui
+                                    .button(RichText::new(rust_i18n::t!("screen_stop_icon").to_string()).color(Color32::WHITE))
+                                    .highlight()
+                                    .on_hover_text(rust_i18n::t!("screen_measure_stop_tooltip").to_string())
+                                    .clicked()
+                                {
+                                    let _ = self.cmd_tx.send(Command::SetMeasurement(None));
+                                }
+                                let name = std::path::Path::new(&path)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| path.clone());
+                                ui.label(name).on_hover_text(path);
+                            }
+                            None => {
+                                if ui
+                                    .button(rust_i18n::t!("screen_measure_start").to_string())
+                                    .on_hover_text(rust_i18n::t!("screen_measure_tooltip").to_string())
+                                    .clicked()
+                                {
+                                    let dir = std::env::current_exe()
+                                        .ok()
+                                        .and_then(|p| p.parent().map(|d| d.join("meting")))
+                                        .unwrap_or_else(|| std::path::PathBuf::from("meting"));
+                                    let _ = self.cmd_tx.send(Command::SetMeasurement(Some(dir.to_string_lossy().to_string())));
+                                }
+                            }
+                        }
+                        // "Relay only" (build 137): for comparing a session through the
+                        // relay with one that went direct. Grey without the relay in use;
+                        // two texts, because egui shows `on_hover_text` only when enabled.
+                        let (via_relay, mut relay_only, mut force_tcp) = {
+                            let st = self.state_rx.borrow();
+                            (st.route == sdr_remote_logic::measure::Route::QuicRelay, st.relay_only, st.force_tcp)
+                        };
+                        ui.add_enabled_ui(via_relay, |ui| {
+                            if ui
+                                .checkbox(&mut relay_only, rust_i18n::t!("screen_relay_only").to_string())
+                                .on_hover_text(rust_i18n::t!("screen_relay_only_tooltip").to_string())
+                                .on_disabled_hover_text(rust_i18n::t!("screen_relay_only_no_relay_tooltip").to_string())
+                                .changed()
+                            {
+                                let _ = self.cmd_tx.send(Command::SetRelayOnly(relay_only));
+                            }
+                            // "Force TCP" (build 146): what the TCP fallback route costs,
+                            // measured on a network where UDP works.
+                            if ui
+                                .checkbox(&mut force_tcp, rust_i18n::t!("screen_force_tcp").to_string())
+                                .on_hover_text(rust_i18n::t!("screen_force_tcp_tooltip").to_string())
+                                .on_disabled_hover_text(rust_i18n::t!("screen_relay_only_no_relay_tooltip").to_string())
+                                .changed()
+                            {
+                                let _ = self.cmd_tx.send(Command::SetForceTcp(force_tcp));
+                            }
+                        });
+                    });
+                }
+            },
+        );
     }
 }

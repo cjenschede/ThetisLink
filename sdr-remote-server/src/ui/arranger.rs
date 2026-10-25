@@ -384,18 +384,18 @@ impl ServerApp {
                     gsnap.rows(), gsnap.cols(), SNAP_ACCENT);
 
                 ui.add_space(6.0);
-                ui.separator();
+                sdr_remote_theme::rule(ui);
                 ui.label(rust_i18n::t!("srv_arrange_pick").to_string());
                 select = sdr_remote_layout::window_palette(ui, &avail, active);
 
                 ui.add_space(6.0);
-                ui.separator();
+                sdr_remote_theme::rule(ui);
                 ui.label(rust_i18n::t!("srv_arrange_place").to_string());
                 intents = sdr_remote_layout::placement_grid(ui, &gsnap, active, drag_anchor);
                 if let Some(sel) = intents.select.take() { select = Some(sel); }
 
                 ui.add_space(8.0);
-                ui.separator();
+                sdr_remote_theme::rule(ui);
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(RichText::new(rust_i18n::t!("srv_apply").to_string()).strong())
                         .fill(SNAP_ACCENT)).clicked() { do_apply = true; }
@@ -404,7 +404,7 @@ impl ServerApp {
 
                 // --- Arrangement memories: store/restore actual window positions ---
                 ui.add_space(8.0);
-                ui.separator();
+                sdr_remote_theme::rule(ui);
                 ui.label(rust_i18n::t!("srv_layout_memory").to_string());
                 ui.label(RichText::new(rust_i18n::t!("srv_layout_memory_help").to_string())
                     .size(11.0).weak());

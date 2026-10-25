@@ -163,16 +163,19 @@ pub(super) fn bringup_probe(
     // start (report #12, 2026-08-12) reconnected two minutes later, this probe
     // read "" on its single attempt, and the radio was driven as an FT-991A
     // for the rest of the evening: no memory channels, no menu values, V/M and
-    // Mem+/- dead. The port has no conversation in flight at this point, so
-    // draining here is safe (see the note in `cat_query` about why it is NOT
-    // safe there).
+    // Mem+/- dead. Draining is only safe with no conversation in flight (see
+    // the note in `cat_query` about why it is NOT safe there). Two callers:
+    // right after the port opened, where nothing is in flight; and the poll
+    // loop when a radio that was on standby comes on, which first lets the
+    // line settle (`poll.rs`, `settle_line`) so whatever was still coming is
+    // in the poll's buffer and not thrown away here (review build 56).
     let _ = port.clear(serialport::ClearBuffer::Input);
     let mut id_resp = String::new();
     let mut id_code = String::new();
     for attempt in 0..3 {
         id_resp = cat_query(port, "ID;");
         id_code = resp_payload("ID", &id_resp);
-        if RadioModel::from_id_code(&id_code).is_some() {
+        if model_from_id_response(&id_resp).is_some() {
             break;
         }
         if attempt < 2 {
@@ -180,10 +183,29 @@ pub(super) fn bringup_probe(
             std::thread::sleep(Duration::from_millis(150));
         }
     }
-    let detected = RadioModel::from_id_code(&id_code);
+    let detected = model_from_id_response(&id_resp);
+    if detected.is_some() && id_resp.matches(';').count() > 1 {
+        // Not a baud problem: the answer names a model, it just did not come
+        // alone - an earlier attempt's late answer, or whatever came after it.
+        // The log says what arrived, not why.
+        info!(
+            "{} ID; came back as {} frames at once ('{}'); model read from the first frame that names one",
+            prefix,
+            id_resp.matches(';').count(),
+            id_resp.trim()
+        );
+    }
 
     if id_code.is_empty() {
-        warn!("{} autodetect: ID; returned no valid response ({:?}); check cable/baud radio-menu vs config; falling back to shared Yaesu parser", prefix, id_resp);
+        // A radio on standby answers `PS;` and nothing else (poll.rs, the
+        // `awake` check) - that is not a cable or baud fault, and the model is
+        // read again once it is switched on (`model_check_due`). Field log
+        // 2026-10-01 08:35: a 991A on standby got the baud warning.
+        if cat_query(port, "PS;").contains("PS0") {
+            info!("{} ID; unanswered - the radio is on standby; its model is read once it is switched on", prefix);
+        } else {
+            warn!("{} autodetect: ID; returned no valid response ({:?}); check cable/baud radio-menu vs config; falling back to shared Yaesu parser", prefix, id_resp);
+        }
     } else if detected.is_none() {
         // An "unknown" ID that carries several frames is not an unknown radio:
         // it is one query answered with everything that was queued behind it,
@@ -212,11 +234,42 @@ pub(super) fn bringup_probe(
         // off during startup detection, or a COM/USB enumeration swap. Loud,
         // because the audio-device assignment cannot be corrected from here.
         warn!(
-            "{} model mismatch: assumed={:?}, radio reports {:?} (ID {}); adopting the radio's own dialect - if the audio sounds wrong, check the slot assignment",
-            prefix, model, detected.unwrap(), id_code
+            "{} model mismatch: assumed={:?}, radio reports {:?} (ID answer '{}'); adopting the radio's own dialect - if the audio sounds wrong, check the slot assignment",
+            prefix, model, detected.unwrap(), id_resp.trim()
         );
     }
     detected
+}
+
+/// The model an `ID;` answer names, read frame by frame.
+///
+/// One answer can hold more than one frame: when the radio is slow to wake, the
+/// reply to an earlier `ID;` arrives together with the reply to the next one.
+/// Field log 2026-09-29: an FTX-1 switched on after the server started answered
+/// `ID0840;ID0840;` - twice the right answer - and read as one payload,
+/// `0840;ID0840` named no model, so the slot stayed a 991A for the whole session.
+/// So every frame is looked at, and the first frame with a code this build knows
+/// names the model. An answer with no such frame still names none, so a
+/// read that is really out of step (no ID in it at all) keeps its warning.
+///
+/// A bare code without its "ID" echo counts in the FIRST frame only - exactly
+/// what the old single-payload read accepted (a partial first read that lost
+/// the echo). "First" is the first piece after splitting on `;`, empty or not:
+/// `;0840;` names nothing, as it named nothing before build 55. Further on, every frame carries its own echo, so a bare `0840`
+/// there would be some other command's payload, not a model.
+///
+/// The one place both readers of `ID;` go through: the startup detection
+/// (`detect_model`) and the check when a radio comes up later (`bringup_probe`).
+pub(super) fn model_from_id_response(resp: &str) -> Option<RadioModel> {
+    resp.split(';')
+        .map(str::trim)
+        .enumerate()
+        .filter_map(|(i, frame)| match frame.strip_prefix("ID") {
+            Some(code) => Some(code),
+            None if i == 0 => Some(frame),
+            None => None,
+        })
+        .find_map(RadioModel::from_id_code)
 }
 
 /// Strip a 2-char CAT command echo + trailing `;` from a response, returning the

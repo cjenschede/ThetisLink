@@ -112,104 +112,114 @@ impl SdrRemoteApp {
         // NB/DNR/Contour/Notch are not usable in FM (mode 5) -> grey out.
         let is_fm = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 5 | 12);
         let toggles = if slot == 0 { self.yaesu_feature_toggles } else { self.yaesu2_feature_toggles };
-        egui::CollapsingHeader::new(rust_i18n::t!("dev_dsp_levels").to_string())
-            .id_salt(("yaesu_levels", slot))
-            .show(ui, |ui| {
-                // (level-ctrl, label, min, max, ftx1_only, on/off-ctrl for 991A)
-                // Proc (ctrl 10) removed: the radio speech processor does nothing on
-                // USB audio (radio shaping bypassed on REAR/USB); client-side EQ/AGC
-                // replace it.
-                let specs: [(u8, &str, i32, i32, bool, Option<u8>); 3] = [
-                    (8, "NB", 0, 10, false, Some(13)),   // 991A: NB on/off = ctrl 13
-                    (9, "DNR", 0, 10, false, Some(14)),  // 991A: NR on/off = ctrl 14
-                    (11, "AMC", 1, 100, true, None),
-                ];
-                for (j, &(ctrl, label, lo, hi, ftx1_only, toggle_ctrl)) in specs.iter().enumerate() {
-                    if ftx1_only && !is_ftx1 { continue; }
-                    // NB not in FM (tester-confirmed on hardware). DNR stays: the 991A OM
-                    // doesn't limit DNR noise reduction to non-FM. AMC (TX audio) always usable.
-                    let row_enabled = !(is_fm && label == "NB");
-                    ui.add_enabled_ui(row_enabled, |ui| {
-                    ui.horizontal(|ui| {
-                        // 991A: separate on/off button before the level slider (FTX-1 encodes
-                        // "off" in the level itself, so no toggle there).
-                        let has_toggle = toggle_ctrl.is_some() && !is_ftx1;
-                        if let Some(tc) = toggle_ctrl {
-                            if !is_ftx1 {
-                                let on = toggles & (1 << tc) != 0;
-                                let tbtn = if on {
-                                    egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
-                                        .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(46.0, 20.0))
-                                } else {
-                                    egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(46.0, 20.0))
-                                };
-                                if ui.add(tbtn).clicked() {
-                                    let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, tc, if on { 0 } else { 1 }));
-                                    self.yaesu_toggle_flip(slot, tc as u32);
+        // A group like every other fold (owner, 2026-10-15: lines above and
+        // below); the body indented as egui's collapsing header did.
+        let levels = if slot == 0 { super::config::Fold::YaesuLevels } else { super::config::Fold::Yaesu2Levels };
+        super::helpers::rule(ui);
+        self.folds_open = super::helpers::settings_group(
+            ui,
+            self.folds_open,
+            levels,
+            RichText::new(rust_i18n::t!("dev_dsp_levels").to_string()).strong().size(14.0),
+            |ui| {
+                ui.indent(("yaesu_levels", slot), |ui| {
+                    // (level-ctrl, label, min, max, ftx1_only, on/off-ctrl for 991A)
+                    // Proc (ctrl 10) removed: the radio speech processor does nothing on
+                    // USB audio (radio shaping bypassed on REAR/USB); client-side EQ/AGC
+                    // replace it.
+                    let specs: [(u8, &str, i32, i32, bool, Option<u8>); 3] = [
+                        (8, "NB", 0, 10, false, Some(13)),   // 991A: NB on/off = ctrl 13
+                        (9, "DNR", 0, 10, false, Some(14)),  // 991A: NR on/off = ctrl 14
+                        (11, "AMC", 1, 100, true, None),
+                    ];
+                    for (j, &(ctrl, label, lo, hi, ftx1_only, toggle_ctrl)) in specs.iter().enumerate() {
+                        if ftx1_only && !is_ftx1 { continue; }
+                        // NB not in FM (tester-confirmed on hardware). DNR stays: the 991A OM
+                        // doesn't limit DNR noise reduction to non-FM. AMC (TX audio) always usable.
+                        let row_enabled = !(is_fm && label == "NB");
+                        ui.add_enabled_ui(row_enabled, |ui| {
+                        ui.horizontal(|ui| {
+                            // 991A: separate on/off button before the level slider (FTX-1 encodes
+                            // "off" in the level itself, so no toggle there).
+                            let has_toggle = toggle_ctrl.is_some() && !is_ftx1;
+                            if let Some(tc) = toggle_ctrl {
+                                if !is_ftx1 {
+                                    let on = toggles & (1 << tc) != 0;
+                                    let tbtn = if on {
+                                        egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
+                                            .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(46.0, 20.0))
+                                    } else {
+                                        egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(46.0, 20.0))
+                                    };
+                                    if ui.add(tbtn).clicked() {
+                                        let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, tc, if on { 0 } else { 1 }));
+                                        self.yaesu_toggle_flip(slot, tc as u32);
+                                    }
                                 }
                             }
-                        }
-                        let sl_label = if has_toggle { "" } else { label };
-                        let resp = ui.add(egui::Slider::new(&mut self.yaesu_level_sliders[s][j], lo..=hi).text(sl_label));
-                        let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_level_sliders[s][j], lo..=hi, ((hi - lo) as f64 / 50.0).max(1.0));
-                        // Send only on drag-release (or a non-drag change: click/key),
-                        // not on every intermediate value - otherwise a drag bursts CAT commands over
-                        // the serial Yaesu link (shares with the poll -> CAT lag). Final value always.
-                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) || scrolled {
-                            let v = self.yaesu_level_sliders[s][j] as u16;
-                            let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, ctrl, v));
-                            if slot == 0 {
-                                self.yaesu_control_changed_at = Some(Instant::now());
-                            } else {
-                                self.yaesu2_control_changed_at = Some(Instant::now());
+                            let sl_label = if has_toggle { "" } else { label };
+                            let resp = ui.add(egui::Slider::new(&mut self.yaesu_level_sliders[s][j], lo..=hi).text(sl_label));
+                            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_level_sliders[s][j], lo..=hi, ((hi - lo) as f64 / 50.0).max(1.0));
+                            // Send only on drag-release (or a non-drag change: click/key),
+                            // not on every intermediate value - otherwise a drag bursts CAT commands over
+                            // the serial Yaesu link (shares with the poll -> CAT lag). Final value always.
+                            if resp.drag_stopped() || (resp.changed() && !resp.dragged()) || scrolled {
+                                let v = self.yaesu_level_sliders[s][j] as u16;
+                                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, ctrl, v));
+                                if slot == 0 {
+                                    self.yaesu_control_changed_at = Some(Instant::now());
+                                } else {
+                                    self.yaesu2_control_changed_at = Some(Instant::now());
+                                }
                             }
-                        }
-                    });
-                    });
-                }
-                // Phase D: Contour / APF / Manual-Notch - on/off button + frequency slider.
-                let dspecs: [(usize, &str, u8, u8, i32, i32); 3] = [
-                    (0, "Contour", 15, 18, 10, 3200),
-                    (1, "APF", 16, 19, 0, 50),
-                    (2, "Notch", 17, 20, 1, 320),
-                ];
-                for &(fidx, label, on_ctrl, freq_ctrl, flo, fhi) in dspecs.iter() {
-                    let enabled = match label {
-                        "APF" => is_cw,                    // APF only in CW (both OMs)
-                        "Contour" => !is_fm && !is_cw,     // Contour: not in FM, not in CW (FTX-1 OM)
-                        _ => !is_fm,                       // Notch: not in FM (manual notch does work in CW)
-                    };
-                    ui.add_enabled_ui(enabled, |ui| {
-                    ui.horizontal(|ui| {
-                        let on = toggles & (1 << on_ctrl) != 0;
-                        let tbtn = if on {
-                            egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
-                                .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(58.0, 20.0))
-                        } else {
-                            egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(58.0, 20.0))
+                        });
+                        });
+                    }
+                    // Phase D: Contour / APF / Manual-Notch - on/off button + frequency slider.
+                    let dspecs: [(usize, &str, u8, u8, i32, i32); 3] = [
+                        (0, "Contour", 15, 18, 10, 3200),
+                        (1, "APF", 16, 19, 0, 50),
+                        (2, "Notch", 17, 20, 1, 320),
+                    ];
+                    for &(fidx, label, on_ctrl, freq_ctrl, flo, fhi) in dspecs.iter() {
+                        let enabled = match label {
+                            "APF" => is_cw,                    // APF only in CW (both OMs)
+                            "Contour" => !is_fm && !is_cw,     // Contour: not in FM, not in CW (FTX-1 OM)
+                            _ => !is_fm,                       // Notch: not in FM (manual notch does work in CW)
                         };
-                        if ui.add(tbtn).clicked() {
-                            let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, on_ctrl, if on { 0 } else { 1 }));
-                            self.yaesu_toggle_flip(slot, on_ctrl as u32);
-                        }
-                        let resp = ui.add(egui::Slider::new(&mut self.yaesu_freq_sliders[s][fidx], flo..=fhi).text("Hz"));
-                        let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_freq_sliders[s][fidx], flo..=fhi, ((fhi - flo) as f64 / 50.0).max(1.0));
-                        // Send on drag-release instead of every intermediate value - wide freq sliders
-                        // (Contour 10-3200, Notch 1-320) would otherwise queue dozens of CAT commands
-                        // per drag. Final value always sent.
-                        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) || scrolled {
-                            let v = self.yaesu_freq_sliders[s][fidx] as u16;
-                            let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, freq_ctrl, v));
-                            if slot == 0 {
-                                self.yaesu_control_changed_at = Some(Instant::now());
+                        ui.add_enabled_ui(enabled, |ui| {
+                        ui.horizontal(|ui| {
+                            let on = toggles & (1 << on_ctrl) != 0;
+                            let tbtn = if on {
+                                egui::Button::new(RichText::new(label).size(11.0).color(Color32::WHITE))
+                                    .fill(Color32::from_rgb(0, 90, 200)).min_size(egui::vec2(58.0, 20.0))
                             } else {
-                                self.yaesu2_control_changed_at = Some(Instant::now());
+                                egui::Button::new(RichText::new(label).size(11.0)).min_size(egui::vec2(58.0, 20.0))
+                            };
+                            if ui.add(tbtn).clicked() {
+                                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, on_ctrl, if on { 0 } else { 1 }));
+                                self.yaesu_toggle_flip(slot, on_ctrl as u32);
                             }
-                        }
-                    });
-                    });
-                }
-            });
+                            let resp = ui.add(egui::Slider::new(&mut self.yaesu_freq_sliders[s][fidx], flo..=fhi).text("Hz"));
+                            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.yaesu_freq_sliders[s][fidx], flo..=fhi, ((fhi - flo) as f64 / 50.0).max(1.0));
+                            // Send on drag-release instead of every intermediate value - wide freq sliders
+                            // (Contour 10-3200, Notch 1-320) would otherwise queue dozens of CAT commands
+                            // per drag. Final value always sent.
+                            if resp.drag_stopped() || (resp.changed() && !resp.dragged()) || scrolled {
+                                let v = self.yaesu_freq_sliders[s][fidx] as u16;
+                                let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, freq_ctrl, v));
+                                if slot == 0 {
+                                    self.yaesu_control_changed_at = Some(Instant::now());
+                                } else {
+                                    self.yaesu2_control_changed_at = Some(Instant::now());
+                                }
+                            }
+                        });
+                        });
+                    }
+                });
+            },
+        );
     }
 
     /// Clarifier block (§15): RIT/XIT on/off (blue=on, optimistic), offset display
@@ -288,7 +298,7 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetControl(
                     sdr_remote_core::protocol::ControlId::YaesuSelectVfo, 3)); // VM;
             }
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label(RichText::new(mode_label).size(14.0).color(Color32::from_rgb(255, 170, 40)));
         });
 
@@ -333,7 +343,7 @@ impl SdrRemoteApp {
                 .size(14.0).family(egui::FontFamily::Monospace));
         });
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Mode + Band + controls row
         {
@@ -365,14 +375,14 @@ impl SdrRemoteApp {
                 if ui.add(btn("Band+")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 5));
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 if ui.add(btn("Mem-")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 10));
                 }
                 if ui.add(btn("Mem+")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 9));
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 if ui.add(btn("A=B")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuButton, 0));
                 }
@@ -478,7 +488,7 @@ impl SdrRemoteApp {
             });
         }
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // S-meter (click toggles bar <-> analog; analog in the same place as the bar).
         let mw = ui.available_width().min(350.0).max(200.0);
@@ -491,7 +501,7 @@ impl SdrRemoteApp {
         };
         self.meter_click(ui, mrect, super::M_YAESU1);
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Status row
         ui.horizontal(|ui| {
@@ -501,7 +511,7 @@ impl SdrRemoteApp {
                 (Color32::from_rgb(0, 150, 0), "RX")
             };
             ui.colored_label(tx_color, RichText::new(tx_text).size(16.0).strong());
-            ui.separator();
+            super::helpers::rule(ui);
             // Radio on/off via CAT PS. ONLY safe as a clickable button on the 991A
             // (code 0): there PS0 = standby, CAT/USB stays alive -> remote back
             // on. The FTX-1 (and unknown types) really turn off at PS0 incl. USB ->
@@ -524,16 +534,16 @@ impl SdrRemoteApp {
                     .on_hover_text(rust_i18n::t!("dev_radio_powers_off_hover").to_string());
             }
             if self.yaesu_hi_swr {
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.colored_label(theme::TL_SWR_ALERT_TEXT,
                     RichText::new(rust_i18n::t!("dev_high_swr").to_string()).size(16.0).strong());
             }
         });
 
-        ui.separator();
+        super::helpers::rule(ui);
         self.render_websdr_controls(ui, CatSyncTarget::Yaesu1, self.yaesu_freq_a, self.yaesu_mode);
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Mic gain slider for Yaesu USB TX audio. Display 0.5 maps
         // to the empirically matched internal gain 0.2.
@@ -554,44 +564,36 @@ impl SdrRemoteApp {
             }
         });
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // 5-band Equalizer - shared generic component (slot 0).
         self.render_yaesu_eq(ui, 0);
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Memory channels - visible body height is user-resizable so it
         // doesn't push the Radio Settings header off the bottom of the window.
-        if super::helpers::chevron_label(
+        // Groups like every other fold: the rule above is the one after the
+        // equalizer, and each draws its own line below (owner, 2026-10-15).
+        self.folds_open = super::helpers::settings_group(
             ui,
-            self.collapse_yaesu_memories,
+            self.folds_open,
+            super::config::Fold::YaesuMemories,
             RichText::new(rust_i18n::t!("dev_memory_channels").to_string()).strong().size(14.0),
-        )
-        .clicked()
-        {
-            self.collapse_yaesu_memories = !self.collapse_yaesu_memories;
-            self.save_full_config();
-        }
-        if self.collapse_yaesu_memories {
-            self.render_memories_scroll_and_handle(ui, 0);
-        }
+            |ui| self.render_memories_scroll_and_handle(ui, 0),
+        );
 
-        if super::helpers::chevron_label(
+        self.folds_open = super::helpers::settings_group(
             ui,
-            self.collapse_yaesu_menu,
+            self.folds_open,
+            super::config::Fold::YaesuMenu,
             RichText::new(rust_i18n::t!("dev_radio_settings").to_string()).strong().size(14.0),
-        )
-        .clicked()
-        {
-            self.collapse_yaesu_menu = !self.collapse_yaesu_menu;
-            self.save_full_config();
-        }
-        if self.collapse_yaesu_menu {
-            ui.indent(("ex_menu_body", 0u8), |ui| {
-                self.render_ex_menu(ui, 0);
-            });
-        }
+            |ui| {
+                ui.indent(("ex_menu_body", 0u8), |ui| {
+                    self.render_ex_menu(ui, 0);
+                });
+            },
+        );
     }
 
     /// Panel/window name for a radio slot (PATCH-dual-radio-991a-ftx1).
@@ -675,26 +677,21 @@ impl SdrRemoteApp {
     /// Snapshot->writeback keeps the borrow checker happy with per-slot state +
     /// per-slot commands (SetYaesu*/SetYaesu2*).
     pub(super) fn render_yaesu_eq(&mut self, ui: &mut egui::Ui, slot: u8) {
-        let mut collapse = if slot == 0 { self.collapse_yaesu_eq } else { self.collapse_yaesu2_eq };
+        let eq_fold = if slot == 0 { super::config::Fold::YaesuEq } else { super::config::Fold::Yaesu2Eq };
         // Header row: chevron + the EQ on/off checkbox next to it, so the EQ state
         // is visible (and toggleable) WITHOUT expanding - same as Android. This is
         // the ONLY EQ on/off control (the body checkbox has been removed), per the
         // UI style guide "no duplicate control for the same scope".
         ui.horizontal(|ui| {
-            if super::helpers::chevron_label(ui, collapse,
-                RichText::new(rust_i18n::t!("dev_equalizer").to_string()).strong().size(14.0)).clicked()
-            {
-                collapse = !collapse;
-                if slot == 0 { self.collapse_yaesu_eq = collapse; } else { self.collapse_yaesu2_eq = collapse; }
-                self.save_full_config();
-            }
+            self.folds_open = super::helpers::fold(ui, self.folds_open, eq_fold,
+                RichText::new(rust_i18n::t!("dev_equalizer").to_string()).strong().size(14.0));
             let mut eq_on = if slot == 0 { self.yaesu_eq_enabled } else { self.yaesu2_eq_enabled };
             if ui.checkbox(&mut eq_on, "EQ").changed() {
                 if slot == 0 { self.yaesu_eq_enabled = eq_on; } else { self.yaesu2_eq_enabled = eq_on; }
                 let _ = self.cmd_tx.send(if slot == 0 { Command::SetYaesuEqEnabled(eq_on) } else { Command::SetYaesu2EqEnabled(eq_on) });
             }
         });
-        if !collapse { return; }
+        if !self.folds_open.is_open(eq_fold) { return; }
 
         // Snapshot per-slot state in locals (writeback at the bottom).
         let mut enabled = if slot == 0 { self.yaesu_eq_enabled } else { self.yaesu2_eq_enabled };
@@ -928,7 +925,7 @@ impl SdrRemoteApp {
                 let _ = self.cmd_tx.send(Command::SetControl(
                     sdr_remote_core::protocol::ControlId::Yaesu2SelectVfo, 3));
             }
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label(RichText::new(mode_label).size(14.0).color(Color32::from_rgb(255, 170, 40)));
         });
         // VFO / Memory indicator (blue for Memory) - same place + name/freq as 991A.
@@ -972,7 +969,7 @@ impl SdrRemoteApp {
             ui.label(RichText::new(format!("{} Hz", format_frequency(self.yaesu2_freq_b)))
                 .size(14.0).family(egui::FontFamily::Monospace));
         });
-        ui.separator();
+        super::helpers::rule(ui);
         {
             let btn = |text: &str| egui::Button::new(RichText::new(text).size(11.0))
                 .min_size(egui::vec2(38.0, 20.0));
@@ -1004,14 +1001,14 @@ impl SdrRemoteApp {
                 if ui.add(btn("Band+")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 5));
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 if ui.add(btn("Mem-")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 10));
                 }
                 if ui.add(btn("Mem+")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 9));
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 if ui.add(btn("A=B")).clicked() {
                     let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 0));
                 }
@@ -1127,7 +1124,7 @@ impl SdrRemoteApp {
                 ui.end_row();
             });
         }
-        ui.separator();
+        super::helpers::rule(ui);
         // S-meter (click toggles bar <-> analog; analog in the same place).
         let mw2 = ui.available_width().min(350.0).max(200.0);
         let mrect2 = if self.meter_analog[super::M_YAESU2] {
@@ -1138,7 +1135,7 @@ impl SdrRemoteApp {
             yaesu_smeter_bar(ui, self.yaesu2_smeter, self.yaesu2_smeter_peak)
         };
         self.meter_click(ui, mrect2, super::M_YAESU2);
-        ui.separator();
+        super::helpers::rule(ui);
         // Status: RX/TX + power on/off (mirror of the 991A panel).
         ui.horizontal(|ui| {
             let (tx_color, tx_text) = if self.yaesu2_tx_active {
@@ -1147,7 +1144,7 @@ impl SdrRemoteApp {
                 (Color32::from_rgb(0, 150, 0), "RX")
             };
             ui.colored_label(tx_color, RichText::new(tx_text).size(16.0).strong());
-            ui.separator();
+            super::helpers::rule(ui);
             // See slot 0: clickable only on the 991A (standby); otherwise label.
             let on_col = Color32::from_rgb(0, 150, 0);
             let off_col = Color32::from_rgb(90, 90, 90);
@@ -1167,14 +1164,14 @@ impl SdrRemoteApp {
                     .on_hover_text(rust_i18n::t!("dev_radio_powers_off_hover").to_string());
             }
             if self.yaesu2_hi_swr {
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.colored_label(theme::TL_SWR_ALERT_TEXT,
                     RichText::new(rust_i18n::t!("dev_high_swr").to_string()).size(16.0).strong());
             }
         });
-        ui.separator();
+        super::helpers::rule(ui);
         self.render_websdr_controls(ui, CatSyncTarget::Yaesu2, self.yaesu2_freq_a, self.yaesu2_mode);
-        ui.separator();
+        super::helpers::rule(ui);
         ui.horizontal(|ui| {
             ui.label(rust_i18n::t!("dev_mic_gain").to_string());
             let mut mic_gain_display = super::yaesu_mic_gain_to_display(self.yaesu2_mic_gain);
@@ -1191,34 +1188,32 @@ impl SdrRemoteApp {
                 self.save_ptt_config();
             }
         });
-        ui.separator();
+        super::helpers::rule(ui);
         // Equalizer - same shared generic component as the 991A window (slot 1).
         self.render_yaesu_eq(ui, 1);
-        ui.separator();
+        super::helpers::rule(ui);
         // Memory Channels - same shared table as the 991A window (via slot 1).
-        if super::helpers::chevron_label(ui, self.collapse_yaesu2_memories,
-            RichText::new(rust_i18n::t!("dev_memory_channels").to_string()).strong().size(14.0)).clicked()
-        {
-            self.collapse_yaesu2_memories = !self.collapse_yaesu2_memories;
-            self.save_full_config();
-        }
-        if self.collapse_yaesu2_memories {
-            // Scale the list down to the bottom of the window instead of a
-            // fixed height: use the remaining available height (with a
-            // lower bound so it stays usable in a small window).
-            self.render_memories_scroll_and_handle(ui, 1);
-        }
+        // Scale the list down to the bottom of the window instead of a
+        // fixed height: use the remaining available height (with a
+        // lower bound so it stays usable in a small window).
+        self.folds_open = super::helpers::settings_group(
+            ui,
+            self.folds_open,
+            super::config::Fold::Yaesu2Memories,
+            RichText::new(rust_i18n::t!("dev_memory_channels").to_string()).strong().size(14.0),
+            |ui| self.render_memories_scroll_and_handle(ui, 1),
+        );
         // Radio settings (EX menu). Which of the two shapes gets drawn follows
         // the radio in this slot, not the slot number - see `render_ex_menu`.
-        if super::helpers::chevron_label(ui, self.collapse_yaesu2_menu,
-            RichText::new(rust_i18n::t!("dev_radio_settings").to_string()).strong().size(14.0)).clicked()
-        {
-            self.collapse_yaesu2_menu = !self.collapse_yaesu2_menu;
-            self.save_full_config();
-        }
-        if self.collapse_yaesu2_menu {
-            ui.indent(("ex_menu_body", 1u8), |ui| self.render_ex_menu(ui, 1));
-        }
+        self.folds_open = super::helpers::settings_group(
+            ui,
+            self.folds_open,
+            super::config::Fold::Yaesu2Menu,
+            RichText::new(rust_i18n::t!("dev_radio_settings").to_string()).strong().size(14.0),
+            |ui| {
+                ui.indent(("ex_menu_body", 1u8), |ui| self.render_ex_menu(ui, 1));
+            },
+        );
     }
 
     /// FTX-1 EX-menu browser (Phase C3). Groups the live-scanned EX values by
@@ -1275,7 +1270,7 @@ impl SdrRemoteApp {
             }
             let n = self.menu_entries[s].len();
             ui.label(rust_i18n::t!("dev_settings_count", n = n).to_string());
-            ui.separator();
+            super::helpers::rule(ui);
             ui.label(rust_i18n::t!("dev_filter").to_string());
             ui.add(egui::TextEdit::singleline(&mut self.menu_filter[s]).desired_width(120.0));
             if !self.menu_filter[s].is_empty() && ui.button("x").clicked() {
@@ -1313,12 +1308,14 @@ impl SdrRemoteApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (group, items) in &groups {
-                    egui::CollapsingHeader::new(RichText::new(group).strong())
-                        // Group names repeat across slots once both can draw
-                        // this shape; the slot keeps their open/closed state apart.
-                        .id_salt(("ex_group", slot, group))
-                        .default_open(!filt.is_empty())
-                        .show(ui, |ui| {
+                    // Group names repeat across slots once both can draw
+                    // this shape; the slot keeps their open/closed state apart.
+                    super::helpers::fold_by_id(
+                        ui,
+                        egui::Id::new(("ex_group", slot, group)),
+                        !filt.is_empty(),
+                        RichText::new(group).strong(),
+                        |ui| {
                             let mut last_sub = String::new();
                             for (addr, sub, desc, val) in items {
                                 if sub != &last_sub {
@@ -1340,7 +1337,8 @@ impl SdrRemoteApp {
                                     }
                                 });
                             }
-                        });
+                        },
+                    );
                 }
             });
 
@@ -1948,15 +1946,10 @@ impl SdrRemoteApp {
         }
     }
 
+    /// The same reading as the Yaesu meter bar (build 218: this label rounded
+    /// the S step to nearest, the bar rounded it down - S6 next to S5).
     pub(super) fn yaesu_compact_smeter_label(raw: u16) -> String {
-        let raw = raw as f32;
-        if raw <= 108.0 {
-            let s_unit = (raw / 12.0).round().clamp(0.0, 9.0) as u8;
-            format!("S{}", s_unit)
-        } else {
-            let db_over = ((raw - 108.0) * 0.5).round().max(0.0) as i32;
-            format!("S9+{} dB", db_over)
-        }
+        sdr_remote_core::s_meter::text(yaesu_raw_to_dbm(raw))
     }
 
     pub(super) fn render_yaesu_compact_status(&mut self, ui: &mut egui::Ui, slot: u8) {
@@ -2047,7 +2040,7 @@ impl SdrRemoteApp {
                 ui.end_row();
             });
 
-        ui.separator();
+        super::helpers::rule(ui);
         self.render_websdr_controls(ui, target, freq_a, mode);
     }
 
@@ -2075,12 +2068,12 @@ impl SdrRemoteApp {
         if show_radio1 {
             ui.horizontal(|ui| {
                 ui.heading(self.yaesu_slot_label(0));
-                ui.separator();
+                super::helpers::rule(ui);
                 if ui.checkbox(&mut self.yaesu_enabled, rust_i18n::t!("dev_enable").to_string()).changed() {
                     let _ = self.cmd_tx.send(Command::SetControl(
                         sdr_remote_core::protocol::ControlId::YaesuEnable, self.yaesu_enabled as u16));
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 if self.yaesu_enabled {
                     let popout_label = if self.yaesu_popout { rust_i18n::t!("dev_close_window").to_string() } else { rust_i18n::t!("dev_open_window").to_string() };
                     if ui.button(popout_label).clicked() {
@@ -2100,17 +2093,17 @@ impl SdrRemoteApp {
                 }
             });
             self.render_port_trouble(ui, self.yaesu_port_trouble, self.yaesu_connected);
-            ui.separator();
+            super::helpers::rule(ui);
             self.render_yaesu_compact_status(ui, 0);
         }
 
         if show_radio2 {
             if show_radio1 {
-                ui.separator();
+                super::helpers::rule(ui);
             }
             ui.horizontal(|ui| {
                 ui.heading(self.yaesu_slot_label(1));
-                ui.separator();
+                super::helpers::rule(ui);
                 if ui.checkbox(&mut self.yaesu2_enabled, rust_i18n::t!("dev_enable").to_string()).changed() {
                     let _ = self.cmd_tx.send(Command::SetYaesu2Enable(self.yaesu2_enabled));
                     if !self.yaesu2_enabled {
@@ -2118,7 +2111,7 @@ impl SdrRemoteApp {
                     }
                     self.save_ptt_config();
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 if self.yaesu2_enabled {
                     let popout_label = if self.yaesu2_popout { rust_i18n::t!("dev_close_window").to_string() } else { rust_i18n::t!("dev_open_window").to_string() };
                     if ui.button(popout_label).clicked() {
@@ -2139,7 +2132,7 @@ impl SdrRemoteApp {
                 }
             });
             self.render_port_trouble(ui, self.yaesu2_port_trouble, self.yaesu2_connected);
-            ui.separator();
+            super::helpers::rule(ui);
             self.render_yaesu_compact_status(ui, 1);
         } else {
             self.yaesu2_popout = false;

@@ -524,3 +524,175 @@ fn ultrabeam_thread(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_serial::FakeSerial;
+
+    /// A packet this code builds is a packet this code can read back, and that
+    /// holds for a payload full of the three bytes that have to be escaped.
+    ///
+    /// This is the test the file was missing most: quoting, the checksum and
+    /// the reader's state machine only mean anything together, and each of the
+    /// three could be wrong in a way the other two hide. 0xF5/0xFA/0xF6 in the
+    /// data are exactly the bytes that end a packet early if the quoting is
+    /// dropped on either side.
+    #[test]
+    fn a_packet_survives_being_written_and_read_back() {
+        let data = [0x01, STX, 0x02, ETX, DLE, 0x03];
+        let fake = FakeSerial::new();
+        fake.log().to_read = build_packet(0x2a, CMD_STATUS, &data);
+        let mut port = fake.boxed();
+
+        let (seq, com, got) = read_packet(&mut port).expect("a packet we built ourselves");
+
+        assert_eq!(seq, 0x2a);
+        assert_eq!(com, CMD_STATUS);
+        assert_eq!(got, data, "the escaped bytes come back as themselves");
+    }
+
+    /// The three special bytes are escaped and nothing else is.
+    #[test]
+    fn only_the_three_framing_bytes_are_escaped() {
+        for b in [STX, ETX, DLE] {
+            assert_eq!(quote_byte(b), vec![DLE, b], "{b:#04x} has to be quoted");
+        }
+        for b in [0x00, 0x01, 0x55, 0xF4, 0xF7, 0xF9, 0xFB, 0xFF] {
+            assert_eq!(quote_byte(b), vec![b], "{b:#04x} must be left alone");
+        }
+    }
+
+    /// The checksum is defined so that running it over the payload INCLUDING
+    /// the checksum byte yields 1. The reader leans on that; if the rule ever
+    /// changes on one side only, this is what says so.
+    #[test]
+    fn the_checksum_closes_on_one() {
+        let raw = [0x2a, CMD_STATUS, 0xAA, 0xBB];
+        let chk = compute_checksum(&raw);
+        let mut with_chk = raw.to_vec();
+        with_chk.push(chk);
+        assert_eq!(compute_checksum(&with_chk), 1);
+        assert_eq!(compute_checksum(&[]), 0x55, "and it starts at 0x55");
+    }
+
+    /// One flipped byte in the body is caught.
+    #[test]
+    fn a_corrupted_packet_is_refused() {
+        let mut pkt = build_packet(1, CMD_STATUS, &[0x10, 0x20, 0x30]);
+        let i = pkt.len() - 3; // inside the body, clear of STX/CHK/ETX
+        pkt[i] ^= 0xFF;
+        let fake = FakeSerial::new();
+        fake.log().to_read = pkt;
+        let mut port = fake.boxed();
+
+        let err = read_packet(&mut port).unwrap_err();
+        assert!(err.starts_with("Checksum mismatch"), "got: {err}");
+    }
+
+    /// A second STX before the end throws away what came before it. That is
+    /// what makes the reader recover from a half packet instead of carrying
+    /// its bytes into the next one.
+    #[test]
+    fn a_new_start_byte_discards_the_half_packet() {
+        let mut stream = vec![STX, 0x99, 0x99]; // a packet that never finished
+        stream.extend(build_packet(7, CMD_STATUS, &[0x42]));
+        let fake = FakeSerial::new();
+        fake.log().to_read = stream;
+        let mut port = fake.boxed();
+
+        let (seq, _, data) = read_packet(&mut port).expect("the second packet");
+        assert_eq!((seq, data), (7, vec![0x42]));
+    }
+
+    /// A port with nothing to say is a timeout, not an error and not a packet.
+    /// The poll loop tells those apart.
+    #[test]
+    fn silence_is_a_timeout() {
+        let fake = FakeSerial::new();
+        let mut port = fake.boxed();
+        assert_eq!(read_packet(&mut port).unwrap_err(), "Timeout");
+    }
+
+    /// Sending writes the framed packet before it reads, and reads the answer.
+    ///
+    /// Two things this test had to be beaten into being able to catch, both
+    /// found by mutating the code under it rather than by reading it:
+    ///
+    /// 1. The expected bytes are written out, not expressed as
+    ///    `build_packet(..)`. Comparing what was written against the function
+    ///    that wrote it passes whatever that function does. Same hole
+    ///    `the_hold_is_one_second` in `filter_width.rs` exists to close.
+    /// 2. The payload is `STX` on purpose. With an ordinary byte the frame
+    ///    contains nothing that needs escaping, so the literal expectation
+    ///    still survived `quote_byte` being mutated to escape nothing.
+    ///
+    /// Checksum by hand over SEQ, COM, DAT: 0x55, (^3)+1 = 0x57, (^1)+1 = 0x57,
+    /// (^0xF5)+1 = 0xA3. The 0xF5 in the data is sent as DLE 0xF5; the checksum
+    /// 0xA3 is not special and travels bare.
+    #[test]
+    fn send_and_receive_writes_the_frame_then_reads() {
+        let fake = FakeSerial::new();
+        fake.log().to_read = build_packet(3, CMD_STATUS, &[0x01]);
+        let mut port = fake.boxed();
+
+        let (seq, com, data) = send_and_receive(&mut port, 3, CMD_STATUS, &[STX]).expect("answered");
+
+        assert_eq!(
+            fake.log().written,
+            vec![STX, 0x03, 0x01, DLE, STX, 0xA3, ETX],
+            "the bytes on the wire, spelled out"
+        );
+        assert_eq!((seq, com, data), (3, CMD_STATUS, vec![0x01]));
+    }
+
+    /// Which byte of the status means what. Written out with a distinct value
+    /// per position, so a field reading its neighbour cannot pass.
+    ///
+    /// Note byte 8: it is skipped. `motors_moving` is byte 9, and the comment
+    /// above the code says byte 8 carries no motion information. If that ever
+    /// turns out to be wrong, this test is where the off-by-one would have been
+    /// caught.
+    ///
+    /// The first version of this said "distinct value per position" and was not.
+    /// It carried 0x02 at both 0 and 9, 0x03 at both 2 and 4, and 0x01 at both 6
+    /// and 7, so three of the swaps it claims to catch went straight through -
+    /// `direction` reading byte 7, `motors_moving` reading byte 0 and
+    /// `operation` reading byte 4 all survived a reviewer's mutations. The
+    /// comment was the promise; the array was the test.
+    #[test]
+    fn every_status_byte_lands_in_its_own_field() {
+        //              0     1     2     3     4     5     6     7     8     9    10    11
+        let data = [0x11, 0x22, 0x33, 0xE8, 0x03, 0x55, 0x66, 0x77, 0xEE, 0x99, 0xAA, 0x00];
+        let s = parse_status(&data).expect("twelve bytes is enough");
+
+        assert!(s.connected, "a parsed status is a connected one");
+        assert_eq!((s.fw_major, s.fw_minor), (0x11, 0x22));
+        assert_eq!(s.operation, 0x33);
+        assert_eq!(s.frequency_khz, 0x03E8, "little-endian over bytes 3 and 4");
+        assert_eq!(s.band, 0x55);
+        assert_eq!(s.direction, 0x66);
+        assert!(s.off_state, "bit 0 of byte 7 (0x77)");
+        assert_eq!(s.motors_moving, 0x99, "byte 9, not byte 8 (0xEE)");
+        assert_eq!(s.freq_max_mhz, 0xAA);
+    }
+
+    /// Eleven bytes is refused, twelve is accepted. The boundary itself, since
+    /// every field above is read by index and a short slice would panic.
+    #[test]
+    fn a_status_shorter_than_twelve_bytes_is_refused() {
+        assert!(parse_status(&[0u8; 11]).is_err());
+        assert!(parse_status(&[0u8; 12]).is_ok());
+        assert!(parse_status(&[0u8; 20]).is_ok(), "and trailing bytes are ignored");
+    }
+
+    /// `off_state` is false when bit 0 is clear, whatever the other bits do.
+    #[test]
+    fn the_busy_flag_reads_bit_zero_only() {
+        let mut data = [0u8; 12];
+        data[7] = 0xFE; // every bit but the lowest
+        assert!(!parse_status(&data).unwrap().off_state);
+        data[7] = 0x01;
+        assert!(parse_status(&data).unwrap().off_state);
+    }
+}

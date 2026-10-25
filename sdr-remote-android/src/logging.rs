@@ -80,6 +80,22 @@ pub fn log_line(text: String) {
     log::info!("{}", text);
 }
 
+/// The developer mode on the phone (build 298; owner decision 2026-10-23):
+/// the switch the logger reads, and the line that says so - at every start and
+/// at every change. What the mode is (the code, the rule) is
+/// `sdr_remote_core::dev_mode`; the app stores it with its settings.
+pub fn set_developer_mode(on: bool) {
+    sdr_remote_core::dev_mode::set(on);
+    // Named in advance (`logregels-build298.md`).
+    log::info!("{}", sdr_remote_core::dev_mode::state_line(on));
+}
+
+/// Does what was typed open the developer mode? The core's one code, so the
+/// app does not hold a copy of it.
+pub fn developer_code_matches(code: String) -> bool {
+    sdr_remote_core::dev_mode::code_matches(&code)
+}
+
 /// The tail of the kept log, for a problem report.
 ///
 /// Says what is missing rather than returning an empty string: a report that
@@ -99,6 +115,60 @@ pub fn log_tail() -> String {
     }
 }
 
+/// Put a copy of the log next to a measurement (owner, 2026-10-03): the log
+/// lives in the app's private folder, which no one can fetch without rooting the
+/// phone - deliberately, it is not debuggable - while the measurement folder can
+/// be fetched over USB. The older generation first, then the current one, so the
+/// copy reads in time order. Says what it did not find rather than failing.
+pub fn copy_log_to(dest: &std::path::Path) -> std::io::Result<()> {
+    let dir = match DIR.lock().map(|d| d.clone()) {
+        Ok(Some(p)) => p,
+        _ => return std::fs::write(dest, "(no log file: logging was never started)
+"),
+    };
+    copy_log_from(&dir, dest)
+}
+
+/// When to copy the log: the moment a measurement file is no longer the
+/// running one - stopped by the operator, ended by a write error, or replaced
+/// by a new one. Following the state rather than the Stop button is what
+/// catches the write error, where there is no Stop to press, and it copies
+/// AFTER the engine has stopped, so the log holds the end of its own
+/// measurement (round 91).
+#[derive(Default)]
+pub struct MeasurementLogFollower {
+    last: Option<String>,
+}
+
+impl MeasurementLogFollower {
+    /// Feed the measurement file the state names now. Returns where to put the
+    /// log copy when a measurement has just ended.
+    pub fn step(&mut self, now: Option<&str>) -> Option<std::path::PathBuf> {
+        if self.last.as_deref() == now {
+            return None;
+        }
+        let ended = self.last.take().map(|f| std::path::Path::new(&f).with_extension("log"));
+        self.last = now.map(str::to_string);
+        ended
+    }
+}
+
+fn copy_log_from(dir: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    // Both opened BEFORE either is copied: a roll in between (`.log` renamed to
+    // `.log.1`) would otherwise leave the copy with the older generation twice
+    // and the newest lines missing. An open handle keeps the file it opened
+    // across a rename, so this fixes one moment (round 92).
+    let sources: Vec<std::fs::File> = [format!("{FILE_NAME}.1"), FILE_NAME.to_string()]
+        .iter()
+        .filter_map(|name| std::fs::File::open(dir.join(name)).ok())
+        .collect();
+    let mut out = std::fs::File::create(dest)?;
+    for mut f in sources {
+        std::io::copy(&mut f, &mut out)?;
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "android")]
 mod android {
     use super::{Sink, DIR, FILE_NAME};
@@ -114,7 +184,7 @@ mod android {
 
     impl Log for FileAndSystem {
         fn enabled(&self, metadata: &Metadata) -> bool {
-            metadata.level() <= Level::Info
+            metadata.level() <= Level::Info && sdr_remote_core::dev_mode::record_passes(metadata.target())
         }
 
         fn log(&self, record: &Record) {
@@ -211,6 +281,42 @@ mod tests {
         assert_eq!(current.trim(), "after the roll");
     }
 
+    /// The copy next to a measurement holds both generations, oldest first.
+    #[test]
+    fn the_copy_holds_both_generations_in_order() {
+        let dir = std::env::temp_dir().join("tl-log-copy-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sink = Sink::open(&dir).unwrap();
+        sink.write_line("older line");
+        sink.written = MAX_BYTES;
+        sink.write_line("newer line");
+        let dest = dir.join("tl-meting-x.log");
+        copy_log_from(&dir, &dest).unwrap();
+        let text = std::fs::read_to_string(&dest).unwrap();
+        let (a, b) = (text.find("older line").unwrap(), text.find("newer line").unwrap());
+        assert!(a < b, "{text}");
+    }
+
+    /// The copy follows the state: once when a measurement ends - by Stop or
+    /// by a write error, both just "no file any more" - and once for a file
+    /// replaced by a new one. Nothing while one runs, nothing when none ran.
+    #[test]
+    fn the_log_is_copied_once_when_a_measurement_ends() {
+        let mut f = MeasurementLogFollower::default();
+        assert_eq!(f.step(None), None, "nothing ran");
+        assert_eq!(f.step(Some("/m/tl-meting-a.csv")), None, "started");
+        assert_eq!(f.step(Some("/m/tl-meting-a.csv")), None, "running");
+        assert_eq!(f.step(None), Some(std::path::PathBuf::from("/m/tl-meting-a.log")), "ended");
+        assert_eq!(f.step(None), None, "and only once");
+        f.step(Some("/m/tl-meting-b.csv"));
+        assert_eq!(
+            f.step(Some("/m/tl-meting-c.csv")),
+            Some(std::path::PathBuf::from("/m/tl-meting-b.log")),
+            "replaced by a new one"
+        );
+    }
+
     /// Rolling twice must not leave three files behind.
     #[test]
     fn rolling_twice_still_leaves_two_files() {
@@ -273,6 +379,37 @@ mod tests {
             caught.iter().any(|l| l == "BlePtt: key down (notification)"),
             "the line handed in from Kotlin never reached the logger: {caught:?}"
         );
+    }
+
+    /// The phone's logger applies the developer mode's one rule before a line
+    /// reaches logcat or the file, it is the only logger the app installs, and
+    /// switching the mode says so in the log (build 298). The logger runs on the
+    /// phone only.
+    #[test]
+    fn the_phone_s_logger_holds_back_the_developer_lines() {
+        let src = include_str!("logging.rs");
+        let src = &sdr_remote_core::source_text::production_code(src);
+        assert_eq!(
+            src.matches("metadata.level() <= Level::Info && sdr_remote_core::dev_mode::record_passes(metadata.target())").count(),
+            1
+        );
+        assert!(src.contains("fn log(&self, record: &Record) {\n            if !self.enabled(record.metadata()) {\n                return;\n            }"));
+        assert!(src.contains("    sdr_remote_core::dev_mode::set(on);\n    // Named in advance (`logregels-build298.md`).\n    log::info!(\"{}\", sdr_remote_core::dev_mode::state_line(on));"));
+        // One logger install in the crate's production code: this file's. The
+        // test code goes out with the core's one reader (review of 299).
+        let mut files = Vec::new();
+        sdr_remote_core::source_text::rust_files(std::path::Path::new("src"), &mut files);
+        let mut installs = Vec::new();
+        for path in &files {
+            let code = sdr_remote_core::source_text::production_code(&std::fs::read_to_string(path).unwrap());
+            for call in ["set_boxed_logger(", "set_logger(", "android_logger::init"] {
+                for _ in code.matches(call) {
+                    installs.push(format!("{} {call}", path.display()));
+                }
+            }
+        }
+        assert_eq!(installs.len(), 1, "one logger, the app's: {installs:?}");
+        assert!(installs[0].ends_with("logging.rs set_boxed_logger("), "{installs:?}");
     }
 
     /// Asked before anything was started, it says so instead of coming back

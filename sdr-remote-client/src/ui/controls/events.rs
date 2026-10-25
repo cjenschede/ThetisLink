@@ -443,12 +443,12 @@ impl RecordingSink {
         }
         if emitted != 1 {
             return Err(format!(
-                "intent_id {id}: verwacht 1 IntentEmitted, kreeg {emitted}"
+                "intent_id {id}: expected 1 IntentEmitted, got {emitted}"
             ));
         }
         if terminal != 1 {
             return Err(format!(
-                "intent_id {id}: verwacht 1 terminal (Sent/Blocked/Failed), kreeg {terminal}"
+                "intent_id {id}: expected 1 terminal (Sent/Blocked/Failed), got {terminal}"
             ));
         }
         Ok(())

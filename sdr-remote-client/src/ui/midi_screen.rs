@@ -145,18 +145,15 @@ impl SdrRemoteApp {
                                 self.freq_step_index -= 1;
                             }
                         }
-                        MidiAction::FilterWiden if pressed => {
-                            // Widen filter: decrease low, increase high by 50 Hz
-                            let new_low = self.filter_low_hz - 50;
-                            let new_high = self.filter_high_hz + 50;
-                            let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterLow, new_low as i16 as u16));
-                            let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterHigh, new_high as i16 as u16));
-                        }
-                        MidiAction::FilterNarrow if pressed => {
-                            // Narrow filter: increase low, decrease high by 50 Hz
-                            let new_low = self.filter_low_hz + 50;
-                            let new_high = self.filter_high_hz - 50;
-                            if new_high > new_low {
+                        // The width buttons' rule (`filter_width::step`, build 245):
+                        // one step to the next width, on the mode's own side of
+                        // the carrier. It was +/-50 Hz on both edges, and in USB
+                        // the low edge crossed the carrier after two presses,
+                        // a pair the server has refused since build 244.
+                        MidiAction::FilterWiden | MidiAction::FilterNarrow if pressed => {
+                            use sdr_remote_logic::filter_width::{step, Step};
+                            let dir = if matches!(action, MidiAction::FilterWiden) { Step::Wider } else { Step::Narrower };
+                            if let Some((new_low, new_high)) = step(self.mode, self.filter_low_hz, self.filter_high_hz, dir) {
                                 let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterLow, new_low as i16 as u16));
                                 let _ = self.cmd_tx.send(Command::SetControl(ControlId::FilterHigh, new_high as i16 as u16));
                             }
@@ -482,28 +479,16 @@ impl SdrRemoteApp {
     }
 
     pub(super) fn midi_vrx_tune(&mut self, vrx_id: u8, delta: i8, step_hz: u64) {
-        let (center, span, current, source) = if vrx_id == 0 {
-            (
-                self.full_spectrum_center_hz,
-                self.full_spectrum_span_hz,
-                self.vrx1_freq_hz,
-                self.frequency_hz,
-            )
+        let (current, source) = if vrx_id == 0 {
+            (self.vrx1_freq_hz, self.frequency_hz)
         } else {
-            (
-                self.rx2_full_spectrum_center_hz,
-                self.rx2_full_spectrum_span_hz,
-                self.vrx2_freq_hz,
-                self.rx2_frequency_hz,
-            )
+            (self.vrx2_freq_hz, self.rx2_frequency_hz)
         };
-        let center = if center > 0 { center as u64 } else { source };
-        let _ = span; // reachable range comes from the shared VRX limit, not the raw DDC span
+        let ch = if vrx_id == 0 { VrxChannel::Vrx1 } else { VrxChannel::Vrx2 };
+        // The centre from the one place that knows it (build 231).
+        let (center, _) = self.vrx_ddc_centre(ch);
         // Same boundary as the panel and the server: stop where the audio stops.
-        let (min_hz, max_hz) = self.vrx_tune_limits(
-            if vrx_id == 0 { VrxChannel::Vrx1 } else { VrxChannel::Vrx2 },
-            center,
-        );
+        let (min_hz, max_hz) = self.vrx_tune_limits(ch, center);
         let base = if current > 0 { current } else { source }.clamp(min_hz, max_hz);
         let next = step_on_grid(base, delta as i64 * step_hz as i64, step_hz as u64, min_hz, max_hz);
         if vrx_id == 0 {
@@ -576,12 +561,12 @@ impl SdrRemoteApp {
         Self::render_midi_action_pair(ui, selected, MidiAction::BandDown, MidiAction::Rx2BandDown);
         Self::render_midi_action_single(ui, selected, MidiAction::Ptt);
 
-        ui.separator();
+        super::helpers::rule(ui);
         Self::render_midi_action_section(ui, "VRX");
         Self::render_midi_action_pair(ui, selected, MidiAction::Vrx1Tune, MidiAction::Vrx2Tune);
         Self::render_midi_action_pair(ui, selected, MidiAction::Vrx1Volume, MidiAction::Vrx2Volume);
 
-        ui.separator();
+        super::helpers::rule(ui);
         Self::render_midi_action_section(ui, &rust_i18n::t!("screen_radio").to_string());
         Self::render_midi_action_pair(ui, selected, MidiAction::YaesuPtt, MidiAction::Radio2Ptt);
         Self::render_midi_action_pair(ui, selected, MidiAction::Radio1Tune, MidiAction::Radio2Tune);
@@ -589,7 +574,7 @@ impl SdrRemoteApp {
         Self::render_midi_action_pair(ui, selected, MidiAction::Radio1BandUp, MidiAction::Radio2BandUp);
         Self::render_midi_action_pair(ui, selected, MidiAction::Radio1BandDown, MidiAction::Radio2BandDown);
 
-        ui.separator();
+        super::helpers::rule(ui);
         Self::render_midi_action_section(ui, &rust_i18n::t!("screen_other_advanced").to_string());
         const PRIMARY_ACTIONS: &[MidiAction] = &[
             MidiAction::Ptt,
@@ -667,7 +652,7 @@ impl SdrRemoteApp {
             });
         }
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // MIDI PTT mode (independent from main PTT mode)
         ui.horizontal(|ui| {
@@ -701,7 +686,7 @@ impl SdrRemoteApp {
             }
         });
 
-        ui.separator();
+        super::helpers::rule(ui);
 
         // Activity monitor
         if !self.midi_last_event.is_empty() {
@@ -709,7 +694,7 @@ impl SdrRemoteApp {
                 ui.label(rust_i18n::t!("screen_last_midi").to_string());
                 ui.monospace(&self.midi_last_event);
             });
-            ui.separator();
+            super::helpers::rule(ui);
         }
 
         // Mappings table

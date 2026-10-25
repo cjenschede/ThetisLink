@@ -43,8 +43,8 @@
     <string name="settings_token">Token</string>
     <string name="settings_device_name">Apparaatnaam</string>
     <string name="settings_device_name_hint">Getoond in relay-logs. Herstart de app om toe te passen.</string>
-    <string name="settings_audio_udp">Audio via UDP (lage latency):</string>
-    <string name="settings_audio_udp_hint">Aan: audio met laagste latency via UDP. Uit: audio blijft op het versleutelde relay-kanaal. Herstart de app om toe te passen.</string>
+    <string name="settings_route_in_use">Nu in gebruik: %1$s</string>
+    <string name="settings_route_restart">herstart de app om toe te passen</string>
     <string name="settings_ptt_mode">PTT-modus:</string>
     <string name="settings_push_to_talk">Push to talk</string>
     <string name="settings_toggle">Omschakelen</string>
@@ -72,6 +72,9 @@
     <string name="settings_gate_thetis_mic">Thetis telefoonmic</string>
     <string name="settings_gate_yaesu_mic">Yaesu telefoonmic</string>
     <string name="settings_mic_gate_hint">PTT is direct; mic-audio opent na deze vertraging. Testbereik: 0-800 ms.</string>
+    <string name="settings_dev_code">Code</string>
+    <string name="settings_dev_on">Ontwikkelstand: meten, relay- en TCP-proeven en de extra logregels</string>
+    <string name="settings_dev_off">Uitzetten</string>
     <string name="settings_remote_server_pc">Externe server-pc:</string>
     <string name="settings_reboot">Herstarten</string>
     <string name="settings_shutdown">Afsluiten</string>
@@ -105,7 +108,14 @@
     <string name="stats_tx_gain">TX-gain</string>
     <string name="stats_audio_levels">Audioniveaus:</string>
     <string name="stats_statistics">Statistieken:</string>
-    <string name="stats_tcp_fallback">TCP-fallback</string>
+    <string name="stats_measure">Meting</string>
+    <string name="stats_measure_start">Start</string>
+    <string name="stats_measure_stop">Stop</string>
+    <string name="stats_relay_only">Alleen relay</string>
+    <string name="stats_relay_only_hint">Geen rechtstreekse weg zolang dit aan staat; een rechtstreekse weg gaat meteen terug naar de relay. Wordt niet onthouden na een herstart.</string>
+    <string name="stats_force_tcp">TCP afdwingen</string>
+    <string name="stats_force_tcp_hint">Alles via de relay over TCP zolang dit aan staat, zoals op een netwerk zonder UDP - om te meten wat dat kost. Wordt niet onthouden na een herstart.</string>
+    <string name="stats_relay_only_no_relay">Alleen bij een verbinding via de relay.</string>
     <string name="stats_link_loss">Verbindingsverlies</string>
     <string name="stats_down">Omlaag</string>
     <string name="stats_up">Omhoog</string>
@@ -314,4 +324,8 @@
     <string name="settings_ui_scale">Weergavegrootte:</string>
     <string name="settings_ui_scale_landscape_on">Bij deze grootte draait de app mee met het toestel. Zet de schermrotatie vast om staand te blijven.</string>
     <string name="settings_ui_scale_landscape_off">Bij deze grootte blijft de app staand. Kleiner zetten laat hem meedraaien.</string>
+    <!-- Shown when the server is not running this app's build. It only tells;
+         nothing on this screen refuses to work over it. -->
+    <string name="stats_build_mismatch">De server draait %1$s en deze app %2$s - dat hoort dezelfde build te zijn.</string>
+    <string name="stats_build_too_old">een build die te oud is om te zeggen welke</string>
 </resources>

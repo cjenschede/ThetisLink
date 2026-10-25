@@ -14,12 +14,29 @@ use tokio::sync::mpsc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::MaybeTlsStream;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+/// The spread on that wait, either way: after a VPS restart the endpoints do not
+/// all knock in step (relay recovery design, 2026-09-08, section 7).
+const RECONNECT_SPREAD: f64 = 0.2;
+/// A session must have stood this long, counted from its first traffic, before
+/// its breaking earns an immediate retry (round 95: a line that passes one frame
+/// and dies would otherwise reconnect two or three times a second).
+const STOOD_AT_LEAST: Duration = Duration::from_secs(1);
+/// After a working session broke, the next attempts that fail INSIDE this device
+/// - no route, no DNS yet: the new network is not up - try again on this ladder
+/// before the 5 s (measured 2026-10-03, build 95: three of five fast attempts
+/// failed within 40-160 ms on exactly that). Such a failure never reaches the
+/// relay, so the ladder costs it nothing.
+const LOCAL_RETRY_LADDER: [Duration; 4] = [
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+];
 const PEER_WAIT_PING: Duration = Duration::from_secs(10);
 const PEER_STATUS_INTERVAL: Duration = Duration::from_secs(5);
 const PEER_RTT_INTERVAL: Duration = Duration::from_secs(15);
@@ -48,13 +65,16 @@ const TLT1_MAGIC: [u8; 4] = *b"TLT1";
 const TLT1_VERSION: u8 = 1;
 const TLT1_HEADER_LEN: usize = 8;
 
-// TLU1 = tunneled audio over the bare-UDP path (PATCH-relay-audio-udp, fase 2).
+// TLU1 = tunneled audio over the bare-UDP path (PATCH-relay-audio-udp, phase 2).
 // Layout: magic(4) | version(1) | flags(1) | client_id(1) | seq(4 LE) | token(32 raw) |
 // AudioPacket. Only audio packet types travel over this; everything else stays on TLT1/wss.
 const TLU1_MAGIC: [u8; 4] = *b"TLU1";
 const TLU1_VERSION: u8 = 1;
 const TLU1_TOKEN_LEN: usize = 32;
-const TLU1_HEADER_LEN: usize = 4 + 1 + 1 + 1 + 4 + TLU1_TOKEN_LEN; // = 43
+/// The TLU1 header in front of every datagram to the relay's UDP port. Public for
+/// the QUIC route layer (`sdr-remote-quic`, phase 3b), which frames its packets with
+/// [`encode_tlu1_raw`] - one encoder for both data forms.
+pub const TLU1_HEADER_LEN: usize = 4 + 1 + 1 + 1 + 4 + TLU1_TOKEN_LEN; // = 43
 
 /// Opus-audio packet types (byte [2] of the TL header) that should travel over
 /// the low-latency UDP path. Everything else (control, spectrum, meters) stays
@@ -81,20 +101,26 @@ fn hex32(hex: &str) -> [u8; 32] {
 }
 
 /// Build a TLU1 audio datagram. `client_id` is the sender's id (station stamps the
-/// target). `token_hex` is the fase-0 capability from the ready-reply.
+/// target). `token_hex` is the phase-0 capability from the ready-reply.
 fn encode_tlu1(client_id: u8, seq: u32, token_hex: &str, payload: &[u8]) -> Vec<u8> {
+    encode_tlu1_raw(client_id, seq, &hex32(token_hex), payload)
+}
+
+/// Build a TLU1 datagram from the raw 32-byte token. The relay forwards the payload
+/// without reading it; to the station it arrives as `[client_id] + payload`.
+pub fn encode_tlu1_raw(client_id: u8, seq: u32, token: &[u8; TLU1_TOKEN_LEN], payload: &[u8]) -> Vec<u8> {
     let mut f = Vec::with_capacity(TLU1_HEADER_LEN + payload.len());
     f.extend_from_slice(&TLU1_MAGIC);
     f.push(TLU1_VERSION);
     f.push(0); // flags (reserved)
     f.push(client_id);
     f.extend_from_slice(&seq.to_le_bytes());
-    f.extend_from_slice(&hex32(token_hex));
+    f.extend_from_slice(token);
     f.extend_from_slice(payload);
     f
 }
 
-/// Extract `udp_token=<hex>` from the relay ready-reply (fase 0). The token is the
+/// Extract `udp_token=<hex>` from the relay ready-reply (phase 0). The token is the
 /// last field, so trimming the remainder is enough.
 /// The chat ticket from a relay line, if one is offered.
 ///
@@ -184,7 +210,7 @@ fn parse_udp_token(ready: &str) -> Option<String> {
         .filter(|t| t.len() == TLU1_TOKEN_LEN * 2)
 }
 
-// --- Fase 3: make-before-break UDP<->wss fallback (relay-only) ---
+// --- Phase 3: make-before-break UDP<->wss fallback (relay-only) ---
 
 /// Relay-control-frame marker. A client tunnels this over wss (TLT1, so the relay stamps
 /// the sender's client_id); the station intercepts it BEFORE forwarding to the engine and
@@ -269,6 +295,84 @@ fn udp_recovered(
         && last_udp_audio.map_or(false, |t| t.elapsed() < stall_after)
 }
 
+/// Target id for a datagram that exists only to hold the station's NAT mapping
+/// open. Delivery is not the point; departure is: the relay validates it and
+/// refreshes our source binding.
+///
+/// Id 0 is NOT unused. An earlier version of this comment said the relay hands
+/// out ids 1..=254; it hands out 0..=7 (`alloc_client_id` in the relay's
+/// main.rs), so a client can hold 0. The relay then forwards this keepalive to
+/// that client as a 1-byte datagram, which the receiver's `n > 1` guard drops.
+/// Harmless today - but do not build on 0 meaning "nobody".
+pub const UDP_MAPPING_KEEPALIVE_ID: u8 = 0;
+
+/// What one round of UDP keepalives is, for one side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeepaliveKind {
+    /// A client's one datagram towards the station.
+    Client,
+    /// A station's datagrams to its bound clients - the beacons their fallback reads.
+    Beacons,
+    /// A station with no client bound: one datagram, only to hold the NAT mapping.
+    MappingOnly,
+}
+
+/// The keepalive datagrams for one round, carrying `token_hex`.
+///
+/// One place for both callers: the 1 s timer, and a token rotation. The rotation
+/// sends them AT ONCE, so the relay learns our source on the new token straight
+/// away instead of at the next tick. Until then a new token has no source, and the
+/// relay's lookup could pick it and drop the audio - the ~1 s gaps every ten
+/// minutes, at the client's connect time + 10n min, in the field log of
+/// 2026-09-29.
+fn keepalive_datagrams(
+    role: RelayRole,
+    bound_clients: &HashSet<u8>,
+    token_hex: &str,
+    udp_seq: &mut u32,
+) -> (Vec<Vec<u8>>, KeepaliveKind) {
+    let (targets, kind) = match role {
+        // A client has one peer, and id 0 means "the station" on the way up.
+        RelayRole::Client => (vec![0], KeepaliveKind::Client),
+        RelayRole::Station if bound_clients.is_empty() => {
+            (station_udp_targets(bound_clients), KeepaliveKind::MappingOnly)
+        }
+        RelayRole::Station => (station_udp_targets(bound_clients), KeepaliveKind::Beacons),
+    };
+    let datagrams = targets
+        .into_iter()
+        .map(|cid| {
+            *udp_seq = udp_seq.wrapping_add(1);
+            encode_tlu1(cid, *udp_seq, token_hex, &[])
+        })
+        .collect();
+    (datagrams, kind)
+}
+
+/// Which ids the station addresses on this UDP tick.
+///
+/// With clients bound: one datagram each - those are the beacons the client's
+/// fallback logic reads.
+///
+/// With NONE bound: still exactly one. Until 2026-09-23 this sent nothing at all,
+/// and that is a trap, because the relay binds a token to the source address it
+/// first saw (`main.rs`, S5). A station with no clients stops sending, its NAT
+/// mapping expires, and when the next client arrives the station resumes from a
+/// NEW source port - which no longer matches the binding. Every beacon is then
+/// dropped silently until the token rotates, up to ten minutes later.
+///
+/// Measured that day: 250 s of station silence, then four minutes in which the
+/// server sent 4-5 beacons per five seconds and the client received exactly none,
+/// ending two seconds after the relay rotated the token.
+fn station_udp_targets(bound_clients: &HashSet<u8>) -> Vec<u8> {
+    if bound_clients.is_empty() {
+        return vec![UDP_MAPPING_KEEPALIVE_ID];
+    }
+    let mut ids: Vec<u8> = bound_clients.iter().copied().collect();
+    ids.sort_unstable(); // deterministic, so a test can say what it expects
+    ids
+}
+
 /// Has the downlink stalled - the ENTRY side of the fallback.
 ///
 /// Free and testable on purpose. The exit side above has been a free function since
@@ -280,14 +384,26 @@ fn udp_recovered(
 /// The argument order deliberately does NOT mirror `udp_recovered`. Two neighbouring
 /// functions with the same three trailing types is a swap that compiles.
 fn downlink_stalled(
-    since_ready: Duration,
+    since_peer_ready: Option<Duration>,
     last_downlink: Option<Instant>,
     connect_timeout: Duration,
     stall_after: Duration,
 ) -> bool {
     match last_downlink {
-        // Nothing has ever come down this path: only the connect window can decide.
-        None => since_ready >= connect_timeout,
+        // Nothing has ever come down this path, so only the connect window can
+        // decide - but it may only start counting once there IS a peer.
+        //
+        // It used to count from `ready_at`, the moment the relay tunnel stood.
+        // The peer handshake comes after that, and on 2026-09-23 it came six
+        // seconds after: the client declared "UDP blocked" at 17:28:48 while the
+        // tunnel client was bound at 17:28:52 and the session authenticated at
+        // 17:28:52.115. It was measuring a window in which no peer could have
+        // sent anything, and it did that on every fresh connect - which is why
+        // the owner saw the indicator "continuously".
+        //
+        // `None` here means there is no peer yet. Then there is nothing to
+        // accuse: silence from someone who is not there is not evidence.
+        None => since_peer_ready.map_or(false, |d| d >= connect_timeout),
         // Something did: a beacon at its normal spacing must NOT read as a stall.
         Some(t) => t.elapsed() >= stall_after,
     }
@@ -504,7 +620,7 @@ fn audio_identity(payload: &[u8]) -> Option<(u16, u32)> {
 pub const PTT_FLAG_BIT: u8 = 0x01;
 
 /// `true` when an audio frame carries an active PTT flag.
-/// Used for TX-always-both (fase 3b section 14.3).
+/// Used for TX-always-both (phase 3b section 14.3).
 fn audio_ptt_active(payload: &[u8]) -> bool {
     is_audio_packet(payload) && payload.len() > 3 && (payload[3] & PTT_FLAG_BIT) != 0
 }
@@ -618,18 +734,120 @@ fn url_host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_string())
 }
 
-/// Open + connect a UDP socket to the relay's UDP data port (fase 2). Best-effort;
+/// The relay's UDP data port: the host of the wss url, at `port`. One lookup for
+/// both data forms (the audio path below, the QUIC grant).
+/// The relay's UDP address: the first one its name gives, as the wss
+/// connection uses it, and beside it the first IPv4 one when the first is not
+/// (`first_and_ipv4`).
+async fn resolve_udp(url: &str, port: u16) -> Result<(SocketAddr, Option<SocketAddr>), String> {
+    let host = url_host(url).ok_or_else(|| "bad relay url".to_string())?;
+    let addrs = tokio::net::lookup_host((host.as_str(), port)).await.map_err(|e| e.to_string())?;
+    first_and_ipv4(addrs).ok_or_else(|| "relay UDP address not resolved".to_string())
+}
+
+/// The first address, and the first IPv4 one when that is another. On a mobile
+/// net with IPv6 only, the name of a relay without an IPv6 address of its own
+/// came back as an IPv6 address first (field test 119, 5G); the phone reaches
+/// IPv4 there through its own translation too, which is what the direct mode
+/// uses (`first_ipv4` in the engine).
+fn first_and_ipv4(addrs: impl IntoIterator<Item = SocketAddr>) -> Option<(SocketAddr, Option<SocketAddr>)> {
+    let mut addrs = addrs.into_iter();
+    let first = addrs.next()?;
+    let ipv4 = if first.is_ipv4() { None } else { addrs.find(|a| a.is_ipv4()) };
+    Some((first, ipv4))
+}
+
+/// A UDP socket connected to `addr`, bound in its family. Opening it on IPv4
+/// for an IPv6 address fails with "address family not supported" (os error 97
+/// on Android), which is how QUIC via the relay never came up on 5G in build
+/// 119: its route layer kept a copy of this that always bound IPv4.
+///
+/// A plain socket, on purpose: no GRO, no GSO, so every datagram carries its
+/// own TLU1 header and is sent and read one by one (the QUIC route layer counts
+/// on that: `max_transmit_segments` 1, `stride == len`).
+pub async fn connect_udp(addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    let sock = bind_for(addr).await?;
+    sock.connect(addr).await?;
+    Ok(sock)
+}
+
+/// An unconnected UDP socket in `addr`'s family, on any port - the one place
+/// that picks the family, for [`connect_udp`] and [`bind_relay_udp`].
+async fn bind_for(addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    let bind = if addr.is_ipv6() {
+        SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, 0))
+    } else {
+        SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0))
+    };
+    UdpSocket::bind(bind).await
+}
+
+/// An UNconnected socket for the relay's UDP port, for a side that talks to
+/// the relay and, after punching (phase 3c), directly from the same socket -
+/// so the direct packets leave under the very address the relay saw. The first
+/// address in `order` that a socket can be connected to wins: binding alone
+/// never fails for a family the system lacks or a network it cannot reach (the
+/// failure would only come at the first send), so a throwaway connected socket
+/// tries the address first, as [`connect_relay_udp`] does. Returns the address
+/// it chose; the caller sends there with `send_to`.
+pub async fn bind_relay_udp(order: &[SocketAddr]) -> std::io::Result<(UdpSocket, SocketAddr)> {
+    let mut last = std::io::Error::other("no relay address");
+    for (i, &addr) in order.iter().enumerate() {
+        match connect_udp(addr).await {
+            Ok(probe) => {
+                drop(probe);
+                return bind_for(addr).await.map(|sock| (sock, addr));
+            }
+            Err(e) => {
+                if let Some(next) = order.get(i + 1) {
+                    log::warn!(
+                        "Relay UDP: no socket for the {} address ({e}) - trying the {} one",
+                        family(addr),
+                        family(*next)
+                    );
+                }
+                last = e;
+            }
+        }
+    }
+    Err(last)
+}
+
+/// The one way to the relay's UDP port, for both forms: `first`, and when no
+/// socket can be made for it, `fallback` (the IPv4 address beside it). Returns
+/// the address it reached. A socket that opens but whose packets go nowhere is
+/// not caught here; the field log is the proof for that.
+pub async fn connect_relay_udp(
+    first: SocketAddr,
+    fallback: Option<SocketAddr>,
+) -> std::io::Result<(UdpSocket, SocketAddr)> {
+    match connect_udp(first).await {
+        Ok(sock) => Ok((sock, first)),
+        Err(e) => match fallback {
+            Some(v4) => {
+                log::warn!("Relay UDP: no socket for the {} address ({e}) - trying its IPv4 address", family(first));
+                connect_udp(v4).await.map(|sock| (sock, v4))
+            }
+            None => Err(e),
+        },
+    }
+}
+
+/// "IPv4" or "IPv6", for log lines that must not carry the address itself.
+pub fn family(addr: SocketAddr) -> &'static str {
+    if addr.is_ipv4() {
+        "IPv4"
+    } else {
+        "IPv6"
+    }
+}
+
+/// Open + connect a UDP socket to the relay's UDP data port (phase 2). Best-effort;
 /// on any failure the caller falls back to audio-over-wss.
 async fn open_udp(url: &str, port: u16) -> Result<UdpSocket, String> {
-    let host = url_host(url).ok_or_else(|| "bad relay url".to_string())?;
-    let addr = tokio::net::lookup_host((host.as_str(), port))
-        .await
-        .map_err(|e| e.to_string())?
-        .next()
-        .ok_or_else(|| "relay UDP address not resolved".to_string())?;
-    let bind = if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
-    let sock = UdpSocket::bind(bind).await.map_err(|e| e.to_string())?;
-    sock.connect(addr).await.map_err(|e| e.to_string())?;
+    let (first, fallback) = resolve_udp(url, port).await?;
+    let (sock, used) = connect_relay_udp(first, fallback).await.map_err(|e| e.to_string())?;
+    log::info!("Relay UDP: over {}", family(used));
     Ok(sock)
 }
 
@@ -642,10 +860,10 @@ async fn recv_udp(sock: &Option<UdpSocket>, buf: &mut [u8]) -> Option<usize> {
     }
 }
 
-// Relay sentinel convention. The relay is the leaf crate, so it OWNS this
-// mapping; the server (`tracked_socket::relay_sentinel_for`) mirrors it because
-// it cannot be imported the other way without a dependency cycle. A parity test
-// in the server crate (which links both) fails the build if the two drift.
+// Relay sentinel convention for the classic tunnel. The server mirrored it
+// (`tracked_socket::relay_sentinel_for`, with a parity test) until build 133,
+// which removed the classic tunnel from the server; this side goes with the
+// rest of the tunnel code (phase 3d, build 3).
 // Mapping: client_id N <-> 203.0.113.(N+1):1.
 /// Strip the relay address out of a log line, keeping what is diagnostically
 /// useful (the scheme, so ws:// vs wss:// is still visible). The host is private
@@ -704,10 +922,36 @@ pub struct RelayConfig {
     /// the LAST hello field. Metadata only - the relay uses it just for logs. Empty
     /// = omitted.
     pub name: String,
-    /// UDP port of the relay's audio data path (PATCH-relay-audio-udp, fase 2).
-    /// `Some(port)` = route audio over kale UDP to `host(url):port`; `None` = all
+    /// UDP port of the relay's audio data path (PATCH-relay-audio-udp, phase 2).
+    /// `Some(port)` = route audio over bare UDP to `host(url):port`; `None` = all
     /// traffic over wss as before (additive). Falls back to wss if UDP can't open.
     pub udp_port: Option<u16>,
+    /// QUIC via the relay (phase 3b): this side carries one QUIC connection
+    /// through the relay's UDP path, framed by the QUIC crate's route layer. The
+    /// monitor then only signs in (with `proto=quic`), hands the UDP capability on
+    /// as a [`UdpGrant`], and keeps the chat ticket: no UDP socket of its own, no
+    /// tunnel over wss, no fallback, nothing that reads a packet. Started with
+    /// [`RelayMonitor::start_threaded_quic`]. `udp_port` is the relay's UDP port
+    /// here too (`None` reads as [`DEFAULT_UDP_PORT`]: QUIC has no wss route).
+    pub quic: bool,
+}
+
+/// What the QUIC route layer needs from a relay session: where the relay's UDP
+/// port is, the capability token, and the session it belongs to. A new
+/// `session` is a new wss session (a new socket on the other side); the same
+/// `session` with another token is the relay's rotation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UdpGrant {
+    pub relay: SocketAddr,
+    /// The relay's first IPv4 address when `relay` is not one: the way back
+    /// when no socket can be made for `relay` (see [`connect_relay_udp`]).
+    pub fallback: Option<SocketAddr>,
+    /// This side's public UDP address as the relay sees it (`udp-seen`, phase
+    /// 3c): what the other side punches to. `None` until the relay has said it,
+    /// and from a relay that does not.
+    pub public: Option<SocketAddr>,
+    pub token: [u8; TLU1_TOKEN_LEN],
+    pub session: u64,
 }
 
 /// Default relay UDP audio port (the proven, firewall-friendly 443).
@@ -775,7 +1019,7 @@ pub struct RelayStatus {
     pub peer_rtt_ms: Option<u32>,
     pub binary: Option<BinaryProbeStats>,
     pub generation: u64,
-    /// Fase 3c: true while audio is on the wss TCP-fallback (UDP degraded/blocked); false
+    /// Phase 3c: true while audio is on the wss TCP-fallback (UDP degraded/blocked); false
     /// on the normal low-latency UDP path. Drives the client transport indicator.
     pub transport_fallback: bool,
     /// The chat ticket the relay last handed out, if it offers one at all.
@@ -858,60 +1102,143 @@ pub struct RelayTunnel {
     pub uplink_rx: mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>,
 }
 
+/// How many QUIC packets wait for the TCP line, each way. A full line drops:
+/// latency before completeness, and QUIC sends again what it needs - as a busy
+/// UDP socket does (the TCP fallback route, build 144).
+pub const TCP_LINE_DEPTH: usize = 64;
+
+/// The route layer's end of the TCP line (the TCP fallback route, build 144,
+/// `OPZET-tcp-uitwijkroute.md`): QUIC packets as TLT1 frames on the monitor's
+/// wss connection, for a network that lets no UDP through. The relay on the VPS
+/// forwards TLT1 by client id already (it stamps a client's id on the way to
+/// the station, and sends a station's frame to the client it names), so the
+/// relay itself does not change.
+#[derive(Debug)]
+pub struct TcpLine {
+    /// TLT1 frames to send on the wss connection ([`tlt1_frame`]).
+    pub to_relay: mpsc::Sender<Vec<u8>>,
+    /// What came in as TLT1: the client id and the QUIC packet.
+    pub from_relay: mpsc::Receiver<(u8, Vec<u8>)>,
+    /// Frames the monitor dropped because one was still on its way out
+    /// (build 146: the count that shows "one at a time" bounds, review 145).
+    pub dropped_out: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// The monitor's end of the TCP line.
+pub struct TcpLineMonitor {
+    to_relay: mpsc::Receiver<Vec<u8>>,
+    from_relay: mpsc::Sender<(u8, Vec<u8>)>,
+    dropped_out: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// A TCP line: one end for the route layer, one for the QUIC monitor
+/// ([`RelayMonitor::start_threaded_quic`]).
+pub fn tcp_line() -> (TcpLine, TcpLineMonitor) {
+    let (out_tx, out_rx) = mpsc::channel(TCP_LINE_DEPTH);
+    let (in_tx, in_rx) = mpsc::channel(TCP_LINE_DEPTH);
+    let dropped_out = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    (
+        TcpLine { to_relay: out_tx, from_relay: in_rx, dropped_out: dropped_out.clone() },
+        TcpLineMonitor { to_relay: out_rx, from_relay: in_tx, dropped_out },
+    )
+}
+
+/// A QUIC packet for client `client_id` as a TLT1 frame (a client sends id 0:
+/// the relay stamps its own).
+pub fn tlt1_frame(client_id: u8, payload: &[u8]) -> Vec<u8> {
+    encode_tlt1(client_id, payload)
+}
+
+/// The client id and the payload of a TLT1 frame - for a test's stand-in of the
+/// relay.
+pub fn tlt1_parts(frame: &[u8]) -> Option<(u8, &[u8])> {
+    parse_tlt1(frame)
+}
+
+/// The next frame for the TCP line, or never: without a line, and once the
+/// route layer's end is gone (a status-only monitor drops it at once).
+async fn recv_tcp_line(line: &mut Option<&mut TcpLineMonitor>) -> Vec<u8> {
+    if let Some(l) = line {
+        if let Some(frame) = l.to_relay.recv().await {
+            return frame;
+        }
+    }
+    std::future::pending().await
+}
+
+// The monitor runs on its own thread, always. A tokio-task variant (`start`,
+// `RelayTask::Tokio`) had no caller, stopped differently (abort in Drop) and did
+// not report a panic; removed (reviewers, rounds 44-45, owner's decision).
 pub struct RelayMonitor {
     status: RelayStatusHandle,
     config_tx: watch::Sender<RelayConfig>,
     shutdown_tx: watch::Sender<bool>,
-    task: RelayTask,
-}
-
-enum RelayTask {
-    Tokio(JoinHandle<()>),
-    Thread,
+    /// Counts "the device has a network again", from whoever can see that (the
+    /// Android connectivity callback). See `network_available`.
+    network_tx: watch::Sender<u64>,
+    /// Counts "the device's default network is another one now". See
+    /// `network_changed` (build 186).
+    change_tx: watch::Sender<u64>,
 }
 
 impl RelayMonitor {
-    pub fn start(initial: RelayConfig) -> Self {
-        let status = RelayStatusHandle {
-            state: Arc::new(Mutex::new(RelayStatus::disabled())),
-        };
-        let (config_tx, config_rx) = watch::channel(initial);
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let task_status = status.clone();
-        let task = tokio::spawn(async move {
-            monitor_loop(config_rx, shutdown_rx, task_status, None).await;
-        });
-        Self {
-            status,
-            config_tx,
-            shutdown_tx,
-            task: RelayTask::Tokio(task),
-        }
-    }
-
     /// Status-only monitor on its own thread (no TL tunnel).
+    ///
+    /// The classic form, whatever `initial.quic` says: QUIC mode without a grant
+    /// receiver would sign in as QUIC and publish nothing, a silent dead end. The
+    /// constructor decides the form, not the caller (review 118).
     pub fn start_threaded(initial: RelayConfig) -> Self {
-        Self::start_threaded_inner(initial, None)
+        Self::start_threaded_inner(RelayConfig { quic: false, ..initial }, None, None, None)
     }
 
-    /// Monitor on its own thread that also tunnels TL frames (Phase C).
+    /// Monitor on its own thread that also tunnels TL frames (Phase C). The
+    /// classic form, like [`RelayMonitor::start_threaded`].
     pub fn start_threaded_tunnel(initial: RelayConfig, tunnel: RelayTunnel) -> Self {
-        Self::start_threaded_inner(initial, Some(tunnel))
+        Self::start_threaded_inner(RelayConfig { quic: false, ..initial }, Some(tunnel), None, None)
     }
 
-    fn start_threaded_inner(initial: RelayConfig, tunnel: Option<RelayTunnel>) -> Self {
+    /// Monitor for QUIC via the relay (phase 3b): signs in with `proto=quic` and
+    /// publishes each session's [`UdpGrant`] on `grants` (`None` between
+    /// sessions). The data goes through the QUIC crate's route layer, not here
+    /// - over UDP, and over `tcp` on the wss connection when there is one (the
+    /// TCP fallback route, build 144). A monitor for status only passes `None`.
+    pub fn start_threaded_quic(
+        initial: RelayConfig,
+        grants: watch::Sender<Option<UdpGrant>>,
+        tcp: Option<TcpLineMonitor>,
+    ) -> Self {
+        Self::start_threaded_inner(RelayConfig { quic: true, ..initial }, None, Some(grants), tcp)
+    }
+
+    fn start_threaded_inner(
+        initial: RelayConfig,
+        tunnel: Option<RelayTunnel>,
+        grants: Option<watch::Sender<Option<UdpGrant>>>,
+        tcp: Option<TcpLineMonitor>,
+    ) -> Self {
         let status = RelayStatusHandle {
             state: Arc::new(Mutex::new(RelayStatus::disabled())),
         };
         let (config_tx, config_rx) = watch::channel(initial);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (network_tx, network_rx) = watch::channel(0_u64);
+        let (change_tx, change_rx) = watch::channel(0_u64);
         let task_status = status.clone();
         let spawn_status = status.clone();
+        // A monitor stopped by a panic is stopped: `is_stopped()` reads this
+        // signal, and a panic never set it (reviewer, round 45).
+        let panic_stop = shutdown_tx.clone();
         if let Err(e) = std::thread::Builder::new()
             .name("thetislink-relay-monitor".to_string())
             .spawn(move || {
                 match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                    Ok(rt) => rt.block_on(monitor_loop(config_rx, shutdown_rx, task_status.clone(), tunnel)),
+                    Ok(rt) => {
+                        if run_reporting_a_panic(&task_status, || {
+                            rt.block_on(monitor_loop(config_rx, shutdown_rx, network_rx, change_rx, task_status.clone(), tunnel, grants, tcp))
+                        }) {
+                            let _ = panic_stop.send(true);
+                        }
+                    }
                     Err(e) => set_status(
                         &task_status,
                         RelayPhase::Error,
@@ -938,7 +1265,8 @@ impl RelayMonitor {
             status,
             config_tx,
             shutdown_tx,
-            task: RelayTask::Thread,
+            network_tx,
+            change_tx,
         }
     }
 
@@ -952,6 +1280,28 @@ impl RelayMonitor {
 
     pub fn stop(&self) {
         let _ = self.shutdown_tx.send(true);
+    }
+
+    /// The device has a network again. If the monitor is waiting because the
+    /// last attempt failed inside this device (no route, no DNS: the new network
+    /// was not up yet), it tries now instead of at the next step of the ladder;
+    /// any other wait it leaves alone.
+    ///
+    /// Measured 2026-10-04: after a switch to mobile the network was ready
+    /// somewhere between the attempt at +0.25 s and the one at +0.75 s, so the
+    /// ladder waited up to half a second too long. Only the phone knows when the
+    /// network is there; the ladder stays as the net under this.
+    pub fn network_available(&self) {
+        self.network_tx.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// The device's default network is another one now. A session that is
+    /// running still runs over the old one - which may be going away - and
+    /// would only notice when that fails: 7.4 s and 11.8 s in the field on
+    /// 2026-10-12. It is ended at once, and the next one starts on the new
+    /// network (build 186).
+    pub fn network_changed(&self) {
+        self.change_tx.send_modify(|n| *n = n.wrapping_add(1));
     }
 
     /// A handle that can stop this monitor from somewhere it is not owned.
@@ -978,24 +1328,72 @@ impl RelayStopHandle {
     pub fn stop(&self) {
         let _ = self.shutdown_tx.send(true);
     }
+
+    /// Whether this monitor has already been told to stop.
+    ///
+    /// The caller that keeps the previous handle (the Android bridge) had no way
+    /// to tell a monitor that is still running from one that stopped a second
+    /// ago, so it warned about both. In a field log of 2026-09-24 that warning
+    /// fired on both app restarts, 0.9 s after "Relay monitor stopped" two lines
+    /// above it - the handle was stale, not live. A warning that is untrue every
+    /// ordinary time is one nobody reads when the real case comes back, and the
+    /// real case here is two live monitors evicting each other for as long as
+    /// the app runs.
+    ///
+    /// The flag is the shutdown signal itself, so this cannot drift away from
+    /// what `stop()` does.
+    pub fn is_stopped(&self) -> bool {
+        *self.shutdown_tx.borrow()
+    }
+
+    /// Whether these two handles stop the same monitor.
+    ///
+    /// The Android bridge keeps the previous monitor's handle in a static slot
+    /// and needs to empty that slot when its own monitor shuts down - but only
+    /// if the slot still holds ITS handle. On a network switch a newer bridge
+    /// has already replaced it, and emptying blindly would throw away the
+    /// handle the duplicate guard exists to use. That case is the whole reason
+    /// the slot is there (2026-08-17).
+    pub fn same_monitor(&self, other: &Self) -> bool {
+        self.shutdown_tx.same_channel(&other.shutdown_tx)
+    }
+
+    /// Empty `slot` if it holds `mine`; leave it alone if it holds anyone
+    /// else's. Returns whether it emptied it.
+    ///
+    /// The decision lives here and not inline in the Android bridge because the
+    /// bridge cannot build a handle to test it with, and this is the line a
+    /// careless change turns into `slot.take()` - which is correct on every
+    /// ordinary shutdown and wrong on exactly the one the slot exists for, a
+    /// network switch where the next bridge's handle is already in it.
+    pub fn clear_slot_if_mine(slot: &mut Option<Self>, mine: &Self) -> bool {
+        if slot.as_ref().is_some_and(|h| h.same_monitor(mine)) {
+            *slot = None;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for RelayMonitor {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
-        if let RelayTask::Tokio(task) = &self.task {
-            task.abort();
-        }
     }
 }
 
 async fn monitor_loop(
     mut config_rx: watch::Receiver<RelayConfig>,
     mut shutdown_rx: watch::Receiver<bool>,
+    mut network_rx: watch::Receiver<u64>,
+    mut change_rx: watch::Receiver<u64>,
     status: RelayStatusHandle,
     mut tunnel: Option<RelayTunnel>,
+    grants: Option<watch::Sender<Option<UdpGrant>>>,
+    mut tcp: Option<TcpLineMonitor>,
 ) {
     let mut generation = 0_u64;
+    let mut recovery = Recovery::default();
     loop {
         if *shutdown_rx.borrow() {
             set_status(
@@ -1011,6 +1409,11 @@ async fn monitor_loop(
         }
 
         let config = config_rx.borrow().clone();
+        // Here, before any branch, and unconditional: every round, also a failed
+        // or disabled one, gets a number of its own. The QUIC route layer tells a
+        // new session from a rotation by this number alone - a `None` between two
+        // sessions can be swallowed by the watch - so two sessions under one
+        // number would keep it on the dead socket (review 118).
         generation = generation.wrapping_add(1);
 
         if !config.enabled {
@@ -1055,17 +1458,37 @@ async fn monitor_loop(
             generation,
         );
 
+        // A network that came up before this attempt is this attempt's network:
+        // only one that comes up after it may cut a wait short.
+        network_rx.borrow_and_update();
+        // The same for a change of network: one before this attempt is the
+        // network it runs on (build 186).
+        change_rx.borrow_and_update();
         let mut outcome = SessionOutcome::default();
-        let run_result = run_connection(
-            &config,
-            &status,
-            generation,
-            &mut config_rx,
-            &mut shutdown_rx,
-            tunnel.as_mut(),
-            &mut outcome,
+        // The whole session - building it and running it - against a change of
+        // network: a build that hangs on a network going away would otherwise
+        // see the change only when it gives up (build 187; review of 186).
+        let (run_result, switched) = until_network_switch(
+            run_connection(
+                &config,
+                &status,
+                generation,
+                &mut config_rx,
+                &mut shutdown_rx,
+                tunnel.as_mut(),
+                grants.as_ref(),
+                tcp.as_mut(),
+                &mut outcome,
+            ),
+            &mut change_rx,
         )
         .await;
+        outcome.network_changed = switched;
+        // The session is over, and with it its token (the relay revokes it with
+        // the connection): no grant until the next one.
+        if let Some(g) = &grants {
+            g.send_replace(None);
+        }
         if *shutdown_rx.borrow() {
             continue;
         }
@@ -1073,15 +1496,18 @@ async fn monitor_loop(
             continue;
         }
 
+        let ended_on_error = run_result.is_err();
         if let Err(err) = run_result {
             // How this session ended, in one line. The log said what went wrong
             // and never whether the session had been working, so a refusal and a
             // network switch read the same.
             log::info!(
-                "Relay session ended: {} (carried_traffic={} rejected={})",
+                "Relay session ended: {} (carried_traffic={} rejected={} closed_by_relay={} local={})",
                 short_error(&err),
                 outcome.carried_traffic,
                 outcome.rejected.as_deref().unwrap_or("-"),
+                outcome.closed_by_relay,
+                outcome.failed_locally,
             );
             let msg = short_error(&err);
             set_status(
@@ -1095,11 +1521,56 @@ async fn monitor_loop(
             );
         }
 
+        let wait = recovery.next_wait(&outcome, ended_on_error, Instant::now(), spread_now());
+        if wait.is_zero() && outcome.network_changed {
+            // Named in advance (working rule 11, build 186).
+            log::info!("Relay: reconnecting at once on the new network");
+        } else if wait.is_zero() {
+            // Named in the plan before it was built (working rule 11).
+            log::info!("Relay: reconnecting at once - the session carried traffic and ended on a transport error");
+        } else if wait < RECONNECT_DELAY.mul_f64(1.0 - RECONNECT_SPREAD) {
+            // Named in the brief before it was built (working rule 11).
+            log::info!("Relay: the network is not up yet - trying again in {} ms", wait.as_millis());
+        }
+        let waiting_for_the_network = !wait.is_zero() && recovery.waits_for_the_network();
         tokio::select! {
-            _ = tokio::time::sleep(RECONNECT_DELAY) => {}
+            _ = tokio::time::sleep(wait) => {}
+            _ = network_came_up(&mut network_rx, waiting_for_the_network) => {
+                // Named in the brief before it was built (working rule 11).
+                log::info!("Relay: the network came up - trying now");
+            }
             _ = config_rx.changed() => {}
             _ = shutdown_rx.changed() => {}
         }
+    }
+}
+
+/// Runs one session until it ends, or until the device's default network
+/// changes - whichever comes first, also while the session is still being
+/// built. The session is dropped then; `run_connection` has nothing to tidy
+/// after its loop, so dropping it is the same as it returning. Returns the
+/// session's result and whether a change ended it (builds 186, 187).
+async fn until_network_switch<F>(session: F, change_rx: &mut watch::Receiver<u64>) -> (Result<(), String>, bool)
+where
+    F: std::future::Future<Output = Result<(), String>>,
+{
+    tokio::select! {
+        r = session => (r, false),
+        Ok(()) = change_rx.changed() => {
+            // Named in advance (working rule 11, builds 186 and 187).
+            log::info!("Relay: the device's network changed - ending this session to start one on the new network");
+            (Err("the device's network changed".to_string()), true)
+        }
+    }
+}
+
+/// Resolves when the device reports a network, but only while `waiting` - the
+/// wait is a step of the local-retry ladder. Any other wait (a refusal, the
+/// relay closing us) is not cut short by a network event: the network was never
+/// the problem there.
+async fn network_came_up(rx: &mut watch::Receiver<u64>, waiting: bool) {
+    if !waiting || rx.changed().await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 
@@ -1183,8 +1654,7 @@ fn note_downlink(
 /// apart at the call site would be to compare translated text.
 ///
 /// Rather than retype seventeen exit paths, the session reports alongside its
-/// error. Nothing here changes behaviour: both fields are written and logged and
-/// nothing branches on them. Step 3 of the design is what will.
+/// error. `reconnect_wait` decides on it (step 3 of the design, build 95).
 #[derive(Default, Debug)]
 pub(crate) struct SessionOutcome {
     /// The relay refused us, with the wire code (`ERR device blocked`) and not
@@ -1195,6 +1665,128 @@ pub(crate) struct SessionOutcome {
     /// carried something and then failed at transport level is the network-switch
     /// case - the only case a fast retry is meant for.
     pub carried_traffic: bool,
+    /// When the first peer traffic arrived: how long the session stood is
+    /// counted from here (round 95).
+    pub traffic_since: Option<Instant>,
+    /// The attempt failed inside this device before reaching the relay: the
+    /// relay's name did not resolve, or there was no route (`NetworkUnreachable`
+    /// and kin). The new network is not up yet (build 96).
+    pub failed_locally: bool,
+    /// The relay ended the connection itself - a Close frame, or the stream
+    /// simply ending - rather than the transport failing under it. That is what
+    /// a second instance with the same install id does to this one (`replacing
+    /// existing client`), and a fast retry there would turn the known ping-pong
+    /// from every 5 s into a busy loop (build 95).
+    pub closed_by_relay: bool,
+    /// The device moved to another default network while the session ran: it
+    /// was ended on purpose, so the next one starts on the new network at once,
+    /// however short this one stood (build 186).
+    pub network_changed: bool,
+}
+
+impl SessionOutcome {
+    /// Peer traffic arrived. The one place that says so - three receive paths
+    /// call it (a text frame, a binary frame, a UDP datagram).
+    pub(crate) fn mark_traffic(&mut self) {
+        self.carried_traffic = true;
+        if self.traffic_since.is_none() {
+            self.traffic_since = Some(Instant::now());
+        }
+    }
+}
+
+/// Whether a failed websocket connect failed inside this device: a local kind
+/// of I/O error, or a relay name that does not resolve now. The connect looks
+/// the name up itself, and a lookup failure there has no kind of its own: in the
+/// field (2026-10-08, a switch from wifi to 5G) it read as "the relay failed",
+/// the wait was the plain 5 s, and the phone's "network is up" did not end it.
+/// The lookup before the connect had just passed (build 141).
+async fn connect_failed_locally(io: &std::io::Error, url: &str) -> bool {
+    if is_local_failure(io) {
+        return true;
+    }
+    match relay_host_port(url) {
+        Some((host, port)) => tokio::net::lookup_host((host.as_str(), port)).await.is_err(),
+        None => false,
+    }
+}
+
+/// An I/O error that means "this device has no way out right now" rather than
+/// "the relay said no": no route, network down, or no address to send from.
+fn is_local_failure(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(e.kind(), NetworkUnreachable | HostUnreachable | NetworkDown | AddrNotAvailable)
+}
+
+/// What the next connection waits for, remembered across attempts: where on the
+/// local-retry ladder we are after a working session broke.
+#[derive(Debug, Default)]
+pub(crate) struct Recovery {
+    step: Option<usize>,
+}
+
+impl Recovery {
+    /// Whether the wait just decided is a step of the local-retry ladder - the
+    /// network was not there yet, so a network coming up ends it.
+    pub(crate) fn waits_for_the_network(&self) -> bool {
+        self.step.is_some()
+    }
+
+    /// How long to wait before the next connection.
+    ///
+    /// - At once after a session that stood (`STOOD_AT_LEAST` of traffic), was
+    ///   not refused, was not closed by the relay, and ENDED ON AN ERROR - the
+    ///   network-switch case (measured 2026-10-03: of 5.4 s silence, 5.0 s was the
+    ///   fixed wait). A session that ends without an error (settings saved
+    ///   unchanged) is not that case (round 95).
+    /// - After that, attempts that fail locally walk `LOCAL_RETRY_LADDER`, and
+    ///   stay on its last step for as long as they fail locally.
+    /// - Everything else - a refusal, the relay closing us, a connection that
+    ///   carried nothing or failed at the relay, the end of the ladder - keeps the
+    ///   5 s, spread a little either way. `spread` is in [0, 1).
+    pub(crate) fn next_wait(&mut self, outcome: &SessionOutcome, ended_on_error: bool, now: Instant, spread: f64) -> Duration {
+        if outcome.network_changed {
+            // On the ladder from here: the new network may not be up yet.
+            self.step = Some(0);
+            return Duration::ZERO;
+        }
+        let stood = outcome.traffic_since.is_some_and(|t| now.saturating_duration_since(t) >= STOOD_AT_LEAST);
+        if ended_on_error && stood && outcome.rejected.is_none() && !outcome.closed_by_relay {
+            self.step = Some(0);
+            return Duration::ZERO;
+        }
+        if let Some(i) = self.step {
+            if outcome.failed_locally {
+                // On the last step it stays while the failure is local - every 2 s,
+                // never slower than the plain wait and still nothing at the relay
+                // (round 96: a net ready between 3.9 and 5 s would otherwise wait
+                // longer than without the ladder).
+                let step = i.min(LOCAL_RETRY_LADDER.len() - 1);
+                self.step = Some(i + 1);
+                return LOCAL_RETRY_LADDER[step];
+            }
+        }
+        self.step = None;
+        let factor = 1.0 - RECONNECT_SPREAD + 2.0 * RECONNECT_SPREAD * spread.clamp(0.0, 1.0);
+        RECONNECT_DELAY.mul_f64(factor)
+    }
+}
+
+/// The relay's host and port from its URL, for resolving it before connecting.
+fn relay_host_port(url: &str) -> Option<(String, u16)> {
+    let uri: tokio_tungstenite::tungstenite::http::Uri = url.parse().ok()?;
+    let host = uri.host()?.to_string();
+    let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("ws") { 80 } else { 443 });
+    Some((host, port))
+}
+
+/// A number in [0, 1) that differs from endpoint to endpoint and from moment to
+/// moment - enough to spread a wait, without a random-number crate.
+fn spread_now() -> f64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    (nanos % 1_000) as f64 / 1_000.0
 }
 
 async fn run_connection(
@@ -1204,6 +1796,8 @@ async fn run_connection(
     config_rx: &mut watch::Receiver<RelayConfig>,
     shutdown_rx: &mut watch::Receiver<bool>,
     tunnel: Option<&mut RelayTunnel>,
+    grants: Option<&watch::Sender<Option<UdpGrant>>>,
+    mut tcp: Option<&mut TcpLineMonitor>,
     outcome: &mut SessionOutcome,
 ) -> Result<(), String> {
     // Split the tunnel into independent pieces so the select! branches do not get
@@ -1218,9 +1812,26 @@ async fn run_connection(
     let mut bound_clients: HashSet<u8> = HashSet::new();
 
     ensure_crypto_provider();
-    let (ws, _) = connect_async(config.url.as_str())
-        .await
-        .map_err(|e| e.to_string())?;
+    // Resolve first, on its own: a name that does not resolve here means the
+    // network is not up yet, not that the relay refused - and the recovery
+    // ladder treats the two differently (build 96).
+    if let Some((host, port)) = relay_host_port(&config.url) {
+        if let Err(e) = tokio::net::lookup_host((host.as_str(), port)).await {
+            outcome.failed_locally = true;
+            return Err(format!("relay address not resolvable here: {e}"));
+        }
+    }
+    let (ws, _) = match connect_async(config.url.as_str()).await {
+        Ok(v) => v,
+        Err(e) => {
+            if let tokio_tungstenite::tungstenite::Error::Io(io) = &e {
+                if connect_failed_locally(io, &config.url).await {
+                    outcome.failed_locally = true;
+                }
+            }
+            return Err(e.to_string());
+        }
+    };
     // Disable Nagle: the monitor sends several small frames close together, and
     // Nagle batching adds latency/jitter to a low-rate control path like this.
     // Disable Nagle on the underlying TCP for both plain (ws) and TLS (wss) - the
@@ -1252,6 +1863,11 @@ async fn run_connection(
             config.instance.trim()
         )
     };
+    // QUIC via the relay says so: today's relay ignores the key, a relay for
+    // v2.13 can refuse a hello without it (OPZET-fase3b §2.7).
+    if config.quic {
+        hello.push_str(" proto=quic");
+    }
     // `name=` MUST be last: it is free-form and may contain spaces, so the relay
     // parses it as the remainder of the line. Omitted when empty.
     let name = config.name.trim();
@@ -1264,20 +1880,35 @@ async fn run_connection(
         .await
         .map_err(|e| e.to_string())?;
 
-    let first = tokio::time::timeout(Duration::from_secs(10), read.next())
-        .await
-        .map_err(|_| "relay hello timed out".to_string())?
-        .ok_or_else(|| "relay closed before authentication".to_string())?
-        .map_err(|e| e.to_string())?;
+    // The relay's answer is OK or ERR. A peer's frame can come before it: the
+    // relay puts this connection in the room before it sends the OK, and the
+    // other side's status or probe in that moment arrives first (review 124,
+    // measured). That is no answer - and since build 124 a peer cannot pass an
+    // OK or ERR through the relay, so waiting for one of those is safe.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let first = loop {
+        let message = tokio::time::timeout_at(deadline, read.next())
+            .await
+            .map_err(|_| "relay hello timed out".to_string())?
+            .ok_or_else(|| "relay closed before authentication".to_string())?
+            .map_err(|e| e.to_string())?;
+        match &message {
+            Message::Text(text) if !text.starts_with(RELAY_OK) && !text.starts_with(RELAY_ERR) => {
+                log::debug!("Relay: a peer frame before the relay's answer - skipped");
+            }
+            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => {}
+            _ => break message,
+        }
+    };
 
-    // Fase 2: the ready-reply carries the UDP capability token ("OK relay-ready
+    // Phase 2: the ready-reply carries the UDP capability token ("OK relay-ready
     // udp_token=..."); capture it to open the audio-over-UDP path below. Assigned on
     // the OK arm; the other arms diverge (return), so it is always initialised after.
     // `mut`: the relay rotates this token over wss before its hard TTL; the loop
     // swaps in each fresh token for outgoing TLU1 packets (see the Text arm below).
     let mut udp_token: Option<String>;
     match first {
-        Message::Text(text) if text.starts_with("OK ") => {
+        Message::Text(text) if text.starts_with(RELAY_OK) && text[RELAY_OK.len()..].starts_with(' ') => {
             // A relay with a chat behind it offers a ticket here; one without
             // simply does not, and that is a normal state (design §2.4 - the
             // chat being absent may never disturb anything else).
@@ -1301,9 +1932,15 @@ async fn run_connection(
         other => return Err(format!("unexpected relay hello: {other:?}")),
     }
 
-    // Fase 2: open the kale-UDP audio path when configured and a token was issued.
+    // Phase 2: open the bare-UDP audio path when configured and a token was issued.
     // Best-effort - on any failure we simply keep audio on wss (additive fallback).
+    // QUIC via the relay: the route layer owns the one UDP socket to the relay
+    // (the relay binds a token to the first source it sees), so none here.
+    if config.quic {
+        publish_grant(config, &udp_token, None, grants, generation).await;
+    }
     let udp_socket: Option<UdpSocket> = match (config.udp_port, &udp_token) {
+        _ if config.quic => None,
         (Some(port), Some(_)) => match open_udp(&config.url, port).await {
             Ok(sock) => {
                 log::info!("Relay UDP audio path up (<relay>:{port})");
@@ -1335,7 +1972,7 @@ async fn run_connection(
         std::collections::HashMap::new();
 
     write
-        .send(Message::Text(peer_frame("hello", config.role).into()))
+        .send(Message::Text(peer_frame("hello", config.role, config.quic).into()))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1345,14 +1982,17 @@ async fn run_connection(
     let mut rtt_seq = 0_u64;
     let mut pending_rtt: Option<(u64, Instant)> = None;
     let mut peer_active = false;
+    // When the peer became reachable. The UDP-connect window measures from here,
+    // not from the moment the tunnel stood - see `downlink_stalled`.
+    let mut peer_active_since: Option<Instant> = None;
     let mut last_peer_activity = Instant::now();
     let mut last_binary_probe = Instant::now();
     let mut binary_seq = 0_u64;
     let mut pending_binary: Option<(u64, Instant)> = None;
     let mut binary_samples: VecDeque<u32> = VecDeque::new();
 
-    // Fase 3a: make-before-break UDP<->wss fallback (relay-only, additive - inert while the
-    // fallback stays off, so the fase-2 UDP path is byte-identical in the normal case).
+    // Phase 3a: make-before-break UDP<->wss fallback (relay-only, additive - inert while the
+    // fallback stays off, so the phase-2 UDP path is byte-identical in the normal case).
     // Client side: watch UDP-audio health and request wss fallback if it never arrives.
     let ready_at = Instant::now();
     // Say what we can do as soon as the session stands. The station needs to know from
@@ -1366,14 +2006,16 @@ async fn run_connection(
     // to the tunnel path like any other payload, and the engine rejects it at the magic
     // byte - `RCF1` starts with 0x52 and a TL packet with 0xAA. Harmless, and the same
     // route the fallback frames themselves already take against a station older than
-    // fase 3a. Not "silently ignored at this layer", which is what the design said and
+    // phase 3a. Not "silently ignored at this layer", which is what the design said and
     // a review rightly would not accept on trust.
     //
     // Repeated below on the heartbeat, and that is not belt and braces: the station
     // keeps this fact inside the per-client fallback entry, and that entry is dropped a
     // lease after the last control frame. Announced once, it is gone fifteen seconds
     // into every session - long before any realistic network switch.
-    if config.role == RelayRole::Client {
+    // Not in QUIC mode: there is no fallback to have capabilities for, and
+    // nothing travels as a TLT1 frame.
+    if config.role == RelayRole::Client && !config.quic {
         let _ = write
             .send(Message::Binary(
                 encode_tlt1(0, &encode_rcf_caps(CAPS_READS_BEACON)).into(),
@@ -1410,6 +2052,18 @@ async fn run_connection(
         }
     }
     let mut last_udp_audio: Option<Instant> = None; // last inbound audio frame over UDP
+    // Said once per session in the log; the screen says it on every frame.
+    let mut said_form_mismatch = false;
+    // This side's public UDP address, as the relay last said it (phase 3c). Per
+    // session: a new session brings a new socket, and so a new address.
+    let mut public_seen: Option<SocketAddr> = None;
+    // A token rotation whose new token the relay has not yet bound (and said).
+    let mut rotation_unconfirmed = false;
+    // Whether the peer's last frame carried the other form. While it did, nothing
+    // else paints the status green: a binary probe answer or bare traffic set
+    // "authenticated, no error" over the warning, and the screen flipped between
+    // red and green every few seconds (field test 2026-10-06, review 121).
+    let mut form_mismatch = false;
     // Last inbound datagram over UDP of ANY kind - audio or a bare beacon. This is
     // what both edges of the fallback read, and the difference from
     // `last_udp_audio` is the whole point: a path that carries beacons is alive
@@ -1476,6 +2130,10 @@ async fn run_connection(
     // Beacons the station sends, so the extra traffic this repair adds to an idle line
     // is a number somebody can read rather than an estimate in a document.
     let mut beacons_sent: u64 = 0;
+    // Datagrams sent purely to hold the NAT mapping open while no client is bound.
+    // Counted separately: they are not beacons and calling them that would hide
+    // exactly the silence this was built to end.
+    let mut mapping_keepalives: u64 = 0;
     // And the other end of that: datagrams the client actually received. It settles a
     // question the station log cannot answer on its own. A fallback of 393 seconds was
     // observed while the station sent 330 beacons, and nothing said whether the client
@@ -1484,6 +2142,32 @@ async fn run_connection(
     // be a second subject). One counter tells those apart.
     let mut downlink_received: u64 = 0;
 
+    // Send one round of keepalives on the token GIVEN, count them, and restart the
+    // keepalive clock. The token is an argument and not read from `udp_token`: at a
+    // rotation the caller hands over the token it just parsed, so the round cannot go
+    // out on the old one whatever order the lines are in - the reviewers showed that a
+    // read from the local could, and that no test sees it (round 53). The clock is
+    // restarted here for the same reason: a caller cannot forget it. A macro and not a
+    // function because the socket and the counters are locals of this loop; the round
+    // itself is `keepalive_datagrams`. Counted in fitness.ps1 ($KEEPALIVE_ROUND_SITES).
+    macro_rules! send_keepalives {
+        ($tok:expr) => {{
+            if let Some(sock) = &udp_socket {
+                let (datagrams, kind) =
+                    keepalive_datagrams(config.role, &bound_clients, $tok, &mut udp_seq);
+                for d in &datagrams {
+                    let _ = sock.send(d).await;
+                    match kind {
+                        KeepaliveKind::Beacons => beacons_sent += 1,
+                        KeepaliveKind::MappingOnly => mapping_keepalives += 1,
+                        KeepaliveKind::Client => {}
+                    }
+                }
+            }
+            last_udp_keepalive = Instant::now();
+        }};
+    }
+
     // Persistent 250 ms ticker, created ONCE before the loop. A `sleep()` re-created
     // each select iteration gets reset by every audio packet (<250 ms apart) and never
     // elapses under continuous audio - which starved the UDP keepalive + peer-status +
@@ -1491,6 +2175,30 @@ async fn run_connection(
     // regardless of audio load. Skip missed ticks (no catch-up burst).
     let mut timer = tokio::time::interval(Duration::from_millis(250));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The TCP line's frame on its way out (build 145): one at a time. While it
+    // has not left - the wss side is full - a new frame is dropped rather than
+    // waited for, so the loop never stands still on writing: "full is gone",
+    // and QUIC sends again what it needs. Its push goes on in an arm of its own.
+    //
+    // `tcp_frame_out` is what keeps it at one frame (review 145).
+    // `SplitSink::poll_ready` answers "ready" at once while its one slot is
+    // empty - without asking the wss side - and `start_send` only fills that
+    // slot. Tungstenite under it buffers up to its `write_buffer_size` (128 KiB)
+    // before it even tries the socket; only a socket that is full then makes
+    // its `poll_ready` wait. Without the flag up to 128 KiB would queue here -
+    // about a second on a 1 Mbit/s line - before anything was dropped. (Build
+    // 146: without the flag a flood still gets frames dropped, so no test that
+    // counts drops can see it; read in tungstenite, not measured.) The
+    // `poll_ready` below is there for the `Sink` contract.
+    //
+    // "Not left yet" is asked of the socket, not of the loop (build 147): a new
+    // frame first tries the push of the one before it, once. The push arm alone
+    // left that to `select!`, and a frame that came in before the loop chose the
+    // push arm was dropped on a free line - 160 of 200 in a burst, 480 to 3170
+    // per 10 s on the station with two clients on TCP (field test of build 146).
+    let mut tcp_frame_out = false;
+    let mut tcp_dropped = 0u64;
+    let mut tcp_dropped_said: Option<Instant> = None;
     loop {
         tokio::select! {
             _ = config_rx.changed() => return Ok(()),
@@ -1503,7 +2211,7 @@ async fn run_connection(
                         // one hits its hard TTL. Swap it in for outgoing TLU1; the old
                         // token stays valid during the relay's short overlap, so no audio
                         // drops. Relay-infrastructure message -> not peer activity.
-                        if text.starts_with("chat-ticket-rotate") {
+                        if text.starts_with(RELAY_CHAT_TICKET_ROTATE) {
                             // Refreshed well inside the ticket's own lifetime, so
                             // the chat window never finds itself holding an
                             // expired one. Relay infrastructure, not peer
@@ -1513,22 +2221,86 @@ async fn run_connection(
                                 set_chat_ticket(&status, Some(t));
                                 log::debug!("Relay chat ticket refreshed");
                             }
-                        } else if text.starts_with("udp-token-rotate") {
+                        } else if text.starts_with(RELAY_UDP_TOKEN_ROTATE) {
                             if let Some(t) = parse_udp_token(&text) {
+                                // At once, not at the next tick, and on the token just
+                                // received: until the relay has seen our source on the
+                                // new token, its lookup can pick it and find no address.
+                                send_keepalives!(&t);
                                 udp_token = Some(t);
-                                log::debug!("Relay UDP token rotated");
+                                // The relay says the address again once the new
+                                // token is bound; that line confirms the rotation
+                                // in the log (review 123).
+                                rotation_unconfirmed = true;
+                                log::info!("Relay UDP token rotated - keepalive sent on the new token");
+                                if config.quic {
+                                    publish_grant(config, &udp_token, public_seen, grants, generation).await;
+                                }
+                            }
+                            continue;
+                        } else if let Some(seen) = text.strip_prefix(RELAY_UDP_SEEN).and_then(|r| r.strip_prefix(' ')) {
+                            // Phase 3c: the relay says where our UDP comes from -
+                            // the address the other side punches to. Into the
+                            // grant of this session; never into the log (the
+                            // family only: on IPv6 it is the device's own).
+                            if let Ok(addr) = seen.trim().parse::<SocketAddr>() {
+                                if public_seen != Some(addr) {
+                                    log::info!("Relay: our public UDP address is known ({})", family(addr));
+                                } else if std::mem::take(&mut rotation_unconfirmed) {
+                                    log::info!(
+                                        "Relay: public UDP address confirmed after the token rotation ({})",
+                                        family(addr)
+                                    );
+                                }
+                                rotation_unconfirmed = false;
+                                public_seen = Some(addr);
+                                if let Some(g) = grants {
+                                    g.send_if_modified(|grant| match grant {
+                                        Some(grant) if grant.public != Some(addr) => {
+                                            grant.public = Some(addr);
+                                            true
+                                        }
+                                        _ => false,
+                                    });
+                                }
                             }
                             continue;
                         }
                         peer_active = true;
-                        outcome.carried_traffic = true;
+                        outcome.mark_traffic();
                         last_peer_activity = Instant::now();
                         if let Some(frame) = parse_peer_frame(&text) {
+                            // The two sides must carry the same data form: QUIC
+                            // packets mean nothing to a TL peer and back. Said on
+                            // screen, every frame, so a heartbeat cannot paint
+                            // over it; the log says it once.
+                            form_mismatch = frame.quic != config.quic;
+                            if form_mismatch {
+                                if !said_form_mismatch {
+                                    said_form_mismatch = true;
+                                    log::warn!(
+                                        "Relay: the {} uses {}, this side {} - the two run different versions",
+                                        frame.role,
+                                        form_name(frame.quic),
+                                        form_name(config.quic)
+                                    );
+                                }
+                                set_status(
+                                    status,
+                                    RelayPhase::Error,
+                                    form_mismatch_message(config.quic),
+                                    true,
+                                    false,
+                                    Some("form mismatch".to_string()),
+                                    generation,
+                                );
+                                continue;
+                            }
                             match frame.kind.as_str() {
                                 "ping" => {
                                     if let Some(seq) = frame.seq {
                                         write
-                                            .send(Message::Text(peer_frame_with_seq("pong", config.role, seq).into()))
+                                            .send(Message::Text(peer_frame_with_seq("pong", config.role, seq, config.quic).into()))
                                             .await
                                             .map_err(|e| e.to_string())?;
                                     }
@@ -1588,7 +2360,7 @@ async fn run_connection(
                                     );
                                 }
                             }
-                        } else {
+                        } else if !form_mismatch {
                             set_status(
                                 status,
                                 RelayPhase::Authenticated,
@@ -1602,8 +2374,24 @@ async fn run_connection(
                     }
                     Some(Ok(Message::Binary(data))) => {
                         peer_active = true;
-                        outcome.carried_traffic = true;
+                        outcome.mark_traffic();
                         last_peer_activity = Instant::now();
+                        // The TCP fallback route (build 144): in QUIC mode a TLT1
+                        // frame is a QUIC packet for the route layer - or for
+                        // nobody, on a monitor without a line (a status monitor
+                        // can get one when the relay hands it a client id that a
+                        // TCP client had a moment ago). Either way it ends here:
+                        // further down it would set the status line to "peer
+                        // traffic received", once per packet (review 144).
+                        if config.quic {
+                            if let Some((cid, payload)) = parse_tlt1(&data) {
+                                if let Some(line) = tcp.as_ref() {
+                                    // A full line drops: QUIC sends again what it needs.
+                                    let _ = line.from_relay.try_send((cid, payload.to_vec()));
+                                }
+                                continue;
+                            }
+                        }
                         // TLT1 = tunneled TL-frame data -> deliver payload to the local endpoint.
                         if let Some(inbound) = &tunnel_inbound {
                             if let Some((cid, payload)) = parse_tlt1(&data) {
@@ -1620,7 +2408,7 @@ async fn run_connection(
                                     }
                                     last_stream_in.insert(stream, now);
                                 }
-                                // Fase 3a: station intercepts a client's wss-audio fallback
+                                // Phase 3a: station intercepts a client's wss-audio fallback
                                 // request (per-session scope, idempotent) instead of
                                 // forwarding it to the engine.
                                 if config.role == RelayRole::Station {
@@ -1713,7 +2501,7 @@ async fn run_connection(
                                         continue;
                                     }
                                 }
-                                // Fase 3: during path overlap / TX-always-both a frame may
+                                // Phase 3: during path overlap / TX-always-both a frame may
                                 // arrive on BOTH wss and UDP; drop the duplicate before the
                                 // jitter buffer. Applies to both roles (client RX downlink and
                                 // station TX uplink).
@@ -1765,14 +2553,17 @@ async fn run_connection(
                                         while binary_samples.len() > BINARY_RTT_WINDOW {
                                             binary_samples.pop_front();
                                         }
-                                        set_binary_stats(
-                                            status,
-                                            binary_stats(&binary_samples, rtt_ms),
-                                            generation,
-                                        );
+                                        if !form_mismatch {
+                                            set_binary_stats(
+                                                status,
+                                                binary_stats(&binary_samples, rtt_ms),
+                                                generation,
+                                            );
+                                        }
                                     }
                                 }
                             }
+                            _ if form_mismatch => {}
                             _ => {
                                 set_status(
                                     status,
@@ -1790,11 +2581,47 @@ async fn run_connection(
                         let _ = write.send(Message::Pong(data)).await;
                     }
                     Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) => return Err("relay closed connection".to_string()),
+                    Some(Ok(Message::Close(_))) => {
+                        outcome.closed_by_relay = true;
+                        return Err("relay closed connection".to_string());
+                    }
                     Some(Ok(Message::Frame(_))) => {}
                     Some(Err(e)) => return Err(e.to_string()),
-                    None => return Err("relay disconnected".to_string()),
+                    None => {
+                        outcome.closed_by_relay = true;
+                        return Err("relay disconnected".to_string());
+                    }
                 }
+            }
+            frame = recv_tcp_line(&mut tcp) => {
+                if tcp_frame_out {
+                    match std::future::poll_fn(|cx| std::task::Poll::Ready(write.poll_flush_unpin(cx))).await {
+                        std::task::Poll::Ready(Ok(())) => tcp_frame_out = false,
+                        std::task::Poll::Ready(Err(e)) => return Err(e.to_string()),
+                        std::task::Poll::Pending => {}
+                    }
+                }
+                let ready = !tcp_frame_out
+                    && matches!(std::future::poll_fn(|cx| std::task::Poll::Ready(write.poll_ready_unpin(cx))).await, std::task::Poll::Ready(Ok(())));
+                if ready {
+                    write.start_send_unpin(Message::Binary(frame.into())).map_err(|e| e.to_string())?;
+                    tcp_frame_out = true;
+                } else {
+                    tcp_dropped += 1;
+                    if let Some(line) = tcp.as_ref() {
+                        line.dropped_out.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if tcp_dropped_said.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
+                        // Named in the brief before it was built (working rule 11, build 145).
+                        log::info!("Relay: {tcp_dropped} QUIC packets for the TCP line dropped - the line to the relay was busy");
+                        tcp_dropped = 0;
+                        tcp_dropped_said = Some(Instant::now());
+                    }
+                }
+            }
+            pushed = std::future::poll_fn(|cx| write.poll_flush_unpin(cx)), if tcp_frame_out => {
+                pushed.map_err(|e| e.to_string())?;
+                tcp_frame_out = false;
             }
             maybe_out = recv_uplink(&mut tunnel_uplink) => {
                 match maybe_out {
@@ -1806,7 +2633,7 @@ async fn run_connection(
                             RelayRole::Station => client_id_from_sentinel(addr),
                             RelayRole::Client => 0,
                         };
-                        // Fase 3b transport policy (additive; both flags off = fase-2
+                        // Phase 3b transport policy (additive; both flags off = phase-2
                         // behaviour, UDP-only for audio + wss for the rest). Per role:
                         //  - Client uplink (TX): UDP unless in fallback; wss when in fallback
                         //    OR always during PTT (TX-always-both, safety-critical path section 14.3).
@@ -1912,7 +2739,7 @@ async fn run_connection(
                 }
             }
             maybe_udp = recv_udp(&udp_socket, &mut udp_buf) => {
-                // Fase 2 downlink: relay delivers [client_id(1)] + AudioPacket over UDP.
+                // Phase 2 downlink: relay delivers [client_id(1)] + AudioPacket over UDP.
                 if let Some(n) = maybe_udp {
                     // Test hook: pretend the network drops inbound UDP for the first N s.
                     let test_drop = test_drop_udp_secs > 0
@@ -1943,11 +2770,11 @@ async fn run_connection(
                     }
                     if !test_drop && n > 1 {
                         peer_active = true;
-                        outcome.carried_traffic = true;
+                        outcome.mark_traffic();
                         last_peer_activity = Instant::now();
                         let cid = udp_buf[0];
                         let payload = &udp_buf[1..n];
-                        // Fase 3: UDP-audio health (client fallback monitor + recovery run).
+                        // Phase 3: UDP-audio health (client fallback monitor + recovery run).
                         // A gap longer than the stall threshold (re)starts the healthy run,
                         // so recovery only fires after continuous UDP audio (hysteresis).
                         if let Some((stream, seq)) = audio_identity(payload) {
@@ -1966,7 +2793,7 @@ async fn run_connection(
                             }
                             last_stream_in.insert(stream, now);
                         }
-                        // Fase 3: drop a frame already delivered over wss during overlap.
+                        // Phase 3: drop a frame already delivered over wss during overlap.
                         let is_dup = dedup.is_duplicate(cid, payload);
                         if !is_dup {
                             if let Some(inbound) = &tunnel_inbound {
@@ -2004,7 +2831,7 @@ async fn run_connection(
                     );
                 }
 
-                // Fase 3b transport state machine (client, relay-only). Two states:
+                // Phase 3b transport state machine (client, relay-only). Two states:
                 //  - UDP (fallback off): request wss if nothing arrived down the path within
                 //    the connect window, or the downlink went quiet past
                 //    FALLBACK_DOWNLINK_STALL.
@@ -2013,6 +2840,16 @@ async fn run_connection(
                 //    during fallback, so recovery is detectable.
                 // A minimum dwell between flips (dwell-cap + rate-limit) prevents flapping. The flip
                 // request tunnels an RCF over wss (id 0; the relay stamps the real client id).
+                // Since when there is a peer at all. Derived here, on the tick, and
+                // deliberately NOT stamped at the three places that set
+                // `peer_active`: three places that must agree about one fact drift,
+                // and this one only has to be accurate to within a tick while the
+                // window it feeds is two seconds (working rule 15).
+                if peer_active {
+                    peer_active_since.get_or_insert_with(Instant::now);
+                } else {
+                    peer_active_since = None;
+                }
                 if config.role == RelayRole::Client && udp_socket.is_some() && peer_active {
                     let now = Instant::now();
                     // Declare the initial transport (UDP) once the tunnel is up, so a
@@ -2050,7 +2887,7 @@ async fn run_connection(
                             // old shape with every test still green - which a review
                             // demonstrated rather than suspected.
                             let stalled = downlink_stalled(
-                                ready_at.elapsed(),
+                                peer_active_since.map(|t| t.elapsed()),
                                 last_udp_downlink,
                                 FALLBACK_CONNECT_TIMEOUT,
                                 FALLBACK_DOWNLINK_STALL,
@@ -2234,7 +3071,7 @@ async fn run_connection(
 
                 if last_status.elapsed() >= PEER_STATUS_INTERVAL {
                     write
-                        .send(Message::Text(peer_frame("status", config.role).into()))
+                        .send(Message::Text(peer_frame("status", config.role, config.quic).into()))
                         .await
                         .map_err(|e| e.to_string())?;
                     last_status = Instant::now();
@@ -2259,14 +3096,18 @@ async fn run_connection(
                     // What the beacon costs and what it is failing to buy. Both stay
                     // silent at zero, so a station without clients and a session where
                     // the saving works say nothing at all.
-                    if config.role == RelayRole::Station && beacons_sent > 0 {
+                    if config.role == RelayRole::Station
+                        && (beacons_sent > 0 || mapping_keepalives > 0)
+                    {
                         log::info!(
                             "Relay station: {beacons_sent} beacons to {} client(s), \
+                             {mapping_keepalives} mapping keepalive(s) while idle, \
                              {fallback_without_beacon_reader} audio frames to a client on \
                              wss that is not known to read one",
                             bound_clients.len()
                         );
                         beacons_sent = 0;
+                        mapping_keepalives = 0;
                         fallback_without_beacon_reader = 0;
                     }
                 }
@@ -2275,14 +3116,17 @@ async fn run_connection(
                     rtt_seq = rtt_seq.wrapping_add(1);
                     let now = Instant::now();
                     write
-                        .send(Message::Text(peer_frame_with_seq("ping", config.role, rtt_seq).into()))
+                        .send(Message::Text(peer_frame_with_seq("ping", config.role, rtt_seq, config.quic).into()))
                         .await
                         .map_err(|e| e.to_string())?;
                     pending_rtt = Some((rtt_seq, now));
                     last_rtt_ping = now;
                 }
 
-                if last_binary_probe.elapsed() >= BINARY_PROBE_INTERVAL {
+                // Not in QUIC mode: the probe measures the wss route with an
+                // audio-sized frame, and in that mode wss carries no data - it
+                // would be 256 bytes a second through the relay for nothing.
+                if !config.quic && last_binary_probe.elapsed() >= BINARY_PROBE_INTERVAL {
                     binary_seq = binary_seq.wrapping_add(1);
                     let now = Instant::now();
                     write
@@ -2304,34 +3148,16 @@ async fn run_connection(
                 // Keep our UDP source-binding + NAT mapping alive so downlink audio
                 // keeps reaching us even during long RX-only / idle periods.
                 if last_udp_keepalive.elapsed() >= UDP_BEACON_INTERVAL {
-                    if let (Some(sock), Some(tok)) = (&udp_socket, &udp_token) {
-                        match config.role {
-                            // A client has one peer, and id 0 means "the station" on
-                            // the way up. Unchanged.
-                            RelayRole::Client => {
-                                udp_seq = udp_seq.wrapping_add(1);
-                                let _ = sock.send(&encode_tlu1(0, udp_seq, tok, &[])).await;
-                            }
-                            // A station has many, and the relay routes downstream on an
-                            // exact client id - so a keepalive addressed to 0 reached
-                            // whichever client happened to hold that id, and nobody at
-                            // all when none did. That is why no client has ever seen a
-                            // downlink beacon.
-                            //
-                            // Sent CONTINUOUSLY, not only during a fallback: the entry
-                            // test needs beacons already flowing before the path breaks,
-                            // or it reads their absence as a broken path and flaps.
-                            RelayRole::Station => {
-                                for cid in bound_clients.iter().copied() {
-                                    udp_seq = udp_seq.wrapping_add(1);
-                                    let _ =
-                                        sock.send(&encode_tlu1(cid, udp_seq, tok, &[])).await;
-                                    beacons_sent += 1;
-                                }
-                            }
-                        }
+                    // A station addresses every bound client, so its keepalives double
+                    // as the beacons the client's fallback reads - sent CONTINUOUSLY,
+                    // not only during a fallback: the entry test needs beacons already
+                    // flowing before the path breaks, or it reads their absence as a
+                    // broken path and flaps. With no client bound it still sends one,
+                    // to hold its NAT mapping (see `station_udp_targets`).
+                    match udp_token.as_deref() {
+                        Some(tok) => send_keepalives!(tok),
+                        None => last_udp_keepalive = Instant::now(),
                     }
-                    last_udp_keepalive = Instant::now();
                 }
             }
         }
@@ -2343,14 +3169,88 @@ struct PeerFrame {
     kind: String,
     role: String,
     seq: Option<u64>,
+    /// `proto=quic`: the peer carries QUIC via the relay. Absent on a peer of
+    /// before phase 3b, which carries TL frames.
+    quic: bool,
 }
 
-fn peer_frame(kind: &str, role: RelayRole) -> String {
-    format!("TLR2 kind={kind} role={}", role.as_str())
+fn proto_suffix(quic: bool) -> &'static str {
+    if quic {
+        " proto=quic"
+    } else {
+        ""
+    }
 }
 
-fn peer_frame_with_seq(kind: &str, role: RelayRole, seq: u64) -> String {
-    format!("TLR2 kind={kind} role={} seq={seq}", role.as_str())
+fn peer_frame(kind: &str, role: RelayRole, quic: bool) -> String {
+    format!("TLR2 kind={kind} role={}{}", role.as_str(), proto_suffix(quic))
+}
+
+fn peer_frame_with_seq(kind: &str, role: RelayRole, seq: u64, quic: bool) -> String {
+    format!("TLR2 kind={kind} role={} seq={seq}{}", role.as_str(), proto_suffix(quic))
+}
+
+fn form_name(quic: bool) -> &'static str {
+    if quic {
+        "QUIC via the relay"
+    } else {
+        "the classic relay tunnel"
+    }
+}
+
+/// The relay's own lines this library reads, by their first word. A peer's text
+/// starting with one would read as the relay's, so the relay refuses to forward
+/// such a text (`RELAY_LINES` in `thetislink-relay`, which must hold every word
+/// here - pinned by `the_relay_refuses_every_line_this_library_reads`, which
+/// reads these constants from this file: a new one is pinned without a list).
+const RELAY_OK: &str = "OK";
+const RELAY_ERR: &str = "ERR";
+const RELAY_CHAT_TICKET_ROTATE: &str = "chat-ticket-rotate";
+const RELAY_UDP_TOKEN_ROTATE: &str = "udp-token-rotate";
+const RELAY_UDP_SEEN: &str = "udp-seen";
+
+/// What the screen says when the two sides do not carry the same form. Since
+/// 2.13 every program carries QUIC and there is no switch left, so the other
+/// form is another version: that is what the user can act on.
+fn form_mismatch_message(own_quic: bool) -> String {
+    if own_quic {
+        "The other side runs an older version of ThetisLink (before 2.13) - update it to this version".to_string()
+    } else {
+        "The other side runs a newer version of ThetisLink (2.13 or later) - update this side".to_string()
+    }
+}
+
+/// Resolve the relay's UDP port and publish the session's grant. Without a
+/// token or an address there is none, and QUIC via the relay cannot run: said
+/// in the log, the route layer stays without a session.
+async fn publish_grant(
+    config: &RelayConfig,
+    token: &Option<String>,
+    public: Option<SocketAddr>,
+    grants: Option<&watch::Sender<Option<UdpGrant>>>,
+    session: u64,
+) {
+    let Some(grants) = grants else { return };
+    let Some(tok) = token else {
+        log::warn!("Relay offers no UDP token - QUIC via the relay cannot run on this relay");
+        grants.send_replace(None);
+        return;
+    };
+    let port = config.udp_port.unwrap_or(DEFAULT_UDP_PORT);
+    match resolve_udp(&config.url, port).await {
+        Ok((relay, fallback)) => {
+            grants.send_replace(Some(UdpGrant { relay, fallback, public, token: hex32(tok), session }));
+            log::info!(
+                "Relay: QUIC grant for session {session} (<relay>:{port}, {}{})",
+                family(relay),
+                if fallback.is_some() { ", IPv4 beside it" } else { "" }
+            );
+        }
+        Err(e) => {
+            log::warn!("Relay UDP address not resolved - QUIC via the relay waits: {e}");
+            grants.send_replace(None);
+        }
+    }
 }
 
 fn parse_peer_frame(text: &str) -> Option<PeerFrame> {
@@ -2362,6 +3262,7 @@ fn parse_peer_frame(text: &str) -> Option<PeerFrame> {
     let mut kind = None;
     let mut role = None;
     let mut seq = None;
+    let mut quic = false;
     for part in parts {
         let Some((key, value)) = part.split_once('=') else {
             continue;
@@ -2370,6 +3271,7 @@ fn parse_peer_frame(text: &str) -> Option<PeerFrame> {
             "kind" => kind = Some(value.to_string()),
             "role" => role = Some(value.to_string()),
             "seq" => seq = value.parse::<u64>().ok(),
+            "proto" => quic = value == "quic",
             _ => {}
         }
     }
@@ -2378,6 +3280,7 @@ fn parse_peer_frame(text: &str) -> Option<PeerFrame> {
         kind: kind.unwrap_or_else(|| "status".to_string()),
         role: role.unwrap_or_else(|| "peer".to_string()),
         seq,
+        quic,
     })
 }
 
@@ -2533,10 +3436,49 @@ fn set_status(
     if changed && log_changed {
         log::info!("Relay status: {}", status.message);
     }
+    // Like the RTT and the probe above: without a session there is no transport to
+    // show. The flag lives in this handle, which outlives every session and the
+    // operator's own disconnect; the session's own `fallback_requested` starts again
+    // at false, so the branch that turns the flag off never ran again, and Android
+    // showed "TCP fallback" from 08:36 until the app restarted at 11:36 (field,
+    // 2026-09-28). Every call inside a session passes connected=true, every call
+    // outside one false (reviewers, round 43).
+    if !connected && std::mem::replace(&mut status.transport_fallback, false) {
+        log::info!("Relay transport: fallback indicator cleared - no relay session now");
+    }
 }
 
-/// Fase 3c: update the transport-fallback flag shown by the client indicator. Mutates only
-/// that field, so it survives the next set_status refresh.
+/// Run the relay thread's body, and if it panics, say that there is no session.
+///
+/// Nothing wrote the status after a panic in the relay thread: it stayed on what
+/// the last session had set - connected, with the fallback on if it was - for good,
+/// on both screens (reviewer, round 44). The two failures before the loop starts
+/// (no runtime, no thread) already report themselves the same way.
+fn run_reporting_a_panic(handle: &RelayStatusHandle, body: impl FnOnce()) -> bool {
+    if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        let what = p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".to_string());
+        log::error!("Relay monitor stopped by a panic: {what}");
+        set_status(
+            handle,
+            RelayPhase::Error,
+            format!("Relay monitor stopped: {what}"),
+            false,
+            false,
+            Some(what),
+            0,
+        );
+        return true;
+    }
+    false
+}
+
+/// Phase 3c: update the transport-fallback flag shown by the client indicator. Mutates only
+/// that field, so it survives a set_status refresh within a session; `set_status` clears
+/// it when there is no session.
 fn set_relay_transport(handle: &RelayStatusHandle, fallback: bool) {
     handle
         .state
@@ -2620,7 +3562,22 @@ mod recovery_tests {
     /// forever.
     #[test]
     fn a_dead_udp_path_does_not_read_as_recovered() {
-        let long_ago = Instant::now() - Duration::from_secs(5760);
+        // The field case was 96 minutes. On Windows an Instant counts from boot,
+        // so on a machine up for less than that the plain subtraction panics
+        // ("overflow when subtracting duration from instant") and this test
+        // failed for the first hour and a half after every restart. Ten seconds
+        // is long ago too: the stall limit is half a second.
+        let now = Instant::now();
+        // The fallback checked too: a machine up for less than ten seconds has
+        // no "long ago" to give, and then there is nothing to test (review 83).
+        let Some(long_ago) = now
+            .checked_sub(Duration::from_secs(5760))
+            .or_else(|| now.checked_sub(Duration::from_secs(10)))
+        else {
+            // Said out loud, so a skip does not read like a pass (review 84).
+            eprintln!("SKIPPED a_dead_udp_path_does_not_read_as_recovered: machine up for under ten seconds");
+            return;
+        };
         assert!(
             !udp_recovered(Some(long_ago), Some(long_ago), RECOVER, STALL),
             "a healthy run that ended 96 minutes ago is not a recovery"
@@ -2648,9 +3605,545 @@ mod recovery_tests {
     }
 }
 
+/// The trust under wss:// (eMudhra, 2026-10-17). Eight eMudhra intermediate keys
+/// could be recovered from their public certificates, and the bundled Mozilla roots
+/// carry no revocation, so the old build trusted a relay certificate made with one
+/// of them. rustls-webpki 0.103.16 refuses every chain that holds one of those keys.
+#[cfg(test)]
+mod tls_trust_tests {
+    use rustls::client::danger::ServerCertVerifier;
+    use rustls::client::WebPkiServerVerifier;
+    use rustls::pki_types::{ServerName, UnixTime};
+    use std::sync::Arc;
+
+    /// EM-DV-TLS-CA-G3B: its public key (P-384, uncompressed point), one of the eight
+    /// in the distrust list of rustls-webpki 0.103.16.
+    const EM_DV_TLS_CA_G3B_KEY: &str = concat!(
+        "04e79ed9c04a9773c4735e51111da85ac2bd5e64ab374b80e12cbc2038ec1e4f0e3b812fc9859e1e67afb04e2f8bc97f",
+        "7485ba65aa911ee8a4e45b62d5cc03d56be678b3c38cb4dc937ca2460e238453c892935d29d44f91e15606b63ccedab468",
+    );
+
+    struct PublicKey(Vec<u8>);
+
+    impl rcgen::PublicKeyData for PublicKey {
+        fn der_bytes(&self) -> &[u8] {
+            &self.0
+        }
+        fn algorithm(&self) -> &rcgen::SignatureAlgorithm {
+            &rcgen::PKCS_ECDSA_P384_SHA384
+        }
+    }
+
+    /// A relay certificate for `key`, issued by a root of our own that the verifier
+    /// trusts, checked the way the wss:// connect checks it.
+    fn verify(key: &impl rcgen::PublicKeyData) -> Result<(), rustls::Error> {
+        let root_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut root = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        root.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let root = root.self_signed(&root_key).unwrap();
+        let relay = rcgen::CertificateParams::new(vec!["relay.example".to_string()])
+            .unwrap()
+            .signed_by(key, &root, &root_key)
+            .unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(root.der().clone()).unwrap();
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider).build().unwrap();
+        let name = ServerName::try_from("relay.example").unwrap();
+        verifier.verify_server_cert(relay.der(), &[], &name, &[], UnixTime::now()).map(|_| ())
+    }
+
+    #[test]
+    fn a_relay_certificate_with_a_leaked_emudhra_key_is_refused() {
+        let ordinary = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        assert!(verify(&ordinary).is_ok(), "the same chain with an ordinary key must pass");
+        let hex = EM_DV_TLS_CA_G3B_KEY;
+        let leaked = PublicKey((0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect());
+        let refused = verify(&leaked);
+        assert!(format!("{refused:?}").contains("CertDistrusted"), "{refused:?}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    fn worked(stood: Duration) -> SessionOutcome {
+        SessionOutcome {
+            carried_traffic: true,
+            traffic_since: Some(Instant::now() - stood),
+            ..Default::default()
+        }
+    }
+
+    /// At once only for a session that stood, broke on an error, and was not
+    /// refused or closed by the relay (builds 95, 96).
+    #[test]
+    fn only_a_working_session_that_broke_reconnects_at_once() {
+        let now = Instant::now();
+        let mut r = Recovery::default();
+        assert_eq!(r.next_wait(&worked(Duration::from_secs(30)), true, now, 0.5), Duration::ZERO, "the network switch");
+        for (o, err, what) in [
+            (SessionOutcome::default(), true, "no traffic"),
+            (worked(Duration::from_millis(300)), true, "stood 0.3 s: a line that passes one frame and dies"),
+            (worked(Duration::from_secs(30)), false, "ended without an error: settings saved unchanged"),
+            (SessionOutcome { rejected: Some("ERR device blocked".into()), ..worked(Duration::from_secs(30)) }, true, "refused"),
+            (SessionOutcome { closed_by_relay: true, ..worked(Duration::from_secs(30)) }, true, "closed by the relay"),
+        ] {
+            let mut r = Recovery::default();
+            assert_eq!(r.next_wait(&o, err, now, 0.5), RECONNECT_DELAY, "{what}: the plain 5 s");
+        }
+    }
+
+    /// A session that hangs - building or running - ends on a change of
+    /// network; a change from before it started does not end it; a session
+    /// that ends by itself gives its own result (builds 186, 187; review of
+    /// 186: that the change fires was seen by no test).
+    #[tokio::test]
+    async fn a_change_of_network_ends_a_session_even_while_it_is_built() {
+        let (tx, mut rx) = watch::channel(0_u64);
+        // A session that never ends, and a change while it runs.
+        let hanging = std::future::pending::<Result<(), String>>();
+        let change = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            tx.send_modify(|n| *n += 1);
+        };
+        let ((result, switched), ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(until_network_switch(hanging, &mut rx), change)
+        })
+        .await
+        .expect("a change of network must end a hanging session");
+        assert!(switched);
+        assert_eq!(result, Err("the device's network changed".to_string()));
+        // A change from before the session, marked seen: it runs on that network.
+        tx.send_modify(|n| *n += 1);
+        rx.borrow_and_update();
+        let ends = async { Ok::<(), String>(()) };
+        assert_eq!(until_network_switch(ends, &mut rx).await, (Ok(()), false));
+        // A session that fails by itself keeps its own error.
+        let fails = async { Err::<(), String>("os error 103".to_string()) };
+        assert_eq!(until_network_switch(fails, &mut rx).await, (Err("os error 103".to_string()), false));
+    }
+
+    /// A session ended because the device changed networks starts again at
+    /// once, however short it stood - and a new network that is not up yet
+    /// walks the ladder (build 186).
+    #[test]
+    fn a_change_of_network_starts_a_new_session_at_once() {
+        let now = Instant::now();
+        let mut r = Recovery::default();
+        let changed = SessionOutcome { network_changed: true, ..Default::default() };
+        assert_eq!(r.next_wait(&changed, true, now, 0.5), Duration::ZERO, "no traffic yet: still at once");
+        let local = SessionOutcome { failed_locally: true, ..Default::default() };
+        assert_eq!(r.next_wait(&local, true, now, 0.5), LOCAL_RETRY_LADDER[0], "the new network not up yet");
+    }
+
+    /// After a working session broke, attempts that fail inside the device walk
+    /// the ladder, then the 5 s; a failure that reached the relay leaves it at once.
+    #[test]
+    fn local_failures_after_a_switch_walk_the_ladder() {
+        let now = Instant::now();
+        let local = SessionOutcome { failed_locally: true, ..Default::default() };
+        let mut r = Recovery::default();
+        assert_eq!(r.next_wait(&worked(Duration::from_secs(30)), true, now, 0.5), Duration::ZERO);
+        for step in LOCAL_RETRY_LADDER {
+            assert_eq!(r.next_wait(&local, true, now, 0.5), step);
+        }
+        let last = LOCAL_RETRY_LADDER[LOCAL_RETRY_LADDER.len() - 1];
+        assert_eq!(r.next_wait(&local, true, now, 0.5), last, "stays on the last step while local");
+        assert_eq!(r.next_wait(&local, true, now, 0.5), last);
+        let at_relay = SessionOutcome::default();
+        assert_eq!(r.next_wait(&at_relay, true, now, 0.5), RECONNECT_DELAY, "until a failure reaches the relay");
+
+        let mut r = Recovery::default();
+        r.next_wait(&worked(Duration::from_secs(30)), true, now, 0.5);
+        assert_eq!(r.next_wait(&local, true, now, 0.5), LOCAL_RETRY_LADDER[0]);
+        assert_eq!(r.next_wait(&at_relay, true, now, 0.5), RECONNECT_DELAY, "reached the relay: the 5 s");
+        assert_eq!(r.next_wait(&local, true, now, 0.5), RECONNECT_DELAY, "the ladder is left");
+
+        let mut fresh = Recovery::default();
+        assert_eq!(fresh.next_wait(&local, true, now, 0.5), RECONNECT_DELAY, "no ladder without a session that broke");
+    }
+
+    /// A relay name that does not resolve marks the attempt as failed locally -
+    /// the path a phone takes when the new network has no DNS yet. `.invalid` is
+    /// reserved and never resolves (RFC 6761), with or without a network.
+    #[test]
+    fn an_unresolvable_relay_name_is_a_local_failure() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let config = RelayConfig {
+                enabled: true,
+                url: "wss://relay.invalid/ws".into(),
+                station: "ST".into(),
+                token: "t".into(),
+                role: RelayRole::Client,
+                instance: String::new(),
+                name: String::new(),
+                udp_port: None,
+                quic: false,
+            };
+            let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+            let (_ctx, mut config_rx) = watch::channel(config.clone());
+            let (_stx, mut shutdown_rx) = watch::channel(false);
+            let mut outcome = SessionOutcome::default();
+            let r = run_connection(&config, &status, 0, &mut config_rx, &mut shutdown_rx, None, None, None, &mut outcome).await;
+            assert!(r.is_err());
+            assert!(outcome.failed_locally, "{r:?}");
+            assert!(!outcome.carried_traffic);
+        });
+    }
+
+    /// The local kinds of I/O error, and one that is not.
+    #[test]
+    fn a_local_failure_is_told_from_the_rest() {
+        use std::io::{Error, ErrorKind};
+        assert!(is_local_failure(&Error::from(ErrorKind::NetworkUnreachable)));
+        assert!(is_local_failure(&Error::from(ErrorKind::HostUnreachable)));
+        assert!(is_local_failure(&Error::from(ErrorKind::NetworkDown)));
+        assert!(is_local_failure(&Error::from(ErrorKind::AddrNotAvailable)), "the old network's source address gone");
+        assert!(!is_local_failure(&Error::from(ErrorKind::ConnectionRefused)), "the relay host said no");
+    }
+
+    /// A connect that failed with an I/O error of no local kind still counts as
+    /// local when the relay's name does not resolve now - the lookup failure
+    /// inside the connect (build 141). A name that resolves, with the same
+    /// error, does not: then the relay failed. A local kind is local either way.
+    #[test]
+    fn a_connect_that_cannot_find_the_relay_failed_locally() {
+        use std::io::{Error, ErrorKind};
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let no_kind = Error::other("failed to lookup address information");
+            assert!(connect_failed_locally(&no_kind, "wss://relay.invalid/ws").await, "the name does not resolve");
+            assert!(!connect_failed_locally(&no_kind, "ws://127.0.0.1/ws").await, "it resolves: the relay failed");
+            let refused = Error::from(ErrorKind::ConnectionRefused);
+            assert!(!connect_failed_locally(&refused, "ws://127.0.0.1/ws").await, "the relay host said no");
+            let unreachable = Error::from(ErrorKind::NetworkUnreachable);
+            assert!(connect_failed_locally(&unreachable, "ws://127.0.0.1/ws").await, "a local kind is local");
+        });
+    }
+
+    #[test]
+    fn the_relay_host_and_port_are_read_from_its_url() {
+        assert_eq!(relay_host_port("wss://relay.example:443/x"), Some(("relay.example".into(), 443)));
+        assert_eq!(relay_host_port("wss://relay.example/x"), Some(("relay.example".into(), 443)));
+        assert_eq!(relay_host_port("ws://10.0.0.1/x"), Some(("10.0.0.1".into(), 80)));
+    }
+
+    /// The wiring, which no test drives (there is no test relay): both ways the
+    /// relay ends a connection mark it, and the loop waits what the decision
+    /// says. That they are there, not that they run - the proof is the log line
+    /// "reconnecting at once" in a measurement over a network switch.
+    #[test]
+    fn the_loop_and_the_relay_side_endings_use_the_decision() {
+        let src = include_str!("lib.rs");
+        let body = &src[..src.find("#[cfg(test)]
+mod tests").unwrap()];
+        assert_eq!(body.matches("outcome.closed_by_relay = true;").count(), 2, "Close and end of stream");
+        assert_eq!(body.matches("recovery.next_wait(&outcome").count(), 1);
+        // The connect's own failure is judged by the rule that also looks the
+        // name up again (build 141), not by the kind of error alone.
+        assert_eq!(body.matches("connect_failed_locally(io, &config.url).await").count(), 1);
+        assert_eq!(body.matches("outcome.mark_traffic();").count(), 3, "the three receive paths");
+        assert!(!body.contains("sleep(RECONNECT_DELAY)"), "no wait outside the decision");
+        assert_eq!(body.matches("tokio::time::sleep(wait)").count(), 1, "the loop waits what was decided");
+        // The two log lines named before the build (working rule 11): the field
+        // proof of this patch, so their disappearing should not go unnoticed.
+        assert!(body.contains("Relay: reconnecting at once - the session carried traffic and ended on a transport error"));
+        assert!(body.contains("Relay: the network is not up yet - trying again in {} ms"));
+        assert!(body.contains("Relay: the network came up - trying now"));
+        // The phone's network signal ends a ladder wait, and is read as seen at
+        // the start of every attempt (build 98).
+        assert_eq!(body.matches("network_came_up(&mut network_rx, waiting_for_the_network)").count(), 1);
+        assert_eq!(body.matches("network_rx.borrow_and_update();").count(), 1);
+        // A change of network ends a running session and is read as seen at
+        // the start of every attempt (build 186).
+        // Seen before the session, and the session against it (review of 186,
+        // W5b: after the session a change during the wait went unseen).
+        assert_eq!(body.matches("change_rx.borrow_and_update();").count(), 1);
+        let order = body.find("change_rx.borrow_and_update();").unwrap();
+        assert!(order < body.find("let mut outcome = SessionOutcome::default();").unwrap());
+        assert!(order < body.find("let (run_result, switched) = until_network_switch(").unwrap());
+        assert_eq!(body.matches("let (run_result, switched) = until_network_switch(").count(), 1);
+        assert_eq!(body.matches("outcome.network_changed = switched;").count(), 1);
+        assert!(body.contains("Relay: the device's network changed - ending this session to start one on the new network"));
+        assert!(body.contains("Relay: reconnecting at once on the new network"));
+    }
+
+    /// Only a ladder wait - the network was not there - is one a network coming
+    /// up may end: not the plain 5 s, and not before a session broke.
+    #[test]
+    fn only_the_ladder_waits_for_the_network() {
+        let now = Instant::now();
+        let mut r = Recovery::default();
+        let local = SessionOutcome { failed_locally: true, ..Default::default() };
+        r.next_wait(&local, true, now, 0.5);
+        assert!(!r.waits_for_the_network(), "no ladder without a session that broke");
+        let mut stood = SessionOutcome::default();
+        stood.traffic_since = Some(now - Duration::from_secs(30));
+        assert_eq!(r.next_wait(&stood, true, now, 0.5), Duration::ZERO);
+        assert_eq!(r.next_wait(&local, true, now, 0.5), LOCAL_RETRY_LADDER[0]);
+        assert!(r.waits_for_the_network(), "a ladder step");
+        r.next_wait(&SessionOutcome::default(), true, now, 0.5);
+        assert!(!r.waits_for_the_network(), "the plain 5 s");
+    }
+
+    /// The signal ends a wait only while waiting for the network, and a signal
+    /// that came before is not taken for a new one.
+    #[tokio::test]
+    async fn a_network_coming_up_ends_only_a_ladder_wait() {
+        let (tx, mut rx) = watch::channel(0_u64);
+        let short = Duration::from_millis(50);
+        tx.send_modify(|n| *n += 1);
+        rx.borrow_and_update();
+        assert!(tokio::time::timeout(short, network_came_up(&mut rx, true)).await.is_err(), "an old signal");
+        tx.send_modify(|n| *n += 1);
+        assert!(tokio::time::timeout(short, network_came_up(&mut rx, false)).await.is_err(), "not waiting");
+        assert!(tokio::time::timeout(short, network_came_up(&mut rx, true)).await.is_ok(), "a new signal");
+        drop(tx);
+        assert!(tokio::time::timeout(short, network_came_up(&mut rx, true)).await.is_err(), "no sender: never");
+    }
+
+    /// The spread keeps the wait within 4 to 6 s, and never at zero.
+    #[test]
+    fn the_spread_stays_around_five_seconds() {
+        let o = SessionOutcome::default();
+        let now = Instant::now();
+        assert_eq!(Recovery::default().next_wait(&o, true, now, 0.0), Duration::from_secs(4));
+        assert!(Recovery::default().next_wait(&o, true, now, 0.999) < Duration::from_secs(6));
+        assert!(Recovery::default().next_wait(&o, true, now, 0.999) > Duration::from_millis(5_990));
+        for _ in 0..50 {
+            let s = spread_now();
+            assert!((0.0..1.0).contains(&s), "{s}");
+        }
+    }
+
     use super::*;
+
+    /// Without a relay session there is no transport to show.
+    ///
+    /// The fallback flag lives in the status handle, which outlives a session -
+    /// and the operator's own disconnect. Only the session's `fallback_requested`
+    /// started again at false, so a session that ended in fallback left the
+    /// indicator on "TCP fallback" until the app was restarted, while the audio ran
+    /// over UDP (field, 2026-09-28: from 08:36 to 11:36, through a manual reconnect).
+    ///
+    /// Cleared where the status says there is no session - in `set_status`, like the
+    /// RTT and the probe beside it - rather than at the start of the next one: in
+    /// between, while reconnecting, after the operator's own disconnect, or with the
+    /// relay switched off, Android showed "TCP fallback" on a disconnected screen
+    /// (reviewers, round 43). And a test reaches `set_status`; a call inside
+    /// `run_connection` it could not.
+    #[test]
+    fn no_session_means_no_fallback_shown() {
+        let h = RelayStatusHandle {
+            state: Arc::new(Mutex::new(RelayStatus::disabled())),
+        };
+        let fallback = |h: &RelayStatusHandle| h.snapshot().transport_fallback;
+        // Inside a session a status change leaves it alone.
+        set_relay_transport(&h, true);
+        set_status(&h, RelayPhase::Authenticated, "up".into(), true, true, None, 1);
+        assert!(fallback(&h), "a status change inside a session must not clear it");
+        // Nor the peer timeout: still connected, the peer gone, audio still on wss.
+        // The RTT beside it clears on `peer_seen` too; this one must not (reviewer,
+        // round 44), so a tidy-up that makes the two conditions alike fails here.
+        set_status(&h, RelayPhase::WaitingForPeer, "peer gone".into(), true, false, None, 1);
+        assert!(fallback(&h), "the peer timeout is inside the session");
+        // The session ends: every state without one clears it.
+        for phase in [RelayPhase::Error, RelayPhase::Connecting, RelayPhase::Disabled] {
+            set_relay_transport(&h, true);
+            set_status(&h, phase.clone(), "down".into(), false, false, None, 1);
+            assert!(!fallback(&h), "{phase:?} without a session still showed the fallback");
+            // A second time, with nothing left to clear.
+            set_status(&h, phase, "down".into(), false, false, None, 1);
+            assert!(!fallback(&h));
+        }
+    }
+
+    /// A panic in the relay thread leaves no session behind, and says so.
+    ///
+    /// Nothing wrote the status after one: it stayed on whatever the last session
+    /// had set - connected, and the fallback on if it was - for good, on both
+    /// screens (reviewer, round 44).
+    #[test]
+    fn a_panicking_monitor_leaves_no_session_on_screen() {
+        let h = RelayStatusHandle {
+            state: Arc::new(Mutex::new(RelayStatus::disabled())),
+        };
+        set_status(&h, RelayPhase::Authenticated, "up".into(), true, true, None, 1);
+        set_relay_transport(&h, true);
+        assert!(run_reporting_a_panic(&h, || panic!("a fault somewhere in the session")));
+        let s = h.snapshot();
+        assert_eq!(s.phase, RelayPhase::Error);
+        assert!(!s.connected, "a dead monitor still showed a connection");
+        assert!(!s.transport_fallback, "a dead monitor still showed the fallback");
+        assert!(s.message.contains("a fault somewhere in the session"), "{}", s.message);
+        // A formatted panic carries a String, not a &str (reviewer, round 45).
+        let n = 7;
+        assert!(run_reporting_a_panic(&h, || panic!("fault number {n}")));
+        assert!(h.snapshot().message.contains("fault number 7"), "{}", h.snapshot().message);
+        // And a body that returns normally changes nothing.
+        set_status(&h, RelayPhase::Authenticated, "up".into(), true, true, None, 1);
+        assert!(!run_reporting_a_panic(&h, || {}));
+        assert!(h.snapshot().connected);
+    }
+
+    /// A stop handle knows whether it has been stopped, and says so in both
+    /// directions.
+    ///
+    /// This is what the Android bridge lacked. It keeps the previous monitor's
+    /// handle in a static slot to stop it if it is still running, but the slot
+    /// is never emptied on a clean shutdown - so every restart found a stale
+    /// handle and warned "a relay monitor was still running" about one that had
+    /// stopped a second earlier. Two restarts in the field log of 2026-09-24,
+    /// two untrue warnings.
+    #[test]
+    fn a_stop_handle_knows_whether_it_has_been_stopped() {
+        let (tx, _rx) = watch::channel(false);
+        let h = RelayStopHandle { shutdown_tx: tx };
+
+        assert!(!h.is_stopped(), "a fresh handle belongs to a running monitor");
+        h.stop();
+        assert!(h.is_stopped(), "and it notices its own stop");
+
+        // Stopping twice is documented as harmless and must stay that way: the
+        // bridge calls stop() on the previous handle whatever the answer above.
+        h.stop();
+        assert!(h.is_stopped());
+    }
+
+    /// Two handles of the same monitor recognise each other; handles of two
+    /// monitors do not.
+    ///
+    /// This is what lets the bridge empty its slot safely. Emptying it on every
+    /// shutdown is wrong in exactly one case, and it is the case the slot was
+    /// built for: on a network switch the next bridge has already put its own
+    /// handle there, and throwing that away would leave two live monitors
+    /// evicting each other with nothing watching.
+    #[test]
+    fn stop_handles_know_whether_they_belong_to_the_same_monitor() {
+        let (tx_a, _rx_a) = watch::channel(false);
+        let (tx_b, _rx_b) = watch::channel(false);
+        let a = RelayStopHandle { shutdown_tx: tx_a };
+        let b = RelayStopHandle { shutdown_tx: tx_b };
+
+        assert!(a.same_monitor(&a.clone()), "a clone is the same monitor");
+        assert!(!a.same_monitor(&b), "two monitors are not");
+        assert!(!b.same_monitor(&a), "and it does not depend on the order");
+    }
+
+    /// Handles taken from a REAL monitor through `stop_handle()` belong to it, and
+    /// stopping through one reaches the monitor itself.
+    ///
+    /// Every other test here builds its handles with a struct literal, so none of
+    /// them ever called `stop_handle()` - and a reviewer made it hand out a fresh
+    /// channel instead of a clone with all 1205 tests still green (2026-09-25).
+    /// That one line would undo three builds at once: `clear_slot_if_mine` never
+    /// finds its own handle, `is_stopped()` stays false, and worst, the duplicate
+    /// guard's `previous.stop()` sends on a dead channel and stops nothing - the
+    /// exact failure that guard exists for. My own mutations were all on the
+    /// condition, none on what the condition compares.
+    #[test]
+    fn stop_handle_hands_out_the_monitors_own_channel() {
+        let cfg = RelayConfig {
+            enabled: false,
+            url: String::new(),
+            station: String::new(),
+            token: String::new(),
+            role: RelayRole::Client,
+            instance: String::new(),
+            name: String::new(),
+            udp_port: None,
+            quic: false,
+        };
+        let a = RelayMonitor::start_threaded(cfg.clone());
+        let b = RelayMonitor::start_threaded(cfg);
+
+        let a1 = a.stop_handle();
+        let a2 = a.stop_handle();
+        assert!(a1.same_monitor(&a2), "two handles of one monitor are the same monitor");
+        assert!(!a1.same_monitor(&b.stop_handle()), "a handle of another monitor is not");
+
+        assert!(!*a.shutdown_tx.borrow(), "a fresh monitor has not been told to stop");
+        a1.stop();
+        assert!(
+            *a.shutdown_tx.borrow(),
+            "stopping through a handle reaches the monitor's OWN channel"
+        );
+        assert!(a2.is_stopped(), "and every other handle of it sees that");
+        assert!(!b.stop_handle().is_stopped(), "the other monitor is untouched");
+    }
+
+    /// Dropping a monitor stops it, and its handles see that.
+    ///
+    /// The bridge never calls `stop()` on its own monitor: it takes it out of
+    /// its slot and lets it go out of scope, so `Drop` is the only stop that
+    /// path has. A reviewer took the stop signal out of `Drop` with 47 tests
+    /// still green (2026-09-25): the monitor thread would then run on after
+    /// every disconnect, and `is_stopped()` would tell the next start that a
+    /// live monitor is still there.
+    #[test]
+    fn dropping_a_monitor_stops_it() {
+        let cfg = RelayConfig {
+            enabled: false,
+            url: String::new(),
+            station: String::new(),
+            token: String::new(),
+            role: RelayRole::Client,
+            instance: String::new(),
+            name: String::new(),
+            udp_port: None,
+            quic: false,
+        };
+        let m = RelayMonitor::start_threaded(cfg);
+        let h = m.stop_handle();
+        assert!(!h.is_stopped(), "a running monitor is not stopped");
+        drop(m);
+        assert!(h.is_stopped(), "dropping the monitor stops it");
+    }
+
+    /// The shutdown path empties the slot only when the slot is still its own.
+    ///
+    /// All three states, because each one is a different mistake:
+    /// - its own handle: must be emptied, or the next start finds a stale one
+    ///   (the untrue warning of the 2026-09-24 field log);
+    /// - someone else's: must be KEPT - that is a newer bridge after a network
+    ///   switch, and dropping it leaves two live monitors unwatched;
+    /// - nothing: must stay nothing.
+    #[test]
+    fn the_slot_is_emptied_only_when_it_holds_this_monitor() {
+        let (tx_mine, _r1) = watch::channel(false);
+        let (tx_next, _r2) = watch::channel(false);
+        let mine = RelayStopHandle { shutdown_tx: tx_mine };
+        let next = RelayStopHandle { shutdown_tx: tx_next };
+
+        let mut slot = Some(mine.clone());
+        assert!(RelayStopHandle::clear_slot_if_mine(&mut slot, &mine));
+        assert!(slot.is_none(), "our own stale handle goes");
+
+        let mut slot = Some(next.clone());
+        assert!(!RelayStopHandle::clear_slot_if_mine(&mut slot, &mine));
+        assert!(
+            slot.as_ref().is_some_and(|h| h.same_monitor(&next)),
+            "a newer bridge's handle must survive our shutdown"
+        );
+
+        let mut slot: Option<RelayStopHandle> = None;
+        assert!(!RelayStopHandle::clear_slot_if_mine(&mut slot, &mine));
+        assert!(slot.is_none());
+    }
+
+    /// A clone reports the same thing, because the bridge stores a clone while
+    /// the monitor keeps its own.
+    #[test]
+    fn a_cloned_stop_handle_sees_the_same_stop() {
+        let (tx, _rx) = watch::channel(false);
+        let h = RelayStopHandle { shutdown_tx: tx };
+        let copy = h.clone();
+
+        assert!(!copy.is_stopped());
+        h.stop();
+        assert!(copy.is_stopped(), "stopping one is stopping the monitor");
+    }
 
     #[test]
     fn a_relay_that_is_only_written_down_is_not_configured() {
@@ -2781,6 +4274,32 @@ mod tests {
         assert!(!w.is_duplicate(1, &frame(1, 1)));
         // And within the new run a genuine repeat is still caught.
         assert!(w.is_duplicate(1, &frame(1, 1)), "repeats inside the new run still drop");
+    }
+
+    #[test]
+    fn a_keepalive_round_carries_the_token_it_is_given() {
+        // The rotation path hands the NEW token to the same round the timer uses;
+        // what goes out must carry exactly that token, one datagram per target,
+        // with a fresh sequence number each.
+        let new_tok = "cd".repeat(32);
+        let mut seq = 10u32;
+
+        let (client, kind) =
+            keepalive_datagrams(RelayRole::Client, &HashSet::new(), &new_tok, &mut seq);
+        assert_eq!(kind, KeepaliveKind::Client);
+        assert_eq!(client.len(), 1);
+        assert_eq!(client[0], encode_tlu1(0, 11, &new_tok, &[]));
+
+        let bound: HashSet<u8> = [3u8, 1].into_iter().collect();
+        let (station, kind) = keepalive_datagrams(RelayRole::Station, &bound, &new_tok, &mut seq);
+        assert_eq!(kind, KeepaliveKind::Beacons);
+        assert_eq!(station, vec![encode_tlu1(1, 12, &new_tok, &[]), encode_tlu1(3, 13, &new_tok, &[])]);
+
+        let (idle, kind) =
+            keepalive_datagrams(RelayRole::Station, &HashSet::new(), &new_tok, &mut seq);
+        assert_eq!(kind, KeepaliveKind::MappingOnly);
+        assert_eq!(idle, vec![encode_tlu1(UDP_MAPPING_KEEPALIVE_ID, 14, &new_tok, &[])]);
+        assert_eq!(seq, 14);
     }
 
     #[test]
@@ -3153,6 +4672,75 @@ mod tests {
         assert!(!audio_absent_while_path_alive(true, Duration::from_secs(60)));
     }
 
+    /// Silence from a peer that is not there yet is not evidence.
+    ///
+    /// The window used to count from the moment the relay tunnel stood, and the
+    /// peer handshake lands after that - six seconds after, in the field log of
+    /// 2026-09-23. So every fresh connect declared "UDP blocked" two seconds in,
+    /// before anything could have sent, and the owner saw the fallback indicator
+    /// on every start.
+    #[test]
+    fn without_a_peer_there_is_nothing_to_accuse() {
+        // No peer yet, and the window has long passed: still not a stall.
+        assert!(!downlink_stalled(
+            None,
+            None,
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+        // The peer arrives: now the clock starts, and inside the window we wait.
+        assert!(!downlink_stalled(
+            Some(FALLBACK_CONNECT_TIMEOUT - Duration::from_millis(1)),
+            None,
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+        // Past it with a peer present and still nothing down: now it counts.
+        assert!(downlink_stalled(
+            Some(FALLBACK_CONNECT_TIMEOUT),
+            None,
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+        // And a peerless client whose path HAS delivered still judges on the gap -
+        // the second arm must not be affected by the first.
+        assert!(downlink_stalled(
+            None,
+            Some(Instant::now() - FALLBACK_DOWNLINK_STALL),
+            FALLBACK_CONNECT_TIMEOUT,
+            FALLBACK_DOWNLINK_STALL
+        ));
+    }
+
+    /// A station with no clients must still put one datagram on the wire.
+    ///
+    /// This is the fault of 2026-09-23, and it is invisible from either endpoint:
+    /// the station believed it was beaconing, the relay believed it was forwarding,
+    /// and the client received nothing for four minutes. The cause was silence
+    /// while idle - the NAT mapping expired, the station came back on a new source
+    /// port, and the relay dropped every datagram against a stale source binding
+    /// until the token rotated.
+    #[test]
+    fn an_idle_station_keeps_its_mapping_open() {
+        // No clients: exactly one datagram, to an id no client can hold.
+        let none: HashSet<u8> = HashSet::new();
+        assert_eq!(station_udp_targets(&none), vec![UDP_MAPPING_KEEPALIVE_ID]);
+        assert_eq!(
+            station_udp_targets(&none).len(),
+            1,
+            "silence is what broke it; one datagram is the whole point"
+        );
+
+        // With clients: one beacon each and NOT the keepalive - the beacon already
+        // keeps the mapping open, and an extra datagram would be waste.
+        let some: HashSet<u8> = [3u8, 1, 2].into_iter().collect();
+        assert_eq!(station_udp_targets(&some), vec![1, 2, 3]);
+        assert!(!station_udp_targets(&some).contains(&UDP_MAPPING_KEEPALIVE_ID));
+
+        // The id itself must stay outside what the relay hands out (1..=254).
+        assert_eq!(UDP_MAPPING_KEEPALIVE_ID, 0);
+    }
+
     /// The entry, which for six rounds had no test at all.
     ///
     /// The one that matters is the third: a beacon at its normal spacing must NOT read
@@ -3164,7 +4752,7 @@ mod tests {
 
         // 1. nothing has ever arrived, still inside the connect window: wait.
         assert!(!downlink_stalled(
-            Duration::from_millis(500),
+            Some(Duration::from_millis(500)),
             None,
             FALLBACK_CONNECT_TIMEOUT,
             FALLBACK_DOWNLINK_STALL
@@ -3172,7 +4760,7 @@ mod tests {
 
         // 2. nothing has ever arrived and the connect window has passed: UDP is blocked.
         assert!(downlink_stalled(
-            FALLBACK_CONNECT_TIMEOUT + Duration::from_millis(1),
+            Some(FALLBACK_CONNECT_TIMEOUT + Duration::from_millis(1)),
             None,
             FALLBACK_CONNECT_TIMEOUT,
             FALLBACK_DOWNLINK_STALL
@@ -3182,7 +4770,7 @@ mod tests {
         //    channel switched off. This must not be a stall, and nothing else in the
         //    workspace says so.
         assert!(!downlink_stalled(
-            Duration::from_secs(60),
+            Some(Duration::from_secs(60)),
             Some(Instant::now() - beacon_interval),
             FALLBACK_CONNECT_TIMEOUT,
             FALLBACK_DOWNLINK_STALL
@@ -3190,7 +4778,7 @@ mod tests {
 
         // 4. the beacons themselves stopped: the path is gone.
         assert!(downlink_stalled(
-            Duration::from_secs(60),
+            Some(Duration::from_secs(60)),
             Some(Instant::now() - FALLBACK_DOWNLINK_STALL - Duration::from_millis(1)),
             FALLBACK_CONNECT_TIMEOUT,
             FALLBACK_DOWNLINK_STALL
@@ -3258,7 +4846,7 @@ mod tests {
     fn tlt1_roundtrip_preserves_payload() {
         let payload = b"\xaa\x00\x01 the quick brown TL frame \xff\x00";
         let frame = encode_tlt1(0, payload);
-        let (client_id, out) = parse_tlt1(&frame).expect("moet parsen");
+        let (client_id, out) = parse_tlt1(&frame).expect("must parse");
         assert_eq!(client_id, 0);
         assert_eq!(out, payload);
     }
@@ -3267,12 +4855,12 @@ mod tests {
     fn tlt1_is_distinct_from_tlb1_probe() {
         // A TLB1 probe must NOT parse as TLT1, and vice versa.
         let probe = binary_probe_frame(BINARY_KIND_PING, RelayRole::Station, 7, BINARY_PROBE_LEN);
-        assert!(parse_tlt1(&probe).is_none(), "TLB1-probe parseerde als TLT1");
+        assert!(parse_tlt1(&probe).is_none(), "a TLB1 probe parsed as TLT1");
 
         let tunnel = encode_tlt1(0, b"hello");
         assert!(
             parse_binary_probe(&tunnel).is_none(),
-            "TLT1-tunnel parseerde als TLB1-probe"
+            "a TLT1 tunnel parsed as a TLB1 probe"
         );
     }
 
@@ -3294,7 +4882,7 @@ mod tests {
             let s = sentinel_for_client_id(id);
             assert_eq!(client_id_from_sentinel(s), id, "roundtrip failed for id {id}");
         }
-        // client 0 -> 203.0.113.1 (matches server tracked_socket::relay_sentinel_for(0)).
+        // client 0 -> 203.0.113.1 (the classic tunnel's convention; see "Relay sentinel convention" above).
         assert_eq!(sentinel_for_client_id(0).ip().to_string(), "203.0.113.1");
         assert_eq!(sentinel_for_client_id(1).ip().to_string(), "203.0.113.2");
     }
@@ -3302,7 +4890,7 @@ mod tests {
     #[test]
     fn tlt1_empty_payload_roundtrips() {
         let frame = encode_tlt1(3, b"");
-        let (id, out) = parse_tlt1(&frame).expect("leeg payload moet parsen");
+        let (id, out) = parse_tlt1(&frame).expect("an empty payload must parse");
         assert_eq!(id, 3);
         assert!(out.is_empty());
     }
@@ -3359,5 +4947,747 @@ mod chat_ticket_tests {
     #[test]
     fn an_odd_payload_length_is_refused() {
         assert!(parse_chat_ticket("chat_ticket=abc.abcd").is_none());
+    }
+}
+
+/// QUIC via the relay (phase 3b): what the monitor does in that mode, against a
+/// relay played over a real ws connection on loopback.
+#[cfg(test)]
+mod quic_mode {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    fn quic_config(url: String, udp_port: u16) -> RelayConfig {
+        RelayConfig {
+            enabled: true,
+            url,
+            station: "ST".into(),
+            token: "secret".into(),
+            role: RelayRole::Client,
+            instance: "inst".into(),
+            name: "Phone One".into(),
+            udp_port: Some(udp_port),
+            quic: true,
+        }
+    }
+
+    /// The relay's UDP port, to see whether anything arrives there.
+    async fn relay_udp() -> (UdpSocket, u16) {
+        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = sock.local_addr().unwrap().port();
+        (sock, port)
+    }
+
+    /// One session of a relay: answers the hello with a token, pushes a rotation,
+    /// then sends `peer` as the peer's hello - and reports what it got. With
+    /// `close`, it then ends the session from its side.
+    async fn play_relay(peer: &'static str) -> (String, mpsc::UnboundedReceiver<Message>) {
+        play_relay_then(peer, false).await
+    }
+
+    async fn play_relay_then(peer: &'static str, close: bool) -> (String, mpsc::UnboundedReceiver<Message>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        let (seen_tx, seen_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let hello = read.next().await.unwrap().unwrap();
+            let _ = seen_tx.send(hello);
+            let first = "11".repeat(32);
+            write.send(Message::Text(format!("OK relay-ready udp_token={first}").into())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let second = "22".repeat(32);
+            write.send(Message::Text(format!("udp-token-rotate udp_token={second}").into())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            write.send(Message::Text(peer.into())).await.unwrap();
+            if close {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let _ = write.send(Message::Close(None)).await;
+                return;
+            }
+            while let Some(Ok(m)) = read.next().await {
+                let _ = seen_tx.send(m);
+            }
+        });
+        (url, seen_rx)
+    }
+
+    /// The TCP line through the monitor (build 144): in QUIC mode a TLT1 frame
+    /// from the relay reaches the route layer with its client id, a binary frame
+    /// that is no TLT1 does not, and a frame the route layer hands over goes out
+    /// on the wss connection as it is.
+    #[tokio::test]
+    async fn quic_mode_carries_the_tcp_line_both_ways() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        let (seen_tx, mut seen) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let _hello = read.next().await;
+            write.send(Message::Text(format!("OK relay-ready udp_token={}", "11".repeat(32)).into())).await.unwrap();
+            write.send(Message::Binary(b"XXXX not a tunnel frame".to_vec().into())).await.unwrap();
+            write.send(Message::Binary(tlt1_frame(4, b"hi").into())).await.unwrap();
+            while let Some(Ok(m)) = read.next().await {
+                let _ = seen_tx.send(m);
+            }
+        });
+        let (_udp, udp_port) = relay_udp().await;
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = quic_config(url, udp_port);
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, _grant_rx) = watch::channel(None);
+        let (mut line, mut line_monitor) = tcp_line();
+        let task = {
+            let status = status.clone();
+            tokio::spawn(async move {
+                let mut outcome = SessionOutcome::default();
+                run_connection(&config, &status, 1, &mut config_rx, &mut shutdown_rx, None, Some(&grant_tx), Some(&mut line_monitor), &mut outcome)
+                    .await
+            })
+        };
+        let got = tokio::time::timeout(Duration::from_secs(5), line.from_relay.recv()).await.unwrap().unwrap();
+        assert_eq!(got, (4, b"hi".to_vec()), "the TLT1 frame, with its client id");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(line.from_relay.try_recv().is_err(), "nothing that is no TLT1 reaches the line");
+        // The status is still the one the junk frame before it set (23 bytes):
+        // the TLT1 frame after it ended at the line.
+        let said = status.state.lock().unwrap().message.clone();
+        assert_eq!(said, "Relay peer traffic received: 23 bytes", "a TLT1 frame ends at the line, not in the status");
+        // Twice (rule 9): the second frame goes too once the first has left.
+        for word in [&b"up"[..], &b"up again"[..]] {
+            line.to_relay.send(tlt1_frame(0, word)).await.unwrap();
+            let out = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(Message::Binary(b)) = seen.recv().await {
+                        return b.to_vec();
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(out, tlt1_frame(0, word), "out on the wss connection as handed over");
+        }
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+    }
+
+    /// A QUIC monitor without a TCP line (a status monitor) drops a TLT1 frame
+    /// quietly: the relay can hand it a client id a TCP client had a moment
+    /// before, and each frame used to set the status line (review 144).
+    #[tokio::test]
+    async fn a_quic_monitor_without_a_line_drops_tlt1_quietly() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let _hello = read.next().await;
+            write.send(Message::Text(format!("OK relay-ready udp_token={}", "11".repeat(32)).into())).await.unwrap();
+            for _ in 0..3 {
+                write.send(Message::Binary(tlt1_frame(4, b"not for you").into())).await.unwrap();
+            }
+            while let Some(Ok(_)) = read.next().await {}
+        });
+        let (_udp, udp_port) = relay_udp().await;
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = quic_config(url, udp_port);
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, mut grant_rx) = watch::channel(None);
+        let task = {
+            let status = status.clone();
+            tokio::spawn(async move {
+                let mut outcome = SessionOutcome::default();
+                run_connection(&config, &status, 1, &mut config_rx, &mut shutdown_rx, None, Some(&grant_tx), None, &mut outcome).await
+            })
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.is_some())).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let said = status.state.lock().unwrap().message.clone();
+        assert!(!said.contains("peer traffic received"), "{said}");
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+    }
+
+    /// A burst on a free line loses nothing (build 147): a relay that reads,
+    /// twenty bursts of ten frames, and every frame arrives. Before, the next
+    /// frame of a burst was dropped whenever the loop had not yet chosen the
+    /// push of the one before it - 160 of 200 here, on a free line (field test
+    /// of build 146; the flood test below could not see it, it wants drops).
+    #[tokio::test]
+    async fn a_burst_on_a_free_line_loses_nothing() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        let (seen_tx, mut seen) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let _hello = read.next().await;
+            write.send(Message::Text(format!("OK relay-ready udp_token={}", "11".repeat(32)).into())).await.unwrap();
+            while let Some(Ok(m)) = read.next().await {
+                if let Message::Binary(_) = m {
+                    let _ = seen_tx.send(());
+                }
+            }
+        });
+        let (_udp, udp_port) = relay_udp().await;
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = quic_config(url, udp_port);
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, mut grant_rx) = watch::channel(None);
+        let (line, mut line_monitor) = tcp_line();
+        let task = {
+            let status = status.clone();
+            tokio::spawn(async move {
+                let mut outcome = SessionOutcome::default();
+                run_connection(&config, &status, 1, &mut config_rx, &mut shutdown_rx, None, Some(&grant_tx), Some(&mut line_monitor), &mut outcome)
+                    .await
+            })
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.is_some())).await.unwrap();
+        let mut sent = 0u64;
+        for _ in 0..20 {
+            for _ in 0..10 {
+                if line.to_relay.try_send(tlt1_frame(0, &[0x55; 300])).is_ok() {
+                    sent += 1;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let t0 = Instant::now();
+        let mut got = 0u64;
+        while got < sent && t0.elapsed() < Duration::from_secs(2) {
+            if tokio::time::timeout(Duration::from_millis(200), seen.recv()).await.is_ok_and(|m| m.is_some()) {
+                got += 1;
+            }
+        }
+        let dropped = line.dropped_out.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        assert_eq!(sent, 200, "the line took every frame");
+        assert_eq!((got, dropped), (200, 0), "every frame of a burst arrives on a free line");
+    }
+
+    /// A relay that stops reading does not stop the monitor (build 145): the
+    /// TCP line's frames are dropped while one is still on its way out, so the
+    /// loop goes on reading - here, TLT1 frames keep reaching the line while
+    /// the line out is flooded. Before, `write.send(..).await` stood still on a
+    /// full socket, and so did everything else (reviews 144).
+    #[tokio::test]
+    async fn a_relay_that_does_not_read_does_not_stop_the_monitor() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let _hello = read.next().await;
+            write.send(Message::Text(format!("OK relay-ready udp_token={}", "11".repeat(32)).into())).await.unwrap();
+            // From here on it never reads again - and keeps sending.
+            let _read = read;
+            for n in 0u32.. {
+                if write.send(Message::Binary(tlt1_frame(2, &n.to_le_bytes()).into())).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let (_udp, udp_port) = relay_udp().await;
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = quic_config(url, udp_port);
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, _grant_rx) = watch::channel(None);
+        let (mut line, mut line_monitor) = tcp_line();
+        let task = {
+            let status = status.clone();
+            tokio::spawn(async move {
+                let mut outcome = SessionOutcome::default();
+                run_connection(&config, &status, 1, &mut config_rx, &mut shutdown_rx, None, Some(&grant_tx), Some(&mut line_monitor), &mut outcome)
+                    .await
+            })
+        };
+        let flood = {
+            let out = line.to_relay.clone();
+            tokio::spawn(async move {
+                let frame = tlt1_frame(0, &[0x55; 1200]);
+                loop {
+                    let _ = out.try_send(frame.clone());
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+        // Over three seconds of flooding - long past any socket buffer on
+        // loopback - every frame from the relay still arrives in good time.
+        let t0 = Instant::now();
+        let mut last = Instant::now();
+        while t0.elapsed() < Duration::from_secs(3) {
+            let got = tokio::time::timeout(Duration::from_millis(500), line.from_relay.recv()).await;
+            assert!(got.is_ok(), "the monitor stopped reading after {:?} of flooding", t0.elapsed());
+            assert!(last.elapsed() < Duration::from_millis(500));
+            last = Instant::now();
+        }
+        flood.abort();
+        // And it bounded: frames were dropped rather than piled up in the
+        // wss side's buffer (review 145: without "one at a time" every test
+        // stayed green while that buffer grew).
+        assert!(line.dropped_out.load(std::sync::atomic::Ordering::Relaxed) > 0, "nothing dropped under the flood");
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+    }
+
+    /// In QUIC mode the monitor signs in with `proto=quic` (before `name=`, which
+    /// must stay last), publishes the session's grant - the relay's UDP port, the
+    /// token, the session - and the rotation as a new token in the same session,
+    /// and sends no TLT1 frame (no capability frame, no tunnel). And nothing over
+    /// UDP of its own: the relay binds a token to the first source it sees, and
+    /// that has to be the route layer's socket.
+    #[tokio::test]
+    async fn quic_mode_signs_in_and_publishes_the_grant() {
+        let (url, mut seen) = play_relay("TLR2 kind=hello role=station proto=quic").await;
+        let (udp, udp_port) = relay_udp().await;
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = quic_config(url, udp_port);
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, mut grant_rx) = watch::channel(None);
+        let task = {
+            let status = status.clone();
+            tokio::spawn(async move {
+                let mut outcome = SessionOutcome::default();
+                run_connection(&config, &status, 7, &mut config_rx, &mut shutdown_rx, None, Some(&grant_tx), None, &mut outcome).await
+            })
+        };
+        let hello = match tokio::time::timeout(Duration::from_secs(5), seen.recv()).await.unwrap().unwrap() {
+            Message::Text(t) => t.to_string(),
+            other => panic!("{other:?}"),
+        };
+        assert!(hello.contains(" proto=quic name=Phone One"), "proto before the free-form name: {hello}");
+
+        let first = tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.is_some())).await.unwrap().unwrap().unwrap();
+        assert_eq!(first.relay, SocketAddr::from(([127, 0, 0, 1], udp_port)), "the host of the url, the UDP port");
+        assert_eq!(first.token, [0x11; 32]);
+        assert_eq!(first.session, 7);
+        let second = tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.is_some_and(|g| g.token == [0x22; 32])))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.session, 7, "a rotation stays in its session");
+
+        // The peer's hello says QUIC too: no complaint.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_ne!(status.state.lock().unwrap().last_error.as_deref(), Some("form mismatch"));
+        // Past the library's own keepalive interval: nothing on the relay's UDP port.
+        let mut buf = [0u8; 64];
+        let heard = tokio::time::timeout(Duration::from_millis(1500), udp.recv_from(&mut buf)).await;
+        assert!(heard.is_err(), "the monitor sent UDP of its own in QUIC mode: {heard:?}");
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        while let Ok(m) = seen.try_recv() {
+            assert!(!matches!(m, Message::Binary(_)), "no TLT1 frame in QUIC mode: {m:?}");
+        }
+    }
+
+    /// A peer of the classic form (no `proto=quic`) against this QUIC side: the
+    /// screen says the other side runs an older version.
+    #[tokio::test]
+    async fn a_peer_of_the_other_form_is_named() {
+        mismatch_is_named("TLR2 kind=hello role=station", true, "runs an older version of ThetisLink").await;
+    }
+
+    /// And the other way round: a QUIC peer against this classic side (review
+    /// 118: the check had run in one direction).
+    #[tokio::test]
+    async fn a_quic_peer_is_named_on_the_classic_side() {
+        mismatch_is_named("TLR2 kind=hello role=station proto=quic", false, "runs a newer version of ThetisLink").await;
+    }
+
+    /// The relay's `udp-seen` line (phase 3c) lands in the grant of the session
+    /// as this side's public address, and it is relay infrastructure: no peer
+    /// traffic, so the status does not turn "peer online" on it.
+    #[tokio::test]
+    async fn the_public_address_the_relay_sees_goes_into_the_grant() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let _hello = read.next().await;
+            write.send(Message::Text(format!("OK relay-ready udp_token={}", "11".repeat(32)).into())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            write.send(Message::Text("udp-seen 203.0.113.77:40000".into())).await.unwrap();
+            while read.next().await.is_some() {}
+        });
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = quic_config(url, 4999);
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, mut grant_rx) = watch::channel(None);
+        let s = status.clone();
+        let task = tokio::spawn(async move {
+            let mut outcome = SessionOutcome::default();
+            run_connection(&config, &s, 3, &mut config_rx, &mut shutdown_rx, None, Some(&grant_tx), None, &mut outcome).await
+        });
+        let want: SocketAddr = "203.0.113.77:40000".parse().unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.map_or(false, |g| g.public.is_some())))
+            .await
+            .expect("the public address never reached the grant")
+            .unwrap()
+            .unwrap();
+        assert_eq!((got.public, got.session), (Some(want), 3), "this session's grant, with the address");
+        assert!(!status.state.lock().unwrap().peer_seen, "the relay's line read as the peer");
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+    }
+
+    /// A peer's frame that arrives before the relay's OK is no answer: the
+    /// relay puts the connection in the room before it sends the OK, so the
+    /// other side's status or probe can come first (review 124, measured). The
+    /// sign-in waits for the OK and the session runs - the public address still
+    /// reaches the grant - instead of reading the frame as a rejection.
+    #[tokio::test]
+    async fn a_peer_frame_before_the_ok_is_no_rejection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let _hello = read.next().await;
+            write.send(Message::Text("TLR2 kind=status role=station".into())).await.unwrap();
+            write.send(Message::Binary(vec![1u8, 2, 3, 4, 5].into())).await.unwrap();
+            write.send(Message::Text(format!("OK relay-ready udp_token={}", "11".repeat(32)).into())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            write.send(Message::Text("udp-seen 203.0.113.77:40000".into())).await.unwrap();
+            while read.next().await.is_some() {}
+        });
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = quic_config(url, 4999);
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, mut grant_rx) = watch::channel(None);
+        let s = status.clone();
+        let task = tokio::spawn(async move {
+            let mut outcome = SessionOutcome::default();
+            let result = run_connection(&config, &s, 1, &mut config_rx, &mut shutdown_rx, None, Some(&grant_tx), None, &mut outcome).await;
+            (result, outcome.rejected)
+        });
+        tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.map_or(false, |g| g.public.is_some())))
+            .await
+            .expect("the session never ran: the peer frame was read as the relay's answer")
+            .unwrap();
+        let _ = stx.send(true);
+        let (_, rejected) = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+        assert_eq!(rejected, None, "the peer frame was taken for a rejection");
+    }
+
+    /// The warning stays while the forms disagree: bare traffic from the peer
+    /// after its frame of the other form does not paint the status green again
+    /// (field test 2026-10-06: it flipped between red and green), and neither
+    /// does the answer to this side's binary probe, which goes out once a
+    /// second - so the test watches for longer than that (review 122: the probe
+    /// branch was run by no test).
+    #[tokio::test]
+    async fn the_form_warning_is_not_painted_over() {
+        let (probes_tx, mut probes_rx) = mpsc::unbounded_channel::<()>();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            let _hello = read.next().await;
+            write.send(Message::Text(format!("OK relay-ready udp_token={}", "11".repeat(32)).into())).await.unwrap();
+            write.send(Message::Text("TLR2 kind=hello role=station proto=quic".into())).await.unwrap();
+            for _ in 0..5 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                write.send(Message::Binary(vec![1u8, 2, 3, 4, 5].into())).await.unwrap();
+                write.send(Message::Text("not a peer frame".into())).await.unwrap();
+            }
+            // Answer every probe, as the peer would.
+            while let Some(Ok(m)) = read.next().await {
+                if let Message::Binary(data) = m {
+                    if let Some((BINARY_KIND_PING, seq)) = parse_binary_probe(&data) {
+                        let pong = binary_probe_frame(BINARY_KIND_PONG, RelayRole::Station, seq, data.len());
+                        let _ = write.send(Message::Binary(pong.into())).await;
+                        let _ = probes_tx.send(());
+                    }
+                }
+            }
+        });
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        let config = RelayConfig { quic: false, udp_port: None, ..quic_config(url, 4999) };
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let s = status.clone();
+        let task = tokio::spawn(async move {
+            let mut outcome = SessionOutcome::default();
+            run_connection(&config, &s, 1, &mut config_rx, &mut shutdown_rx, None, None, None, &mut outcome).await
+        });
+        // Sampled through the whole burst of traffic and a little after it.
+        let t0 = Instant::now();
+        let mut seen = false;
+        while t0.elapsed() < Duration::from_millis(1_700) {
+            {
+                let st = status.state.lock().unwrap();
+                if st.last_error.as_deref() == Some("form mismatch") {
+                    seen = true;
+                } else if seen {
+                    panic!("the warning was painted over: {:?} {}", st.phase, st.message);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(seen, "the warning never came");
+        assert!(probes_rx.try_recv().is_ok(), "no probe was answered in the window - the probe branch was not run");
+        let (phase, error) = {
+            let st = status.state.lock().unwrap();
+            (st.phase.clone(), st.last_error.clone())
+        };
+        assert_eq!((phase, error.as_deref()), (RelayPhase::Error, Some("form mismatch")));
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+    }
+
+    async fn mismatch_is_named(peer: &'static str, own_quic: bool, says: &str) {
+        let (url, _seen) = play_relay(peer).await;
+        let status = RelayStatusHandle { state: Arc::new(Mutex::new(RelayStatus::disabled())) };
+        // The classic side without UDP of its own: the frame is the point here.
+        let config = RelayConfig { quic: own_quic, udp_port: own_quic.then_some(4999), ..quic_config(url, 4999) };
+        let (_ctx, mut config_rx) = watch::channel(config.clone());
+        let (stx, mut shutdown_rx) = watch::channel(false);
+        let (grant_tx, _grant_rx) = watch::channel(None);
+        let s = status.clone();
+        let task = tokio::spawn(async move {
+            let mut outcome = SessionOutcome::default();
+            let grants = own_quic.then_some(&grant_tx);
+            run_connection(&config, &s, 1, &mut config_rx, &mut shutdown_rx, None, grants, None, &mut outcome).await
+        });
+        let t0 = Instant::now();
+        loop {
+            {
+                let st = status.state.lock().unwrap();
+                if st.last_error.as_deref() == Some("form mismatch") {
+                    assert_eq!(st.phase, RelayPhase::Error);
+                    assert!(st.message.contains(says), "{}", st.message);
+                    break;
+                }
+            }
+            assert!(t0.elapsed() < Duration::from_secs(5), "no mismatch said");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+    }
+
+    /// Every relay line this library reads is one the relay refuses to forward
+    /// from a peer: the word stands in `thetislink-relay` as a `LINE_` constant,
+    /// and that constant is in its `RELAY_LINES`. Two programs, so a test between
+    /// them (working rule 15; review 123).
+    #[test]
+    fn the_relay_refuses_every_line_this_library_reads() {
+        let relay = include_str!("../../thetislink-relay/src/main.rs");
+        let list = relay
+            .lines()
+            .find(|l| l.starts_with("const RELAY_LINES"))
+            .expect("the relay has its RELAY_LINES");
+        // The words this library reads, from its own source - every
+        // `const RELAY_<...>: &str = "<word>";` - not from a second list that
+        // could leave one out (review 124: such a list kept the suite green with
+        // udp-seen gone from both sides).
+        let words: Vec<&str> = include_str!("lib.rs")
+            .lines()
+            .filter(|l| l.starts_with("const RELAY_") && l.contains(": &str = \""))
+            .map(|l| l.split('"').nth(1).unwrap())
+            .collect();
+        assert!(words.len() >= 5, "the library's relay words were not found: {words:?}");
+        for word in words {
+            let decl = relay
+                .lines()
+                .find(|l| l.starts_with("const LINE_") && l.ends_with(&format!("= \"{word}\";")))
+                .unwrap_or_else(|| panic!("the relay has no LINE_ constant for {word:?}"));
+            let name = decl.trim_start_matches("const ").split(':').next().unwrap();
+            assert!(list.contains(name), "{name} ({word:?}) is not in the relay's RELAY_LINES");
+        }
+    }
+
+    /// The TLU1 header is defined twice: here (the apps) and in the relay on the
+    /// VPS (`thetislink-relay`, its own program). Since build 117 the QUIC
+    /// route layer's MTU ceiling counts on its length, so the two are compared:
+    /// the relay's source is read and its constants must be these (review 117).
+    #[test]
+    fn the_tlu1_header_matches_the_relay_on_the_vps() {
+        let relay = include_str!("../../thetislink-relay/src/main.rs");
+        for line in [
+            "const TLU1_MAGIC: &[u8; 4] = b\"TLU1\";",
+            "const TLU1_VERSION: u8 = 1;",
+            "const TLU1_TOKEN_LEN: usize = 32;",
+            "const TLU1_HEADER_LEN: usize = 4 + 1 + 1 + 1 + 4 + TLU1_TOKEN_LEN; // = 43",
+        ] {
+            assert!(relay.contains(line), "the relay on the VPS no longer says: {line}");
+        }
+        assert_eq!((&TLU1_MAGIC, TLU1_VERSION, TLU1_TOKEN_LEN, TLU1_HEADER_LEN), (b"TLU1", 1, 32, 43));
+    }
+
+    /// The monitor's grant follows its sessions: there while one stands, gone
+    /// (`None`) the moment it ends - its token goes with the connection.
+    #[test]
+    fn the_grant_is_withdrawn_when_the_session_ends() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let url = rt.block_on(async { play_relay_then("TLR2 kind=hello role=station proto=quic", true).await.0 });
+        let (grant_tx, mut grant_rx) = watch::channel(None);
+        let monitor = RelayMonitor::start_threaded_quic(quic_config(url, 4999), grant_tx, None);
+        rt.block_on(async {
+            let got = tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.is_some())).await.is_ok();
+            assert!(got, "a grant while the session stands");
+            let gone = tokio::time::timeout(Duration::from_secs(5), grant_rx.wait_for(|g| g.is_none())).await;
+            assert!(gone.is_ok(), "no grant after the session ended");
+        });
+        drop(monitor);
+    }
+
+    /// The first address, and the IPv4 one beside it only when the first is not
+    /// IPv4 (field test 119: a 5G net gave the relay's name an IPv6 address first).
+    #[test]
+    fn the_first_address_and_an_ipv4_one_beside_it() {
+        let v6: SocketAddr = "[2001:db8::21]:443".parse().unwrap();
+        let v4: SocketAddr = "192.0.2.33:443".parse().unwrap();
+        assert_eq!(first_and_ipv4([v6, v4]), Some((v6, Some(v4))));
+        assert_eq!(first_and_ipv4([v4, v6]), Some((v4, None)), "an IPv4 first needs nothing beside it");
+        assert_eq!(first_and_ipv4([v6]), Some((v6, None)), "no IPv4 to fall back to");
+        assert_eq!(first_and_ipv4(Vec::new()), None);
+        // Two IPv4 addresses: the second is no fallback for the first (review 120).
+        let v4b: SocketAddr = "192.0.2.34:443".parse().unwrap();
+        assert_eq!(first_and_ipv4([v4, v4b, v6]), Some((v4, None)));
+        // The word the log lines carry - the field test reads the hypothesis of
+        // 119 off it, so a wrong one would give a wrong verdict (review 120).
+        assert_eq!((family(v4), family(v6)), ("IPv4", "IPv6"));
+    }
+
+    /// A socket for an IPv6 address is opened in IPv6, and data goes both ways
+    /// (build 119 bound IPv4 for it: os error 97 on the phone). And IPv4 still.
+    #[tokio::test]
+    async fn a_socket_follows_the_family_of_its_address() {
+        for local in ["[::1]:0", "127.0.0.1:0"] {
+            let relay = UdpSocket::bind(local).await.unwrap();
+            let addr = relay.local_addr().unwrap();
+            let sock = connect_udp(addr).await.unwrap_or_else(|e| panic!("{}: {e}", family(addr)));
+            sock.send(b"ping").await.unwrap();
+            let mut buf = [0u8; 8];
+            let (n, from) = tokio::time::timeout(Duration::from_secs(2), relay.recv_from(&mut buf)).await.unwrap().unwrap();
+            assert_eq!(&buf[..n], b"ping");
+            relay.send_to(b"pong", from).await.unwrap();
+            let n = tokio::time::timeout(Duration::from_secs(2), sock.recv(&mut buf)).await.unwrap().unwrap();
+            assert_eq!(&buf[..n], b"pong", "{}", family(addr));
+        }
+    }
+
+    /// No socket for the first address: the IPv4 one beside it is used, and
+    /// said. Without one beside it, the failure is the answer.
+    #[tokio::test]
+    async fn no_socket_for_the_first_address_falls_back_to_ipv4() {
+        let relay = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let v4 = relay.local_addr().unwrap();
+        let (sock, used) = connect_relay_udp(UNREACHABLE_FOR_A_SOCKET, Some(v4)).await.expect("the IPv4 address");
+        assert_eq!(used, v4);
+        sock.send(b"via ipv4").await.unwrap();
+        let mut buf = [0u8; 16];
+        let n = tokio::time::timeout(Duration::from_secs(2), relay.recv(&mut buf)).await.unwrap().unwrap();
+        assert_eq!(&buf[..n], b"via ipv4");
+        assert!(connect_relay_udp(UNREACHABLE_FOR_A_SOCKET, None).await.is_err(), "nothing to fall back to");
+        // The first address wins when it works: the fallback is only the way back.
+        let (_, used) = connect_relay_udp(v4, Some("127.0.0.1:9".parse().unwrap())).await.unwrap();
+        assert_eq!(used, v4);
+    }
+
+    /// The unconnected socket for the QUIC leg: the first address in the order
+    /// that a socket can be connected to, and data goes both ways - to the
+    /// relay and back, and to any other address from the same socket (the
+    /// direct path after punching).
+    #[tokio::test]
+    async fn the_unconnected_relay_socket_takes_the_first_usable_address() {
+        let relay = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let other = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let v4 = relay.local_addr().unwrap();
+        let (sock, used) = bind_relay_udp(&[UNREACHABLE_FOR_A_SOCKET, v4]).await.expect("the IPv4 address");
+        assert_eq!(used, v4, "an address no socket reaches is passed over");
+        let (sock2, used2) = bind_relay_udp(&[v4, UNREACHABLE_FOR_A_SOCKET]).await.unwrap();
+        assert_eq!(used2, v4, "the first wins when it works");
+        drop(sock2);
+        assert!(bind_relay_udp(&[UNREACHABLE_FOR_A_SOCKET]).await.is_err(), "nothing usable");
+        assert!(bind_relay_udp(&[]).await.is_err(), "nothing at all");
+        let mut buf = [0u8; 16];
+        for (to, name) in [(&relay, "the relay"), (&other, "another address")] {
+            sock.send_to(name.as_bytes(), to.local_addr().unwrap()).await.unwrap();
+            let (n, from) = tokio::time::timeout(Duration::from_secs(2), to.recv_from(&mut buf)).await.unwrap().unwrap();
+            assert_eq!(&buf[..n], name.as_bytes());
+            to.send_to(b"back", from).await.unwrap();
+            let (n, src) = tokio::time::timeout(Duration::from_secs(2), sock.recv_from(&mut buf)).await.unwrap().unwrap();
+            assert_eq!((&buf[..n], src), (&b"back"[..], to.local_addr().unwrap()), "{name}");
+        }
+    }
+
+    /// An address no socket can be connected to: a link-local IPv6 address on a
+    /// network interface that does not exist (measured on Windows: "unreachable
+    /// network", 10051). Port 0 does not do: Windows connects to it. A copy sits
+    /// in the QUIC route layer's test (`no_socket_for_the_first_address_goes_over_the_ipv4_one`);
+    /// change both.
+    const UNREACHABLE_FOR_A_SOCKET: SocketAddr = SocketAddr::V6(std::net::SocketAddrV6::new(
+        std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+        443,
+        0,
+        9999,
+    ));
+
+    /// The two classic constructors sign in in the classic form, whatever the
+    /// config says: QUIC mode without a grant receiver would publish nothing
+    /// (review 118).
+    #[test]
+    fn the_classic_constructors_sign_in_classic() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        for tunnel in [false, true] {
+            let (url, mut seen) = rt.block_on(play_relay("TLR2 kind=hello role=station"));
+            let config = RelayConfig { udp_port: None, ..quic_config(url, 4999) };
+            assert!(config.quic, "asked for QUIC");
+            let monitor = if tunnel {
+                let (inbound_tx, _inbound_rx) = mpsc::unbounded_channel();
+                let (_uplink_tx, uplink_rx) = mpsc::unbounded_channel();
+                let sentinel = SocketAddr::from(([203, 0, 113, 1], 4580));
+                RelayMonitor::start_threaded_tunnel(config, RelayTunnel { sentinel, inbound_tx, uplink_rx })
+            } else {
+                RelayMonitor::start_threaded(config)
+            };
+            let hello = rt.block_on(async {
+                match tokio::time::timeout(Duration::from_secs(5), seen.recv()).await.unwrap().unwrap() {
+                    Message::Text(t) => t.to_string(),
+                    other => panic!("{other:?}"),
+                }
+            });
+            assert!(!hello.contains("proto=quic"), "tunnel {tunnel}: signed in classic: {hello}");
+            drop(monitor);
+        }
+    }
+
+    /// The peer frames carry the form both ways, and a frame without it reads
+    /// as the classic form.
+    #[test]
+    fn the_peer_frames_carry_the_form() {
+        let q = parse_peer_frame(&peer_frame("hello", RelayRole::Station, true)).unwrap();
+        assert!(q.quic);
+        let q = parse_peer_frame(&peer_frame_with_seq("ping", RelayRole::Client, 5, true)).unwrap();
+        assert!(q.quic && q.seq == Some(5));
+        let c = parse_peer_frame(&peer_frame("status", RelayRole::Client, false)).unwrap();
+        assert!(!c.quic);
+        assert!(!parse_peer_frame("TLR2 kind=hello role=station").unwrap().quic, "a peer from before 3b");
     }
 }

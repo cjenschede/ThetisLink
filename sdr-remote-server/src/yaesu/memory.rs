@@ -1501,10 +1501,16 @@ pub(super) fn read_all_memories_ftx1(
     for ch in 1..=99u16 {
         // Echo-validated read: accept a response ONLY if it echoes THIS channel
         // ("MR{ch:05}..."). A late / in-flight response for another channel is then
-        // rejected and re-queried (cat_query flushes input first), so the list can
-        // no longer shift or renumber - the exact symptom of "starts at 20/30,
-        // correct order but wrong numbers". An empty channel answers "?;" and is
-        // skipped without retrying.
+        // rejected and re-queried, so the list can no longer shift or renumber -
+        // the exact symptom of "starts at 20/30, correct order but wrong numbers".
+        // An empty channel answers "?;" and is skipped without retrying.
+        //
+        // This line used to say "(cat_query flushes input first)". It does the
+        // opposite, on purpose: `cat.rs` refuses to flush there because doing so
+        // discards slow or in-flight answers and broke BOTH radios' memory reads.
+        // The echo validation is not protected BY a flush, it is what stands in
+        // PLACE of one - a lagged answer is caught on the retry rather than
+        // thrown away. Found by a reviewer, 2026-09-25.
         // 800ms timeout (instead of the 300ms default): the FTX-1 answers the first
         // time after connect/idle slowly (cold). With 300ms the query timed out, and the
         // buffer flush of the retry threw away the just-arriving slow response
@@ -1861,9 +1867,27 @@ pub(super) enum Ftx1ExRead {
     Value(String),
     Missing,
     NoResponse,
+    /// A command waited between two attempts, and the read gave way to it
+    /// (build 284). Not read: the scan asks this address again.
+    MadeWay,
 }
 
-pub(super) fn read_ftx1_ex_value(port: &mut Box<dyn serialport::SerialPort>, spill: &mut String, p1: u8, p2: u8, p3: u8) -> Ftx1ExRead {
+/// How long one attempt of an EX read waits for its answer. One attempt, not
+/// the read: a read is up to three of them, ~2.2 s on an address that does not
+/// answer (review of build 283).
+pub(super) const FTX1_EX_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(700);
+
+/// `stop` is asked before the second and third attempt: a command that waits
+/// does not wait for the retries (build 284; field 2026-10-23 13:22:02, a TX0
+/// 1.7 s late behind an address that did not answer).
+pub(super) fn read_ftx1_ex_value(
+    port: &mut Box<dyn serialport::SerialPort>,
+    spill: &mut String,
+    p1: u8,
+    p2: u8,
+    p3: u8,
+    stop: &mut dyn FnMut() -> bool,
+) -> Ftx1ExRead {
     let cmd = format!("EX{:02}{:02}{:02};", p1, p2, p3);
     let prefix = format!("EX{:02}{:02}{:02}", p1, p2, p3);
 
@@ -1874,7 +1898,10 @@ pub(super) fn read_ftx1_ex_value(port: &mut Box<dyn serialport::SerialPort>, spi
     spill_waiting(port, spill);
     let mut rejected_once = false;
     for attempt in 0..3 {
-        let resp = cat_query_with_timeout(port, &cmd, Duration::from_millis(700));
+        if attempt > 0 && stop() {
+            return Ftx1ExRead::MadeWay;
+        }
+        let resp = cat_query_with_timeout(port, &cmd, FTX1_EX_ATTEMPT_TIMEOUT);
         std::thread::sleep(Duration::from_millis(15));
 
         match ex_frame(&resp, &prefix, spill) {
@@ -2087,6 +2114,11 @@ impl Ftx1MenuScan {
                         self.next = self.addresses.len(); // the pass ends here; the next step finishes
                     }
                 }
+                Ftx1ExRead::MadeWay => {
+                    // Not read: the same address comes first next step, and
+                    // nothing is counted - no answer is not what happened.
+                    self.next -= 1;
+                }
             }
             return None;
         }
@@ -2178,6 +2210,42 @@ mod ftx1_menu_scan_tests {
         let (r, reads) = run(&values, &mut fails);
         assert_eq!(r.unwrap().lines().count(), 405);
         assert_eq!(reads.len(), 444 + 39, "one pass over the chart, a second only over the 39 it lacks");
+    }
+
+    /// A read that made way for a command (build 284) is no read: the same
+    /// address comes again on the next step, and it is counted as nothing - not
+    /// as "no answer", which would show in the pass line and feed the abort
+    /// guard. Twice on one address, and once more further on.
+    #[test]
+    fn a_read_that_made_way_is_asked_again_and_counts_for_nothing() {
+        let items = ftx1_chart_addresses();
+        let (values, _) = radio(&items, &[]);
+        let first = items[0];
+        let later = items[100];
+        let mut gives_way: HashMap<(u8, u8, u8), u8> = [(first, 2u8), (later, 1u8)].into_iter().collect();
+        let mut scan = Ftx1MenuScan::new();
+        let mut reads = Vec::new();
+        let result = loop {
+            let done = scan.step(&mut |p1, p2, p3| {
+                reads.push((p1, p2, p3));
+                if let Some(n) = gives_way.get_mut(&(p1, p2, p3)) {
+                    if *n > 0 {
+                        *n -= 1;
+                        return Ftx1ExRead::MadeWay;
+                    }
+                }
+                Ftx1ExRead::Value(values[&(p1, p2, p3)].clone())
+            });
+            if let Some(r) = done {
+                break r;
+            }
+            assert!(reads.len() < 100_000, "the scan ends");
+        };
+        assert_eq!(&reads[0..3], &[first, first, first], "the address that made way comes first again");
+        assert_eq!(reads.iter().filter(|&&a| a == later).count(), 2, "and so does one further on");
+        assert_eq!(reads.len(), items.len() + 3, "one pass, plus the three reads that made way");
+        assert_eq!(scan.no_response_count, 0, "making way is not \"no answer\"");
+        assert_eq!(result.unwrap().lines().count(), items.len(), "every address read in the end");
     }
 
     /// The order of the reads decides which partial set an aborted scan
@@ -2881,7 +2949,7 @@ mod ex_read_tests {
         let fake = FakeSerial::answering_each(&["EX0101012;"]);
         let mut port = fake.boxed();
         let mut spill = String::new();
-        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::Value("2".to_string()));
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1, &mut || false), Ftx1ExRead::Value("2".to_string()));
         assert!(fake.log().written_text().contains("EX010101;"), "and it asked the address it was given");
     }
 
@@ -2893,7 +2961,7 @@ mod ex_read_tests {
         let fake = FakeSerial::answering_each(&["?;", "?;"]);
         let mut port = fake.boxed();
         let mut spill = String::new();
-        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::Missing);
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1, &mut || false), Ftx1ExRead::Missing);
     }
 
     /// Silence is NOT "no such address", and this is the assertion that says
@@ -2907,7 +2975,34 @@ mod ex_read_tests {
         let fake = FakeSerial::new(); // answers nothing at all
         let mut port = fake.boxed();
         let mut spill = String::new();
-        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::NoResponse);
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1, &mut || false), Ftx1ExRead::NoResponse);
+    }
+
+    /// A command that waits does not wait for the retries (build 284): on a
+    /// silent address the read asks once, then gives way - one attempt, not
+    /// three (field 2026-10-23: a TX0 1.7 s late). Twice on one port. And
+    /// `stop` is not asked before the first attempt: the batch has just asked.
+    #[test]
+    fn a_waiting_command_stops_the_retries() {
+        let fake = FakeSerial::new(); // answers nothing at all
+        let mut port = fake.boxed();
+        let mut spill = String::new();
+        for round in 1..=2 {
+            let mut asked = 0;
+            let started = std::time::Instant::now();
+            let r = read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1, &mut || {
+                asked += 1;
+                true
+            });
+            assert_eq!(r, Ftx1ExRead::MadeWay, "round {round}");
+            assert_eq!(asked, 1, "round {round}: asked once, after the first attempt");
+            assert!(
+                started.elapsed() < super::FTX1_EX_ATTEMPT_TIMEOUT * 2,
+                "round {round}: one attempt, not three ({:?})",
+                started.elapsed()
+            );
+        }
+        assert_eq!(fake.log().written_text().matches("EX010101;").count(), 2, "one question per round");
     }
 
     /// What was already waiting is a reply to a poll, not to this question. It
@@ -2933,7 +3028,7 @@ mod ex_read_tests {
         fake.feed("FA014070000;"); // already on the line before we ask
         let mut port = fake.boxed();
         let mut spill = String::new();
-        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1), Ftx1ExRead::Value("7".to_string()));
+        assert_eq!(read_ftx1_ex_value(&mut port, &mut spill, 1, 1, 1, &mut || false), Ftx1ExRead::Value("7".to_string()));
         assert_eq!(spill, "FA014070000;", "the poll's reply went to the poll loop");
     }
 }

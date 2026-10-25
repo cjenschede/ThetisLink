@@ -1158,14 +1158,20 @@ mod tests {
     fn the_engine_feeds_every_stream_and_derives_what_it_expects() {
         let src = include_str!("engine.rs");
         for (needle, why) in [
-            ("loss_meter.thetis.packet(", "the Thetis bundle would stop being measured"),
-            ("loss_meter.radio1.packet(", "radio 1 would go back to being protected by a figure about another stream"),
-            ("loss_meter.radio2.packet(", "same for radio 2"),
-            ("loss_meter.vrx1.packet(", "a VRX-only client would have nothing feeding its meter"),
-            ("loss_meter.vrx2.packet(", "same for VRX2"),
+            // Since build 90 every arrival goes through `audio_arrived!`, which
+            // feeds this meter and measurement mode together; the macro must
+            // still feed the meter, and each stream must still be fed.
+            ("loss_meter.$stream.packet($seq)", "the macro would stop feeding the loss meter"),
+            ("audio_arrived!(thetis,", "the Thetis bundle would stop being measured"),
+            // The radios through one block since build 293, which feeds the
+            // meter it is handed: each radio hands its own.
+            ("audio_arrived!($meter, $stream,", "the radios' block would stop feeding the loss meter"),
+            ("yaesu_audio_in!(pkt, \"Radio 1\", yaesu_jitter_buf, st_yaesu, yaesu_logged_first, radio1,", "radio 1 would go back to being protected by a figure about another stream"),
+            ("yaesu_audio_in!(pkt, \"Radio 2\", yaesu2_jitter_buf, st_yaesu2, yaesu2_logged_first, radio2,", "same for radio 2"),
+            ("audio_arrived!(vrx1,", "a VRX-only client would have nothing feeding its meter"),
+            ("audio_arrived!(vrx2,", "same for VRX2"),
             ("loss_meter.reset()", "a reconnect would be charged for its own gap again - open point 15"),
-            ("loss_meter.radio1.reset()", "a stream that starts over would read as total loss"),
-            ("loss_meter.radio2.reset()", "same for radio 2"),
+            ("loss_meter.$meter.reset()", "a radio's stream that starts over would read as total loss"),
             ("loss_meter.vrx1.reset()", "same for VRX1"),
             ("loss_meter.vrx2.reset()", "same for VRX2"),
             ("Expecting::from_client(", "the engine would state the subscriptions in its own words"),
@@ -1189,7 +1195,7 @@ mod tests {
         // Both Thetis audio paths - legacy mono Audio and AudioMultiCh - feed the
         // window. A patch that removes one leaves a client measured on some
         // servers and not on others.
-        assert_eq!(src.matches("loss_meter.thetis.packet(").count(), 2);
+        assert_eq!(src.matches("audio_arrived!(thetis,").count(), 2);
         // One place closes the windows: the heartbeat. Two would mean two window
         // lengths, and the percentages would stop meaning the same thing.
         assert_eq!(src.matches("loss_meter.step(").count(), 1);

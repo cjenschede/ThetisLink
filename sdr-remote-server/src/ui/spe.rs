@@ -43,7 +43,7 @@ pub(super) fn render_spe_panel(
             ui.checkbox(show_log, rust_i18n::t!("srv_log_cb").to_string());
         });
     });
-    ui.separator();
+    sdr_remote_theme::rule(ui);
 
     // Warning / Alarm (prominent, above everything)
     if status.alarm != b'N' && status.alarm != 0 {
@@ -134,7 +134,7 @@ pub(super) fn render_spe_panel(
             spe.send_command(spe_expert::SpeCmd::CyclePower);
         }
 
-        ui.separator();
+        sdr_remote_theme::rule(ui);
 
         // Drive level +/- (LEFT/RIGHT arrow on SPE, adjusts Thetis drive during TX)
         let drive_enabled = status.connected && status.state == 2 && is_active;
@@ -239,7 +239,7 @@ pub(super) fn render_spe_panel(
     // Log (collapsible, toggled via header checkbox)
     if *show_log {
         ui.add_space(4.0);
-        ui.separator();
+        sdr_remote_theme::rule(ui);
         egui::ScrollArea::vertical()
             .id_salt("spe_log")
             .stick_to_bottom(true)

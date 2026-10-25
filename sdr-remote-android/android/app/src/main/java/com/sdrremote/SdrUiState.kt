@@ -15,9 +15,18 @@ data class DxSpotInfo(
 data class SdrUiState(
     val initError: String? = null,
     val connected: Boolean = false,
-    // Fase 3c: relay audio on the wss TCP-fallback (true) vs low-latency UDP (false).
-    val relayTransportFallback: Boolean = false,
+    // The transport the engine runs on, as the screen shows it ("QUIC" or
+    // "QUIC via relay", Route::label); empty until the first state.
+    val route: String = "",
+    // Goes up on every new session on this link; the ViewModel lets go of a held
+    // PTT on that edge (PTT-NOOIT-HANGEN 2).
+    val sessionGeneration: ULong = 0u,
     val pttDenied: Boolean = false,
+    // What blocks the station and what helps, one line each - decided and
+    // worded in Rust (sdr_remote_logic::station_notice); the screens draw them.
+    val stationNotices: List<String> = emptyList(),
+    // Whether Connect may be offered (station_notice::can_offer_connect).
+    val canConnect: Boolean = true,
     val audioError: Boolean = false,
     val authRejected: Boolean = false,
     val totpRequired: Boolean = false,
@@ -26,6 +35,20 @@ data class SdrUiState(
     val connectStatusAction: String = "",
     val connectStatusIsError: Boolean = false,
     val connectStatusIsAwaitingTotp: Boolean = false,
+    /** The server is not running this app's build. Tells only; refuses nothing. */
+    val serverBuildDiffers: Boolean = false,
+    /** What the server calls itself; empty when it agrees or was too old to say. */
+    val serverBuild: String = "",
+    /** The measurement file being written (open point 34); null when measuring is off. */
+    val measurementFile: String? = null,
+    val relayOnly: Boolean = false,
+    val forceTcp: Boolean = false,
+    val viaRelay: Boolean = false,
+    // The connection name (build 139), from Rust; empty while there is no session.
+    val pathShort: String = "",
+    val pathName: String = "",
+    val pathHint: String = "",
+    val pathCoupling: Boolean = false,
     val rttMs: Int = 0,
     val jitterMs: Float = 0f,
     val bufferDepth: Int = 0,
@@ -79,6 +102,10 @@ data class SdrUiState(
     val rxAfGain: Int = 0,
     val agcEnabled: Boolean = false,
     val otherTx: Boolean = false,
+    /** The Thetis meter carries watts now (the engine's `smeter_tx`): the meter's scale, not the PTT (build 169). */
+    val meterTx: Boolean = false,
+    /** The spectrum's automatic reference pauses now (the engine's `auto_ref_paused`, build 176). */
+    val autoRefPaused: Boolean = false,
     val transmitting: Boolean = false,
     val filterLowHz: Int = 0,
     val filterHighHz: Int = 0,
@@ -183,16 +210,16 @@ data class SdrUiState(
     val yaesuMenuData: String = "",
     val yaesu2MenuData: String = "",
     val yaesuModel: Int = 0, // 0=991A, 1=FTX-1
-    val yaesuTunerState: Int = 0, // interne ATU: 0=uit, 1=aan, 2=tunend
-    val yaesuHiSwr: Boolean = false, // radio meldt hoge SWR tijdens TX (zelf-wissend)
-    // De server meldt: stuurvermogen omhoog terwijl een PA onbereikbaar is.
+    val yaesuTunerState: Int = 0, // internal ATU: 0=off, 1=on, 2=tuning
+    val yaesuHiSwr: Boolean = false, // the radio reports high SWR during TX (clears itself)
+    // The server reports: drive power went up while a PA is unreachable.
     val paDriveWarning: Boolean = false,
-    val yaesuTxPowerMax: Int = 0, // max TX-vermogen huidige band (EX max-power; 0=onbekend)
-    // DSP/functie-feature-state radio 1 (typed control channel)
+    val yaesuTxPowerMax: Int = 0, // max TX power on the current band (EX max-power; 0=unknown)
+    // DSP/function feature state, radio 1 (typed control channel)
     val yaesuFeatureToggles: UInt = 0u,
     val yaesuFeatureLevels: List<Int> = emptyList(),
     val yaesuFeatureFreqs: List<Int> = emptyList(),
-    // Radio 2 (yaesu2) — Android toont één radio tegelijk; selectedRadio kiest welke.
+    // Radio 2 (yaesu2) — Android shows one radio at a time; selectedRadio picks which.
     val yaesu2Connected: Boolean = false,
     val yaesu2Model: Int = 1,
     val yaesu2TunerState: Int = 0,
@@ -205,7 +232,7 @@ data class SdrUiState(
     val yaesu2PowerOn: Boolean = false,
     val yaesu2AfGain: Int = 0,
     val yaesu2TxPower: Int = 0,
-    val yaesu2TxPowerMax: Int = 0, // max TX-vermogen huidige band (EX max-power; 0=onbekend)
+    val yaesu2TxPowerMax: Int = 0, // max TX power on the current band (EX max-power; 0=unknown)
     val yaesu2Squelch: Int = 0,
     val yaesu2RfGain: Int = 0,
     val yaesu2MicGain: Int = 0,

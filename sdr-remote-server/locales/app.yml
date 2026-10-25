@@ -37,6 +37,11 @@ srv_arrange_hover:
   nl: "Vensters over een raster op het scherm ordenen"
   de: "Fenster über ein Raster auf dem Bildschirm anordnen"
   fr: "Organiser les fenêtres sur l'écran à l'aide d'une grille"
+srv_server_stopped:
+  en: "Server stopped by an error - see the log, and start the server again"
+  nl: "Server gestopt door een fout - zie de log, en start de server opnieuw"
+  de: "Server durch einen Fehler gestoppt - siehe Log, und den Server neu starten"
+  fr: "Serveur arrêté par une erreur - voir le journal, puis redémarrer le serveur"
 srv_about:
   en: "About"
   nl: "Over"
@@ -299,21 +304,6 @@ srv_relay_enable:
   nl: "Uitgaande relay-monitor inschakelen"
   de: "Ausgehenden Relay-Monitor aktivieren"
   fr: "Activer le moniteur de relais sortant"
-srv_relay_udp:
-  en: "Audio over UDP (low latency)"
-  nl: "Audio over UDP (lage latency)"
-  de: "Audio über UDP (niedrige Latenz)"
-  fr: "Audio sur UDP (faible latence)"
-srv_relay_udp_hover:
-  en: "Route audio + PTT over plain UDP (port 443) instead of the wss tunnel: no retransmit, lower latency. Both server and client must have it on. Applies on restart."
-  nl: "Route audio + PTT over kale UDP (poort 443) i.p.v. de wss-tunnel: geen retransmit, lagere latency. Server en client moeten het beide aan hebben. Geldt na herstart."
-  de: "Audio + PTT über reines UDP (Port 443) statt des wss-Tunnels leiten: keine erneute Übertragung, niedrigere Latenz. Server und Client müssen es beide aktiviert haben. Gilt nach Neustart."
-  fr: "Router l'audio + PTT sur UDP simple (port 443) au lieu du tunnel wss : pas de retransmission, latence plus faible. Le serveur et le client doivent l'activer. Effectif au redémarrage."
-srv_relay_udp_off_hover:
-  en: "Only applies once the relay is on. Switching the relay on brings this with it."
-  nl: "Geldt pas als de relay aan staat. De relay aanzetten neemt dit mee."
-  de: "Gilt erst, wenn das Relay an ist. Das Relay einzuschalten nimmt dies mit."
-  fr: "Ne s'applique qu'avec le relais actif. Activer le relais l'active aussi."
 srv_relay_url:
   en: "Relay URL:"
   nl: "Relay URL:"
@@ -330,10 +320,25 @@ srv_relay_token:
   de: "Relay-Token:"
   fr: "Jeton de relais :"
 srv_relay_desc:
-  en: "Relay routes the full connection: audio + PTT over UDP with automatic wss (TCP) fallback, control + spectrum over wss. Both server and client must use the same relay, station name and token."
-  nl: "Relay routeert de volledige verbinding: audio + PTT over UDP met automatische wss (TCP) fallback, controle + spectrum over wss. Server en client moeten dezelfde relay, stationsnaam en token gebruiken."
-  de: "Relay leitet die gesamte Verbindung: Audio + PTT über UDP mit automatischem wss-(TCP)-Fallback, Steuerung + Spektrum über wss. Server und Client müssen denselben Relay, Stationsnamen und Token verwenden."
-  fr: "Le relais achemine toute la connexion : audio + PTT sur UDP avec repli wss (TCP) automatique, contrôle + spectre sur wss. Le serveur et le client doivent utiliser le même relais, nom de station et jeton."
+  en: "Clients reach this server through the relay over one encrypted QUIC connection; the relay passes it on and cannot read it. This needs UDP to the relay (port 443). Both server and client must use the same relay, station name and token."
+  nl: "Clients bereiken deze server via de relay over één versleutelde QUIC-verbinding; de relay geeft die door en kan er niet in kijken. Daarvoor is UDP naar de relay nodig (poort 443). Server en client moeten dezelfde relay, stationsnaam en token gebruiken."
+  de: "Clients erreichen diesen Server über das Relay mit einer einzigen verschlüsselten QUIC-Verbindung; das Relay leitet sie weiter und kann sie nicht lesen. Dafür ist UDP zum Relay nötig (Port 443). Server und Client müssen denselben Relay, Stationsnamen und Token verwenden."
+  fr: "Les clients joignent ce serveur via le relais par une seule connexion QUIC chiffrée ; le relais la transmet et ne peut pas la lire. Cela demande l'UDP vers le relais (port 443). Le serveur et le client doivent utiliser le même relais, nom de station et jeton."
+srv_allow_direct:
+  en: "Allow direct connections"
+  nl: "Rechtstreeks verbinden toestaan"
+  de: "Direkte Verbindungen erlauben"
+  fr: "Autoriser les connexions directes"
+srv_allow_direct_hover:
+  en: "On: clients may also reach this server straight on its own port, and a connection through the relay may move to a direct path. Off: through the relay only - your home address stays out of sight of guests. Applies at the next start."
+  nl: "Aan: clients mogen deze server ook rechtstreeks op zijn eigen poort bereiken, en een verbinding via de relay mag naar een rechtstreekse weg overstappen. Uit: alleen via de relay - je thuisadres blijft buiten zicht van gasten. Geldt bij de volgende start."
+  de: "Ein: Clients dürfen diesen Server auch direkt an seinem eigenen Port erreichen, und eine Verbindung über das Relay darf auf einen direkten Weg wechseln. Aus: nur über das Relay - Ihre Heimadresse bleibt für Gäste unsichtbar. Gilt beim nächsten Start."
+  fr: "Activé : les clients peuvent aussi joindre ce serveur directement sur son propre port, et une connexion via le relais peut passer sur un chemin direct. Désactivé : uniquement via le relais - votre adresse reste cachée aux invités. Effectif au prochain démarrage."
+srv_allow_direct_no_relay_hover:
+  en: "Only with the relay set up: without it, switching this off would lock everyone out."
+  nl: "Alleen met de relay ingesteld: zonder relay zou dit uitzetten iedereen buitensluiten."
+  de: "Nur mit eingerichtetem Relay: ohne Relay würde das Ausschalten alle aussperren."
+  fr: "Uniquement avec le relais configuré : sans lui, désactiver ceci exclurait tout le monde."
 srv_security:
   en: "Security"
   nl: "Beveiliging"
@@ -359,6 +364,16 @@ srv_password_required:
   nl: "Wachtwoord is verplicht"
   de: "Passwort ist erforderlich"
   fr: "Le mot de passe est requis"
+srv_totp_key_required:
+  en: "2FA needs a key - press Generate"
+  nl: "2FA heeft een sleutel nodig - druk op Genereer"
+  de: "2FA braucht einen Schluessel - Erzeugen druecken"
+  fr: "La 2FA a besoin d'une cle - appuyez sur Generer"
+srv_totp_key_invalid:
+  en: "This 2FA key is not valid - press Generate"
+  nl: "Deze 2FA-sleutel is ongeldig - druk op Genereer"
+  de: "Dieser 2FA-Schluessel ist ungueltig - Erzeugen druecken"
+  fr: "Cette cle 2FA n'est pas valide - appuyez sur Generer"
 srv_secret:
   en: "Secret:"
   nl: "Geheim:"
@@ -379,6 +394,36 @@ srv_autostart:
   nl: "Automatisch starten bij opstarten"
   de: "Beim Start automatisch starten"
   fr: "Démarrage automatique au lancement"
+srv_line_ptt:
+  en: "transmits when Windows raises RTS or DTR of its USB port (at start-up, for example): %{menus}. ThetisLink keys by CAT and does not need these - set them to DAKY (FT-991A; 060 PC KEYING: OFF) or OFF (FTX-1)."
+  nl: "zendt als Windows RTS of DTR van de USB-poort hoog zet (bijvoorbeeld bij het opstarten): %{menus}. ThetisLink schakelt via CAT en heeft deze niet nodig - zet ze op DAKY (FT-991A; 060 PC KEYING: OFF) of OFF (FTX-1)."
+  de: "sendet, wenn Windows RTS oder DTR des USB-Ports setzt (zum Beispiel beim Start): %{menus}. ThetisLink tastet per CAT und braucht diese nicht - auf DAKY (FT-991A; 060 PC KEYING: OFF) oder OFF (FTX-1) stellen."
+  fr: "émet quand Windows active RTS ou DTR de son port USB (au démarrage, par exemple) : %{menus}. ThetisLink commute par CAT et n'en a pas besoin - réglez-les sur DAKY (FT-991A; 060 PC KEYING: OFF) ou OFF (FTX-1)."
+srv_dev_code:
+  en: "Code"
+  nl: "Code"
+  de: "Code"
+  fr: "Code"
+srv_dev_on:
+  en: "Developer mode: measurement and the extra log lines"
+  nl: "Ontwikkelstand: meten en de extra logregels"
+  de: "Entwicklermodus: Messung und die zusätzlichen Protokollzeilen"
+  fr: "Mode développeur : mesure et lignes de journal supplémentaires"
+srv_dev_off:
+  en: "Switch off"
+  nl: "Uitzetten"
+  de: "Ausschalten"
+  fr: "Désactiver"
+srv_tx_measurement:
+  en: "Measurement mode (developer)"
+  nl: "Meetmodus (ontwikkelaar)"
+  de: "Messmodus (Entwickler)"
+  fr: "Mode mesure (développeur)"
+srv_tx_measurement_hover:
+  en: "Writes the arrival of every transmit packet to tl-servermeting-*.csv next to the server log. Takes effect at the next start."
+  nl: "Schrijft de aankomst van elk zendpakket naar tl-servermeting-*.csv naast het serverlog. Geldt vanaf de volgende start."
+  de: "Schreibt die Ankunft jedes Sendepakets in tl-servermeting-*.csv neben dem Serverprotokoll. Gilt ab dem nächsten Start."
+  fr: "Écrit l'arrivée de chaque paquet d'émission dans tl-servermeting-*.csv à côté du journal du serveur. Prend effet au prochain démarrage."
 srv_save_start:
   en: "Save & Start"
   nl: "Opslaan & starten"

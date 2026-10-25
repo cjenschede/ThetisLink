@@ -62,6 +62,12 @@ import com.sdrremote.R
 @Composable
 fun SettingsDialog(
     connected: Boolean,
+    // The transport the engine runs on now, as the screen shows it ("QUIC" or
+    // "QUIC via relay" - the engine's own word); empty before the first state.
+    routeInUse: String = "",
+    // The way the traffic takes now (build 139), shown instead of the route
+    // while a session runs; the restart notice still compares the route.
+    pathInUse: String = "",
     headsetActive: Boolean,
     headsetName: String?,
     audioMode: Int, // 0=Auto, 1=Speaker, 2=Headset
@@ -98,6 +104,9 @@ fun SettingsDialog(
     radio1Label: String = "Yaesu 1",
     radio2Label: String = "Yaesu 2",
     onRogerChange: (Float, Float, Int, Boolean, Boolean, Boolean, Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
+    // The developer mode (build 298): the ViewModel switches it.
+    developerMode: Boolean = false,
+    onDeveloperMode: (Boolean) -> Unit = {},
     onReboot: () -> Unit,
     onShutdown: () -> Unit,
     onDismiss: () -> Unit,
@@ -167,6 +176,25 @@ fun SettingsDialog(
                 // ViewModel at bridge creation). Used to show a restart notice when the
                 // live toggle differs - symmetric for turning the relay on AND off.
                 val relayActiveSession = remember { prefs.getBoolean("relay_active_session", false) }
+                // No line before the engine's first state: an empty word would
+                // otherwise read as UDP and ask for a restart that is not needed
+                // (review 111).
+                if (routeInUse.isNotEmpty()) {
+                    // The route the settings ask for, by the bridge's own rule
+                    // (review 118): asked of it, not worked out here. Remembered
+                    // per set of values, like relayIsConfigured below.
+                    val routeWanted = remember(relayEnabled, relayUrl, relayStation, relayToken) {
+                        uniffi.sdr_remote.expectedRouteLabel(relayEnabled, relayUrl, relayStation, relayToken)
+                    }
+                    val routeDiffers = routeWanted != routeInUse
+                    Text(
+                        stringResource(R.string.settings_route_in_use, if (pathInUse.isNotEmpty()) pathInUse else routeInUse) +
+                            if (routeDiffers) " - " + stringResource(R.string.settings_route_restart) else "",
+                        fontSize = 11.sp,
+                        color = if (routeDiffers) Color(0xFFC8A028) else Color.Gray,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.settings_connect_via_relay), fontSize = 14.sp)
                     Spacer(Modifier.width(8.dp))
@@ -233,21 +261,6 @@ fun SettingsDialog(
                     singleLine = true,
                     supportingText = { Text(stringResource(R.string.settings_device_name_hint)) },
                     modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                var relayUdpEnabled by remember { mutableStateOf(prefs.getBoolean("relay_udp_enabled", true)) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.settings_audio_udp), fontSize = 14.sp)
-                    Spacer(Modifier.width(8.dp))
-                    Switch(
-                        checked = relayUdpEnabled,
-                        onCheckedChange = { relayUdpEnabled = it; prefs.edit().putBoolean("relay_udp_enabled", it).apply() },
-                    )
-                }
-                Text(
-                    stringResource(R.string.settings_audio_udp_hint),
-                    fontSize = 11.sp,
-                    color = Color.Gray,
                 )
 
                 // How large the app draws itself.
@@ -692,6 +705,39 @@ fun SettingsDialog(
                     color = Color.Gray,
                 )
 
+                // The developer mode (build 298): a code while it is off, the
+                // sign and a way out while it is on. Its tools are drawn by the
+                // statistics block, and only in the mode.
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                if (developerMode) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("DEV", color = com.sdrremote.prefs.DeveloperMode.COLOUR, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = { onDeveloperMode(false) }) {
+                            Text(stringResource(R.string.settings_dev_off), fontSize = 12.sp)
+                        }
+                    }
+                    Text(stringResource(R.string.settings_dev_on), fontSize = 11.sp, color = Color.Gray)
+                } else {
+                    var devCode by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = devCode,
+                        onValueChange = { typed ->
+                            devCode = typed
+                            if (uniffi.sdr_remote.developerCodeMatches(typed)) {
+                                devCode = ""
+                                onDeveloperMode(true)
+                            }
+                        },
+                        label = { Text(stringResource(R.string.settings_dev_code), fontSize = 12.sp) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.width(160.dp),
+                    )
+                }
+
                 if (connected) {
                     Spacer(Modifier.height(12.dp))
                     HorizontalDivider()
@@ -820,7 +866,7 @@ private fun BlePttPicker(
  * yields null and everything hanging off it does nothing at all. Walk the
  * wrappers instead.
  */
-private fun Context.findMainActivity(): com.sdrremote.MainActivity? {
+internal fun Context.findMainActivity(): com.sdrremote.MainActivity? {
     var c: Context = this
     while (true) {
         if (c is com.sdrremote.MainActivity) return c

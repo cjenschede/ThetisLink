@@ -12,9 +12,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sdrremote.R
+import uniffi.sdr_remote.version
 import kotlin.math.log10
 
 // Consumes vertical scroll on slider rows so LazyColumn doesn't intercept horizontal drags
@@ -65,6 +69,8 @@ fun VolumeControls(
 fun AudioStats(
     captureLevel: Float,
     playbackLevel: Float,
+    serverBuildDiffers: Boolean,
+    serverBuild: String,
     rttMs: Int,
     jitterMs: Float,
     bufferDepth: Int,
@@ -89,7 +95,16 @@ fun AudioStats(
     yaesu2Visible: Boolean,
     vrx1Visible: Boolean = false,
     vrx2Visible: Boolean = false,
-    relayTransportFallback: Boolean = false,
+    // Measurement mode (open point 34): the file being written, and the switch.
+    measurementFile: String? = null,
+    onMeasurement: ((Boolean) -> Unit)? = null,
+    // "Relay only" (build 137): grey unless the connection runs through the relay.
+    relayOnly: Boolean = false,
+    viaRelay: Boolean = false,
+    onRelayOnly: ((Boolean) -> Unit)? = null,
+    // "Force TCP" (build 146): the same kind of switch, for measuring the TCP route.
+    forceTcp: Boolean = false,
+    onForceTcp: ((Boolean) -> Unit)? = null,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.stats_audio_levels), fontSize = 14.sp)
@@ -98,20 +113,10 @@ fun AudioStats(
 
         Spacer(Modifier.height(8.dp))
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.stats_statistics), fontSize = 14.sp)
-            // Fase 3c: relay transport indicator. Normal = low-latency UDP; when the
-            // network blocks/degrades UDP the audio auto-falls back to reliable wss/TCP.
-            if (relayTransportFallback) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    stringResource(R.string.stats_tcp_fallback),
-                    fontSize = 11.sp,
-                    color = androidx.compose.ui.graphics.Color(0xFFFFAA28),
-                )
-            }
-        }
+        Text(stringResource(R.string.stats_statistics), fontSize = 14.sp)
         StatsGrid(
+            serverBuildDiffers = serverBuildDiffers,
+            serverBuild = serverBuild,
             rttMs = rttMs,
             jitterMs = jitterMs,
             bufferDepth = bufferDepth,
@@ -137,6 +142,50 @@ fun AudioStats(
             vrx1Visible = vrx1Visible,
             vrx2Visible = vrx2Visible,
         )
+        if (onMeasurement != null) {
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.stats_measure), fontSize = 12.sp)
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(
+                    onClick = { onMeasurement(measurementFile == null) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        stringResource(if (measurementFile == null) R.string.stats_measure_start else R.string.stats_measure_stop),
+                        fontSize = 11.sp,
+                    )
+                }
+                if (measurementFile != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(measurementFile.substringAfterLast('/'), fontSize = 11.sp, color = Color(0xFFFFAA28))
+                }
+            }
+            if (onRelayOnly != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.stats_relay_only), fontSize = 12.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = relayOnly, enabled = viaRelay, onCheckedChange = { onRelayOnly(it) })
+                }
+                Text(
+                    stringResource(if (viaRelay) R.string.stats_relay_only_hint else R.string.stats_relay_only_no_relay),
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+            }
+            if (onForceTcp != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.stats_force_tcp), fontSize = 12.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = forceTcp, enabled = viaRelay, onCheckedChange = { onForceTcp(it) })
+                }
+                Text(
+                    stringResource(if (viaRelay) R.string.stats_force_tcp_hint else R.string.stats_relay_only_no_relay),
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+            }
+        }
     }
 }
 
@@ -251,6 +300,8 @@ private fun LevelMeter(label: String, level: Float) {
 
 @Composable
 private fun StatsGrid(
+    serverBuildDiffers: Boolean,
+    serverBuild: String,
     rttMs: Int,
     jitterMs: Float,
     bufferDepth: Int,
@@ -277,6 +328,22 @@ private fun StatsGrid(
     vrx2Visible: Boolean,
 ) {
     Column(modifier = Modifier.padding(start = 8.dp)) {
+        // All ThetisLink binaries of a release are meant to be the same build,
+        // and without something that looks, that is an agreement nobody checks.
+        // It only tells - being locked out of your own station at a distance by
+        // a half-finished update is worse than reading this line.
+        if (serverBuildDiffers) {
+            Text(
+                text = stringResource(
+                    R.string.stats_build_mismatch,
+                    serverBuild.ifEmpty { stringResource(R.string.stats_build_too_old) },
+                    version(),
+                ),
+                fontSize = 12.sp,
+                color = Color(0xFFDC9628),
+            )
+            Spacer(Modifier.height(6.dp))
+        }
         StatRow("RTT", "$rttMs ms")
         StatRow(stringResource(R.string.stats_down), "$downKbps Kbit/s")
         StatRow(stringResource(R.string.stats_up), "$upKbps Kbit/s")

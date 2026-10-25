@@ -104,7 +104,7 @@ pub struct RotorConfig {
     /// `rot_` in the USB serial, but may be free text.
     pub name: String,
     /// USB serial of the MCP2221A-board that drives this rotor
-    /// (`rot_<naam>` prefix per ThetisLink convention). Empty = not
+    /// (`rot_<name>` prefix per ThetisLink convention). Empty = not
     /// bound.
     pub mcp_serial: String,
     /// Calibration (phase 4): Yaesu pin-4 voltage at 0 deg (CCW end-park).
@@ -377,6 +377,13 @@ pub struct ServerConfig {
     pub language: String,
     /// Auto-start server on launch (skip settings screen)
     pub autostart: bool,
+    /// The developer mode (build 294, `sdr_remote_core::dev_mode`): switched
+    /// on with the code in the settings screen, and kept here so it stays on.
+    pub developer_mode: bool,
+    /// Developer only (build 230): write the arrival of every Thetis TX audio
+    /// packet to `tl-servermeting-*.csv` beside the log (`tx_arrivals.rs`).
+    /// Read through [`ServerConfig::measuring`], never alone.
+    pub tx_measurement: bool,
     /// Active PA: 0=none, 1=SPE, 2=RF2K
     pub active_pa: u8,
     /// Drive (%) to put back when no PA is amplifying and there is no snapshot
@@ -424,9 +431,15 @@ pub struct ServerConfig {
     pub relay_url: String,
     pub relay_station: String,
     pub relay_token: String,
-    /// PATCH-relay-audio-udp: route audio+PTT over kale UDP (443) instead of the wss
-    /// tunnel. Default on. Env THETISLINK_RELAY_UDP_PORT overrides.
-    pub relay_udp_enabled: bool,
+    /// "Allow direct connections" (build 135): clients may also reach this
+    /// server straight on its own port, and punch to it. Off: through the relay
+    /// only - the home address stays out of sight of guests. Only takes effect
+    /// with the relay set up (`direct_connections`); without one, off would lock
+    /// everyone out. On by default, also for a file from before the key.
+    pub allow_direct: bool,
+    // Since build 133 the server is QUIC only: the keys relay_udp_enabled,
+    // quic_enabled and relay_quic of older files are no longer read, and are
+    // gone at the next save.
 }
 
 /// The value a key gets when an **existing** config file does not mention it.
@@ -516,6 +529,8 @@ impl Default for ServerConfig {
             theme_custom: String::new(),
             language: "nl".to_string(),
             autostart: false,
+            developer_mode: false,
+            tx_measurement: false,
             active_pa: 0,
             pa_default_drive: crate::pa_policy::DEFAULT_PA_DRIVE,
             pa_single_operate: true,
@@ -538,12 +553,26 @@ impl Default for ServerConfig {
             relay_url: String::new(),
             relay_station: String::new(),
             relay_token: String::new(),
-            relay_udp_enabled: true,
+            allow_direct: true,
         }
     }
 }
 
 impl ServerConfig {
+    /// Does the server measure: the measurement ticked and the developer mode
+    /// on (build 294). Ticked while the mode is off it does nothing, so a conf
+    /// from before the mode, or a mode switched off, starts no measurement.
+    /// The one reading for every place that starts or shows it.
+    pub fn measuring(&self) -> bool {
+        self.tx_measurement && self.developer_mode
+    }
+
+    /// Is Thetis part of this server: a TCI address that is not empty. One
+    /// place for the heartbeat to the clients and the status panel (build 269).
+    pub fn thetis_configured(&self) -> bool {
+        self.tci_addr.as_deref().is_some_and(|s| !s.trim().is_empty())
+    }
+
     /// What the server starts as on a machine that has never run it: no config
     /// file exists yet.
     ///
@@ -575,11 +604,6 @@ impl ServerConfig {
             rotor_enabled: false,
             show_rotor_window: false,
             dxcluster_enabled: false,
-            // Off with the rest, even though it is the lower-latency route:
-            // the relay itself is off on a first run, so this decides nothing
-            // yet, and a first screen where every box is clear is worth more
-            // than a setting that only starts mattering two steps later.
-            relay_udp_enabled: false,
             ..Self::default()
         }
     }
@@ -1322,6 +1346,12 @@ fn parse_conf(contents: &str) -> ServerConfig {
                 "autostart" => {
                     config.autostart = value.trim() == "true";
                 }
+                "developer_mode" => {
+                    config.developer_mode = value.trim() == "true";
+                }
+                "tx_measurement" => {
+                    config.tx_measurement = value.trim() == "true";
+                }
                 "pa_default_drive" => {
                     config.pa_default_drive = value.trim().parse().unwrap_or(crate::pa_policy::DEFAULT_PA_DRIVE).min(100);
                 }
@@ -1396,14 +1426,14 @@ fn parse_conf(contents: &str) -> ServerConfig {
                 "relay_enabled" => {
                     config.relay_enabled = value.trim() == "true";
                 }
-                "relay_udp_enabled" => {
-                    config.relay_udp_enabled = value.trim() == "true";
-                }
                 "relay_url" => {
                     config.relay_url = value.trim().to_string();
                 }
                 "relay_station" => {
                     config.relay_station = value.trim().to_string();
+                }
+                "allow_direct" => {
+                    config.allow_direct = value.trim() != "false";
                 }
                 "relay_token" => {
                     let v = value.trim();
@@ -1731,6 +1761,8 @@ fn render_conf(config: &ServerConfig) -> String {
         contents.push_str(&format!("theme_custom={}\n", config.theme_custom));
     }
     contents.push_str(&format!("autostart={}\n", config.autostart));
+    contents.push_str(&format!("developer_mode={}\n", config.developer_mode));
+    contents.push_str(&format!("tx_measurement={}\n", config.tx_measurement));
     contents.push_str(&format!("active_pa={}\n", config.active_pa));
     contents.push_str(&format!("pa_default_drive={}\n", config.pa_default_drive));
     contents.push_str(&format!("pa_single_operate={}\n", config.pa_single_operate));
@@ -1760,13 +1792,13 @@ fn render_conf(config: &ServerConfig) -> String {
         contents.push_str(&format!("friendly_name={}\n", name));
     }
     contents.push_str(&format!("relay_enabled={}\n", config.relay_enabled));
-    contents.push_str(&format!("relay_udp_enabled={}\n", config.relay_udp_enabled));
     if !config.relay_url.is_empty() {
         contents.push_str(&format!("relay_url={}\n", config.relay_url));
     }
     if !config.relay_station.is_empty() {
         contents.push_str(&format!("relay_station={}\n", config.relay_station));
     }
+    contents.push_str(&format!("allow_direct={}\n", config.allow_direct));
     if !config.relay_token.is_empty() {
         contents.push_str(&format!("relay_token={}\n", sdr_remote_core::auth::obfuscate_password(&config.relay_token)));
     }
@@ -1809,6 +1841,7 @@ const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
         "ultrabeam_window", "rotor_window", "ultrabeam_show_menu", "mcp2221_section_expanded",
     ]),
     ("Appearance", &["theme", "language", "ui_zoom", "layout_grids"]),
+    ("Development", &["developer_mode", "tx_measurement"]),
 ];
 
 /// Format labels as comma-separated string for protocol transmission.
@@ -1823,6 +1856,232 @@ pub fn labels_string(config: &ServerConfig) -> String {
         parts.push(l);
     }
     parts.join(",")
+}
+
+/// The shortest 2FA key that counts: the length of the one the settings
+/// screen generates (20 random bytes, 32 base32 characters). A key typed by hand
+/// as "A" - or none at all - is no second factor: with an empty key the code
+/// can be worked out by anyone who has the password (review 128, measured).
+pub const MIN_TOTP_SECRET_LEN: usize = 32;
+
+/// Why a server may not start. The kind, so the settings screen picks its own
+/// translated line from it instead of asking the rule again by hand (review
+/// 129: a second reading of the rule would leave the button off without a word
+/// the day the rule gains a condition); `Display` is the log's wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartRefusal {
+    NoPassword,
+    /// The password is not of the button's strength; the reason, as
+    /// `validate_password_strength` gives it.
+    WeakPassword(&'static str),
+    /// 2FA is on, and its key is missing or shorter than [`MIN_TOTP_SECRET_LEN`].
+    TotpKeyMissing,
+    /// 2FA is on, and its key is long enough but no code can be made from it.
+    TotpKeyInvalid,
+}
+
+impl std::fmt::Display for StartRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartRefusal::NoPassword => write!(f, "no password"),
+            StartRefusal::WeakPassword(why) => write!(f, "the password is too weak ({why})"),
+            StartRefusal::TotpKeyMissing => write!(
+                f,
+                "2FA is switched on but its key is missing or shorter than {MIN_TOTP_SECRET_LEN} characters - generate one in the settings screen"
+            ),
+            StartRefusal::TotpKeyInvalid => write!(
+                f,
+                "2FA is switched on but its key is not a valid key - generate a new one in the settings screen"
+            ),
+        }
+    }
+}
+
+/// Whether a server may start with these credentials, and with which: the
+/// password, and the 2FA key when 2FA is on. The one rule for every way a
+/// server starts - the settings screen's button and its autostart, the command
+/// line, and `run_server_async` itself, where both meet (builds 128-130,
+/// owner's decisions 2026-10-07: the same strength everywhere, and a 2FA key of
+/// full length). `Err` says why, as a kind.
+pub fn start_credentials(
+    password: Option<&str>,
+    totp_enabled: bool,
+    totp_secret: Option<&str>,
+) -> Result<(String, Option<String>), StartRefusal> {
+    let Some(password) = password.filter(|p| !p.is_empty()) else {
+        return Err(StartRefusal::NoPassword);
+    };
+    if let Err(why) = sdr_remote_core::auth::validate_password_strength(password) {
+        return Err(StartRefusal::WeakPassword(why));
+    }
+    let totp = if totp_enabled {
+        match totp_secret {
+            Some(key) if key.len() < MIN_TOTP_SECRET_LEN => return Err(StartRefusal::TotpKeyMissing),
+            Some(key) if !sdr_remote_core::auth::totp_secret_decodes(key) => return Err(StartRefusal::TotpKeyInvalid),
+            Some(key) => Some(key.to_string()),
+            None => return Err(StartRefusal::TotpKeyMissing),
+        }
+    } else {
+        None
+    };
+    Ok((password.to_string(), totp))
+}
+
+/// The password - and the 2FA key, when 2FA is on - a server started from the
+/// command line runs with: those of the saved settings (owner's decision
+/// 2026-10-07), judged by [`start_credentials`]. The rest of a command-line
+/// start still comes from the defaults and the options. `readable` is whether
+/// the saved settings could be read (`may_write`): a file that exists but could
+/// not be read is said as such - it does hold a password, and the screen cannot
+/// save over it either (review 128).
+pub fn cli_credentials(saved: &ServerConfig, readable: bool) -> Result<(String, Option<String>), String> {
+    if !readable {
+        return Err(format!(
+            "{} exists but could not be read - close whatever holds it open and try again",
+            config_path().display()
+        ));
+    }
+    start_credentials(saved.password.as_deref(), saved.totp_enabled, saved.totp_secret.as_deref()).map_err(|why| {
+        format!(
+            "{why} in {} - start the server once without options, set it in the settings screen, and save",
+            config_path().display()
+        )
+    })
+}
+
+/// Whether this server takes clients straight on its port, or through the
+/// relay only: relay-only needs both the switch off and a relay that is set up
+/// (`sdr_remote_relay::is_configured`) - without one, it would lock everyone
+/// out, so the switch does nothing then (the settings screen greys it).
+pub fn direct_connections(config: &ServerConfig) -> sdr_remote_quic::Direct {
+    let relay = sdr_remote_relay::is_configured(config.relay_enabled, &config.relay_url, &config.relay_station, &config.relay_token);
+    if relay && !config.allow_direct {
+        sdr_remote_quic::Direct::RelayOnly
+    } else {
+        sdr_remote_quic::Direct::Allowed
+    }
+}
+
+#[cfg(test)]
+mod direct_connections_tests {
+    use super::{direct_connections, ServerConfig};
+    use sdr_remote_quic::Direct;
+
+    fn with(relay: bool, token: &str, allow_direct: bool) -> ServerConfig {
+        ServerConfig {
+            relay_enabled: relay,
+            relay_url: "wss://relay.example".into(),
+            relay_station: "pa0xyz".into(),
+            relay_token: token.into(),
+            allow_direct,
+            ..ServerConfig::default()
+        }
+    }
+
+    /// Relay only takes both: the switch off and a relay set up. Every other
+    /// state lets clients in straight - the switch alone never locks out.
+    #[test]
+    fn relay_only_needs_the_switch_off_and_a_relay() {
+        assert_eq!(direct_connections(&with(true, "t", false)), Direct::RelayOnly);
+        assert_eq!(direct_connections(&with(true, "t", true)), Direct::Allowed);
+        assert_eq!(direct_connections(&with(false, "t", false)), Direct::Allowed, "relay off");
+        assert_eq!(direct_connections(&with(true, "", false)), Direct::Allowed, "relay without a token");
+    }
+
+    /// On by default, and a file from before the key reads as on; only a
+    /// written "false" turns it off - read back from the file, the one way the
+    /// operator's choice travels (review 135: the default alone is `true`, so
+    /// a test of the default could not see the key being ignored).
+    #[test]
+    fn direct_connections_are_allowed_unless_switched_off() {
+        use super::{parse_conf, render_conf};
+        assert!(ServerConfig::default().allow_direct);
+        assert!(ServerConfig::first_run().allow_direct);
+        assert!(!parse_conf("allow_direct=false
+").allow_direct, "switched off in the file");
+        assert!(parse_conf("allow_direct=true
+").allow_direct);
+        assert!(parse_conf("relay_enabled=true
+").allow_direct, "a file from before the key");
+        let off = ServerConfig { allow_direct: false, ..ServerConfig::default() };
+        assert!(!parse_conf(&render_conf(&off)).allow_direct, "written and read back off");
+        assert!(parse_conf(&render_conf(&ServerConfig::default())).allow_direct, "and on");
+    }
+}
+
+#[cfg(test)]
+mod cli_credentials_tests {
+    use super::{cli_credentials, start_credentials, ServerConfig, StartRefusal, MIN_TOTP_SECRET_LEN};
+
+    const KEY: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+    fn saved(password: Option<&str>, totp_enabled: bool, secret: Option<&str>) -> ServerConfig {
+        ServerConfig {
+            password: password.map(str::to_string),
+            totp_enabled,
+            totp_secret: secret.map(str::to_string),
+            ..ServerConfig::default()
+        }
+    }
+
+    /// No password, or an empty one: no start (a server without one admits anyone).
+    #[test]
+    fn without_a_saved_password_the_command_line_does_not_start() {
+        assert!(cli_credentials(&saved(None, false, None), true).is_err());
+        assert!(cli_credentials(&saved(Some(""), false, None), true).is_err());
+        assert!(cli_credentials(&ServerConfig::default(), true).is_err(), "a first run has none");
+    }
+
+    /// The saved password; the 2FA key only when 2FA is on, as the settings screen does.
+    #[test]
+    fn the_saved_password_and_2fa_are_used() {
+        assert_eq!(cli_credentials(&saved(Some("secret99"), false, None), true), Ok(("secret99".into(), None)));
+        assert_eq!(cli_credentials(&saved(Some("secret99"), false, Some(KEY)), true), Ok(("secret99".into(), None)), "off is off");
+        assert_eq!(cli_credentials(&saved(Some("secret99"), true, Some(KEY)), true), Ok(("secret99".into(), Some(KEY.into()))));
+        assert!(cli_credentials(&saved(Some("secret99"), true, None), true).is_err(), "2FA on without a key");
+    }
+
+    /// A settings file that exists but could not be read is said as such - not
+    /// as "no password", which it does hold (review 128).
+    #[test]
+    fn an_unreadable_file_is_named_as_unreadable() {
+        let why = cli_credentials(&saved(Some("secret99"), false, None), false).unwrap_err();
+        assert!(why.contains("could not be read"), "{why}");
+        assert!(!why.contains("no password"), "{why}");
+    }
+
+    /// One rule for every way a server starts: a password of the button's
+    /// strength, and with 2FA a key of full length. Both states of each.
+    #[test]
+    fn the_start_rule_asks_strength_and_a_full_key() {
+        assert!(start_credentials(None, false, None).is_err());
+        assert!(start_credentials(Some(""), false, None).is_err());
+        assert!(start_credentials(Some("        "), false, None).is_err(), "spaces only");
+        assert!(start_credentials(Some("short1"), false, None).is_err(), "too short");
+        assert!(start_credentials(Some("lettersonly"), false, None).is_err(), "no digit");
+        assert_eq!(start_credentials(Some("secret99"), false, None), Ok(("secret99".into(), None)));
+        assert!(start_credentials(Some("secret99"), true, Some("")).is_err(), "an empty key is no second factor");
+        assert!(start_credentials(Some("secret99"), true, Some("A")).is_err(), "nor is a short one");
+        assert!(start_credentials(Some("secret99"), true, Some(&KEY[..MIN_TOTP_SECRET_LEN - 1])).is_err(), "one short");
+        assert_eq!(start_credentials(Some("secret99"), true, Some(KEY)), Ok(("secret99".into(), Some(KEY.into()))));
+        assert_eq!(start_credentials(Some("secret99"), false, Some("A")), Ok(("secret99".into(), None)), "2FA off: the key does not matter");
+        assert_eq!(sdr_remote_core::auth::generate_totp_secret().len(), MIN_TOTP_SECRET_LEN, "the generated key is the full length");
+    }
+
+    /// The kind of each refusal - what the settings screen picks its line from
+    /// - and a key of full length that is no base32 refused too: it would start
+    /// a server nobody can log in to (review 129).
+    #[test]
+    fn each_refusal_says_its_kind() {
+        assert_eq!(start_credentials(None, false, None), Err(StartRefusal::NoPassword));
+        assert!(matches!(start_credentials(Some("short1"), false, None), Err(StartRefusal::WeakPassword(_))));
+        assert_eq!(start_credentials(Some("secret99"), true, Some("A")), Err(StartRefusal::TotpKeyMissing));
+        assert_eq!(start_credentials(Some("secret99"), true, None), Err(StartRefusal::TotpKeyMissing));
+        let not_base32 = "1".repeat(MIN_TOTP_SECRET_LEN);
+        assert_eq!(start_credentials(Some("secret99"), true, Some(&not_base32)), Err(StartRefusal::TotpKeyInvalid));
+        let generated = sdr_remote_core::auth::generate_totp_secret();
+        assert_eq!(start_credentials(Some("secret99"), true, Some(&generated)), Ok(("secret99".into(), Some(generated))));
+    }
 }
 
 #[cfg(test)]
@@ -2028,6 +2287,34 @@ yaesu2_audio_channel=1
         assert_eq!(line_of("yaesu_memory_write_ack"), "yaesu_memory_write_ack=true");
         assert_eq!(line_of("yaesu2_memory_write_ack"), "yaesu2_memory_write_ack=false");
     }
+
+    /// The lead is no setting since build 294 (owner, 2026-10-23): a conf
+    /// that still names it reads, and the keys go at the next save.
+    #[test]
+    fn a_conf_with_the_old_lead_keys_reads_and_drops_them() {
+        let c = parse_conf("tx_lead_ms_1=0\ntx_lead_alternate_2=true\nautostart=true\n");
+        assert!(c.autostart);
+        assert!(!render_conf(&c).contains("tx_lead"));
+    }
+
+    /// Both states (working rule 13): the measurement runs only with the box
+    /// ticked and the developer mode on; the mode comes back from the file.
+    #[test]
+    fn the_measurement_needs_the_developer_mode() {
+        for (conf, measuring) in [
+            ("tx_measurement=true\ndeveloper_mode=true\n", true),
+            ("tx_measurement=true\ndeveloper_mode=false\n", false),
+            ("tx_measurement=true\n", false),
+            ("tx_measurement=false\ndeveloper_mode=true\n", false),
+        ] {
+            assert_eq!(parse_conf(conf).measuring(), measuring, "{conf}");
+        }
+        let mut c = ServerConfig::default();
+        c.developer_mode = true;
+        assert!(parse_conf(&render_conf(&c)).developer_mode);
+        c.developer_mode = false;
+        assert!(!parse_conf(&render_conf(&c)).developer_mode);
+    }
 }
 
 #[cfg(test)]
@@ -2048,10 +2335,11 @@ mod first_run_tests {
         assert!(!c.rotor_enabled, "rotor");
         assert!(!c.dxcluster_enabled, "DX cluster");
         assert!(!c.relay_enabled, "relay");
-        assert!(!c.relay_udp_enabled, "audio over UDP");
         assert!(!c.yaesu_enabled, "radio 1");
         assert!(!c.yaesu2_enabled, "radio 2");
         assert!(!c.autostart, "autostart");
+        assert!(!c.tx_measurement, "the developer's measurement");
+        assert!(!c.developer_mode, "the developer mode");
         for (what, open) in [
             ("Amplitec", c.show_amplitec_window),
             ("tuner", c.show_tuner_window),

@@ -113,10 +113,7 @@ impl eframe::App for ServerApp {
                             });
                         if self.theme_variant == sdr_remote_theme::ThemeVariant::Custom {
                             let mut edit = |label: &str, c: &mut egui::Color32| {
-                                let mut rgb = [c.r(), c.g(), c.b()];
-                                if ui.color_edit_button_srgb(&mut rgb).on_hover_text(label).changed() {
-                                    *c = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                }
+                                sdr_remote_theme::colour_button(ui, c).on_hover_text(label);
                             };
                             edit("Achtergrond", &mut self.theme_custom.background);
                             edit("Widgets", &mut self.theme_custom.widget);
@@ -212,24 +209,6 @@ impl eframe::App for ServerApp {
                                 }
                             });
                     });
-                    // Why the port cannot be opened, when the server knows - straight
-                    // under the dropdown where the port was chosen. The busy case is
-                    // the classic one: other CAT software still holding the port in
-                    // the background while its window is long closed.
-                    if let Some(ref y) = self.yaesu {
-                        use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING};
-                        let st = y.status();
-                        if !st.connected {
-                            let text = match st.port_trouble {
-                                PORT_TROUBLE_BUSY => Some(rust_i18n::t!("srv_port_busy").to_string()),
-                                PORT_TROUBLE_MISSING => Some(rust_i18n::t!("srv_port_missing").to_string()),
-                                _ => None,
-                            };
-                            if let Some(text) = text {
-                                ui.colored_label(egui::Color32::from_rgb(255, 170, 40), text);
-                            }
-                        }
-                    }
                     // TX/output device: separately selectable so the transmit audio always
                     // goes to the right codec (PATCH-yaesu-output-device). Empty = same as
                     // the input; choose this when the capture/render endpoints have different names.
@@ -551,27 +530,7 @@ impl eframe::App for ServerApp {
 
                     ui.add_space(8.0);
                     ui.heading("Relay");
-                    // Audio over UDP follows the relay switch. It is the lower-latency
-                    // route and decides nothing at all while the relay is off, so it
-                    // comes along when the relay is switched on rather than sitting
-                    // there as a second step that costs latency when forgotten. It
-                    // stays a real checkbox underneath: a firewall that drops UDP 443
-                    // is a good reason to turn it off again, and that choice holds
-                    // until the relay switch itself is next touched.
-                    if ui
-                        .checkbox(&mut self.relay_enabled, rust_i18n::t!("srv_relay_enable").to_string())
-                        .changed()
-                    {
-                        self.relay_udp_enabled = self.relay_enabled;
-                    }
-                    ui.add_enabled_ui(self.relay_enabled, |ui| {
-                        ui.checkbox(&mut self.relay_udp_enabled, rust_i18n::t!("srv_relay_udp").to_string())
-                            .on_hover_text(if self.relay_enabled {
-                                rust_i18n::t!("srv_relay_udp_hover").to_string()
-                            } else {
-                                rust_i18n::t!("srv_relay_udp_off_hover").to_string()
-                            });
-                    });
+                    ui.checkbox(&mut self.relay_enabled, rust_i18n::t!("srv_relay_enable").to_string());
                     ui.horizontal(|ui| {
                         ui.label(rust_i18n::t!("srv_relay_url").to_string());
                         ui.add(
@@ -599,6 +558,19 @@ impl eframe::App for ServerApp {
                                 .password(true),
                         );
                     });
+                    // Allow direct connections (build 135). Grey without a relay
+                    // that is set up: off would then lock everyone out, so it
+                    // does nothing - the one rule is `config::direct_connections`.
+                    let relay_set_up = sdr_remote_relay::is_configured(
+                        self.relay_enabled, &self.relay_url, &self.relay_station, &self.relay_token);
+                    ui.add_enabled_ui(relay_set_up, |ui| {
+                        // Two texts, one per state: egui shows `on_hover_text` only on
+                        // an enabled widget, so the grey one needs its own call
+                        // (review 135: the reason it is grey never showed).
+                        ui.checkbox(&mut self.allow_direct, rust_i18n::t!("srv_allow_direct").to_string())
+                            .on_hover_text(rust_i18n::t!("srv_allow_direct_hover").to_string())
+                            .on_disabled_hover_text(rust_i18n::t!("srv_allow_direct_no_relay_hover").to_string());
+                    });
                     ui.label(
                         egui::RichText::new(rust_i18n::t!("srv_relay_desc").to_string())
                         .size(10.0)
@@ -622,10 +594,27 @@ impl eframe::App for ServerApp {
                             rust_i18n::t!("srv_config_unwritable").to_string(),
                         );
                     }
-                    if self.password.is_empty() {
-                        ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_password_required").to_string());
-                    } else if let Err(msg) = sdr_remote_core::auth::validate_password_strength(&self.password) {
-                        ui.colored_label(egui::Color32::from_rgb(255, 165, 0), msg);
+                    // Why the button is off, from the rule's own answer - not a
+                    // second reading of the rule (review 129).
+                    let refusal = crate::config::start_credentials(
+                        Some(&self.password),
+                        self.totp_enabled,
+                        Some(&self.totp_secret),
+                    )
+                    .err();
+                    match &refusal {
+                        Some(crate::config::StartRefusal::NoPassword) => {
+                            ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_password_required").to_string());
+                        }
+                        Some(crate::config::StartRefusal::WeakPassword(msg)) => {
+                            ui.colored_label(egui::Color32::from_rgb(255, 165, 0), *msg);
+                        }
+                        // Said in the 2FA block below. Every kind is named, no
+                        // catch-all: a new kind does not compile until this
+                        // screen says it (review 130).
+                        Some(crate::config::StartRefusal::TotpKeyMissing)
+                        | Some(crate::config::StartRefusal::TotpKeyInvalid)
+                        | None => {}
                     }
 
                     ui.add_space(4.0);
@@ -668,16 +657,31 @@ impl eframe::App for ServerApp {
                             }
                         }
                         ui.label(egui::RichText::new(rust_i18n::t!("srv_scan_qr").to_string()).small().weak());
+                        match &refusal {
+                            Some(crate::config::StartRefusal::TotpKeyMissing) => {
+                                ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_totp_key_required").to_string());
+                            }
+                            Some(crate::config::StartRefusal::TotpKeyInvalid) => {
+                                ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_totp_key_invalid").to_string());
+                            }
+                            // Said above, with the password.
+                            Some(crate::config::StartRefusal::NoPassword)
+                            | Some(crate::config::StartRefusal::WeakPassword(_))
+                            | None => {}
+                        }
                     }
 
                     ui.add_space(8.0);
                     ui.checkbox(&mut self.autostart, rust_i18n::t!("srv_autostart").to_string());
+                    // The developer mode (build 294): a code opens it, a button
+                    // closes it. Its tools only while it is on.
+                    self.render_developer_mode(ui);
 
                     ui.add_space(8.0);
 
-                    let pw_valid = !self.password.is_empty()
-                        && sdr_remote_core::auth::validate_password_strength(&self.password).is_ok();
-                    if ui.add_enabled(pw_valid, egui::Button::new(rust_i18n::t!("srv_save_start").to_string())).clicked() {
+                    // The same answer the lines above came from.
+                    let may_start = refusal.is_none();
+                    if ui.add_enabled(may_start, egui::Button::new(rust_i18n::t!("srv_save_start").to_string())).clicked() {
                         self.start_server();
                     }
                     }); // <- end ScrollArea wrap for Mode::Settings
@@ -685,6 +689,7 @@ impl eframe::App for ServerApp {
                 Mode::Running => {
                     ui.horizontal(|ui| {
                         ui.heading(format!("ThetisLink Server v{}", sdr_remote_core::VERSION));
+                        super::developer_mode::dev_badge(ui);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button(rust_i18n::t!("srv_about").to_string()).clicked() {
                                 self.show_about = !self.show_about;
@@ -692,6 +697,13 @@ impl eframe::App for ServerApp {
                             self.render_chat_button(ui);
                         });
                     });
+                    // The server thread ended while this screen says Running - a
+                    // panic, or an error out of run_server_async. Stopping takes the
+                    // handle away (stop_server_and_wait), so a finished one here was
+                    // not asked for (review 46). Say so, and what helps.
+                    if self.server_thread.as_ref().map_or(false, |h| h.is_finished()) {
+                        ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_server_stopped").to_string());
+                    }
                     // UI scale, next to the arrange button: the two belong together -
                     // a smaller scale is what makes a finer grid worth having.
                     ui.horizontal(|ui| {
@@ -719,11 +731,14 @@ impl eframe::App for ServerApp {
                             }
                         });
                     });
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
 
-                    // Reserve space at the bottom for the two stacked buttons
-                    // (Exit + Settings) with their separators, so a long
-                    // status/scan list doesn't push them out of view. Previously
+                    // Reserve space at the bottom for what sits below the list - one
+                    // `rule` and the Settings button since the Exit button went
+                    // (2026-09-19) - so a long status/scan list doesn't push it out
+                    // of view. Still sized for two buttons and two lines of 6 px:
+                    // more than one `rule` (13.5 px) and one button need (review of
+                    // 208), and left as it was rather than tuned unseen. Previously
                     // there was a fixed 30px here - too little for two buttons, so
                     // after an Adafruit scan the Settings button became unreachable
                     // (the panel itself doesn't scroll, only the ScrollArea).
@@ -741,7 +756,6 @@ impl eframe::App for ServerApp {
                                             ui,
                                             shared,
                                             &self.status_bind_addr,
-                                            self.yaesu.is_some(),
                                             self.amplitec.is_some(),
                                             self.tuner.is_some(),
                                             self.spe.is_some(),
@@ -787,7 +801,7 @@ impl eframe::App for ServerApp {
                     // No Exit button (owner's decision, 2026-09-19): closing the
                     // window is the way out, and it does all the button did - see
                     // `Drop for ServerApp`.
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
                     if ui.button(rust_i18n::t!("srv_settings").to_string()).clicked() {
                         // Stop server (thread finishes in background)
                         if let Some(tx) = self.shutdown_tx.take() {
@@ -900,7 +914,7 @@ impl eframe::App for ServerApp {
                             render_tuner_panel(ui, &tuner_for_window, &status, &mut self.show_tuner_log);
 
                             ui.add_space(4.0);
-                            ui.separator();
+                            sdr_remote_theme::rule(ui);
 
                             // Macro button grid
                             ui.horizontal(|ui| {
@@ -1016,6 +1030,12 @@ impl eframe::App for ServerApp {
 
                 let labels = self.amplitec_labels.clone();
                 let log_entries: Vec<_> = self.amplitec_log.iter().cloned().collect();
+                let rx_only_unguarded = self
+                    .status_panel_state
+                    .as_ref()
+                    .and_then(|s| s.rx_only_unguarded_slot.get())
+                    .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                    .unwrap_or(false);
                 let amplitec_for_window = amplitec.clone();
 
                 let amp_default_h = if self.show_amplitec_log { 330.0 } else { 175.0 };
@@ -1058,6 +1078,7 @@ impl eframe::App for ServerApp {
                                     &labels,
                                     &mut self.amplitec_max_w, &mut self.amplitec_tx_blocked,
                                     &log_entries, &mut self.show_amplitec_log,
+                                    rx_only_unguarded,
                                 );
                                 if power_changed {
                                     // Persist to the server conf; the network loop
@@ -1160,11 +1181,12 @@ impl eframe::App for ServerApp {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                                 let spe_operate_allowed = crate::pa_policy::operate_allowed(
-                                    crate::pa_policy::effective_active_pa(
-                                        self.active_pa.load(Ordering::Relaxed),
-                                        true,
-                                        self.rf2k.is_some(),
-                                    ),
+                                    crate::pa_policy::ActiveMark {
+                                        marked: self.active_pa.load(Ordering::Relaxed),
+                                        spe_present: true,
+                                        rf2k_present: self.rf2k.is_some(),
+                                    }
+                                    .effective(),
                                     crate::pa_policy::PA_SPE,
                                 );
                                 render_spe_panel(ui, &spe_for_window, &status, &log_entries,
@@ -1225,11 +1247,12 @@ impl eframe::App for ServerApp {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             egui::ScrollArea::vertical().show(ui, |ui| {
                                 let rf2k_operate_allowed = crate::pa_policy::operate_allowed(
-                                    crate::pa_policy::effective_active_pa(
-                                        self.active_pa.load(Ordering::Relaxed),
-                                        self.spe.is_some(),
-                                        true,
-                                    ),
+                                    crate::pa_policy::ActiveMark {
+                                        marked: self.active_pa.load(Ordering::Relaxed),
+                                        spe_present: self.spe.is_some(),
+                                        rf2k_present: true,
+                                    }
+                                    .effective(),
                                     crate::pa_policy::PA_RF2K,
                                 );
                                 render_rf2k_panel(ui, &rf2k_for_window, &status,
@@ -1242,8 +1265,7 @@ impl eframe::App for ServerApp {
                                     &mut self.rf2k_confirm_zero_fram);
                                 render_rf2k_drive_config_section(ui, &rf2k_for_window, &status,
                                     &mut self.rf2k_show_drive_config,
-                                    &mut self.rf2k_drive_edit,
-                                    &mut self.rf2k_drive_loaded);
+                                    &mut self.rf2k_drive_edit);
                                 render_rf2k_footer(ui, &status);
                             });
                         });
@@ -1408,7 +1430,7 @@ impl eframe::App for ServerApp {
                             ui.label(rust_i18n::t!("srv_about_tagline").to_string());
                         });
                         ui.add_space(8.0);
-                        ui.separator();
+                        sdr_remote_theme::rule(ui);
                         ui.label(RichText::new("Author").size(13.0).strong());
                         ui.label("Chiron van der Burgt - PA3GHM");
                         ui.add_space(6.0);
@@ -1487,7 +1509,7 @@ impl eframe::App for ServerApp {
                             );
                         });
                     ui.add_space(8.0);
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
                     ui.horizontal(|ui| {
                         // Already accepted: only a way out. Offering "Accept"
                         // again would suggest the permission had lapsed.
@@ -1572,7 +1594,7 @@ impl ServerApp {
         let Some(model) = self.probe_model[s] else {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(rust_i18n::t!("srv_probe_none").to_string())
+                    egui::RichText::new(rust_i18n::t!(super::status_panel::probe_note_key(self.probe_trouble[s], "srv_probe_none")).to_string())
                         .size(11.0)
                         .color(Color32::from_rgb(220, 160, 40)),
                 );
@@ -1598,7 +1620,7 @@ impl ServerApp {
         });
         if self.probe_silent[s] {
             ui.label(
-                egui::RichText::new(rust_i18n::t!("srv_probe_silent").to_string())
+                egui::RichText::new(rust_i18n::t!(super::status_panel::probe_note_key(self.probe_trouble[s], "srv_probe_silent")).to_string())
                     .size(11.0)
                     .color(Color32::from_rgb(220, 160, 40)),
             );
@@ -1708,8 +1730,11 @@ impl ServerApp {
         std::thread::Builder::new()
             .name(format!("model-probe-{slot}"))
             .spawn(move || {
-                let found = crate::yaesu::detect_model(&port, baud).map(|(m, _)| m.as_code());
-                let _ = tx.send((slot, port, found));
+                let (found, trouble) = match crate::yaesu::detect_model_or_trouble(&port, baud) {
+                    Ok((m, _)) => (Some(m.as_code()), sdr_remote_core::protocol::PORT_TROUBLE_NONE),
+                    Err(trouble) => (None, trouble),
+                };
+                let _ = tx.send((slot, port, found, trouble));
             })
             .ok();
     }
@@ -1718,7 +1743,7 @@ impl ServerApp {
     /// for a port that is no longer selected is dropped, so a quick change of
     /// mind cannot leave the screen describing the previous radio.
     fn drain_model_probes(&mut self) {
-        while let Ok((slot, port, model)) = self.probe_rx.try_recv() {
+        while let Ok((slot, port, model, trouble)) = self.probe_rx.try_recv() {
             let s = slot as usize;
             let current = if slot == 0 { &self.yaesu_port } else { &self.yaesu2_port };
             if current.trim() != port.trim() {
@@ -1726,6 +1751,7 @@ impl ServerApp {
                 continue;
             }
             self.probe_busy[s] = false;
+            self.probe_trouble[s] = trouble;
             // No answer does not erase what we knew. A radio that is switched
             // off would otherwise take its own settings off the screen.
             if model.is_none() && self.probe_model[s].is_some() {
@@ -1757,7 +1783,11 @@ impl ServerApp {
                     sdr_remote_core::protocol::radio_model_name(code),
                     port
                 ),
-                None => log::info!("[radio{}] settings probe: nothing answered on {}", slot, port),
+                // With the reason when the port did not open (build 271).
+                None => match crate::yaesu::port_trouble_log_text(trouble) {
+                    Some(why) => log::info!("[radio{}] settings probe: {} could not be opened - {}", slot, port, why),
+                    None => log::info!("[radio{}] settings probe: nothing answered on {}", slot, port),
+                },
             }
             // Remembered right away, so the next launch offers the same controls
             // without opening the port again - but only when the port actually

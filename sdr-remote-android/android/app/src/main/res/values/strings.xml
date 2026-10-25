@@ -48,8 +48,8 @@
     <string name="settings_token">Token</string>
     <string name="settings_device_name">Device name</string>
     <string name="settings_device_name_hint">Shown in relay logs. Restart the app to apply.</string>
-    <string name="settings_audio_udp">Audio over UDP (low latency):</string>
-    <string name="settings_audio_udp_hint">On: lowest-latency audio over UDP. Off: audio stays on the encrypted relay channel. Restart the app to apply.</string>
+    <string name="settings_route_in_use">In use now: %1$s</string>
+    <string name="settings_route_restart">restart the app to apply</string>
     <string name="settings_ptt_mode">PTT mode:</string>
     <string name="settings_push_to_talk">Push to talk</string>
     <string name="settings_toggle">Toggle</string>
@@ -77,6 +77,9 @@
     <string name="settings_gate_thetis_mic">Thetis phone mic</string>
     <string name="settings_gate_yaesu_mic">Yaesu phone mic</string>
     <string name="settings_mic_gate_hint">PTT is immediate; mic audio opens after this delay. Test range: 0-800 ms.</string>
+    <string name="settings_dev_code">Code</string>
+    <string name="settings_dev_on">Developer mode: measurement, relay and TCP tests, and the extra log lines</string>
+    <string name="settings_dev_off">Switch off</string>
     <string name="settings_remote_server_pc">Remote server PC:</string>
     <string name="settings_reboot">Reboot</string>
     <string name="settings_shutdown">Shutdown</string>
@@ -110,7 +113,14 @@
     <string name="stats_tx_gain">TX Gain</string>
     <string name="stats_audio_levels">Audio Levels:</string>
     <string name="stats_statistics">Statistics:</string>
-    <string name="stats_tcp_fallback">TCP fallback</string>
+    <string name="stats_measure">Measurement</string>
+    <string name="stats_measure_start">Start</string>
+    <string name="stats_measure_stop">Stop</string>
+    <string name="stats_relay_only">Relay only</string>
+    <string name="stats_relay_only_hint">No direct path while on; a direct one goes back to the relay at once. Not kept after a restart.</string>
+    <string name="stats_force_tcp">Force TCP</string>
+    <string name="stats_force_tcp_hint">Everything over the relay via TCP while on, as on a network without UDP - to measure what that costs. Not kept after a restart.</string>
+    <string name="stats_relay_only_no_relay">Only when connected through the relay.</string>
     <string name="stats_link_loss">Connection loss</string>
     <string name="stats_down">Down</string>
     <string name="stats_up">Up</string>
@@ -321,4 +331,8 @@
     <string name="settings_ui_scale">Display size:</string>
     <string name="settings_ui_scale_landscape_on">At this size the app turns with the device. Lock rotation on the device to stay upright.</string>
     <string name="settings_ui_scale_landscape_off">At this size the app stays upright. A smaller size lets it turn.</string>
+    <!-- Shown when the server is not running this app's build. It only tells;
+         nothing on this screen refuses to work over it. -->
+    <string name="stats_build_mismatch">The server runs %1$s and this app is %2$s - they should be the same build.</string>
+    <string name="stats_build_too_old">a build too old to say which</string>
 </resources>

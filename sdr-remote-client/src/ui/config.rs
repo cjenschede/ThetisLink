@@ -248,21 +248,8 @@ pub(crate) struct ClientConfig {
     pub(crate) meter_analog: [bool; 6],
     pub(crate) spectrum_popout: bool,
     pub(crate) main_window_pos: Option<(f32, f32)>,
-    pub(crate) ub_show_menu: bool,
-    pub(crate) collapse_diversity: bool,
-    pub(crate) collapse_yaesu_eq: bool,
-    pub(crate) collapse_yaesu_memories: bool,
-    pub(crate) collapse_yaesu_menu: bool,
-    // The groups on the Server tab (helpers::settings_group). Closed by default:
-    // the tab is long, and the point of a group is that it can be shut.
-    pub(crate) group_audio_open: bool,
-    pub(crate) group_roger_open: bool,
-    pub(crate) group_ble_open: bool,
-    pub(crate) group_cw_open: bool,
-    pub(crate) collapse_yaesu2_memories: bool,
-    pub(crate) collapse_yaesu2_menu: bool,
-    pub(crate) amplitec_power_show: bool,
-    pub(crate) bw_breakdown_expanded: bool,
+    // Every remembered chevron, groups and fold-outs alike (`Fold`).
+    pub(crate) folds_open: FoldsOpen,
     pub(crate) yaesu_memories_h: f32,
     /// Height of the slot-1 memory list. Separate from slot 0 on purpose: the
     /// two windows are laid out independently and a shared height moves one
@@ -367,6 +354,10 @@ pub(crate) struct ClientConfig {
     /// True -> zoom-min 1x allowed, smear when tuning <1.2× zoom.
     /// Server enforces strictest over all clients (as long as one client false -> server clamps to 2x).
     pub(crate) allow_zoom_below_2x: bool,
+    /// The developer mode (build 295; owner decision 2026-10-23): opened with
+    /// the code on the server screen, kept until it is closed there. What the
+    /// mode is lives in `sdr_remote_core::dev_mode`.
+    pub(crate) developer_mode: bool,
 
     /// PTT switch-on spike protection for a built-in speaker+mic in one chassis
     /// (tablets/laptops). When off, all gate-delays are 0 - no added latency. The
@@ -388,10 +379,6 @@ pub(crate) struct ClientConfig {
     /// Human device label sent to the relay (shown in relay logs/dashboard).
     /// Auto-defaulted to the hostname on first run; user-editable; may contain spaces.
     pub(crate) relay_device_name: String,
-    /// PATCH-relay-audio-udp: route audio+PTT over raw UDP (port 443) instead of the
-    /// wss tunnel - no retransmit, low latency. Default on. The env var
-    /// THETISLINK_RELAY_UDP_PORT overrides this (testing / non-standard port).
-    pub(crate) relay_udp_enabled: bool,
 
     /// UI language: "en" (base), "nl", "de" or "fr". Any other value falls back
     /// to "en". On a machine with no config file yet it is taken from the OS
@@ -431,8 +418,8 @@ impl Default for ClientConfig {
             theme_custom: String::new(),
             spectrum_enabled: false,
             spectrum_ref_db: -20.0,
-            spectrum_range_db: 100.0,
-            auto_ref_enabled: true,
+            spectrum_range_db: sdr_remote_logic::state::SPECTRUM_RANGE_DEFAULT_DB,
+            auto_ref_enabled: sdr_remote_logic::state::SPECTRUM_AUTO_REF_DEFAULT,
             waterfall_contrast: 1.2,
             spectrum_max_bins: sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16,
             spectrum_fft_size_k: 0,  // 0 = auto (server default)
@@ -476,8 +463,8 @@ impl Default for ClientConfig {
             vrx2_high_res_spectrum: None,
             wf_contrast_per_band: HashMap::new(),
             rx2_spectrum_ref_db: -20.0,
-            rx2_spectrum_range_db: 100.0,
-            rx2_auto_ref_enabled: true,
+            rx2_spectrum_range_db: sdr_remote_logic::state::SPECTRUM_RANGE_DEFAULT_DB,
+            rx2_auto_ref_enabled: sdr_remote_logic::state::SPECTRUM_AUTO_REF_DEFAULT,
             rx2_waterfall_contrast: 1.2,
             rx1_enabled: true, // default ON
             rx2_enabled: false,
@@ -508,19 +495,7 @@ impl Default for ClientConfig {
             meter_analog: [false; 6],
             spectrum_popout: false,
             main_window_pos: None,
-            ub_show_menu: false,
-            collapse_diversity: false,
-            collapse_yaesu_eq: false,
-            collapse_yaesu_memories: false,
-            collapse_yaesu_menu: false,
-            group_audio_open: false,
-            group_roger_open: false,
-            group_ble_open: false,
-            group_cw_open: false,
-            collapse_yaesu2_memories: false,
-            collapse_yaesu2_menu: false,
-            amplitec_power_show: false,
-            bw_breakdown_expanded: false,
+            folds_open: FoldsOpen::default(),
             yaesu_memories_h: 250.0,
             yaesu2_memories_h: 250.0,
             layout_grids: String::new(),
@@ -567,6 +542,7 @@ impl Default for ClientConfig {
             catsync_url_y2: String::new(),
             catsync_favorites: Vec::new(),
             allow_zoom_below_2x: false,
+            developer_mode: false,
             spike_protection: false,
             mic_gate_delay_thetis_ms: 0,
             mic_gate_delay_yaesu_ms: 100,
@@ -576,7 +552,6 @@ impl Default for ClientConfig {
             relay_token: String::new(),
             relay_instance_id: String::new(),
             relay_device_name: String::new(),
-            relay_udp_enabled: true,
             language: "en".to_string(),
             successful_connects: 0,
         }
@@ -712,8 +687,12 @@ pub(crate) fn load_config() -> ClientConfig {
 
     let mut tx_profiles: Option<Vec<(u8, String)>> = None;
     let mut has_keys = false;
+    // A file from before build 171 has no `spectrum_defaults=`: version 0.
+    let mut spectrum_defaults: u32 = 0;
     for line in contents.lines() {
-        if let Some(val) = line.strip_prefix("server=") {
+        if let Some(val) = line.strip_prefix("spectrum_defaults=") {
+            spectrum_defaults = val.trim().parse().unwrap_or(0);
+        } else if let Some(val) = line.strip_prefix("server=") {
             let v = val.trim();
             if !v.is_empty() {
                 config.server = v.to_string();
@@ -727,9 +706,6 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("relay_enabled=") {
             config.relay_enabled = val.trim() == "true";
-            has_keys = true;
-        } else if let Some(val) = line.strip_prefix("relay_udp_enabled=") {
-            config.relay_udp_enabled = val.trim() == "true";
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("relay_url=") {
             config.relay_url = val.trim().to_string();
@@ -1079,24 +1055,7 @@ pub(crate) fn load_config() -> ClientConfig {
             for (i, part) in val.trim().split(',').enumerate() {
                 if i < 6 { config.meter_analog[i] = part.trim() == "1" || part.trim() == "true"; }
             }
-        } else if let Some(val) = line.strip_prefix("ub_show_menu=") {
-            config.ub_show_menu = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("collapse_diversity=") {
-            config.collapse_diversity = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("collapse_yaesu_eq=") {
-            config.collapse_yaesu_eq = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("collapse_yaesu_memories=") {
-            config.collapse_yaesu_memories = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("collapse_yaesu_menu=") {
-            config.collapse_yaesu_menu = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("group_audio_open=") {
-            config.group_audio_open = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("group_roger_open=") {
-            config.group_roger_open = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("group_ble_open=") {
-            config.group_ble_open = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("group_cw_open=") {
-            config.group_cw_open = val.trim() == "true";
+        } else if config.folds_open.read_line(line) {
         } else if let Some(val) = line.strip_prefix("cw_paddle_enabled=") {
             config.cw_paddle_enabled = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("cw_sidetone_on=") {
@@ -1121,14 +1080,6 @@ pub(crate) fn load_config() -> ClientConfig {
             config.cw_target = val.trim().parse().unwrap_or(0).min(2);
         } else if let Some(val) = line.strip_prefix("cw_hang_ms=") {
             config.cw_hang_ms = val.trim().parse::<u16>().unwrap_or(500).clamp(200, 3000);
-        } else if let Some(val) = line.strip_prefix("collapse_yaesu2_memories=") {
-            config.collapse_yaesu2_memories = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("collapse_yaesu2_menu=") {
-            config.collapse_yaesu2_menu = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("amplitec_power_show=") {
-            config.amplitec_power_show = val.trim() == "true";
-        } else if let Some(val) = line.strip_prefix("bw_breakdown_expanded=") {
-            config.bw_breakdown_expanded = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("layout_grids=") {
             config.layout_grids = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("layout_mem") {
@@ -1307,6 +1258,8 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("allow_zoom_below_2x=") {
             config.allow_zoom_below_2x = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("developer_mode=") {
+            config.developer_mode = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("spike_protection=") {
             config.spike_protection = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("mic_gate_delay_thetis_ms=") {
@@ -1384,7 +1337,54 @@ pub(crate) fn load_config() -> ClientConfig {
         config.relay_device_name = generate_device_name();
         save_relay_device_name(&config.relay_device_name);
     }
+    if spectrum_defaults < SPECTRUM_DEFAULTS_VERSION {
+        let changed = adopt_new_spectrum_defaults(&mut config);
+        if changed > 0 {
+            // Named in advance (working rule 11, build 171).
+            log::info!(
+                "Spectrum defaults: {} value(s) still at the old default set to the new one (auto ref on, range {} dB)",
+                changed,
+                sdr_remote_logic::state::SPECTRUM_RANGE_DEFAULT_DB
+            );
+        }
+    }
     config
+}
+
+/// The version of the spectrum defaults a saved file was written with. Every
+/// save writes it, so a value the operator sets later is never taken for an
+/// untouched old default.
+const SPECTRUM_DEFAULTS_VERSION: u32 = 2;
+
+/// Once, for a file from before build 171: a spectrum value still exactly at
+/// the old default was never changed - every save writes every value, so
+/// that is the only way to tell - and gets the new one (owner, 2026-10-11:
+/// "alleen nieuwe nog niet aangepaste range waarde"). Returns how many
+/// changed.
+fn adopt_new_spectrum_defaults(config: &mut ClientConfig) -> usize {
+    use sdr_remote_logic::state::{SPECTRUM_AUTO_REF_DEFAULT, SPECTRUM_RANGE_DEFAULT_DB};
+    const OLD_RANGE_DB: f32 = 100.0;
+    let mut changed = 0;
+    for range in [&mut config.spectrum_range_db, &mut config.rx2_spectrum_range_db] {
+        if *range == OLD_RANGE_DB {
+            *range = SPECTRUM_RANGE_DEFAULT_DB;
+            changed += 1;
+        }
+    }
+    for range in [&mut config.vrx1_range_db, &mut config.vrx2_range_db] {
+        if *range == Some(OLD_RANGE_DB) {
+            *range = Some(SPECTRUM_RANGE_DEFAULT_DB);
+            changed += 1;
+        }
+    }
+    // The VRX screens had it off by default; RX1 and RX2 had it on already.
+    for auto in [&mut config.vrx1_auto_ref, &mut config.vrx2_auto_ref] {
+        if *auto == Some(false) {
+            *auto = Some(SPECTRUM_AUTO_REF_DEFAULT);
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// Auto-default device label = the computer's hostname (Windows COMPUTERNAME, else
@@ -1486,9 +1486,9 @@ pub(crate) fn survives_full_save(line: &str) -> bool {
         || line.starts_with("mic_gate_delay_yaesu_ms=")
         || line.starts_with("smeter_source=")
         || line.starts_with("thetis_autostart=")
+        || line.starts_with("developer_mode=")
         || line.starts_with("successful_connects=")
         || line.starts_with("relay_enabled=")
-        || line.starts_with("relay_udp_enabled=")
         || line.starts_with("relay_url=")
         || line.starts_with("relay_station=")
         || line.starts_with("relay_token=")
@@ -1516,8 +1516,10 @@ pub(crate) fn survives_full_save(line: &str) -> bool {
         // The Morse paddle, written by save_cw_paddle_enabled; one prefix for
         // the keys step 7 of the CW design will add next to it.
         || line.starts_with("cw_")
-        // The open/closed state of the groups on the Server tab, one key each.
-        || line.starts_with("group_")
+        // Every remembered chevron, written one key at a time by
+        // `FoldsOpen::toggle`. Its own list, so a new fold is kept without
+        // being named here.
+        || Fold::ALL.iter().any(|fold| line.strip_prefix(fold.key()).is_some_and(|rest| rest.starts_with('=')))
         // Which administrator answers were folded away. Same trap
         || line.starts_with("chat_answers_seen=")
         // One prefix for the relay keys, for the same reason as `roger_`
@@ -1604,15 +1606,6 @@ pub(crate) fn save_config(
     meter_analog: [bool; 6],
     spectrum_popout: bool,
     main_window_pos: Option<(f32, f32)>,
-    ub_show_menu: bool,
-    collapse_diversity: bool,
-    collapse_yaesu_eq: bool,
-    collapse_yaesu_memories: bool,
-    collapse_yaesu_menu: bool,
-    collapse_yaesu2_memories: bool,
-    collapse_yaesu2_menu: bool,
-    amplitec_power_show: bool,
-    bw_breakdown_expanded: bool,
     yaesu_memories_h: f32,
     yaesu2_memories_h: f32,
     layout_grids: &str,
@@ -1675,6 +1668,7 @@ pub(crate) fn save_config(
         content.push_str(&format!("spectrum_ref_db={:.0}\n", spectrum_ref_db));
         content.push_str(&format!("spectrum_range_db={:.0}\n", spectrum_range_db));
         content.push_str(&format!("auto_ref_enabled={}\n", auto_ref_enabled));
+        content.push_str(&format!("spectrum_defaults={}\n", SPECTRUM_DEFAULTS_VERSION));
         content.push_str(&format!("spectrum_max_bins={}\n", spectrum_max_bins));
         content.push_str(&format!("spectrum_fft_size_k={}\n", spectrum_fft_size_k));
         content.push_str(&format!("rx2_spectrum_fft_size_k={}\n", rx2_spectrum_fft_size_k));
@@ -1813,15 +1807,6 @@ pub(crate) fn save_config(
         if let Some((x, y)) = main_window_pos {
             content.push_str(&format!("main_window_pos={:.0},{:.0}\n", x, y));
         }
-        content.push_str(&format!("ub_show_menu={}\n", ub_show_menu));
-        content.push_str(&format!("collapse_diversity={}\n", collapse_diversity));
-        content.push_str(&format!("collapse_yaesu_eq={}\n", collapse_yaesu_eq));
-        content.push_str(&format!("collapse_yaesu_memories={}\n", collapse_yaesu_memories));
-        content.push_str(&format!("collapse_yaesu_menu={}\n", collapse_yaesu_menu));
-        content.push_str(&format!("collapse_yaesu2_memories={}\n", collapse_yaesu2_memories));
-        content.push_str(&format!("collapse_yaesu2_menu={}\n", collapse_yaesu2_menu));
-        content.push_str(&format!("amplitec_power_show={}\n", amplitec_power_show));
-        content.push_str(&format!("bw_breakdown_expanded={}\n", bw_breakdown_expanded));
         content.push_str(&format!("yaesu_memories_h={:.0}\n", yaesu_memories_h));
         content.push_str(&format!("yaesu2_memories_h={:.0}\n", yaesu2_memories_h));
         if !layout_grids.is_empty() {
@@ -1931,7 +1916,7 @@ const UNSORTED: &str = "Not sorted yet";
 /// another monitor stands out in a column of positions and disappears
 /// entirely when it sits under its own heading.
 const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
-    ("Connection", &["server", "password", "relay_", "successful_connects", "thetis_autostart"]),
+    ("Connection", &["server", "password", "relay_", "quic_", "successful_connects", "thetis_autostart"]),
     ("Audio", &[
         "volume", "play_volume", "tx_gain", "vfo_a_volume", "vfo_b_volume", "local_volume",
         "rx2_volume", "input_device", "output_device", "agc_enabled", "thetis_wideband_audio",
@@ -1959,9 +1944,10 @@ const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
     ("Window visibility", &[
         "spectrum_popout", "yaesu_popout", "yaesu2_popout", "popout_joined", "collapse_",
         "device_tab", "meter_analog", "bw_breakdown_expanded", "amplitec_power_show",
-        "ub_show_menu",
+        "ub_show_menu", "group_",
     ]),
     ("Appearance", &["theme", "language", "ui_zoom", "layout_grids"]),
+    ("Development", &["developer_mode"]),
 ];
 
 /// Phase A relay monitor: persist relay settings without touching the large
@@ -1971,7 +1957,6 @@ pub(crate) fn save_relay_config(
     url: &str,
     station: &str,
     token: &str,
-    udp_enabled: bool,
 ) {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
@@ -1992,7 +1977,6 @@ pub(crate) fn save_relay_config(
         ("relay_url", url.trim().to_string()),
         ("relay_station", station.trim().to_string()),
         ("relay_token", token_enc),
-        ("relay_udp_enabled", udp_enabled.to_string()),
     ];
     let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
     for (key, value) in desired {
@@ -2125,16 +2109,156 @@ pub(crate) fn load_chat_answers_seen() -> Vec<i64> {
         .collect()
 }
 
-/// The open/closed state of one group on the Server tab. Literal keys, so the
-/// scanning test can see each of them.
-pub(crate) fn save_group_open(key: &str, open: bool) {
-    let v = if open { "true" } else { "false" };
-    match key {
-        "group_audio_open" => save_single_key("group_audio_open", v),
-        "group_roger_open" => save_single_key("group_roger_open", v),
-        "group_ble_open" => save_single_key("group_ble_open", v),
-        "group_cw_open" => save_single_key("group_cw_open", v),
-        other => log::warn!("save_group_open: unknown group {}", other),
+/// Every chevron whose open/closed state is remembered: the groups on the
+/// Server tab (`helpers::settings_group`) and the fold-outs elsewhere
+/// (`helpers::fold`). One list for all of them: the key in the conf, reading
+/// it back, writing it and keeping it through a full save all come from here,
+/// so a fold cannot be half-remembered (builds 198-199; owner: generic where it
+/// can be). Until 199 the fold-outs were a field, a loader line, a parameter
+/// of `save_config`, a line it wrote and an argument in `persistence.rs` each,
+/// and radio 2's equalizer was never written at all. A new fold is a new
+/// variant: `key` and `slot` have no catch-all, so the compiler asks for both,
+/// and `ALL` is checked against `slot` by `every_fold_has_one_key_and_one_slot`.
+///
+/// The keys are the ones the conf already had, `collapse_` meaning open, so
+/// what was open before 199 is open after it. The menu groups of a Yaesu are
+/// not here: their names come from the radio, so they stay in egui's memory
+/// for the run (`helpers::fold_by_id`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Fold {
+    Relay,
+    Display,
+    Audio,
+    Roger,
+    Ble,
+    Cw,
+    UltrabeamMenu,
+    Diversity,
+    YaesuEq,
+    Yaesu2Eq,
+    YaesuMemories,
+    Yaesu2Memories,
+    YaesuMenu,
+    Yaesu2Menu,
+    YaesuLevels,
+    Yaesu2Levels,
+    AmplitecPower,
+    BandwidthBreakdown,
+    Rf2kDebug,
+    Rf2kDriveConfig,
+    Developer,
+}
+
+impl Fold {
+    pub(crate) const ALL: [Fold; 21] = [
+        Self::Relay,
+        Self::Display,
+        Self::Audio,
+        Self::Roger,
+        Self::Ble,
+        Self::Cw,
+        Self::UltrabeamMenu,
+        Self::Diversity,
+        Self::YaesuEq,
+        Self::Yaesu2Eq,
+        Self::YaesuMemories,
+        Self::Yaesu2Memories,
+        Self::YaesuMenu,
+        Self::Yaesu2Menu,
+        Self::YaesuLevels,
+        Self::Yaesu2Levels,
+        Self::AmplitecPower,
+        Self::BandwidthBreakdown,
+        Self::Rf2kDebug,
+        Self::Rf2kDriveConfig,
+        Self::Developer,
+    ];
+
+    /// The key in the conf.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Relay => "group_relay_open",
+            Self::Display => "group_display_open",
+            Self::Audio => "group_audio_open",
+            Self::Roger => "group_roger_open",
+            Self::Ble => "group_ble_open",
+            Self::Cw => "group_cw_open",
+            Self::UltrabeamMenu => "ub_show_menu",
+            Self::Diversity => "collapse_diversity",
+            Self::YaesuEq => "collapse_yaesu_eq",
+            Self::Yaesu2Eq => "collapse_yaesu2_eq",
+            Self::YaesuMemories => "collapse_yaesu_memories",
+            Self::Yaesu2Memories => "collapse_yaesu2_memories",
+            Self::YaesuMenu => "collapse_yaesu_menu",
+            Self::Yaesu2Menu => "collapse_yaesu2_menu",
+            Self::YaesuLevels => "collapse_yaesu_levels",
+            Self::Yaesu2Levels => "collapse_yaesu2_levels",
+            Self::AmplitecPower => "amplitec_power_show",
+            Self::BandwidthBreakdown => "bw_breakdown_expanded",
+            Self::Rf2kDebug => "rf2k_show_debug",
+            Self::Rf2kDriveConfig => "rf2k_show_drive_config",
+            Self::Developer => "group_developer_open",
+        }
+    }
+
+    fn slot(self) -> usize {
+        match self {
+            Self::Relay => 0,
+            Self::Display => 1,
+            Self::Audio => 2,
+            Self::Roger => 3,
+            Self::Ble => 4,
+            Self::Cw => 5,
+            Self::UltrabeamMenu => 6,
+            Self::Diversity => 7,
+            Self::YaesuEq => 8,
+            Self::Yaesu2Eq => 9,
+            Self::YaesuMemories => 10,
+            Self::Yaesu2Memories => 11,
+            Self::YaesuMenu => 12,
+            Self::Yaesu2Menu => 13,
+            Self::YaesuLevels => 14,
+            Self::Yaesu2Levels => 15,
+            Self::AmplitecPower => 16,
+            Self::BandwidthBreakdown => 17,
+            Self::Rf2kDebug => 18,
+            Self::Rf2kDriveConfig => 19,
+            Self::Developer => 20,
+        }
+    }
+}
+
+/// Which folds are open. All closed by default: the tab is long, and the
+/// point of a group is that it can be shut.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(crate) struct FoldsOpen([bool; Fold::ALL.len()]);
+
+impl FoldsOpen {
+    pub(crate) fn is_open(self, fold: Fold) -> bool {
+        self.0[fold.slot()]
+    }
+
+    fn set(&mut self, fold: Fold, open: bool) {
+        self.0[fold.slot()] = open;
+    }
+
+    /// Open or close a fold, and write it to the conf at once: closing the
+    /// window with a fold open keeps it open.
+    pub(crate) fn toggle(&mut self, fold: Fold) {
+        let open = !self.is_open(fold);
+        self.set(fold, open);
+        save_single_key(fold.key(), if open { "true" } else { "false" });
+    }
+
+    /// One line of the conf; true when it was a fold's.
+    fn read_line(&mut self, line: &str) -> bool {
+        for fold in Fold::ALL {
+            if let Some(val) = line.strip_prefix(fold.key()).and_then(|rest| rest.strip_prefix('=')) {
+                self.set(fold, val.trim() == "true");
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -2194,6 +2318,11 @@ pub(crate) fn save_thetis_autostart(on: bool) {
     save_single_key("thetis_autostart", if on { "true" } else { "false" });
 }
 
+/// Persist the developer mode as a single `developer_mode=` line (build 295).
+pub(crate) fn save_developer_mode(on: bool) {
+    save_single_key("developer_mode", if on { "true" } else { "false" });
+}
+
 /// PATCH-4: detect first-run for the connection wizard. Returns true when:
 ///  - the config file is absent, OR
 ///  - it exists but `successful_connects == 0` (default for fresh installs
@@ -2250,6 +2379,49 @@ pub(crate) fn mark_successful_connect() {
         updated_lines.push(new_line);
     }
     let _ = std::fs::write(path, updated_lines.join("\n") + "\n");
+}
+
+#[cfg(test)]
+mod spectrum_defaults_tests {
+    use super::{adopt_new_spectrum_defaults, ClientConfig};
+
+    /// A file from before build 171: what is still exactly at the old default
+    /// takes the new one, what the operator set stays (build 171).
+    #[test]
+    fn only_untouched_spectrum_values_take_the_new_defaults() {
+        let mut c = ClientConfig::default();
+        c.spectrum_range_db = 100.0; // never touched
+        c.rx2_spectrum_range_db = 85.0; // set by the operator
+        c.vrx1_range_db = Some(100.0);
+        c.vrx2_range_db = None; // never written
+        c.vrx1_auto_ref = Some(false);
+        c.vrx2_auto_ref = Some(false);
+        assert_eq!(adopt_new_spectrum_defaults(&mut c), 4);
+        assert_eq!(c.spectrum_range_db, 70.0);
+        assert_eq!(c.rx2_spectrum_range_db, 85.0, "the operator's value stays");
+        assert_eq!(c.vrx1_range_db, Some(70.0));
+        assert_eq!(c.vrx2_range_db, None);
+        assert_eq!((c.vrx1_auto_ref, c.vrx2_auto_ref), (Some(true), Some(true)));
+        // A range chosen above the old default stays (review of 171, W9).
+        let mut chosen = ClientConfig::default();
+        chosen.spectrum_range_db = 120.0;
+        assert_eq!(adopt_new_spectrum_defaults(&mut chosen), 0);
+        assert_eq!(chosen.spectrum_range_db, 120.0);
+        // A fresh install starts on the new ones, and nothing is left to adopt.
+        let mut fresh = ClientConfig::default();
+        assert_eq!((fresh.auto_ref_enabled, fresh.rx2_auto_ref_enabled), (true, true));
+        assert_eq!((fresh.spectrum_range_db, fresh.rx2_spectrum_range_db), (70.0, 70.0));
+        assert_eq!(adopt_new_spectrum_defaults(&mut fresh), 0);
+        // Every save marks the file, so a later 100 by hand is never taken for
+        // an old default (a text guard).
+        let code = include_str!("config.rs");
+        let code = &code[..code.find("mod spectrum_defaults_tests").unwrap()];
+        assert_eq!(code.matches("content.push_str(&format!(\"spectrum_defaults={}\\n\", SPECTRUM_DEFAULTS_VERSION));").count(), 1);
+        assert_eq!(code.matches("if spectrum_defaults < SPECTRUM_DEFAULTS_VERSION {").count(), 1);
+        // And every load reads the mark - without it every start would take
+        // a 100 chosen later for an old default (review of 171, Z7/W12).
+        assert_eq!(code.matches("if let Some(val) = line.strip_prefix(\"spectrum_defaults=\") {\n            spectrum_defaults = val.trim().parse().unwrap_or(0);").count(), 1);
+    }
 }
 
 #[cfg(test)]
@@ -2336,6 +2508,73 @@ mod conf_section_tests {
 }
 
 #[cfg(test)]
+mod fold_tests {
+    use super::{survives_full_save, Fold, FoldsOpen};
+
+    /// Every fold has its own key and its own slot, keeps its key through a
+    /// full save, and comes back from the conf - itself and no other (builds
+    /// 198-199). The loader, the writer and the window state take the whole
+    /// set, pinned as text: those are the lines where a fold was lost before.
+    #[test]
+    fn every_fold_has_one_key_and_one_slot() {
+        let mut keys: Vec<&str> = Fold::ALL.iter().map(|f| f.key()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), Fold::ALL.len(), "two folds share a key");
+        for (i, fold) in Fold::ALL.into_iter().enumerate() {
+            assert_eq!(fold.slot(), i, "{fold:?} is not in ALL at its own slot");
+            assert!(survives_full_save(&format!("{}=true", fold.key())), "{fold:?} is thrown away by a full save");
+            let mut open = FoldsOpen::default();
+            assert!(open.read_line(&format!("{}=true", fold.key())));
+            for other in Fold::ALL {
+                assert_eq!(open.is_open(other), other == fold, "{fold:?} read back as {other:?}");
+            }
+            assert!(open.read_line(&format!("{}=false", fold.key())));
+            assert_eq!(open, FoldsOpen::default());
+        }
+        assert!(!FoldsOpen::default().read_line("group_audio_opened=true"));
+        assert!(!survives_full_save("collapse_yaesu_eqs=true"));
+        let config = include_str!("config.rs");
+        let config = &config[..config.find("#[cfg(test)]").unwrap()];
+        assert_eq!(config.matches("} else if config.folds_open.read_line(line) {").count(), 1);
+        assert_eq!(config.matches("save_single_key(fold.key(), if open {").count(), 1);
+        assert_eq!(include_str!("app_state.rs").matches("folds_open: config.folds_open,").count(), 1);
+        // The Ultrabeam asks for its elements on the frame its menu opens, not
+        // on every frame it is open (review of 199): an `if` without
+        // `!was_open` floods the server and looks normal on the screen.
+        assert_eq!(
+            include_str!("devices.rs").matches("if !was_open && self.folds_open.is_open(menu) {").count(),
+            1
+        );
+    }
+
+    /// A conf written before 199 - the fold-outs as the full save wrote them -
+    /// opens the same folds after the update (build 199). The other mode is a
+    /// fresh conf, which is `FoldsOpen::default()`: everything closed.
+    #[test]
+    fn a_conf_from_before_199_opens_the_same_folds() {
+        let old = "ub_show_menu=false\ncollapse_diversity=true\ncollapse_yaesu_eq=false\n\
+                   collapse_yaesu_memories=true\ncollapse_yaesu_menu=false\ncollapse_yaesu2_memories=false\n\
+                   collapse_yaesu2_menu=true\namplitec_power_show=true\nbw_breakdown_expanded=false\n";
+        let mut open = FoldsOpen::default();
+        for line in old.lines() {
+            assert!(open.read_line(line.trim()), "{line} is no longer read");
+        }
+        let opened: Vec<Fold> = Fold::ALL.into_iter().filter(|f| open.is_open(*f)).collect();
+        assert_eq!(
+            opened,
+            [Fold::Diversity, Fold::YaesuMemories, Fold::Yaesu2Menu, Fold::AmplitecPower]
+        );
+        // The old writers are gone, so nothing writes these keys a second way.
+        let persistence = include_str!("persistence.rs");
+        assert!(!persistence.contains("self.collapse_"), "a fold is passed to the full save again");
+        let config = &include_str!("config.rs")[..include_str!("config.rs").find("#[cfg(test)]").unwrap()];
+        assert!(!config.contains("strip_prefix(\"collapse_"), "a fold has its own loader line again");
+        assert!(!config.contains("format!(\"collapse_"), "a fold is written by the full save again");
+    }
+}
+
+#[cfg(test)]
 mod full_save_tests {
     use super::survives_full_save;
 
@@ -2376,12 +2615,14 @@ mod full_save_tests {
         keys.dedup();
         // If this ever finds nothing the test would pass vacuously, which is the
         // one way a self-scanning test can rot.
-        // Ten today. Not ">= 8": a floor below the real count lets two writers
-        // disappear without a word, so it would say "I am still reading" where
-        // it should say "I am reading all of them".
+        // Twenty today (the five group keys left the scan in build 198: they are
+        // written as `save_single_key(group.key(), ...)` and pinned by
+        // `every_fold_has_one_key_and_one_slot`). Not lower: a floor below the
+        // real count lets writers disappear without a word, so it would say "I
+        // am still reading" where it should say "I am reading all of them".
         assert!(
-            keys.len() >= 10,
-            "the scan found only {} keys where there were 10, so either a writer              was removed or the scan stopped reading its own source",
+            keys.len() >= 20,
+            "the scan found only {} keys where there were 20, so either a writer              was removed or the scan stopped reading its own source",
             keys.len()
         );
         for key in keys {
@@ -2429,7 +2670,6 @@ mod full_save_tests {
     fn the_hand_patched_writers_survive_a_full_save() {
         for key in [
             "relay_enabled",
-            "relay_udp_enabled",
             "relay_url",
             "relay_station",
             "relay_token",

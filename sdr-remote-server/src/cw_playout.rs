@@ -69,6 +69,19 @@ pub const HANG_MAX: Duration = Duration::from_millis(3000);
 pub const HOLD_GRACE: Duration = Duration::from_millis(1000);
 /// The playout thread sleeps until this close to the moment and spins the rest.
 pub const SPIN_WINDOW: Duration = Duration::from_micros(1500);
+/// With nothing scheduled, how long the playout thread waits before looking
+/// again. A wake-up that arrives between the look and the wait is missed, so
+/// this is also the worst case for the first edge of a run - it cost exactly
+/// that in the first draft.
+pub const NO_WORK_WAIT: Duration = Duration::from_millis(100);
+/// How far the thread sleeps at a time while walking towards a moment. Short
+/// enough that something scheduled nearer is noticed quickly.
+///
+/// Named on 2026-09-24. Both this and `NO_WORK_WAIT` were bare literals in the
+/// thread body, which is why they were outside the nine timings a test pins -
+/// a reviewer moved them to 40 ms and 400 ms and nothing said a word. A number
+/// that is not a constant is a number no rule reaches.
+pub const SLEEP_STEP: Duration = Duration::from_millis(2);
 
 /// An edge that is due (or was): what to send, and when it was meant to go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -426,6 +439,14 @@ impl CwPlayout {
         }
     }
 
+    /// Whoever owns the run now is gone as far as the server is concerned -
+    /// `release` for an owner the caller does not know (the safety task stopped,
+    /// `network.rs` `safety_task_lost`).
+    pub fn release_owner(&mut self, now: Instant) -> Option<DueEdge> {
+        let owner = self.owner?;
+        self.release(owner, now)
+    }
+
     /// The owner whose run has been over for `IDLE_RELEASE`: key up, nothing
     /// pending, and quiet since. The caller hands the transmitter back and
     /// calls `forget_owner`.
@@ -484,7 +505,7 @@ pub fn spawn_playout_thread(shared: Handle, out: tokio::sync::mpsc::UnboundedSen
             // it cost the first edge of a run up to 100 ms in the first draft).
             let g = lock(&shared);
             let Some(deadline) = g.next_deadline() else {
-                let _ = shared.wake.wait_timeout(g, Duration::from_millis(100));
+                let _ = shared.wake.wait_timeout(g, NO_WORK_WAIT);
                 continue;
             };
             drop(g);
@@ -496,7 +517,7 @@ pub fn spawn_playout_thread(shared: Handle, out: tokio::sync::mpsc::UnboundedSen
                 if deadline <= now + SPIN_WINDOW {
                     break;
                 }
-                let step = (deadline - now - SPIN_WINDOW).min(Duration::from_millis(2));
+                let step = (deadline - now - SPIN_WINDOW).min(SLEEP_STEP);
                 std::thread::sleep(step);
                 if lock(&shared).next_deadline().map_or(true, |d| d < deadline) {
                     break; // something nearer, or nothing at all: start over
@@ -543,6 +564,64 @@ mod tests {
     fn fresh() -> (CwPlayout, Instant) {
         (CwPlayout::new(ms(80)), Instant::now())
     }
+
+    // ---- the timings themselves --------------------------------------------
+
+    /// Every timing in this file written out, once, as a number.
+    ///
+    /// Not a tautology: the tests below express their bounds in terms of the
+    /// constants, so `WATCHDOG` could be four seconds or four minutes and every
+    /// one of them would still pass. The same hole was found in
+    /// `filter_width.rs` (`the_hold_is_one_second`, 2026-09-16) and repaired the
+    /// same way.
+    ///
+    /// Review 2120A1 named three of these — `WATCHDOG`, `IDLE_RELEASE` and
+    /// `HOLD_GRACE`. It was nine: none of the timings in this file was pinned,
+    /// and a reviewer reads the paths he walks, not the list. So the list here
+    /// is taken from the declarations above rather than from the review.
+    ///
+    /// It is eleven now. Taking the list from the declarations still missed two,
+    /// because two of the thread's timings were not declarations at all but bare
+    /// literals in its body - found by a reviewer who moved them and watched
+    /// nothing happen. Three passes over the same file, three different answers:
+    /// a list of what is named cannot see what was never given a name.
+    ///
+    /// What this catches: a value changed without meaning to, and a value
+    /// changed on purpose without saying so — the failure IS the conversation,
+    /// and the doc comment on the constant is what has to be brought back in
+    /// line with it. What it does NOT catch: a value that is simply wrong. That
+    /// takes a measurement, and for three of these the measurement is in the
+    /// doc comment (`MOX_RISE`: 160-225 ms on the ANAN-7000DLE, build 96) while
+    /// for the rest it is not.
+    #[test]
+    fn the_timings_are_the_numbers_the_comments_promise() {
+        // What the operator hears, and what pays for jitter.
+        assert_eq!(PLAYOUT_DELAY, ms(80));
+        assert_eq!(MOX_RISE, ms(250));
+
+        // The two that stand between a stuck key and a transmitter that keeps
+        // sending. Thetis carries the same 3000 for its own watchdog; if this
+        // one moves, that one has to be looked at in the same patch.
+        assert_eq!(WATCHDOG, ms(3000));
+        assert_eq!(MAX_CONTINUE_GAP, ms(3000));
+
+        // The hang time: what a client that says nothing gets, and the window
+        // it may ask within.
+        assert_eq!(IDLE_RELEASE, ms(500));
+        assert_eq!(HANG_MIN, ms(200));
+        assert_eq!(HANG_MAX, ms(3000));
+
+        // How long past its own clocks a run still holds the transmitter.
+        assert_eq!(HOLD_GRACE, ms(1000));
+
+        // The playout thread stops sleeping this long before the moment, waits
+        // this long when there is nothing to do, and walks towards a moment in
+        // steps of this.
+        assert_eq!(SPIN_WINDOW, Duration::from_micros(1500));
+        assert_eq!(NO_WORK_WAIT, ms(100));
+        assert_eq!(SLEEP_STEP, ms(2));
+    }
+
 
     #[test]
     fn the_first_edge_of_a_run_plays_at_arrival_plus_the_delay() {

@@ -58,10 +58,33 @@ pub struct AudioActivityStats {
     pub rx2: ChannelStats,
     /// Client -> Thetis TX (decoded mic audio written to CABLE-B).
     pub tx: ChannelStats,
-    /// Yaesu USB -> client.
-    pub yaesu_rx: ChannelStats,
-    /// Client -> Yaesu USB (TX audio routed to Yaesu).
-    pub yaesu_tx: ChannelStats,
+    /// Yaesu USB -> client, per radio (radio 1, radio 2). One counter for
+    /// both until build 269, shown only when radio 1 was there.
+    pub yaesu_rx: [ChannelStats; 2],
+    /// Client -> Yaesu USB (TX audio routed to Yaesu), per radio.
+    pub yaesu_tx: [ChannelStats; 2],
+}
+
+/// What the server set up at its start (build 269): Thetis (a TCI address)
+/// and which radios were built. Set once by `run_server_async`; the status
+/// panel shows its Thetis line, its audio chips and its radio dots from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Configured {
+    pub thetis: bool,
+    pub radios: [bool; 2],
+}
+
+impl Configured {
+    /// The line the server writes when it sets this.
+    pub fn line(&self) -> String {
+        let present = |p: bool| if p { "present" } else { "absent" };
+        format!(
+            "Status panel: Thetis {}, radio 1 {}, radio 2 {}",
+            if self.thetis { "configured" } else { "not configured" },
+            present(self.radios[0]),
+            present(self.radios[1])
+        )
+    }
 }
 
 impl AudioActivityStats {
@@ -79,6 +102,9 @@ pub struct TciStatusProbe {
     /// Server-start nanoseconds at which `connected` last flipped.
     /// 0 = never observed.
     pub last_state_change_ns: AtomicI64,
+    /// Thetis reports transmitting, by any means: its TRX notification (MOX,
+    /// a footswitch, ThetisLink) or Tune (build 272).
+    pub transmitting: std::sync::atomic::AtomicBool,
 }
 
 /// Bundle of the lock-free Status-panel state shared between the server
@@ -103,12 +129,21 @@ pub struct StatusPanelShared {
     /// Status panel can render per-tuner rows (Live yellow voltage,
     /// threshold + hysteresis sliders) without needing a separate channel.
     pub tuners_slot: Arc<std::sync::OnceLock<Arc<crate::tuner::Tuners>>>,
-    /// Live Yaesu-rotor instance (PATCH-yaesu-rotor-mcp2221 fase 3).
+    /// Live Yaesu-rotor instance (PATCH-yaesu-rotor-mcp2221 phase 3).
     /// `None` as long as there is no `rot_*` MCP2221A in `config.rotors`,
     /// or as long as server-start has not yet spun up the poll thread.
     pub rotor_slot: Arc<std::sync::OnceLock<Arc<crate::mcp2221_yaesu_rotor::RotorInstance>>>,
     /// Optional outbound relay monitor status (Phase A: status only, no TL frames routed).
     pub relay_status: Arc<std::sync::OnceLock<sdr_remote_relay::RelayStatusHandle>>,
+    /// The "RX-only and unguarded" flag of the PttController (build 217),
+    /// published once after it is built; the Amplitec window reads it.
+    pub rx_only_unguarded_slot: Arc<std::sync::OnceLock<Arc<std::sync::atomic::AtomicBool>>>,
+    /// What the server set up at its start (build 269).
+    pub configured: Arc<std::sync::OnceLock<Configured>>,
+    /// The radios the server built, radio 1 and radio 2 (build 270): the
+    /// panel says why a port does not open. Radio 2 exists only in the
+    /// server, so the window had no way to it.
+    pub radios: Arc<std::sync::OnceLock<[Option<Arc<crate::yaesu::YaesuRadio>>; 2]>>,
 }
 
 /// Outcome of the UDP bind attempt - surfaced in the Status panel.
@@ -128,7 +163,10 @@ impl StatusPanelShared {
             bind_status: Arc::new(std::sync::OnceLock::new()),
             tuners_slot: Arc::new(std::sync::OnceLock::new()),
             rotor_slot: Arc::new(std::sync::OnceLock::new()),
+            rx_only_unguarded_slot: Arc::new(std::sync::OnceLock::new()),
             relay_status: Arc::new(std::sync::OnceLock::new()),
+            configured: Arc::new(std::sync::OnceLock::new()),
+            radios: Arc::new(std::sync::OnceLock::new()),
         }
     }
 }
@@ -148,6 +186,11 @@ impl TciStatusProbe {
             self.last_state_change_ns
                 .store(server_start.elapsed().as_nanos() as i64, Ordering::Relaxed);
         }
+    }
+
+    /// What Thetis last reported about transmitting.
+    pub fn set_transmitting(&self, on: bool) {
+        self.transmitting.store(on, Ordering::Relaxed);
     }
 
     /// UI-side snapshot: (is_connected, age_secs_or_none).

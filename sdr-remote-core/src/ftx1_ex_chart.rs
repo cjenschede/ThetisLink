@@ -125,8 +125,8 @@ pub const EX_CHART: &[(&str, &str, &str, &str)] = &[
     // (operator, build 120). Addresses sequential 010701-010706; 02/03 (freq-presets)
     // did not come back in the live scan when not configured.
     ("010701", "RADIO SETTING", "WIRES-X", "PRESET SEARCH MANUAL / PRESET"),
-    ("010702", "RADIO SETTING", "WIRES-X", "VFO PRESET FREQ (preset-frequentie, bv. 145.780 MHz)"),
-    ("010703", "RADIO SETTING", "WIRES-X", "UHF PRESET FREQ (preset-frequentie, bv. 438.980 MHz)"),
+    ("010702", "RADIO SETTING", "WIRES-X", "VFO PRESET FREQ (preset frequency, e.g. 145.780 MHz)"),
+    ("010703", "RADIO SETTING", "WIRES-X", "UHF PRESET FREQ (preset frequency, e.g. 438.980 MHz)"),
     ("010704", "RADIO SETTING", "WIRES-X", "WIRES-X DG-ID AUTO / 01 - 99"),
     ("010705", "RADIO SETTING", "WIRES-X", "SEARCH SETUP HISTORY / ACTIVITY"),
     ("010706", "RADIO SETTING", "WIRES-X", "NODE MODE AP RADIO / AP PC / DIRECT"),

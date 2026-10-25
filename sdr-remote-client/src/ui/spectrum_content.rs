@@ -8,6 +8,24 @@
 use super::*;
 
 impl SdrRemoteApp {
+    /// The "Zoom <2x" checkbox of every spectrum panel - RX1, RX2 and VRX share
+    /// one flag (build 242: RX2 had none, RX1 and VRX each a copy of this). TL2-1
+    /// ctun-auto-recenter setup: persisted and pushed to the server on a toggle;
+    /// the server enforces the strictest - as long as one client has it off, it
+    /// clamps to 2x.
+    pub(super) fn zoom_below_2x_checkbox(&mut self, ui: &mut egui::Ui) {
+        if ui.checkbox(&mut self.allow_zoom_below_2x, rust_i18n::t!("main_allow_zoom_2x").to_string())
+            .on_hover_text(rust_i18n::t!("hover_zoom_below_2x").to_string())
+            .changed()
+        {
+            crate::ui::config::save_allow_zoom_below_2x(self.allow_zoom_below_2x);
+            let _ = self.cmd_tx.send(Command::SetControl(
+                sdr_remote_core::protocol::ControlId::AllowZoomBelow2x,
+                if self.allow_zoom_below_2x { 1 } else { 0 },
+            ));
+        }
+    }
+
     /// Render spectrum controls + plot + waterfall (used by both inline and pop-out)
     pub(super) fn render_spectrum_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, reserve_bottom: f32, is_popout: bool) {
         // Row 1: Ref + Auto checkbox + Range
@@ -72,18 +90,7 @@ impl SdrRemoteApp {
                 let max_pan = crate::ui::tuning::max_pan_fraction(self.spectrum_zoom);
                 self.spectrum_pan = self.spectrum_pan.clamp(-max_pan, max_pan);
             }
-            // TL2-1 ctun-auto-recenter setup checkbox. Persist + push to server on toggle.
-            // Server enforces strictest: as long as one client has it off, the server clamps to 2x.
-            if ui.checkbox(&mut self.allow_zoom_below_2x, rust_i18n::t!("main_allow_zoom_2x").to_string())
-                .on_hover_text(rust_i18n::t!("hover_zoom_below_2x").to_string())
-                .changed()
-            {
-                crate::ui::config::save_allow_zoom_below_2x(self.allow_zoom_below_2x);
-                let _ = self.cmd_tx.send(Command::SetControl(
-                    sdr_remote_core::protocol::ControlId::AllowZoomBelow2x,
-                    if self.allow_zoom_below_2x { 1 } else { 0 },
-                ));
-            }
+            self.zoom_below_2x_checkbox(ui);
             ui.label(rust_i18n::t!("main_pan_label").to_string());
             let max_pan = crate::ui::tuning::max_pan_fraction(self.spectrum_zoom);
             let pan_resp = ui.add(egui::Slider::new(&mut self.spectrum_pan, -max_pan..=max_pan)
@@ -157,6 +164,8 @@ impl SdrRemoteApp {
                 self.zoom_pan_changed_at = Some(Instant::now());
             }
         });
+        // A rule under the button rows, as the VRX panel has (owner, build 240).
+        super::helpers::rule(ui);
 
         // Debounce: send zoom/pan + dynamic bins to server after 100ms stability
         if let Some(changed_at) = self.zoom_pan_changed_at {
@@ -324,13 +333,14 @@ impl SdrRemoteApp {
         } else {
             self.spectrum_total_h.clamp(300.0, 1200.0)
         };
-        let spec_h = (spec_area * 0.50).max(100.0);
-        let wf_h = (spec_area * 0.50).max(80.0);
+        let (spec_h, wf_h) = super::spectrum::plot_and_waterfall_heights(spec_area, ui.spacing().item_spacing.y);
 
         // The tuning latch falls back to the full row because the extracted view
-        // lags while retuning. With the row switched off there is nothing to fall
-        // back to, so the view is drawn throughout - as on VRX.
-        let (plot_bins, plot_center_hz, plot_span_hz) = if !rx1_tuning_active || self.full_spectrum_bins.is_empty() {
+        // lags while retuning. With the row switched off, or no longer coming,
+        // there is nothing to fall back to - the client keeps the last row, of
+        // the old band perhaps (build 234) - so the view is drawn throughout, as
+        // on VRX.
+        let (plot_bins, plot_center_hz, plot_span_hz) = if !rx1_tuning_active || !self.full_row_live(self.full_row_at) {
             (&self.spectrum_bins, self.spectrum_center_hz, self.spectrum_span_hz)
         } else {
             (&self.full_spectrum_bins, self.full_spectrum_center_hz, self.full_spectrum_span_hz)
@@ -347,7 +357,7 @@ impl SdrRemoteApp {
             self.spectrum_ref_db,
             self.spectrum_range_db,
             self.smeter,
-            self.ptt,
+            self.smeter_tx,
             self.other_tx,
             self.filter_low_hz,
             self.filter_high_hz,

@@ -25,7 +25,15 @@ mod spe_expert;
 mod spectrum;
 mod tci;
 mod tx_denial;
+mod tx_intake;
 mod tx_orphan;
+mod tx_recover;
+mod tx_arrivals;
+#[cfg(any(test, feature = "naspelen"))]
+mod tx_replay;
+#[cfg(any(test, feature = "naspelen"))]
+mod trial;
+mod pause_trim;
 mod tci_commands;
 mod tracked_socket;
 mod tci_parser;
@@ -185,11 +193,13 @@ struct GuiLogger {
 
 impl Log for GuiLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        self.inner.enabled(metadata)
+        self.inner.enabled(metadata) && sdr_remote_core::dev_mode::record_passes(metadata.target())
     }
 
     fn log(&self, record: &Record) {
-        if self.inner.matches(record) {
+        // The developer lines only in the developer mode (build 294), before
+        // the fan-out: stderr, the screen and the file see the same lines.
+        if self.inner.matches(record) && sdr_remote_core::dev_mode::record_passes(record.target()) {
             self.inner.log(record);
             let line = format!("{}", record.args());
             let mut buf = self.buffer.lock().unwrap();
@@ -210,6 +220,26 @@ impl Log for GuiLogger {
 
     fn flush(&self) {
         self.inner.flush();
+    }
+}
+
+/// The command-line logger: env_logger behind the developer mode's rule
+/// (build 294), the same one `GuiLogger` applies.
+struct DevGate(env_logger::Logger);
+
+impl Log for DevGate {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        self.0.enabled(metadata) && sdr_remote_core::dev_mode::record_passes(metadata.target())
+    }
+
+    fn log(&self, record: &Record) {
+        if sdr_remote_core::dev_mode::record_passes(record.target()) {
+            self.0.log(record);
+        }
+    }
+
+    fn flush(&self) {
+        self.0.flush();
     }
 }
 
@@ -234,7 +264,118 @@ fn print_usage() {
     eprintln!("  --spe-port <COM>       COM port for SPE Expert 1.3K-FA amplifier");
     eprintln!("  --rf2k <ADDR>          RF2K-S Pi address (e.g. 192.168.1.50:8080)");
     eprintln!();
+    eprintln!("The password (and 2FA) come from the saved settings; without a saved");
+    eprintln!("password the server does not start this way.");
+    eprintln!();
     eprintln!("Without arguments, a settings GUI is shown.");
+    // The trial's options, a development build only (build 257).
+    #[cfg(feature = "naspelen")]
+    {
+        eprintln!();
+        eprintln!("{}", trial::USAGE);
+    }
+}
+
+/// The server's log, next to the executable. The one place that says where:
+/// the logger, the panic hook and two diagnostics in `network.rs` all write to
+/// it, and the diagnosis report reads it.
+pub(crate) fn server_log_path() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("thetislink-server.log")
+}
+
+/// Open the log for a new run: emptied, then held in APPEND mode.
+///
+/// Append, not write. The panic hook and two diagnostics open the same file
+/// separately and add to its end; a handle that writes from its own position
+/// went on writing over what they had added. Field test 2026-10-01 11:00:42:
+/// the safety task panicked on purpose, the log said "the panic line above
+/// says where", and there was no panic line - the logger had written over it.
+fn open_log_fresh(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    OpenOptions::new().create(true).write(true).truncate(true).open(path)?;
+    OpenOptions::new().append(true).open(path)
+}
+
+/// Every way a server starts meets in `run_server_async`, and that is where it
+/// refuses: no password, a weak one, or 2FA on without a full key - before
+/// anything opens a port. A way added later is covered without knowing it
+/// (review 128).
+#[cfg(test)]
+mod start_gate_tests {
+    use super::{run_server_async, ServerConfig};
+    use std::time::Duration;
+
+    /// The reason the gate gave, or `None` when the server got past it.
+    async fn gate_says(config: ServerConfig) -> Option<String> {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let run = run_server_async(config, rx, None, None, None, None, None, None, None, None, None, None, None, None, None);
+        tokio::pin!(run);
+        match tokio::time::timeout(Duration::from_millis(1_500), &mut run).await {
+            Ok(Err(e)) if e.to_string().starts_with("not started") => Some(e.to_string()),
+            // Past the gate: running, or stopped for a reason of its own (a
+            // port taken by another program) - not the gate's (review 129).
+            Ok(_) => None,
+            Err(_) => {
+                let _ = tx.send(true);
+                let _ = tokio::time::timeout(Duration::from_secs(10), &mut run).await;
+                None
+            }
+        }
+    }
+
+    /// Both states of the gate (review 129: a gate that refused every start
+    /// stayed green): each refusal with its own reason, and valid credentials
+    /// let through.
+    #[tokio::test]
+    async fn the_server_does_not_start_without_proper_credentials() {
+        let said = |s: Option<String>, want: &str| {
+            let s = s.unwrap_or_else(|| panic!("not refused - wanted {want:?}"));
+            assert!(s.contains(want), "{s} - wanted {want:?}");
+        };
+        said(gate_says(ServerConfig::default()).await, "no password");
+        said(gate_says(ServerConfig { password: Some("weak".into()), ..ServerConfig::default() }).await, "too weak");
+        let two_fa_no_key = ServerConfig {
+            password: Some("secret99".into()),
+            totp_enabled: true,
+            totp_secret: Some(String::new()),
+            ..ServerConfig::default()
+        };
+        said(gate_says(two_fa_no_key).await, "2FA");
+        let valid = ServerConfig {
+            password: Some("secret99".into()),
+            totp_enabled: true,
+            totp_secret: Some(sdr_remote_core::auth::generate_totp_secret()),
+            ..ServerConfig::default()
+        };
+        assert_eq!(gate_says(valid).await, None, "valid credentials pass the gate");
+    }
+}
+
+#[cfg(test)]
+mod log_file_tests {
+    use super::open_log_fresh;
+    use std::io::Write;
+
+    /// What another writer adds at the end survives the logger's next line.
+    #[test]
+    fn a_line_added_by_another_writer_is_not_written_over() {
+        let path = std::env::temp_dir().join(format!("tl-log-test-{}.log", std::process::id()));
+        std::fs::write(&path, "from an earlier run that must go\n").unwrap();
+        let mut logger = open_log_fresh(&path).unwrap();
+        logger.write_all(b"one\n").unwrap();
+        {
+            let mut hook = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            hook.write_all(b"[PANIC] here\n").unwrap();
+        }
+        logger.write_all(b"two\n").unwrap();
+        drop(logger);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(text, "one\n[PANIC] here\ntwo\n");
+    }
 }
 
 /// Install a panic hook that writes panic info to thetislink-server.log next to
@@ -248,11 +389,7 @@ fn print_usage() {
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let log_path = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("thetislink-server.log");
+        let log_path = server_log_path();
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -275,14 +412,20 @@ fn install_panic_hook() {
         );
 
         // Best-effort append. If file-open fails the default handler still runs.
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true).append(true).open(&log_path)
-        {
-            let _ = f.write_all(entry.as_bytes());
-        }
+        append_to_server_log(&log_path, &entry);
 
         default_hook(info);
     }));
+}
+
+/// Append `text` to the server's log file, best effort - for what must be
+/// readable even when only stderr was set up: a panic, and a command-line start
+/// that is refused (review 128: a headless start that stopped left nothing to
+/// read).
+fn append_to_server_log(path: &std::path::Path, text: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = f.write_all(text.as_bytes());
+    }
 }
 
 fn main() -> Result<()> {
@@ -290,6 +433,21 @@ fn main() -> Result<()> {
 
     // Parse command-line arguments
     let args: Vec<String> = env::args().collect();
+    // Step 4's trial options, only with the feature (build 256): taken out
+    // here, so a start with only these still opens the settings screen.
+    #[cfg(feature = "naspelen")]
+    let args = match trial::take_args(args) {
+        Ok(rest) => rest,
+        Err(why) => {
+            eprintln!("{}", why);
+            std::process::exit(2);
+        }
+    };
+    // The replay of the transmit chain, only with the feature (build 246).
+    #[cfg(feature = "naspelen")]
+    if args.get(1).map(String::as_str) == Some("--naspelen") {
+        std::process::exit(tx_replay::run_cli(&args[2..]));
+    }
     let mut tci_addr: Option<String> = None;
     let mut thetis_path: Option<String> = None;
     let mut amplitec_port: Option<String> = None;
@@ -336,10 +494,27 @@ fn main() -> Result<()> {
         || spe_port.is_some() || rf2k_addr.is_some();
 
     if has_cli_args {
-        // CLI mode - normal env_logger, no GUI
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+        // CLI mode - env_logger, no GUI. The developer mode is never on here
+        // (no settings screen), so its lines stay out (build 294).
+        let env_log = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
+        log::set_max_level(env_log.filter());
+        log::set_boxed_logger(Box::new(DevGate(env_log))).unwrap();
 
         let defaults = ServerConfig::default();
+        // What a command-line start takes from the saved settings: the
+        // password and the 2FA key - without a password it does not start, it
+        // would admit anyone who reaches its port (build 128) - and the relay,
+        // so a server without a screen is reachable without a forwarded port
+        // (build 135). The rest runs on defaults and the command line.
+        let saved = crate::config::load();
+        let (password, totp_secret) = match crate::config::cli_credentials(&saved, crate::config::may_write()) {
+            Ok(credentials) => credentials,
+            Err(why) => {
+                log::error!("Not started: {why}");
+                append_to_server_log(&server_log_path(), &format!("\n[NOT STARTED] {why}\n"));
+                std::process::exit(2);
+            }
+        };
         let amp_en = amplitec_port.is_some() || defaults.amplitec_port.is_some();
         let spe_en = spe_port.is_some() || defaults.spe_port.is_some();
         let rf2k_en = rf2k_addr.is_some() || defaults.rf2k_addr.is_some();
@@ -362,7 +537,7 @@ fn main() -> Result<()> {
             yaesu2_baud: defaults.yaesu2_baud,
             yaesu2_audio_device: defaults.yaesu2_audio_device,
             yaesu2_audio_output_device: defaults.yaesu2_audio_output_device,
-            chat_answers_seen: crate::config::load().chat_answers_seen,
+            chat_answers_seen: saved.chat_answers_seen,
             yaesu_model_last: defaults.yaesu_model_last,
             yaesu2_model_last: defaults.yaesu2_model_last,
             yaesu_audio_channel: defaults.yaesu_audio_channel,
@@ -419,9 +594,12 @@ fn main() -> Result<()> {
             theme_custom: defaults.theme_custom,
             language: defaults.language,
             autostart: false,
+            // CLI mode: never (build 294).
+            developer_mode: false,
+            tx_measurement: false,
             active_pa: 0,
-            // CLI mode: no stored settings are read, so the PA policy runs on its
-            // own defaults - one PA in Operate, drive back to 100 % when none is.
+            // CLI mode: the stored PA settings are not read, so the PA policy runs
+            // on its own defaults - one PA in Operate, drive back to 100 % when none is.
             pa_default_drive: crate::pa_policy::DEFAULT_PA_DRIVE,
             pa_single_operate: true,
             rf2k_last_seen_operate: None,
@@ -433,15 +611,15 @@ fn main() -> Result<()> {
             dxcluster_callsign: defaults.dxcluster_callsign,
             dxcluster_enabled: defaults.dxcluster_enabled,
             dxcluster_expiry_min: defaults.dxcluster_expiry_min,
-            password: defaults.password,
-            totp_secret: defaults.totp_secret,
-            totp_enabled: defaults.totp_enabled,
+            totp_enabled: totp_secret.is_some(),
+            password: Some(password),
+            totp_secret,
             friendly_name: defaults.friendly_name,
-            relay_enabled: defaults.relay_enabled,
-            relay_url: defaults.relay_url,
-            relay_station: defaults.relay_station,
-            relay_token: defaults.relay_token,
-            relay_udp_enabled: defaults.relay_udp_enabled,
+            relay_enabled: saved.relay_enabled,
+            relay_url: saved.relay_url.clone(),
+            relay_station: saved.relay_station.clone(),
+            relay_token: saved.relay_token.clone(),
+            allow_direct: saved.allow_direct,
             tuners: defaults.tuners,
             rotors: defaults.rotors,
         };
@@ -497,12 +675,8 @@ fn main() -> Result<()> {
 
         // Open log file next to the executable
         let log_file = {
-            let exe_dir = env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
-            let log_path = exe_dir.join("thetislink-server.log");
-            match OpenOptions::new().create(true).write(true).truncate(true).open(&log_path) {
+            let log_path = server_log_path();
+            match open_log_fresh(&log_path) {
                 Ok(f) => {
                     eprintln!("Log file: {}", log_path.display());
                     Some(StdMutex::new(f))
@@ -526,6 +700,9 @@ fn main() -> Result<()> {
         hide_console();
 
         let config = config::load();
+        // The developer mode as saved (build 294), before anything is logged
+        // that it holds back.
+        sdr_remote_core::dev_mode::set(config.developer_mode);
         // Apply the saved UI language before the GUI starts up.
         rust_i18n::set_locale(&config.language);
 
@@ -593,6 +770,17 @@ pub async fn run_server_async(
     info!("PA3GHM - Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
     info!("Licensed under GPL-2.0-or-later - source: https://github.com/cjenschede/ThetisLink");
 
+    // The one place every start meets, before anything opens a port: no server
+    // without a password of the button's strength, nor with 2FA on and no full
+    // key - whichever way it was started, and whatever way is added later
+    // (review 128).
+    let (password, totp_secret) =
+        crate::config::start_credentials(config.password.as_deref(), config.totp_enabled, config.totp_secret.as_deref())
+            .map_err(|why| {
+                log::error!("Not started: {why}");
+                anyhow::anyhow!("not started: {why}")
+            })?;
+
     // PATCH-2: derive Status-panel state from the optional incoming bundle
     // (GUI mode) or construct a one-shot bundle for CLI mode so the rest of
     // run_server_async can always operate on real Arc<>s.
@@ -602,8 +790,8 @@ pub async fn run_server_async(
     let tci_probe = status_panel_state.tci.clone();
     let server_start = status_panel_state.server_start;
 
-    // Session manager
-    let session = Arc::new(Mutex::new(SessionManager::new(config.password.clone(), config.totp_secret.clone())));
+    // Session manager, with what the gate at the top let through.
+    let session = Arc::new(Mutex::new(SessionManager::new(Some(password), totp_secret)));
     // PATCH-2: publish to the Status-panel slot so the UI can read it.
     // CLI mode also publishes - harmless even though no UI reads from it.
     let _ = status_panel_state.session_slot.set(session.clone());
@@ -623,6 +811,11 @@ pub async fn run_server_async(
         config.tci_addr.as_deref().filter(|s| !s.trim().is_empty()),
         config.thetis_path.clone(),
     )));
+    // The Amplitec window shows the RX-only warning from the same flag the
+    // heartbeat sends (build 217).
+    let _ = status_panel_state
+        .rx_only_unguarded_slot
+        .set(ptt.lock().await.rx_only_unguarded_handle());
 
     // Spectrum processor
     let spectrum = Arc::new(Mutex::new(SpectrumProcessor::new()));
@@ -916,11 +1109,10 @@ pub async fn run_server_async(
         None
     };
 
-    // Relay Phase C: outbound relay path that also tunnels TL frames, so a client
-    // that cannot port-forward can reach the server through the VPS relay instead
-    // of direct UDP. The tunnel channels connect the relay monitor to the
-    // TrackedSocket seam; direct UDP stays the default and is byte-identical.
-    let (relay_monitor, relay_socket_ends) = if config.relay_enabled {
+    // The relay, when it is on: the monitor signs in and hands each session's
+    // grant to the QUIC endpoint, which carries the data itself (phase 3b; since
+    // build 133 the only form).
+    let (relay_monitor, quic_relay) = if config.relay_enabled {
         let relay_cfg = sdr_remote_relay::RelayConfig {
             enabled: config.relay_enabled,
             url: config.relay_url.clone(),
@@ -931,20 +1123,21 @@ pub async fn run_server_async(
             // per-install id needed. Station identity is the station name; no device label.
             instance: String::new(),
             name: String::new(),
-            udp_port: sdr_remote_relay::relay_udp_port_resolve(config.relay_udp_enabled),
+            // QUIC through the relay always needs the relay's UDP port.
+            udp_port: sdr_remote_relay::relay_udp_port_resolve(true),
+            // Set by `start_threaded_quic`.
+            quic: false,
         };
-        // Tunnel channels between TrackedSocket and the relay monitor:
-        //  - uplink:  TrackedSocket (send to sentinel) -> monitor (TLT1 over WS)
-        //  - inbound: monitor (decoded TLT1)           -> TrackedSocket (recv_from)
-        let (uplink_tx, uplink_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
-        let sentinel = crate::tracked_socket::relay_sentinel_for(0);
-        let tunnel = sdr_remote_relay::RelayTunnel { sentinel, inbound_tx, uplink_rx };
+        let (grant_tx, grant_rx) = tokio::sync::watch::channel(None);
         // Own thread (see build 123): keeps the relay ping/echo off the busy DSP
         // runtime, so its scheduling doesn't inflate the measured RTT/jitter.
-        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_tunnel(relay_cfg, tunnel);
+        // The TCP line: clients on a network that lets no UDP through reach the
+        // station over it (build 144).
+        let (tcp, tcp_monitor) = sdr_remote_relay::tcp_line();
+        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_quic(relay_cfg, grant_tx, Some(tcp_monitor));
         let _ = status_panel_state.relay_status.set(monitor.status_handle());
-        (Some(monitor), Some((uplink_tx, inbound_rx)))
+        info!("Relay: QUIC via the relay");
+        (Some(monitor), Some(sdr_remote_quic::RelayRoute::new(grant_rx, Some(tcp))))
     } else {
         (None, None)
     };
@@ -1001,6 +1194,20 @@ pub async fn run_server_async(
         None
     };
 
+    // What the status panel shows for Thetis and the radios (build 269).
+    let configured = audio_stats::Configured {
+        thetis: config.thetis_configured(),
+        radios: [yaesu_prebuilt.is_some(), yaesu2_prebuilt.is_some()],
+    };
+    // Named in advance (working rule 11, build 269).
+    info!("{}", configured.line());
+    // Named in advance (`logregels-build294.md`): in which mode this log is
+    // written. The mode is set where it is switched; this says it at each start,
+    // from the switch the logger reads and not from the settings (review of 294).
+    info!("{}", sdr_remote_core::dev_mode::state_line(sdr_remote_core::dev_mode::is_on()));
+    let _ = status_panel_state.configured.set(configured);
+    let _ = status_panel_state.radios.set([yaesu_prebuilt.clone(), yaesu2_prebuilt.clone()]);
+
     let network = NetworkService::new(
         bind_addr,
         session.clone(),
@@ -1027,7 +1234,7 @@ pub async fn run_server_async(
         tci_probe.clone(),
         server_start,
         status_panel_state.bind_status.clone(),
-        relay_socket_ends,
+        quic_relay,
     )
     .await?;
 
@@ -1064,7 +1271,8 @@ pub async fn run_server_async(
     // Ensure PTT is released on shutdown
     ptt.lock().await.release().await;
     // And every Yaesu key line, before the radios are put back (CW step 6).
-    crate::network::lower_all_key_lines(&cw_lines_at_exit);
+    // The proof is for the loss path; at exit the put-back below is what follows.
+    let _down = crate::network::lower_all_key_lines(&cw_lines_at_exit);
 
     // Put back what this session changed on each Yaesu, and wait for the
     // radio's thread to say it has - every way out of the server passes here

@@ -17,6 +17,19 @@
 
 use std::time::Instant;
 
+/// Who changed this receiver's VFO last, as the fork reports it with
+/// `vfo_source_ex` (TL2-8, build 218). ThetisLink until the fork says
+/// otherwise: that is how it behaved before, and what a fork without the cap
+/// keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VfoSource {
+    #[default]
+    ThetisLink,
+    /// Tuned in Thetis itself (or by another TCI program): Thetis scrolls its
+    /// own display, and the server does not recenter.
+    Thetis,
+}
+
 /// Per-RX trigger state-machine.
 #[derive(Debug)]
 pub struct PerRxState {
@@ -26,6 +39,8 @@ pub struct PerRxState {
     pub flag_clear_at: Option<Instant>,
     /// Last trigger-eval result for test-hook + debugging.
     pub last_eval: Option<TriggerEvalResult>,
+    /// Who changed the VFO last (build 218).
+    pub vfo_source: VfoSource,
 }
 
 impl Default for PerRxState {
@@ -34,6 +49,7 @@ impl Default for PerRxState {
             recentering: false,
             flag_clear_at: None,
             last_eval: None,
+            vfo_source: VfoSource::ThetisLink,
         }
     }
 }
@@ -50,6 +66,26 @@ pub struct CtunRecenterState {
 impl CtunRecenterState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A `vfo_source_ex` report for receiver 0 or 1. True when the source
+    /// changed (the caller logs it); an unknown receiver changes nothing.
+    pub fn note_vfo_source(&mut self, receiver: u32, source: VfoSource) -> bool {
+        let rx = match receiver {
+            0 => &mut self.rx1,
+            1 => &mut self.rx2,
+            _ => return false,
+        };
+        let changed = rx.vfo_source != source;
+        rx.vfo_source = source;
+        changed
+    }
+
+    /// A new TCI connection: who tuned last is the fork's to say again (it
+    /// sends it in its connect burst); until then, as before TL2-8.
+    pub fn forget_vfo_sources(&mut self) {
+        self.rx1.vfo_source = VfoSource::ThetisLink;
+        self.rx2.vfo_source = VfoSource::ThetisLink;
     }
 
     /// Tick flag-clear timers; called periodically (≤200ms granularity).
@@ -97,6 +133,7 @@ pub enum TriggerDecision {
     SkipWithinZone,    // VFO safely within 60% headroom
     SkipHwInit,        // ddc_bandwidth == 0 (band-switch transient)
     SkipNoClients,     // 0 clients with spectrum_enabled -> trigger unnecessary
+    SkipThetisLocal,   // last VFO change was in Thetis: Thetis scrolls itself (TL2-8, build 218)
 }
 
 /// Trigger-formula (operator-specific, per PATCH-tl2-server-ctun-auto-recenter §1.3):
@@ -141,6 +178,8 @@ pub fn evaluate_trigger(
 
     let decision = if !has_cap_auto_recenter_ex {
         TriggerDecision::SkipNoCap
+    } else if rx_state.vfo_source == VfoSource::Thetis {
+        TriggerDecision::SkipThetisLocal
     } else if effective_zoom.is_none() {
         TriggerDecision::SkipNoClients
     } else if ddc_bandwidth_hz == 0 {
@@ -296,6 +335,28 @@ mod tests {
         let d = eval(true, Some(8.0), u64::MAX, 0, 384_000, false, &s);
         // No panic = test passes; decision is irrelevant but must be defined
         assert!(matches!(d, TriggerDecision::SkipWithinZone | TriggerDecision::Trigger));
+    }
+
+    /// Tuned in Thetis last: the server leaves the display to Thetis, even at
+    /// the edge; ThetisLink tuning again brings the recenter back. Per receiver,
+    /// and a new connection forgets it (build 218).
+    #[test]
+    fn a_vfo_tuned_in_thetis_is_not_recentered_by_the_server() {
+        let mut state = CtunRecenterState::new();
+        assert!(state.note_vfo_source(0, VfoSource::Thetis));
+        assert!(!state.note_vfo_source(0, VfoSource::Thetis), "no change, no log");
+        assert_eq!(eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, false, &state.rx1), TriggerDecision::SkipThetisLocal);
+        assert_eq!(eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, false, &state.rx2), TriggerDecision::Trigger, "RX2 is its own");
+        assert!(state.note_vfo_source(0, VfoSource::ThetisLink));
+        assert_eq!(eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, false, &state.rx1), TriggerDecision::Trigger);
+        assert!(state.note_vfo_source(1, VfoSource::Thetis));
+        assert!(!state.note_vfo_source(2, VfoSource::Thetis), "no receiver 2");
+        state.forget_vfo_sources();
+        assert_eq!(state.rx2.vfo_source, VfoSource::ThetisLink, "a new connection starts as before");
+        // Wired where the loop runs: the report arm and the reset on disconnect.
+        let tci = include_str!("tci.rs");
+        assert_eq!(tci.matches("if self.ctun_recenter.note_vfo_source(receiver, source) {").count(), 1);
+        assert_eq!(tci.matches("self.ctun_recenter.forget_vfo_sources();").count(), 1);
     }
 
     #[test]

@@ -138,6 +138,7 @@ impl SdrRemoteApp {
                     self.set_popout_geom(kind, pos, size);
                     self.save_full_config();
                 }
+                super::helpers::paint_window_ground(ctx);
                 content(self, ctx);
             },
         );
@@ -364,7 +365,7 @@ impl SdrRemoteApp {
                 self.render_rx2_controls_with_split(&mut cols[1], true, true, controls::UiSurface::PopoutJoined);
             });
 
-            ui.separator();
+            super::helpers::rule(ui);
 
             // Spectrums stacked: RX1 on top, RX2 below. Pre-connect both
             // halves show their respective "Waiting for ..." placeholder so
@@ -373,7 +374,8 @@ impl SdrRemoteApp {
             // render_rx2_spectrum_only; RX1 gets it here to mirror that).
             let total_w = ui.available_width();
             let available = ui.available_height();
-            let half = (available - 4.0) / 2.0;
+            // A rule between the two halves (build 242), ~16 px with its room.
+            let half = (available - 16.0) / 2.0;
             ui.allocate_ui(egui::vec2(total_w, half), |ui| {
                 if !self.spectrum_bins.is_empty() {
                     self.render_spectrum_content(ui, ctx, 0.0, true);
@@ -383,7 +385,8 @@ impl SdrRemoteApp {
                     });
                 }
             });
-            ui.add_space(2.0);
+            // A rule above the RX2 buttons, as above every other panel (build 242).
+            super::helpers::rule(ui);
             self.render_rx2_spectrum_only(ui, ctx);
 
             // Read RX2 spectrum interaction keys inside viewport
@@ -454,18 +457,14 @@ impl SdrRemoteApp {
     fn render_vrx_popout_body(&mut self, ctx: &egui::Context, ch: VrxChannel) {
         let is_vrx1 = matches!(ch, VrxChannel::Vrx1);
         egui::CentralPanel::default().show(ctx, |ui| {
-            // DDC range of this channel: center+span from the spectrum packets,
-            // fall back to VFO ± 192 kHz while there's no spectrum yet.
-            let ddc_center = if is_vrx1 {
-                if self.full_spectrum_center_hz > 0 { self.full_spectrum_center_hz as u64 } else { self.frequency_hz }
-            } else {
-                if self.rx2_full_spectrum_center_hz > 0 { self.rx2_full_spectrum_center_hz as u64 } else { self.rx2_frequency_hz }
-            };
+            // DDC range of this channel: the centre from the one place that
+            // knows it (build 231), the width from `vrx_tune_limits`.
+            let (ddc_center, _) = self.vrx_ddc_centre(ch);
             // Not the raw DDC edges: the reachable range stops where the server
             // stops listening, so tuning cannot run past the audio.
             let (vmin, vmax) = self.vrx_tune_limits(ch, ddc_center);
             self.render_vrx_channel_controls(ui, ch, ddc_center, vmin, vmax);
-            ui.separator();
+            super::helpers::rule(ui);
             let outer_w = ui.available_width();
             let avail_h = ui.available_height().max(120.0);
             ui.allocate_ui(egui::vec2(outer_w, avail_h), |ui| {
@@ -566,6 +565,7 @@ impl SdrRemoteApp {
             loading: sdr_remote_core::protocol::yaesu_loading_blocks_tx(self.yaesu_loading[slot]),
             own_tx: self.yaesu_ptt_last_sent[slot],
             refused: Self::recently_blocked(self.yaesu_refused_at[slot]),
+            mic_missing: self.mic_missing.is_some(),
             ..Default::default()
         });
         Self::ptt_face_look(face, ctx, normal)
@@ -597,6 +597,9 @@ impl SdrRemoteApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
                 (Color32::from_rgb(200, 120, 0), rust_i18n::t!("main_ptt_blocked").to_string(), false)
             }
+            // No microphone (build 191): its own colour on every PTT button,
+            // locked - the press is refused anyway (`desktop_frame`).
+            PttFace::NoMic => (Color32::from_rgb(150, 70, 140), rust_i18n::t!("main_ptt_no_mic").to_string(), true),
             PttFace::Normal => normal,
         }
     }
@@ -630,7 +633,7 @@ impl SdrRemoteApp {
             (Color32::from_rgb(170, 170, 170), "yaesu_loading_background")
         };
         ui.colored_label(colour, rust_i18n::t!(key, what = what.join(", ")).to_string());
-        ui.separator();
+        super::helpers::rule(ui);
     }
 
     /// Yaesu-1 popout body: fixed PTT + volume bar on the bottom, the 991A panel
@@ -638,7 +641,11 @@ impl SdrRemoteApp {
     /// block; PTT mouse-latch + spacebar OR mirrors the Thetis PTT handler.
     fn render_yaesu1_popout_body(&mut self, ctx: &egui::Context) {
         // Fixed PTT button at bottom
-        egui::TopBottomPanel::bottom("yaesu_ptt_panel").show(ctx, |ui| {
+        // The panel's edge, as `rule` (its own border line is off). The content
+        // above scrolls, so its last line is not always in view (owner,
+        // 2026-10-15).
+        egui::TopBottomPanel::bottom("yaesu_ptt_panel").show_separator_line(false).show(ctx, |ui| {
+            super::helpers::rule(ui);
             ui.horizontal(|ui| {
                 // Ownership plus our own request - the radio's TX state is
                 // deliberately not in this. It read `other_tx` (Thetis, not this
@@ -717,7 +724,7 @@ impl SdrRemoteApp {
                     self.resampled_sources(0),
                 );
 
-                ui.separator();
+                super::helpers::rule(ui);
 
                 // Same audio switch as on the main screen: the control window can
                 // stay open with the radio muted.
@@ -728,7 +735,7 @@ impl SdrRemoteApp {
                     self.toggle_yaesu_audio(0);
                 }
 
-                ui.separator();
+                super::helpers::rule(ui);
 
                 ui.label(rust_i18n::t!("main_volume_label").to_string());
                 let slider = egui::Slider::new(&mut self.yaesu_volume, 0.001..=1.0)
@@ -756,7 +763,11 @@ impl SdrRemoteApp {
     /// Yaesu-2 popout body: mirror of Yaesu-1 routed to slot 1. Relocated verbatim
     /// from the inline update-loop block.
     fn render_yaesu2_popout_body(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("yaesu2_ptt_panel").show(ctx, |ui| {
+        // The panel's edge, as `rule` (its own border line is off). The content
+        // above scrolls, so its last line is not always in view (owner,
+        // 2026-10-15).
+        egui::TopBottomPanel::bottom("yaesu2_ptt_panel").show_separator_line(false).show(ctx, |ui| {
+            super::helpers::rule(ui);
             ui.horizontal(|ui| {
                 // Slot 1, same rule as slot 0 - see render_yaesu1_popout_body.
                 let (ptt_color, ptt_text, ptt_locked) =
@@ -822,7 +833,7 @@ impl SdrRemoteApp {
                     space_down,
                     self.resampled_sources(1),
                 );
-                ui.separator();
+                super::helpers::rule(ui);
                 // Same audio switch as on the main screen (see slot 0).
                 if Self::render_window_audio_toggle(
                     ui, self.yaesu2_enabled, self.connected,
@@ -830,7 +841,7 @@ impl SdrRemoteApp {
                 ) {
                     self.toggle_yaesu_audio(1);
                 }
-                ui.separator();
+                super::helpers::rule(ui);
                 ui.label(rust_i18n::t!("main_volume_label").to_string());
                 let slider = egui::Slider::new(&mut self.yaesu2_volume, 0.001..=1.0)
                     .logarithmic(true)

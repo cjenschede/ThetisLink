@@ -2,6 +2,7 @@
 
 package com.sdrremote.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,7 +46,18 @@ import com.sdrremote.nsd.MdnsDiscovery
 @Composable
 fun ConnectionPanel(
     connected: Boolean,
+    // The connection name (build 139): the letters, and the long name with what
+    // it means on a tap; amber while coupling. From Rust, drawn here.
+    pathShort: String = "",
+    pathName: String = "",
+    pathHint: String = "",
+    pathCoupling: Boolean = false,
     audioError: Boolean,
+    // What blocks the station and what helps, one line each, from Rust
+    // (station_notice). Drawn, not decided, here.
+    stationNotices: List<String> = emptyList(),
+    // Whether Connect may be offered, from Rust (station_notice).
+    canConnect: Boolean = true,
     transmitting: Boolean = false,
     paForwardW: Int = 0,
     paMaxW: Int = 0,
@@ -79,12 +91,17 @@ fun ConnectionPanel(
 
     // When the relay is the active route the direct server-IP is not relevant
     // (the relay decides the destination via station/token), so we replace the
-    // IP field with the relay destination. Mirrors the bridge's relay-tunnel
-    // condition (relay enabled + url + station all set).
+    // IP field with the relay destination. Asked of the bridge's own rule, the
+    // one it connects by (build 139): this panel counted relay + url + station
+    // and left the token out, so an empty token showed "via relay" while the
+    // app connected straight.
     val relayEnabled = prefs.getBoolean("relay_enabled", false)
     val relayUrl = prefs.getString("relay_url", "") ?: ""
     val relayStation = prefs.getString("relay_station", "") ?: ""
-    val viaRelay = relayEnabled && relayUrl.isNotBlank() && relayStation.isNotBlank()
+    val relayToken = prefs.getString("relay_token", "") ?: ""
+    val viaRelay = remember(relayEnabled, relayUrl, relayStation, relayToken) {
+        uniffi.sdr_remote.relayIsConfigured(relayEnabled, relayUrl, relayStation, relayToken)
+    }
 
     // PATCH-3: NSD-based mDNS discovery — only runs while ConnectionPanel
     // is in the composition AND the user is not yet connected. Multicast
@@ -147,7 +164,7 @@ fun ConnectionPanel(
                     prefs.edit().putString("server_addr", serverInput).apply()
                     onConnect(serverInput, pw)
                 },
-                enabled = pw.isNotBlank() && !connectStatusIsAwaitingTotp,
+                enabled = pw.isNotBlank() && !connectStatusIsAwaitingTotp && canConnect,
             ) {
                 Text(stringResource(R.string.common_connect))
             }
@@ -156,6 +173,10 @@ fun ConnectionPanel(
             }
         }
     }
+
+    // What blocks the station and what helps (station_notice in Rust): each
+    // its own line, so none hides another - or the audio error (review 59).
+    StationNoticeLines(stationNotices)
 
     // PATCH-3: dropdown with mDNS-discovered servers. Empty list = nothing
     // to render; user still has the manual IP field above as the always-on
@@ -252,6 +273,16 @@ fun ConnectionPanel(
         val statusColor = if (connected) Color(0xFF00C800) else Color(0xFFC80000)
         val statusText = if (connected) stringResource(R.string.common_connected) else stringResource(R.string.common_disconnected)
         Text(text = statusText, color = statusColor, fontSize = 14.sp)
+        if (connected && pathShort.isNotEmpty()) {
+            // The letters by default; a tap shows the long name and what it means.
+            var showLong by remember { mutableStateOf(false) }
+            Text(
+                text = if (showLong) "$pathName - $pathHint" else pathShort,
+                color = if (pathCoupling) Color(0xFFC8A028) else Color.Unspecified,
+                fontSize = 12.sp,
+                modifier = Modifier.clickable { showLong = !showLong },
+            )
+        }
 
         if (audioError) {
             Text(
@@ -285,5 +316,18 @@ fun ConnectionPanel(
                 )
             }
         }
+    }
+}
+
+/**
+ * The station notices from Rust (`station_notice`), one red line each. One
+ * renderer for every screen that shows them - the connection panel, the wizard
+ * and, since build 216, the top of the devices screen, where the Amplitec is
+ * switched (owner, 2026-10-16).
+ */
+@Composable
+fun StationNoticeLines(stationNotices: List<String>) {
+    for (notice in stationNotices) {
+        Text(text = notice, color = Color(0xFFC80000), fontSize = 12.sp)
     }
 }

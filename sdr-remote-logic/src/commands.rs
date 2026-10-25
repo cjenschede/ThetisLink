@@ -25,6 +25,21 @@ pub enum Command {
     SetFrequency(u64),
     SetMode(u8),
     SetControl(ControlId, u16),
+    /// Measurement mode (open point 34): `Some(dir)` starts writing a raw
+    /// measurement file in `dir` (a new file each time), `None` stops it.
+    SetMeasurement(Option<String>),
+    /// "Relay only" (build 137, the measurement screen): while on, a connection
+    /// through the relay offers no direct path and leaves one it is on. Not kept
+    /// across a restart. Does nothing without a relay.
+    SetRelayOnly(bool),
+    /// "Force TCP" (build 146, the measurement screen): while on, a connection
+    /// through the relay sends everything over the relay's TCP line, as on a
+    /// network that lets no UDP through - to measure what that route costs. Not
+    /// kept across a restart. Does nothing without a relay.
+    SetForceTcp(bool),
+    /// A reading of the phone's network or position for the measurement file
+    /// (build 181). Written only while a measurement runs.
+    MeasureNetwork(crate::measure::NetSample),
     SetAgcEnabled(bool),
     SetInputDevice(String),
     SetOutputDevice(String),
@@ -84,7 +99,7 @@ pub enum Command {
     Rf2kDacAlcUp,
     Rf2kDacAlcDown,
     Rf2kZeroFRAM,
-    Rf2kSetDriveConfig { category: u8, band: u8, value: u8 },
+    Rf2kSetDriveConfig(sdr_remote_core::rf2k_drive::DriveChange),
     // Yaesu FT-991A
     SetYaesuVolume(f32),
     /// May a client modulate more than one transmitter at a time?

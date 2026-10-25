@@ -21,11 +21,13 @@
 // backend here records what the engine hands it, so the mix can be observed
 // without a sound card.
 
+mod common;
+
 use anyhow::Result;
 use sdr_remote_core::codec::OpusEncoder;
 use sdr_remote_core::protocol::{
     MultiChannelAudioPacket,
-    AudioPacket, Capabilities, Flags, Header, HeartbeatAck, PacketType, ServerStateFlags,
+    AudioPacket, Capabilities, Flags, HeartbeatAck, PacketType, ServerStateFlags,
     VrxAudioPacket, YaesuPresencePacket,
 };
 use sdr_remote_logic::audio::AudioBackend;
@@ -34,7 +36,7 @@ use sdr_remote_logic::engine::ClientEngine;
 use sdr_remote_logic::state::RadioState;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::net::UdpSocket;
+use common::{build_proving_auth_result, FakeServer};
 use tokio::sync::{mpsc, watch};
 
 // ---------------- recording audio backend ----------------
@@ -90,45 +92,44 @@ fn spawn_engine(rec: Recorded) -> (
     watch::Receiver<RadioState>,
     mpsc::UnboundedSender<Command>,
     watch::Sender<bool>,
+    FakeServer,
 ) {
     spawn_engine_with_mic(rec, 0.0)
 }
 
+/// The engine and its scripted server: QUIC (phase 3d, step 1 - these tests ran
+/// over plain UDP until the plain path was to go). `connect()` names the
+/// server's address, port and all.
 fn spawn_engine_with_mic(rec: Recorded, capture_amplitude: f32) -> (
     watch::Receiver<RadioState>,
     mpsc::UnboundedSender<Command>,
     watch::Sender<bool>,
+    FakeServer,
 ) {
+    let server = FakeServer::start_now();
     let (engine, state_rx, cmd_tx) = ClientEngine::new();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let factory = move |_i: Option<&str>, _o: Option<&str>| -> Result<Box<dyn AudioBackend>> {
         Ok(Box::new(RecordingAudio { rec: rec.clone(), capture_amplitude }))
     };
-    tokio::spawn(async move { engine.run(factory, shutdown_rx, None).await });
-    (state_rx, cmd_tx, shutdown_tx)
+    tokio::spawn(async move { engine.run(factory, shutdown_rx).await });
+    (state_rx, cmd_tx, shutdown_tx, server)
 }
 
 // ---------------- scripted server ----------------
 
-fn header(t: PacketType) -> [u8; 4] {
-    let mut hdr = [0u8; 4];
-    Header::new(t, Flags::NONE).serialize(&mut hdr);
-    hdr
-}
-
 fn build_auth_challenge() -> Vec<u8> {
-    let mut buf = vec![0u8; 20];
-    buf[..4].copy_from_slice(&header(PacketType::AuthChallenge));
-    buf
+    let mut buf = [0u8; sdr_remote_core::protocol::AUTH_CHALLENGE_SIZE];
+    sdr_remote_core::protocol::serialize_auth_challenge(&mut buf, &[0u8; 16]);
+    buf.to_vec()
 }
 
-fn build_auth_result(code: u8) -> Vec<u8> {
-    let mut buf = vec![0u8; 5];
-    buf[..4].copy_from_slice(&header(PacketType::AuthResult));
-    buf[4] = code;
-    buf
-}
-
+/// NOTE since build 2: this builds `HeartbeatAck::SIZE`, which carries no
+/// version tag, so the client under test judges this server `PeerBuild::Older`
+/// and writes a warning line. Deliberate - it keeps the old-reader path
+/// exercised - and written down here because it was not anywhere
+/// (raised in review). These tests are about audio channels; the
+/// build judgement is covered in `connect_state_machine.rs`.
 fn build_heartbeat_ack() -> Vec<u8> {
     let ack = HeartbeatAck {
         flags: Flags::NONE,
@@ -139,6 +140,7 @@ fn build_heartbeat_ack() -> Vec<u8> {
             ServerStateFlags::THETIS_CONFIGURED | ServerStateFlags::TCI_CONNECTED,
         ),
         subs: None,
+        version: None,
     };
     let mut buf = [0u8; HeartbeatAck::SIZE];
     ack.serialize(&mut buf);
@@ -224,10 +226,10 @@ fn build_yaesu_presence(slot0_model: u8, slot1_model: u8) -> Vec<u8> {
 /// Bring the engine to Connected against a scripted server, then hand the
 /// caller the socket + client address so it can push audio.
 async fn connect(
+    server: FakeServer,
     cmd_tx: &mpsc::UnboundedSender<Command>,
     state_rx: &mut watch::Receiver<RadioState>,
-) -> (UdpSocket, std::net::SocketAddr) {
-    let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+) -> (FakeServer, std::net::SocketAddr) {
     let server_addr = server.local_addr().unwrap();
     cmd_tx
         .send(Command::Connect(server_addr.to_string(), Some("pw".into())))
@@ -236,10 +238,10 @@ async fn connect(
     let mut buf = [0u8; 2048];
     let (_n, client) = server.recv_from(&mut buf).await.unwrap();
     server.send_to(&build_auth_challenge(), client).await.unwrap();
-    let (_n, _) = server.recv_from(&mut buf).await.unwrap();
+    let (n, _) = server.recv_auth_response(&mut buf).await.unwrap();
     server
         .send_to(
-            &build_auth_result(sdr_remote_core::protocol::AUTH_ACCEPTED),
+            &build_proving_auth_result(sdr_remote_core::protocol::AUTH_ACCEPTED, &buf[..n], "pw"),
             client,
         )
         .await
@@ -249,9 +251,18 @@ async fn connect(
     let (_n, _) = server.recv_from(&mut buf).await.unwrap();
     server.send_to(&build_heartbeat_ack(), client).await.unwrap();
 
+    // The flag follows the status by one ack; the deadline is the one number
+    // both harnesses use (review 78: two copies, 3 s and 5 s). This loop acks
+    // ONCE and does not pump: that single ack is also the only thing in either
+    // harness that catches a flag which comes late - a flag needing a second
+    // ack never comes here (review 79, measured at 900 ms and 2 s late). A
+    // pump in this loop would take that cover away with nothing going red.
     let start = Instant::now();
     while !state_rx.borrow().connected {
-        assert!(start.elapsed() < Duration::from_secs(5), "engine never connected");
+        assert!(
+            start.elapsed() < Duration::from_millis(common::CONNECTED_FLAG_WAIT_MS),
+            "engine never connected"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     (server, client)
@@ -261,7 +272,7 @@ async fn connect(
 /// the connection is not dropped underneath the test.
 async fn wait_for_level(
     state_rx: &watch::Receiver<RadioState>,
-    server: &UdpSocket,
+    server: &FakeServer,
     client: std::net::SocketAddr,
     f: impl Fn(&RadioState) -> f32,
 ) -> f32 {
@@ -292,7 +303,7 @@ async fn wait_for_level(
 /// report WHICH channel stayed frozen instead of just failing.
 async fn wait_for_zero(
     state_rx: &watch::Receiver<RadioState>,
-    server: &UdpSocket,
+    server: &FakeServer,
     client: std::net::SocketAddr,
     f: impl Fn(&RadioState) -> f32,
 ) -> bool {
@@ -330,8 +341,8 @@ async fn vrx_level_does_not_follow_the_volume_slider() {
     let mut levels = Vec::new();
     for volume in [1.0_f32, 0.05] {
         let rec = Recorded::default();
-        let (mut state_rx, cmd_tx, shutdown_tx) = spawn_engine(rec);
-        let (server, client) = connect(&cmd_tx, &mut state_rx).await;
+        let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec);
+        let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
         cmd_tx.send(Command::SetVrxVolume(volume)).unwrap();
         cmd_tx.send(Command::SetVrxEnabled(true)).unwrap();
@@ -366,8 +377,8 @@ async fn both_vrx_channels_report_the_same_level_for_the_same_audio() {
     let frames: Vec<Vec<u8>> = (0..25).map(|_| opus_frame(&mut enc, 0.5)).collect();
 
     let rec = Recorded::default();
-    let (mut state_rx, cmd_tx, shutdown_tx) = spawn_engine(rec);
-    let (server, client) = connect(&cmd_tx, &mut state_rx).await;
+    let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec);
+    let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
     for cmd in [
         Command::SetVrxVolume(1.0),
@@ -409,8 +420,8 @@ async fn the_two_yaesu_radios_are_calibrated_apart_on_purpose() {
     let frames: Vec<Vec<u8>> = (0..25).map(|_| opus_frame(&mut enc, 0.5)).collect();
 
     let rec = Recorded::default();
-    let (mut state_rx, cmd_tx, shutdown_tx) = spawn_engine(rec);
-    let (server, client) = connect(&cmd_tx, &mut state_rx).await;
+    let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec);
+    let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
     // Slot 0 = FT-991A (model 0), slot 1 = FTX-1 (model 1).
     let _ = server.send_to(&build_yaesu_presence(0, 1), client).await;
@@ -450,8 +461,8 @@ async fn the_transmit_meter_follows_the_gain_it_is_measured_after() {
     let mut levels = Vec::new();
     for gain in [0.25_f32, 0.75] {
         let rec = Recorded::default();
-        let (mut state_rx, cmd_tx, shutdown_tx) = spawn_engine_with_mic(rec, 0.3);
-        let (server, client) = connect(&cmd_tx, &mut state_rx).await;
+        let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine_with_mic(rec, 0.3);
+        let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
         cmd_tx.send(Command::SetAgcEnabled(false)).unwrap();
         cmd_tx.send(Command::SetTxGain(gain)).unwrap();
@@ -493,8 +504,8 @@ async fn a_channel_that_stops_feeding_returns_to_zero() {
     let mut frozen: Vec<String> = Vec::new();
     for channel in ["RX1", "RX2", "VRX1", "VRX2", "Yaesu 1", "Yaesu 2"] {
         let rec = Recorded::default();
-        let (mut state_rx, cmd_tx, shutdown_tx) = spawn_engine(rec);
-        let (server, client) = connect(&cmd_tx, &mut state_rx).await;
+        let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec);
+        let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
         match channel {
             "RX1" => cmd_tx.send(Command::SetRx1Enabled(true)).unwrap(),
@@ -564,8 +575,8 @@ async fn the_yaesu_playback_gain_follows_the_same_per_model_calibration_as_the_m
     let mut rms = Vec::new();
     for slot1 in [false, true] {
         let rec = Recorded::default();
-        let (mut state_rx, cmd_tx, shutdown_tx) = spawn_engine(rec.clone());
-        let (server, client) = connect(&cmd_tx, &mut state_rx).await;
+        let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec.clone());
+        let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
         // Slot 0 = FT-991A (model 0), slot 1 = FTX-1 (model 1).
         let _ = server.send_to(&build_yaesu_presence(0, 1), client).await;

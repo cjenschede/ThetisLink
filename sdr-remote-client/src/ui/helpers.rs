@@ -107,38 +107,98 @@ pub(super) fn chevron_label(
 /// closed, and the one below is always under the last thing that belongs to
 /// it: under the chevron when closed, under the last row when open (owner,
 /// 2026-09-18). This draws the one below. The one above is the caller's
-/// (`group_rule` in front of the call) - unless another group comes directly
+/// (`rule` in front of the call) - unless another group comes directly
 /// before, whose line below is then this group's line above, so two groups
-/// in a row share one line instead of showing two. The caller owns the open
-/// flag and persists it; this only draws and reports a click, so the body can
-/// borrow whatever it needs.
+/// in a row share one line instead of showing two.
+///
+/// The set of open groups goes in by value and comes back with a click
+/// applied and saved (`FoldsOpen::toggle`), so the body can borrow whatever
+/// it needs: `self.folds_open = settings_group(ui, self.folds_open, ...)`.
 pub(super) fn settings_group(
     ui: &mut egui::Ui,
-    open: bool,
+    groups: super::config::FoldsOpen,
+    group: super::config::Fold,
     title: impl Into<egui::WidgetText>,
     body: impl FnOnce(&mut egui::Ui),
-) -> bool {
-    let clicked = chevron_label(ui, open, title).clicked();
+) -> super::config::FoldsOpen {
+    settings_group_with(ui, groups, group, title, |_| (), body).0
+}
+
+/// A remembered chevron without the lines of a group, for the fold-outs in
+/// the popouts and panels (build 199): the same arrow, and a click applied
+/// and saved. The caller draws the body under `is_open`, with its own
+/// spacing: `self.folds_open = fold(ui, self.folds_open, Fold::X, title);`.
+pub(super) fn fold(
+    ui: &mut egui::Ui,
+    mut folds: super::config::FoldsOpen,
+    which: super::config::Fold,
+    title: impl Into<egui::WidgetText>,
+) -> super::config::FoldsOpen {
+    if chevron_label(ui, folds.is_open(which), title).clicked() {
+        folds.toggle(which);
+    }
+    folds
+}
+
+/// The same chevron for a fold whose name is only known at run time - the
+/// menu groups of a Yaesu, named by the radio (build 199). These cannot be a
+/// `Fold`, so they are remembered in egui's memory for the run, as they were
+/// under egui's own collapsing header; `default_open` is taken the first time
+/// the fold is drawn, not at the first click, so a filter typed later does not
+/// open a group already seen - as under that header. The body is indented like
+/// that header did.
+pub(super) fn fold_by_id(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    default_open: bool,
+    title: impl Into<egui::WidgetText>,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let mut open = ui.data_mut(|d| *d.get_temp_mut_or(id, default_open));
+    if chevron_label(ui, open, title).clicked() {
+        open = !open;
+        ui.data_mut(|d| d.insert_temp(id, open));
+    }
+    if open {
+        ui.indent(id, body);
+    }
+}
+
+/// `settings_group` with something on the right of the header row, such as
+/// the relay group's "Wizard" and "Recenter windows" (build 198). Right-to-left
+/// keeps it at the right edge on any width. What it returns comes back next to
+/// the groups, so it reports a click rather than borrowing what the body does.
+pub(super) fn settings_group_with<R>(
+    ui: &mut egui::Ui,
+    mut groups: super::config::FoldsOpen,
+    group: super::config::Fold,
+    title: impl Into<egui::WidgetText>,
+    header_right: impl FnOnce(&mut egui::Ui) -> R,
+    body: impl FnOnce(&mut egui::Ui),
+) -> (super::config::FoldsOpen, R) {
+    let open = groups.is_open(group);
+    let (clicked, right) = ui
+        .horizontal(|ui| {
+            let clicked = chevron_label(ui, open, title).clicked();
+            (clicked, ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), header_right).inner)
+        })
+        .inner;
     if open {
         body(ui);
     }
-    group_rule(ui);
-    clicked
+    rule(ui);
+    if clicked {
+        groups.toggle(group);
+    }
+    (groups, right)
 }
 
-/// The line above and below a settings group. egui's own separator
-/// (one thin pixel in the faint border colour, a few pixels of room) was hard
-/// to see and sat close to the text (owner, 2026-09-18): this one is drawn in
-/// the theme's weak text colour, so it follows all four themes, a little
-/// heavier, with more room on both sides.
-pub(super) fn group_rule(ui: &mut egui::Ui) {
-    const ROOM: f32 = 6.0;
-    const STROKE: f32 = 1.5;
-    ui.add_space(ROOM);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), STROKE), egui::Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(STROKE, ui.visuals().weak_text_color()));
-    ui.add_space(ROOM);
-}
+// The one line, shared with the server and the chat (see the theme crate).
+pub(super) use sdr_remote_theme::rule;
+
+// The ground of a window that is not the main one, shared with the chat (see
+// the theme crate).
+pub(super) use sdr_remote_theme::paint_window_ground;
 
 /// Determine amateur band from frequency (returns None if outside bands)
 pub(crate) fn freq_to_band(hz: u64) -> Option<String> {
@@ -236,11 +296,13 @@ pub(crate) fn vrx_mode_label(mode: u8) -> &'static str {
     }
 }
 
-/// Default (filter_low_hz, filter_high_hz) for a VRX mode. Preserves
-/// the current SSB bandwidth on USB<->LSB swap; uses mode-specific
-/// defaults for AM/SAM/FM (their natural bandwidths differ from SSB).
-pub(crate) fn vrx_mode_default_filter(new_mode: u8, current_bw: i32) -> (i32, i32) {
-    let bw = if current_bw > 0 { current_bw } else { 3000 };
+/// Default (filter_low_hz, filter_high_hz) for a VRX mode. Keeps the current
+/// width only on a USB<->LSB swap (build 243: from SAM at +/-5 kHz, LSB became
+/// 10 kHz wide); from AM/SAM/FM, SSB starts at 3 kHz. AM/SAM/FM have their own
+/// defaults (their natural bandwidths differ from SSB).
+pub(crate) fn vrx_mode_default_filter(old_mode: u8, new_mode: u8, current_bw: i32) -> (i32, i32) {
+    let ssb = |m: u8| m == 0 || m == 1;
+    let bw = if current_bw > 0 && ssb(old_mode) && ssb(new_mode) { current_bw } else { 3000 };
     match new_mode {
         0 => (0, bw),                // USB
         1 => (-bw, 0),               // LSB
@@ -278,16 +340,6 @@ pub(crate) fn vrx_filter_from_preset(mode: u8, preset_bw: i32) -> (i32, i32) {
 
 pub(crate) fn format_bandwidth(hz: i32, cw: bool) -> String {
     sdr_remote_logic::filter_width::format_width_hz(hz, cw)
-}
-
-/// True for modes whose filter is symmetric around the carrier - AM, SAM, DSB,
-/// FM, DRM. Main-RX DSPMode numbering: LSB=0, USB=1, DSB=2, CWL=3, CWU=4,
-/// FM=5, AM=6, DIGU=7, SPEC=8, DIGL=9, SAM=10, DRM=11. One-sided modes (SSB,
-/// CW, DIG) and SPEC are NOT symmetric. Used to mirror a single dragged filter
-/// edge to both sides so the spectrum matches Thetis, which forces symmetry in
-/// these modes (it adopts the wider edge for both sides).
-pub(crate) fn is_symmetric_mode(mode: u8) -> bool {
-    !matches!(mode, 0 | 1 | 3 | 4 | 7 | 8 | 9)
 }
 
 /// Get current time as HH:MM:SS string
@@ -530,11 +582,72 @@ pub(crate) fn spe_band_name(band: u8) -> &'static str {
     }
 }
 
+/// The RF2K's band index is the server's (`parse_band`: 0 = 160 m up to
+/// 10 = 6 m). Until build 204 this list ran the other way round - the
+/// UltraBeam's order - and showed 15 m for 40 m.
 pub(crate) fn rf2k_band_name(band: u8) -> &'static str {
-    match band {
-        0 => "6m", 1 => "10m", 2 => "12m", 3 => "15m", 4 => "17m",
-        5 => "20m", 6 => "30m", 7 => "40m", 8 => "60m", 9 => "80m",
-        10 => "160m", _ => "?",
+    sdr_remote_core::rf2k_drive::BAND_NAMES.get(band as usize).copied().unwrap_or("?")
+}
+
+#[cfg(test)]
+mod mode_filter_tests {
+    use super::vrx_mode_default_filter;
+
+    /// The VRX keeps its width only from SSB to SSB, and a band memory keeps and
+    /// restores only edges that fit its mode (build 243; owner, 2026-10-17: SAM
+    /// at +/-5 kHz to LSB gave a 10 kHz LSB, and 60 m and 160 m came back as LSB
+    /// with a USB and an AM filter).
+    #[test]
+    fn a_mode_change_takes_no_width_from_another_kind_of_mode() {
+        // VRX modes: 0 USB, 1 LSB, 2 AM, 3 SAM, 4 FM.
+        assert_eq!(vrx_mode_default_filter(3, 1, 10_000), (-3000, 0), "SAM to LSB");
+        assert_eq!(vrx_mode_default_filter(2, 0, 6_000), (0, 3000), "AM to USB");
+        assert_eq!(vrx_mode_default_filter(4, 1, 8_000), (-3000, 0), "FM to LSB");
+        assert_eq!(vrx_mode_default_filter(0, 1, 2_400), (-2400, 0), "USB to LSB keeps 2.4 kHz");
+        assert_eq!(vrx_mode_default_filter(1, 0, 2_700), (0, 2700), "and back");
+        assert_eq!(vrx_mode_default_filter(1, 3, 2_700), (-3000, 3000), "LSB to SAM: its own default");
+
+        let src = include_str!("persistence.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let save = &body[body.find("fn save_current_band").unwrap()..body.find("fn restore_band").unwrap()];
+        let restore = &body[body.find("fn restore_band").unwrap()..];
+        let fit = "sdr_remote_logic::filter_width::edges_fit_mode(";
+        assert_eq!(save.matches(fit).count(), 1, "kept only if it fits");
+        assert!(save.contains("- not kept\""), "named in advance");
+        assert_eq!(restore.matches(fit).count(), 1, "restored only if it fits");
+        assert!(restore.contains("let kept_mode = if mem.mode != cur_mode && block_mode { cur_mode } else { mem.mode };"),
+            "the mode Thetis keeps (review of 243)");
+        assert!(restore.contains("edges_fit_mode(kept_mode,"), "checked against it");
+        let vrx = include_str!("vrx.rs");
+        assert_eq!(vrx.matches("vrx_mode_default_filter(mode, mode_val, cur_bw)").count(), 1, "old mode, new mode");
+        assert!(restore.contains("- not restored\""), "named in advance");
+        let send = restore.find("Command::SetControl(flo_id").unwrap();
+        assert!(restore[..send].contains("if fits {"), "the filter is sent only when it fits");
+    }
+}
+
+#[cfg(test)]
+mod filter_edge_tests {
+    /// Every client path that makes RX filter edges keeps them on the mode's own
+    /// side of the carrier (build 245): the drag of RX1 and RX2 through
+    /// `filter_width::drag_edge`, MIDI wider and narrower through
+    /// `filter_width::step`, like the width buttons.
+    #[test]
+    fn every_filter_edge_path_uses_the_shared_rule() {
+        let cut = |s: &'static str| &s[..s.find("#[cfg(test)]").unwrap_or(s.len())];
+        let rx = cut(include_str!("rx_controls.rs"));
+        for (vfo, needle) in [
+            ("RX1 low", "drag_edge(self.mode, self.filter_low_hz, self.filter_high_hz, true, hz)"),
+            ("RX1 high", "drag_edge(self.mode, self.filter_low_hz, self.filter_high_hz, false, hz)"),
+            ("RX2 low", "drag_edge(self.rx2_mode, self.rx2_filter_low_hz, self.rx2_filter_high_hz, true, hz)"),
+            ("RX2 high", "drag_edge(self.rx2_mode, self.rx2_filter_low_hz, self.rx2_filter_high_hz, false, hz)"),
+        ] {
+            assert_eq!(rx.matches(needle).count(), 1, "{vfo}");
+        }
+        assert!(!rx.contains("hz.abs()"), "no mirror of its own");
+        let midi = cut(include_str!("midi_screen.rs"));
+        assert!(midi.contains("step(self.mode, self.filter_low_hz, self.filter_high_hz, dir)"), "MIDI steps like the buttons");
+        assert!(!midi.contains("filter_low_hz - 50") && !midi.contains("filter_high_hz + 50"), "no +/-50 of its own");
     }
 }
 
@@ -581,5 +694,40 @@ mod opening_zoom_tests {
     #[test]
     fn an_absurd_width_stops_at_the_ceiling() {
         assert_eq!(default_zoom_for_span(u32::MAX), 1024.0);
+    }
+}
+
+#[cfg(test)]
+mod popout_tests {
+    /// Every pop-out paints its ground before its panels (build 203): the one
+    /// lifecycle all of them go through calls it right before the content.
+    /// Counted over every source file of the client, so a window opened
+    /// somewhere else is seen too (review of 203).
+    #[test]
+    fn every_popout_paints_its_ground_first() {
+        fn walk(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, files);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        assert!(files.len() >= 40, "only {} source files found", files.len());
+        let opens: usize = files
+            .iter()
+            .map(|f| std::fs::read_to_string(f).unwrap().matches(concat!("show_viewport", "_immediate(")).count())
+            .sum();
+        assert_eq!(opens, 1, "a second way to open a window");
+        let popouts = include_str!("popouts.rs");
+        assert_eq!(
+            popouts.matches("super::helpers::paint_window_ground(ctx);
+                content(self, ctx);").count(),
+            1
+        );
     }
 }

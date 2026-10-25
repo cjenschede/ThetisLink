@@ -61,7 +61,7 @@ pub(super) fn render_ultrabeam_panel(
             }
         });
     });
-    ui.separator();
+    sdr_remote_theme::rule(ui);
 
     if !status.connected {
         ui.label(rust_i18n::t!("srv_ub_no_conn").to_string());
@@ -89,10 +89,10 @@ pub(super) fn render_ultrabeam_panel(
     // Band + FW version
     ui.horizontal(|ui| {
         ui.label(format!("Band: {}", ultrabeam::band_name(status.band)));
-        ui.separator();
+        sdr_remote_theme::rule(ui);
         ui.label(format!("FW: {}.{:02}", status.fw_major, status.fw_minor));
         if status.off_state {
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             ui.colored_label(Color32::from_rgb(255, 170, 40), rust_i18n::t!("srv_retracted").to_string());
         }
     });
@@ -140,7 +140,7 @@ pub(super) fn render_ultrabeam_panel(
                 }
             }
         }
-        ui.separator();
+        sdr_remote_theme::rule(ui);
         let (track_hz, track_label) = ub_track_vfo_hz(vfo_freq_shared, vfo_b_freq_shared, amp_status, amp_labels);
         let track_khz = (track_hz / 1000) as u16;
         let can_sync = status.connected && track_khz >= 1800 && track_khz <= 54000
@@ -252,7 +252,7 @@ pub(super) fn render_ultrabeam_panel(
     // Collapsible menu section
     if *show_menu {
         ui.add_space(8.0);
-        ui.separator();
+        sdr_remote_theme::rule(ui);
         ui.label(RichText::new(rust_i18n::t!("srv_menu").to_string()).strong().size(16.0));
 
         // Elements display

@@ -1,10 +1,10 @@
-# ThetisLink v2.12.0 — Technische Referentie
+# ThetisLink v2.13.0 — Technische Referentie
 
 ## 1. Overzicht
 
-ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger - welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken - en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over UDP met Opus codec.
+ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger - welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken - en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over één versleutelde QUIC-verbinding met Opus codec.
 
-**Versie:** v2.12.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.13.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11 en Android 8+ (arm64); macOS (Intel/Apple Silicon) vanaf broncode, experimenteel
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -21,14 +21,42 @@ Daarnaast is er een **PA3GHM ThetisLink fork** ([cjenschede/Thetis](https://gith
 - **Diversity auto-null**: Smart en Ultra algoritmen die server-side in Thetis draaien (DSP-snelheid)
 - **BroadcastDiversityPhase/Gain**: real-time cirkelplot updates tijdens auto-null sweep
 
-Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. Met deze vink uit blijft het stock TCI-extensiegedrag van v2.10.3.15 behouden (de fork bevat wel een eigen build-tag, release-notes en About-metadata). De huidige ThetisLink fork build tag is **TL2-4**.
+Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. Met deze vink uit blijft het stock TCI-extensiegedrag van v2.10.3.15 behouden (de fork bevat wel een eigen build-tag, release-notes en About-metadata). De huidige ThetisLink fork build tag is **TL2-18**.
 
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.12.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.13.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.13.0 hoogtepunten
+
+**Eén versleutelde verbinding, rechtstreeks of door de relay.** Kaal UDP en de
+klassieke relaytunnel zijn weg. Desktop, telefoon en server praten over één
+QUIC-verbinding (quinn, TLS 1.3) op UDP: rechtstreeks op poort 4580, of door de relay
+op UDP 443, waar een routelaag onder quinn elk pakket in een TLU1-kop zet en de relay
+het ongelezen doorgeeft. Een pakket dat in één datagram past gaat als datagram, de
+rest over een korte stream. Het wachtwoordbewijs zit vast aan de TLS-sessie
+(`Binding`), en sinds deze versie bewijst ook de server dat hij het wachtwoord kent;
+een server zonder bewijs wordt geweigerd (hoofdstuk 27). Wire `VERSION` blijft 3,
+maar een programma van v2.12 komt niet meer tot een verbinding: het gooit een
+QUIC-pakket weg en omgekeerd. Via de relay zegt de nieuwe kant het ("runs an older
+version"); verder zegt niemand het.
+
+**De verbinding zoekt zelf de kortste weg.** Na het wachtwoord prikken client en
+server via de relay een gat (`PunchOffer` 0x38, `PunchReady` 0x39), en dezelfde
+QUIC-verbinding gaat rechtstreeks verder (D+R); achter dezelfde router over het eigen
+netwerk (L+R). Laat een netwerk geen UDP door, dan reist ze over de wss-lijn van de
+relay (TCP 443) als R (TCP). De weg heeft één naam in alle programma's
+(`sdr_remote_core::path::PathKind`). Op de server kan rechtstreeks verbinden uit
+(`allow_direct`), alleen met een ingestelde relay.
+
+**Een Yaesu zendt zoals Thetis.** Eén zendpad voor drie zenders: een aankomend
+zendpakket gaat door één beslissing (`tx_intake`), elke zender heeft een jitterbuffer
+met dezelfde regels, de PTT is de vlag op de audiopakketten, en een Yaesu begint elke
+zending met 80 ms voorsprong in zijn geluidskaart. Na een stilte binnen één druk wordt
+een zendbuffer geleegd, zodat oude spraak nooit een zender sleutelt.
 
 ### v2.12.0 hoogtepunten
 
@@ -257,8 +285,8 @@ flowchart LR
     subgraph Server["Server (PC naast Thetis)"]
         TCI["TCI WebSocket :40001"]
     end
-    OpusEnc -->|"UDP :4580<br>Audio + PTT"| TCI
-    TCI -->|"UDP :4580<br>Audio"| OpusDec
+    OpusEnc -->|"QUIC (UDP) :4580<br>Audio + PTT"| TCI
+    TCI -->|"QUIC (UDP) :4580<br>Audio"| OpusDec
     TCI -->|TX_AUDIO_STREAM| Thetis[Thetis]
     Thetis -->|RX_AUDIO_STREAM| TCI
 ```
@@ -267,46 +295,45 @@ Audio, IQ en alle commando's lopen via die ene TCI WebSocket (RX_AUDIO_STREAM / 
 
 ### Rechtstreeks of via de relay
 
-Het schema hierboven is het **rechtstreekse** pad: de client stuurt UDP direct naar
-de server. Dat werkt op een LAN, of van buitenaf met een port-forward.
+Het schema hierboven is het **rechtstreekse** pad: de client opent een QUIC-verbinding
+naar de server op UDP 4580. Dat werkt op een LAN, of van buitenaf met een
+port-forward.
 
-Kan geen van beide kanten een inkomende verbinding aannemen — een client op mobiele
-data, een station achter CGNAT, een netwerk dat inkomend verkeer blokkeert — dan
-maken beide kanten in plaats daarvan een **uitgaande** TLS-verbinding met een relay,
-die ze aan elkaar koppelt:
+Kan geen van beide kanten een inkomende verbinding aannemen - een client op mobiele
+data, een station achter CGNAT - dan melden beide kanten zich **uitgaand** aan bij een
+relay (wss, TCP 443), en loopt dezelfde QUIC-verbinding door de relay (UDP 443):
 
 ```mermaid
 flowchart LR
     subgraph C["Client (laptop/telefoon)"]
-        CE["ClientEngine"]
+        CE["ClientEngine + routelaag"]
     end
     subgraph R["Relay (VPS)"]
         Room["Kamer 'stationsnaam'<br>1 station + max. 8 clients"]
     end
     subgraph S["Server (pc naast Thetis)"]
-        SS["Sessiebeheer"]
+        SS["QuicServer + sessiebeheer"]
     end
-    CE -->|"uitgaand TLS :443<br>TLU1 = audio over kaal UDP"| Room
-    CE -->|"uitgaand TLS :443<br>TLT1 = besturing/spectrum over wss"| Room
+    CE -->|"wss TCP :443<br>aanmelden, chat, peerberichten"| Room
+    CE -->|"UDP :443<br>de QUIC-verbinding (TLU1)"| Room
     Room --> SS
+    CE <-.->|"na het wachtwoord: dezelfde verbinding rechtstreeks<br>D+R (geprikt) of L+R (eigen netwerk :4580)"| SS
     SS --> Thetis["Thetis (TCI)"]
 ```
 
 Twee eigenschappen zijn van belang voor de rest van dit document:
 
-**Het radioprotocol verandert niet.** De relay tunnelt dezelfde frames; niets vanaf
-hoofdstuk 5 (UDP-protocol) gedraagt zich anders omdat een verbinding gerelayd is.
+**Het radioprotocol verandert niet.** Binnen de QUIC-verbinding reizen dezelfde
+pakketten als vroeger over kaal UDP; niets vanaf hoofdstuk 5 gedraagt zich anders
+omdat een verbinding gerelayd is.
 
-**De server weet niet dat hij gerelayd is.** Een gerelayde client wordt geadresseerd
-met een synthetisch `203.0.113.x`-sentineladres, zodat het sessiebeheer, de
-abonnementsverzamelingen en elke verzendplek hem als gewone UDP-peer behandelen.
-Alleen de socketwrapper kent het verschil.
+**De server weet niet langs welke weg een client komt.** Elke QUIC-verbinding krijgt
+een synthetisch sentineladres (`198.51.100.x`), zodat het sessiebeheer, de
+abonnementen en elke verzendplek een client als gewone peer behandelen.
 
-Audio neemt een kaal-UDP-pad vanwege de vertraging en al het overige gaat door de
-TLS-verbinding; wordt UDP geblokkeerd of loopt het vast, dan valt de audio
-automatisch terug op wss. Zie [hoofdstuk 30](#30-relay-afstandsbediening-over-internet)
-voor de framing, de terugvalregels en de ontdubbeling die hoort bij een frame dat
-over twee paden kan komen.
+Vindt de relay een kortere weg, dan gaat dezelfde verbinding rechtstreeks verder;
+laat het netwerk geen UDP door, dan gaat ze over de wss-lijn. Zie
+[hoofdstuk 30](#30-relay-afstandsbediening-over-internet).
 
 ### Client Architectuur
 
@@ -361,6 +388,20 @@ sdr-remote/
 │       ├── stream.rs           # Per stroom: beide decoders, formaat, verhulling
 │       ├── diagnose.rs         # Probleemmelding opschonen (denylist log / allowlist instellingen)
 │       ├── conf_layout.rs      # .conf-bestanden groeperen bij het schrijven
+│       ├── path.rs             # Welke weg de verbinding nu neemt (L, D, R, D+R, L+R, R (TCP))
+│       ├── control_ack.rs      # Bevestigde bedieningen (volgnummer + ControlAck)
+│       ├── resample.rs         # Alle audio-herbemonsteraars van server en apps
+│       ├── audio_channels.rs   # Welke kanalen van de Thetis-bundel een client krijgt
+│       ├── s_meter.rs          # S-waarde als tekst, voor elke meter op elk scherm
+│       ├── filter_fit.rs       # Of filterranden bij een Thetis-DSP-mode passen
+│       ├── rf2k_drive.rs       # RF2K-S-drivetabel per band (SSB, AM, CONT)
+│       ├── rx_only_notice.rs   # De tekst bij een RX-only antennepositie
+│       ├── thetis_power.rs     # Thetis aanzetten op verzoek
+│       ├── cat_health.rs       # Wanneer melden dat de baudrate mogelijk fout is
+│       ├── oslang.rs           # De taal bij de eerste start op een machine
+│       ├── ftx1_ex_chart.rs    # FTX-1 EX-menulabels (gedeeld door desktop en telefoon)
+│       ├── dev_mode.rs         # De ontwikkelstand (verborgen, met code)
+│       ├── source_text.rs      # Rust-bron als tekst lezen, voor de tests
 │       └── auth.rs             # HMAC-SHA256 authenticatie + TOTP
 ├── sdr-remote-logic/           # Platform-onafhankelijke client engine (geen egui)
 │   └── src/
@@ -373,14 +414,45 @@ sdr-remote/
 │       ├── rx_stream.rs        # Ontvangststroom: decoders + herbemonsteraars in een type
 │       ├── roger.rs            # Roger-beep-generator
 │       ├── i18n.rs             # NL/EN string-tabellen
+│       ├── path_name.rs        # De verbindingsnamen zoals beide apps ze tonen
+│       ├── udp_blocked.rs      # Of dit netwerk UDP naar de relay doorlaat (TCP-noodroute)
+│       ├── session_intent.rs   # Wat deze client van de server vroeg, om het opnieuw te vragen
+│       ├── station_notice.rs   # Meldingen over een stationstoestand die de operator blokkeert
+│       ├── ptt_intent.rs       # Wat de operator van een zender vraagt (PTT)
+│       ├── ptt_button.rs       # Wat een PTT-knop toont, per zender en per front-end
+│       ├── ptt_denial.rs       # Een weigering van de server, zichtbaar voor de UI
+│       ├── ble_ptt.rs          # Zendbeslissing voor een Bluetooth-PTT-knop
+│       ├── tx_stream.rs        # Eén zendstroom naar de server per zender
+│       ├── after_tx.rs         # De RX-stroom direct na het loslaten van PTT
+│       ├── usb_lost.rs         # Melding: server verloor de kabel naar de radio tijdens zenden
+│       ├── cw_keyer.rs         # CW-keyer: paddlecontacten in, sleutelflanken uit
+│       ├── sidetone.rs         # CW-meeluistertoon
+│       ├── filter_width.rs     # RX-filterbreedteknoppen
+│       ├── thetis_autostart.rs # "Thetis automatisch starten": één regel voor desktop en telefoon
+│       ├── thetis_streams.rs   # Thetis-stromen stoppen als de operator naar een Yaesu luistert
+│       ├── loss_window.rs      # Hoeveel van het gevraagde echt aankwam
+│       ├── measure.rs          # Meetstand: ruwe registratie van wat aankwam en wanneer
+│       ├── wav_tx.rs           # WAV-opname afspelen naar een zender, met PTT
 │       └── wav.rs              # WAV opname/afspeel-helpers
+│   └── tests/
+│       ├── channel_level_parity.rs # Audiotest zonder hardware: pint de zes niveau-
+│       │                           # meetpunten (voor het volume, VRX-pariteit,
+│       │                           # Yaesu-meter EN afspeelversterking per model, TX-piek
+│       │                           # na versterking, en elk kanaal dat naar nul terugvalt)
+│       └── connect_state_machine.rs # Gescripte server op loopback: verbind-/aanmeldstanden
 ├── sdr-remote-theme/           # Gedeeld UI-kleurpalet / theme-constanten
 ├── sdr-remote-layout/          # Gedeelde vensterschikker (client + server-GUI)
 ├── sdr-remote-chat/            # Gedeeld chatmodel + meldformulier (desktop egui + Android)
 │   └── src/                    # model.rs (geen UI), worker.rs (HTTP), panel.rs (egui, feature)
 ├── vrx-rs/                     # VRX-engine: FFT-channelizer + per-VRX Opus/runtime
 │   └── src/                    # channelizer.rs, opus.rs, runtime.rs, config.rs, wav.rs
-├── sdr-remote-relay/           # Relay-client-library (in server + client gelinkt)
+├── sdr-remote-relay/           # Relay-client-library: aanmelden over wss, sessie, herhaalladder (in server + client)
+├── sdr-remote-quic/            # De versleutelde verbinding: QUIC (quinn, TLS 1.3), rechtstreeks of via de relay
+│   └── src/
+│       ├── lib.rs              # QuicServer/QuicClient, sentineladressen, Binding voor het wachtwoordbewijs
+│       ├── route.rs            # Routelaag onder quinn: QUIC in TLU1 via de relay, of in TLT1 over wss
+│       ├── punch.rs            # Gaten prikken na het wachtwoord (D+R) en het eigen netwerk (L+R)
+│       └── testing.rs          # Een relay voor de tests
 ├── thetislink-relay/           # Self-hosted VPS-relay-binary
 │   └── src/                    # main.rs (forwarder), admin_api.rs, store.rs (SQLite)
 ├── thetislink-chat/            # Chatdienst + meldingenpostbus (eigen container náást de relay)
@@ -388,7 +460,7 @@ sdr-remote/
 ├── sdr-remote-server/          # Windows server (draait naast Thetis)
 │   └── src/
 │       ├── main.rs             # Opstarten, argumenten, afsluiten
-│       ├── network.rs          # UDP zenden/ontvangen, resampling, playout-timer, routering per client
+│       ├── network.rs          # QUIC-server, ontvangen/zenden per client, resampling, playout-timer, routering
 │       ├── session.rs          # Clientsessies (multi-client, abonnementsverzamelingen)
 │       ├── tracked_socket.rs   # UDP-socket met tellers per stroom + pariteitstests met de relay
 │       ├── mdns.rs             # mDNS-dienstaankondiging (lokale ontdekking)
@@ -401,6 +473,18 @@ sdr-remote/
 │       ├── vrx_manager.rs      # VRX-abonnementen/runtimes per client
 │       ├── vrx_bridge.rs       # Brug tussen de IQ-stroom en de vrx-rs-engine
 │       ├── ptt.rs              # PttController: PTT-veiligheid (bevat TciConnection)
+│       ├── tx_recover.rs       # Zendaudio zoals de server hem ontvangt (Thetis en Yaesu)
+│       ├── tx_intake.rs        # Wat een binnenkomend zendaudiopakket doet, per zender
+│       ├── tx_replay.rs        # Herhaling van de zendketen
+│       ├── tx_arrivals.rs      # Meting van binnenkomende zendpakketten
+│       ├── tx_denial.rs        # Hoe vaak een client hoort dat zijn zendverzoek is geweigerd
+│       ├── tx_orphan.rs        # Een zender die de server sleutelde en waarvan de eigenaar weg is
+│       ├── pause_trim.rs       # De zendbuffer inhalen in de spraakpauzes
+│       ├── trial.rs            # Proefopstelling van de zendketen (ontwikkeling)
+│       ├── pa_policy.rs        # Wie mag versterken, en de drive als niemand dat doet
+│       ├── cw_key_line.rs      # Sleutellijn van een Yaesu (RTS op de tweede USB-COM-poort)
+│       ├── cw_playout.rs       # CW-weergave: sleutelflanken in, op tijd naar de radio
+│       ├── test_serial.rs      # Nep-seriële poort voor de tests
 │       ├── power_cap.rs        # RF-vermogensbegrenzing per positie (SPE/RF2K DriveDown)
 │       ├── dxcluster.rs        # DX-Cluster telnetclient
 │       ├── macros.rs           # CW-keyer-macro's
@@ -412,7 +496,9 @@ sdr-remote/
 │       │   ├── memory.rs       # Geheugenkanalen + CTCSS/DCS lezen/schrijven, tonenwandeling, scanpauze
 │       │   ├── ex_menu.rs      # FT-991A EX-menu lezen/schrijven
 │       │   ├── audio.rs        # Yaesu USB-audiostromen (opname + TX-uitgang)
-│       │   └── tone_store.rs   # CTCSS/DCS per kanaal, bewaard naast de radio
+│       │   ├── tone_store.rs   # CTCSS/DCS per kanaal, bewaard naast de radio
+│       │   ├── line_ptt.rs     # Zenden via een lijn van de USB-poort (RTS/DTR)
+│       │   └── tx_timing.rs    # Zendketen van een Yaesu, getimed zoals die van Thetis
 │       ├── amplitec.rs         # Amplitec antenneschakelaar
 │       ├── rf2k.rs             # RF2K-S PA HTTP-controller
 │       ├── spe_expert.rs       # SPE Expert 1.3K-FA seriële controller
@@ -435,6 +521,8 @@ sdr-remote/
 │           ├── arranger.rs     # Vensterschikker-matrix (apparaatvensters van de server)
 │           ├── window_placement.rs # Monitorgeometrie
 │           ├── utils.rs        # Gedeelde GUI-helpers (with_timeout, opmaak)
+│           ├── chat_window.rs  # De chat in de server-GUI
+│           ├── developer_mode.rs # De ontwikkelstand in de server-GUI
 │           └── amplitec.rs / rf2k.rs / spe.rs / tuner.rs / ultrabeam.rs / rotor.rs / macros_ui.rs
 ├── sdr-remote-client/          # Desktopclient (egui)
 │   ├── locales/                # rust-i18n UI-vertalingen (app.yml: EN/NL/DE/FR)
@@ -445,6 +533,8 @@ sdr-remote/
 │       ├── midi.rs             # MIDI-controllerinvoer
 │       ├── websdr.rs           # Win32-venster + wry WebView (ingebedde WebSDR/KiwiSDR)
 │       ├── catsync.rs          # WebSDR-kanaalcommunicatie, favorieten, ontdenderde freq-sync
+│       ├── ble.rs              # Bluetooth-PTT-knop (YPC21 / PTT-Z01)
+│       ├── paddle.rs           # Morsepaddle via MCP2221A
 │       └── ui/                 # egui-UI (per gebied gesplitst; ui/mod.rs opgedeeld in v2.7.0)
 │           ├── mod.rs          # SdrRemoteApp-state + gedeelde widgets (kanaalblokken, watervalring)
 │           ├── app_state.rs    # App-constructie, config -> state, opstartcommando's
@@ -468,29 +558,37 @@ sdr-remote/
 │           ├── arranger.rs     # Vensterschikker-matrix (clientvensters, per monitor)
 │           ├── window_placement.rs # Monitorgeometrie + pop-outplaatsing
 │           ├── wizard.rs       # Verbindingswizard bij eerste start
+│           ├── ble_screen.rs   # Instellingen en gebeurtenissen van de Bluetooth-PTT-knop
+│           ├── paddle_screen.rs # Instellingen en gebeurtenissen van de morsepaddle
+│           ├── developer_mode.rs # De ontwikkelstand op het serverscherm
 │           ├── screens.rs      # Pakkettype-labels + resterende schermhelpers
 │           ├── server_screen.rs / thetis_screen.rs / devices.rs / diversity_screen.rs / midi_screen.rs
 │           ├── yaesu_panel.rs  # Yaesu-bedieningsvenster (beide slots)
 │           ├── yaesu_memory.rs # Yaesu-geheugenkanaaltabel
-│           ├── yaesu_menu.rs   # Yaesu EX-menu-editor
-│           └── ftx1_ex_chart.rs# FTX-1 EX-menu-referentietabel
+│           └── yaesu_menu.rs   # Yaesu EX-menu-editor (labels uit core/ftx1_ex_chart.rs)
 └── sdr-remote-android/         # Android client (Kotlin/Compose + Rust via UniFFI)
     ├── src/
     │   ├── lib.rs              # JNI entrypoint, Android logging
     │   ├── bridge.rs           # UniFFI bridge (Rust ↔ Kotlin), AppState
     │   ├── audio_oboe.rs       # Oboe AudioBackend impl (AAudio)
+    │   ├── logging.rs          # Een eigen logbestand op de telefoon
     │   └── sdr_remote.udl      # UniFFI interface definitie
     └── android/                # Android Studio project
         └── app/src/main/java/com/sdrremote/
             ├── MainActivity.kt
             ├── SdrUiState.kt           # Compose UI-state-model
             ├── viewmodel/SdrViewModel.kt
+            ├── ChatUiState.kt          # Chat-UI-state
+            ├── service/                # AudioService, AudioRouting, BlePttController, MidiController
+            ├── prefs/                  # Lokale voorkeuren (audio, Yaesu-zenden, ontwikkelstand)
+            ├── nsd/                    # mDNS-serverontdekking
+            ├── measure/                # NetworkMeter (meetstand)
             └── ui/
                 ├── screens/            # MainScreen, ExternalDevicesScreen, ConnectWizard
                 └── components/         # Compose UI componenten (RadioControls, StatsPanel, …)
 ```
 
-> **Ook een workspace-member:** `mcp2221-test` (een losstaande MCP2221A hardware-testharnas, niet meegeleverd). De map `vendor/mcp2221-hal` bevat een vendored dependency die de MCP2221A-paden gebruiken.
+> **Ook workspace-members:** `mcp2221-test` (een losstaande MCP2221A hardware-testharnas) en `yaesu-key-test` (een testprogramma om een Yaesu via een COM-poortlijn te sleutelen); geen van beide wordt meegeleverd. De map `vendor/mcp2221-hal` bevat een vendored dependency die de MCP2221A-paden gebruiken.
 
 > **Internationalisatie (i18n).** Twee mechanismen naast elkaar: (1) een handgeschreven NL/EN-stringtabel in `sdr-remote-logic/src/i18n.rs` voor connect-status/foutmeldingen, gedeeld met Android via UniFFI; (2) sinds v2.5.0 een **rust-i18n**-systeem voor de desktop-UI-chrome (`sdr-remote-client/locales/app.yml`, EN-basis + NL/DE/FR) met een **taal-picker** in het Server-tabblad. Android heeft eigen string-resources (`values-nl/de/fr`) met OS-taal-detectie en EN-fallback. Ham-vaktermen, mode-namen en productnamen blijven onvertaald.
 
@@ -512,14 +610,43 @@ sdr-remote/
 | `oboe` | 0.6 | Audio I/O (AAudio op Android) |
 | `uniffi` | 0.28 | Rust ↔ Kotlin FFI bridge |
 | `rustfft` | 6 | FFT voor spectrum verwerking (server) |
-| `tokio-tungstenite` | 0.24 | WebSocket client voor TCI (server) |
+| `tokio-tungstenite` | 0.24 | WebSocket: TCI naar Thetis (server) en wss naar de relay |
 | `futures-util` | 0.3 | StreamExt/SinkExt voor WebSocket (server) |
 | `serialport` | 4.7 | Serieel USB communicatie (apparaten) |
 | `midir` | 0.10 | MIDI interface |
 | `wry` | 0.54 | WebView voor embedded WebSDR/KiwiSDR venster (client) |
 | `hmac`/`sha2` | 0.12/0.10 | HMAC-SHA256 authenticatie |
+| `hkdf` | 0.12 | Sessiesleutel-afleiding (HKDF-SHA256, sinds v2.13) |
 | `rand` | 0.8 | Random nonce generatie |
 | `tracing`/`tracing-subscriber`/`tracing-appender` | 0.1/0.3/0.2 | Gestructureerde logging + roterende file-appender |
+| `quinn` | 0.11 | QUIC: de versleutelde verbinding tussen app en server (sinds v2.13) |
+| `rustls` | 0.23 | TLS 1.3 onder QUIC en voor wss naar de relay |
+| `rcgen` | 0.13 | Zelfondertekend servercertificaat, bij elke start nieuw (sinds v2.13) |
+| `bytes` | 1 | Pakketbuffers voor quinn |
+| `socket2` | 0.5 | Socket-opties voor de UDP-poort van de server |
+| `totp-lite`/`base32` | 2.0/0.5 | TOTP-tweestapsverificatie |
+| `qrcode` | 0.14 | QR-code voor het instellen van TOTP (server-GUI) |
+| `num_enum` | 0.7 | Protocolnummers naar enums |
+| `mdns-sd` | 0.19.1 | mDNS: de server op het eigen netwerk vinden |
+| `rust-i18n` | 3 | UI-vertalingen (desktop, server-GUI, chat) |
+| `reqwest` | 0.12 | HTTP-client (RF2K-S, chat) |
+| `serde`/`serde_json` | 1 | JSON (RF2K-S, chat, relay) |
+| `chrono` | 0.4 | Tijd en datum in logs en chat |
+| `mcp2221-hal` | 0.1 (vendored) | MCP2221A USB-HID (tuners, rotor, paddle) |
+| `tao` | 0.34 | Venster voor de ingebedde WebView (client) |
+| `open` | 5 | Links openen in de browser (client) |
+| `windows` | 0.58 | Win32/WinRT-API's (o.a. Bluetooth-PTT-knop, taal van het systeem) |
+| `android_logger` | 0.14 | Logging naar logcat (Android) |
+| `winresource` | 0.1 | Programma-icoon in de exe (build) |
+
+Alleen in de relay en de chatdienst op de VPS:
+
+| Crate | Versie | Doel |
+|-------|--------|------|
+| `axum` | 0.7 | HTTP/WebSocket-server (relay) |
+| `rusqlite` | 0.32 (bundled) | SQLite-opslag (stations, apparaten, postbus) |
+| `argon2` | 0.5 | Wachtwoord-hash van de beheerder (relay) |
+| `getrandom` | 0.2 | Sessiesleutels voor het beheer (chatdienst) |
 
 **Build-optimalisatie:** Dependencies worden ook in dev mode geoptimaliseerd (`[profile.dev.package."*"] opt-level = 2`) omdat Opus en rubato te traag zijn zonder optimalisatie.
 
@@ -527,7 +654,7 @@ sdr-remote/
 
 ## 5. UDP Protocol
 
-Binair handgeschreven protocol op UDP poort **4580**. Alle multi-byte waarden zijn big-endian. Maximum packet grootte: 33.000 bytes (voor spectrum data).
+Binair handgeschreven protocol. Sinds v2.13 reist elk pakket binnen één QUIC-verbinding (UDP poort **4580**, of door de relay): als datagram, of over een korte eigen stream als het niet in één datagram past. Alle multi-byte waarden zijn big-endian. Maximum packet grootte: 33.000 bytes (voor spectrum data).
 
 ### Header (4 bytes)
 
@@ -536,7 +663,7 @@ Elk packet begint met dezelfde header:
 | Offset | Grootte | Veld | Waarde |
 |--------|---------|------|--------|
 | 0 | 1 | Magic | `0xAA` |
-| 1 | 1 | Version | `3` (opgehoogd 1→2 in v2.0.0, 2→3 in v2.0.3; client en server moeten dezelfde wire-VERSION delen) |
+| 1 | 1 | Version | `3` (opgehoogd 1→2 in v2.0.0, 2→3 in v2.0.3; client en server moeten dezelfde wire-VERSION delen - nodig maar sinds v2.13 niet voldoende: een client weigert ook een server die bij de handdruk geen bewijs geeft, zie sectie 27) |
 | 2 | 1 | PacketType | Zie onder |
 | 3 | 1 | Flags | Bit 0 = PTT actief; bit 1 = `AUDIO_WIDEBAND` (16 kHz Opus-payload); bit 2 = `HELD_BY_OTHER`; bit 3 = `SERVER_RELEASED`; bits 4-5 = over welke zender een `PttDenied` gaat; bits 6-7 vrij |
 
@@ -566,7 +693,7 @@ RX2 audio van de tweede ontvanger. Zelfde binair formaat als Audio.
 
 Yaesu FT-991A audio stream. Zelfde binair formaat als Audio.
 
-#### Heartbeat (0x02) — 16-20 bytes
+#### Heartbeat (0x02) — 16-52 bytes
 
 Periodiek (elke 500ms) door client verzonden voor verbindingsbewaking en RTT-meting.
 
@@ -579,10 +706,11 @@ Periodiek (elke 500ms) door client verzonden voor verbindingsbewaking en RTT-met
 | 14 | 1 | LossPercent | Geschat packet loss % (u8) |
 | 15 | 1 | JitterMs | Geschatte jitter in ms (u8) |
 | 16-19 | 4 | Capabilities | Client capability flags (u32, optioneel) |
+| 20-51 | 32 | VersionTag | Versie en build van de afzender (optioneel; sinds v2.13) |
 
 Backward compatible: oude clients zonder capabilities (16 bytes) worden geaccepteerd.
 
-#### HeartbeatAck (0x03) — 12-20 bytes
+#### HeartbeatAck (0x03) — 12-54 bytes
 
 Server antwoord op Heartbeat. Echoot de client's timestamp terug voor RTT-berekening.
 
@@ -593,8 +721,10 @@ Server antwoord op Heartbeat. Echoot de client's timestamp terug voor RTT-bereke
 | 8-11 | 4 | EchoTime | Geechode client timestamp |
 | 12-15 | 4 | Capabilities | Negotiated capabilities (u32, optioneel) |
 | 16-19 | 4 | StateFlags | `ServerStateFlags`-bitveld (u32, optioneel; geadverteerd via capability-bit 3) |
+| 20-21 | 2 | SubscriptionMask | De abonnementen die de server voor deze client houdt (optioneel; sinds v2.13) |
+| 22-53 | 32 | VersionTag | Versie en build van de server (optioneel; sinds v2.13) |
 
-Backward-compatible: een oudere server stuurt alleen 12-16 bytes (geen StateFlags); een client die een ontbrekend veld leest behandelt het als nul.
+Backward-compatible: een oudere server stuurt alleen 12-16 bytes (geen StateFlags); een client die een ontbrekend veld leest behandelt het als nul. (Een server van vóór v2.13 komt de handdruk niet meer door, sectie 27; dit beschrijft nog hoe een korte ack gelezen wordt.)
 
 **Capability flags:**
 
@@ -616,6 +746,19 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0-3 | 4 | Header | Magic, version, type=0x04, flags |
 | 4 | 1 | ControlId | Type besturing (zie onder) |
 | 5-6 | 2 | Value | Waarde (u16) |
+| 7-10 | 4 | Seq | Volgnummer (u32), alleen client -> server (sinds v2.13, optioneel) |
+
+**Bevestigde bediening (sinds v2.13).** Een client van v2.13 zet er een volgnummer achter; het
+pakket is dan 11 bytes (`YaesuControl` 0x2C: 12). Een server van v2.13 beantwoordt elke
+genummerde bediening met `ControlAck` (0x37, header + het volgnummer, u32) en past hem alleen toe
+als het nummer nieuwer is dan het laatst toegepaste voor dezelfde bediening - een late kopie van
+"PTT aan" die na "uit" binnenkomt, wordt niet toegepast. Een handeling - een VFO-wissel, de
+V/M-knop, een rauwe Yaesu-knop, een clarifier-stap, het lezen of schrijven van geheugens of menu's,
+een diversity-auto-null - kent geen volgorde: elk nummer wordt één keer uitgevoerd, in welke volgorde het ook aankomt. De client
+herhaalt een bediening die de server niet bevestigt (eerst na 1,5 rondreis, tussen 100 en 500 ms,
+daarna telkens het dubbele; hooguit vier herhalingen, dus opgeven na 1,5 tot 7,5 s), en alleen zodra de server van deze sessie minstens één bediening heeft
+bevestigd. Een oudere server leest de eerste 7 (8) bytes en bevestigt nooit, dus naar hem gaat
+niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorheen.
 
 **ControlId waarden — Thetis RX1:**
 
@@ -664,6 +807,8 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0x1B | Rx2SpectrumMaxBins | 64-32768 | RX2 max bins |
 | 0x3D | DdcSampleRateRx1 | kHz (bijv. 384) | Per-RX DDC rate (stock `iq_samplerate`, fork `ddc_sample_rate_ex`) |
 | 0x3E | DdcSampleRateRx2 | kHz | Per-RX DDC rate RX2 |
+| 0x9C | DdcCentreRx1 | kHz, afgerond (0 = onbekend) | Server → client: het DDC-midden van RX1 dat de VRX op de server gebruikt; ook zonder volle-bandspectrum (build 231) |
+| 0x9D | DdcCentreRx2 | kHz | Idem voor RX2 |
 | 0x3F | Rx2SpectrumFftSize | 32/65/131/262 | FFT-grootte in K = 32768/65536/131072/262144 (RX2) |
 
 **ControlId waarden — TCI Controls (v0.5.3):**
@@ -742,7 +887,7 @@ Stuurt bedieningscommando's (bidirectioneel).
 | 0x25 | YaesuReadMemories | 0 = lees de radio nu, 1 = de serverkopie volstaat | Lees alle geheugens |
 | 0x26 | YaesuRecallMemory | 1-117 | Memory channel recall (991A 1-117 incl. PMS; FTX-1 5-cijferig) |
 | 0x27 | YaesuWriteMemories | trigger | Schrijf alle geheugens |
-| 0x28 | YaesuSelectVfo | 0=A, 1=B, 2=swap | VFO selectie |
+| 0x28 | YaesuSelectVfo | 0=A, 1=B, 2=swap, 3=V/M (wissel VFO/geheugen) | VFO selectie |
 | 0x29 | YaesuSquelch | 0-255 | Squelch niveau |
 | 0x2A | YaesuRfGain | 0-255 | RF gain |
 | 0x2B | YaesuRadioMicGain | 0-100 | Radio mic gain (niet ThetisLink TX gain) |
@@ -921,10 +1066,13 @@ Multi-channel audio: bundelt 1-4 mono Opus frames in een enkel UDP packet. Perfe
 | Type ID | Naam | Richting | Payload |
 |---------|------|----------|---------|
 | 0x30 | AuthChallenge | Server -> Client | 16-byte nonce |
-| 0x31 | AuthResponse | Client -> Server | 32-byte HMAC |
-| 0x32 | AuthResult | Server -> Client | 1 byte: 0=rejected, 1=accepted, 2=totp_required |
+| 0x31 | AuthResponse | Client -> Server | 32-byte HMAC, plus de 16-byte nonce van de client (sinds v2.13) |
+| 0x32 | AuthResult | Server -> Client | 1 byte: 0=rejected, 1=accepted, 2=totp_required, plus een 32-byte serverbewijs (sinds v2.13) |
 | 0x33 | TotpChallenge | Server -> Client | (geen payload, signaleert TOTP invoer) |
 | 0x34 | TotpResponse | Client -> Server | 2-byte length + UTF-8 TOTP code (6 cijfers) |
+| 0x37 | ControlAck | Server -> Client | 4-byte volgnummer van een genummerde bediening (sinds v2.13; zie Control Packet) |
+| 0x38 | PunchOffer | Client -> Server | het openbare adres van de client: familie (4 of 6), adres, poort u16 (sinds v2.13; alleen binnen QUIC, voor een directe verbinding door gaten prikken) |
+| 0x39 | PunchReady | Server -> Client | het adres waarvandaan de server prikte, zelfde opbouw (sinds v2.13; alleen binnen QUIC) |
 
 ### Protocol-uitbreidingen (v2.2.0)
 
@@ -993,7 +1141,7 @@ De onderstaande additieve types zijn geïntroduceerd in v2.0.3–v2.4.2 en worde
 | 0x20 | AmplitecPowerTable | Amplitec per-band power-cap-tabel push (`AmplitecPowerTablePacket`, SIZE 22). |
 | 0x2A | FrequencyVrxActual | Werkelijke VRX-luisterfrequentie na snappen / SAM auto-tune (server-echo, per `vrx_id`). |
 | 0x2B | TxFilterBand | TX-modulatiefilter-band (low/high-randen) push (`TxFilterBandPacket`, SIZE 12). |
-| 0x2C | YaesuControl | Getypt Yaesu-control-kanaal (SIZE 8). |
+| 0x2C | YaesuControl | Getypt Yaesu-control-kanaal (SIZE 8; 12 met een volgnummer van een client van v2.13, zie Control Packet). |
 | 0x2D | YaesuFeature | Yaesu DSP-feature-state-snapshot (toggles/levels/freqs; SIZE 33). |
 | 0x2E | YaesuPresence | Yaesu radio-aanwezigheid (geconfigureerd + actief) per slot, plus een poort-probleemcode per slot: 0 = niets te melden, 1 = de COM-poort wordt vastgehouden door een ander programma, 2 = de COM-poort bestaat niet (SIZE 10; de twee probleem-bytes zijn additief - de 8-byte-vorm van een oudere peer leest als probleem 0). |
 
@@ -1071,11 +1219,11 @@ De server houdt nu per slot een aparte **status**-adresset bij naast de audioset
 | Sample rate | 8 kHz | Narrowband, voldoende voor SSB/CW ontvangst |
 | Kanalen | Mono | Een audiokanaal |
 | Applicatie | VOIP | Geoptimaliseerd voor spraak |
-| Bitrate | 12.800 bps | Net boven 12.4k FEC-drempel |
+| Bitrate | 12.800 bps; 20.000 bps zolang de bescherming tegen verlies aan staat | Onder ongeveer 18 kbps draagt Opus op narrowband geen bruikbare in-band redundantie (gemeten); 20 kbps geeft marge |
 | Bandbreedte | Narrowband | Past bij 8 kHz |
 | Frame duur | 20 ms | 160 samples per frame |
-| FEC | Aan | In-band Forward Error Correction |
-| DTX | Aan | Discontinuous Transmission (stilte-onderdrukking) |
+| FEC | Uit; aan zolang de verbinding van een luisteraar pakketten verliest | Redundantie gaat af van het geluid, dus hij gaat aan op gemeten verlies |
+| DTX | Uit | Een ontvanger is nooit stil: ruis tussen de signalen is ook signaal |
 | Verwacht verlies | 10% | Optimaliseert FEC-overhead |
 
 ### Wideband (TX audio)
@@ -1553,16 +1701,16 @@ De server ondersteunt **meerdere gelijktijdige clients** met single-TX arbitrati
 ### Connect flow
 
 1. Client stuurt eerste Heartbeat naar server adres
-2. Server stuurt AuthChallenge -> client antwoordt met AuthResponse (HMAC-SHA256)
+2. Server stuurt AuthChallenge -> client antwoordt met AuthResponse (HMAC-SHA256) met een eigen nonce erachter; de server leidt K = HKDF-SHA256(wachtwoord, beide nonces) af en hangt een bewijs HMAC(K, label‖beide nonces) achter zijn AuthResult. De client leidt dezelfde K af, controleert het bewijs, en weigert een server die geen of een verkeerd bewijs geeft (sinds v2.13; een oudere client wordt nog toegelaten, zonder sleutel)
 3. Als TOTP ingeschakeld: Server stuurt AuthResult(2) + TotpChallenge -> client toont invoerveld -> client stuurt TotpResponse
 4. Server registreert client sessie (`TouchResult::NewClient`)
-4. Server reset jitter buffer + decoder
-5. Server antwoordt met HeartbeatAck (+ negotiated capabilities)
-6. Client markeert verbinding als "Connected" bij ontvangst HeartbeatAck
+5. Server reset jitter buffer + decoder
+6. Server antwoordt met HeartbeatAck (+ negotiated capabilities)
+7. Client markeert verbinding als "Connected" bij ontvangst HeartbeatAck
 
 ### Disconnect flow (timeout)
 
-1. Client ontvangt geen HeartbeatAck EN geen audio pakketten langer dan **max(6s, rtt x 8)**
+1. Client ontvangt geen HeartbeatAck EN geen audio pakketten langer dan **max(6s, rtt x 8)**; tijdens het zenden geen HeartbeatAck langer dan **3 s** (sinds v2.13, met een waarschuwingstoon)
 2. Client markeert als "Disconnected" maar buffer draineert via PLC zodat audio vloeiend hervat als pakketten terugkomen
 3. Server merkt timeout na **15 seconden** en verwijdert sessie
 
@@ -2425,14 +2573,14 @@ in de radio dus terug op 100,0 Hz. ThetisLink bewaart de tonen in zijn eigen lij
 zet telkens de juiste terug zodra de radio op een kanaal landt, dus zenden via
 ThetisLink werkt gewoon - maar de radio op zichzelf zendt op geschreven kanalen
 100,0 Hz uit. Vanwege die prijs staat schrijven naar de FTX-1 uit tot het in de
-serverinstellingen is geaccepteerd. Zie [Bekende Beperkingen](#31-bekende-beperkingen) voor het
+serverinstellingen is geaccepteerd. Zie [Bekende Beperkingen](#32-bekende-beperkingen) voor het
 volledige verhaal.
 
 ## 27. Netwerk Authenticatie (HMAC-SHA256 + TOTP 2FA)
 
 ### Challenge-Response
 
-ThetisLink gebruikt verplichte wachtwoord-authenticatie via een pre-shared key (PSK) met optionele TOTP twee-factor authenticatie:
+ThetisLink gebruikt wachtwoord-authenticatie via een pre-shared key (PSK) - verplicht in de GUI; een server die met opdrachtregelargumenten wordt gestart, kan nog zonder draaien en laat dan elke client toe, en het dichtzetten daarvan is besloten maar nog niet gebouwd - met optionele TOTP twee-factor authenticatie:
 
 ```mermaid
 sequenceDiagram
@@ -2440,8 +2588,9 @@ sequenceDiagram
     participant S as Server
     C->>S: Heartbeat (nieuw adres)
     S->>C: AuthChallenge(nonce) [16 byte random]
-    C->>S: AuthResponse(HMAC) [HMAC-SHA256(wachtwoord, nonce)]
-    S->>C: AuthResult(1) [accepted]
+    C->>S: AuthResponse(HMAC, nonce_c) [HMAC-SHA256(wachtwoord, nonce), eigen 16-byte nonce erachter]
+    S->>C: AuthResult(1, bewijs) [accepted, bewijs = HMAC(K, label‖nonce‖nonce_c), K = HKDF(wachtwoord, nonce‖nonce_c)]
+    Note over C: Client leidt K af en controleert het bewijs,<br/>geen of verkeerd bewijs: geweigerd
     C->>S: Heartbeat (normaal verder)
 ```
 
@@ -2453,20 +2602,20 @@ sequenceDiagram
     participant S as Server
     C->>S: Heartbeat (nieuw adres)
     S->>C: AuthChallenge(nonce) [16 byte random]
-    C->>S: AuthResponse(HMAC) [HMAC-SHA256(wachtwoord, nonce)]
-    S->>C: AuthResult(2) [totp_required]
+    C->>S: AuthResponse(HMAC, nonce_c) [HMAC-SHA256(wachtwoord, nonce), eigen 16-byte nonce erachter]
+    S->>C: AuthResult(2, bewijs) [totp_required, het bewijs komt bij deze stap]
     S->>C: TotpChallenge
     Note over C: Client toont TOTP invoerveld<br/>Heartbeats gepauzeerd
     C->>S: TotpResponse(code) [6-cijferige code]
-    S->>C: AuthResult(1) [accepted]
+    S->>C: AuthResult(1) [accepted, geen bewijs hier - dat kwam bij de wachtwoordstap]
     C->>S: Heartbeat (normaal verder)
 ```
 
-De client stopt heartbeats tijdens het wachten op TOTP input om te voorkomen dat de server de auth sessie reset.
+De client stopt heartbeats tijdens het wachten op TOTP input. Dat houdt de sessie op de server niet in leven: een client bij de codestap is nog niet aangemeld. De server geeft hem twee minuten om te typen (sinds v2.13; daarvoor vijftien seconden). Een code die daarna komt krijgt geen antwoord; na vijf seconden laat de client die poging los, zijn heartbeats lopen weer, de server daagt hem opnieuw uit en hij vraagt een nieuwe code (een server van v2.13 of later; een oudere houdt de oude poging vast tot zijn termijn, en de client meldt dan na nog vijf seconden "geen antwoord"). Komt het antwoord laat in plaats van nooit, dan geldt het alsnog: de client bewaart de nonces van de poging tot een nieuwe uitdaging ze vervangt, en verbindt. Een client waarvan een heartbeat binnenkomt terwijl de server zijn codestap nog vasthoudt (een herstart, of hetzelfde adres via de relay) krijgt een nieuwe uitdaging zodra die codestap twee seconden oud is - daarvoor kan de heartbeat zijn eigen zijn, nog onderweg; wat de operator ondertussen aanraakt is geen klop.
 
 ### Eigenschappen
 
-- **Wachtwoord verplicht** - server start niet zonder geldig wachtwoord (min. 8 tekens, letters + cijfers)
+- **Wachtwoord verplicht in de GUI** - de server-GUI start niet zonder geldig wachtwoord (min. 8 tekens, letters + cijfers); de opdrachtregel dwingt het nog niet af
 - **TOTP 2FA optioneel** - TOTP-SHA1, 6 cijfers, 30 seconden periode, +/-1 periode clock skew tolerantie
 - **Geen overhead** op data packets (audio/spectrum) - alleen IP:port check na auth
 - **Brute-force bescherming** - 5 pogingen per client (IP:port), daarna 60s blokkade
@@ -2583,11 +2732,11 @@ De FTX-1 **WIRES-X** EX-menu-velden zijn toegevoegd aan de EX-editor (§26).
 
 ## 30. Relay (afstandsbediening over internet)
 
-Rechtstreeks UDP tussen client en server werkt op een LAN of achter een
-port-forward. De relay bestaat voor al het andere: een client op mobiele data, een
-station achter CGNAT, een netwerk dat inkomende verbindingen blokkeert. Beide
-kanten maken een **uitgaande** TLS-verbinding met een rendez-vousserver; de relay
-koppelt ze en stuurt frames door.
+Een rechtstreekse QUIC-verbinding tussen client en server werkt op een LAN of achter
+een port-forward. De relay bestaat voor al het andere: een client op mobiele data, een
+station achter CGNAT, een netwerk dat inkomende verbindingen blokkeert. Beide kanten
+melden zich **uitgaand** aan bij een rendez-vousserver; de relay koppelt ze en geeft
+de QUIC-verbinding door.
 
 Twee crates:
 
@@ -2614,94 +2763,75 @@ als station, elke client van dat station als client.
   `PEER_DEAD_TIMEOUT` (15 s) zonder frame of pong, zodat een half-open
   TCP-verbinding niet eeuwig een plek bezet houdt.
 
-### 30.2 Sentinel-adressen: waarom de server niets van de relay hoeft te weten
+### 30.2 Eén QUIC-verbinding door de relay
 
-De server adresseert clients met een `SocketAddr`. In plaats van elke verzendplek
-iets over relays te leren, krijgt een gerelayde client een **synthetisch adres**,
-afgeleid van zijn relay-`client_id`:
+Sinds v2.13 vervoert de relay geen ThetisLink-frames meer, maar de QUIC-verbinding
+zelf. quinn draait op een eigen socket (de routelaag, `sdr-remote-quic/src/route.rs`):
+een pakket voor de relay krijgt een TLU1-kop (`magic(4) | versie(1) | vlaggen(1) |
+client_id(1) | seq(4 LE) | token(32)`), de relay stuurt de inhoud ongelezen door, en
+de andere kant ontvangt `[client_id] + inhoud`. De relay heeft geen sleutel en kan de
+verbinding niet lezen.
 
-```
-sentinel_for_client_id(id) -> 203.0.113.{1 + id % 254} : 1
-client_id_from_sentinel(addr) -> addr.octets()[3] - 1
-```
+**Het wachtwoordbewijs zit vast aan de verbinding.** Beide kanten leiden uit de
+TLS-sessie 32 bytes af (`Binding`), en de bewijzen van client en server (hoofdstuk 27)
+worden daarover berekend. Het certificaat zelf wordt niet gecontroleerd: een
+tussenpersoon houdt twee TLS-sessies met twee verschillende bindingen, en een bewijs
+dat in geen van beide past.
 
-`203.0.113.0/24` is TEST-NET-3 (RFC 5737) en is nooit routeerbaar, dus een sentinel
-kan nooit botsen met een echte peer. De sessiebeheerder, de abonnementsverzamelingen
-en de spectrum-verzendplekken behandelen een gerelayde client als een gewone
-UDP-peer; alleen de socketwrapper (`tracked_socket.rs`) kent het verschil en stuurt
-het frame de tunnel in in plaats van de draad op.
+### 30.3 Sentinel-adressen
 
-### 30.3 Twee transporten: kaal UDP voor audio, wss voor de rest
+De server adresseert clients met een `SocketAddr`. Elke QUIC-verbinding krijgt een
+synthetisch adres in `198.51.100.0/24` (TEST-NET-2), zodat sessiebeheer,
+abonnementen en verzendplekken niet hoeven te weten langs welke weg een client komt.
+Daaronder ziet quinn elke relayclient op één vast adres per `client_id` in
+`192.0.2.0/24` (TEST-NET-1): een quinn-server volgt een bekende verbinding pas na een
+padcontrole naar een nieuw adres, en een quinn-client neemt alleen pakketten aan van
+het adres waarmee hij verbond. Geen van deze bereiken is routeerbaar.
 
-Alles gaat door de TLS-verbinding behalve audio, die een eigen pad met lage
-vertraging krijgt.
+### 30.4 De grant, prikken en L+R
 
-**TLT1 — getunnelde TL-frames over wss.** `magic(4) | versie(1) | client_id(1) |
-lengte(2 LE) | payload`. Draagt besturing, spectrum, meters en al het overige. Een
-eigen magic in plaats van een kale prefix, omdat echte payloads ook binair zijn; een
-binair frame met een onbekende magic wordt zonder fout weggegooid.
+Na het aanmelden (wss) krijgt een kant een **grant**: het UDP-token en het UDP-adres
+van de relay. De relay bindt het token aan de eerste bron die hij ziet, dus alle
+datagrammen van één kant gaan uit één socket. Een nieuwe relaysessie - na een
+netwerkwissel, met een nieuw token - krijgt een nieuwe socket en meteen een
+keepalive.
 
-**TLU1 — audio over kaal UDP.** `magic(4) | versie(1) | vlaggen(1) | client_id(1) |
-seq(4 LE) | token(32) | AudioPacket`, header 43 bytes. Alleen de pakkettypen in
-`AUDIO_TYPE_BYTES` nemen dit pad — een bewuste spiegel van
-`sdr_remote_core::protocol::AUDIO_PACKET_TYPES`, eerlijk gehouden door een
-pariteitstest in de server-crate, de enige crate die beide linkt (de relay blijft
-licht en linkt `core` niet, want dat zou Opus meetrekken).
+Zodra de relay UDP van een kant ziet, meldt hij het openbare adres dat hij ziet
+(`udp-seen`). **Pas na het wachtwoord** biedt de client dat adres aan (`PunchOffer`,
+0x38) en antwoordt de server met het adres waarvandaan hij prikte (`PunchReady`,
+0x39); beide sturen pakketten naar elkaar tot de rechtstreekse weg werkt. Daarna
+loopt dezelfde QUIC-verbinding rechtstreeks (**D+R**); valt die weg stil, dan gaat ze
+terug door de relay (**R**). Zijn beide openbare adressen gelijk - app en server achter
+dezelfde router - dan geeft de server binnen de verbinding ook zijn thuisadres door, en
+probeert de client dat op poort 4580 (**L+R**).
 
-Het UDP-sessietoken **roteert over wss** vóór het verloopt, zodat het audiopad zich
-nooit in-band opnieuw hoeft te legitimeren.
+Met **Rechtstreeks verbinden toestaan** uit (`allow_direct=false`, alleen met een
+ingestelde relay) neemt de server niemand op zijn eigen poort aan en prikt hij niet:
+alles blijft R.
 
-### 30.4 Terugval: make-before-break, en wat "hersteld" betekent
+### 30.5 De TCP-uitwijkroute, een netwerkwissel en een andere versie
 
-Netwerken die UDP blokkeren of knijpen komen veel voor (gastenwifi, sommige mobiele
-providers). De client bewaakt zijn eigen UDP-audio en vraagt het station om te
-schakelen:
+**De TCP-uitwijkroute.** Laat een netwerk geen UDP door, dan reist dezelfde
+QUIC-verbinding over de wss-lijn met de relay, in TLT1-frames (`magic(4) | versie(1) |
+client_id(1) | lengte(2 LE) | inhoud`). Zolang de client niet weet dat UDP werkt,
+stuurt hij elk pakket beide kanten op; QUIC gooit het dubbele weg. Ziet de relay binnen
+`UDP_SEEN_WAIT` (10 s) geen UDP, dan toont de app "This network lets no UDP through;
+ThetisLink uses a fallback route over TCP (more delay)" en heet de weg **R (TCP)**. Op
+TCP wacht alles achter een verloren pakket; daarom is dit een noodroute, en alleen als
+R.
 
-| Constante | Waarde | Betekenis |
-|---|---|---|
-| `FALLBACK_STALL` | 500 ms | zolang geen UDP-audio = vastgelopen |
-| `FALLBACK_CONNECT_TIMEOUT` | 2 s | sinds verbinden helemaal geen UDP-audio |
-| `FALLBACK_RECOVER` | 3 s | een gezonde UDP-reeks moet zo lang duren |
-| `FALLBACK_DWELL` | 3 s | minimale tijd tussen twee transportwissels |
-| `FALLBACK_HEARTBEAT` | 5 s | de terugvalstand wordt zo vaak herbevestigd |
-| `FALLBACK_LEASE` | 15 s | station vergeet een niet-ververste terugvalstand |
+**Een netwerkwissel.** Op een nieuw standaardnetwerk beëindigt de relaybibliotheek de
+lopende sessie en begint ze meteen een nieuwe op het nieuwe netwerk, met een korte
+herhaalladder zolang dat netwerk nog opkomt. Op de telefoon geeft de app door wanneer het
+nieuwe netwerk er is (`networkAvailable`), en dan breekt de bibliotheek de lopende wachttijd af. De gebruiker krijgt
+daarvan geen melding; het staat in het log.
 
-Twee eigenschappen verdienen vermelding, want beide zijn duur geleerd:
-
-**Stilte is geen storing.** De vastloop-test slaat alleen aan zolang er aantoonbaar
-audio vervoerd wordt (over wss, of over UDP tot het stil werd). Met alle kanalen uit
-valt er niets te vervoeren, en dan kost een wissel seconden audio bij het volgende
-inschakelen.
-
-**Herstel eist een reeks die nog lóópt.** `udp_recovered()` verlangt zowel dat de
-gezonde reeks minstens `FALLBACK_RECOVER` geleden begon, *als* dat er nu UDP-audio
-binnenkomt. Zonder die tweede helft bevriest de "gezond sinds"-tijdstempel wanneer
-het pad wegvalt en voldoet hij eeuwig aan "oud genoeg" — wat een transportwissel per
-wachttijd opleverde, eindeloos (waargenomen bij 1829 wissels, 96 minuten na het
-laatste UDP-frame).
-
-Tijdens TX gaan audioframes met een PTT-vlag over **beide** paden (TX-always-both),
-zodat een transportwissel niet het frame kan opslokken dat de zender sleutelt.
-
-### 30.5 Ontdubbeling
-
-Omdat een frame tijdens een overlap over beide paden kan aankomen, houdt de
-ontvangende kant een schuivend venster bij van wat al bezorgd is. Dat zit in de
-transportlaag, vóór de jitterbuffer, zodat de jitterschatter nooit een duplicaat
-ziet.
-
-Het venster sleutelt op **(client_id, pakkettype, volgnummer)** — inclusief het
-VRX-kanaal-id, want VRX1 en VRX2 delen pakkettype `0x21` met eigen tellers en zouden
-elkaars frames anders opeten.
-
-Een stroom die herstart begint bij volgnummer 0 terwijl het venster de nummers van
-de vorige reeks nog kent. `RESTART_BACKJUMP` (64) herkent die sprong en vergeet de
-stroom, want anders geldt elk frame van de nieuwe reeks als herhaling van de oude —
-een wachttijd precies zo lang als de vorige luistersessie.
-
-Weggegooide duplicaten worden **per stroom geteld** en gemeld op de bestaande
-statustick van 5 s, stil als er niets weggegooid is. Zonder die teller zijn "er komt
-geen audio" en "de audio wordt weggegooid" dezelfde stilte.
+**Een andere versie aan de andere kant.** De peerberichten over wss (TLR2) dragen
+`proto=quic`. Ontbreekt dat - een programma van vóór 2.13 - dan zet de bibliotheek de
+relaystatus op `Error` met "The other side runs an older version of ThetisLink (before
+2.13) - update it to this version". Een peerbericht draagt geen clientnummer: met
+clients van beide versies in één kamer volgt de melding van het station wie het laatst
+sprak.
 
 ### 30.6 De VPS-binary
 
@@ -2718,9 +2848,8 @@ geen audio" en "de audio wordt weggegooid" dezelfde stilte.
   sessies met CSRF-bescherming en een snelheidsbegrenzing per IP, alleen bereikbaar
   van achter de proxy.
 
-Een **binaire sonde** (`TLB1`, 1 Hz, 256 bytes payload die representatief is voor een
-audioframe) meet de rondgangstijd over het werkelijke datapad, met een schuivend
-venster van 30 metingen voor min/gem/max. Dat is wat de verbindingsindicator toont.
+De rondgangstijd en "peer online" die de relaystatus toont, komen uit de
+peerberichten (TLR2) over wss.
 
 ---
 
@@ -2899,3 +3028,11 @@ one thing the separation exists to prevent.
    geen commando voor. Schrijven kan wel, leegmaken niet, dus een ongewenst kanaal
    wis je op de set zelf. Een rij verwijderen in de clienttabel haalt hem alleen uit
    de lijst; in de radio blijft het kanaal staan.
+
+7. **Oudere versies:** een programma van v2.12 of ouder komt niet tot een verbinding met een programma van v2.13, in geen van beide richtingen: v2.13 spreekt alleen QUIC, v2.12 geen QUIC. De oudere kant meldt "server niet bereikbaar". Werk server, desktop en app tegelijk bij. Ook een v2.13-client tegen een server die geen bewijs geeft, weigert die server (sectie 27).
+
+8. **Gemengde versies op één station:** met clients van v2.12 en v2.13 in één relaykamer wisselt de relaystatus van het station tussen de versiemelding en groen, omdat een peerbericht geen clientnummer draagt (sectie 30.5).
+
+9. **Relaymeldingen op de telefoon:** de app toont de relaystatus niet; de desktop toont hem op het verbindscherm, de server als zweeftekst in het statuspaneel.
+
+10. **TUNE op een RX-only-antennepositie:** een TUNE vanaf een client wordt binnen 200 ms gestopt, niet vooraf geweigerd.

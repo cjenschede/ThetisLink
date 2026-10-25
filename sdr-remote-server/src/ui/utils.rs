@@ -171,5 +171,5 @@ pub(crate) fn with_timeout<T: Send + 'static>(
         let _ = tx.send(f());
     });
     rx.recv_timeout(timeout)
-        .unwrap_or_else(|_| Err("Timeout: COM poort reageert niet".to_string()))
+        .unwrap_or_else(|_| Err("Timeout: the COM port did not respond".to_string()))
 }

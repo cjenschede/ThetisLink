@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.12.0 — Gebruikershandleiding
+﻿# ThetisLink v2.13.0 — Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -25,7 +25,7 @@ ThetisLink is een remote bediening voor Thetis - welke radio Thetis bedient, is 
 - **ThetisLink Client** — desktop client (Windows; op macOS vanaf broncode, experimenteel) met spectrum, waterval en volledige bediening
 - **ThetisLink Android** — mobiele client app
 
-De server communiceert met Thetis via TCI WebSocket voor zowel besturing als audio. Audio wordt via Opus codec over UDP verzonden met minimale latency.
+De server communiceert met Thetis via TCI WebSocket voor zowel besturing als audio. Audio wordt via Opus codec over de versleutelde QUIC-verbinding verzonden met minimale latency.
 
 ### Thetis versie
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.12.0.apk` | Android client app |
+| `ThetisLink-2.13.0.apk` | Android client app |
 | `Installatie.md` | Installatiehandleiding (Nederlands) |
 | `User-Manual.md` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.md` | Technische referentie (Nederlands) |
@@ -84,8 +84,8 @@ flowchart TB
         Server[ThetisLink Server]
         Thetis <-->|"TCI WebSocket :40001<br>audio + IQ + besturing"| Server
     end
-    Server <-->|"UDP :4580"| Desktop[Desktop Client<br>egui]
-    Server <-->|"UDP :4580"| Android[Android Client<br>Compose]
+    Server <-->|"QUIC (UDP) :4580"| Desktop[Desktop Client<br>egui]
+    Server <-->|"QUIC (UDP) :4580"| Android[Android Client<br>Compose]
     Server <--> Amplitec[Amplitec 6/2<br>COM 19200]
     Server <--> Tuner1[JC-4s / JC-3s Tuner #1<br>MCP2221A USB-HID]
     Server <--> Tuner2[JC-4s / JC-3s Tuner #2<br>MCP2221A USB-HID]
@@ -140,11 +140,13 @@ amplitec_label6=UltraBeam
 3. Controleer de verbindingsinstellingen
 4. Vink de gewenste apparaten aan
 5. Klik **Start**
-6. De server luistert op UDP poort 4580
+6. De server luistert met QUIC op UDP-poort 4580
 
 ### Server UI
 
 De server toont:
+- Per zender een lampje in het statuspaneel: rood zolang die zender zegt dat hij zendt; per radio waarom een poort niet opengaat; Thetis als "niet ingesteld" zonder TCI-adres (v2.13.0)
+- Een waarschuwing als een antennepositie RX-only is en Thetis op dat moment niet tegen zenden beschermd kan worden; met stock Thetis zet ThetisLink daarvoor Thetis' eigen "Receive only" aan, en zet hij het alleen terug als hij het zelf aanzette (v2.13.0)
 - Verbindingsstatus (TCI WebSocket)
 - Actieve apparaat vensters (Tuner, Amplitec, SPE, RF2K, UltraBeam, Rotor, Yaesu)
 - Macro knoppen (2 rijen van 12)
@@ -166,6 +168,43 @@ De client ontvangt automatisch:
 - Apparaat status (Amplitec, UltraBeam, Yaesu, etc.)
 - DX cluster spots
 
+### Welke weg de verbinding neemt (v2.13.0)
+
+Naast **Verbonden** staat hoe de verbinding op dat moment loopt. Op de desktop staat
+de naam in het hoofdvenster, met een uitleg als je de muis erop houdt; op de telefoon
+staan de letters, en een tik toont de naam met de uitleg.
+
+| Letters | Naam | Betekenis |
+|---|---|---|
+| **L** | Lokaal | Rechtstreeks naar de server op je eigen netwerk |
+| **D** | Direct | Rechtstreeks naar de server over internet (een doorgezette poort) |
+| **R** | Relay | Al het verkeer gaat via de relay |
+| **R** | Relay (koppelen...) | Via de relay, terwijl een rechtstreekse weg geprobeerd wordt (geel) |
+| **D+R** | Direct, via relay | Via de relay gekoppeld; het verkeer gaat nu rechtstreeks |
+| **L+R** | Lokaal, via relay | Via de relay gevonden; het verkeer gaat over je eigen netwerk |
+| **R (TCP)** | Relay via TCP | Al het verkeer via de relay over TCP: dit netwerk laat geen UDP door. Meer vertraging |
+
+Bij elke weg met de relay erin zijn ook de chat en probleem melden beschikbaar. De
+server toont dezelfde letters per client.
+
+### Meldingen bij het verbinden (v2.13.0)
+
+- **"De server bewijst niet dat hij het wachtwoord kent"** / **"De server kent het
+  wachtwoord niet"**: sinds v2.13 bewijst ook de server dat hij het wachtwoord kent.
+  Lukt dat niet, dan weigert de app de server. Het is een oudere server, een verkeerd
+  wachtwoord op de server, of er zit iets tussen.
+- **"De server draait ... en deze client ..."**: server en app zijn niet dezelfde
+  versie of build. Werk de oudste bij.
+- **"Server niet bereikbaar"** kan sinds v2.13 ook betekenen dat de andere kant een
+  versie van vóór 2.13 draait: die twee komen niet tot een verbinding. Werk server,
+  desktop en app tegelijk bij.
+
+### Ontwikkelstand
+
+Er is een ontwikkelstand voor meten en testen, die je met een code opent. Zonder die
+stand zijn de gereedschappen ervan er niet. Alleen in die stand vraagt de Android-app om
+je locatie; de toestemming staat wel in de app, dus de app-informatie noemt hem.
+
 ### Auto-discovery werkt niet (mDNS)
 
 Als de mDNS-dropdown leeg blijft maar handmatig IP invoeren wél werkt: mDNS gebruikt UDP multicast (`224.0.0.251:5353`), wat in sommige situaties niet doorkomt.
@@ -183,39 +222,54 @@ Een handmatig ingevuld IP-adres werkt onafhankelijk van mDNS; je hoeft dus niet 
 Op hetzelfde netwerk (LAN/WiFi) verbindt de client rechtstreeks met de server — daar is geen relay voor nodig. Wil je **over het internet** verbinden vanaf een plek buiten je eigen netwerk, dan zijn er twee wegen:
 
 1. **Port-forward** op de router thuis naar de server-PC (UDP 4580). Werkt alleen als je een publiek IP hebt en de router-config kunt aanpassen.
-2. **Relay** (nieuw in v2.4.0). Zowel de server (station) als de client verbinden **naar buiten** met een kleine relay-server op een VPS. Geen port-forward nodig, en het werkt ook achter **CGNAT** (waar de provider je geen eigen publiek IP geeft). Dit is de aanbevolen weg voor internet-remote.
+2. **Relay**. Zowel de server (station) als de client verbinden **naar buiten** met een kleine relay-server op een VPS. Geen port-forward nodig, en het werkt ook achter **CGNAT** (waar de provider je geen eigen publiek IP geeft). Dit is de aanbevolen weg voor internet-remote.
 
 De relay draait op een eigen server (VPS) die je zelf host — hij is niet meegeleverd als kant-en-klare download, maar als broncode + Docker-image (zie de installatiehandleiding en `thetislink-relay/DEPLOY-wss.md`). Eén relay bedient één of meer stations; de server-PC hoeft niet bereikbaar te zijn van buitenaf.
 
-De server ondersteunt beide wegen tegelijk: zodra er een relay is geconfigureerd, kiest **elke client zelf** of hij direct of via de relay verbindt. Eén server kan dus meerdere clients tegelijk bedienen waarvan sommige direct en andere via de relay werken — je hoeft niet voor de hele installatie één weg te kiezen.
+De server bedient beide wegen tegelijk: een client die het adres van de server intypt verbindt rechtstreeks, een client met de relay ingesteld verbindt via de relay. Wil je dat gasten je thuisadres niet te zien krijgen, zet dan op de server **Rechtstreeks verbinden toestaan** uit (bij de relay-instellingen; alleen beschikbaar als er een relay is ingesteld). Dan komt iedereen via de relay binnen, en zoekt de verbinding ook geen rechtstreekse weg. Dit geldt bij de volgende start van de server.
 
 > **De relay proberen zonder zelf te hosten?** Voor de eerste gebruikers die de relay willen uitproberen kan PA3GHM je — op verzoek en zolang er plek is — tijdelijk toevoegen aan een testrelay. Let op: dit is een **tijdelijke server met een beperkt aantal plekken**, dus zonder garantie op beschikbaarheid of continuïteit. PA3GHM mag een verzoek weigeren of ermee stoppen, en een nee hoeft niet uitgelegd te worden. Neem contact op met PA3GHM via [QRZ.com](https://www.qrz.com/db/PA3GHM) (callsign PA3GHM).
 
-### Hoe het verbindt
+### Hoe het verbindt (v2.13.0)
 
-Zowel het station (server) als de client openen een uitgaande verbinding naar de relay:
+Sinds v2.13 loopt alles - audio, spectrum, bediening en PTT - over **één versleutelde
+QUIC-verbinding**, rechtstreeks of via de relay:
 
-- **Besturing + spectrum** lopen over een beveiligde WebSocket (**wss**, TCP-poort 443) — versleuteld door de TLS van de relay (Caddy regelt het certificaat).
-- **Audio + PTT** lopen over **UDP** (poort 443) voor minimale vertraging, net als op het LAN.
+- **Aanmelden bij de relay** gaat over een beveiligde WebSocket (**wss**, TCP-poort 443). Daarover lopen ook de chat en probleem melden.
+- **De verbinding zelf** loopt over **UDP-poort 443** naar de relay. De relay geeft haar door en kan er niet in kijken.
 
-De relay koppelt de client aan het juiste station op basis van een **room/station-naam** en een **stationsleutel**. Deze gegevens vul je één keer in bij server en client (exacte velden en stappen: zie `Installatie.md`). Zolang beide met dezelfde room en sleutel bij de relay ingelogd zijn, is de verbinding identiek te bedienen als een directe LAN-verbinding.
+De relay koppelt de client aan het juiste station op basis van een **room/station-naam** en een **stationsleutel**. Deze gegevens vul je één keer in bij server en client (exacte velden en stappen: zie `Installatie.md`).
 
-### Automatische terugval naar TCP (make-before-break)
+```mermaid
+flowchart LR
+    Client[App] -->|"Stap 1: aanmelden + verbinden :443"| Relay[Relay VPS]
+    Relay --> Server[ThetisLink Server]
+    Client <==>|"Stap 2: na het wachtwoord rechtstreeks<br>D+R of L+R"| Server
+```
 
-Sommige netwerken (bedrijfs-WiFi, gast-netwerken, restrictieve mobiele providers) blokkeren UDP. Zonder maatregel zou de audio dan wegvallen terwijl besturing en spectrum blijven werken. ThetisLink lost dit vanaf v2.4.0 automatisch op:
+**De verbinding zoekt zelf de kortste weg.** Nadat het wachtwoord is gecontroleerd,
+probeert de app met hulp van de relay een rechtstreekse weg naar de server. Lukt dat,
+dan loopt dezelfde verbinding rechtstreeks verder (**D+R**), zonder onderbreking; staan
+app en server achter dezelfde router, dan over je eigen netwerk (**L+R**). Valt de
+rechtstreekse weg stil, dan gaat de verbinding terug via de relay (**R**). Wat je ziet
+staat bij "Welke weg de verbinding neemt".
 
-- Merkt de client dat er **geen UDP-audio** meer binnenkomt, dan vraagt hij het station om de audio **door de wss-tunnel (TCP)** te sturen. De overschakeling gebeurt *make-before-break*: het nieuwe pad wordt opgebouwd vóór het oude losgelaten wordt, zodat je geen gat in de audio hoort.
-- Zodra UDP weer beschikbaar is, schakelt de verbinding **vanzelf terug** naar UDP (de laagste latency).
-- De terugval geldt alleen voor de audio/PTT; besturing en spectrum liepen al over wss.
+### Netwerken die UDP blokkeren (v2.13.0)
 
-**Transport-indicator.** Je ziet altijd welk pad de audio nu gebruikt:
+Sommige netwerken (hotels, bedrijven, gastnetwerken) laten geen UDP door. De app stuurt
+dan dezelfde versleutelde verbinding over de wss-lijn met de relay (TCP 443), zonder
+eerst te wachten. Blijft UDP uit, dan meldt de app na ongeveer tien seconden: **"Dit netwerk
+laat geen UDP door; ThetisLink gebruikt een noodroute via TCP (meer vertraging)"**. De weg heet dan **R (TCP)**. Op TCP wacht
+alles achter een verloren pakket, dus je kunt af en toe een hik horen; het is een
+noodroute. Op een netwerk waar UDP werkt merk je er niets van. Er is niets in te
+stellen.
 
-- **Desktop:** in het **Server-tabblad**, naast "Audio streams:" — grijs **"Transport: UDP"** in normale toestand, of amber **"TCP fallback"** als de audio tijdelijk door de tunnel loopt.
-- **Android:** in het statistieken-paneel, naast "Statistics:" — dezelfde amber **"TCP fallback"**-melding.
+### Na een netwerkwissel (v2.13.0)
 
-Zie je "TCP fallback" tijdens normaal LAN-gebruik zonder relay, dan is er niets aan de hand — de indicator is alleen betekenisvol bij een relay-verbinding. Blijft hij op een relay-verbinding hangen op "TCP fallback", dan blokkeert je netwerk UDP structureel; de audio werkt door, alleen met iets meer vertraging.
-
-> **UDP uitzetten (optioneel).** Weet je op voorhand dat je netwerk UDP blokkeert, dan kun je de client/Android op **alleen-wss** zetten, zodat hij niet eerst UDP probeert. Standaard staat UDP aan (laagste latency) met automatische terugval als vangnet.
+Wissel je met de telefoon van wifi naar mobiel (of terug), dan begint de app meteen een
+nieuwe relaysessie op het nieuwe netwerk, met een paar snelle nieuwe pogingen zolang
+het netwerk nog opkomt. De telefoon merkt zelf wanneer het nieuwe netwerk er is en probeert dan meteen opnieuw,
+in plaats van op de volgende poging te wachten.
 
 ### Relay-beheer (dashboard)
 
@@ -359,6 +413,10 @@ In USB en LSB blijft de lage afsnijding staan zolang die tussen 0 en 500 Hz ligt
 het bereik van "Default Low Cut" in Thetis. Ligt hij daarbuiten, dan zet de knop hem
 terug op 100 Hz. DIGU en DIGL worden breder of smaller om het midden.
 
+**Filterranden passen bij de mode (v2.13.0).** Een bandgeheugen zet alleen randen
+terug die bij zijn mode passen, de server stuurt Thetis alleen randen die bij de mode
+passen, en een rand die je in SSB, CW of DIG sleept stopt bij de draaggolf.
+
 **Filter-preset van Thetis (fork):** de PA3GHM fork stuurt de actieve filter-preset (F1, F2, F3, VAR1, VAR2 of NONE) mee over TCI. **ThetisLink gebruikt die melding op dit moment niet:** de clients tonen de breedte die Thetis heeft, niet de naam van de preset, en er is geen knop om een preset te kiezen.
 
 ### Volume
@@ -384,6 +442,17 @@ ThetisLink biedt drie PTT modi:
 **BLE-zendknop (YPC21 / PTT-Z01 en dezelfde klasse) - Android en, sinds v2.12.0, ook de desktop:** de knop waar ThetisLink zelf verbinding mee maakt, en de knop van voorkeur. Op de telefoon instellen onder **Instellingen > BT-zendknop**, op de desktop onder de **Server**-tab in de groep **BT-zendknop**; beide met **Knop kiezen**, waarbij je de knop een keer indrukt om hem wakker te maken zodat hij in de lijst komt; koppel hem niet in de Bluetooth-instellingen van Android. De app verbindt uit zichzelf opnieuw nadat de knop buiten bereik is geweest of Bluetooth uit heeft gestaan. Omdat de verbinding van ThetisLink zelf is en niet van het aanraaksysteem, keyt deze knop ook **met het scherm op slot** - hij zit in je hand en je kunt hem loslaten. Buiten bereik wordt de zender losgelaten in plaats van aan gelaten. Op Android vereist dit Android 12 of nieuwer; op de desktop werkt hij met de Bluetooth-adapter die Windows al heeft.
 
 **Android — externe BT remote (ZL-01 of vergelijkbaar):** een Bluetooth-knop die zich gedraagt als externe touch-device kan als PTT-knop gebruikt worden. ThetisLink onderschept de touch-events en mappt ze naar PTT down/up. Werkt alleen als het scherm actief is (aanraak-events worden alleen door Android afgeleverd op een wakker scherm).
+
+**Als de verbinding wegvalt tijdens het zenden (v2.13.0):** houd je PTT ingedrukt en
+eindigt de sessie, dan hoor je **drie korte piepjes**, één keer: de zender is uit, ook
+als je niet naar het scherm kijkt. Krijgt een druk 3 seconden lang geen antwoord van de
+server, dan wordt hij met dezelfde toon beëindigd. Op de desktop moet een toets die je
+door een verbroken verbinding heen vasthield eerst los voordat hij weer zendt.
+
+**Alleen de gekozen microfoon (desktop, v2.13.0):** ThetisLink gebruikt alleen de
+microfoon die je in de instellingen koos, nooit vanzelf de standaardmicrofoon van
+Windows. Is hij er niet, dan staat **Geen mic** op de PTT-knoppen en is zenden uit; zodra
+je hem weer aansluit gaat hij vanzelf weer open.
 
 **PTT-spike-onderdrukking (v2.4.0):** op een tablet/laptop met ingebouwde speaker én microfoon in één behuizing kan de inschakel-plop bij PTT-on meegezonden worden. Zet in de client de optie **"Built-in speaker + mic (PTT spike protection)"** aan: bij PTT wordt de speaker direct gemut en worden de eerste milliseconden mic-audio weggegooid, zodat de plop niet uitgezonden wordt. De **mic gate-delay** is apart instelbaar voor Thetis en Yaesu. Laat de optie **uit** bij een headset of goed geïsoleerde audio (0 ms, geen extra latency). Sinds **v2.4.2** blijft de ontvangst-audio van de andere ontvangers hoorbaar tijdens het zenden; de interne-speaker-mute geldt **alleen** wanneer deze spike-protectie-optie aan staat.
 
@@ -510,12 +579,12 @@ Naast de twee fysieke ontvangers (RX1/RX2) biedt ThetisLink vanaf v2.2.0 twee **
 
 **Per-VRX instellingen:**
 - **Aan/uit** per VRX — een VRX verbruikt pas netwerk en CPU als je hem inschakelt.
-- **Frequentie:** eigen luisterfrequentie, vrij instelbaar binnen de DDC-bandbreedte. Per DDC-positie wordt de laatst gekozen VRX-frequentie onthouden, zodat je bij terugkeren op dezelfde plek verder luistert.
+- **Frequentie:** eigen luisterfrequentie, vrij instelbaar binnen de DDC-bandbreedte. Per DDC-positie wordt de laatst gekozen VRX-frequentie onthouden, zodat je bij terugkeren op dezelfde plek verder luistert. Schuift het DDC-midden een stukje op (bij het hercentreren) en ligt de VRX nog in beeld, dan blijft hij staan. Valt hij buiten het bereik waarin de server luistert, dan gaat hij naar de frequentie die hij daar eerder had, of anders naar de VFO. Dat geldt ook als een breder VRX-filter het bereik kleiner maakt.
 - **Mode:** USB, LSB, AM, SAM of FM.
 - **Filter:** eigen filterbreedte per VRX.
 - **Volume:** eigen mix-niveau; de VRX-audio wordt samen met RX1/RX2 (en een eventuele Yaesu) in de hoofdaudio gemengd.
 
-**Spectrum, waterval en S-meter:** elke VRX heeft een eigen **hoge-resolutie spectrum + waterval** rond zijn luisterfrequentie en een eigen S-meter. De hoge-resolutie weergave vraag je per VRX aan; de client toont dan een ingezoomd spectrum (met instelbare zoom, referentieniveau, bereik en waterval-contrast).
+**Spectrum, waterval en S-meter:** elke VRX heeft een eigen **hoge-resolutie spectrum + waterval** rond zijn luisterfrequentie en een eigen S-meter. Het spectrum hoort bij het VRX-venster: open je het venster met de vensterknop bij VRX1/VRX2 op het hoofdscherm, dan komt het spectrum mee, ingezoomd (met instelbare zoom, referentieniveau, bereik en waterval-contrast). Het kruisje sluit het venster en zet het spectrum uit; het geluid blijft.
 
 **Smalle of brede audio:** de VRX-audio is Opus smalband (8 kHz) of breedband (16 kHz). Vanaf v2.3.0 kies je dit **per VRX** (NB/WB/Auto) — zie [Per-VRX audiobandbreedte](#per-vrx-audiobandbreedte-v230) hieronder.
 
@@ -565,6 +634,8 @@ De desktop-client heeft een **thema-keuze** in het Server-tabblad. Naast de stan
   - **Widgets** — de vulkleur van knoppen en velden.
   - **Text** — de tekstkleur.
   - **Slider knop** — de accentkleur van de schuifknoppen en hun rail.
+
+Sinds **v2.13.0** staan taal, schaal en thema samen in de groep **Taal en weergave** van het Server-tabblad. Alle groepen in dat tabblad klappen open en dicht, en onthouden hoe je ze achterliet.
 
 De keuze wordt bewaard in `thetislink-client.conf` en hersteld bij de volgende start. Het thema is puur cosmetisch — spectrum- en waterval-kleuren (het signaalniveau-palet) blijven ongewijzigd zodat signalen op elke achtergrond gelijk afleesbaar blijven.
 
@@ -732,6 +803,10 @@ TCP/IP verbinding (poort 8080). ThetisLink ondersteunt zowel de originele RF2K-S
 - Controller versie met hardware revisie
 
 ThetisLink detecteert automatisch welke firmware actief is. Met de originele firmware werkt alles behalve drive-bediening.
+
+**Drive-tabel bewerken (v2.13.0):** met de aangepaste firmware tonen de desktop en de
+telefoon de drive-tabel van de server. Wat je wijzigt gaat naar de server, die het naar
+de RF2K-S schrijft; alleen de gewijzigde waarden worden verstuurd.
 
 De RF2K-S kan gereset worden via de server UI wanneer dat nodig is.
 
@@ -1018,6 +1093,22 @@ De Android-client heeft nu vrijwel dezelfde Yaesu-bediening als de desktop: een 
 
 Om mobiel dataverbruik te beperken stuurt de server geen Thetis-RX-audio meer naar clients die alleen een Yaesu beluisteren, en wordt Yaesu-data alleen gestreamd zolang het Yaesu-venster open/actief is (met een korte spectrum-grace bij hervatten). Zo betaal je op 4G/5G niet voor streams die je niet gebruikt.
 
+### Melding: de radio zendt op zijn USB-lijnen (v2.13.0)
+
+Sommige menu-instellingen laten de radio zenden als Windows RTS of DTR van de USB-poort
+hoog zet, bijvoorbeeld bij het opstarten van de PC: op de FT-991A de menu's 047, 060,
+071, 076 en 108, op de FTX-1 RPTT SELECT en PC KEYING. ThetisLink schakelt via CAT en
+heeft die niet nodig. Staat er een zo, dan noemt de server het menu en wat je moet
+kiezen: DAKY (FT-991A; 060 PC KEYING: OFF) of OFF (FTX-1).
+
+### Zenden met een Yaesu (v2.13.0)
+
+De zendaudio van een Yaesu gaat sinds v2.13 door dezelfde jitterbuffer als die van
+Thetis, wacht tot de radio werkelijk zendt, en speelt uit wat je zei voordat de radio
+terug op ontvangst gaat. Elke zending begint met **80 ms voorsprong** in de geluidskaart
+van de radio, zodat de eerste lettergreep niet wegvalt. Dat is 80 ms extra vertraging
+op elke Yaesu-zending.
+
 ### Configuratie
 
 ```
@@ -1277,6 +1368,9 @@ Als het spectrum (lijn) en de waterval niet synchroon lopen bij het pannen, hers
 
 | Versie | Hoogtepunten |
 |---|---|
+| **2.13.0** | **Eén versleutelde verbinding, thuis en onderweg.** Alles loopt over één QUIC-verbinding, rechtstreeks of via de relay, en de verbinding zoekt zelf de kortste weg (L, D, R, D+R, L+R). Een netwerk dat UDP blokkeert verbindt via een noodroute over TCP. Na een netwerkwissel verbindt de app meteen opnieuw. De wachtwoordcontrole werkt beide kanten op. Een Yaesu zendt met dezelfde buffer en timing als Thetis, met 80 ms voorsprong. **Werk server, desktop en app tegelijk bij**: een programma van 2.12 verbindt niet met 2.13. Stock Thetis v2.10.3.15 volstaat; de fork PA3GHM TL2-18 komt tegelijk uit. |
+| **2.12.0** | **Een echte peddel, en hij sleutelt de radio zelf.** Zie `CHANGELOG.md`. |
+| **2.11.0** | **Eén microfoon kan meerdere zenders bereiken, en een kabel die losraakt laat geen draaggolf meer achter.** Zie `CHANGELOG.md`. |
 | **2.10.0** | **Een eerste start op de server claimt niets, en twee radio's blijven uit elkaar.** Zolang er nog geen conf-bestand is start de server **kaal**: alle apparaten uit, de tweede ontvanger uit, geen venster dat vanzelf opengaat - je zet aan wat je hebt in plaats van uit te zetten wat je niet hebt. De **taal** volgt daarbij de weergavetaal van Windows als ThetisLink die heeft (NL/DE/FR), en anders Engels; staat er al een conf-bestand, dan blijft jouw keuze staan. **Duits en Frans** bereiken nu ook het verbindingsscherm, de wizard en de statusregel eronder. **Twee Yaesu's van hetzelfde type kunnen verschillende instellingen houden**: SSB-omschakelen bij PTT, toestemming om geheugens te schrijven en welke kant van de USB-audio je neemt waren gedeeld, dus toestemming geven op de ene radio gaf hem ook op de andere. ThetisLink vraagt nu aan de **poort** welke radio eraan hangt in plaats van het uit het slotnummer af te leiden - een FTX-1 in slot 1 kreeg het menu van een 991A. **Rijen die niet van toepassing zijn worden niet getoond** (rogerbeep, DX-spots zonder cluster, diversity op een enkele ontvanger), en een radioslot heet "Yaesu 1" tot de server zegt wat het is. De **chat** legt uit wat een relay doet en is altijd bereikbaar; een antwoord van de beheerder dat je wegklikt blijft weg (per machine onthouden, dus wegklikken op de telefoon laat het in het servervenster staan), en de strook met die antwoorden is begrensd en scrollt, zodat hij niet meer het hele venster neemt. En **een instellingenbestand dat niet gelezen kan worden wordt niet meer overschreven**. Aan de wire komt er een vlagbit bij (server zonder DX-cluster), geinverteerd zodat een oudere kant zich precies als voorheen gedraagt; stock Thetis v2.10.3.x volstaat. |
 | **2.9.1** | **Een gat is de codec weer, en audio uitzetten is stil.** 2.9.0 voegde een ruisgenerator toe die er nooit had gezeten; die maakte een wegval harder en scherper dan de band waarvoor hij inviel. Eruit. Wat een gat vult is de eigen verhulling van de codec en niets erbovenop, zoals sinds het begin. **Audio uitzetten is meteen stil** - dat was nooit de generator maar de poort: audio uitzetten stopt de stroom aan de serverkant, de client las dat als een wegval en bleef de stilte vullen. **Een stroom die je uitzet vergeet wat hij hoorde**, op alle zes de kanalen en ook bij een herverbinding. **Een station dat alleen naar een radio luistert houdt zijn verbinding** net zo goed als elk ander: audio uit een radio telde niet mee als levensteken, waardoor die controle aan de hartslag alleen hing. **60m is weer een band**: de knop bleef grijs, 60m kon geen bandgeheugen houden, en de knop landde 500 Hz onder de band - nu op 5.354 MHz. De server schrijft bij het opstarten de schermindeling in zijn log. Wire-protocol ongewijzigd t.o.v. 2.9.0; stock Thetis v2.10.3.x volstaat. |
 | **2.9.0** | **Een onderbreking klinkt weer als de band, een telefoon overleeft een netwerkwissel, en chat + probleem melden.** Verhulling liep altijd door de smalbandige decoder, dus met breedbandige audio kwam er stilte in plaats van ruis - en alleen kanaal 0 probeerde het uberhaupt. Elke stroom decodeert, corrigeert en verhult nu in zijn eigen formaat; beide radio's, beide VRX en RX2 verhullen nu ook. **Netwerkwissel**: wisselen tussen WiFi en mobiel liet de bediening werken en het geluid weg, tot de app werd afgeschoten - twee fouten, een aan elke kant. **Chat en probleem melden** voor stations op een relay: een ruimte gedeeld met de andere gebruikers, en een meldknop die rechtstreeks naar de beheerder gaat met de log erbij, opgeschoond en zichtbaar voordat hij weggaat. Beide optioneel. **Android houdt een eigen logbestand bij** - de systeemlog rolt binnen minuten weg. De app is niet langer debugbaar, dus `adb run-as` werkt niet meer. De server zegt **waarom een radio ontbreekt** als Windows de COM-poort aan een ander programma gaf. Backwards-compatible met 2.8.x; stock Thetis v2.10.3.x volstaat. |

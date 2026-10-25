@@ -41,6 +41,14 @@ pub struct SerialLog {
     /// asking - which the EX read does, on purpose - would never see an answer
     /// that was already waiting.
     pub replies: std::collections::VecDeque<String>,
+    /// Answer after ANY write rather than only after one ending in `;`.
+    ///
+    /// The semicolon is a Yaesu CAT convention and it was the only rule this
+    /// fake knew, which made `replies` useless to a device that speaks binary.
+    /// Amplitec sends twelve raw bytes, so its tests could not express "the
+    /// answer arrives after the question" - and that is exactly the ordering a
+    /// buffer-clearing test has to be able to say.
+    pub reply_to_any_write: bool,
     writes: usize,
 }
 
@@ -73,6 +81,15 @@ impl FakeSerial {
     pub fn answering_each(replies: &[&str]) -> Self {
         let f = Self::new();
         f.0.lock().unwrap().replies = replies.iter().map(|r| (*r).to_string()).collect();
+        f
+    }
+
+    /// A device that answers every command, in order, whatever the command
+    /// looks like. For binary protocols, where there is no terminator to
+    /// recognise.
+    pub fn answering_each_command(replies: &[&str]) -> Self {
+        let f = Self::answering_each(replies);
+        f.0.lock().unwrap().reply_to_any_write = true;
         f
     }
 
@@ -130,7 +147,7 @@ impl std::io::Write for FakeSerial {
         let mut g = self.0.lock().unwrap();
         g.written.extend_from_slice(b);
         // The radio answers what it was asked, if it has an answer left.
-        if b.ends_with(b";") {
+        if g.reply_to_any_write || b.ends_with(b";") {
             if let Some(reply) = g.replies.pop_front() {
                 g.to_read.extend_from_slice(reply.as_bytes());
             }
@@ -224,5 +241,156 @@ impl SerialPort for FakeSerial {
     }
     fn clear_break(&self) -> serialport::Result<()> {
         Ok(())
+    }
+}
+
+/// The fake's own tests. It had none, and seven tests in two other files lean
+/// on it - so whatever it does wrong, they inherit.
+///
+/// A reviewer found the hole that made this worth writing: with
+/// `if true || b.ends_with(b";")` in the write path, every one of the 382 tests
+/// in this workspace stayed green. The OFF state of `reply_to_any_write` was
+/// observable by nothing at all, which means nothing was holding the semicolon
+/// rule that the Yaesu tests depend on.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// Without the flag, only a command ending in `;` draws an answer. That is
+    /// the Yaesu CAT convention, and three tests in `yaesu/memory.rs` need it:
+    /// the EX read clears the line before asking, on purpose, so an answer that
+    /// was already waiting would make those tests pass for the wrong reason.
+    #[test]
+    fn by_default_only_a_semicolon_command_is_answered() {
+        let f = FakeSerial::answering_each(&["EX0101012;"]);
+        let mut port = f.boxed();
+
+        port.write_all(b"no terminator here").unwrap();
+        let mut buf = [0u8; 32];
+        assert!(port.read(&mut buf).is_err(), "nothing was asked, so nothing answers");
+        assert_eq!(f.log().replies.len(), 1, "and the reply is still queued");
+
+        port.write_all(b"EX0101;").unwrap();
+        let n = port.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"EX0101012;");
+    }
+
+    /// With the flag, any write draws the next answer. A binary device sends
+    /// twelve raw bytes and ends in no terminator at all.
+    #[test]
+    fn with_the_flag_any_command_is_answered() {
+        let f = FakeSerial::answering_each_command(&["AAAACAAE"]);
+        let mut port = f.boxed();
+
+        port.write_all(&[0x01, 0x0A, 0x00]).unwrap();
+        let mut buf = [0u8; 32];
+        let n = port.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"AAAACAAE");
+    }
+
+    /// The two constructors differ in exactly that flag and nothing else.
+    #[test]
+    fn the_two_constructors_differ_only_in_the_flag() {
+        let plain = FakeSerial::answering_each(&["x;"]);
+        let any = FakeSerial::answering_each_command(&["x;"]);
+
+        assert!(!plain.log().reply_to_any_write);
+        assert!(any.log().reply_to_any_write);
+        assert_eq!(plain.log().replies, any.log().replies);
+    }
+
+    /// Answers are handed out in order, one per command, and silence follows
+    /// when the list runs out.
+    #[test]
+    fn answers_come_in_order_and_then_stop() {
+        let f = FakeSerial::answering_each_command(&["first", "second"]);
+        let mut port = f.boxed();
+        let mut buf = [0u8; 32];
+
+        port.write_all(b"1").unwrap();
+        let n = port.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"first");
+
+        port.write_all(b"2").unwrap();
+        let n = port.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"second");
+
+        port.write_all(b"3").unwrap();
+        assert!(port.read(&mut buf).is_err(), "a command beyond the list is met with silence");
+    }
+
+    /// A port with nothing to say times out rather than returning zero bytes.
+    /// Several paths under test tell those two apart, and one of them has a
+    /// guard that can only fire on the zero it never gets.
+    #[test]
+    fn an_empty_port_times_out_and_does_not_return_zero() {
+        let f = FakeSerial::new();
+        let mut port = f.boxed();
+        let mut buf = [0u8; 8];
+
+        let e = port.read(&mut buf).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    /// Clearing the input throws away what was waiting and nothing else.
+    #[test]
+    fn clearing_the_input_drops_what_was_waiting() {
+        let f = FakeSerial::answering("stale bytes");
+        let port = f.boxed();
+
+        assert!(!f.log().to_read.is_empty());
+        port.clear(serialport::ClearBuffer::Input).unwrap();
+        assert!(f.log().to_read.is_empty());
+
+        // Output-only clearing leaves the input alone; amplitec's drain asks for
+        // Input, and a test that cannot tell them apart would pass either way.
+        f.feed("more");
+        port.clear(serialport::ClearBuffer::Output).unwrap();
+        assert_eq!(f.log().to_read, b"more".to_vec());
+    }
+
+    /// Writes stop failing only from the number given, and the count is of
+    /// writes and not of bytes.
+    #[test]
+    fn a_failing_port_fails_from_the_write_it_was_told_to() {
+        let f = FakeSerial::failing_writes_from(2);
+        let mut port = f.boxed();
+
+        assert!(port.write_all(b"one").is_ok());
+        assert!(port.write_all(b"two").is_ok());
+        assert!(port.write_all(b"three").is_err(), "the third write is past the limit");
+    }
+
+    /// Every write is kept, in order - not just the last one.
+    ///
+    /// Four tests in three files judge `written`, and all four write exactly
+    /// once, so keeping everything and keeping only the last write looked the
+    /// same to them. A reviewer made the fake overwrite instead of append and all
+    /// 436 tests stayed green (2026-09-25). It matters the day a sequence is
+    /// tested - and the first one is already on the list: amplitec's session
+    /// loop sends a scan and then a switch command.
+    #[test]
+    fn every_write_is_kept_in_order() {
+        let f = FakeSerial::new();
+        let mut port = f.boxed();
+        port.write_all(b"FIRST;").unwrap();
+        port.write_all(&[0x01, 0x0A]).unwrap();
+        port.write_all(b"LAST;").unwrap();
+
+        let mut expected = b"FIRST;".to_vec();
+        expected.extend_from_slice(&[0x01, 0x0A]);
+        expected.extend_from_slice(b"LAST;");
+        assert_eq!(f.log().written, expected);
+    }
+
+    /// A clone shares the log, which is what lets a test keep reading while the
+    /// code under test owns the port.
+    #[test]
+    fn a_clone_shares_the_log() {
+        let f = FakeSerial::new();
+        let mut port = f.boxed();
+        port.write_all(b"seen by both").unwrap();
+        assert_eq!(f.log().written_text(), "seen by both");
     }
 }

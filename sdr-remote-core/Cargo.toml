@@ -9,9 +9,14 @@ audiopus = { workspace = true }
 bytemuck = { workspace = true }
 log = { workspace = true }
 anyhow = { workspace = true }
+# The one anti-alias filter for every downsampler (`resample.rs`, build 259); already
+# used by the server and the apps, so no new crate enters the workspace.
+rubato = { workspace = true }
 num_enum = "0.7"
 hmac = "0.12"
 sha2 = "0.10"
+# Session key derivation (phase 2 of the direct connection); same family as hmac.
+hkdf = "0.12"
 rand = "0.8"
 totp-lite = "2.0"
 base32 = "0.5"

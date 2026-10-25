@@ -192,7 +192,7 @@ impl SdrRemoteApp {
         let mut intent = l.intent();
         match why {
             PttRelease::Refused => intent.refused(),
-            PttRelease::LinkGone => intent.disconnected(),
+            PttRelease::LinkGone => intent.link_gone(resampled),
             PttRelease::RadioLeftTx => intent.radio_left_tx(resampled),
         }
         let next = sdr_remote_logic::ptt_intent::Latches::from_intent(&intent);
@@ -316,8 +316,27 @@ impl SdrRemoteApp {
         // "only RX comes back, VRX stays silent" the owner reported, and it
         // got worse rather than better when the engine side was fixed first
         // (2026-08-16).
-        if state.session_generation != self.session_generation_seen {
+        // A new session: the server authenticated us again. That happens on a
+        // first connect, on a server restarted inside the time-out and on a
+        // network switch - in the last two `connected` never goes down. What
+        // THIS side holds per session (the PTT latches, the subscriptions it
+        // asks for again below) hangs on this edge. What the server has to be
+        // told again, the engine replays itself (session_intent).
+        //
+        // A server without a password never authenticates, so this edge never
+        // fires there and nothing below runs - nor the engine's replay. Known,
+        // list point 17; the GUI requires a password.
+        let new_session = state.session_generation != self.session_generation_seen;
+        if new_session {
             self.session_generation_seen = state.session_generation;
+            // A new session on a link that never went down: the server
+            // authenticated us again (a restart inside the time-out, a network
+            // switch). The engine let go of its transmit flags there
+            // (session_lost!() on AUTH_ACCEPTED, build 60) - and without this
+            // the latch here stayed shut with the finger still on the key, so
+            // the button was red and the engine asked for nothing (review 60).
+            // The one exit for every PTT; a no-op on a first connect.
+            self.release_all_ptt();
             self.vrx_state_sync_pending = true;
             self.yaesu_enable_sent = false;
             self.yaesu2_enable_sent = false;
@@ -554,6 +573,8 @@ impl SdrRemoteApp {
         // The sign itself stays a level: it says "something is refused right
         // now", which is exactly what a level means.
         self.ptt_denied = state.ptt_denial.active();
+        self.server_build = state.server_build.clone();
+        self.measurement_file = state.measurement_file.clone();
         self.rtt_ms = state.rtt_ms;
         self.jitter_ms = state.jitter_ms;
         self.buffer_depth = state.buffer_depth;
@@ -617,16 +638,27 @@ impl SdrRemoteApp {
             self.mode = state.mode;
         }
         self.smeter = state.smeter;
-        if state.smeter >= self.smeter_peak {
-            self.smeter_peak = state.smeter;
-            self.smeter_peak_time = Instant::now();
-        } else if self.smeter_peak_time.elapsed().as_secs_f32() > 2.0 {
-            self.smeter_peak = state.smeter;
+        let (peak, restart) = sdr_remote_logic::state::smeter_peak_step(
+            self.smeter_peak,
+            self.smeter_peak_time.elapsed().as_secs_f32(),
+            state.smeter,
+            state.smeter_tx || state.other_tx,
+        );
+        self.smeter_peak = peak;
+        if restart {
             self.smeter_peak_time = Instant::now();
         }
-        // Reset zoom on reconnect (connected false->true) or power ON
-        // Span is reset to 0 so the first spectrum packet triggers zoom calculation.
-        // Use `was_connected` snapshot - see comment above on connected-state mutation.
+        // Reset zoom on reconnect or power ON. Span is reset to 0 so the first
+        // spectrum packet triggers zoom calculation. Use `was_connected`
+        // snapshot - see comment above on connected-state mutation.
+        //
+        // Only the rising edge of `connected`, on purpose. A new session on a
+        // link that never went down (`new_session` above) needs nothing from
+        // here: AllowZoomBelow2x and the S-meter source are in
+        // SESSION_SCOPED_CONTROLS and the engine replays them itself at the
+        // authentication (session_intent), and SetMultiTx never leaves the
+        // engine. Two reviews in a row read this edge as a gap; it is not
+        // (review 62).
         let reconnected = state.connected && !was_connected;
         if reconnected {
             // The engine starts off and remembers nothing across a session, so this choice
@@ -652,6 +684,8 @@ impl SdrRemoteApp {
             self.rx2_anf_on = false;
             self.ddc_sample_rate_rx1 = 0;
             self.ddc_sample_rate_rx2 = 0;
+            self.ddc_centre_rx1_hz = 0;
+            self.ddc_centre_rx2_hz = 0;
             // TL2-1 ctun-auto-recenter: push allow_zoom_below_2x on every
             // (re)connect so the server-strictest-checkbox policy can be
             // computed correctly WITHOUT waiting for a manual toggle.
@@ -682,9 +716,13 @@ impl SdrRemoteApp {
             self.rx_volume = state.rx_af_gain as f32 / 100.0;
         }
         self.audio_error = state.audio_error;
+        self.mic_missing = state.mic_missing.clone();
         self.agc_enabled = state.agc_enabled;
         self.other_tx = state.other_tx;
         self.server_tx = state.server_tx;
+        self.smeter_tx = state.smeter_tx;
+        self.tx_window_open = state.tx_window_open;
+        self.auto_ref_paused = state.auto_ref_paused;
         if !state.playing { self.playing = false; }
         if !state.last_recorded.is_empty() && state.last_recorded != self.last_recorded {
             self.last_recorded = state.last_recorded.clone();
@@ -910,7 +948,12 @@ impl SdrRemoteApp {
         // receives - the same bytes, routed to a second window instead of asked
         // for twice. Set before ingest, so the row that arrives in this frame is
         // the one laid under this frame's view.
-        if state.full_spectrum_enabled {
+        //
+        // Only a row of now, per receiver (`RowLive`, build 235, review of
+        // 234): the engine keeps a row that stopped coming (a window closed),
+        // and the RX2 row also over a lost session, so on reopening the old
+        // band lay under the waterfall.
+        if self.full_row_live(self.full_row_at) {
             if !state.full_spectrum_bins.is_empty() {
                 self.vrx1_spectrum.set_backdrop(
                     &state.full_spectrum_bins,
@@ -918,6 +961,10 @@ impl SdrRemoteApp {
                     state.full_spectrum_span_hz,
                 );
             }
+        } else {
+            self.vrx1_spectrum.clear_backdrop();
+        }
+        if self.full_row_live(self.rx2_full_row_at) {
             if !state.rx2_full_spectrum_bins.is_empty() {
                 self.vrx2_spectrum.set_backdrop(
                     &state.rx2_full_spectrum_bins,
@@ -926,7 +973,6 @@ impl SdrRemoteApp {
                 );
             }
         } else {
-            self.vrx1_spectrum.clear_backdrop();
             self.vrx2_spectrum.clear_backdrop();
         }
         // VRX's own extracted spectrum → typed input of the channel type.
@@ -995,6 +1041,19 @@ impl SdrRemoteApp {
                 }
             }
         }
+        // The DDC centres the server says (build 231): not an operator setting,
+        // so taken every frame, whatever the TCI echo gate says.
+        for (rx, sent_khz, held) in [
+            (1, state.ddc_centre_rx1_khz, &mut self.ddc_centre_rx1_hz),
+            (2, state.ddc_centre_rx2_khz, &mut self.ddc_centre_rx2_hz),
+        ] {
+            let hz = sdr_remote_core::protocol::ddc_centre_from_khz(sent_khz);
+            if *held == 0 && hz > 0 {
+                // Named in advance (`logregels-build231.md`).
+                log::info!("DDC centre from the server: RX{} {} kHz", rx, sent_khz);
+            }
+            *held = hz;
+        }
         if state.full_spectrum_sequence != self.full_spectrum_sequence && !state.full_spectrum_bins.is_empty() {
             // Adjust default zoom when span first becomes known (0 -> real value)
             let old_span = self.full_spectrum_span_hz;
@@ -1002,6 +1061,7 @@ impl SdrRemoteApp {
             self.full_spectrum_center_hz = state.full_spectrum_center_hz;
             self.full_spectrum_span_hz = state.full_spectrum_span_hz;
             self.full_spectrum_sequence = state.full_spectrum_sequence;
+            self.full_row_at = Some(Instant::now());
             if old_span == 0 && self.full_spectrum_span_hz > 0 && !self.rx_zoom_initialized {
                 // The fallback for a session that never learns the DDC rate.
                 // Same derivation, same method - see `adopt_opening_zoom_rx1`.
@@ -1012,27 +1072,29 @@ impl SdrRemoteApp {
         // Per-VRX auto-ref from the channel's OWN bins (§6.1 #3), not from RX.
         if let Some(ref_db) =
             self.vrx1_spectrum
-                .update_auto_ref(self.vrx1_auto_ref, self.vrx1_freq_hz, -3_000, 3_000, self.vrx1_range_db)
+                .update_auto_ref(self.vrx1_auto_ref && !self.auto_ref_paused, self.vrx1_freq_hz, -3_000, 3_000, self.vrx1_range_db)
         {
             self.vrx1_ref_db = ref_db;
         }
         if let Some(ref_db) =
             self.vrx2_spectrum
-                .update_auto_ref(self.vrx2_auto_ref, self.vrx2_freq_hz, -3_000, 3_000, self.vrx2_range_db)
+                .update_auto_ref(self.vrx2_auto_ref && !self.auto_ref_paused, self.vrx2_freq_hz, -3_000, 3_000, self.vrx2_range_db)
         {
             self.vrx2_ref_db = ref_db;
         }
 
         // Per-VRX S-meter from the channel's OWN spectrum bins (§6.1 #2). The s-meter belongs to
         // the SPECTRUM, not to the audio checkbox: it is active as soon as the spectrum is on
-        // (bins flowing), even with VRX audio off. Cal-offset (VRX1=10, VRX2=5)
-        // empirically matches the main RX meter.
+        // (bins flowing), even with VRX audio off. Cal-offset VRX1=4 (it was 10;
+        // the owner measured VRX1 ~5-6 dB above RX1 with noise and with a sine,
+        // build 244 - for now, until the meter is computed on the server), VRX2=5
+        // (not measured yet).
         self.vrx1_spectrum.update_smeter(
             self.vrx1_high_res_spectrum,
             self.vrx1_freq_hz,
             self.vrx1_filter_low_hz,
             self.vrx1_filter_high_hz,
-            10.0,
+            4.0,
         );
         self.vrx2_spectrum.update_smeter(
             self.vrx2_high_res_spectrum,
@@ -1102,26 +1164,13 @@ impl SdrRemoteApp {
 
         // (pending_freq already cleared above, before frequency acceptance)
 
-        // Delayed auto_ref restore after TX->RX transition
-        if let Some(at) = self.tx_spectrum_restore_auto_at {
-            if Instant::now() >= at {
-                if let Some(saved) = self.tx_spectrum_saved_auto_ref.take() {
-                    self.auto_ref_enabled = saved;
-                    if saved {
-                        // Converge fast again after TX, as before - the state
-                        // that decides that now lives in the channel.
-                        self.rx1_spectrum.reset_auto_ref();
-                    }
-                }
-                self.tx_spectrum_restore_auto_at = None;
-            }
-        }
-
         // Auto ref level from the noise floor, excluding the RX filter passband.
         // Shared with RX2 and both VRX channels via ChannelSpectrum - this used
         // to be four copies of the same loop, one per channel.
+        // Paused through a transmission and just after it (build 176): it
+        // keeps its last receive value and carries on from there.
         if let Some(v) = self.rx1_spectrum.update_auto_ref(
-            self.auto_ref_enabled,
+            self.auto_ref_enabled && !self.auto_ref_paused,
             self.frequency_hz,
             self.filter_low_hz,
             self.filter_high_hz,
@@ -1140,7 +1189,7 @@ impl SdrRemoteApp {
                 (self.filter_low_hz, self.filter_high_hz)
             };
             if let Some(v) = self.rx2_spectrum.update_auto_ref(
-                self.rx2_auto_ref_enabled,
+                self.rx2_auto_ref_enabled && !self.auto_ref_paused,
                 self.rx2_frequency_hz,
                 lo,
                 hi,
@@ -1161,10 +1210,8 @@ impl SdrRemoteApp {
             if let Some(ref nb) = new_band {
                 self.waterfall_contrast = self.wf_contrast_per_band.get(nb).copied().unwrap_or(1.2);
             }
-            // Reset auto-ref to fast convergence on band change
-            if self.auto_ref_enabled {
-                self.rx1_spectrum.reset_auto_ref();
-            }
+            // The auto-ref restarts on a band change in `update_auto_ref`, for
+            // every channel (build 238).
             self.current_band = new_band;
         }
 
@@ -1191,11 +1238,14 @@ impl SdrRemoteApp {
         } else if !state.amplitec_connected && was_connected {
             self.amplitec_log_push(&now, "Disconnected");
         }
-        if state.amplitec_switch_a != old_a && state.amplitec_switch_a > 0 {
+        // A switch is a move from one real position to another (build 233):
+        // after a lost session the positions come back from 0, which is the
+        // session and not the Amplitec.
+        if (AmplitecMove { was: old_a, now: state.amplitec_switch_a }).switched() {
             let label = self.amplitec_label_a(state.amplitec_switch_a);
             self.amplitec_log_push(&now, &format!("Switch A -> {} ({})", state.amplitec_switch_a, label));
         }
-        if state.amplitec_switch_b != old_b && state.amplitec_switch_b > 0 {
+        if (AmplitecMove { was: old_b, now: state.amplitec_switch_b }).switched() {
             let label = self.amplitec_label_b(state.amplitec_switch_b);
             self.amplitec_log_push(&now, &format!("Switch B -> {} ({})", state.amplitec_switch_b, label));
         }
@@ -1261,7 +1311,7 @@ impl SdrRemoteApp {
         self.rf2k_device_name = state.rf2k_device_name.clone();
         self.rf2k_available = state.rf2k_available;
         self.rf2k_active = state.rf2k_active;
-        // Debug (Fase D)
+        // Debug (Phase D)
         self.rf2k_debug_available = state.rf2k_debug_available;
         self.rf2k_bias_pct_x10 = state.rf2k_bias_pct_x10;
         self.rf2k_psu_source = state.rf2k_psu_source;
@@ -1278,9 +1328,7 @@ impl SdrRemoteApp {
         self.rf2k_tuner_6m = state.rf2k_tuner_6m;
         self.rf2k_band_gap_allowed = state.rf2k_band_gap_allowed;
         self.rf2k_controller_version = state.rf2k_controller_version;
-        self.rf2k_drive_config_ssb = state.rf2k_drive_config_ssb;
-        self.rf2k_drive_config_am = state.rf2k_drive_config_am;
-        self.rf2k_drive_config_cont = state.rf2k_drive_config_cont;
+        self.rf2k_drive_config = state.rf2k_drive_config;
 
         // UltraBeam
         self.ub_connected = state.ub_connected;
@@ -1704,6 +1752,7 @@ impl SdrRemoteApp {
             self.rx2_full_spectrum_center_hz = state.rx2_full_spectrum_center_hz;
             self.rx2_full_spectrum_span_hz = state.rx2_full_spectrum_span_hz;
             self.rx2_full_spectrum_sequence = state.rx2_full_spectrum_sequence;
+            self.rx2_full_row_at = Some(Instant::now());
             if old_span == 0 && self.rx2_full_spectrum_span_hz > 0 && !self.rx2_zoom_initialized {
                 self.adopt_opening_zoom_rx2(self.rx2_full_spectrum_span_hz);
             }
@@ -1794,6 +1843,40 @@ fn parse_numbered_menu(body: &str) -> Vec<yaesu_menu::MenuItem> {
                 .map(|number| yaesu_menu::MenuItem { number, raw_value: v.to_string() })
         })
         .collect()
+}
+
+/// One Amplitec position change as the client sees it (build 233).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AmplitecMove {
+    /// The position before (0: not known - a new session).
+    was: u8,
+    now: u8,
+}
+
+impl AmplitecMove {
+    fn switched(self) -> bool {
+        self.was > 0 && self.now > 0 && self.now != self.was
+    }
+}
+
+#[cfg(test)]
+mod amplitec_move_tests {
+    use super::AmplitecMove;
+
+    /// A network switch is no Amplitec switch (build 233, review of 232):
+    /// the positions go to 0 with a lost session and come back from 0.
+    #[test]
+    fn a_position_coming_back_after_a_session_is_no_switch() {
+        let m = |was, now| AmplitecMove { was, now }.switched();
+        assert!(m(1, 2), "a real switch");
+        assert!(!m(2, 2), "no change");
+        assert!(!m(0, 2), "back after a session");
+        assert!(!m(2, 0), "gone with the session");
+        let src = include_str!("sync_state.rs");
+        let src = &src[..src.find("mod amplitec_move_tests").unwrap()];
+        assert_eq!(src.matches("if (AmplitecMove { was: old_a, now: state.amplitec_switch_a }).switched() {").count(), 1);
+        assert_eq!(src.matches("if (AmplitecMove { was: old_b, now: state.amplitec_switch_b }).switched() {").count(), 1);
+    }
 }
 
 #[cfg(test)]

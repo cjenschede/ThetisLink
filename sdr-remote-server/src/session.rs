@@ -18,6 +18,26 @@ const SERVER_DEFAULT_MAX_BINS: u16 = 2048;
 /// Timeout before considering a client disconnected (15s for mobile resilience)
 const SESSION_TIMEOUT_SECS: u64 = 15;
 
+/// The deadline for a client at the 2FA code step. It sends no heartbeats while
+/// the operator types (the engine holds them until the code is in) and cannot
+/// refresh its session before it is authenticated, so a listener's fifteen
+/// seconds reaped it mid-typing - after which its code got, since build 68, no
+/// answer at all, and the client waited at the code field for ever (review 70).
+/// Two minutes is four TOTP periods.
+const TOTP_ENTRY_TIMEOUT_SECS: u64 = 120;
+
+/// How old a client's code step must be before a heartbeat from its address is
+/// a knock. The client pauses its heartbeats once it has HEARD it is at the
+/// code step - and the server is at that step from the moment it verified the
+/// password, so on a slow line the client's next heartbeat (half a second after
+/// the one that started the handshake) lands on its own fresh code step and, in
+/// build 73, replaced it: a second challenge, the new key thrown away, and a
+/// code typed in that window answering nothing (review 73, measured at 600 ms
+/// of flight). Two seconds is above one heartbeat interval on any line and far
+/// under the time it takes to type a code; a restart or a relay reconnect is
+/// seconds later.
+const TOTP_KNOCK_GRACE_SECS: u64 = 2;
+
 /// The deadline for a client that is holding a transmitter.
 ///
 /// Fifteen seconds is a reasonable time to miss a listener. It is not a
@@ -33,6 +53,9 @@ const SESSION_TIMEOUT_SECS: u64 = 15;
 /// two lifts the key of a client that died is then a race, and both outcomes are
 /// right (step-4 brief, the time-out row in section 2.6). The safety order is
 /// pinned in ptt.rs: `mox_drops_before_the_transmitter_is_given_away_or_the_key_lifted`.
+/// Since build 265 a keyed radio lets a silent holder go at 2 s
+/// (`release_silent_radio`), and Thetis since 251; this is what is left for a
+/// holder neither of those released - a CW run, a radio not yet keyed.
 const TX_HOLDER_TIMEOUT_SECS: u64 = 3;
 
 /// Has a client been silent longer than its deadline? Compared at full
@@ -40,14 +63,17 @@ const TX_HOLDER_TIMEOUT_SECS: u64 = 3;
 /// seconds on, which made the three-second deadline of a TX holder four and
 /// the fifteen of a listener sixteen. The one place both the time-out and the
 /// check for an active session ask.
-pub fn silent_too_long(silence: std::time::Duration, holds_transmitter: bool) -> bool {
-    silence > std::time::Duration::from_secs(timeout_secs(holds_transmitter))
+pub fn silent_too_long(silence: std::time::Duration, holds_transmitter: bool, at_the_code_step: bool) -> bool {
+    silence > std::time::Duration::from_secs(timeout_secs(holds_transmitter, at_the_code_step))
 }
 
-/// How long this client may be silent before it is dropped.
-pub fn timeout_secs(holds_transmitter: bool) -> u64 {
+/// How long this client may be silent before it is dropped: a holder soonest,
+/// a client typing its 2FA code longest, everyone else the listener's fifteen.
+pub fn timeout_secs(holds_transmitter: bool, at_the_code_step: bool) -> u64 {
     if holds_transmitter {
         TX_HOLDER_TIMEOUT_SECS
+    } else if at_the_code_step {
+        TOTP_ENTRY_TIMEOUT_SECS
     } else {
         SESSION_TIMEOUT_SECS
     }
@@ -134,7 +160,28 @@ pub struct ClientSnapshot {
     pub rtt_ms: u16,
     pub loss_percent: u8,
     pub jitter_ms: u8,
+    /// Which build this client says it is. `Unknown` until its first heartbeat.
+    pub client_build: sdr_remote_core::protocol::PeerBuild,
+    /// Which way its traffic takes (build 143); `None` without a [`WayLookup`]
+    /// or once its connection is gone.
+    pub path: Option<sdr_remote_core::path::PathKind>,
 }
+
+/// What the password step answers: the code for the client, and - for a client
+/// that sent its nonce - the proof that this server knows the password.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthVerdict {
+    pub code: u8,
+    pub proof: Option<[u8; 32]>,
+}
+
+/// A code the server never sends: the answer to a response with nothing
+/// pending for its address (the challenge expired, the entry was reaped, the
+/// client is past this step). Nothing goes back - a REJECTED read as "wrong
+/// password" on the client's screen, and with a slow answer that was a loop -
+/// and the next packet from the address gets a fresh challenge the usual way
+/// (review 67).
+pub const AUTH_NOT_ANSWERED: u8 = 0xff;
 
 /// Authentication state for a client
 #[derive(Debug)]
@@ -177,6 +224,30 @@ impl AuthFailureTracker {
     }
 }
 
+/// What an authentication came over: a QUIC connection's binding and the
+/// peer's real address. Since build 133 there is always a binding - plain UDP
+/// and the classic relay, which had none, are gone - so there is no value
+/// without one to pass (no `Default`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuthChannel {
+    /// The connection's channel binding; the answer, key and proof cover it.
+    pub binding: [u8; sdr_remote_core::auth::BINDING_SIZE],
+    /// Where the brake on password guessing counts instead of the session's
+    /// address (a QUIC sentinel is new for every connection).
+    pub peer: Option<SocketAddr>,
+}
+
+/// The binding the session tests authenticate over: any value does, as long as
+/// the answer and the channel name the same one.
+#[cfg(test)]
+const TEST_BINDING: [u8; sdr_remote_core::auth::BINDING_SIZE] = [7; sdr_remote_core::auth::BINDING_SIZE];
+
+/// A channel with [`TEST_BINDING`], for the session tests.
+#[cfg(test)]
+fn bound() -> AuthChannel {
+    AuthChannel { binding: TEST_BINDING, peer: None }
+}
+
 /// A connected client session
 #[derive(Debug)]
 pub struct ClientSession {
@@ -187,10 +258,26 @@ pub struct ClientSession {
     /// "connected for Xm Ys" column in the Status panel.
     pub connected_since: Instant,
     pub auth_state: AuthState,
+    /// The key of this session, derived at the password step with a client that
+    /// sent its nonce (phase 2 of the direct connection); `None` for an older
+    /// client. Nothing reads it before phase 5. Server-owned: it IS the session,
+    /// and a new session gets a new one.
+    pub session_key: Option<[u8; 32]>,
+    /// Which numbered controls this session applied, per control (phase 2b,
+    /// `control_ack`). Server-owned: a new session starts empty, and a client
+    /// that restarted behind the same address is reset with it.
+    pub controls: sdr_remote_core::control_ack::ControlReceiver,
     pub last_heartbeat_seq: u32,
     pub rtt_ms: u16,
     pub loss_percent: u8,
     pub jitter_ms: u8,
+    /// Which build this client says it is, judged against this server's.
+    ///
+    /// Server-owned in the sense of the gate at the bottom of this file: no
+    /// control restores it, because the client repeats it on every heartbeat
+    /// of its own accord. Kept so the log can say it once instead of twice a
+    /// second, and so the Status panel can show it.
+    pub client_build: sdr_remote_core::protocol::PeerBuild,
     pub spectrum_enabled: bool,
     pub spectrum_fps: u8,
     pub spectrum_zoom: f32,
@@ -277,8 +364,36 @@ pub enum TxTarget {
     Yaesu2,
 }
 
+/// Why a request for a transmitter was refused - the log's words, and what
+/// the refusal tells the client. See `SessionManager::acquire_refusal`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AcquireRefusal {
+    pub why: &'static str,
+    pub denial: sdr_remote_core::protocol::Denial,
+}
+
+/// What `SessionManager::close_tx` leaves behind: who held what, and who has
+/// to be told. `tell` is every active client, holder or not, taken under the
+/// same lock as the close and handed out only by the close - so a client can
+/// only be told AFTER the server is closed, and the list cannot be fetched
+/// from anywhere else (review 61: the loop that told everyone could be moved
+/// before the close, or run over an empty list, with every check green).
+pub struct TxClosed {
+    pub held: Vec<(TxTarget, SocketAddr)>,
+    pub tell: Vec<SocketAddr>,
+}
+
 impl TxTarget {
     pub const ALL: [TxTarget; 3] = [TxTarget::Thetis, TxTarget::Yaesu1, TxTarget::Yaesu2];
+
+    /// The name the log gives this transmitter.
+    pub fn radio_name(self) -> &'static str {
+        match self {
+            TxTarget::Thetis => "Thetis",
+            TxTarget::Yaesu1 => "Yaesu radio 0",
+            TxTarget::Yaesu2 => "Yaesu radio 1",
+        }
+    }
 
     /// The transmitter a CW key edge is for, by the number the packet carries
     /// (`CwEdgesPacket::target`: 0 Thetis, 1 and 2 the Yaesu slots). Anything
@@ -311,6 +426,12 @@ mod cw_target_tests {
 /// Supports multiple simultaneous clients with single-TX arbitration.
 pub struct SessionManager {
     clients: HashMap<SocketAddr, ClientSession>,
+    /// Told when a client is admitted and when its session ends
+    /// ([`AdmissionWatch`]). `None` until the network layer sets it.
+    admission: Option<std::sync::Arc<dyn AdmissionWatch>>,
+    /// Asked which way a client's traffic takes, for the snapshot
+    /// ([`WayLookup`]). `None` until the network layer sets it.
+    ways: Option<std::sync::Arc<dyn WayLookup>>,
     /// Who holds each transmitter, if anyone.
     ///
     /// Was a single `Option<SocketAddr>` for Thetis. The Yaesu paths had no
@@ -318,6 +439,19 @@ pub struct SessionManager {
     /// up, and any client could raise or drop that flag - so two people could
     /// talk into one radio, and one could end the other's transmission.
     tx_holders: std::collections::HashMap<TxTarget, SocketAddr>,
+    /// Transmitting is over for this server run (`close_tx`): every request for
+    /// a transmitter is refused until the server is restarted.
+    tx_closed: bool,
+    /// When a radio's holder was last heard on that radio (build 282): its
+    /// PTT rides on the audio, so the 2 s clock watches that audio, as Thetis's
+    /// safety watches its PTT packets - not the heartbeat, which goes on while
+    /// nothing keys the radio.
+    radio_heard: std::collections::HashMap<TxTarget, Instant>,
+    /// A radio that let go of its holder by itself - its own time-out timer,
+    /// or the radio stopping (build 282). The holder's packets still carry the
+    /// flag until it hears of it, and must not key the radio again: they are
+    /// ignored until a packet without the flag says it let go.
+    let_go_by_radio: std::collections::HashMap<TxTarget, SocketAddr>,
     /// Rate-limit auth failures per IP
     auth_failures: AuthFailureTracker,
     /// Server password (None = no auth required)
@@ -339,19 +473,63 @@ pub struct SessionManager {
     connect_generation: u64,
 }
 
+/// Who must know when a client is admitted and when its session ends. Over
+/// QUIC that is its permit to punch a hole (phase 3c): granted at admission,
+/// taken back when the session goes - the session layer knows both moments,
+/// so it is the one source (build 127, review 126: the permit used to be
+/// granted at three places in the network layer and outlived the session).
+///
+/// Called with the session lock held: an implementation must not block and
+/// must not call back into the session manager (review 127).
+pub trait AdmissionWatch: Send + Sync {
+    fn admitted(&self, addr: SocketAddr);
+    fn gone(&self, addr: SocketAddr);
+}
+
+/// Which way a client's traffic takes now (build 143, the connection names):
+/// the transport knows it, the session layer hands it to the status panel.
+/// Called with the session lock held, like [`AdmissionWatch`].
+pub trait WayLookup: Send + Sync {
+    fn way(&self, addr: SocketAddr) -> Option<sdr_remote_core::path::PathKind>;
+}
+
 impl SessionManager {
+    /// Tell `watch` of every admission and every session that ends, from now on.
+    pub fn watch_admissions(&mut self, watch: std::sync::Arc<dyn AdmissionWatch>) {
+        self.admission = Some(watch);
+    }
+
+    /// Ask `ways` which way each client takes, for the snapshot, from now on.
+    pub fn see_ways(&mut self, ways: std::sync::Arc<dyn WayLookup>) {
+        self.ways = Some(ways);
+    }
+
+    /// The one way a session ends: removed, and the watch told.
+    fn forget_client(&mut self, addr: SocketAddr) {
+        self.clients.remove(&addr);
+        self.let_go_by_radio.retain(|_, a| *a != addr);
+        if let Some(w) = &self.admission {
+            w.gone(addr);
+        }
+    }
+
     pub fn new(password: Option<String>, totp_secret: Option<String>) -> Self {
         if password.is_some() {
             info!("Authentication enabled (password configured)");
         } else {
-            warn!("No password configured - all client connections will be rejected");
+            warn!("No password configured - every client that reaches the port is admitted without one");
         }
         if totp_secret.is_some() {
             info!("2FA enabled (TOTP configured)");
         }
         Self {
             clients: HashMap::new(),
+            admission: None,
+            ways: None,
             tx_holders: std::collections::HashMap::new(),
+            tx_closed: false,
+            radio_heard: std::collections::HashMap::new(),
+            let_go_by_radio: std::collections::HashMap::new(),
             auth_failures: AuthFailureTracker::new(),
             password,
             totp_secret,
@@ -396,6 +574,8 @@ impl SessionManager {
                 rtt_ms: c.rtt_ms,
                 loss_percent: c.loss_percent,
                 jitter_ms: c.jitter_ms,
+                client_build: c.client_build.clone(),
+                path: self.ways.as_ref().and_then(|w| w.way(c.addr)),
             })
             .collect()
     }
@@ -415,6 +595,25 @@ impl SessionManager {
         self.auth_failures.is_blocked(&addr)
     }
 
+    /// Step 4 (build 256, a development build only): the trial client is let in
+    /// as authenticated, without a password - its packets come from the server
+    /// itself (`trial.rs`), never from the network. It asks for no receive audio.
+    /// `true` when it was let in now, `false` when it already was.
+    #[cfg(any(test, feature = "naspelen"))]
+    pub fn admit_trial_client(&mut self, addr: SocketAddr) -> bool {
+        if self.is_authenticated(addr) {
+            return false;
+        }
+        self.create_challenge(addr);
+        if let Some(s) = self.clients.get_mut(&addr) {
+            s.auth_state = AuthState::Authenticated;
+            s.last_seen = Instant::now();
+            s.rx1_enabled = false;
+        }
+        self.mark_admitted(addr);
+        true
+    }
+
     /// Get the auth state for an address (None if unknown)
     pub fn get_auth_state(&self, addr: SocketAddr) -> Option<&AuthState> {
         self.clients.get(&addr).map(|s| &s.auth_state)
@@ -427,8 +626,55 @@ impl SessionManager {
         matches!(self.get_auth_state(addr), Some(AuthState::Authenticated))
     }
 
+    /// Does this packet from this address get a challenge? A stranger does; a
+    /// client whose challenge is pending does not (it is answering it), nor does
+    /// an authenticated one. A client at the code step: only for a **heartbeat**
+    /// on a code step older than `TOTP_KNOCK_GRACE_SECS`. Such a client sends no
+    /// heartbeats while the operator types, so a heartbeat from its address is a
+    /// new client - a restart, or over the relay the same fixed address - and
+    /// keeping the old attempt locked that address out for the whole code-step
+    /// deadline, two minutes since build 71 (review 71). But it does send what
+    /// the operator touches meanwhile - a control, the VFO - and in build 72 one
+    /// of those counted as a knock and wiped the attempt (review 72, measured);
+    /// and its own last heartbeat, sent before it heard of the code step, did
+    /// the same in build 73 on a slow line (review 73, measured). The packet
+    /// itself is judged here, not a flag the caller derives: a flag let the
+    /// wiring in `network.rs` say `true` or `false` with every test green
+    /// (review 73). The `NoAuth` arm is defensive: the caller asks only when a
+    /// password is set, and `NoAuth` exists only without one.
+    ///
+    /// A `Disconnect` never does: somebody leaving is not somebody arriving. A
+    /// closed QUIC connection reads as one, also after its client has already
+    /// said goodbye itself, and that challenge then lingered as a half login
+    /// until the session timeout (field test, build 111).
+    pub fn wants_challenge(&self, addr: SocketAddr, packet: &sdr_remote_core::protocol::Packet) -> bool {
+        if matches!(packet, sdr_remote_core::protocol::Packet::Disconnect) {
+            return false;
+        }
+        match self.clients.get(&addr) {
+            None => true,
+            Some(s) => match s.auth_state {
+                AuthState::NoAuth => true,
+                AuthState::PendingTotp => {
+                    matches!(packet, sdr_remote_core::protocol::Packet::Heartbeat(_))
+                        && s.last_seen.elapsed() >= std::time::Duration::from_secs(TOTP_KNOCK_GRACE_SECS)
+                }
+                AuthState::PendingChallenge { .. } | AuthState::Authenticated => false,
+            },
+        }
+    }
+
     /// Create a pending challenge for a new client. Returns the nonce.
     pub fn create_challenge(&mut self, addr: SocketAddr) -> [u8; 16] {
+        if matches!(self.get_auth_state(addr), Some(AuthState::PendingTotp)) {
+            info!("Client {} knocked again at the code step - the old attempt is replaced by a new challenge", addr);
+        }
+        // A session this replaces ends the one way a session ends, so its
+        // watch hears it - true by itself, not by the gate two layers up that
+        // only lets unadmitted clients get here (review 127).
+        if self.clients.contains_key(&addr) {
+            self.forget_client(addr);
+        }
         let nonce = sdr_remote_core::auth::generate_nonce();
         let now = Instant::now();
         // Deliberately NOT bumping connect_generation here. Issuing a challenge only
@@ -441,7 +687,10 @@ impl SessionManager {
             last_seen: now,
             connected_since: now,
             auth_state: AuthState::PendingChallenge { nonce, sent_at: now },
+            session_key: None,
+            controls: sdr_remote_core::control_ack::ControlReceiver::new(),
             last_heartbeat_seq: 0, rtt_ms: 0, loss_percent: 0, jitter_ms: 0,
+            client_build: sdr_remote_core::protocol::PeerBuild::Unknown,
             spectrum_enabled: false,
             spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
             spectrum_zoom: 1.0, spectrum_pan: 0.0,
@@ -465,58 +714,149 @@ impl SessionManager {
         nonce
     }
 
-    /// Verify an auth response. Returns true if accepted.
-    /// Verify HMAC auth response. Returns:
+    /// Verify the HMAC auth response. The code is for the client:
     /// - 0 = rejected
     /// - 1 = accepted (fully authenticated)
     /// - 2 = HMAC ok, TOTP required (pending 2FA)
-    pub fn verify_auth(&mut self, addr: SocketAddr, hmac: &[u8; 32]) -> u8 {
+    ///
+    /// With a `client_nonce` (phase 2) the accepted and TOTP-required answers
+    /// carry the proof that this server knows the password, and the session
+    /// gets its key; without one it is the answer from before.
+    ///
+    /// `channel` carries the binding of the QUIC connection the response came
+    /// in on and the peer's real address (`TrackedSocket::auth_channel`). The
+    /// client's HMAC, the key and the proof all cover the binding,
+    /// so an answer made on another TLS session - someone in the middle - does
+    /// not verify. A session is keyed by its sentinel and every QUIC connection
+    /// has its own, so a key never outlives the binding it was made with.
+    pub fn verify_auth(
+        &mut self,
+        addr: SocketAddr,
+        hmac: &[u8; 32],
+        client_nonce: Option<[u8; 16]>,
+        channel: AuthChannel,
+    ) -> AuthVerdict {
+        let binding = Some(channel.binding);
+        // Failures count on the real peer over QUIC, on the address otherwise.
+        let throttle = channel.peer.unwrap_or(addr);
+        use sdr_remote_core::auth::{server_proof, session_key, verify_hmac, CHALLENGE_TTL_SECS};
+        use sdr_remote_core::protocol::{AUTH_ACCEPTED, AUTH_REJECTED, AUTH_TOTP_REQUIRED};
+        let refused = AuthVerdict { code: AUTH_REJECTED, proof: None };
+        let not_answered = AuthVerdict { code: AUTH_NOT_ANSWERED, proof: None };
         let password = match &self.password {
             Some(p) => p.clone(),
-            None => return sdr_remote_core::protocol::AUTH_REJECTED,
+            None => return refused,
         };
         if let Some(session) = self.clients.get_mut(&addr) {
-            if let AuthState::PendingChallenge { nonce, .. } = &session.auth_state {
+            if let AuthState::PendingChallenge { nonce, sent_at } = &session.auth_state {
                 let nonce = *nonce;
-                if sdr_remote_core::auth::verify_hmac(&password, &nonce, hmac) {
+                let age = sent_at.elapsed().as_secs();
+                if age >= CHALLENGE_TTL_SECS {
+                    // A slow answer is not a wrong one: nothing counted, the
+                    // entry goes, and the next packet from this address gets a
+                    // fresh challenge the usual way. Until phase 2 a challenge
+                    // never expired at all.
+                    info!("Auth challenge for {} expired after {}s - a new one follows", addr, age);
+                    self.forget_client(addr);
+                    return not_answered;
+                }
+                if verify_hmac(&password, &nonce, hmac, binding.as_ref()) {
+                    let (key, proof) = match client_nonce {
+                        Some(nc) => {
+                            let key = session_key(&password, &nonce, &nc, binding.as_ref());
+                            (Some(key), Some(server_proof(&key, &nonce, &nc, binding.as_ref())))
+                        }
+                        None => (None, None),
+                    };
+                    session.session_key = key;
+                    let key_line = match key {
+                        Some(_) => "session key established",
+                        None => "legacy client, no session key",
+                    };
                     if self.totp_secret.is_some() {
                         session.auth_state = AuthState::PendingTotp;
-                        info!("Client {} password OK, awaiting TOTP", addr);
-                        return sdr_remote_core::protocol::AUTH_TOTP_REQUIRED;
+                        info!("Client {} password OK, awaiting TOTP - {}", addr, key_line);
+                        return AuthVerdict { code: AUTH_TOTP_REQUIRED, proof };
                     }
                     session.auth_state = AuthState::Authenticated;
-                    self.mark_admitted();
-                    self.auth_failures.clear(&addr);
-                    info!("Client {} authenticated", addr);
-                    return sdr_remote_core::protocol::AUTH_ACCEPTED;
+                    // Admission is the last we heard from this client: the
+                    // listener's deadline runs from here, not from the challenge.
+                    session.last_seen = Instant::now();
+                    self.mark_admitted(addr);
+                    self.auth_failures.clear(&throttle);
+                    info!("Client {} authenticated - {}", addr, key_line);
+                    return AuthVerdict { code: AUTH_ACCEPTED, proof };
                 }
             }
         }
-        self.auth_failures.record_failure(addr);
+        // Only a wrong answer to a pending challenge is a failure. A response
+        // with nothing pending - the entry reaped after the session time-out, a
+        // client already past this step, or a packet that answers nothing -
+        // cannot be a password guess, so it is not counted: counting it let five
+        // forged responses with a victim's source address block that victim for
+        // a minute, and made every slow answer a failure (review 66). The next
+        // packet from the address gets a fresh challenge the usual way.
+        if !matches!(self.get_auth_state(addr), Some(AuthState::PendingChallenge { .. })) {
+            log::debug!("Auth response from {} answers no pending challenge - ignored", addr);
+            return not_answered;
+        }
+        self.auth_failures.record_failure(throttle);
         warn!("Authentication failed from {}", addr);
-        sdr_remote_core::protocol::AUTH_REJECTED
+        // A client of v2.13 or later (it sent a nonce) falls silent on a
+        // refusal and comes back only with a Connect. Its entry would hold the
+        // address at PendingChallenge for the listener's fifteen seconds, and
+        // the corrected password then got no challenge and "server
+        // unreachable" (review 76, measured). Gone, the next packet gets a
+        // fresh challenge. An older client keeps heartbeating through a
+        // refusal and answers every challenge with the same wrong password:
+        // for it the entry stays, or five of those in three seconds would
+        // block its address for a minute.
+        if client_nonce.is_some() {
+            self.forget_client(addr);
+        }
+        refused
     }
 
-    /// Verify TOTP code. Returns true if code is valid.
-    pub fn verify_totp(&mut self, addr: SocketAddr, code: &str) -> bool {
+    /// Verify a TOTP code: `Some(true)` admits, `Some(false)` is a wrong code,
+    /// `None` is a code with nothing pending - not answered, like
+    /// `AUTH_NOT_ANSWERED` at the password step.
+    pub fn verify_totp(&mut self, addr: SocketAddr, code: &str, throttle: SocketAddr) -> Option<bool> {
         let secret = match &self.totp_secret {
             Some(s) => s.clone(),
-            None => return false,
+            // No 2FA here, so nothing is ever pending: nothing to say - a
+            // REJECTED would be an answer to nothing, and a free fingerprint
+            // ("this server has no 2FA") for anyone who can send a packet.
+            None => return None,
         };
         if let Some(session) = self.clients.get_mut(&addr) {
             if matches!(session.auth_state, AuthState::PendingTotp) {
                 if sdr_remote_core::auth::verify_totp(&secret, code) {
                     session.auth_state = AuthState::Authenticated;
-                    self.mark_admitted();
-                    self.auth_failures.clear(&addr);
+                    // `last_seen` was the age of the handshake until here (nothing
+                    // before admission refreshes it), and the listener's fifteen
+                    // seconds are counted from it: a client that took twenty
+                    // seconds to type its code was admitted and reaped within the
+                    // next tick, and sent back to the code field (review 74,
+                    // measured). Admission is the last we heard from it.
+                    session.last_seen = Instant::now();
+                    self.mark_admitted(addr);
+                    self.auth_failures.clear(&throttle);
                     info!("Client {} TOTP verified, fully authenticated", addr);
-                    return true;
+                    return Some(true);
                 }
             }
         }
-        self.auth_failures.record_failure(addr);
+        // Same rule as the password step: a code with nothing pending is not a
+        // wrong code. (A client reaped at the code step - two minutes since build
+        // 71 - gets no answer here; its engine lets go after five seconds and the
+        // next knock gets a fresh challenge.)
+        if !matches!(self.get_auth_state(addr), Some(AuthState::PendingTotp)) {
+            log::debug!("TOTP response from {} answers no pending challenge - ignored", addr);
+            return None;
+        }
+        self.auth_failures.record_failure(throttle);
         warn!("TOTP verification failed from {}", addr);
-        false
+        Some(false)
     }
 
     /// Register activity from a client address.
@@ -534,16 +874,19 @@ impl SessionManager {
             };
             info!("New client connected: {}", addr);
             let now = Instant::now();
-            self.mark_admitted();
+            self.mark_admitted(addr);
             self.clients.insert(addr, ClientSession {
                 addr,
                 last_seen: now,
                 connected_since: now,
                 auth_state,
+                session_key: None,
+                controls: sdr_remote_core::control_ack::ControlReceiver::new(),
                 last_heartbeat_seq: 0,
                 rtt_ms: 0,
                 loss_percent: 0,
                 jitter_ms: 0,
+                client_build: sdr_remote_core::protocol::PeerBuild::Unknown,
                 spectrum_enabled: false,
                 spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
                 spectrum_zoom: 1.0,
@@ -594,11 +937,13 @@ impl SessionManager {
             .is_some_and(|c| c.last_heartbeat_seq.saturating_sub(seq) > Self::HEARTBEAT_RESTART_GAP);
         if restarted {
             info!("Client {} restarted without disconnecting - serving it as new", addr);
-            self.mark_admitted();
+            self.mark_admitted(addr);
         }
         if let Some(session) = self.clients.get_mut(&addr) {
             if restarted {
                 session.connected_since = Instant::now();
+                // Its control numbers start over too.
+                session.controls.reset();
             }
             session.last_heartbeat_seq = seq;
             session.rtt_ms = rtt;
@@ -607,15 +952,54 @@ impl SessionManager {
         }
     }
 
+    /// Record which build a client says it is.
+    ///
+    /// Returns what it was and what it is now, for a caller that decides with
+    /// `PeerBuild::change_line` whether that is worth a line. Deciding here as
+    /// well would be the same rule in two places, and the client end has it
+    /// too.
+    ///
+    /// `None` only when the address has no session.
+    pub fn note_client_build(
+        &mut self,
+        addr: SocketAddr,
+        version: Option<sdr_remote_core::protocol::VersionTag>,
+    ) -> Option<(
+        sdr_remote_core::protocol::PeerBuild,
+        sdr_remote_core::protocol::PeerBuild,
+    )> {
+        let now = sdr_remote_core::protocol::PeerBuild::of(version);
+        let session = self.clients.get_mut(&addr)?;
+        let was = std::mem::replace(&mut session.client_build, now.clone());
+        Some((was, now))
+    }
+
+
     /// Remove a client session (explicit disconnect)
     /// A client is now in and needs what a fresh subscriber gets.
     ///
     /// Exactly four things count as being admitted: a first contact with no password,
     /// an accepted password, an accepted TOTP code, and a silent restart behind an
     /// address that was already known. Issuing a challenge is not one of them - that
-    /// is only someone knocking.
-    fn mark_admitted(&mut self) {
+    /// is only someone knocking. The watch hears all four; the fourth is an address
+    /// that was admitted already, so telling it again changes nothing.
+    fn mark_admitted(&mut self, addr: SocketAddr) {
         self.connect_generation = self.connect_generation.wrapping_add(1);
+        if let Some(w) = &self.admission {
+            w.admitted(addr);
+        }
+    }
+
+    /// Judge a numbered control from `addr` (phase 2b): apply, a repeat, or older
+    /// than what was applied for the same control. `None` for an address with no
+    /// session - nothing to judge against.
+    pub fn judge_control(
+        &mut self,
+        addr: SocketAddr,
+        key: sdr_remote_core::control_ack::ControlKey,
+        seq: u32,
+    ) -> Option<sdr_remote_core::control_ack::Verdict> {
+        self.clients.get_mut(&addr).map(|c| c.controls.judge(key, seq))
     }
 
     /// See `connect_generation`. Changes whenever anyone joins.
@@ -626,7 +1010,7 @@ impl SessionManager {
     /// Returns the transmitters this client was holding, so the caller can
     /// take them out of TX now rather than leave that to the watchdogs.
     pub fn remove(&mut self, addr: SocketAddr) -> Vec<TxTarget> {
-        self.clients.remove(&addr);
+        self.forget_client(addr);
         // Everything it held, not just Thetis. A client that walks off with a
         // Yaesu would otherwise keep that radio busy for everyone.
         let mut released = Vec::new();
@@ -642,7 +1026,10 @@ impl SessionManager {
 
     /// Check if a session is active and authenticated
     fn is_active_authed(s: &ClientSession) -> bool {
-        !silent_too_long(s.last_seen.elapsed(), false)
+        // `false` for the code step on purpose: the match below excludes it, so
+        // the longer deadline never applies here. Admit `PendingTotp` below and
+        // this has to say so too, or the two places that ask one rule drift.
+        !silent_too_long(s.last_seen.elapsed(), false, false)
             && matches!(s.auth_state, AuthState::NoAuth | AuthState::Authenticated)
     }
 
@@ -665,10 +1052,8 @@ impl SessionManager {
     }
 
     /// Clients that should receive the main Thetis RX-audio stream.
-    /// Same gate as smeter_addrs: an Android client in Yaesu mode (Yaesu slot on +
-    /// spectrum off) listens to the Yaesu, not to Thetis -> don't send Thetis audio
-    /// (data saving on mobile). Desktop with yaesu+spectrum both on keeps
-    /// receiving Thetis audio. Recovers automatically once Yaesu mode goes off (spectrum on).
+    /// Every active, authenticated client: who receives Thetis RX audio, and so
+    /// who counts as listening to it.
     pub fn thetis_audio_addrs(&self) -> Vec<SocketAddr> {
         // Every active, authenticated client receives Thetis RX audio. The old
         // spectrum/Yaesu gate was a data-saving proxy that wrongly cut RX1 audio when a
@@ -687,16 +1072,25 @@ impl SessionManager {
         let holders: std::collections::HashSet<SocketAddr> =
             self.tx_holders.values().copied().collect();
         let timed_out: Vec<SocketAddr> = self.clients.values()
-            .filter(|s| silent_too_long(s.last_seen.elapsed(), holders.contains(&s.addr)))
+            .filter(|s| silent_too_long(
+                s.last_seen.elapsed(),
+                holders.contains(&s.addr),
+                matches!(s.auth_state, AuthState::PendingTotp),
+            ))
             .map(|s| s.addr)
             .collect();
 
         for &addr in &timed_out {
             // How long it was silent, so a field log shows how close to its
-            // deadline (3 s holding a transmitter, else the long one) it went.
+            // deadline (3 s holding a transmitter, 120 s at the code step, else
+            // the long one) it went.
             let silent_ms = self.clients.get(&addr).map(|s| s.last_seen.elapsed().as_millis()).unwrap_or(0);
-            warn!("Client {} timed out ({} ms silent)", addr, silent_ms);
-            self.clients.remove(&addr);
+            if self.clients.get(&addr).map_or(false, |s| matches!(s.auth_state, AuthState::PendingTotp)) {
+                warn!("Client {} timed out at the code step ({} ms silent) - the code never came", addr, silent_ms);
+            } else {
+                warn!("Client {} timed out ({} ms silent)", addr, silent_ms);
+            }
+            self.forget_client(addr);
             // Every transmitter it held. A client whose link died while it
             // had a Yaesu would otherwise keep that radio busy for everyone
             // until the server restarts.
@@ -708,16 +1102,31 @@ impl SessionManager {
             }
         }
 
+        // The byte counters of clients that are gone go with them, here and not
+        // only when the status panel draws: a server without a screen would
+        // keep one counter per address for ever - and over QUIC every new
+        // connection is a new address (review 109).
+        if !timed_out.is_empty() {
+            let left: Vec<SocketAddr> = self.clients.keys().copied().collect();
+            crate::tracked_socket::bw_retain(&left);
+        }
+
         timed_out
     }
 
     /// Try to acquire one transmitter. Returns true if granted.
     /// First-come-first-served: if no one holds it, grant it; otherwise deny.
     pub fn try_acquire_tx(&mut self, target: TxTarget, addr: SocketAddr) -> bool {
+        // The one place a transmitter is granted (`acquire_for_attempt` comes
+        // through here too), so closing it here closes it everywhere.
+        if self.tx_closed {
+            return false;
+        }
         match self.tx_holders.get(&target).copied() {
             None => {
                 info!("TX lock on {:?} acquired by {}", target, addr);
                 self.tx_holders.insert(target, addr);
+                self.radio_heard.insert(target, Instant::now());
                 true
             }
             Some(holder) if holder == addr => true,
@@ -725,11 +1134,121 @@ impl SessionManager {
         }
     }
 
+    /// Transmitting is over for this server run: the safety task that releases
+    /// a transmitter nobody lets go of has stopped (`network.rs`,
+    /// `safety_task_lost`). Every holder is let go and every later request is
+    /// refused - there is no way back short of a restart, on purpose: what was
+    /// supposed to end a transmission is gone. Returns who held what, and who
+    /// has to be told (`TxClosed`).
+    pub fn close_tx(&mut self) -> TxClosed {
+        self.tx_closed = true;
+        TxClosed {
+            held: self.tx_holders.drain().collect(),
+            tell: self.active_addrs(),
+        }
+    }
+
+    /// Why a request for a transmitter was not granted, for every place that
+    /// refuses one: the log's words, and what the refusal tells the client
+    /// (`Denial`). After `close_tx` the server is closed - the client lets go of
+    /// a held key and says a restart is needed; otherwise another client holds
+    /// it, and asking again is fine.
+    pub fn acquire_refusal(&self) -> AcquireRefusal {
+        if self.tx_closed {
+            AcquireRefusal {
+                why: "transmitting is closed until the server is restarted (the safety task stopped)",
+                denial: sdr_remote_core::protocol::Denial::Closed,
+            }
+        } else {
+            AcquireRefusal {
+                why: "another client holds it",
+                denial: sdr_remote_core::protocol::Denial::Refused,
+            }
+        }
+    }
+
     /// Release one transmitter - only the client holding it may do so.
-    pub fn release_tx(&mut self, target: TxTarget, addr: SocketAddr) {
+    /// Whether it was this client's.
+    pub fn release_tx(&mut self, target: TxTarget, addr: SocketAddr) -> bool {
         if self.tx_holders.get(&target).copied() == Some(addr) {
             info!("TX lock on {:?} released by {}", target, addr);
             self.tx_holders.remove(&target);
+            return true;
+        }
+        false
+    }
+
+    /// The safety released the transmitter (`check_safety`): whoever held
+    /// Thetis lets go of it in the same tick, and is named. Until build 251 the
+    /// ownership stayed until a release frame played (build 250) or the time-out
+    /// of a silent holder - and when the release packets were lost while the
+    /// heartbeat came back, until the client's next press; a second client was
+    /// refused all that while (rounds 249 and 250). Thetis only: the safety is
+    /// Thetis's, a Yaesu has its own.
+    pub fn release_after_safety(&mut self) -> Option<SocketAddr> {
+        let holder = self.tx_holder(TxTarget::Thetis)?;
+        self.release_tx(TxTarget::Thetis, holder);
+        Some(holder)
+    }
+
+    /// The 2 s clock of a radio (build 265; owner's decision 2026-10-20): its
+    /// holder has not been heard on that radio (`heard_on`; since build 282,
+    /// until then any packet of the client) for longer than the packet window
+    /// of the Thetis safety (`ptt::silence_ended_the_over`, the same `>`). The
+    /// holder lets go; the caller unkeys the radio. Its next packet with the
+    /// flag takes the radio again, as Thetis's does (build 282; until then a
+    /// way back of its own). Thetis has its own (`check_safety`,
+    /// `release_after_safety`).
+    pub fn release_silent_radio(
+        &mut self,
+        target: TxTarget,
+        now: Instant,
+    ) -> Option<(SocketAddr, std::time::Duration)> {
+        if target == TxTarget::Thetis {
+            return None;
+        }
+        let holder = self.tx_holder(target)?;
+        let heard = match self.radio_heard.get(&target) {
+            Some(&t) => t,
+            None => self.clients.get(&holder)?.last_seen,
+        };
+        let silence = now.saturating_duration_since(heard);
+        if !crate::ptt::silence_ended_the_over(Some(silence)) {
+            return None;
+        }
+        self.tx_holders.remove(&target);
+        Some((holder, silence))
+    }
+
+    /// A packet of `addr` for this radio, at `now`: the 2 s clock starts again
+    /// when it is the holder's.
+    pub fn heard_on(&mut self, target: TxTarget, addr: SocketAddr, now: Instant) {
+        if self.tx_holder(target) == Some(addr) {
+            self.radio_heard.insert(target, now);
+        }
+    }
+
+    /// The radio let go of its holder by itself (build 282): the holder goes,
+    /// and its packets with the flag do not take the radio again until one
+    /// without says it let go too (`let_go_seen`). Whether it held it.
+    pub fn let_go_by_the_radio(&mut self, target: TxTarget, addr: SocketAddr) -> bool {
+        let held = self.release_tx(target, addr);
+        if held {
+            self.let_go_by_radio.insert(target, addr);
+        }
+        held
+    }
+
+    /// Is `addr` the holder its radio let go of, still pressing?
+    pub fn let_go_by_the_radio_and_still_pressing(&self, target: TxTarget, addr: SocketAddr) -> bool {
+        self.let_go_by_radio.get(&target) == Some(&addr)
+    }
+
+    /// A packet without the flag from `addr`: it let go, so a radio that let
+    /// go of it first may be taken by its next press again.
+    pub fn let_go_seen(&mut self, target: TxTarget, addr: SocketAddr) {
+        if self.let_go_by_radio.get(&target) == Some(&addr) {
+            self.let_go_by_radio.remove(&target);
         }
     }
 
@@ -1293,6 +1812,29 @@ pub fn playout_keys(frame_ptt: bool, owner: Option<SocketAddr>, audio_from: Opti
     frame_ptt && owner.is_some() && owner == audio_from
 }
 
+/// Does a frame played without PTT hand Thetis back? Asked when nothing is
+/// transmitted (build 250): the safety let the transmitter go in a silence
+/// (`force_release` sets the PTT to `Rx`, nothing more), the operator let go in
+/// it, and the release frame found no transmission to end - the branch that
+/// hands the ownership back runs only while transmitting, so the client kept
+/// Thetis and a second client was refused (round 249). Only the client the
+/// session still holds, whose audio it is: the other side of `playout_keys`.
+pub fn playout_hands_back(frame_ptt: bool, owner: Option<SocketAddr>, audio_from: Option<SocketAddr>) -> bool {
+    !frame_ptt && owner.is_some() && owner == audio_from
+}
+
+/// Has the receive loop's memory of the Thetis holder (`remembered`) outlived
+/// the holding? The session lets go in places the loop does not see - a holder
+/// that times out (`check_timeout`, in the safety task) - and the loop's
+/// buffer still holds that client's last audio, with PTT. Back on the same
+/// address, the client was handed the transmitter as new while the loop saw
+/// the same holder, kept the buffer, and the old audio keyed Thetis (field
+/// 2026-10-16 23:48:42, 181 ms of speech 3 s old; build 247). Asked before the
+/// new acquisition: after it the session says "held" again.
+pub fn holder_outlived(remembered: Option<SocketAddr>, holder_now: Option<SocketAddr>) -> bool {
+    remembered.is_some() && holder_now != remembered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1315,7 +1857,7 @@ mod tests {
         format!("127.0.0.1:{port}").parse().unwrap()
     }
 
-    /// Eerst komt, eerst maalt.
+    /// First come, first served.
     #[test]
     fn the_first_to_ask_gets_tx_and_the_second_does_not() {
         let mut m = mgr();
@@ -1358,6 +1900,52 @@ mod tests {
         assert!(!playout_keys(true, Some(a(2)), Some(a(1))), "another client owns it: the first one's tail");
         assert!(!playout_keys(true, Some(a(2)), None), "owner, but no audio of it yet");
         assert!(!playout_keys(true, None, None));
+    }
+
+    /// A release frame played while nothing is transmitted hands Thetis back -
+    /// the safety let the transmitter go in a silence, and the operator let go
+    /// in it (build 250; round 249). Only the client the session still holds,
+    /// whose audio it is, and only a frame without PTT.
+    #[test]
+    fn a_release_played_while_nothing_transmits_hands_thetis_back() {
+        assert!(playout_hands_back(false, Some(a(1)), Some(a(1))), "the holder let go");
+        assert!(!playout_hands_back(true, Some(a(1)), Some(a(1))), "a frame with PTT keeps it");
+        assert!(!playout_hands_back(false, None, Some(a(1))), "the session let go already: nothing to hand back");
+        assert!(!playout_hands_back(false, Some(a(2)), Some(a(1))), "another client holds it");
+        assert!(!playout_hands_back(false, Some(a(1)), None), "no audio of it in the loop");
+        // Never both: a frame that keys is no release, and the reverse.
+        for ptt in [true, false] {
+            for owner in [None, Some(a(1)), Some(a(2))] {
+                for from in [None, Some(a(1))] {
+                    assert!(!(playout_keys(ptt, owner, from) && playout_hands_back(ptt, owner, from)));
+                }
+            }
+        }
+    }
+
+    /// The receive loop's memory of the Thetis holder outlives the holding when
+    /// the session let go elsewhere - a time-out of the holder - and then its
+    /// buffered audio, with PTT, must go as at a goodbye (build 247; field
+    /// 2026-10-16 23:48:42). The time-out itself, then the same client again on
+    /// the same address: the session hands it the transmitter as new.
+    #[test]
+    fn the_loops_holder_outlives_a_time_out_of_the_session() {
+        assert!(!holder_outlived(None, None), "nobody remembered");
+        assert!(!holder_outlived(None, Some(a(1))), "nobody remembered, someone holds");
+        assert!(!holder_outlived(Some(a(1)), Some(a(1))), "still holding: every packet of an over");
+        assert!(holder_outlived(Some(a(1)), None), "let go elsewhere: a time-out");
+        assert!(holder_outlived(Some(a(1)), Some(a(2))), "and someone else holds it now");
+        let mut m = mgr();
+        m.touch(a(1));
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        let remembered = Some(a(1));
+        assert!(!holder_outlived(remembered, m.tx_holder(TxTarget::Thetis)));
+        m.clients.get_mut(&a(1)).unwrap().last_seen = std::time::Instant::now() - std::time::Duration::from_secs(4);
+        assert_eq!(m.check_timeout(), vec![a(1)], "the holder timed out");
+        m.touch(a(1));
+        assert!(holder_outlived(remembered, m.tx_holder(TxTarget::Thetis)), "asked before the new acquisition");
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert!(!holder_outlived(remembered, m.tx_holder(TxTarget::Thetis)), "asked after it, it can no longer tell");
     }
 
     /// The holder may ask again without losing it - that happens on every audio
@@ -1427,7 +2015,7 @@ mod tests {
         let mut m = mgr();
         m.try_acquire_tx(TxTarget::Yaesu1, a(1));
 
-        assert!(m.accepts(TxTarget::Yaesu1, a(1)), "de houder mag praten");
+        assert!(m.accepts(TxTarget::Yaesu1, a(1)), "the holder may talk");
         assert!(
             !m.accepts(TxTarget::Yaesu1, a(2)),
             "somebody else must not talk into the same radio"
@@ -1460,7 +2048,7 @@ mod tests {
 
         m.release_tx(TxTarget::Yaesu1, a(1));
         assert_eq!(m.tx_holder(TxTarget::Yaesu1), None);
-        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)), "Thetis blijft van hem");
+        assert_eq!(m.tx_holder(TxTarget::Thetis), Some(a(1)), "Thetis stays with him");
     }
 
     /// A departing client releases everything it held, not only Thetis.
@@ -1493,7 +2081,10 @@ mod tests {
             last_seen: now,
             connected_since: now,
             auth_state: AuthState::NoAuth,
+            session_key: None,
+            controls: sdr_remote_core::control_ack::ControlReceiver::new(),
             last_heartbeat_seq: 0, rtt_ms: 0, loss_percent: 0, jitter_ms: 0,
+            client_build: sdr_remote_core::protocol::PeerBuild::Unknown,
             spectrum_enabled: rx1_en,
             spectrum_fps: 30,
             spectrum_zoom: rx1_zoom,
@@ -1542,7 +2133,7 @@ mod tests {
 
     /// Unit-test: checkbox-strictest wins (as long as one client checkbox-off, server zoom-min = 2.0).
     #[test]
-    fn vink_strictest_wins() {
+    fn checkbox_strictest_wins() {
         let mut mgr = SessionManager::new(None, None);
         // 2 clients, 1 checkbox-on + 1 checkbox-off -> strictest = 2.0
         mgr.clients.insert("127.0.0.1:5001".parse().unwrap(), mk_session("127.0.0.1:5001", true, 8.0, 4.0, true, true));
@@ -1559,7 +2150,7 @@ mod tests {
     }
 
     #[test]
-    fn vink_strictest_no_clients_returns_safe_default() {
+    fn checkbox_strictest_no_clients_returns_safe_default() {
         let mgr = SessionManager::new(None, None);
         // No clients -> safe default 2.0
         assert_eq!(mgr.server_enforced_zoom_min(), 2.0);
@@ -1593,9 +2184,65 @@ mod tests {
     }
 }
 
+/// One loop's view of `SessionManager::connect_generation`: did anyone join
+/// since this loop last looked? Every loop that keeps a "who already has it"
+/// list or a previous value per push owns one, and forgets that list when this
+/// says yes - a rejoin inside the session timeout keeps the address and the
+/// client count, so nothing else can see it.
+///
+/// One type for one rule (working rule 15): it was written out by hand four
+/// times, and the fifth loop that needed it - the equipment status, whose
+/// panels a client clears with its session since build 83 - had none, so the
+/// panels stood empty for up to ten seconds after a rejoin (review 84). Each
+/// loop owns its own: the edge is consumed, and two loops on one value would
+/// let the first one swallow it.
+pub struct GenerationWatch {
+    last: u64,
+}
+
+impl GenerationWatch {
+    pub fn new() -> Self {
+        Self { last: 0 }
+    }
+
+    /// True when `generation` differs from what this watch saw last time, and
+    /// remember it. Read the generation under the same lock as the address
+    /// list the loop is about to serve, or a client admitted in between finds
+    /// the edge already used and waits for the safety net.
+    pub fn changed(&mut self, generation: u64) -> bool {
+        let changed = generation != self.last;
+        self.last = generation;
+        changed
+    }
+}
+
 #[cfg(test)]
 mod connect_generation_tests {
     use super::*;
+
+    /// The rule the five loops share, in one place where a test can reach it.
+    #[test]
+    fn a_watch_fires_once_per_admission_and_never_twice() {
+        let a: SocketAddr = "10.0.0.7:5000".parse().unwrap();
+        let mut m = SessionManager::new(None, None);
+        let mut watch = GenerationWatch::new();
+        assert!(!watch.changed(m.connect_generation()), "nobody has joined yet");
+        m.touch(a);
+        assert!(watch.changed(m.connect_generation()), "an admission is an edge");
+        assert!(!watch.changed(m.connect_generation()), "and the edge is used up");
+        // A rejoin on the same address: the count and the address stay the same,
+        // and this is the only thing that sees it (review 83).
+        m.remove(a);
+        m.touch(a);
+        assert!(watch.changed(m.connect_generation()), "a rejoin is an edge too");
+        // Two watches on one manager each see the edge once.
+        let mut other = GenerationWatch::new();
+        assert!(other.changed(m.connect_generation()));
+        assert!(!watch.changed(m.connect_generation()));
+        // The counter wraps; a watch compares, it does not order.
+        let mut w = GenerationWatch { last: u64::MAX };
+        assert!(w.changed(0));
+    }
 
     fn mgr() -> SessionManager {
         SessionManager::new(None, None)
@@ -1629,6 +2276,23 @@ mod connect_generation_tests {
             m.connect_generation(), settled,
             "a restarted client must be served as new"
         );
+    }
+
+    /// A restarted client numbers its controls from 1 again. Without the reset
+    /// its first controls would read as older than what the previous process
+    /// had applied, and none of them would be applied (phase 2b).
+    #[test]
+    fn a_silent_restart_starts_the_control_numbers_over() {
+        use sdr_remote_core::control_ack::{ControlKey, Verdict};
+        let mut m = mgr();
+        let a = A.parse().unwrap();
+        m.touch(a);
+        m.update_heartbeat(a, 400, 0, 0, 0);
+        let k = ControlKey::Control(7);
+        assert_eq!(m.judge_control(a, k, 50), Some(Verdict::Apply));
+        assert_eq!(m.judge_control(a, k, 1), Some(Verdict::Stale), "same process: older");
+        m.update_heartbeat(a, 0, 0, 0, 0); // a new process behind the same address
+        assert_eq!(m.judge_control(a, k, 1), Some(Verdict::Apply));
     }
 
     /// A few packets arriving out of order are not a restart. Treating them as one
@@ -1678,9 +2342,9 @@ mod connect_generation_tests {
         let a = A.parse().unwrap();
         let nonce = m.create_challenge(a);
         let before = m.connect_generation();
-        let resp = sdr_remote_core::auth::compute_hmac("secret", &nonce);
+        let resp = sdr_remote_core::auth::compute_hmac("secret", &nonce, Some(&TEST_BINDING));
         assert_eq!(
-            m.verify_auth(a, &resp),
+            m.verify_auth(a, &resp, None, bound()).code,
             sdr_remote_core::protocol::AUTH_ACCEPTED
         );
         assert_eq!(m.connect_generation(), before + 1);
@@ -1694,15 +2358,15 @@ mod connect_generation_tests {
         let mut m = SessionManager::new(Some("secret".into()), Some(secret.clone()));
         let a = A.parse().unwrap();
         let nonce = m.create_challenge(a);
-        let resp = sdr_remote_core::auth::compute_hmac("secret", &nonce);
+        let resp = sdr_remote_core::auth::compute_hmac("secret", &nonce, Some(&TEST_BINDING));
         assert_eq!(
-            m.verify_auth(a, &resp),
+            m.verify_auth(a, &resp, None, bound()).code,
             sdr_remote_core::protocol::AUTH_TOTP_REQUIRED,
             "the password step must not admit a 2FA client"
         );
         let before = m.connect_generation();
         let code = sdr_remote_core::auth::generate_totp(&secret);
-        assert!(m.verify_totp(a, &code));
+        assert_eq!(m.verify_totp(a, &code, a), Some(true));
         assert_eq!(m.connect_generation(), before + 1, "the TOTP step admits");
     }
 
@@ -1736,12 +2400,12 @@ mod holder_timeout_tests {
 
     /// Move a client's last sign of life back by this many seconds.
     fn silent_for_ms(m: &mut SessionManager, addr: SocketAddr, ms: u64) {
-        let c = m.clients.get_mut(&addr).expect("client bestaat");
+        let c = m.clients.get_mut(&addr).expect("client exists");
         c.last_seen = std::time::Instant::now() - std::time::Duration::from_millis(ms);
     }
 
     fn silent_for(m: &mut SessionManager, addr: SocketAddr, secs: u64) {
-        let c = m.clients.get_mut(&addr).expect("client bestaat");
+        let c = m.clients.get_mut(&addr).expect("client exists");
         c.last_seen = std::time::Instant::now() - std::time::Duration::from_secs(secs);
     }
 
@@ -1751,7 +2415,7 @@ mod holder_timeout_tests {
         let mut m = SessionManager::new(None, None);
         m.touch(a(1));
         silent_for(&mut m, a(1), 4);
-        assert!(m.check_timeout().is_empty(), "een luisteraar mag even zwijgen");
+        assert!(m.check_timeout().is_empty(), "a listener may be quiet for a while");
     }
 
     /// Whoever holds a transmitter may not. This is the case that on 2026-09-03 left a
@@ -1764,8 +2428,182 @@ mod holder_timeout_tests {
         silent_for(&mut m, a(1), 4);
 
         let gone = m.check_timeout();
-        assert_eq!(gone, vec![a(1)], "de houder is na vier seconden weg");
+        assert_eq!(gone, vec![a(1)], "the holder is gone after four seconds");
         assert_eq!(m.tx_holder(TxTarget::Yaesu1), None, "and the transmitter is free");
+    }
+
+    /// Step 4's trial client (build 256): let in as authenticated once, asking
+    /// for no receive audio, and a client like any other after that.
+    #[test]
+    fn the_trial_client_is_let_in_once_and_asks_for_no_audio() {
+        let mut m = SessionManager::new(Some("pw".to_string()), None);
+        let t = crate::trial::TRIAL_CLIENT;
+        assert!(!m.is_authenticated(t));
+        assert!(m.admit_trial_client(t), "let in");
+        assert!(m.is_authenticated(t));
+        assert!(!m.clients[&t].rx1_enabled, "no receive audio asked");
+        assert!(!m.admit_trial_client(t), "once: a second call finds it in");
+        assert!(m.try_acquire_tx(TxTarget::Thetis, t), "and it can take Thetis like a client");
+    }
+
+    /// The safety released the transmitter: whoever held Thetis lets go of it
+    /// in the same breath, not at the time-out a second later or at a release
+    /// frame that may never come (build 251; rounds 249 and 250). Thetis only -
+    /// the safety is Thetis's - and once: a second call finds nobody.
+    #[test]
+    fn the_safety_takes_thetis_from_its_holder() {
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        m.touch(a(2));
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(2)));
+        assert!(!m.try_acquire_tx(TxTarget::Thetis, a(2)), "held: refused");
+
+        assert_eq!(m.release_after_safety(), Some(a(1)), "the holder is named");
+        assert_eq!(m.tx_holder(TxTarget::Thetis), None, "and Thetis is free");
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), Some(a(2)), "a Yaesu is not the safety's");
+        assert_eq!(m.release_after_safety(), None, "the second pass finds nobody");
+        assert!(m.check_timeout().is_empty(), "the client itself stays connected");
+
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(2)), "a second client gets Thetis");
+        m.release_tx(TxTarget::Thetis, a(2));
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)), "and the first one again, on its next press");
+    }
+
+    /// The 2 s clock of a radio (build 265): a holder not heard on that radio
+    /// past the packet window lets go - heard on the radio, not anywhere: a
+    /// heartbeat keeps nothing keyed since the PTT rides on the audio (build
+    /// 282). Thetis is not this clock's; a holder that speaks is left alone; and
+    /// its next press takes the radio again like anyone's.
+    #[test]
+    fn a_radio_lets_go_of_a_holder_it_does_not_hear() {
+        use std::time::Duration;
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        m.touch(a(2));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(1)));
+        let t0 = m.radio_heard[&TxTarget::Yaesu1];
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert_eq!(m.release_silent_radio(TxTarget::Yaesu1, at(2_000)), None, "inside the window");
+        assert_eq!(m.release_silent_radio(TxTarget::Thetis, at(9_000)), None, "Thetis has its own");
+        assert_eq!(m.release_silent_radio(TxTarget::Yaesu2, at(9_000)), None, "nobody holds it");
+        // Heard on the radio: the clock starts again. Somebody else's packet,
+        // or the client's heartbeat, does not.
+        m.heard_on(TxTarget::Yaesu1, a(1), at(1_500));
+        m.heard_on(TxTarget::Yaesu1, a(2), at(3_000));
+        m.touch(a(1));
+        assert_eq!(m.release_silent_radio(TxTarget::Yaesu1, at(3_500)), None, "heard at 1.5 s");
+        assert_eq!(m.release_silent_radio(TxTarget::Yaesu1, at(3_501)), Some((a(1), Duration::from_millis(2_001))));
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), None, "the holder lets go");
+        assert_eq!(m.release_silent_radio(TxTarget::Yaesu1, at(4_000)), None, "once");
+        m.heard_on(TxTarget::Yaesu1, a(1), at(4_000));
+        assert_eq!(m.tx_holder(TxTarget::Yaesu1), None, "a packet alone takes nothing back");
+        // The second pass: its next press takes it, and the clock runs again.
+        assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(1)));
+        let t1 = m.radio_heard[&TxTarget::Yaesu1];
+        assert!(m.release_silent_radio(TxTarget::Yaesu1, t1 + Duration::from_millis(2_000)).is_none());
+        assert!(m.release_silent_radio(TxTarget::Yaesu1, t1 + Duration::from_millis(2_001)).is_some());
+        assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(2)), "the radio is free for another press");
+        // The client itself stays: no sign-in again.
+        assert!(m.clients.contains_key(&a(1)));
+    }
+
+    /// The radio let go by itself (build 282): its holder's packets still carry
+    /// the flag until it hears of it, and are ignored until one without the
+    /// flag comes - from that client, on that radio. Twice, and the mark goes
+    /// with the client.
+    #[test]
+    fn a_radio_that_let_go_by_itself_waits_for_its_holder_to_let_go() {
+        let mut m = SessionManager::new(None, None);
+        m.touch(a(1));
+        m.touch(a(2));
+        assert!(!m.let_go_by_the_radio(TxTarget::Yaesu1, a(1)), "it held nothing");
+        assert!(!m.let_go_by_the_radio_and_still_pressing(TxTarget::Yaesu1, a(1)));
+        for pass in 0..2 {
+            assert!(m.try_acquire_tx(TxTarget::Yaesu1, a(1)), "pass {pass}");
+            assert!(m.let_go_by_the_radio(TxTarget::Yaesu1, a(1)));
+            assert_eq!(m.tx_holder(TxTarget::Yaesu1), None);
+            assert!(m.let_go_by_the_radio_and_still_pressing(TxTarget::Yaesu1, a(1)));
+            assert!(!m.let_go_by_the_radio_and_still_pressing(TxTarget::Yaesu1, a(2)), "only its holder");
+            assert!(!m.let_go_by_the_radio_and_still_pressing(TxTarget::Yaesu2, a(1)), "only that radio");
+            m.let_go_seen(TxTarget::Yaesu2, a(1));
+            m.let_go_seen(TxTarget::Yaesu1, a(2));
+            assert!(m.let_go_by_the_radio_and_still_pressing(TxTarget::Yaesu1, a(1)), "still pressing: another client's and another radio's let-go are not its own");
+            m.let_go_seen(TxTarget::Yaesu1, a(1));
+            assert!(!m.let_go_by_the_radio_and_still_pressing(TxTarget::Yaesu1, a(1)), "pass {pass}: let go");
+        }
+        // A client that goes takes its mark along.
+        assert!(m.try_acquire_tx(TxTarget::Yaesu2, a(2)));
+        assert!(m.let_go_by_the_radio(TxTarget::Yaesu2, a(2)));
+        m.remove(a(2));
+        assert!(!m.let_go_by_the_radio_and_still_pressing(TxTarget::Yaesu2, a(2)));
+    }
+
+    /// The two numbers of a press that loses its link (build 265): the server
+    /// lets go at 2 s, the client at 3 s - so a link back in between keys the
+    /// radio again with the press still held (since build 282 by the flag on
+    /// its next packet, until then by a way back of its own).
+    #[test]
+    fn the_clocks_of_a_lost_press_follow_each_other() {
+        let engine = include_str!("../../sdr-remote-logic/src/engine.rs");
+        let line = "pub(crate) const TRANSMIT_LINK_TIMEOUT_MS: u64 = ";
+        let at = engine.find(line).expect("the client's window") + line.len();
+        let client: u64 = engine[at..at + engine[at..].find(';').unwrap()].replace('_', "").parse().unwrap();
+        let server = crate::ptt::PTT_PACKET_TIMEOUT_MS;
+        assert_eq!((server, client), (2_000, 3_000), "owner's decision 2026-10-20");
+        assert!(client > server, "the server lets go first");
+    }
+
+    /// The safety task stopped: everyone holding a transmitter lets go, and
+    /// nobody gets one again - not the holder, not a newcomer, not through the
+    /// CW attempt either (`acquire_for_attempt` comes through the same gate).
+    #[test]
+    fn closing_tx_lets_every_holder_go_and_refuses_everyone_after() {
+        let mut m = SessionManager::new(None, None);
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        assert!(m.try_acquire_tx(TxTarget::Yaesu2, a(2)));
+
+        let mut held = m.close_tx().held;
+        held.sort_by_key(|(_, addr)| addr.port());
+        assert_eq!(held, vec![(TxTarget::Thetis, a(1)), (TxTarget::Yaesu2, a(2))], "who held what");
+        for target in TxTarget::ALL {
+            assert_eq!(m.tx_holder(target), None, "{:?} is let go", target);
+            assert!(!m.accepts(target, a(1)), "no audio goes to {:?}", target);
+        }
+        assert!(!m.try_acquire_tx(TxTarget::Thetis, a(1)), "not the one who held it");
+        assert!(!m.try_acquire_tx(TxTarget::Yaesu1, a(3)), "not a newcomer");
+        assert_eq!(m.acquire_for_attempt(TxTarget::Thetis, a(1)), None, "not a CW attempt");
+    }
+
+    /// The close says who has to be told: every active client, the listeners
+    /// too - not only the holders. Field test of build 60: the phone, listening,
+    /// was told nothing and learned of the closed server at its first press.
+    #[test]
+    fn closing_tx_names_every_active_client_to_tell() {
+        let mut m = SessionManager::new(None, None);
+        for port in 1..=3 {
+            m.touch(a(port));
+        }
+        assert!(m.try_acquire_tx(TxTarget::Thetis, a(1)));
+        let mut tell = m.close_tx().tell;
+        tell.sort_by_key(|addr| addr.port());
+        assert_eq!(tell, vec![a(1), a(2), a(3)], "the holder and both listeners");
+    }
+
+    /// The refusal says why: before the close another client holds it and the
+    /// client may ask again; after it the server let go and the client must not.
+    /// Field test 2026-10-01 11:00:42: after the close the log still said
+    /// "while another client holds it".
+    #[test]
+    fn a_refusal_after_the_close_says_the_server_let_go() {
+        let mut m = SessionManager::new(None, None);
+        use sdr_remote_core::protocol::Denial;
+        assert_eq!(m.acquire_refusal().denial, Denial::Refused);
+        assert_eq!(m.acquire_refusal().why, "another client holds it");
+        m.close_tx();
+        assert_eq!(m.acquire_refusal().denial, Denial::Closed);
+        assert!(m.acquire_refusal().why.contains("closed until the server is restarted"));
     }
 
     /// The distinction is per client, not per server: in the same round the
@@ -1781,7 +2619,7 @@ mod holder_timeout_tests {
 
         let gone = m.check_timeout();
         assert_eq!(gone, vec![a(1)], "only the transmitting one drops");
-        assert!(m.clients.contains_key(&a(2)), "de luisteraar blijft");
+        assert!(m.clients.contains_key(&a(2)), "the listener stays");
         assert_eq!(m.tx_holder(TxTarget::Thetis), None);
     }
 
@@ -1806,15 +2644,15 @@ mod holder_timeout_tests {
 
     #[test]
     fn a_listener_keeps_the_long_deadline() {
-        assert_eq!(timeout_secs(false), SESSION_TIMEOUT_SECS);
+        assert_eq!(timeout_secs(false, false), SESSION_TIMEOUT_SECS);
     }
 
     /// The measurement this exists for: a link that died mid-transmission left
     /// the radio on the air for twenty seconds.
     #[test]
     fn a_client_holding_a_transmitter_is_missed_sooner() {
-        assert!(timeout_secs(true) < timeout_secs(false));
-        assert_eq!(timeout_secs(true), TX_HOLDER_TIMEOUT_SECS);
+        assert!(timeout_secs(true, false) < timeout_secs(false, false));
+        assert_eq!(timeout_secs(true, false), TX_HOLDER_TIMEOUT_SECS);
     }
 
     /// The deadline is the number of seconds it names. It used to be one more:
@@ -1825,11 +2663,11 @@ mod holder_timeout_tests {
     #[test]
     fn the_deadline_is_the_number_of_seconds_it_names() {
         let ms = std::time::Duration::from_millis;
-        assert!(!silent_too_long(ms(3000), true), "exactly three: not yet");
-        assert!(silent_too_long(ms(3001), true));
-        assert!(silent_too_long(ms(3999), true), "the second the rounding lost");
-        assert!(!silent_too_long(ms(15_000), false));
-        assert!(silent_too_long(ms(15_001), false));
+        assert!(!silent_too_long(ms(3000), true, false), "exactly three: not yet");
+        assert!(silent_too_long(ms(3001), true, false));
+        assert!(silent_too_long(ms(3999), true, false), "the second the rounding lost");
+        assert!(!silent_too_long(ms(15_000), false, false));
+        assert!(silent_too_long(ms(15_001), false, false));
         // And through the session manager, both places.
         let mut m = SessionManager::new(None, None);
         m.touch(a(1));
@@ -1848,11 +2686,24 @@ mod holder_timeout_tests {
         assert_eq!(gone, vec![a(1), a(2)], "three and a half seconds is past three - for the holder");
     }
 
+    /// A client at the code step is given time to type: four TOTP periods, not
+    /// the fifteen seconds of a listener - which reaped it mid-typing, after
+    /// which its code got no answer and the client waited for ever (review 70).
+    #[test]
+    fn a_client_at_the_code_step_gets_time_to_type() {
+        let ms = |m: u64| std::time::Duration::from_millis(m);
+        assert!(timeout_secs(false, true) > timeout_secs(false, false));
+        assert_eq!(timeout_secs(false, true), TOTP_ENTRY_TIMEOUT_SECS);
+        assert!(!silent_too_long(ms(16_000), false, true), "sixteen seconds at the code step is not silence");
+        assert!(silent_too_long(ms(120_001), false, true));
+        assert_eq!(timeout_secs(true, true), TX_HOLDER_TIMEOUT_SECS, "a holder is a holder, whatever step it is at");
+    }
+
     /// Not so soon that an ordinary hiccup drops a transmission: heartbeats come
     /// every 500 ms, so the deadline has to be several of them.
     #[test]
     fn the_short_deadline_still_allows_several_missed_heartbeats() {
-        assert!(timeout_secs(true) * 1000 >= 4 * 500);
+        assert!(timeout_secs(true, false) * 1000 >= 4 * 500);
     }
 }
 
@@ -1917,6 +2768,14 @@ mod session_scope_tests {
         "rtt_ms",
         "loss_percent",
         "jitter_ms",
+        // Observed, not asked for: the client puts it on every heartbeat, so a
+        // new session re-learns it within half a second without anyone
+        // replaying anything.
+        "client_build",
+        // It IS the session: derived at the password step, gone with it.
+        "session_key",
+        // Bookkeeping of which numbered controls were applied (phase 2b).
+        "controls",
     ];
 
     /// The `pub` field names of `ClientSession`, read out of this file's source.
@@ -1988,5 +2847,447 @@ mod session_scope_tests {
                  missing from RESTORED_BY."
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod mutual_auth_tests {
+    use super::*;
+    use sdr_remote_core::auth::{compute_hmac, server_proof, session_key, CHALLENGE_TTL_SECS};
+    use sdr_remote_core::protocol::{AUTH_ACCEPTED, AUTH_REJECTED, AUTH_TOTP_REQUIRED};
+    use std::time::Duration;
+
+    fn addr() -> SocketAddr {
+        "10.0.0.5:5000".parse().unwrap()
+    }
+
+    fn addr_other() -> SocketAddr {
+        "10.0.0.6:5000".parse().unwrap()
+    }
+
+    /// A bare heartbeat, as a client sends every half second.
+    fn heartbeat() -> sdr_remote_core::protocol::Packet {
+        use sdr_remote_core::protocol::{Flags, Header, Packet, PacketType};
+        let mut b = [0u8; 20];
+        Header::new(PacketType::Heartbeat, Flags::NONE).serialize(&mut b);
+        Packet::deserialize(&b).expect("a bare heartbeat reads")
+    }
+
+    /// What the operator touches while typing: a control.
+    fn control() -> sdr_remote_core::protocol::Packet {
+        use sdr_remote_core::protocol::{ControlId, ControlPacket, Packet};
+        Packet::Control(ControlPacket { control_id: ControlId::Rx1AfGain, value: 1 })
+    }
+
+    #[test]
+    fn a_new_client_gets_a_key_and_a_proof_an_old_client_neither() {
+        let a = addr();
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        let nonce = m.create_challenge(a);
+        let nc = [4u8; 16];
+        let v = m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), Some(nc), bound());
+        assert_eq!(v.code, AUTH_ACCEPTED);
+        let key = session_key("secret99", &nonce, &nc, Some(&TEST_BINDING));
+        assert_eq!(v.proof, Some(server_proof(&key, &nonce, &nc, Some(&TEST_BINDING))));
+        assert_eq!(m.clients.get(&a).unwrap().session_key, Some(key));
+
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        let nonce = m.create_challenge(a);
+        let v = m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound());
+        assert_eq!(v.code, AUTH_ACCEPTED);
+        assert_eq!(v.proof, None, "an old client gets the old answer");
+        assert_eq!(m.clients.get(&a).unwrap().session_key, None);
+    }
+
+    /// Over QUIC the answer, the key and the proof all cover the connection's
+    /// binding (review 108, point 4): an answer made on another TLS session (a
+    /// party in the middle) or without the binding is refused, and the proof
+    /// the server gives back only verifies with the same binding.
+    #[test]
+    fn over_quic_only_an_answer_on_the_same_binding_is_admitted() {
+        let a = addr();
+        let (bound, other) = ([1u8; 32], [2u8; 32]);
+        let nc = [4u8; 16];
+
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        let nonce = m.create_challenge(a);
+        let quic = |b: [u8; 32]| AuthChannel { binding: b, peer: None };
+        let v = m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&bound)), Some(nc), quic(bound));
+        assert_eq!(v.code, AUTH_ACCEPTED);
+        let key = session_key("secret99", &nonce, &nc, Some(&bound));
+        assert_eq!(v.proof, Some(server_proof(&key, &nonce, &nc, Some(&bound))), "the proof covers the binding");
+        assert_eq!(m.clients.get(&a).unwrap().session_key, Some(key), "and so does the key");
+
+        for (what, hmac_binding) in [("another session's binding", Some(&other)), ("no binding", None)] {
+            let mut m = SessionManager::new(Some("secret99".into()), None);
+            let nonce = m.create_challenge(a);
+            let v = m.verify_auth(a, &compute_hmac("secret99", &nonce, hmac_binding), Some(nc), quic(bound));
+            assert_eq!(v.code, AUTH_REJECTED, "{what}");
+            assert_eq!(v.proof, None, "{what}: no proof for a refused answer");
+        }
+    }
+
+    /// The byte counters of timed-out clients are dropped where the sessions
+    /// are reaped, not only when the status panel draws (review 109: a server
+    /// without a screen kept them for ever). A text pin: the counters are a
+    /// process-wide table no test owns.
+    #[test]
+    fn the_reaper_drops_the_byte_counters_of_clients_that_are_gone() {
+        let src = include_str!("session.rs");
+        let start = src.find("pub fn check_timeout(&mut self)").unwrap();
+        let body = &src[start..start + src[start..].find("
+    }
+").unwrap()];
+        assert!(body.contains(concat!("crate::tracked_socket::", "bw_retain(&left)")), "check_timeout drops them");
+    }
+
+    /// Over QUIC the brake counts the real peer, not the sentinel: wrong answers
+    /// from five connections - five sentinels - block that peer (review 109).
+    #[test]
+    fn the_brake_counts_the_peer_behind_new_quic_connections() {
+        let peer: SocketAddr = "198.18.1.2:40000".parse().unwrap();
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        for n in 1..=MAX_AUTH_FAILURES {
+            let sentinel: SocketAddr = format!("198.51.100.1:{n}").parse().unwrap();
+            let nonce = m.create_challenge(sentinel);
+            let channel = AuthChannel { binding: [1u8; 32], peer: Some(peer) };
+            let v = m.verify_auth(sentinel, &compute_hmac("guess", &nonce, Some(&[1u8; 32])), Some([4u8; 16]), channel);
+            assert_eq!(v.code, AUTH_REJECTED);
+        }
+        assert!(m.is_blocked(peer), "the peer is blocked after {} wrong answers on new connections", MAX_AUTH_FAILURES);
+        assert!(!m.is_blocked("198.51.100.1:1".parse().unwrap()), "not the sentinel");
+    }
+
+    #[test]
+    fn the_proof_comes_with_totp_required_and_the_key_is_held() {
+        let a = addr();
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let mut m = SessionManager::new(Some("secret99".into()), Some(secret.clone()));
+        let nonce = m.create_challenge(a);
+        let nc = [4u8; 16];
+        let v = m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), Some(nc), bound());
+        assert_eq!(v.code, AUTH_TOTP_REQUIRED);
+        let key = session_key("secret99", &nonce, &nc, Some(&TEST_BINDING));
+        assert_eq!(v.proof, Some(server_proof(&key, &nonce, &nc, Some(&TEST_BINDING))), "the proof is about the password, not the code");
+        assert_eq!(m.clients.get(&a).unwrap().session_key, Some(key));
+        assert_eq!(m.verify_totp(a, &sdr_remote_core::auth::generate_totp(&secret), a), Some(true));
+        assert_eq!(m.clients.get(&a).unwrap().session_key, Some(key), "the code step keeps the key");
+    }
+
+    /// A slow answer is not a wrong one.
+    #[test]
+    fn an_expired_challenge_is_refused_without_counting_as_a_failure() {
+        let a = addr();
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        let nonce = m.create_challenge(a);
+        m.clients.get_mut(&a).unwrap().auth_state = AuthState::PendingChallenge {
+            nonce,
+            sent_at: Instant::now() - Duration::from_secs(CHALLENGE_TTL_SECS + 1),
+        };
+        let v = m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound());
+        assert_eq!(v, AuthVerdict { code: AUTH_NOT_ANSWERED, proof: None }, "nothing goes back");
+        assert!(m.auth_failures.failures.get(&a).is_none(), "a slow client is not an attacker");
+        assert!(
+            m.get_auth_state(a).is_none(),
+            "the stale challenge is gone, so the next packet from this address gets a fresh one"
+        );
+    }
+
+    /// The property the whole patch rests on: the server proves itself only to
+    /// a client that has already proven itself. Written after a reviewer moved
+    /// the proof above the HMAC check and nothing failed (review 66).
+    #[test]
+    fn a_wrong_password_gets_no_proof_and_no_key() {
+        let a = addr();
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        let nonce = m.create_challenge(a);
+        let v = m.verify_auth(a, &compute_hmac("secret98", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound());
+        assert_eq!(v, AuthVerdict { code: AUTH_REJECTED, proof: None });
+        assert!(m.clients.get(&a).is_none(), "a refused client that sent a nonce holds no entry (build 77)");
+        assert!(m.auth_failures.failures.get(&a).is_some(), "a wrong password IS a failure");
+        // An older client keeps its entry, and no key in it.
+        let b = addr_other();
+        let nonce = m.create_challenge(b);
+        let v = m.verify_auth(b, &compute_hmac("secret98", &nonce, Some(&TEST_BINDING)), None, bound());
+        assert_eq!(v, AuthVerdict { code: AUTH_REJECTED, proof: None });
+        assert_eq!(m.clients.get(&b).unwrap().session_key, None);
+    }
+
+    /// A refused password frees the address of a client that falls silent and
+    /// comes back with a Connect (v2.13+, it sent a nonce): the next packet
+    /// gets a fresh challenge instead of fifteen seconds of nothing. An older
+    /// client keeps heartbeating through the refusal and would answer every
+    /// challenge with the same wrong password: its entry stays (review 76).
+    #[test]
+    fn a_refused_password_frees_the_address_of_a_new_client_only() {
+        let a = addr();
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        let nonce = m.create_challenge(a);
+        assert!(!m.wants_challenge(a, &heartbeat()), "pending: no second challenge");
+        assert_eq!(m.verify_auth(a, &compute_hmac("wrong", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound()).code, AUTH_REJECTED);
+        assert!(m.wants_challenge(a, &heartbeat()), "refused, and the next packet is a fresh start");
+        assert!(!m.is_blocked(a), "one failure is counted, not blocked");
+
+        let b = addr_other();
+        let nonce = m.create_challenge(b);
+        assert_eq!(m.verify_auth(b, &compute_hmac("wrong", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_REJECTED);
+        assert!(!m.wants_challenge(b, &heartbeat()), "an older client keeps its entry for the listener's deadline");
+    }
+
+    /// A response that answers nothing is not a wrong password: five forged ones
+    /// used to block the address they named for a minute (review 66).
+    #[test]
+    fn an_answer_without_a_pending_challenge_counts_no_failure() {
+        let a = addr();
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        for _ in 0..MAX_AUTH_FAILURES + 1 {
+            let v = m.verify_auth(a, &[0u8; 32], None, bound());
+            assert_eq!(v.code, AUTH_NOT_ANSWERED, "nothing pending, nothing said");
+        }
+        assert!(!m.is_blocked(a), "an address with nothing pending cannot be talked onto the block list");
+        assert!(m.auth_failures.failures.get(&a).is_none());
+        assert_eq!(m.verify_totp(a, "000000", a), None, "a server without 2FA says nothing to a code");
+        // And a client past the password step is not counted either.
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let mut m = SessionManager::new(Some("secret99".into()), Some(secret));
+        let nonce = m.create_challenge(a);
+        assert_eq!(m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_TOTP_REQUIRED);
+        assert_eq!(m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_NOT_ANSWERED);
+        assert!(m.auth_failures.failures.get(&a).is_none());
+        assert_eq!(m.verify_totp(a, "000000", a), Some(false), "a wrong code with a pending step IS a failure");
+        assert_eq!(m.verify_totp(addr_other(), "000000", addr_other()), None, "a code with nothing pending is not");
+    }
+
+    /// A knock at the code step is a new client, not the one typing: it gets a
+    /// fresh challenge. Until build 72 the address stayed locked for the whole
+    /// code-step deadline (review 71).
+    #[test]
+    fn a_knock_at_the_code_step_gets_a_new_challenge() {
+        let a = addr();
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let mut m = SessionManager::new(Some("secret99".into()), Some(secret.clone()));
+        assert!(m.wants_challenge(a, &heartbeat()) && m.wants_challenge(a, &control()), "a stranger, whatever it sends");
+        assert!(
+            !m.wants_challenge(a, &sdr_remote_core::protocol::Packet::Disconnect),
+            "but a goodbye is no arrival (field test, build 111)"
+        );
+        let nonce = m.create_challenge(a);
+        assert!(!m.wants_challenge(a, &heartbeat()), "answering a pending challenge");
+        assert_eq!(m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound()).code, AUTH_TOTP_REQUIRED);
+        assert!(m.clients.get(&a).unwrap().session_key.is_some());
+        assert!(
+            !m.wants_challenge(a, &heartbeat()),
+            "a heartbeat on a FRESH code step is the client's own, still in flight - it cost the attempt in build 73"
+        );
+        // The grace in absolute numbers too, or a constant measured against
+        // itself could grow to a minute with every test green (review 74).
+        m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(1);
+        assert!(!m.wants_challenge(a, &heartbeat()), "one second: the client's own heartbeat may still be in flight");
+        m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(3);
+        assert!(m.wants_challenge(a, &heartbeat()), "three seconds: a restart waits no longer than this");
+        m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(TOTP_KNOCK_GRACE_SECS + 1);
+        assert!(
+            !m.wants_challenge(a, &control()),
+            "a control from the client that is typing is not a knock - it cost the attempt in build 72"
+        );
+        assert!(m.wants_challenge(a, &heartbeat()), "at a code step older than the grace, a heartbeat is a new client");
+        let nonce = m.create_challenge(a);
+        assert!(!m.wants_challenge(a, &heartbeat()), "and the old attempt is gone: a challenge is pending again");
+        assert_eq!(m.clients.get(&a).unwrap().session_key, None, "with its key");
+        assert_eq!(m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_TOTP_REQUIRED);
+        assert_eq!(m.verify_totp(a, &sdr_remote_core::auth::generate_totp(&secret), a), Some(true));
+        assert!(!m.wants_challenge(a, &heartbeat()), "authenticated");
+    }
+
+    /// The deadline through the reaper, not only through `timeout_secs`: the
+    /// code step's two minutes reach `check_timeout` (review 71: that wire was
+    /// held by nothing - the flag could be `false` and everything stayed green).
+    #[test]
+    fn the_reaper_gives_the_code_step_its_time() {
+        let a = addr();
+        let b = addr_other();
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let mut m = SessionManager::new(Some("secret99".into()), Some(secret));
+        let nonce = m.create_challenge(a);
+        assert_eq!(m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_TOTP_REQUIRED);
+        let mut n = SessionManager::new(Some("secret99".into()), None);
+        let nonce_b = n.create_challenge(b);
+        assert_eq!(n.verify_auth(b, &compute_hmac("secret99", &nonce_b, Some(&TEST_BINDING)), None, bound()).code, AUTH_ACCEPTED);
+
+        m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(20);
+        n.clients.get_mut(&b).unwrap().last_seen = Instant::now() - Duration::from_secs(20);
+        assert!(m.check_timeout().is_empty(), "twenty seconds at the code step: still typing");
+        assert_eq!(n.check_timeout(), vec![b], "twenty seconds silent and authenticated: gone");
+
+        m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(TOTP_ENTRY_TIMEOUT_SECS + 10);
+        assert_eq!(m.check_timeout(), vec![a], "past two minutes the code never came");
+    }
+
+    /// Admission restarts the listener's clock. Until build 75 a client that
+    /// took twenty seconds to type its code was admitted and reaped within the
+    /// next tick, because `last_seen` still said twenty seconds (review 74).
+    #[test]
+    fn admission_after_a_long_code_step_is_not_reaped() {
+        let a = addr();
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let mut m = SessionManager::new(Some("secret99".into()), Some(secret.clone()));
+        let nonce = m.create_challenge(a);
+        assert_eq!(m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_TOTP_REQUIRED);
+        m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(20);
+        assert!(m.check_timeout().is_empty(), "still typing");
+        assert_eq!(m.verify_totp(a, &sdr_remote_core::auth::generate_totp(&secret), a), Some(true));
+        assert!(m.check_timeout().is_empty(), "admitted a moment ago, and already gone");
+        assert!(m.is_authenticated(a));
+
+        // And the password step without 2FA, for symmetry.
+        let b = addr_other();
+        let mut n = SessionManager::new(Some("secret99".into()), None);
+        let nonce = n.create_challenge(b);
+        n.clients.get_mut(&b).unwrap().last_seen = Instant::now() - Duration::from_secs(CHALLENGE_TTL_SECS - 1);
+        assert_eq!(n.verify_auth(b, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_ACCEPTED);
+        assert!(n.clients.get(&b).unwrap().last_seen.elapsed() < Duration::from_secs(1), "admission stamps the clock");
+    }
+
+    /// The relation build 67 repaired, held by a test instead of a comment: a
+    /// challenge must be able to expire before the reaper removes the client,
+    /// or the expiry is dead code (review 67: 30 back in and all green).
+    #[test]
+    fn a_challenge_expires_before_the_reaper_removes_the_client() {
+        assert!(
+            CHALLENGE_TTL_SECS < timeout_secs(false, false),
+            "CHALLENGE_TTL_SECS ({}) must be under the session time-out ({}) or it can never fire",
+            CHALLENGE_TTL_SECS,
+            timeout_secs(false, false)
+        );
+    }
+
+    /// And one that is still fresh is answered as before.
+    #[test]
+    fn a_fresh_challenge_is_still_answerable_just_inside_the_ttl() {
+        let a = addr();
+        let mut m = SessionManager::new(Some("secret99".into()), None);
+        let nonce = m.create_challenge(a);
+        m.clients.get_mut(&a).unwrap().auth_state = AuthState::PendingChallenge {
+            nonce,
+            sent_at: Instant::now() - Duration::from_secs(CHALLENGE_TTL_SECS - 1),
+        };
+        assert_eq!(m.verify_auth(a, &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), None, bound()).code, AUTH_ACCEPTED);
+    }
+}
+
+/// The permit to punch follows the session (build 127, review 126): the watch
+/// hears every admission - password, code, a server without a password - and
+/// every session that ends - a goodbye, a time-out. Both states of each.
+#[cfg(test)]
+mod admission_watch_tests {
+    use super::*;
+    use sdr_remote_core::auth::compute_hmac;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct Heard(Mutex<Vec<(&'static str, SocketAddr)>>);
+
+    impl AdmissionWatch for Heard {
+        fn admitted(&self, addr: SocketAddr) {
+            self.0.lock().unwrap().push(("in", addr));
+        }
+        fn gone(&self, addr: SocketAddr) {
+            self.0.lock().unwrap().push(("out", addr));
+        }
+    }
+
+    fn watched(password: Option<&str>, totp: Option<String>) -> (SessionManager, Arc<Heard>) {
+        let mut m = SessionManager::new(password.map(str::to_string), totp);
+        let heard = Arc::new(Heard::default());
+        m.watch_admissions(heard.clone());
+        (m, heard)
+    }
+
+    fn a() -> SocketAddr {
+        "10.0.0.5:5000".parse().unwrap()
+    }
+
+    fn heard(h: &Heard) -> Vec<(&'static str, SocketAddr)> {
+        std::mem::take(&mut *h.0.lock().unwrap())
+    }
+
+    #[test]
+    fn an_accepted_password_admits_and_a_goodbye_ends_it() {
+        let (mut m, h) = watched(Some("secret99"), None);
+        let nonce = m.create_challenge(a());
+        assert_eq!(heard(&h), vec![], "a challenge is only a knock");
+        m.verify_auth(a(), &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound());
+        assert_eq!(heard(&h), vec![("in", a())]);
+        m.remove(a());
+        assert_eq!(heard(&h), vec![("out", a())]);
+    }
+
+    /// The snapshot carries each client's way from the lookup (build 143), and
+    /// none without one.
+    #[test]
+    fn the_snapshot_names_each_client_s_way() {
+        struct Fixed;
+        impl WayLookup for Fixed {
+            fn way(&self, addr: SocketAddr) -> Option<sdr_remote_core::path::PathKind> {
+                (addr == a()).then_some(sdr_remote_core::path::PathKind::LocalViaRelay)
+            }
+        }
+        let (mut m, _h) = watched(None, None);
+        m.create_challenge(a());
+        assert_eq!(m.active_clients_snapshot().iter().map(|c| c.path).collect::<Vec<_>>(), vec![None], "no lookup yet");
+        m.see_ways(Arc::new(Fixed));
+        assert_eq!(
+            m.active_clients_snapshot().iter().map(|c| c.path).collect::<Vec<_>>(),
+            vec![Some(sdr_remote_core::path::PathKind::LocalViaRelay)]
+        );
+    }
+
+    #[test]
+    fn a_wrong_password_admits_nothing() {
+        let (mut m, h) = watched(Some("secret99"), None);
+        let nonce = m.create_challenge(a());
+        m.verify_auth(a(), &compute_hmac("wrong", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound());
+        assert_eq!(heard(&h), vec![("out", a())], "refused: never in, and the waiting session ends");
+    }
+
+    #[test]
+    fn with_a_code_the_code_admits_not_the_password() {
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let (mut m, h) = watched(Some("secret99"), Some(secret.clone()));
+        let nonce = m.create_challenge(a());
+        m.verify_auth(a(), &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound());
+        assert_eq!(heard(&h), vec![], "the password alone is not the admission");
+        assert_eq!(m.verify_totp(a(), &sdr_remote_core::auth::generate_totp(&secret), a()), Some(true));
+        assert_eq!(heard(&h), vec![("in", a())]);
+    }
+
+    /// A knock again at the code step replaces the waiting session: the one it
+    /// replaces ends the one way a session ends, and the watch hears it - by
+    /// itself, not by the gate that only lets unadmitted clients get there
+    /// (review 127).
+    #[test]
+    fn a_new_challenge_ends_the_session_it_replaces() {
+        let secret = sdr_remote_core::auth::generate_totp_secret();
+        let (mut m, h) = watched(Some("secret99"), Some(secret));
+        let nonce = m.create_challenge(a());
+        m.verify_auth(a(), &compute_hmac("secret99", &nonce, Some(&TEST_BINDING)), Some([4u8; 16]), bound());
+        assert_eq!(heard(&h), vec![]);
+        m.create_challenge(a());
+        assert_eq!(heard(&h), vec![("out", a())], "the session at the code step ended");
+        m.create_challenge("10.0.0.9:1".parse().unwrap());
+        assert_eq!(heard(&h), vec![], "a first knock replaces nothing");
+    }
+
+    #[test]
+    fn a_server_without_a_password_admits_at_first_contact_and_a_time_out_ends_it() {
+        let (mut m, h) = watched(None, None);
+        m.touch(a());
+        assert_eq!(heard(&h), vec![("in", a())]);
+        m.touch(a());
+        assert_eq!(heard(&h), vec![], "once");
+        m.clients.get_mut(&a()).unwrap().last_seen = Instant::now() - Duration::from_secs(SESSION_TIMEOUT_SECS + 1);
+        assert_eq!(m.check_timeout(), vec![a()]);
+        assert_eq!(heard(&h), vec![("out", a())], "the session that timed out takes its permit");
     }
 }

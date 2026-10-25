@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-use std::net::SocketAddr;
 use std::sync::Mutex;
 
 use log::{info, warn};
@@ -15,7 +14,7 @@ use sdr_remote_logic::commands::Command;
 use sdr_remote_logic::ptt_intent::{
     PhonePtt as LogicPhonePtt, PttSource as LogicPttSource, PttTarget as LogicPttTarget,
 };
-use sdr_remote_logic::engine::{ClientEngine, ClientRelayTunnel};
+use sdr_remote_logic::engine::ClientEngine;
 use sdr_remote_logic::state::RadioState;
 
 /// Namespace function: returns shared version string (with build number in dev)
@@ -34,6 +33,15 @@ pub fn version() -> String {
 /// moment the relay started working (review finding, 2026-08-20).
 pub fn relay_is_configured(enabled: bool, url: String, station: String, token: String) -> bool {
     sdr_remote_relay::is_configured(enabled, &url, &station, &token)
+}
+
+/// The word for the route these settings ask for, to hold against the
+/// state's `route` - the rule the bridge chooses with (`Route::asked_for`),
+/// handed to Compose rather than kept there a second time (review 118).
+pub fn expected_route_label(relay_enabled: bool, url: String, station: String, token: String) -> String {
+    sdr_remote_logic::measure::Route::asked_for(sdr_remote_relay::is_configured(relay_enabled, &url, &station, &token))
+        .label()
+        .to_string()
 }
 
 /// Filter edges for one press of a width button.
@@ -58,9 +66,40 @@ pub fn filter_width_label(mode: u8, low_hz: i32, high_hz: i32) -> String {
     sdr_remote_logic::filter_width::width_label(mode, low_hz, high_hz)
 }
 
+/// The S reading for a level in dBm (build 218).
+pub fn s_meter_text(dbm: f32) -> String {
+    sdr_remote_core::s_meter::text(dbm)
+}
+
+/// Where a level in dBm sits on the S-meter bar, 0 to 1: the desktop's scale
+/// (`dbm_to_display`), so the bar stands where the desktop has it (build 219).
+pub fn s_meter_fraction(dbm: f32) -> f32 {
+    f32::from(sdr_remote_core::dbm_to_display(dbm)) / 228.0
+}
+
+/// A Yaesu CAT S-meter value in dBm, capped at S9+60 like the desktop
+/// (build 219).
+pub fn yaesu_s_meter_dbm(raw: u32) -> f32 {
+    sdr_remote_core::s_meter::yaesu_raw_to_dbm(raw.min(u32::from(u16::MAX)) as u16)
+}
+
 #[cfg(test)]
 mod filter_bridge_tests {
     use super::*;
+
+    /// The phone's S-meter scale is the desktop's (review of 218): S9 at
+    /// 108/228, the ends clamped, and a Yaesu value past the scale is S9+60.
+    #[test]
+    fn the_phone_s_meter_scale_is_the_desktops() {
+        assert_eq!(s_meter_fraction(-73.0), 108.0 / 228.0);
+        assert_eq!(s_meter_fraction(-200.0), 0.0);
+        assert_eq!(s_meter_fraction(0.0), 1.0);
+        assert_eq!(s_meter_fraction(-103.0), 48.0 / 228.0);
+        assert_eq!(yaesu_s_meter_dbm(108), -73.0);
+        assert_eq!(yaesu_s_meter_dbm(255), -13.0);
+        assert_eq!(s_meter_text(yaesu_s_meter_dbm(255)), "S9+60dB");
+        assert_eq!(yaesu_s_meter_dbm(70_000), -13.0);
+    }
 
     /// The two hops Kotlin makes: the direction flag and the edges that come back.
     /// The bridge had no test at all, so swapping `wider` left all of them green
@@ -443,10 +482,21 @@ pub struct BridgeChatState {
 /// 1:1 mapping with RadioState fields.
 pub struct BridgeRadioState {
     pub connected: bool,
-    /// Fase 3c: relay audio on the wss TCP-fallback (true) vs low-latency UDP (false).
-    /// Always false in direct mode. Overridden in get_state() from the relay status.
-    pub relay_transport_fallback: bool,
+    /// Goes up on every new session on this link (`RadioState::session_generation`).
+    /// The phone lets go of a held PTT on that edge, as it does when the link
+    /// dies: the engine let go of its flags at the authentication (build 60).
+    pub session_generation: u64,
+    /// The transport this engine runs on, as the screen shows it
+    /// (`Route::label`), so the settings show what is in use - and compare it
+    /// with `expected_route_label`, the same word from the same table.
+    pub route: String,
     pub ptt_denied: bool,
+    /// What blocks the station and what helps, one line each, in the app's
+    /// language (`sdr_remote_logic::station_notice`). Filled in
+    /// `bridge_state_from_radio_state`, which knows the language.
+    pub station_notices: Vec<String>,
+    /// Whether Connect may be offered (`station_notice::can_offer_connect`).
+    pub can_connect: bool,
     /// That refusal was the server letting go, not another client holding on.
     ///
     /// The radio stopped or its time-out timer is about to fire. A held control
@@ -513,7 +563,41 @@ pub struct BridgeRadioState {
     pub drive_level: u8,
     pub rx_af_gain: u8,
     pub agc_enabled: bool,
+    /// The server is not running this client's build.
+    ///
+    /// Flattened from the shared `PeerBuild` rather than mirrored as an enum:
+    /// the judgement stays in one place (core), and what crosses is only what
+    /// a screen needs to draw. Nothing on Android refuses to work over this.
+    pub server_build_differs: bool,
+    /// What the server calls itself. Empty when it agrees, and also when it
+    /// is a build too old to say which - the flag above is what separates
+    /// "nothing to report" from "could not say".
+    pub server_build: String,
+    /// The measurement file being written (open point 34), `None` when off.
+    pub measurement_file: Option<String>,
+    /// "Relay only" as last switched (build 137, `RadioState::relay_only`).
+    pub relay_only: bool,
+    /// "Force TCP" as last switched (build 146, `RadioState::force_tcp`).
+    pub force_tcp: bool,
+    /// The connection runs through the relay, so "relay only" means something
+    /// (build 137). From `Route` here, not from the label in Kotlin, so a
+    /// renamed label cannot leave the switch grey.
+    pub via_relay: bool,
+    /// The connection name (build 139): the letters, the long name in the
+    /// app's language, and whether it is the coupling wait (drawn amber). All
+    /// empty or false while there is no session. The words come from
+    /// `sdr_remote_logic::path_name`, so the phone keeps no table of its own.
+    pub path_short: String,
+    pub path_name: String,
+    pub path_hint: String,
+    pub path_coupling: bool,
     pub other_tx: bool,
+    /// The Thetis meter carries watts now - what the meter chooses its scale
+    /// on, not the phone's own PTT (`RadioState::smeter_tx`, build 169).
+    pub smeter_tx: bool,
+    /// The spectrum's automatic reference pauses now
+    /// (`RadioState::auto_ref_paused`, build 176).
+    pub auto_ref_paused: bool,
     pub filter_low_hz: i32,
     pub filter_high_hz: i32,
     pub thetis_configured: bool,
@@ -620,7 +704,7 @@ pub struct BridgeRadioState {
     pub yaesu_menu_data: String,
     pub yaesu_model: u8,
     pub yaesu_tuner_state: u8,
-    /// Radio meldt hoge SWR tijdens TX (zelf-wissend).
+    /// The radio reports high SWR during TX (clears itself).
     pub yaesu_hi_swr: bool,
     pub pa_drive_warning: bool,
     /// Maximum TX power for the current band (from the EX max-power menus; 0 = unknown).
@@ -651,7 +735,7 @@ pub struct BridgeRadioState {
     pub playback_level_yaesu2: f32,
     pub yaesu2_memory_data: String,
     pub yaesu2_menu_data: String,
-    // DSP/functie-feature-state (beide slots): toggles bitfield, levels, freqs.
+    // DSP/function feature state (both slots): toggles bitfield, levels, freqs.
     pub yaesu_feature_toggles: u32,
     pub yaesu_feature_levels: Vec<u8>,
     pub yaesu_feature_freqs: Vec<u16>,
@@ -702,7 +786,13 @@ pub fn bridge_state_from_radio_state(
         lang,
         sdr_remote_logic::i18n::Platform::Mobile,
     );
+    let station_notices = sdr_remote_logic::station_notice::station_notice_lines(&s, lang);
+    let path_name = s.path.map(|k| sdr_remote_logic::path_name::long_name(k, lang)).unwrap_or_default();
+    let path_hint = s.path.map(|k| sdr_remote_logic::path_name::hint(k, lang)).unwrap_or_default();
     BridgeRadioState {
+        station_notices,
+        path_name,
+        path_hint,
         connect_status_headline: headline,
         connect_status_action: action.unwrap_or_default(),
         connect_status_is_error: matches!(
@@ -721,7 +811,8 @@ impl From<RadioState> for BridgeRadioState {
     fn from(s: RadioState) -> Self {
         Self {
             connected: s.connected,
-            relay_transport_fallback: false, // set in get_state() from the relay status
+            session_generation: s.session_generation,
+            route: s.route.label().to_string(),
 
             // Derived from the refusal record rather than carried as flags.
             // Android never had the fault the counter is for - it has no
@@ -738,6 +829,11 @@ impl From<RadioState> for BridgeRadioState {
             // settled, so a level reader has to AND the two. Writing that out
             // here would have put the rule in one front end again.
             ptt_denied: s.ptt_denial.active(),
+            station_notices: sdr_remote_logic::station_notice::station_notice_lines(
+                &s,
+                sdr_remote_logic::i18n::Lang::En,
+            ),
+            can_connect: sdr_remote_logic::station_notice::can_offer_connect(&s),
             ptt_released_by_server: s.ptt_denial.released_by_server_now(),
             audio_error: s.audio_error,
             rtt_ms: s.rtt_ms,
@@ -785,7 +881,21 @@ impl From<RadioState> for BridgeRadioState {
             drive_level: s.drive_level,
             rx_af_gain: s.rx_af_gain,
             agc_enabled: s.agc_enabled,
+            server_build_differs: s.server_build.is_trouble(),
+            server_build: s.server_build.theirs().unwrap_or_default().to_string(),
+            measurement_file: s.measurement_file.clone(),
+            relay_only: s.relay_only,
+            force_tcp: s.force_tcp,
+            via_relay: s.route == sdr_remote_logic::measure::Route::QuicRelay,
+            path_short: s.path.map(|k| k.short().to_string()).unwrap_or_default(),
+            // English here; `bridge_state_from_radio_state` puts them in the
+            // app's language, as it does the station notices.
+            path_name: s.path.map(|k| sdr_remote_logic::path_name::long_name(k, sdr_remote_logic::i18n::Lang::En)).unwrap_or_default(),
+            path_hint: s.path.map(|k| sdr_remote_logic::path_name::hint(k, sdr_remote_logic::i18n::Lang::En)).unwrap_or_default(),
+            path_coupling: s.path == Some(sdr_remote_core::path::PathKind::RelayCoupling),
             other_tx: s.other_tx,
+            smeter_tx: s.smeter_tx,
+            auto_ref_paused: s.auto_ref_paused,
             filter_low_hz: s.filter_low_hz,
             filter_high_hz: s.filter_high_hz,
             thetis_configured: s.thetis_configured,
@@ -1005,10 +1115,13 @@ pub struct SdrBridge {
     /// Android resolved `strings.xml` to, so this side cannot drift from that one.
     /// Defaults to "en" for the window before that call.
     ui_language: Mutex<String>,
+    /// Follows the measurement file in the state, to copy the log when one ends.
+    measurement_log: Mutex<crate::logging::MeasurementLogFollower>,
     /// Phase C: keeps the relay monitor alive for as long as the bridge exists (it runs
-    /// on a thread of its own). `None` in direct mode.
-    _relay_monitor: Mutex<Option<sdr_remote_relay::RelayMonitor>>,
-    /// Fase 3c: relay status handle to surface the transport (UDP / wss-fallback) to the
+    /// on a thread of its own), and passes the phone's network events on to it.
+    /// `None` in direct mode.
+    relay_monitor: Mutex<Option<sdr_remote_relay::RelayMonitor>>,
+    /// Phase 3c: relay status handle to surface the transport (UDP / wss-fallback) to the
     /// Compose UI. `None` in direct mode.
     relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
     /// The relay address this bridge was built with, exactly as configured -
@@ -1039,34 +1152,30 @@ impl SdrBridge {
         relay_token: String,
         relay_instance: String,
         relay_name: String,
-        relay_udp_enabled: bool,
     ) -> Self {
-        #[cfg(target_os = "android")]
-        {
-            android_logger::init_once(
-                android_logger::Config::default()
-                    .with_max_level(log::LevelFilter::Info)
-                    .with_tag("ThetisLink"),
-            );
-        }
+        // No logger here: the app installs its one at start (`init_logging`,
+        // before any bridge exists), and that one applies the developer
+        // mode's filter. A second install here could only win if that start
+        // had failed, and then without the filter (build 298).
 
         let (engine, state_rx, cmd_tx) = ClientEngine::new();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        // Phase C: relay transport for Android clients that cannot port-forward (mobile
-        // behind CGNAT). If the relay config is complete, set up the tunnel and monitor
-        // (role Client); otherwise direct UDP (the default, byte-identical).
+        // The relay, for phones that cannot be reached straight (mobile behind
+        // CGNAT): when its settings are complete, a client relay monitor signs in
+        // and hands its grants to the engine's QUIC client (phase 3b). Otherwise
+        // QUIC straight to the address typed.
         let mut relay_monitor: Option<sdr_remote_relay::RelayMonitor> = None;
-        // One condition, read twice: it decides both whether the tunnel is built
+        // One condition, read twice: it decides both whether the relay is used
         // and whether the chat has a relay to reach. Splitting them is how the
         // chat came to blame a relay that was switched off.
         let relay_active =
             sdr_remote_relay::is_configured(relay_enabled, &relay_url, &relay_station, &relay_token);
-        let relay_tunnel = if relay_active {
-            let (uplink_tx, uplink_rx) = mpsc::unbounded_channel();
-            let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
-            // Placeholder server address (a display label; ignored by the relay transport).
-            let server_placeholder = SocketAddr::from(([203, 0, 113, 1], 4580));
+        // `relay_active` is the one rule the settings' "in use" line compares
+        // against (`expected_route_label`, `Route::asked_for`).
+        let mut relay_quic_grants = None;
+        let mut relay_tcp_line = None;
+        if relay_active {
             let relay_cfg = sdr_remote_relay::RelayConfig {
                 enabled: true,
                 url: relay_url.clone(),
@@ -1075,22 +1184,17 @@ impl SdrBridge {
                 role: sdr_remote_relay::RelayRole::Client,
                 instance: relay_instance,
                 name: relay_name,
-                // Fase 5: audio + PTT over kale UDP when the user leaves it enabled
-                // (default). Off -> audio stays on the encrypted wss channel (the user's
-                // latency-vs-encryption choice, matching the desktop toggle). The relay
-                // lib handles UDP transparently and falls back to wss if it can't open.
-                udp_port: if relay_udp_enabled {
-                    Some(sdr_remote_relay::DEFAULT_UDP_PORT)
-                } else {
-                    None
-                },
+                // QUIC through the relay always needs the relay's UDP port.
+                udp_port: sdr_remote_relay::relay_udp_port_resolve(true),
+                // Set by the constructor below: `start_threaded_quic` makes it true.
+                quic: false,
             };
-            let tunnel = sdr_remote_relay::RelayTunnel {
-                sentinel: server_placeholder,
-                inbound_tx,
-                uplink_rx,
-            };
-            let monitor = sdr_remote_relay::RelayMonitor::start_threaded_tunnel(relay_cfg, tunnel);
+            let (grant_tx, grant_rx) = watch::channel(None);
+            // The TCP line for a network that lets no UDP through (build 144).
+            let (tcp, tcp_monitor) = sdr_remote_relay::tcp_line();
+            relay_quic_grants = Some(grant_rx);
+            relay_tcp_line = Some(tcp);
+            let monitor = sdr_remote_relay::RelayMonitor::start_threaded_quic(relay_cfg, grant_tx, Some(tcp_monitor));
             // Only one relay monitor may live in this process. Android can build
             // a second bridge while the first is still running - the phone was
             // seen with two, three seconds apart, after switching network - and
@@ -1104,46 +1208,49 @@ impl SdrBridge {
             //
             // Stopping the older one here rather than trusting the owner of it
             // to do so: whoever forgets, the invariant holds.
+            // What the slot holds here may be the handle of a monitor that has
+            // already stopped - it was, on every restart, until build 13 made a
+            // clean shutdown empty the slot. Saying "still running" regardless made
+            // this warning untrue twice in one field log (2026-09-24), 0.9 s after
+            // "Relay monitor stopped" two lines above it - and a warning that is
+            // untrue every ordinary time is one nobody reads when the real case
+            // returns. So it asks first. `stop()` is still unconditional: the safety
+            // net does not depend on the answer, only the sentence does.
             if let Some(previous) = PREVIOUS_MONITOR.lock().unwrap().replace(monitor.stop_handle()) {
-                warn!("a relay monitor was still running - stopping it, or the two would evict each other");
+                if !previous.is_stopped() {
+                    warn!("a relay monitor was still running - stopping it, or the two would evict each other");
+                }
                 previous.stop();
             }
             relay_monitor = Some(monitor);
-            // Not the address itself. It is the one thing a report must never
-            // carry, and the relay library already writes <relay> in its own
-            // status lines - printing it raw here made the kept log the only
-            // place it appeared in plain text. Which relay is configured tells
-            // nobody anything they can act on anyway: the recipient of a report
-            // sees <relay> either way (2026-08-17).
-            info!("Android transport: relay tunnel (via <relay>)");
-            Some(ClientRelayTunnel {
-                uplink_tx,
-                inbound_rx,
-                server_addr: server_placeholder,
-            })
-        } else {
-            None
-        };
+        }
+        // Which transport is logged by the engine, once, for both front ends
+        // (review 133). Never the relay's address: it is the one thing a report
+        // must never carry (2026-08-17).
+        let engine = engine.with_quic_relay(relay_quic_grants, relay_tcp_line);
 
+        // Through the reporter, so a panic leaves "no connection" on screen
+        // instead of the last state; nothing caught one here before.
+        let engine_stop = engine.stop_reporter();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-            rt.block_on(async {
-                if let Err(e) = engine.run(make_audio, shutdown_rx, relay_tunnel).await {
-                    log::error!("Engine error: {}", e);
-                }
+            engine_stop.run(|| {
+                let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+                // The result goes to the reporter: an error is a stopped engine,
+                // like a panic, and it says so on screen.
+                rt.block_on(async { engine.run(make_audio, shutdown_rx).await })
             });
             info!("Engine thread exited");
         });
 
-        // Capture the status handle before the monitor is moved into the struct, so
-        // get_state() can report the live transport (UDP vs wss-fallback).
+        // Capture the status handle before the monitor is moved into the struct.
         let relay_status = relay_monitor.as_ref().map(|m| m.status_handle());
         Self {
             cmd_tx,
             state_rx: Mutex::new(state_rx),
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             ui_language: Mutex::new("en".to_string()),
-            _relay_monitor: Mutex::new(relay_monitor),
+            measurement_log: Mutex::new(crate::logging::MeasurementLogFollower::default()),
+            relay_monitor: Mutex::new(relay_monitor),
             relay_status,
             chat_relay_url: if relay_active {
                 relay_url.clone()
@@ -1213,6 +1320,80 @@ impl SdrBridge {
 
     pub fn set_mic_gate_delay_ms(&self, delay_ms: u32) {
         let _ = self.cmd_tx.send(Command::SetMicGateDelayMs(delay_ms));
+    }
+
+    /// Measurement mode (open point 34): `Some(dir)` starts a new file in `dir`,
+    /// `None` stops it.
+    /// The log copy next to a finished measurement is made in `get_state`, when
+    /// the state stops naming the file (round 91) - not here.
+    pub fn set_measurement(&self, dir: Option<String>) {
+        let _ = self.cmd_tx.send(Command::SetMeasurement(dir));
+    }
+
+    /// "Relay only" from the measurement screen (build 137): no direct path
+    /// while on. Does nothing without a relay; the engine says so in the log.
+    pub fn set_relay_only(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetRelayOnly(on));
+    }
+
+    /// "Force TCP" from the measurement screen (build 146): everything over the
+    /// relay's TCP line while on. Does nothing without a relay; the engine says
+    /// so in the log.
+    pub fn set_force_tcp(&self, on: bool) {
+        let _ = self.cmd_tx.send(Command::SetForceTcp(on));
+    }
+
+    /// The serving cell, for the measurement file (build 181). The tech by its
+    /// short name (`lte`, `nr`, ...); Android's "unavailable" for what it does
+    /// not give.
+    pub fn measure_cell(&self, tech: String, cell_id: i64, pci: i32, arfcn: i32, tac: i32) {
+        use sdr_remote_logic::measure::{NetSample, Tech};
+        let tech = Tech::from_name(&tech);
+        let _ = self.cmd_tx.send(Command::MeasureNetwork(NetSample::Cell { tech, cell_id, pci, arfcn, tac }));
+    }
+
+    /// A 5G cell Android lists but not as the registered one, with how it is
+    /// used (Android's `CellInfo.CONNECTION_*` number, passed on unchanged), for
+    /// the measurement file (build 210).
+    pub fn measure_nr_cell(&self, link: i32, cell_id: i64, pci: i32, arfcn: i32, tac: i32) {
+        use sdr_remote_logic::measure::{CellLink, NetSample};
+        let link = CellLink::from_android(link);
+        let _ = self.cmd_tx.send(Command::MeasureNetwork(NetSample::NrCell { link, cell_id, pci, arfcn, tac }));
+    }
+
+    /// The signal of the serving cell (or the wifi RSSI), for the measurement
+    /// file (build 181).
+    pub fn measure_signal(&self, tech: String, rsrp: i32, rsrq: i32, sinr: i32, level: i32) {
+        use sdr_remote_logic::measure::{NetSample, Tech};
+        let tech = Tech::from_name(&tech);
+        let _ = self.cmd_tx.send(Command::MeasureNetwork(NetSample::Signal { tech, rsrp, rsrq, sinr, level }));
+    }
+
+    /// The phone's position, for the measurement file (build 181).
+    pub fn measure_gps(&self, lat_e6: i32, lon_e6: i32, speed_kmh: i32, accuracy_m: i32) {
+        use sdr_remote_logic::measure::NetSample;
+        let _ = self.cmd_tx.send(Command::MeasureNetwork(NetSample::Gps { lat_e6, lon_e6, speed_kmh, accuracy_m }));
+    }
+
+    /// Android reports that the phone has a (new) default network. Passed to the
+    /// relay monitor, which uses it only to end a wait for a network that was not
+    /// up yet (build 98). Nothing to do in direct mode.
+    pub fn network_available(&self) {
+        info!("Android: a network is available");
+        if let Some(monitor) = self.relay_monitor.lock().unwrap().as_ref() {
+            monitor.network_available();
+        }
+    }
+
+    /// Android reports that the default network is another one than before.
+    /// The relay session still runs over the old one; the monitor ends it and
+    /// starts one on the new network (build 186). Nothing to do in direct mode.
+    pub fn network_changed(&self) {
+        // Named in advance (working rule 11, build 186).
+        info!("Android: the default network changed");
+        if let Some(monitor) = self.relay_monitor.lock().unwrap().as_ref() {
+            monitor.network_changed();
+        }
     }
 
     pub fn set_playback_mute(&self, mute: bool) {
@@ -1489,9 +1670,14 @@ impl SdrBridge {
             sdr_remote_core::protocol::ControlId::Yaesu2PowerOnOff, on as u16));
     }
 
+    /// The server's copy of the memories (value 1), as the desktop asks: the
+    /// server reads the radio once and gives every subscriber its copy. With
+    /// 0 every switch of radio read the FTX-1 again - 3.5 s in which the
+    /// server refused the PTT (owner, 2026-10-11; build 169). A server
+    /// without a copy still reads the radio.
     pub fn yaesu_read_memories(&self) {
         let _ = self.cmd_tx.send(Command::SetControl(
-            sdr_remote_core::protocol::ControlId::YaesuReadMemories, 0));
+            sdr_remote_core::protocol::ControlId::YaesuReadMemories, 1));
     }
 
     pub fn yaesu_ptt(&self, on: bool) {
@@ -1553,13 +1739,13 @@ impl SdrBridge {
         let _ = self.cmd_tx.send(Command::SetYaesu2Compressor(level));
     }
 
-    /// Client-side Yaesu-TX AGC aan/uit, radio 2 (FTX-1).
+    /// Client-side Yaesu TX AGC on/off, radio 2 (FTX-1).
     pub fn yaesu2_tx_agc(&self, on: bool) {
         let _ = self.cmd_tx.send(Command::SetYaesu2TxAgc(on));
     }
 
     /// Typed DSP/function control for a slot (0 = radio 1, 1 = radio 2). Covers all
-    /// DSP-knoppen + clarifier (YaesuCtrl-index in `control`, waarde in `value`).
+    /// DSP buttons + clarifier (YaesuCtrl index in `control`, value in `value`).
     pub fn yaesu_control(&self, slot: u8, control: u8, value: u16) {
         let _ = self.cmd_tx.send(Command::SetYaesuControl(slot, control, value));
     }
@@ -1570,9 +1756,10 @@ impl SdrBridge {
             sdr_remote_core::protocol::ControlId::Yaesu2Enable, on as u16));
     }
 
+    /// As `yaesu_read_memories`, for the second radio.
     pub fn yaesu2_read_memories(&self) {
         let _ = self.cmd_tx.send(Command::SetControl(
-            sdr_remote_core::protocol::ControlId::Yaesu2ReadMemories, 0));
+            sdr_remote_core::protocol::ControlId::Yaesu2ReadMemories, 1));
     }
 
     pub fn yaesu2_ptt(&self, on: bool) {
@@ -1629,14 +1816,20 @@ impl SdrBridge {
     pub fn get_state(&self) -> BridgeRadioState {
         let rx = self.state_rx.lock().unwrap();
         let state = rx.borrow().clone();
+        // A measurement that just ended - by Stop, by a write error, or replaced -
+        // gets the log next to it, with its name (`tl-meting-....log`), so one
+        // fetch over USB brings both (owner, 2026-10-03). On a thread of its own:
+        // up to 4 MB, and this is called from the screen's loop (round 91).
+        let ended = self.measurement_log.lock().unwrap().step(state.measurement_file.as_deref());
+        if let Some(dest) = ended {
+            std::thread::spawn(move || match crate::logging::copy_log_to(&dest) {
+                Ok(()) => log::info!("Measurement: log copied to {}", dest.display()),
+                Err(e) => log::warn!("Measurement: log could not be copied to {}: {}", dest.display(), e),
+            });
+        }
         let lang_str = self.ui_language.lock().unwrap().clone();
         let lang = sdr_remote_logic::i18n::Lang::from_code(&lang_str);
-        let mut bs = bridge_state_from_radio_state(state, lang);
-        // Fase 3c: report the live relay transport (UDP vs wss-fallback) to the UI.
-        if let Some(h) = &self.relay_status {
-            bs.relay_transport_fallback = h.snapshot().transport_fallback;
-        }
-        bs
+        bridge_state_from_radio_state(state, lang)
     }
 
     // ---- the chat ---------------------------------------------------------
@@ -1797,6 +1990,15 @@ impl SdrBridge {
     }
 
     pub fn shutdown(&self) {
+        // A measurement still running when the app goes ends without the state
+        // ever saying so: copy its log now, and here rather than on a thread of
+        // its own, which the process could take with it (round 92).
+        if let Some(dest) = self.measurement_log.lock().unwrap().step(None) {
+            match crate::logging::copy_log_to(&dest) {
+                Ok(()) => log::info!("Measurement: log copied to {} at shutdown", dest.display()),
+                Err(e) => log::warn!("Measurement: log could not be copied to {} at shutdown: {}", dest.display(), e),
+            }
+        }
         let mut guard = self.shutdown_tx.lock().unwrap();
         if let Some(tx) = guard.take() {
             let _ = tx.send(true);
@@ -1808,9 +2010,30 @@ impl SdrBridge {
         // ping-pong the slot (each reclaim closes the other, which reconnects after
         // RECONNECT_DELAY). Stopping the monitor here (ViewModel.onCleared) prevents
         // the zombie connection.
-        if let Some(monitor) = self._relay_monitor.lock().unwrap().take() {
+        // Taken out in its own statement so this mutex is released before the
+        // slot's is taken below. Written inside the `if let`, the guard lived to
+        // the end of the block (a scrutinee temporary, edition 2021), and the two
+        // locks were nested in an order nobody had chosen or written down. No path
+        // takes them the other way round today; not nesting them at all means none
+        // can start to (reviewer finding, 2026-09-25).
+        let taken = self.relay_monitor.lock().unwrap().take();
+        if let Some(monitor) = taken {
             info!("bridge shutting down - stopping its relay monitor");
+            let mine = monitor.stop_handle();
             monitor.stop();
+            // And empty the duplicate-guard slot, which until now was filled in
+            // one place and cleared in none. A stale handle there is what made
+            // the guard's warning untrue on every restart; build 12 taught the
+            // warning to ask, and this removes the reason it had to.
+            //
+            // Only if the slot still holds THIS monitor. On a network switch the
+            // next bridge has already put its own handle there - that is the
+            // case the slot exists for - and emptying it blindly would leave two
+            // live monitors with nothing watching them.
+            sdr_remote_relay::RelayStopHandle::clear_slot_if_mine(
+                &mut PREVIOUS_MONITOR.lock().unwrap(),
+                &mine,
+            );
         }
     }
 }
@@ -1883,6 +2106,30 @@ mod relay_rule_tests {
                 "the bridge disagrees with the shared rule for {url:?}/{station:?}/{token:?}"
             );
         }
+    }
+
+    /// The same for the route word the settings compare with: the function
+    /// Compose calls gives the shared rule's answer in every state of the relay
+    /// settings, a half-filled relay included (review 119).
+    #[test]
+    fn the_bridge_hands_through_the_route_rule() {
+        use sdr_remote_logic::measure::Route;
+        let (u, s, t) = ("wss://relay.example/ws", "pa0xyz", "secret");
+        for token in [t, ""] {
+            for relay_enabled in [false, true] {
+                let configured = sdr_remote_relay::is_configured(relay_enabled, u, s, token);
+                assert_eq!(
+                    super::expected_route_label(relay_enabled, u.to_string(), s.to_string(), token.to_string()),
+                    Route::asked_for(configured).label(),
+                    "relay {relay_enabled} (token {:?})",
+                    token
+                );
+            }
+        }
+        // And the words themselves.
+        let label = |relay| super::expected_route_label(relay, u.to_string(), s.to_string(), t.to_string());
+        assert_eq!(label(true), "QUIC via relay");
+        assert_eq!(label(false), "QUIC");
     }
 }
 
@@ -2030,5 +2277,116 @@ mod ble_ptt_bridge_tests {
         // radio is on the air, so "nothing is held" no longer means "there is
         // nothing to release". Releasing nothing costs nothing.
         assert_eq!(gate.disconnected(1), BlePttAction::Gone);
+    }
+}
+
+#[cfg(test)]
+mod udl_order_tests {
+    //! UniFFI calls the Rust method by position, not by name: a UDL line and a
+    //! Rust signature that list two arguments of the same type in a different
+    //! order compile, and every value lands in the other's place (review of
+    //! 210: the four `i32` of `measure_nr_cell` were written by hand in both).
+
+    /// Argument names in order, from the text between the parentheses: the
+    /// last word of each UDL argument (`i32 pci`), the part before `:` of each
+    /// Rust one (`pci: i32`), without the receiver.
+    fn names(args: &str, udl: bool) -> Vec<String> {
+        args.split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty() && !a.ends_with("self"))
+            .map(|a| if udl { a.rsplit(' ').next().unwrap() } else { a.split(':').next().unwrap().trim() })
+            // An unused argument keeps its place with a leading `_` (`init_logging`
+            // off Android): the same name for the order.
+            .map(|a| a.trim_start_matches('_').to_string())
+            .collect()
+    }
+
+    /// The text of `name(...)` up to its closing parenthesis, from `at`.
+    fn args_at(text: &str, at: usize) -> &str {
+        let open = at + text[at..].find('(').unwrap() + 1;
+        let close = open + text[open..].find(')').unwrap();
+        &text[open..close]
+    }
+
+    /// The lines of one UDL block that declare a function: name and argument
+    /// text. A line with a `(` that is not one whole declaration is refused, so
+    /// nothing is skipped without a word (review of 211: a comment after a line
+    /// or a declaration over two lines was left out, and only a floor noticed).
+    fn declarations(body: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for line in body.lines().map(str::trim) {
+            if line.starts_with("//") || !line.contains('(') {
+                continue;
+            }
+            assert!(line.ends_with(");"), "a UDL line this test cannot read: `{line}`");
+            let head = &line[..line.find('(').unwrap()];
+            let name = head.rsplit(' ').next().unwrap().to_string();
+            out.push((name, args_at(line, 0).to_string()));
+        }
+        out
+    }
+
+    /// Every function in the UDL has the same argument names, in the same
+    /// order, as its Rust side: a method as the method of that name in the
+    /// `impl` block of its interface, a constructor as that block's `fn new`,
+    /// and a `namespace` function as the free `pub fn` of that name (review of
+    /// 211: the constructor's five strings and `ptt_button`'s two bools were not
+    /// covered).
+    #[test]
+    fn the_udl_and_the_rust_name_every_argument_in_the_same_order() {
+        let udl = include_str!("sdr_remote.udl");
+        let rust = include_str!("bridge.rs");
+        let free = [include_str!("bridge.rs"), include_str!("logging.rs")];
+        let mut compared = 0;
+        let mut interfaces = 0;
+        for block in udl.split("\ninterface ").skip(1) {
+            interfaces += 1;
+            let iface = block.split_whitespace().next().unwrap();
+            let body = &block[..block.find("\n};").unwrap()];
+            let start = rust.find(&format!("\nimpl {iface} {{\n")).unwrap_or_else(|| panic!("no `impl {iface}`"));
+            let end = start + 1 + rust[start + 1..].find("\n}\n").unwrap();
+            let imp = &rust[start..end];
+            for (name, args) in declarations(body) {
+                let rust_name = if name == "constructor" { "new" } else { name.as_str() };
+                let at = imp.find(&format!("fn {rust_name}(")).unwrap_or_else(|| panic!("{iface}::{name} not in its impl"));
+                assert_eq!(
+                    names(&args, true),
+                    names(args_at(imp, at), false),
+                    "{iface}::{name}: the UDL and the Rust name the arguments differently"
+                );
+                compared += 1;
+            }
+        }
+        assert_eq!(interfaces, 3, "SdrBridge, PhonePtt and BlePttGate");
+        let ns = &udl[udl.find("namespace sdr_remote {").expect("the namespace")..];
+        let ns = &ns[..ns.find("\n};").unwrap()];
+        let mut free_fns = 0;
+        for (name, args) in declarations(ns) {
+            let pattern = format!("pub fn {name}(");
+            let sites: Vec<&str> = free
+                .iter()
+                .flat_map(|f| f.match_indices(pattern.as_str()).map(move |(at, _)| args_at(f, at)))
+                .collect();
+            assert!(!sites.is_empty(), "namespace {name}: no `pub fn {name}(`");
+            for site in sites {
+                assert_eq!(names(&args, true), names(site, false), "namespace {name}: the UDL and the Rust differ");
+            }
+            free_fns += 1;
+        }
+        // 140 methods and three constructors, ten namespace functions, on 2026-10-15.
+        assert!(compared >= 143 && free_fns >= 10, "only {compared} methods and {free_fns} functions compared");
+    }
+
+    /// The one call that builds the bridge names its arguments: five strings in
+    /// a row, where Kotlin would otherwise go by position too (review of 211).
+    #[test]
+    fn the_app_builds_the_bridge_with_named_arguments() {
+        let vm = include_str!("../android/app/src/main/java/com/sdrremote/viewmodel/SdrViewModel.kt");
+        assert_eq!(vm.matches("SdrBridge(").count(), 1, "one place builds the bridge");
+        let call = &vm[vm.find("SdrBridge(").unwrap()..];
+        let call = &call[..call.find(')').unwrap()];
+        for name in ["relayEnabled =", "relayUrl =", "relayStation =", "relayToken =", "relayInstance =", "relayName ="] {
+            assert!(call.contains(name), "`{name}` not named in {call}");
+        }
     }
 }

@@ -236,6 +236,18 @@ fn send_and_scan(
     cmd: &[u8; 12],
     status: &Arc<Mutex<AmplitecStatus>>,
 ) -> Result<(), String> {
+    // Drop whatever is still in the port before asking. Nothing is in flight
+    // here - the previous exchange has finished, successfully or not - so this
+    // is the safe moment, the same one `yaesu/cat.rs` describes.
+    //
+    // Without it a reply that arrived in two reads leaves its tail behind, and
+    // the next poll reads that tail first: it passes the sixteen-character
+    // length test on the wrong bytes and reports `connected` with switch
+    // positions that are one answer behind, for as long as the thread lives.
+    // Every other serial device here already drained (spe_expert, ultrabeam,
+    // yaesu/cat, yaesu/mod); this one was the exception, found in review.
+    let _ = port.clear(serialport::ClearBuffer::Input);
+
     // Send the command
     port.write_all(cmd).map_err(|e| format!("write: {}", e))?;
     port.flush().map_err(|e| format!("flush: {}", e))?;
@@ -281,4 +293,178 @@ pub fn available_ports() -> Vec<String> {
         .into_iter()
         .map(|p| p.port_name)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_serial::FakeSerial;
+
+    /// The response is hex-formatted and read at character 9 and 15, so the
+    /// switch positions are the LOW nibbles of bytes 4 and 7. Spelling that out
+    /// once here beats repeating the arithmetic in every test: 'C' is 0x43 and
+    /// 'E' is 0x45, so this answer means switch A = 3, switch B = 5.
+    /// A reply that means switch A = 3, switch B = 5. It is handed to the
+    /// fake as an ANSWER to a command rather than parked in the port, because
+    /// the port is drained before every question - a test that pre-loads it is
+    /// modelling a device that speaks before it is spoken to.
+    const ANSWER_A3_B5: &str = "AAAACAAE";
+
+    fn status() -> Arc<Mutex<AmplitecStatus>> {
+        Arc::new(Mutex::new(AmplitecStatus::default()))
+    }
+
+    /// The command really reaches the port, and the answer really lands in the
+    /// status. Before this test the whole file had none, so "write the wrong
+    /// command" and "read the wrong character" were both free.
+    #[test]
+    fn a_scan_writes_the_command_and_reads_both_switches() {
+        let fake = FakeSerial::answering_each_command(&[ANSWER_A3_B5]);
+        let mut port = fake.boxed();
+        let st = status();
+
+        send_and_scan(&mut port, &CMD_SCAN, &st).expect("the port answered");
+
+        assert_eq!(fake.log().written, CMD_SCAN.to_vec(), "the scan command, verbatim");
+        let s = st.lock().unwrap();
+        assert_eq!((s.switch_a, s.switch_b), (3, 5));
+        assert!(s.connected, "an answer is what makes it connected");
+    }
+
+    /// The bytes that move the antenna, written out.
+    ///
+    /// Seventy-eight of them, read out of the original Amplitec PC Control Pro 2
+    /// software, and until now held by nothing: a reviewer replaced `CMD_SCAN`
+    /// and a whole row of `CMD_SWITCH_A` with `DE AD BE EF` and all 380 tests
+    /// stayed green. The test that looked like it covered this compared what was
+    /// written against the very constant that was written - the same tautology
+    /// found and repaired one file over, in this same commit.
+    ///
+    /// There is no second source for these: no datasheet, no protocol document.
+    /// So this test is not a duplicate of the truth, it IS the record of it, and
+    /// a change here has to be a deliberate one.
+    #[test]
+    fn the_command_bytes_are_the_ones_read_from_the_vendor_software() {
+        assert_eq!(CMD_SCAN, [0x01, 0x0A, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(CMD_SWITCH_A, [
+            [0x01, 0x0a, 0x01, 0x82, 0x01, 0x20, 0x80, 0x06, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x02, 0x82, 0x02, 0x20, 0x80, 0x06, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x04, 0x82, 0x03, 0x01, 0x80, 0x01, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x08, 0x82, 0x04, 0x01, 0x80, 0x01, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x10, 0x82, 0x05, 0x20, 0x80, 0x06, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x20, 0x02, 0x06, 0x20, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00],
+        ]);
+        assert_eq!(CMD_SWITCH_B, [
+            [0x01, 0x0a, 0x20, 0x80, 0x06, 0x01, 0x82, 0x01, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x20, 0x00, 0x06, 0x02, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x20, 0x80, 0x06, 0x04, 0x82, 0x03, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x20, 0x80, 0x06, 0x08, 0x82, 0x04, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x20, 0x80, 0x06, 0x10, 0x82, 0x05, 0x00, 0x00, 0x00, 0x00],
+            [0x01, 0x0a, 0x08, 0x80, 0x04, 0x20, 0x82, 0x06, 0x00, 0x00, 0x00, 0x00],
+        ]);
+    }
+
+    /// Whatever command it is handed reaches the port unchanged, and the two
+    /// tables are not the same bytes.
+    ///
+    /// Renamed. It used to be called `switch_a_and_switch_b_send_from_their_own_table`,
+    /// which promised something it never reached: choosing the table from the
+    /// position happens in `run_amplitec_session`, and no test here calls that.
+    /// A reviewer made switch A send B's command and all five tests passed.
+    /// **That selection is still untested** (open point 6); the name no longer
+    /// says otherwise.
+    #[test]
+    fn whatever_command_it_is_given_is_what_goes_out() {
+        for (table, name) in [(&CMD_SWITCH_A, "A"), (&CMD_SWITCH_B, "B")] {
+            let fake = FakeSerial::answering_each_command(&[ANSWER_A3_B5]);
+            let mut port = fake.boxed();
+            send_and_scan(&mut port, &table[3], &status()).expect("answered");
+            assert_eq!(fake.log().written, table[3].to_vec(), "switch {name} position 4");
+        }
+        assert_ne!(CMD_SWITCH_A[3], CMD_SWITCH_B[3], "the tables must differ, or the loop above proves nothing");
+    }
+
+    /// A port that answers nothing is an error, and the status is NOT marked
+    /// connected. That is the difference that makes the caller reconnect.
+    ///
+    /// It arrives as a READ error, not as the "empty response" branch below it.
+    /// A serial port with nothing to say times out; it does not hand back zero
+    /// bytes. So `if n == 0` in `send_and_scan` is a guard that cannot fire
+    /// against a port that behaves like one, and this test says so rather than
+    /// asserting a message that never appears. Removing the branch is a
+    /// behaviour decision and not this patch's to make (open point 6).
+    #[test]
+    fn silence_is_an_error_and_leaves_it_disconnected() {
+        let fake = FakeSerial::new(); // answers nothing at all
+        let mut port = fake.boxed();
+        let st = status();
+
+        let err = send_and_scan(&mut port, &CMD_SCAN, &st).unwrap_err();
+        assert!(err.starts_with("read:"), "got: {err}");
+        assert!(!err.contains("empty response"), "the n == 0 branch is not the one that fires");
+        assert!(!st.lock().unwrap().connected);
+    }
+
+    /// A write that fails is an error before anything is read.
+    #[test]
+    fn a_dead_port_is_an_error_on_the_write() {
+        let fake = FakeSerial::failing_writes_from(0);
+        let mut port = fake.boxed();
+        let st = status();
+
+        let err = send_and_scan(&mut port, &CMD_SCAN, &st).unwrap_err();
+        assert!(err.starts_with("write:"), "got: {err}");
+        assert!(!st.lock().unwrap().connected);
+    }
+
+    /// Bytes left over from a previous answer do not become this one.
+    ///
+    /// This is the defect a reviewer traced on 2026-09-24, and it starts with
+    /// the short answer pinned below. A reply that arrives in two reads leaves
+    /// its tail in the port; nothing here ever drained it, while `spe_expert`,
+    /// `ultrabeam`, `yaesu/cat` and `yaesu/mod` all do. The next poll then reads
+    /// the tail FIRST, sails past sixteen hex characters on the wrong bytes, and
+    /// reports `connected` with switch positions that belong to no switch -
+    /// permanently, because every poll after it starts one answer behind.
+    ///
+    /// The stale bytes here are chosen to be readable rather than realistic:
+    /// 'B' is 0x42, so without the drain this test sees A=2, B=2.
+    #[test]
+    fn a_leftover_from_the_last_answer_is_not_read_as_this_one() {
+        let fake = FakeSerial::answering_each_command(&[ANSWER_A3_B5]);
+        fake.log().to_read = b"BBBBBBBB".to_vec(); // the tail of something older
+        let mut port = fake.boxed();
+        let st = status();
+
+        send_and_scan(&mut port, &CMD_SCAN, &st).expect("the device answered");
+
+        let s = st.lock().unwrap();
+        assert_eq!(
+            (s.switch_a, s.switch_b),
+            (3, 5),
+            "read the answer to THIS command, not what was still in the port"
+        );
+    }
+
+    /// An answer too short to hold both positions is accepted as success and
+    /// changes nothing - not even `connected`.
+    ///
+    /// This test pins what the code does today, and it is written down as a
+    /// question rather than as approval: a reply of seven bytes returns `Ok`,
+    /// so the caller does not reconnect, while the switch positions stay at
+    /// whatever they were and the device never counts as connected. A partial
+    /// read of a good answer looks exactly like this. Changing it is a
+    /// behaviour decision and not this patch's to make (open point 6).
+    #[test]
+    fn a_short_answer_is_silently_accepted_and_changes_nothing() {
+        let fake = FakeSerial::answering_each_command(&["AAAACAA"]); // one byte short
+        let mut port = fake.boxed();
+        let st = status();
+
+        send_and_scan(&mut port, &CMD_SCAN, &st).expect("today this is Ok, not an error");
+
+        let s = st.lock().unwrap();
+        assert_eq!((s.switch_a, s.switch_b), (0, 0), "untouched");
+        assert!(!s.connected, "and it never became connected");
+    }
 }

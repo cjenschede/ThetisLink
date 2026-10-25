@@ -50,6 +50,20 @@ pub(crate) const RX2_PLOT_CONFIG: SpectrumPlotConfig = SpectrumPlotConfig {
     color_floor: 0.25,
 };
 
+/// The strip with the frequency labels under every spectrum plot - RX and VRX
+/// alike (build 241; it was 18 px on RX and 16 on VRX).
+pub(crate) const PLOT_LABEL_H: f32 = 18.0;
+
+/// Plot and waterfall heights that together fill `available`, for every
+/// spectrum panel - RX1, RX2 and VRX (build 241). The label strip under the plot
+/// and the gap between plot and waterfall (`gap`, the panel's item spacing) come
+/// off first, and the rest is split evenly. Until 241 the RX panels split all of
+/// it, and ran ~20 px past their window: the waterfall lost its bottom edge.
+pub(crate) fn plot_and_waterfall_heights(available: f32, gap: f32) -> (f32, f32) {
+    let each = ((available - PLOT_LABEL_H - gap) / 2.0).max(40.0);
+    (each, each)
+}
+
 /// center_freq_hz and span_hz describe the bins frequency window (from server).
 /// display_center_hz overrides the display center (VFO-centered, like waterfall).
 pub(crate) fn spectrum_plot(
@@ -75,7 +89,7 @@ pub(crate) fn spectrum_plot(
 ) {
     let width = ui.available_width();
     let plot_height = plot_height.max(80.0);
-    let label_height = 18.0;
+    let label_height = PLOT_LABEL_H;
     let desired_size = Vec2::new(width, plot_height + label_height);
     let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
@@ -499,12 +513,8 @@ pub(crate) fn spectrum_plot(
         rust_i18n::t!("spec_tx_in_use", w = format!("{:.0}", smeter)).to_string()
     } else if transmitting {
         format!("TX: {:.0}W", smeter)
-    } else if smeter <= -73.0 {
-        let s_unit = ((smeter + 127.0) / 6.0).floor().clamp(0.0, 9.0) as u8;
-        format!("S{}", s_unit)
     } else {
-        let db_over = (smeter + 73.0).round() as i32;
-        format!("S9+{}dB", db_over.max(0))
+        sdr_remote_core::s_meter::text(smeter)
     };
 
     let meter_color = if transmitting || other_tx {
@@ -515,8 +525,15 @@ pub(crate) fn spectrum_plot(
 
     {
         let meter_font = egui::FontId::proportional(if config.is_popout { 42.0 } else { 21.0 });
-        let galley = painter.layout_no_wrap(meter_text, meter_font, meter_color);
-        let text_pos = egui::Align2::RIGHT_TOP.anchor_size(Pos2::new(plot_rect.max.x - 4.0, plot_rect.min.y + 4.0), galley.size());
+        let s_reading = !(transmitting || other_tx);
+        let galley = painter.layout_no_wrap(meter_text, meter_font.clone(), meter_color);
+        let right = plot_rect.max.x - 4.0;
+        let text_pos = if s_reading {
+            let left = s_meter_left(&painter, &meter_font, right, galley.size().x);
+            egui::Rect::from_min_size(Pos2::new(left, plot_rect.min.y + 4.0), galley.size())
+        } else {
+            egui::Align2::RIGHT_TOP.anchor_size(Pos2::new(right, plot_rect.min.y + 4.0), galley.size())
+        };
         painter.rect_filled(text_pos.expand(2.0), 2.0, bg_color);
         painter.galley(text_pos.min, galley, meter_color);
     }
@@ -944,7 +961,7 @@ pub(crate) fn render_vrx_strip(
     let bin_hz = full_span_hz as f64 / full_bins.len() as f64;
 
     // ── Spectrum + label strip ──
-    let label_h = 16.0_f32;
+    let label_h = PLOT_LABEL_H;
     let plot_h = spec_h.max(40.0);
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(ui.available_width(), plot_h + label_h),
@@ -1135,20 +1152,12 @@ pub(crate) fn render_vrx_strip(
         // ── S-meter overlay (top-right) ──
         let bg_color_smeter = Color32::from_rgba_premultiplied(10, 15, 30, 220);
         {
-            let meter_text = if smeter_dbm <= -73.0 {
-                let s_unit = ((smeter_dbm + 127.0) / 6.0).floor().clamp(0.0, 9.0) as u8;
-                format!("S{}", s_unit)
-            } else {
-                let db_over = (smeter_dbm + 73.0).round() as i32;
-                format!("S9+{}dB", db_over.max(0))
-            };
+            let meter_text = sdr_remote_core::s_meter::text(smeter_dbm);
             let meter_font = egui::FontId::proportional(42.0); // parity with RX popout spectrum
             let meter_color = Color32::from_rgb(0, 220, 0);
-            let galley = painter.layout_no_wrap(meter_text, meter_font, meter_color);
-            let text_pos = egui::Align2::RIGHT_TOP.anchor_size(
-                P2::new(plot_rect.max.x - 4.0, plot_rect.min.y + 2.0),
-                galley.size(),
-            );
+            let galley = painter.layout_no_wrap(meter_text, meter_font.clone(), meter_color);
+            let left = s_meter_left(&painter, &meter_font, plot_rect.max.x - 4.0, galley.size().x);
+            let text_pos = egui::Rect::from_min_size(P2::new(left, plot_rect.min.y + 2.0), galley.size());
             painter.rect_filled(text_pos.expand(2.0), 2.0, bg_color_smeter);
             painter.galley(text_pos.min, galley, meter_color);
         }
@@ -1450,6 +1459,19 @@ pub(crate) fn render_vrx_strip(
     new_freq
 }
 
+/// Every reading starts at the same x, so the S does not walk with the value:
+/// the widest two-digit reading ends at `right`. A wider one (three digits)
+/// still ends at `right`.
+const S_METER_WIDEST: &str = "S9+00dB";
+
+fn s_meter_left(painter: &egui::Painter, font: &egui::FontId, right: f32, width: f32) -> f32 {
+    let reserved = painter
+        .layout_no_wrap(S_METER_WIDEST.to_string(), font.clone(), Color32::WHITE)
+        .size()
+        .x;
+    right - reserved.max(width)
+}
+
 /// Map 8-bit power value to RGB color (waterfall colormap)
 /// Black -> Blue -> Cyan -> Yellow -> Red -> White
 pub(crate) fn waterfall_colormap(value: u8) -> (u8, u8, u8) {
@@ -1484,4 +1506,62 @@ pub(crate) fn waterfall_colormap(value: u8) -> (u8, u8, u8) {
 fn spectrum_level_color_with_floor(level: f32, floor: f32) -> (u8, u8, u8) {
     let mapped = floor + level.clamp(0.0, 1.0) * (1.0 - floor);
     waterfall_colormap((mapped * 255.0) as u8)
+}
+
+#[cfg(test)]
+mod panel_height_tests {
+    use super::{plot_and_waterfall_heights, PLOT_LABEL_H};
+
+    /// Plot, label strip, gap and waterfall fill the panel exactly, plot and
+    /// waterfall alike (build 241) - and RX1, RX2 and VRX all ask this one rule.
+    #[test]
+    fn every_spectrum_panel_fits_its_height() {
+        for available in [200.0f32, 413.0, 600.0, 1200.0] {
+            for gap in [0.0f32, 2.0, 3.0] {
+                let (plot, wf) = plot_and_waterfall_heights(available, gap);
+                assert_eq!(plot, wf, "{available}/{gap}: alike");
+                assert!((plot + PLOT_LABEL_H + gap + wf - available).abs() < 0.01, "{available}/{gap}: fills it");
+            }
+        }
+        let gap = "ui.spacing().item_spacing.y";
+        for (name, src, from) in [
+            ("RX1", include_str!("spectrum_content.rs"), "fn render_spectrum_content"),
+            ("RX2", include_str!("rx_controls.rs"), "fn render_rx2_spectrum_only"),
+            ("VRX", include_str!("vrx.rs"), "fn render_vrx_spectrum_panel"),
+        ] {
+            let body = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            let body = &body[body.find(from).unwrap()..];
+            let body = &body[..body[3..].find("\n    pub(super) fn ").map_or(body.len(), |i| i + 3)];
+            assert_eq!(body.matches("plot_and_waterfall_heights(").count(), 1, "{name}");
+            assert!(body.contains(gap), "{name}: the real gap");
+            assert!(!body.contains("* 0.50"), "{name}: no split of its own");
+        }
+        let draw = include_str!("spectrum.rs");
+        let draw = &draw[..draw.find("#[cfg(test)]").unwrap()];
+        assert_eq!(draw.matches("= PLOT_LABEL_H;").count(), 2, "spectrum_plot and render_vrx_strip");
+    }
+}
+
+#[cfg(test)]
+mod s_meter_tests {
+    use super::S_METER_WIDEST;
+    use sdr_remote_core::s_meter::text;
+
+    /// The reserved width is a two-digit reading of the same form. The reading
+    /// itself is `sdr_remote_core::s_meter` (build 218); no screen in the
+    /// client formats one of its own.
+    #[test]
+    fn the_s_reading_and_its_reserved_width() {
+        assert_eq!(S_METER_WIDEST.len(), text(-53.0).len());
+        assert_eq!(S_METER_WIDEST.replace('0', "2"), text(-51.0), "the same form, digit for digit");
+        for f in [
+            include_str!("spectrum.rs"),
+            include_str!("meters.rs"),
+            include_str!("yaesu_panel.rs"),
+        ] {
+            let body = f.split("#[cfg(test)]").next().unwrap();
+            assert_eq!(body.matches("S9+{").count(), 0, "an S reading formatted outside s_meter");
+            assert_eq!(body.matches("format!(\"S{}\"").count(), 0, "an S step formatted outside s_meter");
+        }
+    }
 }

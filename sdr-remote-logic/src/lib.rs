@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+pub mod after_tx;
 pub mod audio;
 pub mod ble_ptt;
 pub mod commands;
@@ -14,10 +15,16 @@ pub mod ptt_intent;
 pub mod roger;
 pub mod rx_stream;
 pub mod loss_window;
+pub mod measure;
+pub mod path_name;
 pub mod session_intent;
 pub mod sidetone;
 pub mod thetis_streams;
+pub mod tx_stream;
 pub mod state;
+pub mod station_notice;
 pub mod thetis_autostart;
+pub mod udp_blocked;
 pub mod usb_lost;
 pub mod wav;
+pub mod wav_tx;

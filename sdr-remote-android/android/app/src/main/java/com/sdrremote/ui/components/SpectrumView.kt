@@ -36,6 +36,7 @@ import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import uniffi.sdr_remote.sMeterText
 
 // Server spectrum encoding constants
 private const val SERVER_FLOOR_DB = -150f
@@ -332,12 +333,9 @@ fun SpectrumPlot(
             "TX: ${smeter.toInt()}W"
         } else if (transmitting) {
             "TX: ${smeter.toInt()}W"
-        } else if (smeter <= -73f) {
-            val sUnit = ((smeter + 127f) / 6f).toInt().coerceIn(0, 9)
-            "S$sUnit"
         } else {
-            val dbOver = (smeter + 73f).toInt().coerceAtLeast(0)
-            "S9+${dbOver}dB"
+            // The one S rule, shared with the desktop (build 218).
+            sMeterText(smeter)
         }
         val meterPaint = Paint().apply {
             color = if (transmitting || otherTx) {
@@ -346,16 +344,26 @@ fun SpectrumPlot(
                 android.graphics.Color.rgb(0, 220, 0)
             }
             textSize = 28f
-            textAlign = Paint.Align.RIGHT
+            textAlign = Paint.Align.LEFT
         }
         val meterBgPaint = Paint().apply {
             color = android.graphics.Color.argb(220, 10, 15, 30)
         }
         val meterW = meterPaint.measureText(meterText)
+        // An S reading starts at a fixed x, so the S does not walk with the value:
+        // the widest two-digit reading ends at the right edge (as the desktop).
+        // The TX texts stay right-aligned.
+        val sReading = !(transmitting || otherTx)
+        val meterRight = w - 8f
+        val meterLeft = if (sReading) {
+            meterRight - maxOf(meterPaint.measureText("S9+00dB"), meterW)
+        } else {
+            meterRight - meterW
+        }
         drawContext.canvas.nativeCanvas.drawRect(
-            w - meterW - 12f, 4f, w - 4f, 32f, meterBgPaint
+            meterLeft - 4f, 4f, meterLeft + meterW + 4f, 32f, meterBgPaint
         )
-        drawContext.canvas.nativeCanvas.drawText(meterText, w - 8f, 28f, meterPaint)
+        drawContext.canvas.nativeCanvas.drawText(meterText, meterLeft, 28f, meterPaint)
 
         // ── DX Cluster spot markers ────────────────────────────────────────
         for (spot in dxSpots) {
@@ -454,7 +462,7 @@ fun SpectrumControls(
     onAllowZoomBelow2xToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // TL2-1 ctun-auto-recenter: zoom-min 2.0 default; 1.0 toegestaan via vink "Allow <2x".
+    // TL2-1 ctun-auto-recenter: zoom-min 2.0 by default; 1.0 allowed through the "Allow <2x" tick box.
     val zoomMin = if (allowZoomBelow2x) 1f else 2f
     // Clamp the current zoom state when the box is unticked while zoom was <2x
     if (zoom < zoomMin) {
@@ -525,7 +533,7 @@ fun SpectrumControls(
         Text("${rangeDb.roundToInt()}", fontSize = 11.sp)
     }
 
-    // Row 3: Waterfall contrast + Allow zoom <2x vink
+    // Row 3: Waterfall contrast + Allow zoom <2x tick box
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -543,8 +551,8 @@ fun SpectrumControls(
         )
         Text("%.1f".format(contrast), fontSize = 11.sp)
         Spacer(Modifier.width(4.dp))
-        // TL2-1 ctun-auto-recenter setup-vink. Default uit (zoom-min 2x).
-        // Server enforced strictest over alle clients.
+        // TL2-1 ctun-auto-recenter setup tick box. Off by default (zoom-min 2x).
+        // The server enforces the strictest over all clients.
         Text("Zoom <2x", fontSize = 11.sp)
         androidx.compose.material3.Checkbox(
             checked = allowZoomBelow2x,

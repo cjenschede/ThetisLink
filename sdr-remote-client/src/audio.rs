@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use sdr_remote_core::DEVICE_SAMPLE_RATE;
-use sdr_remote_logic::audio::{mix_alarm, mix_swr_alarm, swr_alarm_hold_samples, PA_DRIVE_ALARM};
+use sdr_remote_logic::audio::{
+    mix_alarm, mix_swr_alarm, ptt_dropped_alarm_samples, swr_alarm_hold_samples, PA_DRIVE_ALARM, PTT_DROPPED_ALARM,
+};
 use sdr_remote_logic::sidetone::{mix_sidetone, Sidetone, SidetoneState};
 
 /// Ring buffer capacity in samples (2s at device rate)
@@ -44,6 +46,114 @@ pub fn list_output_devices() -> Vec<String> {
     names
 }
 
+/// A device name without the number Windows puts in front of a USB device
+/// ("Microphone (2- USB Audio CODEC)" -> "Microphone (USB Audio CODEC)"). Windows
+/// renumbers on replugging, and a stored name would stop matching the same
+/// microphone (build 188). Only that number is ignored.
+pub fn without_windows_number(name: &str) -> String {
+    let Some(open) = name.find('(') else { return name.to_string() };
+    let rest = &name[open + 1..];
+    let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0 && rest[digits..].starts_with("- ") {
+        format!("{}({}", &name[..open], &rest[digits + 2..])
+    } else {
+        name.to_string()
+    }
+}
+
+/// Which of these device names is the chosen one (builds 188, 189).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// The name itself.
+    Exact(usize),
+    /// The only one that differs just in the Windows number.
+    Renumbered(usize),
+    /// More than one differs just in the Windows number: two of the same
+    /// codec, and the number was what told them apart. None is taken (review
+    /// of 188: the first in the list could be the other codec).
+    Ambiguous(usize),
+    Missing,
+}
+
+/// The chosen name among the names there are: exactly, or else the one and
+/// only name that differs just in the Windows number.
+pub fn choose_input(names: &[String], wanted: &str) -> Choice {
+    if let Some(i) = names.iter().position(|n| n == wanted) {
+        return Choice::Exact(i);
+    }
+    let want = without_windows_number(wanted);
+    let same: Vec<usize> = (0..names.len()).filter(|&i| without_windows_number(&names[i]) == want).collect();
+    match same.len() {
+        0 => Choice::Missing,
+        1 => Choice::Renumbered(same[0]),
+        n => Choice::Ambiguous(n),
+    }
+}
+
+/// The input device chosen under this name, and how it was found.
+fn find_input(host: &cpal::Host, name: &str) -> Result<(Option<cpal::Device>, Choice)> {
+    let devices: Vec<cpal::Device> = host.input_devices()?.collect();
+    let names: Vec<String> = devices.iter().map(|d| d.name().unwrap_or_default()).collect();
+    let choice = choose_input(&names, name);
+    let device = match choice {
+        Choice::Exact(i) | Choice::Renumbered(i) => devices.into_iter().nth(i),
+        Choice::Ambiguous(_) | Choice::Missing => None,
+    };
+    Ok((device, choice))
+}
+
+/// The engine's audio opening. The very first, without names, gets the chosen
+/// devices (`first`, taken once) so the default microphone never opens first
+/// (build 189); if those are there but do not open, the defaults - a chosen
+/// device must not stop the engine, and the chosen microphone stays refused
+/// because `SetInputDevice` follows and fails (builds 190, 191).
+pub fn first_open<T>(
+    first: Option<(String, String)>,
+    input: Option<&str>,
+    output: Option<&str>,
+    open: impl Fn(Option<&str>, Option<&str>) -> Result<T>,
+) -> Result<T> {
+    match (&first, input, output) {
+        (Some((i, o)), None, None) => {
+            let (i, o) = (Some(i.as_str()).filter(|s| !s.is_empty()), Some(o.as_str()).filter(|s| !s.is_empty()));
+            match open(i, o) {
+                Ok(a) => Ok(a),
+                Err(e) if i.is_some() || o.is_some() => {
+                    // Named in advance (working rule 11, build 190).
+                    warn!("Could not open the chosen devices at start ({}) - opening the defaults; the chosen microphone stays refused", e);
+                    open(None, None)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        _ => open(input, output),
+    }
+}
+
+/// How often a missing microphone is looked for (build 189).
+const MIC_LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Looks for a missing microphone on a thread of its own: counting the devices
+/// takes 130-160 ms (measured, review of 188), and in the engine's playout tick
+/// that was a stall every 2 s. Sets `back` once and stops; stops on `stop`.
+fn watch_for_input(name: String, back: Arc<AtomicBool>, stop: Arc<AtomicBool>) {
+    let spawned = std::thread::Builder::new().name("mic-watch".to_string()).spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(MIC_LOOK_EVERY);
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            if let Ok((Some(_), _)) = find_input(&cpal::default_host(), &name) {
+                back.store(true, Ordering::Relaxed);
+                return;
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        warn!("no thread to look for the microphone: {}", e);
+    }
+}
+
 /// Client audio pipeline.
 /// Captures from microphone and plays received audio to speakers.
 pub struct ClientAudio {
@@ -67,6 +177,8 @@ pub struct ClientAudio {
     swr_alarm: Arc<AtomicU32>,
     /// Its own counter, so the two warnings cannot silence each other.
     pa_drive_alarm: Arc<AtomicU32>,
+    /// The press let go with the session (build 253): armed once, plays out.
+    ptt_dropped_alarm: Arc<AtomicU32>,
     /// The CW sidetone, keyed by the paddle reader and mixed in the playback
     /// callback - also while muted for transmit, which is when it is keyed.
     sidetone: Arc<Sidetone>,
@@ -74,10 +186,25 @@ pub struct ClientAudio {
     /// speaker/chassis switch-on spike decays before mic audio is transmitted.
     /// 0 = disabled (no added latency - the default for isolated/headset audio).
     capture_gate_delay_samples: Arc<AtomicU32>,
+    /// The chosen microphone that was not found, by the name it was chosen
+    /// under. No other microphone is opened in its place (build 188): a wrong
+    /// one sounds like it works, and the modulation goes bad unnoticed.
+    missing_input: Option<String>,
+    /// Set by the watch thread when the missing microphone is there again; and
+    /// the flag that stops it when this pipeline goes (build 189).
+    input_back: Arc<AtomicBool>,
+    input_watch_stop: Arc<AtomicBool>,
     /// Actual sample rate of the capture device
     pub capture_sample_rate: u32,
     /// Actual sample rate of the playback device
     pub playback_sample_rate: u32,
+}
+
+impl Drop for ClientAudio {
+    /// The watch thread goes with the pipeline (build 189).
+    fn drop(&mut self) {
+        self.input_watch_stop.store(true, Ordering::Relaxed);
+    }
 }
 
 // SAFETY: cpal::Stream on Windows (WASAPI) uses COM handles that are safe to
@@ -99,6 +226,7 @@ impl ClientAudio {
         let playback_mute = Arc::new(AtomicBool::new(false));
         let swr_alarm = Arc::new(AtomicU32::new(0));
         let pa_drive_alarm = Arc::new(AtomicU32::new(0));
+        let ptt_dropped_alarm = Arc::new(AtomicU32::new(0));
         let capture_gate_delay_samples = Arc::new(AtomicU32::new(0));
 
         let mut audio = Self {
@@ -114,8 +242,12 @@ impl ClientAudio {
             playback_mute,
             swr_alarm,
             pa_drive_alarm,
+            ptt_dropped_alarm,
             sidetone,
             capture_gate_delay_samples,
+            missing_input: None,
+            input_back: Arc::new(AtomicBool::new(false)),
+            input_watch_stop: Arc::new(AtomicBool::new(false)),
             capture_sample_rate: DEVICE_SAMPLE_RATE,
             playback_sample_rate: DEVICE_SAMPLE_RATE,
         };
@@ -133,31 +265,34 @@ impl ClientAudio {
     ) -> Result<()> {
         let host = cpal::default_host();
 
+        // Only the chosen microphone, or none (build 188): the speaker may fall
+        // back, a microphone may not - see `missing_input`.
         let input_device = match input_name {
-            Some(name) if !name.is_empty() => {
-                let found = host.input_devices()?.find(|d| {
-                    d.name().map(|n| n == name).unwrap_or(false)
-                });
-                match found {
-                    Some(d) => d,
-                    None => {
-                        // warn, not info: this changes which microphone is on the
-                        // air. And it says what it fell back to, because "not
-                        // found" without that leaves the reader guessing at the
-                        // one thing they need.
-                        let d = host.default_input_device().context("no default input device")?;
-                        let got = d.name().unwrap_or_else(|_| "(unknown)".to_string());
-                        warn!(
-                            "Input device '{}' not found - using '{}' instead. \
-                             Windows renumbers USB devices, so a stored name can stop matching; \
-                             pick the input again in the settings to make this stick.",
-                            name, got
-                        );
-                        d
+            Some(name) if !name.is_empty() => match find_input(&host, name)? {
+                (Some(d), choice) => {
+                    if let Choice::Renumbered(_) = choice {
+                        let got = d.name().unwrap_or_default();
+                        info!("Client input: {} (matched '{}' without the Windows number)", got, name);
                     }
+                    Some(d)
                 }
-            }
-            _ => host.default_input_device().context("no default input device")?,
+                (None, choice) => {
+                    if let Choice::Ambiguous(n) = choice {
+                        // Named in advance (working rule 11, build 189).
+                        warn!(
+                            "Input device '{}' matches {} devices without the Windows number - no microphone; pick it again in the settings",
+                            name, n
+                        );
+                    } else {
+                        // Named in advance (working rule 11, build 188).
+                        warn!("Input device '{}' not found - no microphone; transmitting is refused until it is back", name);
+                    }
+                    self.missing_input = Some(name.to_string());
+                    watch_for_input(name.to_string(), self.input_back.clone(), self.input_watch_stop.clone());
+                    None
+                }
+            },
+            _ => Some(host.default_input_device().context("no default input device")?),
         };
         let output_device = match output_name {
             Some(name) if !name.is_empty() => {
@@ -182,7 +317,9 @@ impl ClientAudio {
             _ => host.default_output_device().context("no default output device")?,
         };
 
-        info!("Client input: {}", input_device.name().unwrap_or_default());
+        if let Some(d) = &input_device {
+            info!("Client input: {}", d.name().unwrap_or_default());
+        }
         info!(
             "Client output: {}",
             output_device.name().unwrap_or_default()
@@ -190,7 +327,9 @@ impl ClientAudio {
 
         // Prefer 48kHz input (avoids 16kHz headset resampling issues).
         // Fall back to device default if 48kHz not supported.
-        let input_config = {
+        let input_config = match &input_device {
+            None => None,
+            Some(input_device) => Some({
             use cpal::traits::DeviceTrait;
             let preferred_rate = cpal::SampleRate(48000);
             let mut best = input_device.default_input_config()
@@ -207,14 +346,17 @@ impl ClientAudio {
                 }
             }
             best
+            }),
         };
         let output_config = output_device
             .default_output_config()
             .context("no default output config")?;
 
-        let in_channels = input_config.channels() as usize;
+        let in_channels = input_config.as_ref().map_or(1, |c| c.channels() as usize);
         let out_channels = output_config.channels() as usize;
-        self.capture_sample_rate = input_config.sample_rate().0;
+        if let Some(c) = &input_config {
+            self.capture_sample_rate = c.sample_rate().0;
+        }
         self.playback_sample_rate = output_config.sample_rate().0;
 
         info!(
@@ -226,7 +368,7 @@ impl ClientAudio {
             out_channels, self.playback_sample_rate
         );
 
-        let in_stream_config = input_config.config();
+        let in_stream_config = input_config.as_ref().map(|c| c.config());
         let out_stream_config = output_config.config();
 
         // Capture (microphone) - downmix to mono
@@ -242,9 +384,10 @@ impl ClientAudio {
         // Pre-allocated scratch - retains capacity across callback invocations to
         // avoid real-time alloc on the audio thread (latency priority).
         let mut mono_scratch: Vec<f32> = Vec::with_capacity(8192);
-        let capture_stream = input_device
+        let capture_stream = match (input_device.as_ref(), in_stream_config.as_ref()) {
+            (Some(input_device), Some(in_stream_config)) => Some(input_device
             .build_input_stream(
-                &in_stream_config,
+                in_stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     // Only write to ring buffer when gate is open (PTT active).
                     // Prevents speaker->mic feedback from contaminating TX audio.
@@ -285,7 +428,9 @@ impl ClientAudio {
                 },
                 None,
             )
-            .context("build client capture stream")?;
+            .context("build client capture stream")?),
+            _ => None,
+        };
 
         // Playback (speakers) - mono or stereo (binaural R channel)
         let level = self.playback_level.clone();
@@ -298,6 +443,9 @@ impl ClientAudio {
         let mut alarm_phase: f32 = 0.0;
         let mut pa_alarm_pos: u32 = 0;
         let mut pa_alarm_phase: f32 = 0.0;
+        let dropped_alarm = self.ptt_dropped_alarm.clone();
+        let mut dropped_pos: u32 = 0;
+        let mut dropped_phase: f32 = 0.0;
         let sidetone = self.sidetone.clone();
         let mut sidetone_state = SidetoneState::default();
         // Pre-allocated scratches for mute-drain and stereo-read. Capacity grows
@@ -370,6 +518,7 @@ impl ClientAudio {
                     // TX, so all three play into the muted buffer as well.
                     mix_swr_alarm(data, out_channels, alarm_rate, &alarm, &mut alarm_pos, &mut alarm_phase);
                     mix_alarm(PA_DRIVE_ALARM, data, out_channels, alarm_rate, &pa_alarm, &mut pa_alarm_pos, &mut pa_alarm_phase);
+                    mix_alarm(PTT_DROPPED_ALARM, data, out_channels, alarm_rate, &dropped_alarm, &mut dropped_pos, &mut dropped_phase);
                     mix_sidetone(data, out_channels, alarm_rate, &sidetone, &mut sidetone_state);
                 },
                 move |err| {
@@ -380,7 +529,7 @@ impl ClientAudio {
             )
             .context("build client playback stream")?;
 
-        self.capture_stream = Some(capture_stream);
+        self.capture_stream = capture_stream;
         self.playback_stream = Some(playback_stream);
         Ok(())
     }
@@ -446,6 +595,17 @@ impl ClientAudio {
         f32::from_bits(self.playback_level.load(Ordering::Relaxed))
     }
 
+    /// The chosen microphone that was not found (build 188).
+    pub fn missing_input(&self) -> Option<String> {
+        self.missing_input.clone()
+    }
+
+    /// Whether the missing microphone is there again (build 188). One load: the
+    /// looking happens on the watch thread (build 189).
+    pub fn missing_input_is_back(&self) -> bool {
+        self.input_back.load(Ordering::Relaxed)
+    }
+
     /// Check if an audio device error has occurred
     pub fn has_error(&self) -> bool {
         self.audio_error.load(Ordering::Relaxed)
@@ -475,6 +635,12 @@ impl sdr_remote_logic::audio::AudioBackend for ClientAudio {
         ClientAudio::playback_level(self)
     }
 
+    fn missing_input(&self) -> Option<String> {
+        ClientAudio::missing_input(self)
+    }
+    fn missing_input_is_back(&self) -> bool {
+        ClientAudio::missing_input_is_back(self)
+    }
     fn has_error(&self) -> bool {
         ClientAudio::has_error(self)
     }
@@ -520,5 +686,113 @@ impl sdr_remote_logic::audio::AudioBackend for ClientAudio {
         // Same re-arming as above, its own counter and its own tone.
         let samples = if on { swr_alarm_hold_samples(self.playback_sample_rate) } else { 0 };
         self.pa_drive_alarm.store(samples, Ordering::Relaxed);
+    }
+
+    fn sound_ptt_dropped(&mut self) {
+        // Armed once; the callback counts it down to silence.
+        self.ptt_dropped_alarm.store(ptt_dropped_alarm_samples(self.playback_sample_rate), Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A missing microphone refuses every press of the PTT, for Thetis and both
+    /// Yaesu slots, on the path a transmitter held by another station takes
+    /// (build 188) - the field log is the proof that nothing is sent.
+    #[test]
+    fn a_missing_microphone_refuses_the_ptt() {
+        let update = include_str!("ui/update.rs");
+        assert_eq!(update.matches("held || self.mic_missing.is_some(),").count(), 1);
+        assert_eq!(
+            update.matches("let d = desktop_frame(self.thetis_latches, true, self.other_tx || self.mic_missing.is_some(), self.ptt);").count(),
+            1
+        );
+        assert_eq!(update.matches("desktop_frame(").count(), 2, "no PTT path around the rule");
+        // And every PTT button's face hears of it: Thetis here, both Yaesu
+        // buttons through yaesu_ptt_face (review of 191: dropping either stayed
+        // green, `..Default::default()` hides it).
+        let popouts = include_str!("ui/popouts.rs");
+        assert_eq!(
+            update.matches("mic_missing: self.mic_missing.is_some(),").count()
+                + popouts.matches("mic_missing: self.mic_missing.is_some(),").count(),
+            2
+        );
+        // The engine's audio opens through first_open (review of 191, N2b).
+        assert!(include_str!("main.rs").contains("audio::first_open(first, input, output, open)"));
+    }
+
+    /// The first opening: the chosen devices; if they will not open, the
+    /// defaults; with no choice a failure stays a failure; and only the first
+    /// call gets the choice (build 191; review of 190: taking the fallback out
+    /// stayed green).
+    #[test]
+    fn the_first_opening_falls_back_to_the_defaults() {
+        let opened = std::cell::RefCell::new(Vec::new());
+        let open = |i: Option<&str>, o: Option<&str>| -> Result<()> {
+            opened.borrow_mut().push((i.map(str::to_string), o.map(str::to_string)));
+            if i == Some("busy mic") { anyhow::bail!("device in use") } else { Ok(()) }
+        };
+        let chosen = |i: &str, o: &str| Some((i.to_string(), o.to_string()));
+        // The choice opens.
+        assert!(first_open(chosen("RODE", "Speakers"), None, None, &open).is_ok());
+        assert_eq!(opened.borrow_mut().drain(..).collect::<Vec<_>>(), vec![(Some("RODE".into()), Some("Speakers".into()))]);
+        // The choice is there but busy: the defaults.
+        assert!(first_open(chosen("busy mic", ""), None, None, &open).is_ok());
+        assert_eq!(opened.borrow_mut().drain(..).collect::<Vec<_>>(), vec![(Some("busy mic".into()), None), (None, None)]);
+        // No choice, and the defaults fail: the failure stands.
+        let failing = |_: Option<&str>, _: Option<&str>| -> Result<()> { anyhow::bail!("no device") };
+        assert!(first_open(chosen("", ""), None, None, failing).is_err());
+        // Not the first call: what the engine asks, unchanged.
+        assert!(first_open(None, Some("busy mic"), None, &open).is_err());
+        assert!(first_open(None, None, None, &open).is_ok());
+        assert_eq!(opened.borrow_mut().last().cloned(), Some((None, None)));
+    }
+
+    /// The choice: the name itself first; without the number only when exactly
+    /// one fits - two of the same codec are told apart by that number, and the
+    /// first in the list could be the other one (review of 188, M1 and B).
+    #[test]
+    fn the_chosen_microphone_is_found_or_none_is_taken() {
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let two = names(&["Microphone (Realtek(R) Audio)", "Microphone (2- USB Audio CODEC)", "Microphone (3- USB Audio CODEC)"]);
+        assert_eq!(choose_input(&two, "Microphone (3- USB Audio CODEC)"), Choice::Exact(2));
+        assert_eq!(choose_input(&two, "Microphone (4- USB Audio CODEC)"), Choice::Ambiguous(2), "none of two is taken");
+        let one = names(&["Microphone (Realtek(R) Audio)", "Microphone (RODE NT-USB)"]);
+        assert_eq!(choose_input(&one, "Microphone (2- RODE NT-USB)"), Choice::Renumbered(1), "the field case of 13-10");
+        assert_eq!(choose_input(&one, "Microphone (2- Jabra Link 380)"), Choice::Missing);
+        assert_eq!(choose_input(&[], "Microphone (2- RODE NT-USB)"), Choice::Missing);
+    }
+
+    /// No other microphone than the chosen one: the default device is opened
+    /// only when nothing is chosen (review of 188, M5: putting the old
+    /// fallback back stayed green).
+    #[test]
+    fn the_default_microphone_opens_only_without_a_choice() {
+        let src = include_str!("audio.rs");
+        let src = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert_eq!(src.matches("default_input_device()").count(), 1);
+        assert!(src.contains("_ => Some(host.default_input_device().context(\"no default input device\")?),"));
+    }
+
+    /// The Windows number in front of a USB device is the one thing ignored
+    /// when looking for the chosen microphone (build 188).
+    #[test]
+    fn only_the_windows_number_is_ignored() {
+        assert_eq!(without_windows_number("Microphone (2- USB Audio CODEC)"), "Microphone (USB Audio CODEC)");
+        assert_eq!(without_windows_number("Microphone (12- USB Audio CODEC)"), "Microphone (USB Audio CODEC)");
+        assert_eq!(
+            without_windows_number("Microphone (3- USB Audio CODEC)"),
+            without_windows_number("Microphone (2- USB Audio CODEC)")
+        );
+        // Anything else stays as it is: another device is another device.
+        assert_eq!(without_windows_number("Microphone (Realtek(R) Audio)"), "Microphone (Realtek(R) Audio)");
+        assert_eq!(without_windows_number("Headset (2 Pro)"), "Headset (2 Pro)");
+        assert_eq!(without_windows_number("No brackets"), "No brackets");
+        assert_ne!(
+            without_windows_number("Microphone (2- USB Audio CODEC)"),
+            without_windows_number("Microphone (2- Jabra Link 380)")
+        );
     }
 }

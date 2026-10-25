@@ -968,7 +968,7 @@ mod tests {
         let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
         reply(&c, id, "antwoord op een oude database", T).unwrap();
         let r = replies_for(&c, 7, T).unwrap()[0].0;
-        assert!(dismiss(&c, 7, r, T).unwrap(), "werkt op de gemigreerde tabel");
+        assert!(dismiss(&c, 7, r, T).unwrap(), "works on the migrated table");
         assert!(replies_for(&c, 7, T).unwrap().is_empty());
     }
 
@@ -990,7 +990,7 @@ mod tests {
         let delivered: Option<i64> = c
             .query_row("SELECT delivered_at FROM replies WHERE id = ?1", params![r], |x| x.get(0))
             .unwrap();
-        assert!(delivered.is_some(), "afgehandeld is aangekomen");
+        assert!(delivered.is_some(), "handled has arrived");
     }
 
     /// An answer put aside stops coming back - and that is the whole point of
@@ -1001,12 +1001,12 @@ mod tests {
         let id = submit(&c, 7, Some("X"), "inhoud", T).unwrap();
         reply(&c, id, "kijk eens naar je audio-apparaat", T).unwrap();
         let got = replies_for(&c, 7, T).unwrap();
-        assert_eq!(got.len(), 1, "voorwaarde: hij staat er");
+        assert_eq!(got.len(), 1, "precondition: it is there");
 
-        assert!(dismiss(&c, 7, got[0].0, T).unwrap(), "dit zet hem opzij");
+        assert!(dismiss(&c, 7, got[0].0, T).unwrap(), "this puts it aside");
         assert!(
             replies_for(&c, 7, T).unwrap().is_empty(),
-            "en dan komt hij niet meer terug"
+            "and then it does not come back"
         );
     }
 
@@ -1018,11 +1018,11 @@ mod tests {
         reply(&c, id, "een antwoord voor 7", T).unwrap();
         let mine = replies_for(&c, 7, T).unwrap()[0].0;
 
-        assert!(!dismiss(&c, 8, mine, T).unwrap(), "8 gaat hier niet over");
+        assert!(!dismiss(&c, 8, mine, T).unwrap(), "this is not 8's to decide");
         assert_eq!(
             replies_for(&c, 7, T).unwrap().len(),
             1,
-            "en 7 ziet zijn antwoord gewoon nog"
+            "and 7 still sees its answer"
         );
     }
 
@@ -1036,7 +1036,7 @@ mod tests {
         let r = replies_for(&c, 7, T).unwrap()[0].0;
 
         assert!(dismiss(&c, 7, r, T).unwrap());
-        assert!(!dismiss(&c, 7, r, T + 1).unwrap(), "de tweede doet niets");
+        assert!(!dismiss(&c, 7, r, T + 1).unwrap(), "the second one does nothing");
         assert!(replies_for(&c, 7, T).unwrap().is_empty());
     }
 
@@ -1052,7 +1052,7 @@ mod tests {
 
         let waiting = list(&c, T).unwrap();
         assert_eq!(waiting.len(), 1);
-        assert!(waiting[0].replied, "er is geantwoord, en dat blijft zo");
+        assert!(waiting[0].replied, "it was answered, and that stays so");
         assert_eq!(waiting[0].reply.as_deref(), Some("wat ik terugschreef"));
     }
 

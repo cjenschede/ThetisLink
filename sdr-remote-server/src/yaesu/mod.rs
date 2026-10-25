@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 use std::collections::HashSet;
+use sdr_remote_core::dev_info;
 use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,8 @@ mod parse;
 use parse::*;
 mod poll;
 mod tone_store;
+pub mod tx_timing;
+pub mod line_ptt;
 use poll::*;
 
 /// Radio model for the dual-radio abstraction (PATCH-dual-radio-991a-ftx1).
@@ -252,6 +255,14 @@ pub fn audio_device_warning(
 }
 
 pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel, u32)> {
+    detect_model_or_trouble(port_name, preferred_baud).ok()
+}
+
+/// `detect_model`, and when nothing was found, why: the `PORT_TROUBLE_*` class
+/// of a port that could not be opened, or `PORT_TROUBLE_NONE` for a port that
+/// opened and stayed silent. The settings probe shows it (build 271): a port
+/// another program holds is not a radio that is switched off.
+pub fn detect_model_or_trouble(port_name: &str, preferred_baud: u32) -> Result<(RadioModel, u32), u8> {
     let mut bauds = vec![preferred_baud];
     for b in [38400u32, 4800, 9600, 19200, 57600, 115200] {
         if !bauds.contains(&b) {
@@ -280,10 +291,11 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
             // the two it was: "in use by another program" asks for a different
             // next move than "check the cable".
             Err(e) => {
-                if let Some(text) = port_trouble_log_text(classify_open_error(&e)) {
+                let trouble = classify_open_error(&e);
+                if let Some(text) = port_trouble_log_text(trouble) {
                     log::warn!("{}: {}", port_name, text);
                 }
-                return None;
+                return Err(trouble);
             }
         };
         // Anything left in the port from before this process is not an answer to
@@ -301,8 +313,8 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
         for _ in 0..3 {
             let resp = cat_query(&mut port, "ID;");
             let code = resp_payload("ID", &resp);
-            if let Some(model) = RadioModel::from_id_code(&code) {
-                return Some((model, baud));
+            if let Some(model) = model_from_id_response(&resp) {
+                return Ok((model, baud));
             }
             if resp.contains(';') && !code.is_empty() {
                 // Something answered, but not with an ID we know. It used to be
@@ -327,7 +339,7 @@ pub fn detect_model(port_name: &str, preferred_baud: u32) -> Option<(RadioModel,
         "{}: opened, but nothing answered ID; on any supported baud rate -          the model cannot be detected and the caller will have to assume one",
         port_name
     );
-    None
+    Err(sdr_remote_core::protocol::PORT_TROUBLE_NONE)
 }
 
 /// Sort a failed serial open into the `PORT_TROUBLE_*` wire codes.
@@ -638,6 +650,8 @@ mod safety_release_tests {
 #[derive(Clone, Debug)]
 pub struct YaesuState {
     pub connected: bool,
+    /// The transmit chain's timing lines (build 163, `tx_timing`).
+    pub tx_timing: tx_timing::TxTiming,
     /// Why the serial port cannot be opened, when it cannot - one of the
     /// `PORT_TROUBLE_*` codes from the protocol. Set by the reconnect loop on
     /// every failed open, cleared on a successful one. This is what turns the
@@ -712,9 +726,9 @@ pub struct YaesuState {
     /// DSP/function toggle bitfield (PATCH-yaesu-extra-controls): bit N = YaesuCtrl N
     /// on/off, from the per-control read-parse. A1: RfAtt(0), BreakIn(1); A2: Narrow(2), AutoNotch(3).
     pub feature_toggles: u32,
-    /// Multi-state/level values indexed by YaesuCtrl (Fase B: Agc(6), PreAmp(7); Fase C: Nb(8),Dnr(9),Processor(10),Amc(11)).
+    /// Multi-state/level values indexed by YaesuCtrl (Phase B: Agc(6), PreAmp(7); Phase C: Nb(8),Dnr(9),Processor(10),Amc(11)).
     pub feature_levels: [u8; 16],
-    /// Fase D frequency values (u16): [0]=Contour, [1]=APF, [2]=Notch.
+    /// Phase D frequency values (u16): [0]=Contour, [1]=APF, [2]=Notch.
     pub feature_freqs: [u16; 4],
     /// Squelch open (BUSY) according to the radio (FTX-1 `RI` response P8). True =
     /// signal present / squelch open -> audio passes. Default true (open) so
@@ -790,6 +804,9 @@ pub struct YaesuState {
     /// it. Kept here, not in the poll loop, so a reconnect does not read our
     /// own RTS back as the original. Put back at exit (RestoreBeforeExit).
     pub cw_pc_keying_original: Option<String>,
+    /// The menus that key this radio on RTS or DTR of its USB port, from the
+    /// menu blob (build 296; `line_ptt`). Set only by `line_ptt::refresh`.
+    pub line_keyed: Vec<line_ptt::LineKeyed>,
     /// When a CW run of this server last keyed this radio (its key line), or
     /// `None`. Set when a CW packet is admitted, kept fresh by the safety tick
     /// while the run holds the radio, and cleared a second after it no longer
@@ -807,6 +824,7 @@ impl Default for YaesuState {
     fn default() -> Self {
         Self {
             connected: false,
+            tx_timing: tx_timing::TxTiming::default(),
             port_trouble: sdr_remote_core::protocol::PORT_TROUBLE_NONE,
             cat_trouble: Default::default(),
             vfo_a_freq: 0,
@@ -854,6 +872,7 @@ impl Default for YaesuState {
             ftx1_memory_write_ack: false,
             audio_channel: 2,
             cw_pc_keying_original: None,
+            line_keyed: Vec::new(),
             cw_keyed_at: None,
             walking_channels: false,
             loading: 0,
@@ -885,6 +904,7 @@ impl YaesuState {
         self.cw_pc_keying_original = None;
         self.last_memory_blob = None;
         self.last_menu_blob = None;
+        self.line_keyed.clear();
         self.filled_memory_channels.clear();
         self.tot_minutes = 0;
         self.max_pwr_hf = 0;
@@ -986,10 +1006,10 @@ pub enum YaesuCmd {
     /// the radio through those channels.
     ReadMemoryTones,
     RecallMemory(u16),  // MC command: select memory channel
-    SelectVfo(u8),      // VS command: 0=VFO A, 1=VFO B, 2=swap
+    SelectVfo(u8),      // VS command: 0=VFO A, 1=VFO B, 2=swap, 3=V/M toggle
     RawCat(String),     // Send any CAT command string directly
     /// Typed DSP/function control (PATCH-yaesu-extra-controls): (control=YaesuCtrl u8,
-    /// value). Encoded per-model in the command dispatch. Fase A1: RfAtt, BreakIn.
+    /// value). Encoded per-model in the command dispatch. Phase A1: RfAtt, BreakIn.
     SetFeature(u8, u16),
     WriteMemory {       // MW command: write a single memory channel
         channel: u16,
@@ -1342,6 +1362,7 @@ impl YaesuRadio {
         status.lock().unwrap().ssb_switch_on_ptt = ssb_switch_on_ptt;
         status.lock().unwrap().ftx1_memory_write_ack = ftx1_memory_write_ack;
         status.lock().unwrap().audio_channel = audio_channel;
+        status.lock().unwrap().tx_timing = tx_timing::TxTiming::new(slot);
         let model_shared = Arc::new(std::sync::atomic::AtomicU8::new(model.as_code()));
         let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -1391,7 +1412,9 @@ impl YaesuRadio {
             // Output (TX to Yaesu) - separate output device if configured, else the
             // input pattern (PATCH-yaesu-output-device).
             let out_dev = output_device.unwrap_or(dev);
-            match build_output_stream(out_dev, tx_producer.clone(), &prefix) {
+            // The sound card counts its gaps for the radio's over line (build 263).
+            let gaps = status.lock().unwrap().tx_timing.output_gaps();
+            match build_output_stream(out_dev, tx_producer.clone(), gaps, &prefix) {
                 Ok((stream, rate)) => {
                     output_stream.set(Some(stream));
                     tx_rate = rate;
@@ -1405,6 +1428,13 @@ impl YaesuRadio {
             let producer = tx_producer.clone();
             let mut rx = tx_audio_rx;
             let prefix_tx = prefix.clone();
+            // Transmit audio waits for TX1 (build 164, `tx_timing::Hold`).
+            let timing = status.lock().unwrap().tx_timing.clone();
+            let hold_max = (tx_rate as u64 * tx_timing::HOLD_MAX_MS / 1000) as usize;
+            let mut hold = tx_timing::Hold::default();
+            let mut unwritten = tx_timing::OverTally::default();
+            let mut over_output = tx_timing::OverOutput::default();
+            let mut lead_start = tx_timing::LeadStart::default();
             std::thread::spawn(move || {
                 let rt = match tokio::runtime::Runtime::new() {
                     Ok(rt) => rt,
@@ -1415,15 +1445,67 @@ impl YaesuRadio {
                 };
                 rt.block_on(async {
                     while let Some(samples) = rx.recv().await {
+                        let taken = hold.take(samples, timing.keyed(), timing.over(), hold_max);
+                        if let Some(n) = hold.take_report() {
+                            // Named in advance (working rule 11, build 184).
+                            info!(
+                                "{} TX audio: {} ms held while the radio was not keyed thrown away (previous over)",
+                                timing.label(),
+                                n as u64 * 1000 / tx_rate.max(1) as u64
+                            );
+                        }
+                        let Some((out, held)) = taken else {
+                            continue;
+                        };
+                        if held > 0 {
+                            timing.held(held as u64 * 1000 / tx_rate.max(1) as u64);
+                        }
+                        let samples = out;
+                        // The over's lead (build 278): zeros ahead of its first
+                        // audio, so the target stands in the ring at once. 0 at
+                        // target 0.
+                        let pad = lead_start.pad(timing.over(), (timing.lead_ms() * tx_rate as u64 / 1000) as usize, samples.len());
+                        // What reaches the sound card, in mono samples: a busy
+                        // lock, no output, or a full ring loses the rest (build
+                        // 185; review of 184).
+                        let mut written = 0usize;
+                        let mut queued_ms = 0u64;
                         if let Ok(ref mut guard) = producer.try_lock() {
                             if let Some(ref mut prod) = **guard {
-                                use ringbuf::traits::Producer;
+                                use ringbuf::traits::{Observer, Producer};
+                                for _ in 0..pad {
+                                    let _ = prod.try_push(0.0);
+                                    let _ = prod.try_push(0.0);
+                                }
                                 for &s in &samples {
                                     // Stereo: duplicate mono to both channels
-                                    let _ = prod.try_push(s);
+                                    if prod.try_push(s).is_ok() {
+                                        written += 1;
+                                    }
                                     let _ = prod.try_push(s);
                                 }
+                                queued_ms = tx_timing::queued_ms(prod.occupied_len(), prod.capacity().get());
                             }
+                        }
+                        // The over line of the sound card, at the first block
+                        // of the next over (build 263).
+                        if written > 0 {
+                            if let Some(summary) = over_output.written(timing.over(), crate::ptt::turnaround_clock(), queued_ms, timing.lead_ms()) {
+                                let (frames, gaps) = timing.take_gaps();
+                                // Named in advance (working rule 11, builds 263 and 278).
+                                dev_info!(
+                                    "{}",
+                                    tx_timing::output_line(timing.label(), frames * 1000 / tx_rate.max(1) as u64, gaps, &summary)
+                                );
+                            }
+                        }
+                        if let Some(n) = unwritten.add(timing.over(), samples.len() - written) {
+                            // Named in advance (working rule 11, build 185).
+                            info!(
+                                "{} TX audio: {} ms not written to the sound card (previous over)",
+                                timing.label(),
+                                n as u64 * 1000 / tx_rate.max(1) as u64
+                            );
                         }
                     }
                 });
@@ -1527,7 +1609,8 @@ impl YaesuRadio {
         rx.recv_timeout(wait).unwrap_or_else(|_| {
             // Not "radio off or port away": the commonest cause by far is a
             // serial thread in the middle of a long read - a menu batch of the
-            // FTX-1 scan holds the line for ~2.6 s. Naming only the two causes
+            // FTX-1 scan held the line for ~2.6 s (since build 284 one attempt,
+            // ~0.7 s - but a long read it still is). Naming only the two causes
             // that need a cable sent people to the shack for a queue.
             Err(format!(
                 "the radio did not answer within {} ms - it may be off, its port away, or its serial thread busy with a long read",
@@ -1629,6 +1712,7 @@ impl YaesuRadio {
             }
             _ => {}
         }
+        line_ptt::refresh(&mut st, model, &format!("[{}]", model.label()), line_ptt::MenuRead::OneValue);
         drop(st);
         *self.menu_data.lock().unwrap() = Some(format!("MENU:{}", merged));
     }
@@ -1912,6 +1996,34 @@ mod model_id_tests {
     #[test]
     fn a_known_code_survives_stray_whitespace() {
         assert_eq!(RadioModel::from_id_code(" 0670 "), Some(RadioModel::Ft991a));
+    }
+
+    /// A whole `ID;` answer, read frame by frame - what both readers use.
+    #[test]
+    fn an_id_answer_names_its_model_even_with_frames_run_together() {
+        // The field log of 2026-09-29: two answers at once. Used to name nothing.
+        assert_eq!(model_from_id_response("ID0840;ID0840;"), Some(RadioModel::Ftx1));
+        // The ordinary answer, and one with its terminator lost.
+        assert_eq!(model_from_id_response("ID0670;"), Some(RadioModel::Ft991a));
+        assert_eq!(model_from_id_response("ID0840"), Some(RadioModel::Ftx1));
+        // A station log: the ID answer, then the radio's "?" for the next query.
+        assert_eq!(model_from_id_response("ID0670;?;"), Some(RadioModel::Ft991a));
+        // A stray frame before the ID answer.
+        assert_eq!(model_from_id_response("?;ID0670;"), Some(RadioModel::Ft991a));
+        // The "ID" echo lost on a partial first read: the bare code still counts,
+        // as it did when the answer was read as one payload.
+        assert_eq!(model_from_id_response("0840;"), Some(RadioModel::Ftx1));
+    }
+
+    /// An answer without a known ID frame still names no model - the out-of-step
+    /// read keeps its warning, and an unknown radio is not guessed.
+    #[test]
+    fn an_id_answer_without_a_known_id_frame_names_nothing() {
+        // "MD04;0840;": a bare code after the first frame is some other command's
+        // payload - the old read named nothing there either (review build 55).
+        for resp in ["", ";", "?;", "ID0841;", "ID;", "007077100;MD04;TX0;AG0041;", "IF0840;", "08400;", "MD04;0840;"] {
+            assert_eq!(model_from_id_response(resp), None, "{resp:?} must not name a model");
+        }
     }
 }
 

@@ -6,10 +6,10 @@ mod logging;
 #[cfg(target_os = "android")]
 mod audio_oboe;
 
-pub use logging::{init_logging, log_line, log_tail};
+pub use logging::{developer_code_matches, init_logging, log_line, log_tail, set_developer_mode};
 
 pub use bridge::{
-    ble_drop_policy, filter_step, filter_width_label, ptt_button, relay_is_configured, version,
+    ble_drop_policy, expected_route_label, filter_step, filter_width_label, ptt_button, relay_is_configured, s_meter_fraction, s_meter_text, version, yaesu_s_meter_dbm,
     BleDropPolicy, BlePttAction, BridgeFilterEdges,
     BlePttGate, PhonePtt, PttButton, PttSource, PttTarget, BridgeChatAnswer, BridgeChatMessage, BridgeChatState, BridgeDxSpot, BridgeRadioState, BridgeRogerBeep,
     SdrBridge,
@@ -119,6 +119,80 @@ mod kotlin_guards {
     /// where the first one already lives. The shape is borrowed from
     /// check-text-hygiene.ps1, which has carried a self-attribution exception for
     /// the same reason for months.
+    /// The developer mode on the phone (build 298): read at start, after the log
+    /// opens and before the screen; switched in one place that also ends what
+    /// only the mode starts; and its tools - with the one request for location -
+    /// drawn only in it. The desktop's guards, for the app.
+    #[test]
+    fn the_developer_mode_is_read_at_start_and_gates_its_tools() {
+        let act = squeeze(&strip_comments(&read("MainActivity.kt")));
+        let set = act
+            .find("uniffi.sdr_remote.setDeveloperMode(com.sdrremote.prefs.DeveloperMode.saved(this))")
+            .expect("the saved mode at start");
+        assert!(act.find("uniffi.sdr_remote.initLogging(").unwrap() < set, "after the log opens");
+        assert!(set < act.find("setContent {").unwrap(), "before the screen");
+
+        let vm = squeeze(&strip_comments(&read("viewmodel/SdrViewModel.kt")));
+        let switch = &vm[vm.find("fun switchDeveloperMode(on: Boolean) {").expect("the switch")..];
+        let switch = &switch[..switch.find(" fun ").unwrap()];
+        for step in [
+            "com.sdrremote.prefs.DeveloperMode.save(getApplication(), on)",
+            "uniffi.sdr_remote.setDeveloperMode(on)",
+            "if (!on) {",
+            "if (st.measurementFile != null) setMeasurement(false)",
+            "if (st.relayOnly) setRelayOnly(false)",
+            "if (st.forceTcp) setForceTcp(false)",
+            "_developerMode.value = on",
+        ] {
+            assert_eq!(switch.matches(step).count(), 1, "{step}");
+        }
+
+        // One key for the reader at start and the switch (review of 298, K3).
+        let prefs = squeeze(&strip_comments(&read("prefs/DeveloperMode.kt")));
+        assert_eq!(prefs.matches("getBoolean(KEY, false)").count(), 1);
+        assert_eq!(prefs.matches("putBoolean(KEY, on)").count(), 1);
+
+        // The two doors: the code in, the button out (K4, K6, K11).
+        let dialog = squeeze(&strip_comments(&read("ui/components/SettingsDialog.kt")));
+        for door in [
+            "if (uniffi.sdr_remote.developerCodeMatches(typed)) { devCode = \"\" onDeveloperMode(true) }",
+            "TextButton(onClick = { onDeveloperMode(false) })",
+            "if (developerMode) { Row(verticalAlignment = Alignment.CenterVertically) { Text(\"DEV\",",
+        ] {
+            assert_eq!(dialog.matches(door).count(), 1, "{door}");
+        }
+
+        let screen = squeeze(&strip_comments(&read("ui/screens/MainScreen.kt")));
+        // Where the screen's flag comes from: the ViewModel, and nowhere else (K2).
+        assert_eq!(screen.matches("val developerMode by viewModel.developerMode.collectAsStateWithLifecycle()").count(), 1);
+        assert_eq!(screen.matches("val developerMode").count(), 1);
+        assert!(screen.contains("if (developerMode) { Text( \"DEV\","), "the sign in About follows the mode (K5)");
+        assert!(screen.contains("if (developerMode && lastKeyEvent.isNotEmpty()) {"), "the last-key line (owner, 2026-10-24)");
+        assert!(screen.contains("val devMeasurement: ((Boolean) -> Unit)? = if (developerMode) onMeasurement else null"));
+        assert!(screen.contains("val devRelayOnly: ((Boolean) -> Unit)? = if (developerMode) {"));
+        assert!(screen.contains("val devForceTcp: ((Boolean) -> Unit)? = if (developerMode) {"));
+        for (arg, n) in [
+            ("onMeasurement = ", 2),
+            ("onMeasurement = devMeasurement,", 2),
+            ("onRelayOnly = ", 2),
+            ("onRelayOnly = devRelayOnly,", 2),
+            ("onForceTcp = ", 2),
+            ("onForceTcp = devForceTcp,", 2),
+        ] {
+            assert_eq!(screen.matches(arg).count(), n, "{arg}");
+        }
+
+        // Location is asked for in one place - the measurement's switch - and
+        // the mode is switched in two: the start and the ViewModel.
+        let (mut asks, mut switches) = (0, 0);
+        for f in all_kotlin() {
+            let src = strip_comments(&std::fs::read_to_string(&f).unwrap());
+            asks += src.matches("requestLocationPermission {").count();
+            switches += src.matches("setDeveloperMode(").count();
+        }
+        assert_eq!((asks, switches), (1, 2));
+    }
+
     #[test]
     fn the_per_radio_preference_keys_are_read_in_one_file() {
         // The one deliberate exception, with its reason in the code beside it: the
@@ -356,5 +430,134 @@ mod kotlin_guards {
                 );
             }
         }
+    }
+
+    /// What blocks the station is decided and worded in Rust
+    /// (`sdr_remote_logic::station_notice`); both screens that offer Connect
+    /// draw that answer and decide nothing. In build 59 the rule was four
+    /// if/else chains, one of which hid the audio error, and the wizard did not
+    /// have it at all (review 59). A Kotlin copy of the words must not return.
+    #[test]
+    fn both_connect_screens_draw_the_station_notices() {
+        for file in ["ui/components/ConnectionPanel.kt", "ui/screens/ConnectWizard.kt"] {
+            let code = squeeze(&strip_comments(&read(file)));
+            assert!(code.contains("StationNoticeLines(stationNotices)"), "{file}: no longer draws the station notices");
+            assert!(code.contains("&& canConnect"), "{file}: Connect no longer asks canConnect");
+        }
+        // And above the device tabs, where the Amplitec is switched (build 216).
+        let main = squeeze(&strip_comments(&read("ui/screens/MainScreen.kt")));
+        assert!(main.contains("item { StationNoticeLines(state.stationNotices) }"), "MainScreen: no notices on the devices screen");
+        // One renderer: the loop over the lines stands once, in it.
+        let loops: usize = all_kotlin()
+            .iter()
+            .map(|p| strip_comments(&std::fs::read_to_string(p).unwrap()).matches("for (notice in stationNotices)").count())
+            .sum();
+        assert_eq!(loops, 1, "a second way to draw the station notices");
+        for path in all_kotlin() {
+            let code = strip_comments(&std::fs::read_to_string(&path).expect("kotlin file"));
+            for sign in ["conn_server_tx_closed", "conn_engine_stopped", "serverTxClosed", "engineDead"] {
+                assert!(!code.contains(sign), "{}: `{}` - the station notice rule is back in Kotlin", path.display(), sign);
+            }
+        }
+    }
+
+    /// The S reading is `sdr_remote_core::s_meter`, through the bridge (build
+    /// 218): Compose had two copies that cut the dB off where the desktop
+    /// rounded, so the phone said `S9+19dB` next to a desktop `S9+20dB`. The one
+    /// `S9+` left in Kotlin is the reserved width of the spectrum overlay.
+    #[test]
+    fn kotlin_shows_the_bridge_s_reading_and_makes_none_of_its_own() {
+        let mut calls = 0;
+        let mut s9 = 0;
+        for path in all_kotlin() {
+            let code = strip_comments(&std::fs::read_to_string(&path).expect("kotlin file"));
+            calls += code.matches("sMeterText(").count();
+            s9 += code.matches("S9+").count();
+        }
+        assert_eq!(calls, 2, "the spectrum and the meter");
+        assert_eq!(s9, 1, "an S reading formatted in Kotlin");
+        assert!(read("ui/components/SpectrumView.kt").contains("measureText(\"S9+00dB\")"));
+    }
+
+    /// Nor its own dBm scale (review of 218): the bar position and the Yaesu
+    /// conversion come from the bridge, so Kotlin holds no S9 or S0 in dBm.
+    #[test]
+    fn kotlin_takes_the_s_meter_scale_from_the_bridge() {
+        let (mut fraction, mut yaesu) = (0, 0);
+        for path in all_kotlin() {
+            let code = strip_comments(&std::fs::read_to_string(&path).expect("kotlin file"));
+            if path.ends_with("sdr_remote.kt") { continue; }
+            // Any spelling (review of 219): `-73f` and `dbm+127f` too; a
+            // digit or a point before it is another number.
+            for dbm in ["73f", "127f"] {
+                for (at, _) in code.match_indices(dbm) {
+                    if code[..at].ends_with("ev.value.toFloat() / ") {
+                        continue; // a MIDI controller value, 0-127 (`MainScreen.kt`)
+                    }
+                    let before = code[..at].chars().next_back();
+                    assert!(
+                        matches!(before, Some(c) if c.is_ascii_digit() || c == '.'),
+                        "{dbm} in {}", path.display()
+                    );
+                }
+            }
+            assert!(!code.contains("dbmToDisplay("), "in {}", path.display());
+            fraction += code.matches("sMeterFraction(").count();
+            yaesu += code.matches("yaesuSMeterDbm(").count();
+        }
+        assert_eq!(fraction, 2, "the level and the peak");
+        assert_eq!(yaesu, 1, "the Yaesu meter");
+    }
+
+    /// Another default network starts a new relay session on it; the first
+    /// report, when the callback is registered, does not (build 186). The
+    /// field log is the proof that it fires on a real switch.
+    #[test]
+    fn another_default_network_starts_a_new_relay_session() {
+        let vm = squeeze(&strip_comments(&read("viewmodel/SdrViewModel.kt")));
+        assert!(vm.contains(
+            "override fun onAvailable(network: Network) { val before = defaultNetwork defaultNetwork = network if (before != null && before != network) { bridge?.networkChanged() } bridge?.networkAvailable() }"
+        ));
+        // And the bridge hands it to the monitor's change, not its "available"
+        // - two names that look alike (review of 186, W6).
+        let bridge = include_str!("bridge.rs");
+        let at = bridge.find("pub fn network_changed(&self) {").expect("the bridge function");
+        let body = &bridge[at..at + bridge[at..].find("\n    }\n").unwrap()];
+        assert!(body.contains("monitor.network_changed();"));
+        assert!(!body.contains("monitor.network_available();"));
+    }
+
+    /// Every way a session ends on the phone goes through one exit,
+    /// sessionGone: the link dying, and a new session on a link that never went
+    /// down. The exit forgets the Yaesu subscriptions (so they are asked for
+    /// again), lets a held PTT go, and forgets the connection. Until build 62
+    /// only the dying link did all three; the new-session edge of build 61 let
+    /// the PTT go and left the subscription believed-sent, so the Yaesu stream
+    /// stayed silent after a restart inside the time-out (review 61). The
+    /// desktop's counterpart is the third release_all_ptt() site and the
+    /// `reconnected` edge, both in fitness.ps1.
+    #[test]
+    fn every_session_end_on_the_phone_goes_through_one_exit() {
+        let vm = squeeze(&strip_comments(&read("viewmodel/SdrViewModel.kt")));
+        // The whole body, verbatim: `contains` on three statements let an
+        // `if (false)` around each of them through (review 62).
+        let exit = concat!(
+            "private fun sessionGone(why: String) { ",
+            "subbed0 = false subbed1 = false ",
+            "if (ptt.asking() != null) { ",
+            "Log.i(TAG, \"$why while transmitting - releasing PTT\") ptt.disconnected() pttEnded() } ",
+            "wasConnected = false }"
+        );
+        assert!(vm.contains(exit), "sessionGone is not the one exit, verbatim - see the test for what it has to be");
+        // From the poll's own first statement: a filter on the state between the
+        // two (`?.takeIf { it.connected }`) walked past the edge with everything
+        // green (review 63).
+        let new_session = "val s = bridge?.getState() ?: continue if (s.sessionGeneration != sessionGenerationSeen) { sessionGenerationSeen = s.sessionGeneration sessionGone(\"New session\") }";
+        let link_down = "if (!s.connected) { sessionGone(\"Connection lost\") }";
+        let at_new = vm.find(new_session).expect("the new-session edge no longer goes through sessionGone");
+        let at_down = vm.find(link_down).expect("the link-down branch no longer goes through sessionGone");
+        // Before the connected branch, so the same poll subscribes again; after
+        // it costs one poll of 33 ms, and nothing but this would notice.
+        assert!(at_new < at_down, "the new-session edge has to come before the connected branch");
     }
 }

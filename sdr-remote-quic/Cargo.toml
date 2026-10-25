@@ -1,0 +1,35 @@
+[package]
+name = "sdr-remote-quic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The direct path over QUIC (phase 3, OPZET-fase3-quic-direct-pad.md). One crate
+# for the topic: the server endpoint and the client tunnel, both behind the same
+# channel shape the relay tunnel already uses, so neither the server's sessions
+# nor the client engine learn a new transport.
+
+[dependencies]
+bytes = "1"
+log = { workspace = true }
+tokio = { workspace = true }
+# default-features off: runtime-tokio and the ring-based rustls glue only - no
+# aws-lc-rs (the relay crate pins rustls to ring for the same reason).
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# The server's certificate is made in memory at every start: the client does not
+# check it against an issuer, the password proof bound to the TLS session does
+# the authenticating (OPZET §3), so there is nothing worth keeping on disk.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }
+# The relay's TLU1 framing, for the route layer through the relay (phase 3b) -
+# one encoder for both data forms. Every program that links this crate links the
+# relay library already.
+sdr-remote-relay = { path = "../sdr-remote-relay" }
+# The punch signals (phase 3c, `PunchPacket`), so the whole punch lives in this
+# crate and the engine and the server only pass it on. Every program that links
+# this crate links the core already; the core depends on no crate of ours.
+sdr-remote-core = { path = "../sdr-remote-core" }
+
+[features]
+# The stand-in relay of `testing.rs`, for the tests of other crates.
+testing = []

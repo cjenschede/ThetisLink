@@ -12,10 +12,61 @@ use crate::{FRAME_SAMPLES, FRAME_SAMPLES_WIDEBAND};
 /// Maximum encoded frame size in bytes
 const MAX_ENCODED_SIZE: usize = 256;
 
+/// The bitrate of every narrowband receive stream (Thetis, both radios, VRX).
+pub const NB_RX_BITRATE: i32 = 12_800;
+
+/// The narrowband bitrate while loss protection is on (build 153). Below
+/// 18 kbps Opus puts no usable redundancy in a narrowband packet: rebuilding a
+/// lost frame from the next one gave bit for bit what concealment gave, at
+/// 12.8, 16 and 17 kbps at the loss percentages the server sets (5 to 20). From
+/// 18 kbps it does, at every one of them (measured twice, review of build
+/// 153). 20 kbps is two steps above that threshold, as a margin: Opus decides
+/// it internally, and one step below it the redundancy goes without a word.
+/// The price is about 27 to 47 bytes a frame, only while a link is losing
+/// packets. VRX has its own encoder and its own copy of this number; a test in
+/// the server keeps the two the same.
+pub const NB_PROTECTED_BITRATE: i32 = 20_000;
+
+/// Whether an Opus packet carries in-band redundancy for the frame before it
+/// (the SILK "LBRR" flag), so that rebuilding a lost frame from it gives real
+/// audio and not just concealment under another name (build 155).
+///
+/// `decode_fec` on a packet without redundancy returns the concealed frame,
+/// bit for bit, and says nothing - so a frame "rebuilt" from it was counted as
+/// real audio. The flag is read from a single-frame SILK or hybrid packet of
+/// 10 or 20 ms, where it is the second bit after the TOC byte (RFC 6716 4.2.3).
+/// Checked against the decoder before it was trusted: in 1456 of 1456 lost
+/// frames - narrowband and wideband, 12.8 to 32 kbps, protection on and off -
+/// this bit said exactly whether the rebuilt frame differed from the concealed
+/// one.
+///
+/// Everything else answers no, which only means "conceal": CELT-only packets,
+/// packets with more than one frame, packets shorter than two bytes (DTX makes
+/// those, on the transmit side), and SILK of 40 or 60 ms. In those last two to
+/// three SILK frames each put a voice-activity bit first, so the flag sits
+/// further down. libopus 1.5 (`opus_packet_has_lbrr`, not in the bundled 1.3)
+/// counts those frames and finds it; this function does not and says no
+/// instead. All our encoders send 20 ms (build 156, review of 155).
+pub fn carries_redundancy(packet: &[u8]) -> bool {
+    if packet.len() < 2 {
+        return false;
+    }
+    let config = packet[0] >> 3;
+    let code = packet[0] & 3;
+    // SILK 10/20 ms in each bandwidth (0-1, 4-5, 8-9) and all hybrid (12-15,
+    // which are 10/20 ms only); 2-3, 6-7 and 10-11 are SILK of 40 and 60 ms.
+    let one_silk_frame = matches!(config, 0 | 1 | 4 | 5 | 8 | 9 | 12..=15);
+    one_silk_frame && code == 0 && (packet[1] >> 6) & 1 == 1
+}
+
 /// Opus encoder configured for 8kHz mono VOIP with FEC
 pub struct OpusEncoder {
     encoder: Encoder,
     encode_buf: Vec<u8>,
+    /// The bitrate it was made with, and goes back to when protection ends.
+    base_bitrate: i32,
+    /// The bitrate it encodes at now.
+    bitrate: i32,
 }
 
 impl OpusEncoder {
@@ -44,6 +95,8 @@ impl OpusEncoder {
         Ok(Self {
             encoder,
             encode_buf: vec![0u8; MAX_ENCODED_SIZE],
+            base_bitrate: 12_800,
+            bitrate: 12_800,
         })
     }
 
@@ -84,7 +137,7 @@ impl OpusEncoder {
         let mut encoder = Encoder::new(SampleRate::Hz8000, Channels::Mono, Application::Voip)
             .context("failed to create continuous-RX Opus encoder")?;
         encoder
-            .set_bitrate(Bitrate::BitsPerSecond(12_800))
+            .set_bitrate(Bitrate::BitsPerSecond(NB_RX_BITRATE))
             .context("set bitrate")?;
         encoder
             .set_bandwidth(Bandwidth::Narrowband)
@@ -98,6 +151,8 @@ impl OpusEncoder {
         Ok(Self {
             encoder,
             encode_buf: vec![0u8; MAX_ENCODED_SIZE],
+            base_bitrate: NB_RX_BITRATE,
+            bitrate: NB_RX_BITRATE,
         })
     }
 
@@ -112,13 +167,27 @@ impl OpusEncoder {
     ///
     /// Both settings are plain runtime controls; nothing is reallocated and no
     /// audio is interrupted. The change takes effect from the next frame.
+    ///
+    /// While protecting, the bitrate goes up to [`NB_PROTECTED_BITRATE`], the
+    /// lowest at which narrowband redundancy is usable at all, and back to the
+    /// encoder's own when protection ends (build 153, owner's choice "b").
     pub fn set_loss_protection(&mut self, on: bool, loss_pct: u8) -> Result<()> {
+        let bitrate = if on { self.base_bitrate.max(NB_PROTECTED_BITRATE) } else { self.base_bitrate };
+        self.encoder
+            .set_bitrate(Bitrate::BitsPerSecond(bitrate))
+            .context("set bitrate")?;
+        self.bitrate = bitrate;
         self.encoder
             .set_inband_fec(on)
             .context("set FEC")?;
         self.encoder
             .set_packet_loss_perc(if on { loss_pct.min(100) } else { 0 })
             .context("set packet loss")
+    }
+
+    /// The bitrate it encodes at now.
+    pub fn bitrate(&self) -> i32 {
+        self.bitrate
     }
 
     /// Encode a 20ms frame of 160 i16 samples at 8kHz mono.
@@ -355,6 +424,117 @@ impl OpusDecoderWideband {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every branch of `carries_redundancy`, on hand-made TOC bytes: the ones
+    /// that make it safe are the ones no encoder in the receive path produces
+    /// today, and the transmit side will (build 156, review of 155).
+    #[test]
+    fn redundancy_is_read_only_where_the_flag_is() {
+        let cases: [(&[u8], bool, &str); 12] = [
+            (&[], false, "empty"),
+            (&[0x08], false, "one byte: a DTX packet"),
+            (&[0x08, 0x40], true, "config 1 (SILK NB 20 ms), code 0, flag set"),
+            (&[0x08, 0x00], false, "config 1, flag clear"),
+            (&[0x48, 0x40], true, "config 9 (SILK WB 20 ms)"),
+            (&[0x60, 0x40], true, "config 12 (hybrid SWB 10 ms)"),
+            (&[0x78, 0x40], true, "config 15 (hybrid FB 20 ms)"),
+            (&[0x0b, 0x40], false, "config 1, code 3: more than one frame"),
+            (&[0x09, 0x40], false, "config 1, code 1: two frames"),
+            (&[0x80, 0x40], false, "config 16: CELT-only"),
+            (&[0x10, 0x40], false, "config 2: SILK NB 40 ms, bit 6 is a voice-activity bit"),
+            (&[0x58, 0x40], false, "config 11: SILK WB 60 ms"),
+        ];
+        for (packet, want, what) in cases {
+            assert_eq!(carries_redundancy(packet), want, "{what}");
+        }
+        // And every one of the 32 configurations, from RFC 6716 3.1 written out
+        // here rather than from the function's own set: the toggled set has to
+        // be wrong somewhere for this to stay green (build 157; review of 156:
+        // letting config 3 back in - the 60 ms fault this repairs - stayed green).
+        // SILK NB/MB/WB 10, 20, 40, 60 ms; hybrid SWB, FB 10, 20 ms; CELT.
+        let one_silk_frame: [bool; 32] = [
+            true, true, false, false, // SILK NB
+            true, true, false, false, // SILK MB
+            true, true, false, false, // SILK WB
+            true, true, true, true, // hybrid SWB 10/20, FB 10/20
+            false, false, false, false, false, false, false, false, // CELT NB, WB
+            false, false, false, false, false, false, false, false, // CELT SWB, FB
+        ];
+        for config in 0..32u8 {
+            let toc = config << 3; // code 0, mono
+            assert_eq!(carries_redundancy(&[toc, 0x40]), one_silk_frame[config as usize], "config {config}, flag set");
+            assert!(!carries_redundancy(&[toc, 0x00]), "config {config}, flag clear");
+        }
+    }
+
+    /// What in-band redundancy is worth, per receive encoder. Until build 153
+    /// narrowband protection sat at 12.8 kbps, where Opus puts nothing usable
+    /// in it: rebuilding a lost frame gave bit for bit what concealment gave
+    /// (this test said so, build 151). Since 153 protection raises the
+    /// narrowband bitrate to `NB_PROTECTED_BITRATE`, and a lost frame is
+    /// rebuilt from the next packet - the turn this test announced. Wideband
+    /// at 24 kbps already carried it. Unprotected narrowband still does not.
+    #[test]
+    fn redundancy_is_usable_on_both_while_protecting() {
+        fn signal(n: usize, seed: &mut u32, t0: usize) -> Vec<i16> {
+            (0..n)
+                .map(|i| {
+                    *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    let noise = ((*seed >> 16) as i16 as f32) / 2.0;
+                    let t = (t0 + i) as f32;
+                    (noise + 6000.0 * (t * 0.07).sin() + 3000.0 * (t * 0.19).sin()) as i16
+                })
+                .collect()
+        }
+        // Narrowband, protected: the rebuilt frame is not the concealed one.
+        let mut enc = OpusEncoder::new_rx_continuous().unwrap();
+        assert_eq!(enc.bitrate(), NB_RX_BITRATE);
+        enc.set_loss_protection(true, 20).unwrap();
+        assert_eq!(enc.bitrate(), NB_PROTECTED_BITRATE);
+        let mut seed = 7u32;
+        let pkts: Vec<Vec<u8>> = (0..60).map(|k| enc.encode(&signal(160, &mut seed, k * 160)).unwrap()).collect();
+        let mut differ = 0;
+        for lost in [20usize, 30, 40, 50] {
+            let (mut a, mut b) = (OpusDecoder::new().unwrap(), OpusDecoder::new().unwrap());
+            for p in &pkts[..lost] {
+                a.decode(p).unwrap();
+                b.decode(p).unwrap();
+            }
+            if a.decode_fec(&pkts[lost + 1]).unwrap() != b.decode_plc().unwrap() {
+                differ += 1;
+            }
+        }
+        assert!(differ > 0, "protected narrowband rebuilt nothing in four gaps");
+        // And back: protection off returns to the receive bitrate.
+        enc.set_loss_protection(false, 0).unwrap();
+        assert_eq!(enc.bitrate(), NB_RX_BITRATE);
+        // The flag says which packets carry it (build 155): every protected
+        // narrowband packet at 20 kbps here, and none after protection is off.
+        assert!(pkts[1..].iter().all(|p| carries_redundancy(p)), "a protected packet without the flag");
+        let mut seed = 9u32;
+        let plain: Vec<Vec<u8>> = (0..20).map(|k| enc.encode(&signal(160, &mut seed, k * 160)).unwrap()).collect();
+        // The first packet after the switch still carries the copy of the last
+        // protected frame; none after it does.
+        let flags: Vec<bool> = plain.iter().map(|p| carries_redundancy(p)).collect();
+        assert!(flags[0] && flags[1..].iter().all(|f| !f), "the flag after protection went off: {flags:?}");
+        // Wideband: in at least one gap the rebuilt frame is not the concealed one.
+        let mut enc = OpusEncoderWideband::new_rx_continuous().unwrap();
+        enc.set_loss_protection(true, 20).unwrap();
+        let mut seed = 7u32;
+        let pkts: Vec<Vec<u8>> = (0..60).map(|k| enc.encode(&signal(320, &mut seed, k * 320)).unwrap()).collect();
+        let mut differ = 0;
+        for lost in [20usize, 30, 40, 50] {
+            let (mut a, mut b) = (OpusDecoderWideband::new().unwrap(), OpusDecoderWideband::new().unwrap());
+            for p in &pkts[..lost] {
+                a.decode(p).unwrap();
+                b.decode(p).unwrap();
+            }
+            if a.decode_fec(&pkts[lost + 1]).unwrap() != b.decode_plc().unwrap() {
+                differ += 1;
+            }
+        }
+        assert!(differ > 0, "wideband redundancy rebuilt nothing in four gaps");
+    }
 
     /// The two receive encoders are deliberately not the same, and both are
     /// deliberately continuous. Merging them once already cost a station its

@@ -2635,9 +2635,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.14"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "171fefbc92fe4a4de27e0698d6a5b392d6a0e333506bc49133760b3bcf948733"
+checksum = "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -2744,6 +2744,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac",
+]
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2842,7 +2851,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -4672,7 +4681,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -4709,9 +4718,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4799,6 +4808,18 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
 
 [[package]]
 name = "realfft"
@@ -4925,7 +4946,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -5096,9 +5117,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.40"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "ring",
@@ -5120,9 +5141,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -5206,7 +5227,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-android"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -5224,7 +5245,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-chat"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "chrono",
  "eframe",
@@ -5234,12 +5255,13 @@ dependencies = [
  "rust-i18n",
  "sdr-remote-core",
  "sdr-remote-relay",
+ "sdr-remote-theme",
  "serde_json",
 ]
 
 [[package]]
 name = "sdr-remote-client"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5274,16 +5296,18 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-core"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "anyhow",
  "audiopus",
  "base32",
  "bytemuck",
+ "hkdf",
  "hmac",
  "log",
  "num_enum",
  "rand 0.8.6",
+ "rubato",
  "sha2",
  "totp-lite",
  "windows 0.58.0",
@@ -5298,24 +5322,38 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-logic"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "anyhow",
  "chrono",
  "log",
  "ringbuf",
- "rubato",
  "sdr-remote-core",
- "socket2 0.5.10",
+ "sdr-remote-quic",
+ "tokio",
+]
+
+[[package]]
+name = "sdr-remote-quic"
+version = "2.13.0"
+dependencies = [
+ "bytes",
+ "log",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "sdr-remote-core",
+ "sdr-remote-relay",
  "tokio",
 ]
 
 [[package]]
 name = "sdr-remote-relay"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "futures-util",
  "log",
+ "rcgen",
  "rustls",
  "tokio",
  "tokio-tungstenite",
@@ -5323,7 +5361,7 @@ dependencies = [
 
 [[package]]
 name = "sdr-remote-server"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5339,12 +5377,12 @@ dependencies = [
  "qrcode",
  "reqwest",
  "ringbuf",
- "rubato",
  "rust-i18n",
  "rustfft",
  "sdr-remote-chat",
  "sdr-remote-core",
  "sdr-remote-layout",
+ "sdr-remote-quic",
  "sdr-remote-relay",
  "sdr-remote-theme",
  "serde",
@@ -7182,15 +7220,15 @@ dependencies = [
 
 [[package]]
 name = "webbrowser"
-version = "1.2.1"
+version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fc95580916af1e68ff6a7be07446fc5db73ebf71cf092de939bbf5f7e189f72"
+checksum = "62c35be770821a214dbc362fc26908c853e776c0004294d0b10b8a6bad582f94"
 dependencies = [
- "core-foundation 0.10.1",
  "jni 0.22.4",
  "log",
  "ndk-context",
  "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "url",
  "web-sys",
@@ -7246,14 +7284,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.7"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -8309,6 +8347,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serialport",
+]
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
 ]
 
 [[package]]

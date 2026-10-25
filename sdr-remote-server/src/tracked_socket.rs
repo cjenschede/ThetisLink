@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Thin wrapper around the client-facing UDP socket that, per client address,
+//! Thin wrapper around the client-facing QUIC endpoint that, per client address,
 //! counts the sent (tx: server->client) and received (rx: client->server) bytes,
 //! for the bandwidth display in the Status panel.
 //!
-//! The method names (`send_to`/`try_send_to`/`recv_from`) are identical to those
-//! of `tokio::net::UdpSocket`, so that all existing send sites remain unchanged -
-//! only the socket type changes. The address argument accepts both
+//! The method names (`send_to`/`try_send_to`/`recv_from`) are those of
+//! `tokio::net::UdpSocket`, which this stood in for until build 133, so the send
+//! sites read as they did over UDP. The address argument accepts both
 //! `SocketAddr` and `&SocketAddr` (via `Borrow`), just as the callers do.
 //!
 //! Counting is lock-free per client (`AtomicU64`); the addr->counter map uses a
@@ -16,10 +16,9 @@
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -105,140 +104,187 @@ pub fn bw_retain(active: &[SocketAddr]) {
     w.retain(|a, _| active.contains(a));
 }
 
-// --- Relay sentinel addresses (Phase C) ---
-//
-// A relay-tunneled client has no real UDP SocketAddr. We assign it a
-// synthetic sentinel addr from RFC 5737 TEST-NET-3 (203.0.113.0/24): that range
-// is reserved for documentation and is never routable / never the source of
-// a real peer. This way all SocketAddr-keyed session/subscriber/TX logic works
-// unchanged (SocketAddr is purely an opaque key there), while the outbound
-// send to such an addr is intercepted here and goes to the relay uplink instead
-// of to a real UDP destination.
-const RELAY_SENTINEL_PORT: u16 = 1;
+/// The server's client-facing socket: the QUIC endpoint, straight and through
+/// the relay (since build 133 the only one; plain UDP and the classic relay
+/// tunnel are gone). Each QUIC connection is seen at a sentinel address of its
+/// own (`198.51.100.0/24`), so all `SocketAddr`-keyed session, subscriber and
+/// TX logic works unchanged.
+pub struct TrackedSocket {
+    quic: QuicPath,
+    /// Step 4 (build 256, a development build only): what `trial.rs` plays in,
+    /// read by `recv_from` beside the QUIC endpoint.
+    #[cfg(any(test, feature = "naspelen"))]
+    trial: Option<AsyncMutex<mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>>>,
+}
 
-/// True if `addr` falls within the reserved relay sentinel range (203.0.113.0/24).
-pub fn is_relay_sentinel(addr: SocketAddr) -> bool {
-    match addr.ip() {
-        std::net::IpAddr::V4(ip) => {
-            let o = ip.octets();
-            o[0] == 203 && o[1] == 0 && o[2] == 113
-        }
-        std::net::IpAddr::V6(_) => false,
+/// Which way a client over QUIC takes (build 143), for the status panel.
+pub struct WaysOf(pub sdr_remote_quic::Ways);
+
+impl crate::session::WayLookup for WaysOf {
+    fn way(&self, addr: SocketAddr) -> Option<sdr_remote_core::path::PathKind> {
+        self.0.of(addr)
     }
 }
 
-/// Synthetic sentinel addr for relay client `client_ix` (v1 uses 0).
-/// Maps to 203.0.113.(1..=254); never .0 (network) or .255 (broadcast).
-pub fn relay_sentinel_for(client_ix: u8) -> SocketAddr {
-    let last = 1 + (client_ix % 254);
-    SocketAddr::from((Ipv4Addr::new(203, 0, 113, last), RELAY_SENTINEL_PORT))
+/// The permit to punch a hole (phase 3c) for a client over QUIC: granted when
+/// the session layer admits it, taken back when its session ends.
+pub struct PunchPermits(pub sdr_remote_quic::PunchGate);
+
+impl crate::session::AdmissionWatch for PunchPermits {
+    fn admitted(&self, addr: SocketAddr) {
+        if sdr_remote_quic::is_quic_sentinel(addr) {
+            self.0.allow(addr);
+        }
+    }
+
+    fn gone(&self, addr: SocketAddr) {
+        if sdr_remote_quic::is_quic_sentinel(addr) {
+            self.0.revoke(addr);
+        }
+    }
 }
 
-/// UDP socket with per-client byte counting. Same API surface as the parts of
-/// `tokio::net::UdpSocket` that the server uses. Optionally transport-aware: if
-/// relay channels are attached, sends to sentinel addrs go to the relay uplink
-/// and `recv_from` also delivers tunneled inbound frames (Phase C). Without those
-/// channels (default via `new`) the behavior is byte-identical to direct UDP.
-pub struct TrackedSocket {
-    inner: UdpSocket,
-    /// Outbound to a sentinel addr is pushed here instead of UDP.
-    relay_uplink: Option<mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>>,
-    /// Tunneled inbound `(sentinel, tl_bytes)` that the relay task pushes in here.
-    relay_inbound: Option<AsyncMutex<mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>>>,
+/// The QUIC listener and its channels. The listener is kept here because
+/// dropping it closes the port.
+struct QuicPath {
+    server: sdr_remote_quic::QuicServer,
+    uplink: mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
+    inbound: AsyncMutex<mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>>,
+}
+
+/// Copy a frame into the receive buffer, or say it does not fit: a frame
+/// larger than the buffer is dropped whole, never cut off into a packet that
+/// parses as something else (review 109).
+use sdr_remote_core::take_frame;
+
+/// What a closed QUIC connection reads as: its client's own goodbye, so the one
+/// Disconnect path ends the session, releases its transmitter and its CW key -
+/// at once, not after the session timeout with a ghost holding the radio
+/// (review 110).
+/// `None` when the buffer cannot hold it - checked like `take_frame` (review 111).
+fn goodbye(buf: &mut [u8]) -> Option<usize> {
+    let header = sdr_remote_core::protocol::Header::new(
+        sdr_remote_core::protocol::PacketType::Disconnect,
+        sdr_remote_core::protocol::Flags::NONE,
+    );
+    let mut hdr = [0u8; 4];
+    header.serialize(&mut hdr);
+    buf.get_mut(..4)?.copy_from_slice(&hdr);
+    Some(4)
 }
 
 impl TrackedSocket {
-    /// Direct-only (no relay). Behavior byte-identical to the bare `UdpSocket`.
-    pub fn new(inner: UdpSocket) -> Self {
+    pub fn new(server: sdr_remote_quic::QuicServer, link: sdr_remote_quic::QuicServerLink) -> Self {
         Self {
-            inner,
-            relay_uplink: None,
-            relay_inbound: None,
+            quic: QuicPath {
+                server,
+                uplink: link.uplink_tx,
+                inbound: AsyncMutex::new(link.inbound_rx),
+            },
+            #[cfg(any(test, feature = "naspelen"))]
+            trial: None,
         }
     }
 
-    /// Transport-aware: sends to sentinel addrs go to `uplink`, and
-    /// `recv_from` also selects over `inbound`. Direct traffic stays unchanged.
-    pub fn with_relay(
-        inner: UdpSocket,
-        uplink: mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
-        inbound: mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>,
-    ) -> Self {
-        Self {
-            inner,
-            relay_uplink: Some(uplink),
-            relay_inbound: Some(AsyncMutex::new(inbound)),
+    /// The same socket with a second way in, for the trial (build 256): what goes
+    /// into the returned sender is read as if it came off the network.
+    #[cfg(any(test, feature = "naspelen"))]
+    pub fn with_trial_inbound(mut self) -> (Self, mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.trial = Some(AsyncMutex::new(rx));
+        (self, tx)
+    }
+
+    /// The channel an authentication from `addr` came on: the live QUIC
+    /// connection's binding and the peer's real address. `Err` when there is no
+    /// such connection (gone, or never one) - an answer from there verifies
+    /// against nothing and is not answered.
+    pub fn auth_channel(&self, addr: SocketAddr) -> Result<crate::session::AuthChannel, ()> {
+        let binding = self.quic.server.bindings.get(addr).ok_or(())?;
+        Ok(crate::session::AuthChannel { binding, peer: self.quic.server.bindings.peer(addr) })
+    }
+
+    /// The address the brake on password guessing counts for `addr`: the real
+    /// peer behind a QUIC sentinel (a new sentinel per connection would restart
+    /// the count), the address itself when that is not known. One source: the
+    /// same lookup as `auth_channel`.
+    pub fn throttle_key(&self, addr: SocketAddr) -> SocketAddr {
+        self.auth_channel(addr).ok().and_then(|c| c.peer).unwrap_or(addr)
+    }
+
+    fn send(&self, buf: &[u8], addr: SocketAddr) -> std::io::Result<usize> {
+        if !sdr_remote_quic::is_quic_sentinel(addr) {
+            return Err(std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "not a QUIC client"));
         }
+        // Byte counting (Hook C) for what goes to the connection.
+        record_tx(&counter(addr), buf, buf.len() as u64);
+        let _ = self.quic.uplink.send((addr, buf.to_vec()));
+        Ok(buf.len())
     }
 
     pub async fn send_to(&self, buf: &[u8], target: impl Borrow<SocketAddr>) -> std::io::Result<usize> {
-        let addr = *target.borrow();
-        if is_relay_sentinel(addr) {
-            // Never a real UDP send to a sentinel. Byte counting (Hook C) MUST
-            // happen here: this goes before and instead of inner.send_to.
-            record_tx(&counter(addr), buf, buf.len() as u64);
-            if let Some(up) = &self.relay_uplink {
-                let _ = up.send((addr, buf.to_vec()));
-            }
-            return Ok(buf.len());
-        }
-        let n = self.inner.send_to(buf, addr).await?;
-        record_tx(&counter(addr), buf, n as u64);
-        Ok(n)
+        self.send(buf, *target.borrow())
     }
 
     pub fn try_send_to(&self, buf: &[u8], target: impl Borrow<SocketAddr>) -> std::io::Result<usize> {
-        let addr = *target.borrow();
-        if is_relay_sentinel(addr) {
-            record_tx(&counter(addr), buf, buf.len() as u64);
-            if let Some(up) = &self.relay_uplink {
-                let _ = up.send((addr, buf.to_vec()));
-            }
-            return Ok(buf.len());
-        }
-        let n = self.inner.try_send_to(buf, addr)?;
-        record_tx(&counter(addr), buf, n as u64);
-        Ok(n)
+        self.send(buf, *target.borrow())
     }
 
     pub async fn recv_from(&self, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
-        match &self.relay_inbound {
-            None => {
-                let (n, addr) = self.inner.recv_from(buf).await?;
-                counter(addr).rx.fetch_add(n as u64, Ordering::Relaxed);
-                Ok((n, addr))
-            }
-            Some(inbound) => {
-                // Only consumer (the network run loop), so the lock has no contention.
-                let mut rx = inbound.lock().await;
-                tokio::select! {
-                    res = self.inner.recv_from(buf) => {
-                        let (n, addr) = res?;
-                        counter(addr).rx.fetch_add(n as u64, Ordering::Relaxed);
-                        Ok((n, addr))
+        // Only consumer (the network run loop), so the lock has no contention.
+        let mut inbound = self.quic.inbound.lock().await;
+        #[cfg(any(test, feature = "naspelen"))]
+        let mut trial = match &self.trial {
+            Some(t) => Some(t.lock().await),
+            None => None,
+        };
+        loop {
+            #[cfg(any(test, feature = "naspelen"))]
+            let next = match trial.as_mut() {
+                Some(t) => tokio::select! {
+                    q = inbound.recv() => q,
+                    Some((addr, data)) = t.recv() => {
+                        let Some(n) = take_frame(&data, buf) else { continue };
+                        return Ok((n, addr));
                     }
-                    Some((addr, data)) = rx.recv() => {
-                        let n = data.len().min(buf.len());
-                        buf[..n].copy_from_slice(&data[..n]);
-                        counter(addr).rx.fetch_add(n as u64, Ordering::Relaxed);
-                        Ok((n, addr))
-                    }
-                }
+                },
+                None => inbound.recv().await,
+            };
+            #[cfg(not(any(test, feature = "naspelen")))]
+            let next = inbound.recv().await;
+            let Some((addr, data)) = next else {
+                return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "QUIC endpoint stopped"));
+            };
+            // Empty: that connection closed, after its last frame.
+            if data.is_empty() {
+                log::info!("QUIC: connection {addr} closed - its session ends now");
+                let Some(n) = goodbye(buf) else { continue };
+                return Ok((n, addr));
             }
+            let Some(n) = take_frame(&data, buf) else { continue };
+            counter(addr).rx.fetch_add(n as u64, Ordering::Relaxed);
+            return Ok((n, addr));
         }
-    }
-
-    /// Unused today, kept for the same reason as the rest of this wrapper:
-    /// it stands in for a `UdpSocket` and should answer what one answers.
-    #[allow(dead_code)]
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.inner.local_addr()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The goodbye a closed QUIC connection reads as: a Disconnect, and only
+    /// when the buffer holds it - never a panic in a receive path (review 111).
+    #[test]
+    fn a_goodbye_fits_or_is_not_written() {
+        let mut small = [0u8; 3];
+        assert_eq!(goodbye(&mut small), None);
+        let mut buf = [0u8; 4];
+        assert_eq!(goodbye(&mut buf), Some(4));
+        assert!(matches!(
+            sdr_remote_core::protocol::Packet::deserialize(&buf),
+            Ok(sdr_remote_core::protocol::Packet::Disconnect)
+        ));
+    }
 
     /// The relay reads the PTT flag straight out of the header byte with its own
     /// bit mask, because it does not link core. That mirror had no guard, and it
@@ -283,100 +329,104 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sentinel_mapping_matches_relay() {
-        // The relay owns the sentinel convention; this server mirror
-        // (relay_sentinel_for / is_relay_sentinel) must agree with it for every
-        // client_id, or tunneled frames route to the wrong client. Guarded here
-        // because only this crate links both relay and server.
-        for id in 0u8..=255 {
-            let server_addr = relay_sentinel_for(id);
-            let relay_addr = sdr_remote_relay::sentinel_for_client_id(id);
-            assert_eq!(server_addr, relay_addr, "sentinel addr drift for id {id}");
-            assert!(is_relay_sentinel(server_addr), "id {id} not seen as sentinel");
-            // Relay's inverse recovers the id within the 254-wide range.
-            assert_eq!(sdr_remote_relay::client_id_from_sentinel(relay_addr), id % 254);
-        }
-    }
-
-    #[test]
-    fn sentinel_range_no_collision_with_real_peers() {
-        // Realistic real peer addrs must NEVER count as a sentinel.
-        for a in [
-            "192.168.1.50:4580",
-            "10.0.0.2:5000",
-            "8.8.8.8:53",
-            "127.0.0.1:4580",
-            "198.51.100.1:1", // TEST-NET-2 (reserved, non-routable), outside the sentinel range
-            "[::1]:4580",
-        ] {
-            assert!(
-                !is_relay_sentinel(a.parse().unwrap()),
-                "{a} ten onrechte als sentinel geflagd"
-            );
-        }
-        // And the issued sentinels do fall within it.
-        assert!(is_relay_sentinel(relay_sentinel_for(0)));
-        assert!(is_relay_sentinel(relay_sentinel_for(9)));
-        assert!(is_relay_sentinel("203.0.113.200:1".parse().unwrap()));
-    }
-
+    /// The trial's way in (build 256): what goes into it is read as a packet from
+    /// the trial client, beside the QUIC endpoint; without it nothing changes.
     #[tokio::test]
-    async fn sentinel_outbound_goes_to_uplink_not_udp() {
-        let inner = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let (up_tx, mut up_rx) = mpsc::unbounded_channel();
-        let (_in_tx, in_rx) = mpsc::unbounded_channel();
-        let sock = TrackedSocket::with_relay(inner, up_tx, in_rx);
-
-        let sentinel = relay_sentinel_for(0);
-        let payload = b"hello-tunnel";
-        let n = sock.send_to(payload, sentinel).await.unwrap();
-        assert_eq!(n, payload.len());
-
-        // Intercept: the frame appeared on the uplink with the sentinel addr...
-        let (addr, data) = up_rx.try_recv().expect("uplink kreeg geen frame");
-        assert_eq!(addr, sentinel);
-        assert_eq!(&data, payload);
-        // no-real-send: nothing more remains in the uplink (exactly one frame).
-        assert!(up_rx.try_recv().is_err());
-    }
-
-    #[tokio::test]
-    async fn real_addr_still_goes_over_udp() {
-        // Intercept counter-check: a real (non-sentinel) addr goes over UDP.
-        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let dest = receiver.local_addr().unwrap();
-        let inner = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let (up_tx, mut up_rx) = mpsc::unbounded_channel();
-        let (_in_tx, in_rx) = mpsc::unbounded_channel();
-        let sock = TrackedSocket::with_relay(inner, up_tx, in_rx);
-
-        let payload = b"direct-udp";
-        sock.send_to(payload, dest).await.unwrap();
-
+    async fn the_trial_way_in_is_read_beside_quic() {
+        let (server, link) = sdr_remote_quic::QuicServer::start(
+            "127.0.0.1:0".parse().unwrap(),
+            sdr_remote_quic::Congestion::Bbr,
+        )
+        .unwrap();
+        let (sock, to_server) = TrackedSocket::new(server, link).with_trial_inbound();
+        to_server.send((crate::trial::TRIAL_CLIENT, b"played in".to_vec())).unwrap();
         let mut buf = [0u8; 64];
-        let (n, _from) = receiver.recv_from(&mut buf).await.unwrap();
-        assert_eq!(&buf[..n], payload);
-        // The uplink got NOTHING (real addr -> UDP, not the tunnel).
-        assert!(up_rx.try_recv().is_err());
+        let (n, from) = tokio::time::timeout(std::time::Duration::from_secs(5), sock.recv_from(&mut buf))
+            .await
+            .expect("in time")
+            .unwrap();
+        assert_eq!((&buf[..n], from), (&b"played in"[..], crate::trial::TRIAL_CLIENT));
+        // Sending to it goes nowhere: it is no QUIC client.
+        assert!(sock.try_send_to(b"x", crate::trial::TRIAL_CLIENT).is_err());
     }
 
+    /// QUIC end to end through the socket: a QUIC client's packet arrives with a
+    /// sentinel of its own range, a reply to that sentinel goes back over its
+    /// connection, the binding is the connection's - and an address that is no
+    /// QUIC client has no channel and gets nothing (build 133: no plain UDP).
     #[tokio::test]
-    async fn relay_inbound_delivered_via_recv_from() {
-        // Seam unit-test hook: the test owns the inbound sender and pushes
-        // (sentinel, bytes) into it; recv_from delivers them byte-identical + with the sentinel addr.
-        let inner = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let (up_tx, _up_rx) = mpsc::unbounded_channel();
-        let (in_tx, in_rx) = mpsc::unbounded_channel();
-        let sock = TrackedSocket::with_relay(inner, up_tx, in_rx);
+    async fn quic_clients_arrive_and_are_answered_through_the_socket() {
+        let (server, link) = sdr_remote_quic::QuicServer::start(
+            "127.0.0.1:0".parse().unwrap(),
+            sdr_remote_quic::Congestion::Bbr,
+        )
+        .unwrap();
+        let quic_addr = server.local_addr().unwrap();
+        let sock = TrackedSocket::new(server, link);
 
-        let sentinel = relay_sentinel_for(0);
-        let payload = b"inbound-frame";
-        in_tx.send((sentinel, payload.to_vec())).unwrap();
-
+        let mut client = sdr_remote_quic::QuicClient::start(sdr_remote_quic::Congestion::Bbr).unwrap();
+        client.uplink_tx.send((quic_addr, b"hello over quic".to_vec())).unwrap();
         let mut buf = [0u8; 64];
-        let (n, addr) = sock.recv_from(&mut buf).await.unwrap();
-        assert_eq!(addr, sentinel);
-        assert_eq!(&buf[..n], payload);
+        let (n, from) = tokio::time::timeout(std::time::Duration::from_secs(5), sock.recv_from(&mut buf))
+            .await
+            .expect("the QUIC packet in time")
+            .unwrap();
+        assert_eq!(&buf[..n], b"hello over quic");
+        assert!(sdr_remote_quic::is_quic_sentinel(from), "tagged with a QUIC sentinel, not {from}");
+
+        let client_binding = *client.binding.wait_for(|b| b.is_some()).await.unwrap();
+        let channel = sock.auth_channel(from).unwrap();
+        assert_eq!(Some(channel.binding), client_binding, "the connection's binding");
+        let peer = channel.peer.expect("the real peer is known");
+        assert_eq!(peer.ip(), "127.0.0.1".parse::<std::net::IpAddr>().unwrap(), "the real peer, not the sentinel");
+        assert_eq!(sock.throttle_key(from), peer, "the brake counts the real peer");
+        let udp: SocketAddr = "192.168.1.97:4580".parse().unwrap();
+        assert!(sock.auth_channel(udp).is_err(), "no QUIC connection, no channel");
+        assert_eq!(sock.throttle_key(udp), udp, "an unknown address counts itself");
+        assert!(sock.auth_channel("198.51.100.200:7".parse().unwrap()).is_err(), "a QUIC sentinel with no connection");
+        assert!(sock.send_to(b"x", udp).await.is_err(), "nothing goes to an address that is no QUIC client");
+
+        sock.send_to(b"reply", from).await.unwrap();
+        let (tag, back) = tokio::time::timeout(std::time::Duration::from_secs(5), client.inbound_rx.recv())
+            .await
+            .expect("the reply in time")
+            .unwrap();
+        assert_eq!((tag, back.as_slice()), (quic_addr, &b"reply"[..]));
+
+        // The QUIC client leaves: its connection closes, and the socket reads
+        // that as the client's own Disconnect, from its sentinel (review 110).
+        drop(client);
+        let (n, gone) = tokio::time::timeout(std::time::Duration::from_secs(5), sock.recv_from(&mut buf))
+            .await
+            .expect("the close in time")
+            .unwrap();
+        assert_eq!(gone, from, "the session that ends is that connection's");
+        assert!(
+            matches!(sdr_remote_core::protocol::Packet::deserialize(&buf[..n]), Ok(sdr_remote_core::protocol::Packet::Disconnect)),
+            "read as a Disconnect"
+        );
+    }
+
+    /// The authentication in the network loop takes its binding from this
+    /// socket, for the address the response came from - not a stored one, and
+    /// not skipped (review 108, point 4.2). A text pin: the call sits in the
+    /// receive loop, which no test drives.
+    #[test]
+    fn the_auth_takes_the_binding_of_the_connection_it_came_on() {
+        let src = include_str!("network.rs");
+        let lines: Vec<&str> = src.lines().map(str::trim).collect();
+        let at = |l: &str| lines.iter().position(|x| *x == l);
+        let fetch = at("let Ok(channel) = self.socket.auth_channel(addr) else {").expect("the channel is fetched");
+        let verify = at("let verdict = session.verify_auth(addr, hmac, *client_nonce, channel);").expect("and handed over");
+        assert!(fetch < verify && verify - fetch <= 4, "fetched right before the verification");
+        assert_eq!(src.matches(".verify_auth(").count(), 1, "one place verifies");
+    }
+
+    /// What travels on a QUIC stream has room for any packet the protocol
+    /// makes; a frame that does not fit the buffer is dropped whole, not cut
+    /// off (review 109; `take_frame`).
+    #[test]
+    fn a_stream_holds_any_packet() {
+        assert!(sdr_remote_quic::MAX_STREAM_PACKET >= sdr_remote_core::MAX_PACKET_SIZE);
     }
 }

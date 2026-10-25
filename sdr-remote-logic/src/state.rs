@@ -5,6 +5,39 @@
 /// like a real reading.
 pub const SMETER_NO_DATA_DBM: f32 = -200.0;
 
+/// A spectrum's range when nobody has set one, on every spectrum screen of
+/// both clients, and whether its reference follows the noise floor (owner,
+/// 2026-10-11: "default auto ref aan ... default range op 70 dB"; build 171).
+/// The phone's own copies in `MainScreen.kt` are held to these by a test.
+pub const SPECTRUM_RANGE_DEFAULT_DB: f32 = 70.0;
+pub const SPECTRUM_AUTO_REF_DEFAULT: bool = true;
+
+/// How long after transmitting a spectrum waits before its automatic
+/// reference measures again - long enough for the frames of the change-over
+/// to have passed (build 171; since build 176 the engine's `AutoRefHold`, for
+/// both clients).
+pub const AUTO_REF_AFTER_TX_MS: u64 = 500;
+
+/// How long the meter's peak needle holds a reading.
+pub const SMETER_PEAK_HOLD_S: f32 = 2.0;
+
+/// One step of the Thetis meter's peak needle: the new peak, and whether its
+/// hold time starts again. It follows only a signal (dBm). While the meter
+/// carries watts (`in_tx`: `smeter_tx` or `other_tx`) the needle is cleared:
+/// a held 50 W was drawn as +50 dBm and stood at the end of the scale for two
+/// seconds after every release (owner, 2026-10-11; build 170). The phone's
+/// `SmeterBar` has the same rule in Kotlin - two languages, so two places;
+/// this one is tested.
+pub fn smeter_peak_step(peak: f32, held_s: f32, value: f32, in_tx: bool) -> (f32, bool) {
+    if in_tx {
+        (SMETER_NO_DATA_DBM, true)
+    } else if value >= peak || held_s > SMETER_PEAK_HOLD_S {
+        (value, true)
+    } else {
+        (peak, false)
+    }
+}
+
 /// A DX cluster spot for client-side display.
 #[derive(Clone, Debug)]
 pub struct DxSpotInfo {
@@ -84,6 +117,14 @@ pub enum ConnectError {
     WrongPassword,
     /// Server rejected the TOTP code after a successful password step.
     WrongTotp,
+    /// The server's proof that it knows the password did not verify: this is
+    /// not the server the password belongs to, or something sits in between.
+    /// The client does not connect (phase 2 of the direct connection).
+    ServerUnverified,
+    /// The server accepted us without any proof that it knows the password: a
+    /// server from before the mutual check. The client does not connect to one
+    /// (owner's decision F, 2026-10-02); the cure is to update the server.
+    ServerProvesNothing,
     /// Server protocol VERSION does not match client VERSION. The UI
     /// chooses the wording (client-too-old vs server-too-old) based on
     /// whether `server_version > client_version` or vice versa.
@@ -137,12 +178,20 @@ impl ConnectStatus {
 pub struct RadioState {
     // Connection
     pub connected: bool,
+    /// The transport this engine runs on - chosen at its start, for its life
+    /// (UDP, the relay, or QUIC). On the connect screens, so a switch that was
+    /// set but not yet applied (it needs a restart) cannot pass for the route
+    /// in use (review 110; it happened in the field).
+    pub route: crate::measure::Route,
     /// The last refusal from the server, and what is still standing because
     /// of it. Two loose booleans before; see `ptt_denial` for why one of them
     /// could be wiped by an unrelated transmitter and why the other could not
     /// be seen at all by an interface that samples.
     pub ptt_denial: crate::ptt_denial::PttDenial,
     pub audio_error: bool,
+    /// The chosen microphone that was not found, by its name: no other one is
+    /// opened, and the desktop refuses to transmit until it is back (build 188).
+    pub mic_missing: Option<String>,
     /// High-level connect-status with optional error detail. Replaces the
     /// older `auth_rejected` / `totp_required` booleans (which are kept
     /// for backwards-compatibility during migration but should not be
@@ -212,13 +261,66 @@ pub struct RadioState {
     pub drive_level: u8,
     pub rx_af_gain: u8,
     pub agc_enabled: bool,
+    /// Which build the server runs, judged against this client's.
+    ///
+    /// Lives here rather than in a front end so both screens can read the same
+    /// answer: a rule written in `client/src/ui/` is a rule Android does not
+    /// have. It carries no instruction - nothing refuses to work over it.
+    pub server_build: sdr_remote_core::protocol::PeerBuild,
+    /// The measurement file being written, when measurement mode is on
+    /// (`crate::measure`, open point 34). Not a session matter: measuring goes
+    /// on across sessions, so `forget_session` leaves it alone.
+    pub measurement_file: Option<String>,
+    /// "Relay only" as last switched (build 137, `Command::SetRelayOnly`). Not
+    /// a session matter: it holds for the engine's life.
+    pub relay_only: bool,
+    /// "Force TCP" as last switched (build 146, `Command::SetForceTcp`). The
+    /// same kind of switch as `relay_only`, for the engine's life.
+    pub force_tcp: bool,
+    /// The way the traffic takes now (build 139, the connection names):
+    /// `None` while there is no session. Set by the engine from the route layer
+    /// (with a relay) or from the server's address (without one).
+    pub path: Option<sdr_remote_core::path::PathKind>,
+    /// The relay sees no UDP from this client: signed in over wss, but no
+    /// `udp-seen` within `udp_blocked::UDP_SEEN_WAIT` (build 137). Shown as a
+    /// station notice.
+    pub udp_blocked: bool,
     pub other_tx: bool,
+    /// The server closed transmitting until it is restarted: a task there that
+    /// keeps a transmitter from hanging stopped (`Flags::SERVER_CLOSED`). A held
+    /// key has already let go; both screens say why and what cures it. Cleared
+    /// in `forget_session` - a restarted server is open again.
+    ///
+    /// `pub(crate)`, like `engine_dead`: only the `station_notice` block makes a
+    /// screen rule of them (the engine reads one back before setting it). A
+    /// screen cannot build its own rule on them - that is a compile error, not a
+    /// count (review 63; build 59 had four such rules).
+    pub(crate) server_tx_closed: bool,
+    /// The server says: the Amplitec position is receive-only and Thetis cannot
+    /// refuse transmitting by itself (`ServerStateFlags::RX_ONLY_UNGUARDED`,
+    /// build 215). `pub(crate)` for the same reason as `server_tx_closed`: only
+    /// `station_notice` makes a screen rule of it. Cleared in `forget_session`.
+    pub(crate) rx_only_unguarded: bool,
+    /// The engine thread stopped (`engine_stopped`): nothing this client sends
+    /// reaches a server any more, and only restarting the app helps. NOT
+    /// cleared by `forget_session` - a dead thread does not come back.
+    pub(crate) engine_dead: bool,
     /// The server says a transmitter is on: the PTT flag on the S-meter
     /// packets, ten times a second. True for a microphone transmission and,
     /// since the server keys MOX for a CW run, for CW too. It also goes up
     /// for a Yaesu the server keyed (the flag is one bit for the station),
     /// which is why nothing reads it without a second condition of its own.
     pub server_tx: bool,
+    /// The Thetis meter carries watts now (`ptt_button::meter_shows_tx`);
+    /// what every meter that draws `smeter` chooses its scale on (build 169).
+    pub smeter_tx: bool,
+    /// Our own Thetis transmission is still going on as far as the screens
+    /// know (`MeterWindow::open`): what the spectrum's transmit settings and
+    /// the mode buttons wait for (build 172).
+    pub tx_window_open: bool,
+    /// The spectra's automatic reference pauses now (`AutoRefHold`): a
+    /// transmission is on, or just ended (build 176).
+    pub auto_ref_paused: bool,
     pub recording: bool,
     pub playing: bool,
     /// The recordings the last Start made, as (source name, file path).
@@ -439,7 +541,7 @@ pub struct RadioState {
     pub rf2k_device_name: String,
     pub rf2k_available: bool,
     pub rf2k_active: bool,      // true if RF2K is the active PA for drive control
-    // RF2K-S debug (Fase D)
+    // RF2K-S debug (Phase D)
     pub rf2k_debug_available: bool,
     pub rf2k_bias_pct_x10: u16,
     pub rf2k_psu_source: u8,
@@ -456,9 +558,8 @@ pub struct RadioState {
     pub rf2k_tuner_6m: bool,
     pub rf2k_band_gap_allowed: bool,
     pub rf2k_controller_version: u16,
-    pub rf2k_drive_config_ssb: [u8; 11],
-    pub rf2k_drive_config_am: [u8; 11],
-    pub rf2k_drive_config_cont: [u8; 11],
+    /// SSB, AM, CONT (`sdr_remote_core::rf2k_drive`).
+    pub rf2k_drive_config: sdr_remote_core::rf2k_drive::DriveTable,
 
     // UltraBeam RCU-06
     pub ub_connected: bool,
@@ -511,11 +612,11 @@ pub struct RadioState {
     /// drops the flag as soon as the match is good again.
     pub yaesu_hi_swr: bool,
     /// Yaesu DSP/function toggles bitfield (PATCH-yaesu-extra-controls): bit N =
-    /// `YaesuCtrl` N on/off. Fed by YaesuFeaturePacket. Fase A1: RfAtt(0), BreakIn(1).
+    /// `YaesuCtrl` N on/off. Fed by YaesuFeaturePacket. Phase A1: RfAtt(0), BreakIn(1).
     pub yaesu_feature_toggles: u32,
-    /// Yaesu multi-state/level values, indexed by `YaesuCtrl`. Fase B: Agc(6), PreAmp(7).
+    /// Yaesu multi-state/level values, indexed by `YaesuCtrl`. Phase B: Agc(6), PreAmp(7).
     pub yaesu_feature_levels: [u8; 16],
-    /// Fase D frequency values: [0]=Contour, [1]=APF, [2]=Notch.
+    /// Phase D frequency values: [0]=Contour, [1]=APF, [2]=Notch.
     pub yaesu_feature_freqs: [u16; 4],
     pub yaesu_vfo_select: u8,  // 0=VFO, 1=Memory, 2=MemTune
     pub yaesu_memory_channel: u16,
@@ -613,6 +714,10 @@ pub struct RadioState {
 
     pub ddc_sample_rate_rx1: u16, // kHz (e.g. 192, 384, 1536)
     pub ddc_sample_rate_rx2: u16, // kHz
+    /// The DDC centre the server says, whole kHz (`DdcCentreRx1/2`, build 231);
+    /// 0 until it has.
+    pub ddc_centre_rx1_khz: u16,
+    pub ddc_centre_rx2_khz: u16,
     pub diversity_autonull_result: u16, // 0=not done, >0 = improvement*10+32000
 }
 
@@ -620,8 +725,10 @@ impl Default for RadioState {
     fn default() -> Self {
         Self {
             connected: false,
+            route: crate::measure::Route::default(),
             ptt_denial: crate::ptt_denial::PttDenial::default(),
             audio_error: false,
+            mic_missing: None,
             connect_status: ConnectStatus::Disconnected,
             rtt_ms: 0,
             jitter_ms: 0.0,
@@ -664,8 +771,20 @@ impl Default for RadioState {
             drive_level: 0,
             rx_af_gain: 0,
             agc_enabled: false,
+            server_build: sdr_remote_core::protocol::PeerBuild::Unknown,
+            measurement_file: None,
+            relay_only: false,
+            force_tcp: false,
+            path: None,
+            udp_blocked: false,
             other_tx: false,
+            server_tx_closed: false,
+            rx_only_unguarded: false,
+            engine_dead: false,
             server_tx: false,
+            smeter_tx: false,
+            tx_window_open: false,
+            auto_ref_paused: false,
             recording: false,
             playing: false,
             last_recorded: Vec::new(),
@@ -816,9 +935,7 @@ impl Default for RadioState {
             rf2k_tuner_6m: false,
             rf2k_band_gap_allowed: false,
             rf2k_controller_version: 0,
-            rf2k_drive_config_ssb: [0; 11],
-            rf2k_drive_config_am: [0; 11],
-            rf2k_drive_config_cont: [0; 11],
+            rf2k_drive_config: [[0; 11]; 3],
             ub_connected: false,
             ub_frequency_khz: 0,
             ub_band: 0,
@@ -931,6 +1048,8 @@ impl Default for RadioState {
             diversity_phase: 18000,
             ddc_sample_rate_rx1: 0,
             ddc_sample_rate_rx2: 0,
+            ddc_centre_rx1_khz: 0,
+            ddc_centre_rx2_khz: 0,
             diversity_autonull_result: 0,
         }
     }
@@ -974,9 +1093,12 @@ impl RadioState {
     /// The engine's `session_lost!()` calls this and then clears what is not a
     /// field of this struct: the transmit flags (locals of its loop) and the
     /// recent CW edges.
-    pub fn forget_session(&mut self) {
+    pub fn forget_session(&mut self) -> SessionForgotten {
         self.ptt_denial.clear();
         self.server_tx = false;
+        self.smeter_tx = false;
+        self.tx_window_open = false;
+        self.auto_ref_paused = false;
         self.yaesu_tx_active = false;
         self.yaesu2_tx_active = false;
         self.pa_drive_warning = false;
@@ -989,12 +1111,155 @@ impl RadioState {
         self.yaesu_held_by_other = false;
         self.yaesu2_held_by_other = false;
         self.other_tx = false;
+        self.server_tx_closed = false;
+        // What the last server said about its antenna position (build 215).
+        self.rx_only_unguarded = false;
+        // Where the last server's DDCs stood (build 231): the next server, or
+        // the same one after a restart, says it again.
+        self.ddc_centre_rx1_khz = 0;
+        self.ddc_centre_rx2_khz = 0;
+        // The code step belongs to the session that is gone: without this a
+        // Disconnect mid-typing left the flag standing, and the next Connect
+        // sent no heartbeats for five seconds (review 71, measured).
+        self.totp_required = false;
+        // The way of a session is gone with it (review 139): the engine's tick
+        // would clear it 20 ms later, but a dead engine has no tick, and two
+        // screens kept naming the last way for good.
+        self.path = None;
+        // The next server may not be the one that just went away, and until it
+        // has said so we know nothing about it. Re-learned on its first ack.
+        self.server_build = sdr_remote_core::protocol::PeerBuild::Unknown;
+        // Two more things the server says about itself, with an inverted
+        // default (absent = it has one): a server that said "single receiver"
+        // or "no cluster" left a false behind that only a server reporting
+        // state flags could undo - a next one that does not never enters that
+        // branch, and RX2 or the spots stayed hidden for the rest of the run
+        // (review 79, both). Back to the default, like `radios_known` above.
+        self.rx2_present = true;
+        self.dx_cluster_available = true;
+        // The mirror of those two: what the server HAS. Each of these latches
+        // on the first status packet of its device and nothing ever cleared
+        // it, so after a station with a rotor the rotor panel stood against a
+        // station without one - absence sends no packet (review 80). Back to
+        // absent; the next station's first status packet sets it again. The
+        // price is a blink of those panels after every session loss, the
+        // same blink `radios_known` has (owner decision, 2026-10-03).
+        self.amplitec_available = false;
+        self.tuner_available = false;
+        self.spe_available = false;
+        self.rf2k_available = false;
+        self.ub_available = false;
+        self.rotor_available = false;
+        self.tx_filter_supported = false;
+        // And their brothers: whether the device answers. Written only from
+        // the server's equipment status, so they too stood for a station that
+        // is gone - and the phone hangs the Amplitec and tuner panels on
+        // these two, not on `*_available`, which its bridge does not carry
+        // (review 82, measured). `yaesu_connected` stays out, and NOT because its
+        // readers are gated on something else - readers on the phone take it
+        // directly (the Yaesu tab, the ATU button, the subscription). The reason
+        // is the desktop: it reads the radio's memories on the rising edge of
+        // that flag, so clearing it per session would read them again after
+        // every reconnect (owner decision, round 82). The price: those readers
+        // hold the old station's radio until the new presence arrives - at
+        // once for a new session, the server clears its tick-list on the
+        // connect generation (review 83).
+        self.amplitec_connected = false;
+        // The phone also shows the Amplitec panel on a known switch position
+        // (`amplitecConnected || amplitecSwitchA > 0`); 0 is "unknown".
+        self.amplitec_switch_a = 0;
+        self.amplitec_switch_b = 0;
+        self.tuner_connected = false;
+        self.spe_connected = false;
+        self.rf2k_connected = false;
+        self.ub_connected = false;
+        self.rotor_connected = false;
+        SessionForgotten(())
     }
+
+    /// The engine thread is gone: the screen shows what a lost session shows,
+    /// and no connection. Nothing wrote the state after a panic in that thread,
+    /// so it froze on the last one - connected, and transmitting if it was, on
+    /// both clients (reviewers, round 45). `EngineStopReporter` calls this.
+    /// Kept BELOW `forget_session`, whose doc block is the field list's own
+    /// instructions and must stay attached to it (reviewers, round 46).
+    pub fn engine_stopped(&mut self) {
+        let forgotten = self.forget_session();
+        self.link_down(forgotten);
+        self.connect_status = ConnectStatus::Disconnected;
+        self.engine_dead = true;
+    }
+
+    /// The link is down: the one place that takes `connected` away, and it
+    /// can only be called by someone who has forgotten the session first.
+    /// Four rounds in a row a link-down path could lose its `forget_session`
+    /// with every test green (reviews 78-81); now that is a compile error.
+    /// What this holds is that the call HAPPENED, not when - both live in the
+    /// same block, so the order is the caller's.
+    pub fn link_down(&mut self, _forgotten: SessionForgotten) {
+        self.connected = false;
+    }
+}
+
+/// Proof that `RadioState::forget_session` ran. Only that function makes one;
+/// `RadioState::link_down` takes it, and a session that ends because a new one
+/// begins hands it to `replaced_by_a_new_session` - a named way to let it go,
+/// which fitness counts, so a third place that drops it is a decision.
+#[must_use = "a forgotten session is either a link that went down (link_down) or a new session (replaced_by_a_new_session)"]
+pub struct SessionForgotten(());
+
+impl SessionForgotten {
+    /// The session ended because another one begins (a Connect that replaces
+    /// a live session, an authentication): the link itself did not go down.
+    pub fn replaced_by_a_new_session(self) {}
 }
 
 #[cfg(test)]
 mod forget_session_tests {
     use super::RadioState;
+
+    /// The DDC centres belong to the server that said them (build 231): a
+    /// lost session forgets them, and the engine takes each from its own
+    /// control.
+    #[test]
+    fn a_lost_session_forgets_the_ddc_centres() {
+        let mut s = RadioState::default();
+        s.ddc_centre_rx1_khz = 7138;
+        s.ddc_centre_rx2_khz = 14282;
+        let _ = s.forget_session();
+        assert_eq!((s.ddc_centre_rx1_khz, s.ddc_centre_rx2_khz), (0, 0));
+        let engine = include_str!("engine.rs");
+        assert_eq!(engine.matches("ControlId::DdcCentreRx1 => state.ddc_centre_rx1_khz = ctrl.value,").count(), 1);
+        assert_eq!(engine.matches("ControlId::DdcCentreRx2 => state.ddc_centre_rx2_khz = ctrl.value,").count(), 1);
+        // And the client takes each into its own field.
+        let sync = include_str!("../../sdr-remote-client/src/ui/sync_state.rs");
+        assert_eq!(sync.matches("(1, state.ddc_centre_rx1_khz, &mut self.ddc_centre_rx1_hz),").count(), 1);
+        assert_eq!(sync.matches("(2, state.ddc_centre_rx2_khz, &mut self.ddc_centre_rx2_hz),").count(), 1);
+    }
+
+    /// A dead engine thread leaves the screen as a lost session does, and not
+    /// connected: nothing wrote the state after a panic, so it froze on the last
+    /// one - connected, and transmitting if it was (reviewers, round 45).
+    #[test]
+    fn a_stopped_engine_leaves_no_session_and_no_connection() {
+        let mut s = RadioState::default();
+        s.connected = true;
+        s.connect_status = super::ConnectStatus::Connected;
+        s.server_tx = true;
+        s.smeter_tx = true;
+        s.tx_window_open = true;
+        s.other_tx = true;
+        s.path = Some(sdr_remote_core::path::PathKind::DirectViaRelay);
+        assert!(!s.engine_dead);
+        s.engine_stopped();
+        assert!(s.engine_dead, "the screens could not tell the engine is gone");
+        assert!(!s.connected, "a dead engine still showed a connection");
+        assert_eq!(s.connect_status, super::ConnectStatus::Disconnected);
+        assert!(!s.server_tx && !s.other_tx, "a dead engine still showed a transmitter");
+        assert!(!s.smeter_tx, "a dead engine still drew watts (review of 169)");
+        assert!(!s.tx_window_open, "a dead engine still held the mode buttons");
+        assert_eq!(s.path, None, "a dead engine still named a way (review 139)");
+    }
 
     /// Every field a server owns is back to what a client without a server
     /// says. The list is written out on purpose: a hand-written list is
@@ -1016,10 +1281,64 @@ mod forget_session_tests {
         s.yaesu_held_by_other = true;
         s.yaesu2_held_by_other = true;
         s.other_tx = true;
+        s.server_tx_closed = true;
+        s.rx_only_unguarded = true;
+        s.totp_required = true;
+        s.server_build = sdr_remote_core::protocol::PeerBuild::Different("2.11.0".into());
+        s.rx2_present = false;
+        s.dx_cluster_available = false;
+        s.amplitec_available = true;
+        s.tuner_available = true;
+        s.spe_available = true;
+        s.rf2k_available = true;
+        s.ub_available = true;
+        s.rotor_available = true;
+        s.tx_filter_supported = true;
+        s.amplitec_connected = true;
+        s.amplitec_switch_a = 3;
+        s.amplitec_switch_b = 2;
+        s.tuner_connected = true;
+        s.spe_connected = true;
+        s.rf2k_connected = true;
+        s.ub_connected = true;
+        s.rotor_connected = true;
+        s.path = Some(sdr_remote_core::path::PathKind::RelayCoupling);
         s.ptt_denial.apply_refusal([true, false, false], sdr_remote_core::protocol::DeniedTarget::Thetis, false);
 
-        s.forget_session();
+        s.forget_session().replaced_by_a_new_session();
 
+        assert!(
+            s.rx2_present && s.dx_cluster_available,
+            "what the last server lacked is not what the next one lacks - RX2 and the spots stayed hidden (review 79)"
+        );
+        // One line per field, so a field that leaks says which one (review 82).
+        for (name, still_set) in [
+            ("amplitec_available", s.amplitec_available),
+            ("tuner_available", s.tuner_available),
+            ("spe_available", s.spe_available),
+            ("rf2k_available", s.rf2k_available),
+            ("ub_available", s.ub_available),
+            ("rotor_available", s.rotor_available),
+            ("tx_filter_supported", s.tx_filter_supported),
+            ("amplitec_connected", s.amplitec_connected),
+            ("amplitec_switch_a", s.amplitec_switch_a != 0),
+            ("amplitec_switch_b", s.amplitec_switch_b != 0),
+            ("tuner_connected", s.tuner_connected),
+            ("spe_connected", s.spe_connected),
+            ("rf2k_connected", s.rf2k_connected),
+            ("ub_connected", s.ub_connected),
+            ("rotor_connected", s.rotor_connected),
+            ("path", s.path.is_some()),
+        ] {
+            assert!(
+                !still_set,
+                "{name} outlived the session - a panel stayed up for a device of a station that is gone (reviews 80, 82)"
+            );
+        }
+
+        assert!(!s.server_tx_closed, "a restarted server is open again - the screen would keep saying it is closed");
+        assert!(!s.rx_only_unguarded, "the next server may guard its RX-only positions");
+        assert!(!s.totp_required, "a code step does not outlive its session - the next connect would send no heartbeats");
         assert!(!s.server_tx);
         assert!(!s.yaesu_tx_active && !s.yaesu2_tx_active);
         assert!(!s.pa_drive_warning && !s.pa_drive_alarm);
@@ -1040,6 +1359,11 @@ mod forget_session_tests {
         // and the ratchet counts the link-down sites, never the fields (review
         // 2120A4).
         assert!(!s.ptt_denial.active(), "and a refusal by a server that is gone is not a refusal");
+        assert_eq!(
+            s.server_build,
+            sdr_remote_core::protocol::PeerBuild::Unknown,
+            "the next server need not be the one that just left, so what the              old one called itself says nothing about it"
+        );
     }
 }
 
@@ -1061,5 +1385,18 @@ mod recording_list_tests {
         let names: Vec<&str> = s.last_recorded.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["Radio 1", "Radio 2"]);
         assert!(s.last_recorded.iter().all(|(_, p)| !p.is_empty()));
+    }
+
+    /// The peak needle follows a signal only, starts over when the meter
+    /// carries watts, and lets go after its hold (build 170).
+    #[test]
+    fn the_peak_needle_never_holds_watts() {
+        assert_eq!(super::smeter_peak_step(-90.0, 0.5, -80.0, false), (-80.0, true), "a higher signal");
+        assert_eq!(super::smeter_peak_step(-80.0, 0.5, -90.0, false), (-80.0, false), "held");
+        assert_eq!(super::smeter_peak_step(-80.0, super::SMETER_PEAK_HOLD_S + 0.1, -90.0, false), (-90.0, true), "let go");
+        assert_eq!(super::smeter_peak_step(-80.0, 0.5, 50.0, true), (super::SMETER_NO_DATA_DBM, true), "watts: cleared, not held");
+        // Back from transmitting: the first signal is the peak again.
+        assert_eq!(super::smeter_peak_step(super::SMETER_NO_DATA_DBM, 0.1, -95.0, false), (-95.0, true));
+        assert_eq!(super::SMETER_PEAK_HOLD_S, 2.0);
     }
 }

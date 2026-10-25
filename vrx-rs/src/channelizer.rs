@@ -110,6 +110,10 @@ pub struct VrxChannelizer {
     // actual carrier lands exactly on the iFFT's zero frequency.
     nco_rotor: Complex32,                 // exp(-j 2π Δf / Fs_out) per sample
     nco_phase_at_frame_start: Complex32,
+    // Odd frame since construction. With 50 % overlap, bin k of frame m
+    // carries the phase (-1)^(k*m); the shift to baseband has to take that
+    // off, or an odd carrier bin cancels in the overlap-add (build 225).
+    frame_odd: bool,
     samples_since_nco_renorm: u32,
 
     // AGC state
@@ -232,6 +236,7 @@ impl VrxChannelizer {
             fm_last_sample: Complex32::new(0.0, 0.0),
             nco_rotor,
             nco_phase_at_frame_start: Complex32::new(1.0, 0.0),
+            frame_odd: false,
             samples_since_nco_renorm: 0,
             // Channelizer output is typically tiny (~1e-5) after bin-
             // selection on a wideband stream. Pulling that up to an
@@ -397,6 +402,17 @@ impl VrxChannelizer {
             }
             self.ifft.process(&mut self.ifft_buf);
 
+            // The frame phase of the whole-bin shift: (-1)^(carrier_bin * m).
+            // Left out, every other frame came out inverted for an odd bin and
+            // the overlap-add kept only hum - a VRX on any whole kHz under a
+            // DDC centre off the 125 Hz grid (field 2026-10-16, build 225).
+            if self.frame_odd && carrier_bin.rem_euclid(2) == 1 {
+                for slot in self.ifft_buf.iter_mut() {
+                    *slot = -*slot;
+                }
+            }
+            self.frame_odd = !self.frame_odd;
+
             // Apply residual NCO to compensate sub-bin frequency offset.
             // Phase must stay coherent across overlap-add frames.
             let mut nco_phase = self.nco_phase_at_frame_start;
@@ -533,6 +549,89 @@ impl VrxChannelizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The share of the output power in a tone `tone_hz` from `carrier_hz`,
+    /// measured over the second half of three seconds at 384 kHz. With
+    /// `switch_to`, the carrier moves there after 1.5 s (`set_carrier_offset`).
+    fn tone_purity(carrier_hz: f32, mode: VrxMode, tone_hz: f32, switch_to: Option<f32>) -> f64 {
+        let (fs_in, fs_out) = (384_000u32, 8_000u32);
+        let mut ch = VrxChannelizer::new_with_output_rate(
+            VrxConfig { carrier_offset_hz: carrier_hz, mode, filter_lo_bins: 0, filter_hi_bins: 48 },
+            fs_in,
+            fs_out,
+        );
+        let n = fs_in as usize * 3;
+        let mut out = Vec::new();
+        let mut carrier = carrier_hz;
+        let mut i0 = 0usize;
+        while i0 < n {
+            if i0 >= n / 2 {
+                if let Some(to) = switch_to {
+                    if carrier != to {
+                        carrier = to;
+                        ch.set_carrier_offset(to);
+                        out.clear();
+                    }
+                }
+            }
+            let chunk: Vec<(f32, f32)> = (i0..(i0 + 7680).min(n))
+                .map(|i| {
+                    let t = i as f64 / fs_in as f64;
+                    let (f, a) = match mode {
+                        // A carrier with a 50 % tone on it.
+                        VrxMode::Am | VrxMode::Sam => {
+                            (carrier as f64, 1.0 + 0.5 * (std::f64::consts::TAU * tone_hz as f64 * t).cos())
+                        }
+                        _ => (carrier as f64 + tone_hz as f64, 1.0),
+                    };
+                    let p = std::f64::consts::TAU * f * t;
+                    ((0.01 * a * p.cos()) as f32, (0.01 * a * p.sin()) as f32)
+                })
+                .collect();
+            out.extend(ch.push_iq(&chunk));
+            i0 += 7680;
+        }
+        let s = &out[out.len() / 2..];
+        let tone = tone_hz.abs() as f64;
+        let (mut re, mut im, mut tot) = (0.0f64, 0.0f64, 0.0f64);
+        for (k, &x) in s.iter().enumerate() {
+            let p = std::f64::consts::TAU * tone * k as f64 / fs_out as f64;
+            re += x as f64 * p.cos();
+            im += x as f64 * p.sin();
+            tot += x as f64 * x as f64;
+        }
+        2.0 * (re * re + im * im) / s.len() as f64 / tot.max(1e-30)
+    }
+
+    /// Field 2026-10-16 (build 225): with the DDC centre of Thetis on 7138.162
+    /// kHz every VRX on a whole kHz sat on an odd bin, and the sound was gone
+    /// - hum in every mode, until a band change made the centre round. With
+    /// 50 % overlap a shift by an odd number of bins turns every other frame
+    /// over; the overlap-add then cancels the signal. Even, odd, the field
+    /// case, a residual on top, and a move from even to odd while running.
+    #[test]
+    fn an_odd_carrier_bin_sounds_as_clean_as_an_even_one() {
+        let bin = 384_000.0f32 / fft_n_for_rates(384_000, 8_000) as f32;
+        assert_eq!(bin, 62.5);
+        for (what, carrier) in [
+            ("even bin", -464.0 * bin),
+            ("odd bin", -451.0 * bin),
+            ("the field case, 7110 kHz on 7138.162", -28_162.0),
+            ("odd with a residual", -451.3 * bin),
+        ] {
+            assert!(tone_purity(carrier, VrxMode::Usb, 1000.0, None) > 0.99, "USB, {what}");
+            assert!(tone_purity(carrier, VrxMode::Lsb, -1000.0, None) > 0.99, "LSB, {what}");
+            assert!(tone_purity(carrier, VrxMode::Am, 1000.0, None) > 0.9, "AM, {what}");
+        }
+        assert!(
+            tone_purity(-464.0 * bin, VrxMode::Usb, 1000.0, Some(-451.0 * bin)) > 0.99,
+            "even, then odd while running"
+        );
+        assert!(
+            tone_purity(-451.0 * bin, VrxMode::Usb, 1000.0, Some(-464.0 * bin)) > 0.99,
+            "odd, then even while running"
+        );
+    }
 
     /// SAM mode must lock its carrier-recovery PLL onto a residual
     /// frequency offset (operator a few Hz off the true carrier). After

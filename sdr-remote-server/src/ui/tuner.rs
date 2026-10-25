@@ -23,7 +23,7 @@ pub(super) fn render_tuner_panel(
             ui.colored_label(Color32::RED, "[OFF]");
         }
 
-        ui.separator();
+        sdr_remote_theme::rule(ui);
 
         // Tune button
         let can_start = status.connected
@@ -76,7 +76,7 @@ pub(super) fn render_tuner_panel(
 
 pub(super) fn render_tuner_log(ui: &mut egui::Ui, log_entries: &[(String, String)], show_log: bool) {
     if show_log {
-        ui.separator();
+        sdr_remote_theme::rule(ui);
         egui::ScrollArea::vertical()
             .id_salt("tuner_log")
             .stick_to_bottom(true)

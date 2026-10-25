@@ -17,6 +17,7 @@
 //! stale snapshot on contention - 1Hz refresh), audio/TCI via lock-free
 //! atomics. UI never blocks the network or audio loops.
 
+use std::sync::atomic::Ordering;
 use egui::{Color32, RichText};
 
 use crate::audio_stats::StatusPanelShared;
@@ -97,13 +98,14 @@ pub fn render_status_panel(
     ui: &mut egui::Ui,
     shared: &StatusPanelShared,
     pending_bind_addr: &str,
-    yaesu_configured: bool,
     amplitec_configured: bool,
     tuner_configured: bool,
     spe_configured: bool,
     rf2k_configured: bool,
 ) {
     let server_start = shared.server_start;
+    // What the server set up at its start; `None` until it has said (build 269).
+    let configured = shared.configured.get();
 
     // ── 1. Bind address ──────────────────────────────────────────────────
     // Reflect the actual bind outcome - a hardcoded placeholder would lie
@@ -114,7 +116,7 @@ pub fn render_status_panel(
             Some(crate::audio_stats::BindStatus::Ok { addr }) => {
                 ui.colored_label(
                     Color32::from_rgb(50, 200, 50),
-                    format!("Listening on UDP {}", addr),
+                    format!("Listening (QUIC) on {}", addr),
                 );
             }
             Some(crate::audio_stats::BindStatus::Failed { addr, error }) => {
@@ -154,7 +156,10 @@ pub fn render_status_panel(
     let (tci_connected, tci_age) = shared.tci.snapshot(server_start);
     ui.horizontal(|ui| {
         ui.label(RichText::new("Thetis:").strong());
-        if tci_connected {
+        if configured.is_some_and(|c| !c.thetis) {
+            // No TCI address: not a fault, so not red (build 269).
+            ui.colored_label(Color32::from_rgb(130, 130, 130), "Not configured");
+        } else if tci_connected {
             let dur = tci_age
                 .map(format_duration_short)
                 .unwrap_or_else(|| "-".to_string());
@@ -205,14 +210,14 @@ pub fn render_status_panel(
             let active_addrs: Vec<std::net::SocketAddr> = clients.iter().map(|c| c.addr).collect();
             let bw_rates = client_bandwidth_rates(&active_addrs);
             let normal_color = ui.visuals().text_color();
-            let col_widths = [170.0, 72.0, 56.0, 48.0, 62.0, 76.0, 76.0, 86.0, 76.0, 70.0, 48.0];
+            let col_widths = [150.0, 56.0, 72.0, 56.0, 48.0, 62.0, 76.0, 76.0, 86.0, 76.0, 70.0, 48.0];
             egui::Grid::new("server_client_stats_grid")
-                .num_columns(11)
+                .num_columns(12)
                 .spacing([4.0, 3.0])
                 .striped(true)
                 .show(ui, |ui| {
                     let headers = [
-                        "Client", "Connected", "RTT", "Loss", "Jitter",
+                        "Client", "Path", "Connected", "RTT", "Loss", "Jitter",
                         "Down", "Audio", "Spectrum", "Other", "Up", "Seen",
                     ];
                     for i in 0..headers.len() {
@@ -244,46 +249,52 @@ pub fn render_status_panel(
                             );
                         };
 
-                        // Colour the client address by connection type: direct
-                        // (real UDP peer) vs relay (synthetic sentinel address in
-                        // 203.0.113.0/24). Keep the amber auth/stale cue on the
-                        // address when that applies - status wins over type.
-                        let is_relay = crate::tracked_socket::is_relay_sentinel(c.addr);
-                        let addr_color = if !c.authenticated || last_seen_age > 5 {
-                            color
-                        } else if is_relay {
-                            Color32::from_rgb(80, 200, 205) // relay = cyan
-                        } else {
-                            Color32::from_rgb(100, 160, 230) // direct = ThetisLink blue
-                        };
-                        let addr_text = if is_relay {
-                            format!("{} (relay)", c.addr)
-                        } else {
-                            c.addr.to_string()
-                        };
-                        ui.add_sized(
-                            [col_widths[0], 16.0],
-                            egui::Label::new(RichText::new(addr_text).monospace().size(11.0).color(addr_color)),
-                        );
-                        cell(ui, connected_for, col_widths[1]);
-                        cell(ui, format!("{} ms", c.rtt_ms), col_widths[2]);
-                        cell(ui, format!("{}%", c.loss_percent), col_widths[3]);
-                        cell(ui, format!("{} ms", c.jitter_ms), col_widths[4]);
-                        cell(ui, format!("{} kbps", down_kbps), col_widths[5]);
-                        cell(ui, format!("{} kbps", aud), col_widths[6]);
-                        cell(ui, format!("{} kbps", spec), col_widths[7]);
-                        cell(ui, format!("{} kbps", oth), col_widths[8]);
-                        cell(ui, format!("{} kbps", up_kbps), col_widths[9]);
-                        cell(ui, format!("{}s", last_seen_age), col_widths[10]);
+                        // The address in the row's own colour: the amber
+                        // auth/stale cue when that applies. The way is a column
+                        // of its own since build 143 - letters, no colour of
+                        // its own (the connection names, owner 2026-10-08).
+                        cell(ui, c.addr.to_string(), col_widths[0]);
+                        cell(ui, c.path.map_or("-", |k| k.short()).to_string(), col_widths[1]);
+                        cell(ui, connected_for, col_widths[2]);
+                        cell(ui, format!("{} ms", c.rtt_ms), col_widths[3]);
+                        cell(ui, format!("{}%", c.loss_percent), col_widths[4]);
+                        cell(ui, format!("{} ms", c.jitter_ms), col_widths[5]);
+                        cell(ui, format!("{} kbps", down_kbps), col_widths[6]);
+                        cell(ui, format!("{} kbps", aud), col_widths[7]);
+                        cell(ui, format!("{} kbps", spec), col_widths[8]);
+                        cell(ui, format!("{} kbps", oth), col_widths[9]);
+                        cell(ui, format!("{} kbps", up_kbps), col_widths[10]);
+                        cell(ui, format!("{}s", last_seen_age), col_widths[11]);
                         ui.end_row();
                     }
                 });
-            // Legend for the address colour coding.
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Connection:").size(10.0).weak());
-                ui.colored_label(Color32::from_rgb(100, 160, 230), RichText::new("direct").size(10.0));
-                ui.colored_label(Color32::from_rgb(80, 200, 205), RichText::new("relay").size(10.0));
-            });
+            // What the letters in the Path column mean.
+            ui.label(
+                RichText::new("Path: L local · D direct · R through the relay · +R found through the relay · R (TCP) through the relay over TCP")
+                    .size(10.0)
+                    .weak(),
+            );
+
+            // A client that is not this server's build, named. Written as a
+            // line under the table rather than one more column because the
+            // normal case is that they all agree and there is nothing to say.
+            // Nothing is refused over this - it only tells.
+            for c in clients.iter().filter(|c| c.client_build.is_trouble()) {
+                let theirs = c
+                    .client_build
+                    .theirs()
+                    .unwrap_or("a build too old to say which");
+                ui.colored_label(
+                    Color32::from_rgb(220, 150, 40),
+                    RichText::new(format!(
+                        "{} runs {} and this server is {} - they should be the same build.",
+                        c.addr,
+                        theirs,
+                        sdr_remote_core::version_string()
+                    ))
+                    .size(10.0),
+                );
+            }
         }
         None => {
             ui.horizontal(|ui| {
@@ -299,12 +310,13 @@ pub fn render_status_panel(
     // ── 4. Audio routing ─────────────────────────────────────────────────
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Audio:").strong());
-        render_channel_chip(ui, "RX1", &shared.audio.rx1, server_start);
-        render_channel_chip(ui, "RX2", &shared.audio.rx2, server_start);
-        render_channel_chip(ui, "TX", &shared.audio.tx, server_start);
-        if yaesu_configured {
-            render_channel_chip(ui, "Y-RX", &shared.audio.yaesu_rx, server_start);
-            render_channel_chip(ui, "Y-TX", &shared.audio.yaesu_tx, server_start);
+        for chip in chips(configured) {
+            let (rx, tx) = chip.stats(&shared.audio);
+            let tx_age = tx.and_then(|t| t.snapshot(server_start).1);
+            match tx_shown(chip.says_transmitting(shared), tx_age) {
+                TxShown::Not => render_channel_chip(ui, chip.label(false), rx, server_start),
+                shown => render_tx_chip(ui, chip.label(true), shown),
+            }
         }
     });
 
@@ -324,7 +336,7 @@ pub fn render_status_panel(
         } else {
             None
         };
-    ui.separator();
+    sdr_remote_theme::rule(ui);
     ui.label(RichText::new("Recent connect attempts:").strong());
     match &attempts {
         Some(list) if list.is_empty() => {
@@ -373,20 +385,33 @@ pub fn render_status_panel(
     // online/offline detection per device is out of scope for PATCH-2.
     // Labelled "Configured devices" so the screenshot reader is not
     // misled into thinking a green dot means the radio replied.
-    ui.separator();
+    sdr_remote_theme::rule(ui);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Configured devices:").strong());
-        render_device_dot(ui, "Yaesu", yaesu_configured);
+        let radios = configured.map_or([false, false], |c| c.radios);
+        render_device_dot(ui, "Yaesu 1", radios[0]);
+        render_device_dot(ui, "Yaesu 2", radios[1]);
         render_device_dot(ui, "Amplitec", amplitec_configured);
         render_device_dot(ui, "Tuner", tuner_configured);
         render_device_dot(ui, "SPE", spe_configured);
         render_device_dot(ui, "RF2K", rf2k_configured);
     });
+    // Why a radio's port does not open, while the server runs (build 270):
+    // above all another program holding it. The settings could not say it.
+    // A radio that also keys on a line of its USB port (build 296). And the
+    // lead in its sound card, in the developer mode only (builds 278, 296).
+    for (i, radio) in shared.radios.get().into_iter().flatten().enumerate() {
+        render_port_trouble(ui, i, radio.as_deref());
+        render_line_keyed(ui, i, radio.as_deref());
+        if sdr_remote_core::dev_mode::is_on() {
+            render_lead_row(ui, i, radio.as_deref());
+        }
+    }
 
     // ── 7. MCP2221A tuner bridges - collapsible so the operator can hide the
     // per-tuner threshold sliders and board-scan tools during normal use.
     // Open/closed state is persisted in the config so it survives a restart.
-    ui.separator();
+    sdr_remote_theme::rule(ui);
     let current_expanded = crate::config::load().mcp2221_section_expanded;
     if super::chevron_label(
         ui,
@@ -423,7 +448,7 @@ pub fn render_status_panel(
             // hardware verification. Only visible once a rot_*
             // instance has started.
             if let Some(rotor) = shared.rotor_slot.get() {
-                ui.separator();
+                sdr_remote_theme::rule(ui);
                 render_rotor_row(ui, rotor);
             } else {
                 // Rotor (MCP2221A) not bound. Show a link row so an
@@ -436,7 +461,7 @@ pub fn render_status_panel(
                     s.starts_with(crate::mcp2221_scan::BoardKind::ROTOR_PREFIX)
                 });
                 if backend_is_mcp || rot_board_detected {
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
                     render_rotor_disabled_row(ui);
                 }
             }
@@ -444,7 +469,7 @@ pub fn render_status_panel(
             // the operator can figure out which USB serial belongs to which
             // physical tuner. Result cached statically until the next Scan
             // click so we don't hammer the HID enumerator on every repaint.
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             render_board_scan_section(ui);
         });
     }
@@ -457,7 +482,7 @@ fn render_tuner_detector_row(
     let bridge = inst.bridge();
     let snap = bridge.snapshot();
     let slot_idx = inst.slot_index();
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    sdr_remote_theme::group(ui).show(ui, |ui| {
         // Header: tuner label + connection status + delete button on the right
         ui.horizontal(|ui| {
             ui.label(RichText::new(inst.label()).strong());
@@ -690,7 +715,7 @@ fn render_tuner_detector_row(
 /// the tuner is set enabled and the server is restarted (same
 /// auto-restart path as the full row).
 fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    sdr_remote_theme::group(ui).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("Tuner {}", slot + 1)).strong());
             ui.colored_label(
@@ -979,7 +1004,7 @@ fn render_rotor_row(
 ) {
     use crate::mcp2221_yaesu_rotor::{Status as RotorStatus, DAC_MAX};
     let snap = rotor.status();
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    sdr_remote_theme::group(ui).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("Yaesu rotor - {}", snap.label)).strong());
             match &snap.status {
@@ -1007,7 +1032,7 @@ fn render_rotor_row(
                             .strong()
                             .size(16.0),
                     );
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
                     ui.label(format!("≈ {:.3} V (median)", v));
                 }
                 (None, Some(v)) => {
@@ -1015,7 +1040,7 @@ fn render_rotor_row(
                         RichText::new(rust_i18n::t!("srv_not_calibrated").to_string())
                             .weak(),
                     );
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
                     ui.label(format!("≈ {:.3} V (median)", v));
                 }
                 _ => {
@@ -1029,7 +1054,7 @@ fn render_rotor_row(
                 ui.label(RichText::new("  laatste raw:").weak());
                 ui.label(RichText::new(format!("{}", raw)).weak());
                 if let Some(p2p) = snap.adc_p2p_raw {
-                    ui.separator();
+                    sdr_remote_theme::rule(ui);
                     ui.label(RichText::new(format!("spread d={} raw", p2p)).weak());
                     // Converted to Yaesu pin voltage for readable diagnosis.
                     // 1.8 k + 10 k voltage-divider correction matches the operator's hardware.
@@ -1120,7 +1145,7 @@ fn render_rotor_row(
                 rotor.park_cw();
             }
             ui.label(RichText::new(format!("{:.3} V", snap.calibration.v_at_max_deg)).weak());
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             ui.label("max:");
             let mut max_deg = snap.calibration.max_deg;
             if ui
@@ -1129,7 +1154,7 @@ fn render_rotor_row(
             {
                 rotor.set_max_deg(max_deg);
             }
-            ui.separator();
+            sdr_remote_theme::rule(ui);
             // Ramp-rate slider: how fast the DAC ramps from 0 -> max (and
             // back) during a GoTo or start/stop. Low value =
             // slow, antenna-friendly acceleration (heavy
@@ -1152,7 +1177,7 @@ fn render_rotor_row(
             // overlap zone (max_deg > 360); for standard 360°
             // rotors the choice is meaningless.
             if snap.calibration.max_deg > 360 {
-                ui.separator();
+                sdr_remote_theme::rule(ui);
                 let mut shortest = snap.calibration.shortest_route_in_overlap;
                 if ui
                     .checkbox(&mut shortest, "shortest route")
@@ -1178,7 +1203,7 @@ fn render_rotor_row(
 /// `enabled`, the serial and the rotor backend correctly and restarts the server.
 fn render_rotor_disabled_row(ui: &mut egui::Ui) {
     use crate::mcp2221_scan::BoardKind;
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    sdr_remote_theme::group(ui).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Yaesu rotor").strong());
             ui.colored_label(
@@ -1306,7 +1331,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
             }
             for b in list {
                 let kind = b.kind();
-                egui::Frame::group(ui.style()).show(ui, |ui| {
+                sdr_remote_theme::group(ui).show(ui, |ui| {
                     // Header with function-classification tag + serial label.
                     ui.horizontal(|ui| {
                         let tag_color = match kind {
@@ -1589,6 +1614,194 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
     }
 }
 
+/// Why a radio's port does not open, as the key of its text: only while the
+/// radio is not connected (build 270; the texts are the settings' old note).
+pub(crate) fn port_trouble_key(connected: bool, trouble: u8) -> Option<&'static str> {
+    use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING};
+    match (connected, trouble) {
+        (false, PORT_TROUBLE_BUSY) => Some("srv_port_busy"),
+        (false, PORT_TROUBLE_MISSING) => Some("srv_port_missing"),
+        _ => None,
+    }
+}
+
+/// "Yaesu N: why its port does not open", in orange, when the server knows.
+fn render_port_trouble(ui: &mut egui::Ui, index: usize, radio: Option<&crate::yaesu::YaesuRadio>) {
+    let Some(y) = radio else { return };
+    let st = y.status();
+    if let Some(key) = port_trouble_key(st.connected, st.port_trouble) {
+        ui.colored_label(
+            Color32::from_rgb(255, 170, 40),
+            format!("Yaesu {}: {}", index + 1, rust_i18n::t!(key)),
+        );
+    }
+}
+
+/// "Yaesu N: transmits when Windows raises RTS or DTR ...": the menus that key
+/// the radio on a line of its USB port (build 296; owner, 2026-10-24).
+fn render_line_keyed(ui: &mut egui::Ui, index: usize, radio: Option<&crate::yaesu::YaesuRadio>) {
+    let Some(y) = radio else { return };
+    let st = y.status();
+    use crate::yaesu::line_ptt;
+    let shown = line_ptt::shown(&st);
+    if shown.is_empty() {
+        return;
+    }
+    ui.colored_label(
+        Color32::from_rgb(255, 170, 40),
+        format!("Yaesu {}: {}", index + 1, rust_i18n::t!("srv_line_ptt", menus = line_ptt::list(&shown))),
+    );
+}
+
+/// The lead targets the developer mode offers (build 278; back in 296), in ms.
+const LEAD_CHOICES: [u64; 8] = [0, 20, 40, 60, 80, 100, 120, crate::yaesu::tx_timing::LEAD_MAX_MS];
+
+/// "Yaesu N TX lead": the target in the radio's sound card ring and whether
+/// only every other over gets it (build 278). In the developer mode only, live
+/// (the next over takes it), and not kept: outside the mode, and after a
+/// restart, every over gets `LEAD_MS` (owner, 2026-10-24).
+fn render_lead_row(ui: &mut egui::Ui, index: usize, radio: Option<&crate::yaesu::YaesuRadio>) {
+    let Some(y) = radio else { return };
+    let timing = y.status_arc().lock().unwrap().tx_timing.clone();
+    let (mut ms, mut alternate) = timing.lead_setting();
+    let before = (ms, alternate);
+    ui.horizontal(|ui| {
+        ui.label(format!("Yaesu {} TX lead (developer):", index + 1));
+        egui::ComboBox::from_id_salt(format!("yaesu_tx_lead_{}", index))
+            .selected_text(format!("{} ms", ms))
+            .show_ui(ui, |ui| {
+                for choice in LEAD_CHOICES {
+                    ui.selectable_value(&mut ms, choice, format!("{} ms", choice));
+                }
+            });
+        ui.checkbox(&mut alternate, "every other over")
+            .on_hover_text("Odd overs get the lead, even overs none: both settings on the same road");
+    });
+    if (ms, alternate) != before {
+        timing.set_lead(ms, alternate);
+    }
+}
+
+/// The settings probe's note when it found no radio: why the port did not
+/// open, when it did not (build 271; round 270), else `fallback` - "switch the
+/// radio on" or "it did not answer". The same keys as the panel's line.
+pub(crate) fn probe_note_key(trouble: u8, fallback: &'static str) -> &'static str {
+    port_trouble_key(false, trouble).unwrap_or(fallback)
+}
+
+/// One audio chip on the panel, one per transmitter (build 271, owner's
+/// proposal): its receive audio, and in its place its transmit audio while that
+/// comes in. RX2 is a receiver only. Until 271 receive and transmit stood side
+/// by side, both green.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Chip {
+    /// RX1, or TX while Thetis transmits.
+    Thetis,
+    Rx2,
+    /// Radio 1 (`0`) or radio 2 (`1`).
+    Radio(usize),
+}
+
+impl Chip {
+    fn label(self, transmitting: bool) -> &'static str {
+        match (self, transmitting) {
+            (Chip::Thetis, false) => "RX1",
+            (Chip::Thetis, true) => "TX",
+            (Chip::Rx2, _) => "RX2",
+            (Chip::Radio(0), false) => "Y1-RX",
+            (Chip::Radio(0), true) => "Y1-TX",
+            (Chip::Radio(_), false) => "Y2-RX",
+            (Chip::Radio(_), true) => "Y2-TX",
+        }
+    }
+
+    /// Does the transmitter itself say it transmits (build 272)? Thetis by its
+    /// TRX notification or Tune; a radio by the TX state the server keeps of it
+    /// (`reported_tx`, read under the lock, not copied). An FT-991A's answer
+    /// was measured unreliable - here at most a short flicker.
+    fn says_transmitting(self, shared: &StatusPanelShared) -> bool {
+        match self {
+            Chip::Thetis => shared.tci.transmitting.load(Ordering::Relaxed),
+            Chip::Rx2 => false,
+            Chip::Radio(r) => shared
+                .radios
+                .get()
+                .and_then(|radios| radios[r.min(1)].as_ref())
+                .is_some_and(|y| y.status_arc().lock().map_or(false, |s| s.reported_tx())),
+        }
+    }
+
+    /// Its receive counter, and its transmit counter if it has a transmitter.
+    fn stats(
+        self,
+        a: &crate::audio_stats::AudioActivityStats,
+    ) -> (&crate::audio_stats::ChannelStats, Option<&crate::audio_stats::ChannelStats>) {
+        match self {
+            Chip::Thetis => (&a.rx1, Some(&a.tx)),
+            Chip::Rx2 => (&a.rx2, None),
+            Chip::Radio(r) => (&a.yaesu_rx[r.min(1)], Some(&a.yaesu_tx[r.min(1)])),
+        }
+    }
+}
+
+/// How fresh audio has to be to count as flowing: a chip is green, and transmit
+/// audio means sending (one number since build 272; round 271).
+const FRESH_SECS: f32 = 1.0;
+
+/// Is transmit audio flowing: under `FRESH_SECS` old.
+fn transmitting(tx_age: Option<f32>) -> bool {
+    tx_age.is_some_and(|a| a < FRESH_SECS)
+}
+
+/// Why a chip is red (build 272): the transmitter says it transmits, transmit
+/// audio flows through ThetisLink, or both. A microphone at the radio is the
+/// first alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TxShown {
+    Not,
+    Radio,
+    Audio,
+    Both,
+}
+
+fn tx_shown(radio_says: bool, tx_age: Option<f32>) -> TxShown {
+    match (radio_says, transmitting(tx_age)) {
+        (false, false) => TxShown::Not,
+        (true, false) => TxShown::Radio,
+        (false, true) => TxShown::Audio,
+        (true, true) => TxShown::Both,
+    }
+}
+
+/// The audio chips for what the server set up: Thetis's two only with a TCI
+/// address, one for each radio that is there. Before the server has said,
+/// Thetis's, as the panel always showed.
+fn chips(configured: Option<&crate::audio_stats::Configured>) -> Vec<Chip> {
+    let (thetis, radios) = configured.map_or((true, [false, false]), |c| (c.thetis, c.radios));
+    let mut v = Vec::new();
+    if thetis {
+        v.extend([Chip::Thetis, Chip::Rx2]);
+    }
+    for (r, there) in radios.into_iter().enumerate() {
+        if there {
+            v.push(Chip::Radio(r));
+        }
+    }
+    v
+}
+
+/// A transmitter sending: its transmit label in red (build 271), and the tip
+/// says where the red comes from (build 272).
+fn render_tx_chip(ui: &mut egui::Ui, label: &str, shown: TxShown) {
+    let why = match shown {
+        TxShown::Radio => "the radio reports transmitting",
+        TxShown::Audio => "transmit audio is coming in through ThetisLink",
+        TxShown::Both | TxShown::Not => "the radio reports transmitting, with transmit audio through ThetisLink",
+    };
+    ui.colored_label(Color32::from_rgb(220, 60, 60), RichText::new(format!("● {}", label)))
+        .on_hover_text(format!("{}: {}", label, why));
+}
+
 fn render_channel_chip(
     ui: &mut egui::Ui,
     label: &str,
@@ -1598,14 +1811,15 @@ fn render_channel_chip(
     let (count, age) = stats.snapshot(server_start);
     let (sym, color) = match age {
         None => ("-", Color32::from_rgb(120, 120, 120)),
-        Some(a) if a < 1.0 => ("●", Color32::from_rgb(50, 200, 50)),
+        Some(a) if a < FRESH_SECS => ("●", Color32::from_rgb(50, 200, 50)),
         Some(a) if a < 5.0 => ("●", Color32::from_rgb(200, 160, 40)),
         Some(_) => ("○", Color32::from_rgb(160, 160, 160)),
     };
     let tip = match age {
         None => format!("{}: never seen", label),
+        // Audio, not signal: a quiet band is audio too (build 272).
         Some(a) => format!(
-            "{}: {} ago, {} frames since start",
+            "{}: audio {} ago (also when the band is quiet), {} frames since start",
             label,
             format_duration_short(a),
             count
@@ -1649,5 +1863,177 @@ fn format_duration_short(secs: f32) -> String {
         let h = m / 60;
         let m = m % 60;
         format!("{}h {}m", h, m)
+    }
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::{chips, transmitting, tx_shown, Chip, TxShown, FRESH_SECS};
+    use crate::audio_stats::Configured;
+
+    /// What the panel shows follows what the server set up (build 269): no
+    /// Thetis chips without a TCI address, and a radio's chips and dot for
+    /// each radio that is there - radio 2 alone too (a new user with only an
+    /// FTX-1 on slot 2, 2026-10-20).
+    #[test]
+    fn the_panel_shows_what_the_server_has() {
+        let c = |thetis, r1, r2| Configured { thetis, radios: [r1, r2] };
+        assert_eq!(chips(Some(&c(true, false, false))), vec![Chip::Thetis, Chip::Rx2]);
+        assert_eq!(chips(Some(&c(false, false, true))), vec![Chip::Radio(1)]);
+        assert_eq!(chips(Some(&c(true, true, true))), vec![Chip::Thetis, Chip::Rx2, Chip::Radio(0), Chip::Radio(1)]);
+        assert_eq!(chips(Some(&c(false, false, false))), vec![], "a bare server: nothing to show");
+        assert_eq!(chips(None), vec![Chip::Thetis, Chip::Rx2], "before the server said: as it was");
+        // One chip per transmitter: its receive label, or its transmit label
+        // while transmit audio comes in (build 271, owner's proposal).
+        let labels: Vec<(&str, &str)> = [Chip::Thetis, Chip::Rx2, Chip::Radio(0), Chip::Radio(1)]
+            .iter()
+            .map(|c| (c.label(false), c.label(true)))
+            .collect();
+        assert_eq!(labels, [("RX1", "TX"), ("RX2", "RX2"), ("Y1-RX", "Y1-TX"), ("Y2-RX", "Y2-TX")]);
+        // The start line, one per state.
+        assert_eq!(c(true, true, false).line(), "Status panel: Thetis configured, radio 1 present, radio 2 absent");
+        assert_eq!(c(false, false, true).line(), "Status panel: Thetis not configured, radio 1 absent, radio 2 present");
+    }
+
+    /// Each radio counts its own audio, where it is ticked; the two used one
+    /// counter between them.
+    #[test]
+    fn each_radio_counts_its_own_audio() {
+        let loops = include_str!("../audio_loops.rs");
+        assert_eq!(loops.matches("audio_stats.yaesu_rx[(slot as usize).min(1)].tick(server_start);").count(), 1);
+        let net = include_str!("../network.rs");
+        // One block for both radios since build 282, by its slot.
+        assert_eq!(net.matches("self.audio_stats.yaesu_tx[slot].tick(self.server_start);").count(), 1);
+        assert_eq!(net.matches("radio_audio!(pkt, addr, 0, crate::session::TxTarget::Yaesu1, yaesu_tx_packet_tx, crate::tx_arrivals::TxStream::Radio1);").count(), 1, "radio 1's arm counts radio 1");
+        assert_eq!(net.matches("radio_audio!(pkt, addr, 1, crate::session::TxTarget::Yaesu2, yaesu2_tx_packet_tx, crate::tx_arrivals::TxStream::Radio2);").count(), 1, "radio 2's arm counts radio 2");
+        // And Thetis has one source for "configured": the heartbeat and the start.
+        assert_eq!(net.matches("self.config.thetis_configured()").count(), 1);
+        let main = include_str!("../main.rs");
+        assert_eq!(main.matches("thetis: config.thetis_configured(),").count(), 1);
+    }
+
+    /// The chip turns to transmit while transmit audio is under a second old -
+    /// the same second that makes a chip green - and never for RX2, which has
+    /// no transmitter.
+    #[test]
+    fn a_chip_shows_transmit_while_its_audio_comes_in() {
+        assert!(!transmitting(None), "never any");
+        assert!(transmitting(Some(0.0)));
+        assert!(transmitting(Some(0.99)));
+        assert!(!transmitting(Some(1.0)), "a second old: back to receive");
+        assert!(!transmitting(Some(30.0)));
+        let a = crate::audio_stats::AudioActivityStats::default();
+        assert!(Chip::Rx2.stats(&a).1.is_none(), "RX2 has no transmitter");
+        assert!(std::ptr::eq(Chip::Thetis.stats(&a).1.unwrap(), &a.tx));
+        assert!(std::ptr::eq(Chip::Radio(1).stats(&a).0, &a.yaesu_rx[1]));
+        assert!(std::ptr::eq(Chip::Radio(1).stats(&a).1.unwrap(), &a.yaesu_tx[1]));
+        assert!(std::ptr::eq(Chip::Radio(0).stats(&a).1.unwrap(), &a.yaesu_tx[0]));
+    }
+
+    /// Red also when the transmitter itself says it transmits - a microphone at
+    /// the radio, Thetis's own MOX or a footswitch, Tune (build 272, owner's
+    /// question) - and the tip says which.
+    #[test]
+    fn a_chip_is_red_when_the_transmitter_says_so_too() {
+        assert_eq!(tx_shown(false, None), TxShown::Not);
+        assert_eq!(tx_shown(false, Some(5.0)), TxShown::Not);
+        assert_eq!(tx_shown(true, None), TxShown::Radio, "the microphone at the radio");
+        assert_eq!(tx_shown(false, Some(0.2)), TxShown::Audio);
+        assert_eq!(tx_shown(true, Some(0.2)), TxShown::Both);
+        assert_eq!(FRESH_SECS, 1.0);
+        assert!(transmitting(Some(FRESH_SECS - 0.01)) && !transmitting(Some(FRESH_SECS)));
+        // One second for green and for "transmit audio flows" (round 271).
+        let src = include_str!("status_panel.rs");
+        let src = &src[..src.find("#[cfg(test)]\nmod setup_tests").unwrap()];
+        assert_eq!(src.matches("Some(a) if a < FRESH_SECS =>").count(), 1);
+        assert_eq!(src.matches("a < 1.0").count(), 0);
+        // Where the transmitter's own word comes from.
+        assert_eq!(src.matches("Chip::Thetis => shared.tci.transmitting.load(Ordering::Relaxed),").count(), 1);
+        assert_eq!(src.matches(".lock().map_or(false, |s| s.reported_tx())").count(), 1);
+        assert_eq!(src.matches("Chip::Rx2 => false,").count(), 1);
+        let net = include_str!("../network.rs");
+        assert_eq!(net.matches("probe.set_transmitting(p.tx_now().thetis);").count(), 1);
+        // "Thetis transmits" has one definition, `thetis_on_the_air` (builds 273
+        // and 275; rounds 272 and 274), in either spelling.
+        // Every source file of the server (build 274; round 273: a copy in a
+        // third file stayed green). Whole files: none has it in a test.
+        let mut written_out = 0;
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut dirs = vec![src];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    let text = std::fs::read_to_string(&p).unwrap();
+                    // Pieced together, so this test does not count itself.
+                    let n = text.matches(concat!("thetis_tx_active", "() || ")).count()
+                        + text.matches(concat!("thetis_tx_active", " || self.tune_active")).count();
+                    written_out += n;
+                }
+            }
+        }
+        assert_eq!(written_out, 1, "TRX or Tune, spelled out once: in thetis_on_the_air");
+        let ptt = include_str!("../ptt.rs");
+        assert_eq!(ptt.matches("thetis: self.tci.thetis_on_the_air(),").count(), 1, "tx_now asks it");
+    }
+
+    /// Why a probe found no radio, in the settings (build 271; round 270): a
+    /// port another program holds says so, not "switch the radio on".
+    #[test]
+    fn the_settings_probe_names_a_port_that_does_not_open() {
+        use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING, PORT_TROUBLE_NONE};
+        assert_eq!(super::probe_note_key(PORT_TROUBLE_BUSY, "srv_probe_none"), "srv_port_busy");
+        assert_eq!(super::probe_note_key(PORT_TROUBLE_MISSING, "srv_probe_silent"), "srv_port_missing");
+        assert_eq!(super::probe_note_key(PORT_TROUBLE_NONE, "srv_probe_none"), "srv_probe_none", "a silent radio");
+        let up = include_str!("update.rs");
+        assert_eq!(up.matches("super::status_panel::probe_note_key(self.probe_trouble[s], \"srv_probe_none\")").count(), 1);
+        assert_eq!(up.matches("super::status_panel::probe_note_key(self.probe_trouble[s], \"srv_probe_silent\")").count(), 1);
+        assert_eq!(up.matches("crate::yaesu::detect_model_or_trouble(&port, baud)").count(), 1);
+        // Every answer for the current port sets it, before the early exit for a
+        // silent radio that keeps its model.
+        let at = up.find("fn drain_model_probes(").unwrap();
+        let body = &up[at..];
+        let set = body.find("self.probe_trouble[s] = trouble;").expect("set from the answer");
+        assert!(set < body.find("self.probe_silent[s] = true;").unwrap());
+    }
+
+    /// The lines no test drives, pinned (round 269: two probes stayed green): which
+    /// dot reads which radio, and the grey Thetis line.
+    #[test]
+    fn the_dots_and_the_grey_line_read_the_right_thing() {
+        let src = include_str!("status_panel.rs");
+        let src = &src[..src.find("#[cfg(test)]\nmod setup_tests").unwrap()];
+        assert_eq!(src.matches("render_device_dot(ui, \"Yaesu 1\", radios[0]);").count(), 1);
+        assert_eq!(src.matches("render_device_dot(ui, \"Yaesu 2\", radios[1]);").count(), 1);
+        let grey = src.find("if configured.is_some_and(|c| !c.thetis) {").expect("the branch without Thetis");
+        assert!(src[grey..].find("\"Not configured\"").unwrap() < 200, "and what it says");
+    }
+
+    /// Why a radio's port cannot be opened, on the status panel while the
+    /// server runs, for each radio (build 270). The note in the settings could
+    /// never show - they exist only while the server is stopped - and is gone.
+    #[test]
+    fn each_radio_says_on_the_panel_why_its_port_does_not_open() {
+        use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING};
+        assert_eq!(super::port_trouble_key(false, PORT_TROUBLE_BUSY), Some("srv_port_busy"));
+        assert_eq!(super::port_trouble_key(false, PORT_TROUBLE_MISSING), Some("srv_port_missing"));
+        assert_eq!(super::port_trouble_key(true, PORT_TROUBLE_BUSY), None, "an open port says nothing");
+        assert_eq!(super::port_trouble_key(false, 0), None);
+        let src = include_str!("status_panel.rs");
+        let src = &src[..src.find("#[cfg(test)]\nmod setup_tests").unwrap()];
+        assert_eq!(src.matches("for (i, radio) in shared.radios.get().into_iter().flatten().enumerate() {").count(), 1);
+        assert_eq!(src.matches("render_port_trouble(ui, i, radio.as_deref());").count(), 1);
+        let up = include_str!("update.rs");
+        assert_eq!(up.matches("srv_port_busy").count(), 0, "not in the settings, where it could not show");
+        let main = include_str!("../main.rs");
+        assert_eq!(main.matches("status_panel_state.radios.set([yaesu_prebuilt.clone(), yaesu2_prebuilt.clone()]);").count(), 1);
+        // The lead's row, in the same loop, in the developer mode only, and
+        // not kept (build 296; owner: "wel in de ontwikkelaars mode").
+        assert!(src.contains("        render_port_trouble(ui, i, radio.as_deref());\n        render_line_keyed(ui, i, radio.as_deref());\n        if sdr_remote_core::dev_mode::is_on() {\n            render_lead_row(ui, i, radio.as_deref());"));
+        assert_eq!(src.matches("set_lead(").count(), 1);
+        assert_eq!(src.matches("    if (ms, alternate) != before {\n        timing.set_lead(ms, alternate);\n    }").count(), 1);
+        assert_eq!(src.matches("save_tx_lead").count(), 0, "not kept");
     }
 }

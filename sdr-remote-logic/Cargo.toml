@@ -6,10 +6,13 @@ license.workspace = true
 
 [dependencies]
 sdr-remote-core = { path = "../sdr-remote-core" }
+sdr-remote-quic = { path = "../sdr-remote-quic" }
 tokio = { workspace = true }
-rubato = { workspace = true }
 ringbuf = { workspace = true }
 log = { workspace = true }
 anyhow = { workspace = true }
-socket2 = "0.5"
 chrono = "0.4"
+
+[dev-dependencies]
+# The stand-in relay, for the engine's tests through the relay (phase 3b).
+sdr-remote-quic = { path = "../sdr-remote-quic", features = ["testing"] }

@@ -46,6 +46,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sdrremote.R
+import uniffi.sdr_remote.sMeterFraction
+import uniffi.sdr_remote.sMeterText
 
 private val FREQ_STEPS = longArrayOf(10, 100, 500, 1_000, 10_000)
 private val STEP_LABELS = arrayOf("10", "100", "500", "1k", "10k")
@@ -335,8 +337,8 @@ fun SmeterBar(value: Float, transmitting: Boolean = false, otherTx: Boolean = fa
         } else {
             // ── RX S-meter bar ── `value` is dBm.
             val dbm = value
-            val raw = dbmToDisplay(dbm)
-            val frac = (raw / 228f).coerceIn(0f, 1f)
+            // The desktop's scale, through the bridge (build 219).
+            val frac = sMeterFraction(dbm)
             val fillWidth = w * frac
             val s9Frac = 108f / 228f
 
@@ -351,8 +353,7 @@ fun SmeterBar(value: Float, transmitting: Boolean = false, otherTx: Boolean = fa
 
             // Peak hold needle (yellow, 2px)
             if (peakLevel > dbm) {
-                val peakRaw = dbmToDisplay(peakLevel)
-                val peakFrac = (peakRaw / 228f).coerceIn(0f, 1f)
+                val peakFrac = sMeterFraction(peakLevel)
                 val peakX = w * peakFrac
                 drawLine(Color(0xFFFFFF00), Offset(peakX, barTop), Offset(peakX, barBottom), strokeWidth = 2f)
             }
@@ -374,27 +375,11 @@ fun SmeterBar(value: Float, transmitting: Boolean = false, otherTx: Boolean = fa
                 drawContext.canvas.nativeCanvas.drawText("+$dbOver", x, size.height - 1f, redTickFont)
             }
 
-            // S-value text centered on bar — derived directly from dBm.
-            val sText = if (dbm <= -73f) {
-                val sUnit = ((dbm + 127f) / 6f).toInt().coerceIn(0, 9)
-                "S$sUnit"
-            } else {
-                val dbOver = (dbm + 73f).toInt().coerceAtLeast(0)
-                "S9+$dbOver dB"
-            }
+            // S-value text centered on bar - the one S rule, shared with the
+            // desktop (build 218).
+            val sText = sMeterText(dbm)
             drawContext.canvas.nativeCanvas.drawText(sText, w / 2f, barTop + barHeight / 2f + 10f, centerFont)
         }
-    }
-}
-
-/// Mirror of `sdr_remote_core::dbm_to_display` — maps dBm onto the 0..228
-/// visual range. S0=-127 dBm, S9=-73 dBm, 6 dB per S-unit, 2 raw units per dB
-/// throughout (S1..S9 and the S9+dB zone use the same scaling).
-private fun dbmToDisplay(dbm: Float): Float {
-    return if (dbm <= -73f) {
-        ((dbm + 127f) * 2f).coerceIn(0f, 108f)
-    } else {
-        (108f + (dbm + 73f) * 2f).coerceIn(108f, 228f)
     }
 }
 

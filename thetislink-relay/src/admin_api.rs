@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Fase 2 admin dashboard HTTP API (axum), served on an INTERNAL port behind Caddy.
+//! Phase 2 admin dashboard HTTP API (axum), served on an INTERNAL port behind Caddy.
 //!
 //! Security baseline (PATCH-relay-admin-dashboard-fase2 section 11):
 //! - bound to localhost only (Caddy terminates TLS + proxies /admin -> here);

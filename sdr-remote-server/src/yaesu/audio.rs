@@ -234,6 +234,7 @@ pub(super) fn build_capture_stream(
 pub(super) fn build_output_stream(
     device_pattern: &str,
     producer_handle: Arc<Mutex<Option<ringbuf::HeapProd<f32>>>>,
+    gaps: super::tx_timing::OutputGaps,
     prefix: &str,
 ) -> Result<(cpal::Stream, u32), String> {
     let host = cpal::default_host();
@@ -286,13 +287,23 @@ pub(super) fn build_output_stream(
     // Install the new producer so the bridge thread can write to it
     *producer_handle.lock().unwrap() = Some(producer);
 
+    // A zero the ring could not give, in the middle of an over, is counted
+    // (build 263; until then it was silence nobody saw).
+    let mut watch = super::tx_timing::GapWatch::default();
     let stream = device.build_output_stream(
         &config.into(),
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            use ringbuf::traits::Consumer as _;
+            use ringbuf::traits::{Consumer as _, Observer as _};
+            let (keyed, over) = (gaps.keyed(), gaps.over());
             for sample in data.iter_mut() {
-                *sample = consumer.try_pop().unwrap_or(0.0);
+                let popped = consumer.try_pop();
+                *sample = popped.unwrap_or(0.0);
+                if let Some(n) = watch.sample(popped.is_some(), keyed, over) {
+                    gaps.add(n / channels.max(1) as u64);
+                }
             }
+            // What is left, for the lead's rebuild in the radio's task (build 278).
+            gaps.set_ring_ms(super::tx_timing::queued_ms(consumer.occupied_len(), consumer.capacity().get()));
         },
         move |err| { log::warn!("{} audio output error: {}", prefix_err, err); },
         None,

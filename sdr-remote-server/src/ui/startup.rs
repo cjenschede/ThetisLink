@@ -32,6 +32,23 @@ impl ServerApp {
         // Clear log buffer for fresh start
         self.log_buffer.lock().unwrap().clear();
 
+        // No server without a password, whichever way it is started: the
+        // button asks for one, but the autostart comes here directly, and a
+        // conf with autostart on and no password started a server that admits
+        // anyone (build 128). The same rule as everywhere (`start_credentials`),
+        // 2FA included (build 129). The settings screen stays, with its red line.
+        let (password, totp_secret) = match crate::config::start_credentials(
+            Some(&self.password),
+            self.totp_enabled,
+            Some(&self.totp_secret),
+        ) {
+            Ok(credentials) => credentials,
+            Err(why) => {
+                log::error!("Not started: {why} - set it in the settings screen");
+                return;
+            }
+        };
+
         let thetis = self.thetis_path.trim().to_string();
         let yaesu_port_str = self.yaesu_port.trim().to_string();
         let amp_port = self.amplitec_port.trim().to_string();
@@ -127,6 +144,8 @@ impl ServerApp {
             theme_custom: self.theme_custom.to_config_string(),
             language: self.ui_language.clone(),
             autostart: self.autostart,
+            developer_mode: self.developer_mode,
+            tx_measurement: self.tx_measurement,
             active_pa: self.active_pa.load(Ordering::Relaxed),
             // Same reason as the two snapshot fields below: the settings screen
             // has no field for these, so read them back instead of overwriting
@@ -153,8 +172,12 @@ impl ServerApp {
             dxcluster_callsign: self.dxcluster_callsign.clone(),
             dxcluster_enabled: self.dxcluster_enabled,
             dxcluster_expiry_min: self.dxcluster_expiry_min,
-            password: if self.password.is_empty() { None } else { Some(self.password.clone()) },
-            totp_secret: if self.totp_enabled { Some(self.totp_secret.clone()) } else { None },
+            password: Some(password),
+            // The key is kept whether 2FA is on or not: one generated and
+            // scanned before the box was ticked was otherwise gone after a
+            // save, and the screen made a new one at the next start (review
+            // 129). The server only uses it with 2FA on (`start_credentials`).
+            totp_secret: totp_secret.or_else(|| Some(self.totp_secret.clone()).filter(|k| !k.is_empty())),
             totp_enabled: self.totp_enabled,
             friendly_name: if self.friendly_name.trim().is_empty() {
                 None
@@ -165,7 +188,7 @@ impl ServerApp {
             relay_url: self.relay_url.trim().to_string(),
             relay_station: self.relay_station.trim().to_string(),
             relay_token: self.relay_token.clone(),
-            relay_udp_enabled: self.relay_udp_enabled,
+            allow_direct: self.allow_direct,
         };
         crate::config::save(&config);
 

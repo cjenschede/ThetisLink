@@ -774,14 +774,14 @@ mod tests {
     fn folding_an_answer_away_does_not_wipe_a_standing_error() {
         let (mut m, _rx) = wired();
         m.apply(ChatEvent::Failed("er ging iets mis".into()));
-        assert_eq!(m.error.as_deref(), Some("er ging iets mis"), "voorwaarde");
+        assert_eq!(m.error.as_deref(), Some("er ging iets mis"), "precondition");
 
         m.apply(ChatEvent::NoChange);
 
         assert_eq!(
             m.error.as_deref(),
             Some("er ging iets mis"),
-            "een handeling zonder gevolg mag geen melding opruimen"
+            "an action without effect must not clear a message"
         );
     }
 
@@ -793,20 +793,20 @@ mod tests {
         let (mut m, rx) = wired();
         m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
         m.dismiss_answer(2);
-        let _ = rx.try_iter().count(); // eerste poging, die "mislukte"
+        let _ = rx.try_iter().count(); // the first attempt, the one that "failed"
 
         // The service sends it again: it knows nothing of this.
         m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
 
         let after_first = count_dismiss(&rx, 2);
-        assert_eq!(after_first, 1, "nog een keer vragen, want hij heeft het niet gehoord");
+        assert_eq!(after_first, 1, "ask once more, the service did not hear it");
 
         // And then it stops. Without these two rounds a suite stays green while the
         // client asks again on every fetch - against an older service a 404 per dismissed
         // answer per poll, which is exactly what the limit had to prevent.
         m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
         m.apply(ChatEvent::Answers(vec![ChatAnswer { id: 2, at: 0, body: "x".into() }]));
-        assert_eq!(count_dismiss(&rx, 2), 0, "een keer herhalen per sessie, niet elke ophaal");
+        assert_eq!(count_dismiss(&rx, 2), 0, "repeat once per session, not on every fetch");
     }
 
     /// The doc on dismiss_answer says idempotent, and locally it was. Review
@@ -819,7 +819,7 @@ mod tests {
         m.dismiss_answer(2);
         let sent: Vec<ChatCommand> = rx.try_iter().collect();
         let n = sent.iter().filter(|c| **c == ChatCommand::DismissAnswer { id: 2 }).count();
-        assert_eq!(n, 1, "een keer vragen is genoeg: {sent:?}");
+        assert_eq!(n, 1, "asking once is enough: {sent:?}");
     }
 
     /// Folding an answer away is a decision about the station, not about this
@@ -836,15 +836,15 @@ mod tests {
             at: 0,
             body: "een antwoord".into(),
         }]));
-        assert_eq!(m.unread_answers().len(), 1, "voorwaarde: hij staat er");
+        assert_eq!(m.unread_answers().len(), 1, "precondition: it is there");
 
         m.dismiss_answer(2);
 
-        assert!(m.unread_answers().is_empty(), "van dit scherm af");
+        assert!(m.unread_answers().is_empty(), "off this screen");
         let sent: Vec<ChatCommand> = rx.try_iter().collect();
         assert!(
             sent.contains(&ChatCommand::DismissAnswer { id: 2 }),
-            "en de dienst hoort het ook: {:?}",
+            "and the service hears it too: {:?}",
             sent
         );
     }

@@ -332,13 +332,15 @@ fn replace_ignore_case(hay: &str, needle: &str, with: &str) -> String {
     out
 }
 
-/// Dotted quads. Loopback stays: it says something useful and identifies nobody.
+/// Addresses, IPv6 and dotted quads. Loopback stays: it says something useful
+/// and identifies nobody.
 ///
 /// Two things keep this from eating text that is not an address. A group above
 /// 255 is not one, and anything directly preceded by a letter or digit is part
 /// of something else - which is what saves a version number like `v2.10.3.15`
 /// from being mangled into `v<ip>` and the log with it.
 fn strip_ips(line: &str) -> String {
+    let line = strip_ipv6(line);
     let mut out = String::with_capacity(line.len());
     let bytes: Vec<char> = line.chars().collect();
     let mut i = 0;
@@ -386,6 +388,47 @@ fn strip_ips(line: &str) -> String {
         }
         out.push(bytes[i]);
         i += 1;
+    }
+    out
+}
+
+/// IPv6 addresses. Until build 122 the redaction knew only dotted quads, and
+/// the phone's own public IPv6 address went into a report unchanged (field test
+/// 120, review 121). A run of hex digits, colons and dots that parses as an IPv6
+/// address becomes `<ip>`; loopback (`::1`) and the unspecified address (`::`)
+/// stay, as `127.x` does. A time of day (`20:16:30.865`) and a MAC address
+/// (`A4:C1:38:F1:3C:82`) do not parse as one, so they stay too. A run directly
+/// after a letter or digit is part of a word, as in `strip_ips`.
+fn strip_ipv6(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let part = |c: char| c.is_ascii_hexdigit() || c == ':' || c == '.';
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let starts_a_run = part(chars[i]) && (i == 0 || !(chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_'));
+        if !starts_a_run {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && part(chars[j]) {
+            j += 1;
+        }
+        let run: String = chars[i..j].iter().collect();
+        // A full stop that ends a sentence is no part of the address.
+        let addr = run.trim_end_matches('.');
+        let hidden = addr.matches(':').count() >= 2
+            && addr
+                .parse::<std::net::Ipv6Addr>()
+                .map_or(false, |a| !a.is_loopback() && !a.is_unspecified());
+        if hidden {
+            out.push_str("<ip>");
+            out.push_str(&run[addr.len()..]);
+        } else {
+            out.push_str(&run);
+        }
+        i = j;
     }
     out
 }
@@ -526,6 +569,32 @@ pub fn read_tail(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// IPv6 addresses leave a report as `<ip>`, in every shape a log writes
+    /// them; loopback, the unspecified address, a time of day and a MAC address
+    /// stay (review 121: the redaction knew only dotted quads).
+    #[test]
+    fn ipv6_addresses_are_removed_and_lookalikes_stay() {
+        for (line, want) in [
+            (
+                "QUIC via relay: session 1 on a new socket Some([2001:db8:2354:686f:691d:bd0:a81c:ff9c]:59198) (IPv6)",
+                "QUIC via relay: session 1 on a new socket Some([<ip>]:59198) (IPv6)",
+            ),
+            ("from 2001:db8::1 at once", "from <ip> at once"),
+            ("link-local fe80::1%3 seen", "link-local <ip>%3 seen"),
+            ("mapped ::ffff:192.0.2.33 here", "mapped <ip> here"),
+            ("ends with 2001:db8::7.", "ends with <ip>."),
+            ("bound to [::]:0 and [::1]:4580", "bound to [::]:0 and [::1]:4580"),
+            ("[20:16:30.865 INFO] a time", "[20:16:30.865 INFO] a time"),
+            ("BlePtt: connecting to A4:C1:38:F1:3C:82 (gen 2)", "BlePtt: connecting to A4:C1:38:F1:3C:82 (gen 2)"),
+            // Code paths: `::e` and `::bad` are valid IPv6 addresses on their own,
+            // but here they are halves of a name.
+            ("[20:16:30.865 INFO] sdr_remote_logic::engine - x", "[20:16:30.865 INFO] sdr_remote_logic::engine - x"),
+            ("Codec::bad and Mode::cafe", "Codec::bad and Mode::cafe"),
+        ] {
+            assert_eq!(redact(line, &[]).trim_end(), want, "{line}");
+        }
+    }
 
     #[test]
     fn the_relay_host_is_removed_whatever_its_case() {

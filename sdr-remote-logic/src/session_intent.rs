@@ -297,7 +297,7 @@ mod tests {
             assert!(
                 in_restore,
                 "`{flag}` is no longer cleared in the restore branch. \
-                 `Yaesu: first audio packet` is the only line that shows the \
+                 `Radio N: first audio packet` is the only line that shows the \
                  radio's audio came back, and it sits behind that flag - so the \
                  restore would work and log nothing about it on exactly the short \
                  reconnect this patch exists for"

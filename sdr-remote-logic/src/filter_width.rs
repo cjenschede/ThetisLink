@@ -113,6 +113,36 @@ pub fn step(mode: u8, low: i32, high: i32, dir: Step) -> Option<(i32, i32)> {
     })
 }
 
+/// Whether filter edges fit a Thetis DSP mode - one rule for the client and the
+/// server, in the core (build 244).
+pub use sdr_remote_core::filter_fit::edges_fit_mode;
+
+/// Where a dragged filter edge goes, for RX1 and RX2 alike (build 245; each had
+/// its own copy in the client).
+///
+/// - **AM, SAM, DSB, FM, DRM** mirror the edge to both sides: Thetis forces
+///   symmetry in these modes (it adopts the wider edge for both).
+/// - **SSB, CW, DIG** stop the edge at the carrier, so a pair never crosses it:
+///   the server sends Thetis only edges that fit the mode (build 244), and every
+///   frame of a drag past the carrier was a refused pair and a log line.
+/// - **SPEC** takes the edge as it is.
+///
+/// An edge dragged across the other one, or a mirror to zero width, leaves the
+/// filter as it was.
+pub fn drag_edge(mode: u8, low: i32, high: i32, is_low: bool, hz: i32) -> (i32, i32) {
+    if !matches!(mode, 0 | 1 | 3 | 4 | 7 | 8 | 9) {
+        let w = hz.abs();
+        return if w > 0 { (-w, w) } else { (low, high) };
+    }
+    let hz = match mode {
+        0 | 3 | 9 => hz.min(0),
+        1 | 4 | 7 => hz.max(0),
+        _ => hz,
+    };
+    let (l, h) = if is_low { (hz, high) } else { (low, hz) };
+    if h > l { (l, h) } else { (low, high) }
+}
+
 /// A width as the operator reads it: hertz for CW and below 1 kHz, otherwise
 /// kilohertz with at most two decimals and no trailing zeros ("2.7 kHz",
 /// "2.42 kHz", "10 kHz"). `--` when there is no width to show.
@@ -148,6 +178,39 @@ pub fn accept_server_filter(local_change_at: Option<Instant>, now: Instant) -> b
     match local_change_at {
         None => true,
         Some(t) => now.saturating_duration_since(t) >= LOCAL_CHANGE_HOLD,
+    }
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::drag_edge;
+    use sdr_remote_core::filter_fit::edges_fit_mode;
+
+    /// A dragged edge stops at the carrier in SSB, CW and DIG, mirrors in the
+    /// symmetric modes, and never makes a pair the server refuses (build 245).
+    #[test]
+    fn a_dragged_edge_never_crosses_the_carrier() {
+        assert_eq!(drag_edge(1, 100, 2900, true, -300), (0, 2900), "USB low edge stops at the carrier");
+        assert_eq!(drag_edge(0, -2900, -100, false, 50), (-2900, 0), "LSB high edge stops at the carrier");
+        assert_eq!(drag_edge(4, 250, 750, true, -100), (0, 750), "CW-U");
+        assert_eq!(drag_edge(9, -3000, -300, false, 200), (-3000, 0), "DIGL");
+        assert_eq!(drag_edge(1, 100, 2900, true, 300), (300, 2900), "an ordinary drag");
+        assert_eq!(drag_edge(1, 100, 2900, true, 3000), (100, 2900), "across the other edge: unchanged");
+        assert_eq!(drag_edge(6, -5000, 5000, false, 3000), (-3000, 3000), "AM mirrors");
+        assert_eq!(drag_edge(10, -5000, 5000, true, -4000), (-4000, 4000), "SAM mirrors");
+        assert_eq!(drag_edge(6, -5000, 5000, true, 0), (-5000, 5000), "no width: unchanged");
+        assert_eq!(drag_edge(8, -1000, 4000, true, -2000), (-2000, 4000), "SPEC as it is");
+        // Whatever the drag, a fitting filter stays fitting.
+        for mode in 0u8..=11 {
+            if mode == 5 || mode == 8 { continue; }
+            let (lo, hi) = match mode { 0 | 3 | 9 => (-2900, -100), 1 | 4 | 7 => (100, 2900), _ => (-3000, 3000) };
+            for hz in [-20_000, -3000, -50, 0, 50, 3000, 20_000] {
+                for is_low in [true, false] {
+                    let (l, h) = drag_edge(mode, lo, hi, is_low, hz);
+                    assert!(edges_fit_mode(mode, l, h), "mode {mode}, {is_low} to {hz}: {l}..{h}");
+                }
+            }
+        }
     }
 }
 
