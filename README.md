@@ -126,7 +126,7 @@ modulation-change filter fan-out). These arrived across several releases, so the
 install guide names the fork build that carries all of them. All
 extensions are gated behind the **ThetisLink extensions** checkbox in Setup
 > Network > IQ Stream; with the checkbox unchecked the fork behaves like
-stock Thetis.
+stock Thetis, apart from a few fixes of defects in standard Thetis that always apply (see the fork's release notes).
 
 The Thetis fork is maintained separately from this repository. Its per-file
 source headers grant the GNU General Public License "version 2 or (at your

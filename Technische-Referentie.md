@@ -21,7 +21,7 @@ Daarnaast is er een **PA3GHM ThetisLink fork** ([cjenschede/Thetis](https://gith
 - **Diversity auto-null**: Smart en Ultra algoritmen die server-side in Thetis draaien (DSP-snelheid)
 - **BroadcastDiversityPhase/Gain**: real-time cirkelplot updates tijdens auto-null sweep
 
-Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. Met deze vink uit blijft het stock TCI-extensiegedrag van v2.10.3.15 behouden (de fork bevat wel een eigen build-tag, release-notes en About-metadata). De huidige ThetisLink fork build tag is **TL2-18**.
+Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. Met deze vink uit blijft het stock TCI-extensiegedrag van v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (TL2-4, TL2-6, TL2-7, TL2-17, TL2-18) (de fork bevat wel een eigen build-tag, release-notes en About-metadata). De huidige ThetisLink fork build tag is **TL2-18**.
 
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
@@ -1350,7 +1350,7 @@ TCI (Transceiver Control Interface) is een WebSocket-gebaseerd protocol ingebouw
 
 ### Stock vs fork TCI sub-protocol
 
-ThetisLink praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork (TL2-4)**. Het basisprotocol is identiek — maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-4).
+ThetisLink praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork**. Het basisprotocol is identiek — maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-1).
 
 **Capability-negotiation:** bij verbinden vraagt de client `tci_caps_ex;` op. Met de fork (en de "ThetisLink extensions" Setup-checkbox aan) antwoordt Thetis met een lijst van ondersteunde `_ex` capabilities (`auto_recenter_ex`, `rx_filter_preset_ex`, `ddc_sample_rate_ex`, `diversity_ex`, ...). Stock Thetis implementeert `tci_caps_ex` niet en het verzoek timet uit → ThetisLink valt terug op stock-mode gedrag.
 
@@ -2039,7 +2039,7 @@ Spectrum data komt via de TCI WebSocket IQ stream.
 
 De IQ sample rate is per ontvanger configureerbaar via de **DDC sample rate dropdown** in de client (Spectrum-panel).
 
-| Sample rate | Stock v2.10.3.15 | PA3GHM fork (TL2-4) | Opmerkingen |
+| Sample rate | Stock v2.10.3.15 | PA3GHM fork | Opmerkingen |
 |-------------|------------------|---------------------|-------------|
 | 48 kHz | ja | ja | minimaal IQ-venster, laagste CPU/netwerk |
 | 96 kHz | ja | ja | |
@@ -2580,7 +2580,7 @@ volledige verhaal.
 
 ### Challenge-Response
 
-ThetisLink gebruikt wachtwoord-authenticatie via een pre-shared key (PSK) - verplicht in de GUI; een server die met opdrachtregelargumenten wordt gestart, kan nog zonder draaien en laat dan elke client toe, en het dichtzetten daarvan is besloten maar nog niet gebouwd - met optionele TOTP twee-factor authenticatie:
+ThetisLink gebruikt wachtwoord-authenticatie via een pre-shared key (PSK) - verplicht: de server start niet zonder geldig wachtwoord, ook niet vanaf de opdrachtregel - met optionele TOTP twee-factor authenticatie:
 
 ```mermaid
 sequenceDiagram
@@ -2615,7 +2615,7 @@ De client stopt heartbeats tijdens het wachten op TOTP input. Dat houdt de sessi
 
 ### Eigenschappen
 
-- **Wachtwoord verplicht in de GUI** - de server-GUI start niet zonder geldig wachtwoord (min. 8 tekens, letters + cijfers); de opdrachtregel dwingt het nog niet af
+- **Wachtwoord verplicht** - de server start niet zonder geldig wachtwoord (min. 8 tekens, letters + cijfers), via de GUI, de autostart en de opdrachtregel; met 2FA aan ook niet zonder volledige sleutel
 - **TOTP 2FA optioneel** - TOTP-SHA1, 6 cijfers, 30 seconden periode, +/-1 periode clock skew tolerantie
 - **Geen overhead** op data packets (audio/spectrum) - alleen IP:port check na auth
 - **Brute-force bescherming** - 5 pogingen per client (IP:port), daarna 60s blokkade

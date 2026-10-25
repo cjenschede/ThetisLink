@@ -192,6 +192,9 @@ hardware notes, see `docs-book/src/technical-reference.md` and
   connection reports "Server not reachable".
 - **The phone does not show the relay's messages**; the desktop shows them on the
   connect screen, the server as a tooltip on its status panel.
+- **A direct connection found through the relay (D+R, L+R) drops when the relay
+  becomes unreachable**, and with a relay set up the app cannot connect again
+  until the relay is back - also when the server is on the same network.
 - **Two servers started with the same relay station push each other out.** A
   command-line start now registers with the station in the saved settings.
 - **A TUNE from a client on an RX-only antenna position** is stopped within

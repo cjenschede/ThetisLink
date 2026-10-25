@@ -62,6 +62,11 @@
 
 <main>
 
+<div class="tl"><b>Let op (25 oktober 2026).</b> Deze uitleg beschrijft het netwerk van vóór ThetisLink 2.13.
+  Sinds 2.13 loopt alles in één versleutelde QUIC-verbinding: nog steeds UDP op poort 4580, nu met TLS 1.3, en een
+  wachtwoord is verplicht. Via de relay staat er een wss-TCP-lijn naast, kan de verbinding daarna rechtstreeks verder
+  (D+R, L+R), en is er een noodroute die alles over TCP draagt. De Gebruikershandleiding beschrijft de huidige stand.</div>
+
 <section id="intro">
   <h2>Het grote idee</h2>
   <p class="lead">De <b>server</b> staat thuis, vlak naast de radio en Thetis. De <b>client</b> (op je
@@ -509,13 +514,13 @@
   gebruikt. Zo zet een nieuwere kant zijn extra's vanzelf uit tegenover een oudere — <i>binnen dezelfde
   protocolversie</i>. Een heel andere protocolversie wordt wél geweigerd; server en clients moeten dan
   samen worden bijgewerkt.</p>
-  <p>Staat de server open op internet, dan kun je een <b>wachtwoord</b> instellen. Het wachtwoord
+  <p>De server vraagt altijd een <b>wachtwoord</b>; zonder start hij niet. Het wachtwoord
   zelf gaat nooit over de lijn: de server stuurt een willekeurige &ldquo;uitdaging&rdquo;, de client
   beantwoordt die met een berekend antwoord op basis van het wachtwoord (HMAC), en optioneel komt er
   nog een <b>tijdscode</b> (TOTP, zoals een authenticator-app) overheen.</p>
   <div class="tl"><b>In ThetisLink.</b> De mogelijkheden-uitwisseling loopt mee in het
-  hartslag-bericht (heartbeat) dat de verbinding ook levend houdt. Authenticatie is optioneel en
-  alleen nodig als de server van buiten bereikbaar is.</div>
+  hartslag-bericht (heartbeat) dat de verbinding ook levend houdt. Authenticatie is verplicht, ook op
+  het eigen netwerk.</div>
 </section>
 
 <section id="latency">
@@ -573,7 +578,7 @@
   ThetisLink — netwerk-uitleg · educatieve versie. Gemaakt door <b>Chiron van der Burgt (PA3GHM)</b>.
   Zie ook het <a href="VRX-uitleg.html">VRX-document</a> voor de signaalbewerking.<br>
   ThetisLink op GitHub: <a href="https://github.com/cjenschede/ThetisLink">github.com/cjenschede/ThetisLink</a><br>
-  Laatst gewijzigd: 18 juni 2026.
+  Laatst gewijzigd: 25 oktober 2026 (de melding bovenaan en het wachtwoord).
 </footer>
 
 </body>

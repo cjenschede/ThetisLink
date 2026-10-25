@@ -21,7 +21,7 @@ There is also a **PA3GHM ThetisLink fork** ([cjenschede/Thetis](https://github.c
 - **Diversity auto-null**: Smart and Ultra algorithms running server-side in Thetis (DSP speed)
 - **BroadcastDiversityPhase/Gain**: real-time circle plot updates during auto-null sweep
 
-All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. With this option unchecked, the stock TCI extension behaviour of v2.10.3.15 is preserved (the fork still carries its own build tag, release notes and About metadata). The current ThetisLink fork build tag is **TL2-18**.
+All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. With this option unchecked, the stock TCI extension behaviour of v2.10.3.15 is preserved, apart from a few fixes of defects in standard Thetis that always apply (TL2-4, TL2-6, TL2-7, TL2-17, TL2-18) (the fork still carries its own build tag, release notes and About metadata). The current ThetisLink fork build tag is **TL2-18**.
 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz** — selectable per receiver via the DDC sample rate dropdown in the client.
 
@@ -1346,7 +1346,7 @@ TCI (Transceiver Control Interface) is a WebSocket-based protocol built into The
 
 ### Stock vs fork TCI sub-protocol
 
-ThetisLink talks TCI to both **stock Thetis v2.10.3.15** and the **PA3GHM fork (TL2-4)**. The base protocol is identical — but the fork adds an `_ex` extension layer that ThetisLink uses when available, including the `rx_only_ex` preventive TX-inhibit (TL2-3+) and the wideband-IQ extension (TL2-4).
+ThetisLink talks TCI to both **stock Thetis v2.10.3.15** and the **PA3GHM fork**. The base protocol is identical — but the fork adds an `_ex` extension layer that ThetisLink uses when available, including the `rx_only_ex` preventive TX-inhibit (TL2-3+) and the wideband-IQ extension (TL2-1).
 
 **Capability negotiation:** at connect time the client requests `tci_caps_ex;`. With the fork (and the "ThetisLink extensions" Setup checkbox enabled) Thetis responds with a list of supported `_ex` capabilities (`auto_recenter_ex`, `rx_filter_preset_ex`, `ddc_sample_rate_ex`, `diversity_ex`, ...). Stock Thetis does not implement `tci_caps_ex` and the request times out → ThetisLink falls back to stock-mode behaviour.
 
@@ -2035,7 +2035,7 @@ Spectrum data comes via the TCI WebSocket IQ stream.
 
 The IQ sample rate is configurable per receiver via the **DDC sample rate dropdown** in the client (Spectrum panel).
 
-| Sample rate | Stock v2.10.3.15 | PA3GHM fork (TL2-4) | Notes |
+| Sample rate | Stock v2.10.3.15 | PA3GHM fork | Notes |
 |-------------|------------------|---------------------|-------|
 | 48 kHz | yes | yes | minimal IQ window, lowest CPU/network |
 | 96 kHz | yes | yes | |
@@ -2569,7 +2569,7 @@ See [Known Limitations](#32-known-limitations) for the full account.
 
 ### Challenge-Response
 
-ThetisLink uses password authentication via a pre-shared key (PSK) - mandatory in the GUI; a server started with command-line arguments can still run without one and then admits every client, and closing that is decided but not yet built - with optional TOTP two-factor authentication:
+ThetisLink uses password authentication via a pre-shared key (PSK) - mandatory: the server does not start without a valid password, also not from the command line - with optional TOTP two-factor authentication:
 
 ```mermaid
 sequenceDiagram
@@ -2604,7 +2604,7 @@ The client stops heartbeats while waiting for TOTP input. That does not keep the
 
 ### Properties
 
-- **Password required in the GUI** - the server GUI does not start without a valid password (min. 8 characters, letters + digits); the command line does not enforce it yet
+- **Password required** - the server does not start without a valid password (min. 8 characters, letters + digits), from the GUI, the autostart or the command line; with 2FA on, also not without a full key
 - **TOTP 2FA optional** - TOTP-SHA1, 6 digits, 30 second period, +/-1 period clock skew tolerance
 - **No overhead** on data packets (audio/spectrum) - only IP:port check after auth
 - **Brute-force protection** - 5 attempts per client (IP:port), then 60s block

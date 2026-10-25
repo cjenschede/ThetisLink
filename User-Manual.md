@@ -31,7 +31,7 @@ De server communiceert met Thetis via TCI WebSocket voor zowel besturing als aud
 
 ThetisLink is getest met en vereist **Thetis v2.10.3.15** (officiële release door ramdor). Dit is de basisversie: alle kernfunctionaliteit (audio, spectrum, PTT, TCI besturing) werkt volledig met ongewijzigde Thetis.
 
-Optioneel is er de **PA3GHM Thetis fork** met ThetisLink-specifieke uitbreidingen. Deze uitbreidingen zitten achter de "ThetisLink extensions" checkbox in Thetis (Setup > Network > IQ Stream). Met de vink uit blijft het stock TCI-extensiegedrag behouden (de fork bevat wel een eigen build-tag, release-notes en About-metadata). ThetisLink detecteert automatisch of extensions beschikbaar zijn en schakelt over. Voordelen van de fork:
+Optioneel is er de **PA3GHM Thetis fork** met ThetisLink-specifieke uitbreidingen. Deze uitbreidingen zitten achter de "ThetisLink extensions" checkbox in Thetis (Setup > Network > IQ Stream). Met de vink uit blijft het stock TCI-extensiegedrag behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (zie de release-notes van de fork) (de fork bevat wel een eigen build-tag, release-notes en About-metadata). ThetisLink detecteert automatisch of extensions beschikbaar zijn en schakelt over. Voordelen van de fork:
 
 - Extended IQ-bandbreedte tot **1536 kHz** (stock cap is 384 kHz), per RX selecteerbaar
 - Server-side **CTUN auto-recenter** — DDC volgt automatisch de VFO bij snel tunen
