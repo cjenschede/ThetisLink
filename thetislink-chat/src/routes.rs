@@ -2,14 +2,14 @@
 //
 //! What each endpoint is allowed to do, and what it is refused for.
 //!
-//! Design §4 asks for the check to happen per action class rather than once at
+//! The check happens per action class rather than once at
 //! the door: reading, writing and consenting are different decisions, and a
 //! ticket that was fine a minute ago may not be fine now. So every handler here
 //! starts from the ticket again.
 //!
 //! Every refusal carries its reason to the caller as well as to the log. A
-//! window that simply does nothing is the fault report nobody can place — §7 of
-//! the design says it for the ban, and §8 extends it to the rest.
+//! window that simply does nothing is the fault report nobody can place: that
+//! holds for the ban, and for every other refusal as well.
 
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +21,7 @@ use crate::store::{Store, MAX_MESSAGE_CHARS};
 use crate::ticket::{self, Ticket, TicketError};
 
 /// Which version of the consent text this build shows. Stored with a consent, so
-/// it stays knowable later what somebody actually agreed to (design §6.3).
+/// it stays knowable later what somebody actually agreed to.
 ///
 /// 2: the screen names the administrator - who they are and where to reach them
 /// for access or removal. Version 1 said everything about what is kept and
@@ -91,10 +91,11 @@ fn refuse(status: &'static str, reason: &str) -> Reply {
 
 /// A refusal a client is meant to recognise rather than merely read.
 ///
-/// The sentence stays, because an old client shows it and that is better than
-/// nothing. The code is what lets a new one say the same thing in the reader's
-/// own language - and the ban notice was the one message in the whole service
-/// that has to be understood, and the only one that was not translated.
+/// The sentence stays for whatever reads the body without knowing the code.
+/// The code is what lets a client say the same thing in the reader's own
+/// language, with `detail` behind it - and the ban notice was the one message
+/// in the whole service that has to be understood, and the only one that was
+/// not translated.
 fn refuse_coded(status: &'static str, code: &str, reason: &str, detail: Option<&str>) -> Reply {
     let detail = match detail {
         Some(d) if !d.trim().is_empty() => format!(",\"detail\":{}", json_string(d)),
@@ -114,7 +115,7 @@ fn refuse_coded(status: &'static str, code: &str, reason: &str, detail: Option<&
 }
 
 /// Escape a string for JSON by hand. Small enough not to want a serialiser, and
-/// this is the one place a message body reaches the wire — a quote or a newline
+/// this is the one place a message body reaches the wire; a quote or a newline
 /// in somebody's text must not be able to break the response around it.
 fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -134,16 +135,6 @@ fn json_string(s: &str) -> String {
     out
 }
 
-/// The ticket, or a reply explaining why not.
-///
-/// The distinction between the errors is kept all the way into the log, because
-/// "a clock is wrong" and "somebody is trying something" need different answers
-/// from whoever reads it.
-/// What a banned station is told, in the one place all three fronts read it
-/// from. A refusal nobody can tell from a network fault is the fault the
-/// design warns about: they keep typing, then write to the administrator.
-pub const BANNED: &str = "you have been removed from the chat by the administrator";
-
 /// The gate: a valid ticket, and not on the ban list.
 ///
 /// One place, so there is no list of routes to keep in step - and the check is
@@ -153,8 +144,7 @@ fn admit(app: &App, req: &Request, now: i64) -> Result<Ticket, Reply> {
     let t = verify_ticket(app, req, now)?;
     // The refusal says so in as many words. Somebody who is banned and told
     // nothing keeps typing into a window that has gone quiet and writes to the
-    // administrator afterwards; the silence is worse than the sentence
-    // (design 7).
+    // administrator afterwards; the silence is worse than the sentence.
     if let Some(ban) = app.store.lock().expect("store lock").ban_of(t.station_id).ok().flatten() {
         // Once an hour per station, not once per poll: a banned client keeps
         // polling every three seconds, and a line each time would bury the log
@@ -176,8 +166,8 @@ fn admit(app: &App, req: &Request, now: i64) -> Result<Ticket, Reply> {
 /// Two routes need this and the reasons are different, so both are named here
 /// rather than left to a comment at the call site:
 ///
-/// - `POST /chat/leave`, because the owner's decision is that a ban OUTLIVES a
-///   withdrawal, not that it PREVENTS one. Behind the ban check, a banned
+/// - `POST /chat/leave`, because by design a ban OUTLIVES a
+///   withdrawal and does not PREVENT one. Behind the ban check, a banned
 ///   station could no longer take its name out of its messages or have them
 ///   deleted - the one thing about their own data they must always be able to
 ///   do. `/chat/consent` stays behind the gate, so coming back is still shut.
@@ -190,6 +180,10 @@ fn admit_even_when_banned(app: &App, req: &Request, now: i64) -> Result<Ticket, 
 }
 
 /// Ticket only: signature and expiry, nothing about who may do what.
+///
+/// The ticket, or a reply explaining why not. The distinction between the
+/// errors is kept all the way into the log, because "a clock is wrong" and
+/// "somebody is trying something" need different answers from whoever reads it.
 fn verify_ticket(app: &App, req: &Request, now: i64) -> Result<Ticket, Reply> {
     let token = req.bearer().ok_or_else(|| {
         refuse("401 Unauthorized", "no ticket offered")
@@ -311,7 +305,7 @@ fn state(app: &Arc<App>, req: &Request, now: i64) -> Reply {
 }
 
 /// Agreeing. Without this nothing else in the chat works, which is the whole
-/// design of §6.1: no consent, no chat, and the rest of ThetisLink untouched.
+/// design: no consent, no chat, and the rest of ThetisLink untouched.
 fn consent(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     let t = match admit(app, req, now) {
         Ok(t) => t,
@@ -323,7 +317,7 @@ fn consent(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     };
     let name = v.get("display_name").and_then(|x| x.as_str()).unwrap_or("").trim();
     if name.is_empty() {
-        // §6.1: choosing no name is a valid choice, and it means no chat rather
+        // Choosing no name is a valid choice, and it means no chat rather
         // than an anonymous one.
         return refuse("400 Bad Request", "a display name is required");
     }
@@ -353,8 +347,9 @@ fn consent(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     }
 }
 
-/// The two buttons of §6.4. Which one ran is in the reply, so the client can say
-/// what actually happened rather than guess.
+/// The two ways to leave: keep the messages anonymised, or delete them. Which
+/// one ran is in the reply, so the client can say what actually happened rather
+/// than guess.
 fn leave(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     let t = match admit_even_when_banned(app, req, now) {
         Ok(t) => t,
@@ -371,7 +366,7 @@ fn leave(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     // An uncollected report of theirs goes with them. One already collected sits
     // on the administrator's own machine, beyond the reach of anything here -
     // which the consent text says in as many words rather than leaving it to be
-    // discovered (design 6.4).
+    // discovered.
     if let Err(e) = crate::postbox::forget_station(&store.conn, t.station_id) {
         warn!("station {}: could not remove uncollected reports: {}", t.station_id, e);
     }
@@ -449,7 +444,7 @@ fn message_json(m: &crate::store::Message) -> String {
         m.at,
         match &m.display_name {
             Some(n) => json_string(n),
-            // Somebody who left. The text stays, the person does not (§6.4).
+            // Somebody who left. The text stays, the person does not.
             None => "null".to_string(),
         },
         json_string(&m.body),
@@ -491,7 +486,7 @@ fn edit_message(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     if body.chars().count() > MAX_MESSAGE_CHARS {
         return refuse(
             "413 Payload Too Large",
-            "too long for the chat - use 'probleem melden' for a log",
+            "too long for the chat: use 'probleem melden' for a log",
         );
     }
     let store = app.store.lock().expect("store lock");
@@ -505,7 +500,7 @@ fn edit_message(app: &Arc<App>, req: &Request, now: i64) -> Reply {
         }
         Ok(Err(crate::store::EditRefusal::TooOld)) => refuse(
             "409 Conflict",
-            "too old to change - others have answered the text as it was",
+            "too old to change: others have answered the text as it was",
         ),
         Err(e) => {
             warn!("station {}: edit of message {} failed: {}", t.station_id, id, e);
@@ -531,11 +526,11 @@ fn post_message(app: &Arc<App>, req: &Request, now: i64) -> Reply {
         return refuse("400 Bad Request", "an empty message is not a message");
     }
     if body.chars().count() > MAX_MESSAGE_CHARS {
-        // §1.8: this limit exists to keep log fragments out of a channel
+        // This limit exists to keep log fragments out of a channel
         // everybody can read, so the refusal says where they do belong.
         return refuse(
             "413 Payload Too Large",
-            "too long for the chat - use 'probleem melden' for a log",
+            "too long for the chat: use 'probleem melden' for a log",
         );
     }
 
@@ -562,7 +557,7 @@ fn post_message(app: &Arc<App>, req: &Request, now: i64) -> Reply {
         .expect("guard lock")
         .claim_write(t.station_id, &body, now)
     {
-        info!("station {}: message refused - {}", t.station_id, r);
+        info!("station {}: message refused; {}", t.station_id, r);
         return refuse("429 Too Many Requests", &r.to_string());
     }
 
@@ -594,21 +589,21 @@ fn submit_diagnosis(app: &Arc<App>, req: &Request, now: i64) -> Reply {
         return refuse("400 Bad Request", "there is nothing in that report");
     }
 
-    // A second net on top of the client's own redaction (design 1.3). Not
+    // A second net on top of the client's own redaction. Not
     // because the client is untrusted, but because one layer is too few for
     // something that leaves somebody's machine: a private relay host in a report
     // is exactly what must never travel.
     if forbidden_trace(&body) {
-        warn!("station {}: diagnosis refused - a private host name was still in it", t.station_id);
+        warn!("station {}: diagnosis refused; a private host name was still in it", t.station_id);
         return refuse(
             "422 Unprocessable Entity",
-            "that report still contains something it should not - please update the client",
+            "that report still contains something it should not: please update the client",
         );
     }
 
     let store = app.store.lock().expect("store lock");
-    // Consent is NOT required here, and that is deliberate (design section 4,
-    // which asks only for a valid ticket and the write scope).
+    // Consent is NOT required here, and that is deliberate: a report asks
+    // only for a valid ticket and the write scope.
     //
     // Joining the chat means agreeing to a name other people see. Sending a
     // report is a private line to the administrator, and the act of typing it
@@ -624,8 +619,8 @@ fn submit_diagnosis(app: &Arc<App>, req: &Request, now: i64) -> Reply {
         Ok(id) => ok(format!("{{\"id\":{}}}", id)),
         Err(e) => {
             // The reason travels: "I cannot send anything" is one symptom for
-            // three different situations (design section 8).
-            info!("station {}: diagnosis refused - {}", t.station_id, e);
+            // three different situations.
+            info!("station {}: diagnosis refused; {}", t.station_id, e);
             let status = match e {
                 crate::postbox::PostboxError::TooLarge => "413 Payload Too Large",
                 crate::postbox::PostboxError::TooMany => "429 Too Many Requests",
@@ -648,7 +643,7 @@ fn forbidden_trace(body: &str) -> bool {
         .any(|h| lower.contains(&h.to_ascii_lowercase()))
 }
 
-/// Any answer waiting for this station (design 1.5).
+/// Any answer waiting for this station.
 fn replies(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     let t = match admit_even_when_banned(app, req, now) {
         Ok(t) => t,
@@ -741,7 +736,7 @@ fn admin(app: &Arc<App>, req: &Request) -> Result<(), Reply> {
     if req.method != "GET" {
         let sent = req.headers.get("x-csrf").map(String::as_str).unwrap_or("");
         if !crate::admin_session::secret_eq(sent, &csrf) {
-            warn!("admin request refused - CSRF token missing or wrong");
+            warn!("admin request refused: CSRF token missing or wrong");
             return Err(refuse("403 Forbidden", "this request was not made by the page"));
         }
     }
@@ -820,7 +815,7 @@ async fn admin_login(app: &Arc<App>, req: &Request) -> Reply {
             || (!by_token && sessions.is_blocked(&unverified, now));
         if blocked {
             warn!("admin login rate-limited for {ip}");
-            return refuse("429 Too Many Requests", "too many attempts - try again later");
+            return refuse("429 Too Many Requests", "too many attempts: try again later");
         }
     }
     let accepted = if by_token {
@@ -849,7 +844,7 @@ async fn admin_login(app: &Arc<App>, req: &Request) -> Reply {
                 warn!("admin login could not be checked with the relay: {why}");
                 return refuse(
                     "503 Service Unavailable",
-                    &format!("could not check that with the relay ({why}) - the postbox token still works"),
+                    &format!("could not check that with the relay ({why}): the postbox token still works"),
                 );
             }
         }
@@ -1034,7 +1029,7 @@ fn admin_recent(app: &Arc<App>, req: &Request) -> Reply {
 /// Put a station on the list.
 ///
 /// The messages stay: a ban is an order-keeping measure and not a withdrawal
-/// of consent, and coupling the two would make it irreversible (design 7).
+/// of consent, and coupling the two would make it irreversible.
 /// Removing somebody's messages as well is a separate act.
 fn admin_ban(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     if let Err(r) = admin(app, req) {
@@ -1201,7 +1196,7 @@ fn admin_claim(app: &Arc<App>, req: &Request, now: i64) -> Reply {
 }
 
 /// Say what happened to it. The only thing that removes a report, which is what
-/// makes a failed download harmless (design 1.4.1).
+/// makes a failed download harmless.
 fn admin_release(app: &Arc<App>, req: &Request, now: i64) -> Reply {
     if let Err(r) = admin(app, req) {
         return r;
@@ -1242,7 +1237,7 @@ fn admin_reply(app: &Arc<App>, req: &Request, now: i64) -> Reply {
 
 #[cfg(test)]
 pub(crate) mod tests_support {
-    pub use super::tests::*;
+    pub(crate) use super::tests::*;
 }
 
 #[cfg(test)]
@@ -1365,7 +1360,7 @@ mod tests {
         assert_eq!(r.status, "403 Forbidden");
     }
 
-    /// §6.1: no consent, no chat. Not a read either - somebody who has not
+    /// No consent, no chat. Not a read either - somebody who has not
     /// agreed has no business reading what others wrote.
     #[test]
     fn without_consent_there_is_no_reading_and_no_writing() {
@@ -1480,7 +1475,7 @@ mod tests {
         assert!(r.body.contains("probleem melden"), "{}", r.body);
     }
 
-    /// §6.4, end to end: the text survives, the person does not.
+    /// Leaving, end to end: the text survives, the person does not.
     #[test]
     fn leaving_the_chat_anonymises_and_the_default_is_the_gentler_one() {
         let a = app();
@@ -1570,8 +1565,9 @@ mod tests {
 mod diagnosis_tests {
     use super::tests_support::*;
     use super::*;
+    use crate::store::BANNED;
 
-    /// A report does not require chat consent (design section 4).
+    /// A report does not require chat consent.
     ///
     /// Joining the chat means agreeing to a name others see; sending a report is
     /// a private line to the administrator. Demanding the first for the second
@@ -1764,7 +1760,7 @@ Content-Length: 0
         assert!(reply.body.contains("token"), "and points at the way in: {}", reply.body);
     }
 
-    /// Found in review: while the relay is down, a wrong token could be tried
+    /// The defect this pins: while the relay is down, a wrong token could be tried
     /// for ever, because an unverifiable attempt was answered 503 and counted
     /// against nothing.
     #[test]
@@ -2051,7 +2047,7 @@ Content-Length: {}
         );
     }
 
-    /// Leaving the chat takes an uncollected report with it (design 6.4).
+    /// Leaving the chat takes an uncollected report with it.
     #[test]
     fn leaving_the_chat_removes_an_uncollected_report() {
         let a = app();
@@ -2070,7 +2066,7 @@ Content-Length: {}
         assert_eq!(r.status, "400 Bad Request");
     }
 
-    /// The requirement the review put hardest (A5): a ticket that was valid
+    /// The hardest requirement here: a ticket that was valid
     /// before the ban must stop working, and for reading as much as for
     /// writing. The ticket here is issued first and used after.
     #[test]
@@ -2101,7 +2097,13 @@ Content-Length: {}
         let app = app();
         app.store.lock().unwrap().ban(7, None, false, NOW).unwrap();
         let r = route(&app, &req("GET", "/chat/state", Some(&token(7, "j2", "chat")), ""), NOW);
-        assert!(r.body.contains(BANNED), "{}", r.body);
+        // Spelled out rather than `BANNED`: comparing the constant with itself
+        // would let the sentence be rewritten unseen.
+        assert!(
+            r.body.contains("you have been removed from the chat by the administrator"),
+            "{}",
+            r.body
+        );
     }
 
     /// One station on the list is one station off the service - and nobody
@@ -2116,7 +2118,7 @@ Content-Length: {}
         assert_eq!(theirs.status, "200 OK", "{}", theirs.body);
     }
 
-    /// The owner's decision: a ban closes the whole service, the postbox with
+    /// By design, a ban closes the whole service, the postbox with
     /// it. Reporting a problem is not a way back in.
     #[test]
     fn a_banned_station_cannot_reach_the_postbox_either() {
@@ -2145,7 +2147,7 @@ Content-Length: {}
     }
 
     /// The messages stay. Coupling a ban to removing what somebody wrote makes
-    /// it irreversible, and it is not (design 7).
+    /// it irreversible, and it is not.
     #[test]
     fn a_ban_leaves_what_was_said_where_it_was() {
         let app = app();
@@ -2190,8 +2192,8 @@ Content-Length: {}
         assert_eq!(store.bans().unwrap()[0].station_id, 7);
     }
 
-    /// C1. The owner's decision is that a ban OUTLIVES a withdrawal, not that
-    /// it PREVENTS one. Behind the gate, a banned station could no longer take
+    /// By design a ban OUTLIVES a withdrawal; it does not
+    /// PREVENT one. Behind the gate, a banned station could no longer take
     /// its name out of its own messages - the one thing about their own data
     /// nobody may be shut out of.
     ///
@@ -2269,6 +2271,15 @@ Content-Length: {}
         let told = route(&app, &req("GET", "/chat/state", Some(&token(7, "s2", "chat")), ""), NOW);
         assert!(told.body.contains("shouting"), "{}", told.body);
         assert!(told.body.contains("\"code\":\"banned\""), "and it is recognisable: {}", told.body);
+        // Spelled out, as in `the_refusal_says_what_happened`: "shouting" alone
+        // is also found in `detail`, so it says nothing about `error`.
+        assert!(
+            told.body.contains("you have been removed from the chat by the administrator: shouting"),
+            "{}",
+            told.body
+        );
+        // `detail` is what a client that knows the code actually shows.
+        assert!(told.body.contains("\"detail\":\"shouting\""), "{}", told.body);
     }
 
     /// A second ban without a note keeps the first note. The history of why is

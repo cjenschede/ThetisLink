@@ -3,10 +3,10 @@
 //! Shared UI theme for the ThetisLink egui applications (client, server and
 //! the chat window both of them open).
 //!
-//! Step 1 of the theme migration switches only the egui base visuals: panel and
-//! window fills, widget fills and the default text colour. Everything that
-//! already reads from `ui.visuals()` follows along automatically. Colours that
-//! are hardcoded per call-site are moved to a shared palette in later steps.
+//! A theme sets the egui base visuals: panel and window fills, widget fills
+//! and the default text colour. Everything that already reads from
+//! `ui.visuals()` follows along automatically. Colours that are hardcoded per
+//! call-site follow only once they are moved to the shared palette.
 //!
 //! This crate exists because client and server must be able to show the same
 //! theme: `sdr-remote-logic` cannot host it, because that is the crate shared
@@ -195,11 +195,10 @@ pub fn apply_visuals(ctx: &egui::Context, variant: ThemeVariant, custom: &Palett
 }
 
 /// The one line of the client, the server and the chat: above and below a
-/// settings group, and in place of every `ui.separator()` (owner, 2026-10-15:
-/// "overal de dikke lijn", and "server en chat ook ja";
+/// settings group, and in place of every `ui.separator()` (2026-10-15;
 /// `every_line_is_the_rule` keeps `ui.separator()` out). egui's own separator
 /// (one thin pixel in the faint border colour, a few pixels of room) was hard
-/// to see and sat close to the text (owner, 2026-09-18): this one is drawn in
+/// to see and sat close to the text: this one is drawn in
 /// the theme's weak text colour, so it follows all four themes, a little
 /// heavier, with more room on both sides.
 ///
@@ -209,7 +208,7 @@ pub fn apply_visuals(ctx: &egui::Context, variant: ThemeVariant, custom: &Palett
 /// (`show_separator_line(false)`); where their edge needs a line, it is this
 /// one, so there is one kind of line.
 ///
-/// A little see-through (owner, 2026-10-15): the lines are there to find the
+/// A little see-through: the lines are there to find the
 /// groups, and when they are too present you see lines and have to look for
 /// what is between them.
 pub fn rule(ui: &mut egui::Ui) {
@@ -223,7 +222,7 @@ pub fn rule(ui: &mut egui::Ui) {
         return;
     }
     // A window that sizes itself to its content measures it first; a line
-    // that takes the full width then would set that width (review of 200).
+    // that takes the full width then would set that width.
     // egui's own line takes none in that pass.
     let width = if ui.is_sizing_pass() { 0.0 } else { ui.available_width() };
     ui.add_space(ROOM);
@@ -234,17 +233,17 @@ pub fn rule(ui: &mut egui::Ui) {
 
 /// The stroke of the one line: the theme's weak text colour, a little heavier
 /// than egui's own and a little see-through. `rule` draws with it, and so does
-/// the edge of a `group` - one kind of line (owner, 2026-10-15).
+/// the edge of a `group` - one kind of line.
 fn rule_stroke(ui: &egui::Ui) -> egui::Stroke {
     const STROKE: f32 = 1.5;
-    // 0.75 in build 201, 0.5 to try (owner, 2026-10-15).
+    // 0.75 in build 201, 0.5 to try.
     const RULE_OPACITY: f32 = 0.5;
     egui::Stroke::new(STROKE, ui.visuals().weak_text_color().gamma_multiply(RULE_OPACITY))
 }
 
 /// A box around a group of controls - a tuner, a board, RX1 - with its edge
-/// in the stroke of `rule`, in place of egui's own thin grey one (owner,
-/// 2026-10-15: "Kader houden, rand als de lijn"). Spacing and corners are
+/// in the stroke of `rule`, in place of egui's own thin grey one
+/// (2026-10-15). Spacing and corners are
 /// egui's group's, so nothing moves. `every_line_is_the_rule` keeps
 /// `Frame::group` and `ui.group` out of the screens.
 pub fn group(ui: &egui::Ui) -> egui::Frame {
@@ -255,10 +254,10 @@ pub fn group(ui: &egui::Ui) -> egui::Frame {
 /// colour, under its panels. eframe wipes such a window (an immediate
 /// viewport) with black, not with `App::clear_color`, and with the panels' own
 /// border lines off (build 201) that showed as a thin black line in the seam
-/// above a Yaesu window's PTT bar (owner, 2026-10-15). egui's panels paint in
+/// above a Yaesu window's PTT bar. egui's panels paint in
 /// this same background layer, after this. The client's pop-outs call it before
 /// their content, and the chat calls it first in `render_body`, so its window
-/// from the server gets it too (review of 208). A main window gets the same
+/// from the server gets it too. A main window gets the same
 /// colour from `clear_color`; that one also covers the moment of a resize.
 pub fn paint_window_ground(ctx: &egui::Context) {
     let fill = ctx.style().visuals.panel_fill;
@@ -268,7 +267,7 @@ pub fn paint_window_ground(ctx: &egui::Context) {
 /// One colour of the custom theme, picked without see-through: the saved
 /// settings keep red, green and blue only, so a colour with alpha came back
 /// darker after a restart, and a see-through ground showed the seams as dark
-/// lines (review of 203). Client and server both pick with this one button.
+/// lines. Client and server both pick with this one button.
 pub fn colour_button(ui: &mut egui::Ui, colour: &mut Color32) -> egui::Response {
     let mut rgb = [colour.r(), colour.g(), colour.b()];
     let response = ui.color_edit_button_srgb(&mut rgb);
@@ -298,8 +297,8 @@ mod rule_tests {
         files
     }
 
-    /// Every line in the client, the server and the chat is `rule` (owner,
-    /// 2026-10-15: "overal de dikke lijn", "server en chat ook ja"), and no
+    /// Every line in the client, the server and the chat is `rule`
+    /// (2026-10-15), and no
     /// panel draws egui's own border line next to it. Read from disk rather
     /// than a hand-written list of files, so a new screen is seen too; the
     /// count of files read per crate keeps the walk honest.
@@ -310,15 +309,15 @@ mod rule_tests {
             ("sdr-remote-server", 40),
             ("sdr-remote-chat", 3),
             ("sdr-remote-theme", 1),
-            // Draws in the windows of the client and the server too (review of 208).
+            // Draws in the windows of the client and the server too.
             ("sdr-remote-layout", 1),
         ];
         let thin = [concat!(".separator", "()"), concat!("Separator::", "default()")];
         let allowed = concat!("ui.add(egui::Separator", "::default());");
         let panels = [concat!("TopBottomPanel", "::"), concat!("SidePanel", "::")];
         // egui's own box with its thin grey edge (build 211), on any name for
-        // the `Ui` and any closure - `cols[0].group(|ui| ...)`, `ui.group(move |ui|
-        // ...)` (reviews of 211 and 212).
+        // the `Ui` and any closure - `cols[0].group(|ui| ...)`, `ui.group(move |ui|...
+        // )`.
         let boxes = [concat!("Frame::", "group("), concat!(".group", "(")];
         let box_allowed = concat!("egui::Frame::", "group(ui.style()).stroke(rule_stroke(ui))");
         let mut box_seen = 0;
@@ -352,7 +351,7 @@ mod rule_tests {
                         }
                     }
                     if line.contains(colour) {
-                        // One colour button, without alpha (review of 208): a
+                        // One colour button, without alpha: a
                         // second one could pick a see-through ground again.
                         assert_eq!(krate, "sdr-remote-theme", "{}: `{}` picks a colour itself; use `colour_button`", file.display(), line.trim());
                         colour_seen += 1;
@@ -370,7 +369,7 @@ mod rule_tests {
             }
         }
         // The one line inside `rule` itself, and not a second copy of it
-        // elsewhere in this file (review of 200).
+        // elsewhere in this file.
         assert_eq!(allowed_seen, 1, "egui's own line is drawn outside `rule`");
         // Five panels in the client, three in the chat: the check above ran.
         assert!(panels_seen >= 8, "only {panels_seen} panels found");
@@ -379,8 +378,8 @@ mod rule_tests {
     }
 
     /// The chat paints its window's ground before anything else, so the window
-    /// the server opens for it has no black seams between its panels (review of
-    /// 208: the client's pop-outs painted it, the server's chat window did not).
+    /// the server opens for it has no black seams between its panels (once
+    /// the client's pop-outs painted it, the server's chat window did not).
     #[test]
     fn the_chat_paints_its_ground_first() {
         let panel = include_str!("../../sdr-remote-chat/src/panel.rs");

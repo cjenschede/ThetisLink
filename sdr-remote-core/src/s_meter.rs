@@ -2,11 +2,11 @@
 //! The S reading as text, for every meter on every screen (build 218). Six
 //! places used to compute it, with three ways of rounding: the phone said
 //! `S9+19dB` where the desktop said `S9+20dB` for the same signal, and the
-//! Yaesu bar said S5 where the compact Yaesu label said S6 (review of 217).
+//! Yaesu bar said S5 where the compact Yaesu label said S6.
 //! The desktop uses these functions directly; Android gets `text` through the
 //! bridge.
 //!
-//! Rounding, the owner's choice (2026-10-16): to the nearest, "for everything".
+//! Rounding (2026-10-16): to the nearest, for everything.
 //! Above S9 the dB (19.6 dB over S9 is `S9+20dB`); since build 222 also the S
 //! step below S9 - it was rounded down, and with the needle on S8 the spectrum
 //! read S7 half the time.
@@ -43,7 +43,7 @@ mod tests {
         assert_eq!(text(-130.0), "S0");
         assert_eq!(text(-115.0), "S2");
         assert_eq!(text(-109.1), "S3", "S2.98 is S3 (build 222)");
-        assert_eq!(text(-79.5), "S8", "S7.92: the needle on S8 read S7 (owner, 2026-10-16)");
+        assert_eq!(text(-79.5), "S8", "S7.92: the needle on S8 read S7 (seen on 2026-10-16)");
         assert_eq!(text(-81.5), "S8", "S7.58");
         assert_eq!(text(-82.5), "S7", "S7.42");
         assert_eq!(text(-74.0), "S9", "S8.83");

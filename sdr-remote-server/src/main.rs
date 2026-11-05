@@ -19,6 +19,7 @@ mod power_cap;
 mod ptt;
 mod rf2k;
 mod session;
+mod single_instance;
 #[cfg(test)]
 mod test_serial;
 mod spe_expert;
@@ -243,6 +244,28 @@ impl Log for DevGate {
     }
 }
 
+/// A second settings window on a PC that already has a server open (builds
+/// 14-15): said in a box in the language of the settings, and code 2 like the
+/// command-line refusal, so a starter that reads the code sees a refusal. No
+/// logger is set yet and the log file is not opened fresh: the running server's
+/// log gets one appended line, nothing more.
+fn refuse_second_window() -> ! {
+    // The console first: refused before `hide_console` further on, the box
+    // would otherwise sit in front of an empty console window.
+    #[cfg(windows)]
+    hide_console();
+    append_to_server_log(&server_log_path(), &format!("\n[NOT STARTED] {}\n", single_instance::REFUSAL));
+    rust_i18n::set_locale(&config::load().language);
+    #[cfg(windows)]
+    unsafe {
+        use windows::core::{w, HSTRING, PCWSTR};
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+        let msg = HSTRING::from(rust_i18n::t!("srv_already_running").to_string());
+        MessageBoxW(None, PCWSTR(msg.as_ptr()), w!("ThetisLink Server"), MB_OK | MB_ICONINFORMATION);
+    }
+    std::process::exit(2);
+}
+
 /// Hide the console window in GUI mode (Windows only)
 #[cfg(windows)]
 fn hide_console() {
@@ -262,7 +285,7 @@ fn print_usage() {
     eprintln!("  --thetis-path <PATH>   Path to Thetis.exe for auto-launch on POWER ON");
     eprintln!("  --amplitec-port <COM>  COM port for Amplitec 6/2 antenna switch");
     eprintln!("  --spe-port <COM>       COM port for SPE Expert 1.3K-FA amplifier");
-    eprintln!("  --rf2k <ADDR>          RF2K-S Pi address (e.g. 192.168.1.50:8080)");
+    eprintln!("  --rf2k <ADDR>          RF2K-S Pi address (e.g. 192.168.1.3:8080)");
     eprintln!();
     eprintln!("The password (and 2FA) come from the saved settings; without a saved");
     eprintln!("password the server does not start this way.");
@@ -287,22 +310,49 @@ pub(crate) fn server_log_path() -> std::path::PathBuf {
         .join("thetislink-server.log")
 }
 
-/// Open the log for a new run: emptied, then held in APPEND mode.
+/// Where the previous run's log is kept: `thetislink-server.previous.log`.
+pub(crate) fn previous_log_path(path: &std::path::Path) -> std::path::PathBuf {
+    path.with_extension("previous.log")
+}
+
+/// Open the log for a new run: the previous run's log moved aside first, then a
+/// new one, held in APPEND mode.
+///
+/// Moved aside, not emptied: a restart is often what made the trouble go away,
+/// and emptying the log took the only account of that trouble with it (a tuner
+/// that would not tune, 2026-10-30). One run back is kept, no more. A log that
+/// cannot be moved (held open elsewhere) is emptied as before, and the second
+/// value is then `false`: the caller says so once the logger is up
+/// (`previous_log_not_kept`), because the `.previous.log` beside it is then from
+/// an earlier run, and nothing in its lines (they carry no date) would tell.
 ///
 /// Append, not write. The panic hook and two diagnostics open the same file
 /// separately and add to its end; a handle that writes from its own position
 /// went on writing over what they had added. Field test 2026-10-01 11:00:42:
 /// the safety task panicked on purpose, the log said "the panic line above
 /// says where", and there was no panic line - the logger had written over it.
-fn open_log_fresh(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+fn open_log_fresh(path: &std::path::Path) -> std::io::Result<(std::fs::File, bool)> {
+    let moved = !path.exists() || std::fs::rename(path, previous_log_path(path)).is_ok();
     OpenOptions::new().create(true).write(true).truncate(true).open(path)?;
-    OpenOptions::new().append(true).open(path)
+    let log = OpenOptions::new().append(true).open(path)?;
+    Ok((log, moved))
+}
+
+/// What the log says when the previous run could not be moved aside. A
+/// `log::warn!`, not a line written into the file, so it is also in the log
+/// window and in a report. It names both files: a lock on either one stops the
+/// move, and with only the log named a held `.previous.log` sent the reader to
+/// the wrong file.
+pub(crate) fn previous_log_not_kept(path: &std::path::Path) -> String {
+    let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let previous = name(&previous_log_path(path));
+    format!("{} could not be moved aside to {previous} (one of the two open in another program?); \
+        {previous} is from an earlier run.", name(path))
 }
 
 /// Every way a server starts meets in `run_server_async`, and that is where it
 /// refuses: no password, a weak one, or 2FA on without a full key - before
-/// anything opens a port. A way added later is covered without knowing it
-/// (review 128).
+/// anything opens a port. A way added later is covered without knowing it.
 #[cfg(test)]
 mod start_gate_tests {
     use super::{run_server_async, ServerConfig};
@@ -316,7 +366,7 @@ mod start_gate_tests {
         match tokio::time::timeout(Duration::from_millis(1_500), &mut run).await {
             Ok(Err(e)) if e.to_string().starts_with("not started") => Some(e.to_string()),
             // Past the gate: running, or stopped for a reason of its own (a
-            // port taken by another program) - not the gate's (review 129).
+            // port taken by another program) - not the gate's.
             Ok(_) => None,
             Err(_) => {
                 let _ = tx.send(true);
@@ -326,14 +376,14 @@ mod start_gate_tests {
         }
     }
 
-    /// Both states of the gate (review 129: a gate that refused every start
+    /// Both states of the gate (a gate that refused every start
     /// stayed green): each refusal with its own reason, and valid credentials
     /// let through.
     #[tokio::test]
     async fn the_server_does_not_start_without_proper_credentials() {
         let said = |s: Option<String>, want: &str| {
-            let s = s.unwrap_or_else(|| panic!("not refused - wanted {want:?}"));
-            assert!(s.contains(want), "{s} - wanted {want:?}");
+            let s = s.unwrap_or_else(|| panic!("not refused: wanted {want:?}"));
+            assert!(s.contains(want), "{s}: wanted {want:?}");
         };
         said(gate_says(ServerConfig::default()).await, "no password");
         said(gate_says(ServerConfig { password: Some("weak".into()), ..ServerConfig::default() }).await, "too weak");
@@ -354,9 +404,55 @@ mod start_gate_tests {
     }
 }
 
+/// A server signs in at the relay as the station only once it holds its port
+/// (build 14). Before that, a server that would never get the port pushed the
+/// working one out of the station slot for its whole 30 s retry, and the two
+/// then took turns every five seconds ("the ghost of the FT-991A", 2026-08-21).
+///
+/// A text pin on the order in `run_server_async`: it says where the two calls
+/// stand, not that they run. The strings are split so this test's own text is
+/// not what it finds.
+#[cfg(test)]
+mod relay_after_port_tests {
+    #[test]
+    fn the_relay_sign_in_comes_after_the_port_is_bound() {
+        let src = include_str!("main.rs");
+        let body = &src[src.find(&["async fn ", "run_server_async("].concat()).expect("run_server_async")..];
+        let bind = body.find(&["let network = ", "NetworkService::new("].concat()).expect("the port bind");
+        let sign_in = body.find(&["RelayMonitor::", "start_threaded_quic("].concat()).expect("the relay sign-in");
+        assert!(sign_in > bind, "the relay sign-in must come after NetworkService::new has the port");
+    }
+
+    /// The window's claim comes before its log file is opened fresh (build
+    /// 15): a refused second window used to empty the running server's log
+    /// down to its own refusal line (a test of build 14).
+    #[test]
+    fn the_window_claims_before_it_opens_its_log_fresh() {
+        let src = include_str!("main.rs");
+        let gui = &src[src.find(&["// GUI mode - ", "dual logger"].concat()).expect("the GUI branch")..];
+        let claim = gui.find(&["single_instance::", "claim("].concat()).expect("the claim");
+        let fresh = gui.find(&["open_log_", "fresh(&log_path)"].concat()).expect("the fresh log");
+        assert!(claim < fresh, "the claim must come before the log file is opened fresh");
+    }
+
+    /// A log that could not be moved aside is said through the logger, so the
+    /// log window and a report have it too, which only works once the logger
+    /// is set.
+    #[test]
+    fn a_log_not_moved_aside_is_said_after_the_logger_is_set() {
+        let src = include_str!("main.rs");
+        let gui = &src[src.find(&["// GUI mode - ", "dual logger"].concat()).expect("the GUI branch")..];
+        let logger = gui.find(&["log::set_boxed_", "logger(Box::new(GuiLogger"].concat()).expect("the logger");
+        let said = gui.find(&["log::warn!(\"{}\", previous_log_", "not_kept(&log_path))"].concat()).expect("the warning");
+        assert!(logger < said, "the warning must come after the logger is set");
+        // And only when the log was not moved: the other way it is said at every start.
+        assert!(gui[..said].trim_end().ends_with("if !log_moved {"), "the warning hangs on the move failing");
+    }
+}
+
 #[cfg(test)]
 mod log_file_tests {
-    use super::open_log_fresh;
+    use super::{open_log_fresh, previous_log_path};
     use std::io::Write;
 
     /// What another writer adds at the end survives the logger's next line.
@@ -364,7 +460,8 @@ mod log_file_tests {
     fn a_line_added_by_another_writer_is_not_written_over() {
         let path = std::env::temp_dir().join(format!("tl-log-test-{}.log", std::process::id()));
         std::fs::write(&path, "from an earlier run that must go\n").unwrap();
-        let mut logger = open_log_fresh(&path).unwrap();
+        let _ = std::fs::remove_file(previous_log_path(&path));
+        let (mut logger, _) = open_log_fresh(&path).unwrap();
         logger.write_all(b"one\n").unwrap();
         {
             let mut hook = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
@@ -374,7 +471,73 @@ mod log_file_tests {
         drop(logger);
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(previous_log_path(&path));
         assert_eq!(text, "one\n[PANIC] here\ntwo\n");
+    }
+
+    /// Each start keeps the run before it, and only that one: the second start
+    /// moves the first run's log aside and drops the one before.
+    #[test]
+    fn each_start_keeps_the_run_before_it() {
+        let path = std::env::temp_dir().join(format!("tl-log-prev-{}.log", std::process::id()));
+        let previous = previous_log_path(&path);
+        assert_eq!(previous.file_name().unwrap(), &*format!("tl-log-prev-{}.previous.log", std::process::id()));
+        let _ = std::fs::remove_file(&previous);
+        std::fs::write(&path, "run 1\n").unwrap();
+        for run in ["run 2\n", "run 3\n"] {
+            let (mut logger, _) = open_log_fresh(&path).unwrap();
+            logger.write_all(run.as_bytes()).unwrap();
+        }
+        let now = std::fs::read_to_string(&path).unwrap();
+        let before = std::fs::read_to_string(&previous).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&previous);
+        assert_eq!((now.as_str(), before.as_str()), ("run 3\n", "run 2\n"));
+    }
+
+    /// A log held open without leave to delete it (as an editor can) cannot be
+    /// moved aside. The caller hears so, because the `.previous.log` beside it
+    /// is then from an earlier run, and the line it logs names both files.
+    #[cfg(windows)]
+    #[test]
+    fn a_log_that_cannot_be_moved_aside_says_so() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let path = std::env::temp_dir().join(format!("tl-log-held-{}.log", std::process::id()));
+        let previous = previous_log_path(&path);
+        let _ = std::fs::remove_file(&previous);
+        std::fs::write(&path, "run 1\n").unwrap();
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, no FILE_SHARE_DELETE: a rename fails,
+        // a truncate does not.
+        let holder = std::fs::OpenOptions::new().read(true).share_mode(1 | 2).open(&path).unwrap();
+        let (mut logger, moved) = open_log_fresh(&path).unwrap();
+        logger.write_all(b"run 2\n").unwrap();
+        drop(logger);
+        drop(holder);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let kept = previous.exists();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(text, "run 2\n");
+        assert!(!moved && !kept, "nothing was moved aside, and the caller knows");
+        let said = super::previous_log_not_kept(&path);
+        for file in [&path, &previous] {
+            let name = file.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(said.contains(&name), "{name} is not named: {said}");
+        }
+    }
+
+    /// The first start on a PC has no log to keep, and starts all the same.
+    #[test]
+    fn a_first_start_without_a_log_opens_one() {
+        let path = std::env::temp_dir().join(format!("tl-log-first-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(previous_log_path(&path));
+        let (mut logger, _) = open_log_fresh(&path).unwrap();
+        logger.write_all(b"first\n").unwrap();
+        drop(logger);
+        let kept = previous_log_path(&path).exists();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((text.as_str(), kept), ("first\n", false));
     }
 }
 
@@ -420,7 +583,7 @@ fn install_panic_hook() {
 
 /// Append `text` to the server's log file, best effort - for what must be
 /// readable even when only stderr was set up: a panic, and a command-line start
-/// that is refused (review 128: a headless start that stopped left nothing to
+/// that is refused (a headless start that stopped left nothing to
 /// read).
 fn append_to_server_log(path: &std::path::Path, text: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -433,7 +596,7 @@ fn main() -> Result<()> {
 
     // Parse command-line arguments
     let args: Vec<String> = env::args().collect();
-    // Step 4's trial options, only with the feature (build 256): taken out
+    // The trial options, only with the feature (build 256): taken out
     // here, so a start with only these still opens the settings screen.
     #[cfg(feature = "naspelen")]
     let args = match trial::take_args(args) {
@@ -500,6 +663,18 @@ fn main() -> Result<()> {
         log::set_max_level(env_log.filter());
         log::set_boxed_logger(Box::new(DevGate(env_log))).unwrap();
 
+        // One server per PC (build 14), before anything opens a port or signs
+        // in at the relay. Held until this branch ends, i.e. for the server's life.
+        let _instance = match single_instance::claim(&single_instance::name()) {
+            Some(claim) => claim,
+            None => {
+                let why = single_instance::REFUSAL;
+                log::error!("Not started: {why}");
+                append_to_server_log(&server_log_path(), &format!("\n[NOT STARTED] {why}\n"));
+                std::process::exit(2);
+            }
+        };
+
         let defaults = ServerConfig::default();
         // What a command-line start takes from the saved settings: the
         // password and the 2FA key - without a password it does not start, it
@@ -542,6 +717,7 @@ fn main() -> Result<()> {
             yaesu2_model_last: defaults.yaesu2_model_last,
             yaesu_audio_channel: defaults.yaesu_audio_channel,
             yaesu2_audio_channel: defaults.yaesu2_audio_channel,
+            yaesu_rx_levels_tuned: defaults.yaesu_rx_levels_tuned,
             yaesu2_ssb_switch_on_ptt: defaults.yaesu2_ssb_switch_on_ptt,
             yaesu2_memory_write_ack: defaults.yaesu2_memory_write_ack,
             amplitec_port: amplitec_port.or(defaults.amplitec_port),
@@ -673,18 +849,25 @@ fn main() -> Result<()> {
         .build();
         let max_level = env_log.filter();
 
+        // One server per PC (build 14), claimed before the log file is opened
+        // fresh: a refused second start wiped the running server's log down to
+        // its own refusal (a test of build 14). Held until this branch
+        // ends, i.e. until the window closes.
+        let _instance = match single_instance::claim(&single_instance::name()) {
+            Some(claim) => claim,
+            None => refuse_second_window(),
+        };
+
         // Open log file next to the executable
-        let log_file = {
-            let log_path = server_log_path();
-            match open_log_fresh(&log_path) {
-                Ok(f) => {
-                    eprintln!("Log file: {}", log_path.display());
-                    Some(StdMutex::new(f))
-                }
-                Err(e) => {
-                    eprintln!("Warning: could not open log file {}: {}", log_path.display(), e);
-                    None
-                }
+        let log_path = server_log_path();
+        let (log_file, log_moved) = match open_log_fresh(&log_path) {
+            Ok((f, moved)) => {
+                eprintln!("Log file: {}", log_path.display());
+                (Some(StdMutex::new(f)), moved)
+            }
+            Err(e) => {
+                eprintln!("Warning: could not open log file {}: {}", log_path.display(), e);
+                (None, true)
             }
         };
 
@@ -695,6 +878,13 @@ fn main() -> Result<()> {
         }))
         .unwrap();
         log::set_max_level(max_level);
+        // Said now that there is a log: the claim and the move came before the logger.
+        if !log_moved {
+            log::warn!("{}", previous_log_not_kept(&log_path));
+        }
+        if let Some(why) = _instance.unavailable() {
+            log::warn!("single-instance check unavailable ({why}); started without it");
+        }
 
         #[cfg(windows)]
         hide_console();
@@ -749,7 +939,7 @@ pub async fn run_server_async(
     vfo_freq_shared: Option<Arc<AtomicU64>>,
     vfo_b_freq_shared: Option<Arc<AtomicU64>>,
     yaesu_prebuilt: Option<Arc<yaesu::YaesuRadio>>,
-    // PATCH-2: shared lock-free state for the Status panel. CLI mode
+    // Shared lock-free state for the Status panel. CLI mode
     // passes `None`; GUI mode passes pre-allocated probes.
     status_panel_state: Option<crate::audio_stats::StatusPanelShared>,
 ) -> Result<()> {
@@ -767,13 +957,12 @@ pub async fn run_server_async(
         info!("Executable built/copied at epoch {} ({})", secs,
               std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default());
     }
-    info!("PA3GHM - Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
-    info!("Licensed under GPL-2.0-or-later - source: https://github.com/cjenschede/ThetisLink");
+    info!("PA3GHM: Remote control for Thetis SDR + Yaesu FT-991A / FTX-1 (dual-radio)");
+    info!("Licensed under GPL-2.0-or-later: source: https://github.com/cjenschede/ThetisLink");
 
     // The one place every start meets, before anything opens a port: no server
     // without a password of the button's strength, nor with 2FA on and no full
-    // key - whichever way it was started, and whatever way is added later
-    // (review 128).
+    // key - whichever way it was started, and whatever way is added later.
     let (password, totp_secret) =
         crate::config::start_credentials(config.password.as_deref(), config.totp_enabled, config.totp_secret.as_deref())
             .map_err(|why| {
@@ -781,7 +970,7 @@ pub async fn run_server_async(
                 anyhow::anyhow!("not started: {why}")
             })?;
 
-    // PATCH-2: derive Status-panel state from the optional incoming bundle
+    // Derive Status-panel state from the optional incoming bundle
     // (GUI mode) or construct a one-shot bundle for CLI mode so the rest of
     // run_server_async can always operate on real Arc<>s.
     let status_panel_state = status_panel_state
@@ -792,7 +981,7 @@ pub async fn run_server_async(
 
     // Session manager, with what the gate at the top let through.
     let session = Arc::new(Mutex::new(SessionManager::new(Some(password), totp_secret)));
-    // PATCH-2: publish to the Status-panel slot so the UI can read it.
+    // Publish to the Status-panel slot so the UI can read it.
     // CLI mode also publishes - harmless even though no UI reads from it.
     let _ = status_panel_state.session_slot.set(session.clone());
 
@@ -941,7 +1130,7 @@ pub async fn run_server_async(
     // idempotent-safe via OnceLock.
     let _ = status_panel_state.tuners_slot.set(tuners.clone());
 
-    // PATCH-yaesu-rotor-mcp2221 phase 3+4+5: RotorInstance is now created in
+    // RotorInstance is created in
     // the rotor-backend match arm below (only for
     // backend == "mcp2221_yaesu"), so that the Rotor facade and the
     // status_panel RotorInstance share one MCP2221A driver.
@@ -998,8 +1187,8 @@ pub async fn run_server_async(
                 }
             }
             "mcp2221_yaesu" => {
-                // Driven directly via an Adafruit MCP2221A board
-                // (PATCH-yaesu-rotor-mcp2221). Slot 0 in config.rotors;
+                // Driven directly via an Adafruit MCP2221A board.
+                // Slot 0 in config.rotors;
                 // the RotorInstance creates its own poll thread + Rotor
                 // facade. We also publish the RotorInstance in
                 // `rotor_slot` so the status panel keeps showing its live ADC +
@@ -1028,7 +1217,7 @@ pub async fn run_server_async(
                         let facade = inst.make_rotor_facade();
                         let _ = status_panel_state.rotor_slot.set(inst);
                         info!(
-                            "Rotor (Adafruit MCP2221A) instance bound - serial \"{}\" (label \"{}\", cal {:.3}V->{:.3}V @ {}°)",
+                            "Rotor (Adafruit MCP2221A) instance bound: serial \"{}\" (label \"{}\", cal {:.3}V->{:.3}V @ {}°)",
                             rot_cfg.mcp_serial, label,
                             rot_cfg.v_at_0deg, rot_cfg.v_at_max_deg, rot_cfg.max_deg
                         );
@@ -1041,7 +1230,7 @@ pub async fn run_server_async(
                     }
                 } else {
                     log::warn!(
-                        "mcp2221_yaesu backend selected but no rotor in config.rotors - use the wizard to claim a rot_<name> board"
+                        "mcp2221_yaesu backend selected but no rotor in config.rotors: use the wizard to claim a rot_<name> board"
                     );
                     None
                 }
@@ -1104,15 +1293,18 @@ pub async fn run_server_async(
         Some(Arc::new(dxcluster::DxCluster::new(&config.dxcluster_server, &config.dxcluster_callsign, config.dxcluster_expiry_min)))
     } else {
         if config.dxcluster_enabled {
-            info!("DX Cluster: enabled but no callsign configured - not connecting (set your callsign in server settings)");
+            info!("DX Cluster: enabled but no callsign configured; not connecting (set your callsign in server settings)");
         }
         None
     };
 
     // The relay, when it is on: the monitor signs in and hands each session's
-    // grant to the QUIC endpoint, which carries the data itself (phase 3b; since
-    // build 133 the only form).
-    let (relay_monitor, quic_relay) = if config.relay_enabled {
+    // grant to the QUIC endpoint, which carries the data itself through the
+    // relay (since build 133 the only form).
+    //
+    // Here only the route is made; the sign-in waits until the port is ours
+    // (build 14), below `NetworkService::new`.
+    let (relay_start, quic_relay) = if config.relay_enabled {
         let relay_cfg = sdr_remote_relay::RelayConfig {
             enabled: config.relay_enabled,
             url: config.relay_url.clone(),
@@ -1129,15 +1321,10 @@ pub async fn run_server_async(
             quic: false,
         };
         let (grant_tx, grant_rx) = tokio::sync::watch::channel(None);
-        // Own thread (see build 123): keeps the relay ping/echo off the busy DSP
-        // runtime, so its scheduling doesn't inflate the measured RTT/jitter.
         // The TCP line: clients on a network that lets no UDP through reach the
         // station over it (build 144).
         let (tcp, tcp_monitor) = sdr_remote_relay::tcp_line();
-        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_quic(relay_cfg, grant_tx, Some(tcp_monitor));
-        let _ = status_panel_state.relay_status.set(monitor.status_handle());
-        info!("Relay: QUIC via the relay");
-        (Some(monitor), Some(sdr_remote_quic::RelayRoute::new(grant_rx, Some(tcp))))
+        (Some((relay_cfg, grant_tx, tcp_monitor)), Some(sdr_remote_quic::RelayRoute::new(grant_rx, Some(tcp))))
     } else {
         (None, None)
     };
@@ -1147,7 +1334,7 @@ pub async fn run_server_async(
     // Tune commands per Amplitec-A position.
     let _ = tuner;
 
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime). The 2nd radio
+    // Dual-radio slot 1. The 2nd radio
     // is created here from config (works in both GUI and headless mode). Model is
     // per-port autodetected via `ID;` (detect_model) -> every combination 2×991A /
     // 2×FTX1 / mix works; if detect fails (radio off) -> 991A assumption, and the
@@ -1169,7 +1356,7 @@ pub async fn run_server_async(
             // detection that could not work stayed hidden.
             let (model, det_baud, how) = match yaesu::detect_model(port, baud) {
                 Some((m, b)) => (m, b, "detected"),
-                None => (yaesu::RadioModel::Ft991a, baud, "ASSUMED - the port stayed silent"),
+                None => (yaesu::RadioModel::Ft991a, baud, "ASSUMED: the port stayed silent"),
             };
             info!("[radio1] slot 1 enabled: {} @ {} baud, model={:?} ({})", port, det_baud, model, how);
             let audio = config.yaesu2_audio_device.clone();
@@ -1184,10 +1371,10 @@ pub async fn run_server_async(
             }
             match yaesu::YaesuRadio::new_with_model(port, det_baud, audio.as_deref(), audio_out.as_deref(), model, 1, config.yaesu2_audio_channel, config.yaesu2_ssb_switch_on_ptt, config.yaesu2_memory_write_ack) {
                 Ok(r) => Some(Arc::new(r)),
-                Err(e) => { warn!("[radio1] init failed: {} - slot 1 off, server keeps running", e); None }
+                Err(e) => { warn!("[radio1] init failed: {}; slot 1 off, server keeps running", e); None }
             }
         } else {
-            warn!("[radio1] enabled but no yaesu2_port configured - slot 1 off");
+            warn!("[radio1] enabled but no yaesu2_port configured: slot 1 off");
             None
         }
     } else {
@@ -1199,11 +1386,10 @@ pub async fn run_server_async(
         thetis: config.thetis_configured(),
         radios: [yaesu_prebuilt.is_some(), yaesu2_prebuilt.is_some()],
     };
-    // Named in advance (working rule 11, build 269).
     info!("{}", configured.line());
-    // Named in advance (`logregels-build294.md`): in which mode this log is
+    // In which mode this log is
     // written. The mode is set where it is switched; this says it at each start,
-    // from the switch the logger reads and not from the settings (review of 294).
+    // from the switch the logger reads and not from the settings.
     info!("{}", sdr_remote_core::dev_mode::state_line(sdr_remote_core::dev_mode::is_on()));
     let _ = status_panel_state.configured.set(configured);
     let _ = status_panel_state.radios.set([yaesu_prebuilt.clone(), yaesu2_prebuilt.clone()]);
@@ -1238,10 +1424,22 @@ pub async fn run_server_async(
     )
     .await?;
 
+    // The port is ours: now sign in at the relay as the station (build 14). A
+    // server that cannot get the port has returned above, so it never takes the
+    // station slot from one that has it. Own thread (see build 123): keeps the
+    // relay ping/echo off the busy DSP runtime, so its scheduling doesn't
+    // inflate the measured RTT/jitter.
+    let relay_monitor = relay_start.map(|(relay_cfg, grant_tx, tcp_monitor)| {
+        let monitor = sdr_remote_relay::RelayMonitor::start_threaded_quic(relay_cfg, grant_tx, Some(tcp_monitor));
+        let _ = status_panel_state.relay_status.set(monitor.status_handle());
+        info!("Relay: QUIC via the relay, signed in after the port was bound");
+        monitor
+    });
+
     info!("Server ready, waiting for connections...");
     let cw_lines_at_exit = network.cw_lines();
 
-    // PATCH-3: advertise on the local network so clients can find us
+    // Advertise on the local network so clients can find us
     // without typing an IP. mDNS failure is non-fatal - manual entry
     // remains the always-on fallback in the clients.
     let mdns_advertiser = match mdns::MdnsAdvertiser::start(
@@ -1270,7 +1468,7 @@ pub async fn run_server_async(
 
     // Ensure PTT is released on shutdown
     ptt.lock().await.release().await;
-    // And every Yaesu key line, before the radios are put back (CW step 6).
+    // And every Yaesu key line, before the radios are put back (build 128).
     // The proof is for the loss path; at exit the put-back below is what follows.
     let _down = crate::network::lower_all_key_lines(&cw_lines_at_exit);
 
@@ -1286,7 +1484,7 @@ pub async fn run_server_async(
             // close the server during the FTX-1 menu scan and this wait ran out
             // first, so PC KEYING stayed on RTS and the 991A routing stayed
             // applied - the radio NOT put back, with a line blaming a radio
-            // that was off (review 2120A2). Nobody had held this one to
+            // that was off. Nobody had held this one to
             // the 2.6 s that its twin was measured against.
             yaesu::put_back_before_exit(&refs, std::time::Duration::from_millis(3000));
         })
@@ -1304,7 +1502,7 @@ pub async fn run_server_async(
     if let Some(monitor) = relay_monitor.as_ref() {
         monitor.stop();
     }
-    // PATCH-3: deregister the mDNS service so clients see the server
+    // Deregister the mDNS service so clients see the server
     // disappear instead of relying on TTL expiry.
     if let Some(adv) = mdns_advertiser {
         adv.shutdown();

@@ -18,7 +18,7 @@ use crate::tci_parser::*;
 /// Why a frame could not go to its loop (build 151). Both lose the frame, but
 /// "queue full" is a loop that fell behind and "gone" is a loop that is not
 /// running at all - the first is a load question, the second a fault, and the
-/// line used to call both "queue full" (review of build 150).
+/// line used to call both "queue full".
 fn drop_reason<T>(e: &mpsc::error::TrySendError<T>) -> &'static str {
     match e {
         mpsc::error::TrySendError::Full(_) => "queue full",
@@ -78,7 +78,7 @@ pub struct TciConnection {
     /// Per-RX CTUN state cache, filled via TCI `rx_ctun_ex` push notifications.
     /// `ctun` (above) is for RX1 (legacy field name); `ctun_rx2` for RX2.
     /// TL2-1 ctun-auto-recenter uses these to check on a VFO-event whether CTUN is ON
-    /// - if not, force ZZCN1/ZZCO1 first (per operator choice 2026-05-08).
+    /// - if not, force ZZCN1/ZZCO1 first.
     pub ctun_rx2: bool,
     /// DDS center frequency per receiver (from TCI DDS notification)
     pub dds_freq: [u64; 2],
@@ -128,10 +128,10 @@ pub struct TciConnection {
     txeq_bypass_pending: bool,
     txeq_bypass_active: bool,
     /// A bypass that ended while TCI was down: the state to restore at the
-    /// next READY (build 224, review of 223).
+    /// next READY.
     txeq_restore_due: Option<bool>,
     /// READY on this connection sent `txeq_restore_due` and kept it for the
-    /// answer to a question (build 226, review of 225): with the connection
+    /// answer to a question: with the connection
     /// gone that answer cannot come, so the state is not said again.
     txeq_restore_sent: bool,
     // TX Monitor (MON_ENABLE)
@@ -170,7 +170,7 @@ pub struct TciConnection {
     // Tune state (TCI: tune)
     /// TUNE on either receiver - RX1 or RX2/VFO-B TX. One flag, because every
     /// reader asks "is Thetis putting out a carrier", not "on which receiver"
-    /// (review finding on build 62: only receiver 0 was kept).
+    /// (build 62 kept only receiver 0).
     tune_active: bool,
     /// Per receiver, so a TUNE OFF on one does not clear a TUNE ON on the other.
     pub(crate) tune_rx: [bool; 2],
@@ -198,7 +198,7 @@ pub struct TciConnection {
     // Current TX profile name from tx_profile_ex
     pub tx_profile_name: String,
 
-    // --- Audio channels (phase 2) ---
+    // --- Audio channels ---
     /// RX1 audio receiver: Vec<f32> chunks at 48kHz mono
     pub rx1_audio_rx: Option<mpsc::Receiver<Vec<f32>>>,
     /// RX2 audio receiver: Vec<f32> chunks at 48kHz mono
@@ -213,14 +213,14 @@ pub struct TciConnection {
     /// How many times this server sent Thetis TRX off (build 196): the reader
     /// drops the requests that wait when it changes, at once - Thetis's own
     /// `trx:..,false` comes only after its whole switch to RX, and an answer
-    /// in between went into Thetis's next MOX (review of 195, home test).
+    /// in between went into Thetis's next MOX (home test of build 195).
     tx_off_count: Arc<AtomicU64>,
     /// TX audio chunks lost at a full channel to the reader (build 105).
     tx_audio_dropped: u64,
     /// Whether audio streams are active
     audio_started: bool,
 
-    // --- IQ channels (phase 3) ---
+    // --- IQ channels ---
     /// IQ RX1 receiver: Vec<(f32, f32)> I/Q pairs
     pub iq_rx1_rx: Option<mpsc::Receiver<(u32, Vec<(f32, f32)>)>>,
     /// IQ RX2 receiver: Vec<(f32, f32)> I/Q pairs
@@ -343,8 +343,8 @@ pub(crate) fn sensors_ex_fresh(at: Option<Instant>, now: Instant) -> bool {
     at.map_or(false, |t| now.saturating_duration_since(t) < SENSORS_EX_FRESH)
 }
 
-/// What a sensor message does - the four ways, in one place (review 318,
-/// the decision the S-meter fault came from, until now inline).
+/// What a sensor message does - the four ways, in one place (the
+/// decision the S-meter fault came from, which used to be inline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SensorUse {
     /// An `_ex` message: cached; `newly` when the format was not current.
@@ -373,7 +373,7 @@ pub(crate) fn sensor_use(is_ex: bool, ex_at: Option<Instant>, now: Instant) -> S
 
 /// What the end of a WAV-playback TX-EQ bypass sends: only the undo of this
 /// server's own `ZZET0`, which went out once `ZZET` answered with the prior
-/// state (build 223, review of 222).
+/// state.
 fn txeq_bypass_restore(saved: Option<bool>) -> Option<&'static str> {
     saved.map(|on| if on { "ZZET1" } else { "ZZET0" })
 }
@@ -412,9 +412,9 @@ mod filter_mode_tests {
         let body = &sdr_remote_core::source_text::production_code(src);
         for (asked, reported, set, line) in [
             ("ptt.tci.asked_mode_a", "ptt.vfo_a_mode()", "ptt.set_filter(low, high).await;",
-             "info!(\"Client {} filter: {} .. {} Hz does not fit mode {} - not sent to Thetis\""),
+             "info!(\"Client {} filter: {} .. {} Hz does not fit mode {}: not sent to Thetis\""),
             ("ptt.tci.asked_mode_b", "ptt.vfo_b_mode()", "ptt.set_rx2_filter(low, high).await;",
-             "info!(\"Client {} RX2 filter: {} .. {} Hz does not fit mode {} - not sent to Thetis\""),
+             "info!(\"Client {} RX2 filter: {} .. {} Hz does not fit mode {}: not sent to Thetis\""),
         ] {
             let check = format!("let mode = crate::tci::mode_for_filter({asked}, {reported}, Instant::now());\n                                    if sdr_remote_core::filter_fit::edges_fit_mode(mode, low, high) {{");
             assert_eq!(body.matches(check.as_str()).count(), 1, "{set}");
@@ -444,14 +444,14 @@ mod sensors_ex_tests {
 
     /// The window itself: Thetis sends several per second, and a frozen meter
     /// after the format stops is the fault this closes - not seconds of it
-    /// (review 318: 60 s stayed green).
+    /// (60 s stayed green).
     #[test]
     fn the_extended_window_is_short() {
         assert!(SENSORS_EX_FRESH >= std::time::Duration::from_millis(500));
         assert!(SENSORS_EX_FRESH <= std::time::Duration::from_secs(3));
     }
 
-    /// Review 318 (point C): a Thetis without the extensions after one with
+    /// A Thetis without the extensions after one with
     /// them, through a reconnect - the field rule of 137. The disconnect
     /// cleared the stamp but kept the extended values, and the getters prefer
     /// those: the meter stood on the old Thetis's last value until a PTT.
@@ -462,7 +462,7 @@ mod sensors_ex_tests {
         // two flags that decide whether this station is transmitting. Written
         // out one by one because a hand-written list is exactly as complete as
         // the list, and five of these seven lines could be deleted with the
-        // whole suite still green (review 2120A3).
+        // whole suite still green.
         t.smeter_raw_dbm = [Some(-50.0), Some(-60.0)];
         t.smeter_direct_dbm = Some(-48.0);
         t.smeter_sig_dbm = Some(-47.0);
@@ -504,7 +504,7 @@ mod sensors_ex_tests {
         rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 0, active: true }));
         assert_eq!(t.thetis_tx_receiver, 0);
         assert_eq!(t.connection_count(), 0);
-        // On a position that is already RX-only (review of 220): the TRX
+        // On a position that is already RX-only: the TRX
         // arm answers the "on" and returns, but the receiver is kept, so the
         // loop's stop for a TUNE there goes to the same receiver.
         let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -540,7 +540,7 @@ mod sensors_ex_tests {
     }
 
     /// The TX-EQ bypass of a WAV playback turns back on only what it turned
-    /// off itself (build 223, review of 222): without an answer to `ZZET` no
+    /// off itself: without an answer to `ZZET` no
     /// `ZZET0` went out, and the end said `ZZET1` anyway - TX-EQ on for an
     /// operator who had it off. An unanswered question goes with its
     /// connection; our own `ZZET0` is kept, so the end still undoes it.
@@ -583,7 +583,7 @@ mod sensors_ex_tests {
         assert_eq!(sent.iter().filter(|c| c.contains("ZZET")).count(), 1, "only the question: {sent:?}");
         assert!(!sent.iter().any(|c| c.contains("ZZET1") || c.contains("ZZET0")), "{sent:?}");
 
-        // Build 224 (review of 223): a playback that ends while TCI is down
+        // Build 224: a playback that ends while TCI is down
         // keeps what to restore, and the next connection restores it at READY
         // - once, also when a second READY comes. Twice, without a restart.
         for _ in 0..2 {
@@ -634,8 +634,8 @@ mod sensors_ex_tests {
         assert!(!end.contains("unwrap_or"), "no default to on");
     }
 
-    /// A restore that was due when a new playback starts (build 225, review
-    /// of 224): Thetis still holds our own ZZET0, so its answer is not the
+    /// A restore that was due when a new playback starts (build 225):
+    /// Thetis still holds our own ZZET0, so its answer is not the
     /// operator's state - the restore that was due is. Three orders: the
     /// answer before READY, READY before the answer, and a question that went
     /// nowhere.
@@ -701,7 +701,7 @@ mod sensors_ex_tests {
     }
 
     /// A restore READY already sent, kept for the answer to a question that
-    /// went nowhere, falls with its connection (build 226, review of 225):
+    /// went nowhere, falls with its connection:
     /// after a second drop the next READY no longer says it, over whatever
     /// the operator chose in between. One not sent yet stays.
     #[test]
@@ -767,7 +767,7 @@ mod sensors_ex_tests {
         assert!(t.smeter_direct_dbm.is_none(), "the old Thetis's value no longer stands in for the meter");
         assert!(t.smeter_raw_dbm[0].is_none(), "nor for the spectrum calibration");
         // And the new connection counts a plain message at once: the stamp went
-        // with the disconnect (review 318 round 2).
+        // with the disconnect.
         assert_eq!(t.smeter_window.len(), 1, "the plain message was not ignored");
     }
 
@@ -795,8 +795,8 @@ impl TciConnection {
         // Cold-boot defensiveness: on Windows, Instant::now() reflects QPC ticks
         // since system boot. If the server starts within ~60s of cold-boot, the
         // raw `Instant::now() - Duration::from_secs(N)` operator panics with
-        // "overflow when subtracting duration from instant" (memory:
-        // project_tl2_coldboot_bind_fail.md, fix verified 2026-05-05). Use
+        // "overflow when subtracting duration from instant" (fix verified
+        // 2026-05-05). Use
         // checked_sub with Instant::now() fallback to keep the field safely-set
         // before any real timing-comparison happens at runtime.
         Self {
@@ -1030,7 +1030,7 @@ impl TciConnection {
         }
         // Our own TUNE, whichever path sent it - and before the connection is
         // checked: a TUNE off said while TCI is gone is still what we want, and
-        // left out it let a carrier stand after the reconnect (review of 214).
+        // left out it let a carrier stand after the reconnect.
         self.we_tune.sent(cmd);
         if !self.connected {
             return; // Not connected, skip (connection managed by background task)
@@ -1066,7 +1066,7 @@ impl TciConnection {
 
     /// End the bypass: restore TX-EQ to the snapshotted prior state. Without
     /// one the query never answered and no `ZZET0` went out, so nothing is
-    /// restored (build 223, review of 222: it said `ZZET1` then).
+    /// restored (it said `ZZET1` then).
     pub async fn thetis_txeq_bypass_end(&mut self) {
         if !self.txeq_bypass_active && !self.txeq_bypass_pending {
             return;
@@ -1075,7 +1075,6 @@ impl TciConnection {
         self.txeq_bypass_pending = false;
         self.txeq_bypass_active = false;
         self.txeq_bypass_saved = None;
-        // Named in advance (`logregels-build223.md`).
         match txeq_bypass_restore(saved) {
             // Nothing can go out: kept for the next connection (build 224).
             Some(cmd) if !self.connected => {
@@ -1118,7 +1117,7 @@ impl TciConnection {
                     Err(mpsc::error::TryRecvError::Empty) => break,
                     // The reader task is gone, whatever it managed to say on
                     // its way out. This is the disconnect that does not depend
-                    // on a message getting through (review finding on build 69: a stream
+                    // on a message getting through (seen on build 69: a stream
                     // that ends without a Close frame sent nothing at all).
                     Err(mpsc::error::TryRecvError::Disconnected) => {
                         reader_gone = true;
@@ -1132,9 +1131,9 @@ impl TciConnection {
         }
         // Only if the Disconnected notification in the same drain did not
         // already do it: handle_disconnect() clears `connected`, so this is the
-        // "exactly once" a review asked for on build 71, not a second pass.
+        // "exactly once" asked for on build 71, not a second pass.
         if reader_gone && self.connected {
-            warn!("TCI: reader task ended without a word - treating it as a disconnect");
+            warn!("TCI: reader task ended without a word; treating it as a disconnect");
             self.handle_disconnect();
         }
 
@@ -1171,7 +1170,7 @@ impl TciConnection {
         // TL2-1 ctun-auto-recenter: PTT-off transition forces eval.
         // Otherwise the user must press buttons to recenter after a long TX period with VFO out of zone.
         if self.detect_ptt_off_transition() {
-            log::debug!("TCI: ctun PTT-off transition - forcing trigger-eval");
+            log::debug!("TCI: ctun PTT-off transition; forcing trigger-eval");
             let zr1 = self.effective_zoom_rx1_cache;
             let zr2 = self.effective_zoom_rx2_cache;
             self.trigger_eval_and_act_rx1(zr1).await;
@@ -1188,7 +1187,7 @@ impl TciConnection {
             return;
         }
         if !self.ctun_recenter.fork_active_logged {
-            info!("TCI: ThetisLink ctun-extension active - Thetis recenter logic disabled (cap auto_recenter_ex)");
+            info!("TCI: ThetisLink ctun-extension active; Thetis recenter logic disabled (cap auto_recenter_ex)");
             self.ctun_recenter.fork_active_logged = true;
         }
         self.run_cat("ZZCN1").await;  // CTUN ON for RX1
@@ -1197,7 +1196,7 @@ impl TciConnection {
 
     /// Lazy-ensure: on a VFO-event on a specific RX, check whether CTUN is ON.
     /// If not (operator manually turned CTUN off, or Thetis-init had it off):
-    /// send ZZCN1 (RX1) or ZZCO1 (RX2) and update cache. Per operator choice 2026-05-08.
+    /// send ZZCN1 (RX1) or ZZCO1 (RX2) and update cache.
     /// Idempotent: when CTUN already ON -> no-op. Cap-gated.
     async fn ensure_ctun_on_for_rx(&mut self, rx_index: u8) {
         if !self.has_cap("auto_recenter_ex") {
@@ -1205,12 +1204,12 @@ impl TciConnection {
         }
         match rx_index {
             0 if !self.ctun => {
-                debug!("TCI: ctun rx=0 was off - forcing ON before VFO-event eval");
+                debug!("TCI: ctun rx=0 was off; forcing ON before VFO-event eval");
                 self.run_cat("ZZCN1").await;
                 self.ctun = true; // optimistic; rx_ctun_ex push confirms later
             }
             1 if !self.ctun_rx2 => {
-                debug!("TCI: ctun rx=1 was off - forcing ON before VFO-event eval");
+                debug!("TCI: ctun rx=1 was off; forcing ON before VFO-event eval");
                 self.run_cat("ZZCO1").await;
                 self.ctun_rx2 = true;
             }
@@ -1354,7 +1353,7 @@ impl TciConnection {
             || (bw_rx2 > 0 && jump_b > bw_rx2 && self.prev_vfo_b_for_ctun > 0);
         if band_switch {
             debug!(
-                "TCI: ctun band-switch detected (vfo_a jump={} > bw_rx1={} OR vfo_b jump={} > bw_rx2={}) - forcing CTUN on again",
+                "TCI: ctun band-switch detected (vfo_a jump={} > bw_rx1={} OR vfo_b jump={} > bw_rx2={}); forcing CTUN on again",
                 jump_a, bw_rx1, jump_b, bw_rx2
             );
             self.force_ctun_on_if_capable().await;
@@ -1365,7 +1364,7 @@ impl TciConnection {
 
     /// Is anything on the air that holds the automatic recenter: our own PTT,
     /// Thetis's TRX (a footswitch, VOX, its own button), or Tune - a carrier
-    /// too (build 274, owner's decision). One place for the three checks that
+    /// too. One place for the three checks that
     /// spelled it out, without Tune.
     pub fn transmitting_for_ctun(&self) -> bool {
         self.tx_active || self.thetis_on_the_air()
@@ -1393,8 +1392,8 @@ impl TciConnection {
     }
 
     /// Thetis is putting out a carrier: its TRX notification (MOX, a
-    /// footswitch, VOX, ThetisLink) or Tune. The one definition (build 275,
-    /// round 274): `PttController::tx_now` and `transmitting_for_ctun` ask it.
+    /// footswitch, VOX, ThetisLink) or Tune. The one definition (build 275):
+    /// `PttController::tx_now` and `transmitting_for_ctun` ask it.
     pub fn thetis_on_the_air(&self) -> bool {
         self.thetis_tx_active || self.tune_active
     }
@@ -1419,7 +1418,6 @@ impl TciConnection {
                 let had_queue_report = self.has_cap("tx_queue_report_ex");
                 self.server_caps = caps.into_iter().collect();
                 if !had_queue_report && self.has_cap("tx_queue_report_ex") {
-                    // Named in advance (`logregels-build212.md`).
                     info!("TCI: Thetis reports its TX queue per over (tx_queue_report_ex)");
                 }
                 let has_caps = !self.server_caps.is_empty();
@@ -1428,7 +1426,7 @@ impl TciConnection {
                 // session): reset state-machines that piggy-back on the cap
                 // surface so the next toggle ON starts clean.
                 if had_caps && !has_caps {
-                    info!("TCI: ThetisLink extensions disabled - releasing _ex feature surface");
+                    info!("TCI: ThetisLink extensions disabled; releasing _ex feature surface");
                     self.ctun_recenter.fork_active_logged = false;
                     // Without the fork pushing s9_frequency_ex we have no
                     // way to know the user's setting, so fall back to the
@@ -1459,7 +1457,6 @@ impl TciConnection {
                 if let Some(cmd) = txeq_bypass_restore(due) {
                     self.txeq_restore_sent = self.txeq_restore_due.is_some();
                     self.run_cat(cmd).await;
-                    // Named in advance (`logregels-build224.md`).
                     info!(
                         "Thetis TXEQ bypass: restored to {} at the new TCI connection",
                         if cmd == "ZZET1" { "on" } else { "off" }
@@ -1488,7 +1485,7 @@ impl TciConnection {
                                 self.vfo_b_freq = freq;
                             }
                             // TL2-1 ctun-auto-recenter: on a VFO-event first ensure
-                            // CTUN-on (per operator choice 2026-05-08); then band-switch
+                            // CTUN-on; then band-switch
                             // detect and trigger-eval. This solves the edge-case where the
                             // operator clicks CTUN-off and then starts tuning - the feature keeps
                             // working without the operator needing to touch the disable checkbox.
@@ -1548,11 +1545,10 @@ impl TciConnection {
                 // clears it since TL2-6), so after a server restart Thetis can
                 // still be transmitting for nobody. Answered on the receiver it
                 // names: `TRX:0` would move a VFO-B transmitter to VFO A.
-                // TUNE keys MOX too: our own TUNE is ours, not a PTT left behind (review of 214).
+                // TUNE keys MOX too: our own TUNE is ours, not a PTT left behind.
                 if self.first_trx.left_behind(receiver, active, self.tx_active || self.we_tune.on()) {
-                    // Named in advance (`logregels-build213.md`).
                     warn!(
-                        "SAFETY: Thetis was transmitting on receiver {} when the server connected and nothing here holds the PTT - TRX:{},false sent",
+                        "SAFETY: Thetis was transmitting on receiver {} when the server connected and nothing here holds the PTT; TRX:{},false sent",
                         receiver, receiver
                     );
                     self.send(&format!("TRX:{},false;", receiver)).await;
@@ -1567,8 +1563,7 @@ impl TciConnection {
                 let blocked = self.tx_blocked.load(Ordering::Relaxed);
                 debug!("TCI TRX recv: active={} tx_blocked={}", active, blocked);
                 // Kept before the RX-only answer returns: a TUNE on a position that
-                // is already RX-only is stopped from the loop on this receiver
-                // (review of 220).
+                // is already RX-only is stopped from the loop on this receiver.
                 if active {
                     self.thetis_tx_receiver = receiver;
                 }
@@ -1656,7 +1651,7 @@ impl TciConnection {
                         // The _ex format stopped (the extensions switched off,
                         // or another Thetis): its last values must not stand
                         // in for the meter, the getters prefer them.
-                        info!("TCI: rx_channel_sensors_ex stopped - back to the plain sensor messages");
+                        info!("TCI: rx_channel_sensors_ex stopped; back to the plain sensor messages");
                         self.forget_sensor_values();
                     }
                     // Legacy format: do our own RMS averaging
@@ -1769,10 +1764,10 @@ impl TciConnection {
             TciNotification::SqlLevel { receiver: 1, level } => { self.rx2_sql_level = level; }
             TciNotification::SqlLevel { .. } => {}
             TciNotification::NbEnable { receiver: 0, enabled, level } => {
-                // Symmetric with the NR-handler (line 553): force level=0 when enabled=false.
+                // Symmetric with the RxNrEnable handler: force level=0 when enabled=false.
                 // Thetis sometimes sends the last level back with enabled=false; without this
                 // guard the client-side `nb_level` stays stuck at e.g. 2 -> the NB-button does not cycle
-                // back to "off". Fix for PATCH-nb-toggle-fix.
+                // back to "off".
                 self.nb_enable = enabled;
                 self.nb_level = if enabled { level } else { 0 };
             }
@@ -1830,9 +1825,8 @@ impl TciConnection {
                 // client's TUNE when its connection goes away (stock; the fork
                 // clears it since TL2-7).
                 if tune_report(&mut self.first_tune, &mut self.we_tune, receiver, active) {
-                    // Named in advance (`logregels-build214.md`).
                     warn!(
-                        "SAFETY: Thetis was tuning on receiver {} when the server connected and nothing here asked for it - tune:{},false sent",
+                        "SAFETY: Thetis was tuning on receiver {} when the server connected and nothing here asked for it; tune:{},false sent",
                         receiver, receiver
                     );
                     self.send(&format!("tune:{},false;", receiver)).await;
@@ -1929,7 +1923,7 @@ impl TciConnection {
             // Stock v2.10.3.14+: iq_samplerate is the global IQ stream / DDC sample rate (Hz).
             // Primary source for DDC rate state. Both RX1 and RX2 receive the same value
             // because stock TCI exposes one global rate (DDC protocol 2 hardware does support
-            // per-RX rates - that comes back via TL2-x fork extensions in Phase 3).
+            // per-RX rates - that needs a fork extension).
             TciNotification::IqSamplerate { rate } => {
                 // Defensive: stock .14/.15 never sends rate=0, but future-Thetis
                 // builds or a corrupt push could set state to 0 and the client-UI
@@ -2016,7 +2010,7 @@ impl TciConnection {
                         self.thetis_txeq = on;
                         if self.txeq_bypass_pending {
                             // A restore that was due is the operator's state: Thetis
-                            // still holds our own ZZET0 (build 225, review of 224).
+                            // still holds our own ZZET0.
                             let due = self.txeq_restore_due.take();
                             self.txeq_restore_sent = false;
                             let prior = due.unwrap_or(on);
@@ -2024,7 +2018,6 @@ impl TciConnection {
                             self.txeq_bypass_pending = false;
                             self.txeq_bypass_active = true;
                             self.run_cat("ZZET0").await;
-                            // Named in advance (`logregels-build225.md`).
                             info!(
                                 "Thetis TXEQ bypass: saved prior = {}, TX-EQ off{}",
                                 if prior { "on" } else { "off" },
@@ -2056,9 +2049,8 @@ impl TciConnection {
             }
             TciNotification::VfoSourceEx { receiver, source } => {
                 if self.ctun_recenter.note_vfo_source(receiver, source) {
-                    // Named in advance (`logregels-build218.md`).
                     info!(
-                        "TCI: VFO source rx={} now {} - {}",
+                        "TCI: VFO source rx={} now {}: {}",
                         receiver,
                         if source == crate::ctun_recenter::VfoSource::Thetis { "thetis" } else { "tl" },
                         if source == crate::ctun_recenter::VfoSource::Thetis { "Thetis scrolls itself" } else { "server recenters" },
@@ -2155,16 +2147,16 @@ impl TciConnection {
                 // They shouldn't arrive here, but ignore if they do
             }
             TciNotification::TxQueueReportEx(report) => {
-                // Named in advance (`logregels-build212.md`): what Thetis' own
+                // What Thetis' own
                 // TX queue did in the over that just ended, beside our ring line.
                 dev_info!("{}", report.line());
             }
             TciNotification::TxQueueReportUnknownVersion { version } => {
-                warn!("TCI: tx_queue_report_ex version {} not understood - ignored", version);
+                warn!("TCI: tx_queue_report_ex version {} not understood; ignored", version);
             }
             TciNotification::TxQueueReportUnreadable { line } => {
-                // Out loud, so a broken line does not read as "the fork does not send" (review of 212).
-                warn!("TCI: tx_queue_report_ex not readable - ignored: {}", line);
+                // Out loud, so a broken line does not read as "the fork does not send".
+                warn!("TCI: tx_queue_report_ex not readable; ignored: {}", line);
             }
             TciNotification::Disconnected => {
                 warn!("TCI: WebSocket disconnected");
@@ -2289,12 +2281,12 @@ impl TciConnection {
     /// Write TX audio samples to the reader task for TX_CHRONO response
     pub fn write_tx_audio(&mut self, samples: &[f32]) {
         if let Some(ref tx) = self.tx_audio_tx {
-            // A full channel lost TX audio without a word until build 105 (round 104).
+            // A full channel lost TX audio without a word until build 105.
             if tx.try_send(samples.to_vec()).is_err() {
                 self.tx_audio_dropped += 1;
                 let n = self.tx_audio_dropped;
                 if n == 1 || n % 50 == 0 {
-                    warn!("TX audio to Thetis dropped (channel full) - {} chunk(s) so far", n);
+                    warn!("TX audio to Thetis dropped (channel full): {} chunk(s) so far", n);
                 }
             }
         }
@@ -2324,12 +2316,12 @@ impl TciConnection {
         self.server_caps.clear();
         // The next Thetis may not send the _ex sensors - and the values this
         // one left must not stand in for the meter (the getters prefer them)
-        // until a PTT happens to clear them (review 318).
+        // until a PTT happens to clear them.
         self.sensors_ex_at = None;
         self.forget_sensor_values();
         // What Thetis was doing is unknown once it is gone. Left standing, a
         // TX or TUNE that was on at the moment of the drop would hold the PA
-        // guard for good - the same class as the Yaesu `connected` gate a review
+        // guard for good - the same class as the Yaesu `connected` gate
         // found on build 65, found here by asking the same question of Thetis.
         self.thetis_tx_active = false;
         self.tune_active = false;
@@ -2345,10 +2337,9 @@ impl TciConnection {
         // 223). Our own ZZET0 is kept: the end of the playback undoes it.
         self.txeq_bypass_pending = false;
         // A restore READY already sent was kept only for that answer (build
-        // 226, review of 225); one not sent yet stays for the next READY.
+        // 226); one not sent yet stays for the next READY.
         if std::mem::take(&mut self.txeq_restore_sent) && self.txeq_restore_due.take().is_some() {
-            // Named in advance (`logregels-build226.md`).
-            info!("Thetis TXEQ bypass: the restore went out at READY - not said again after this drop");
+            info!("Thetis TXEQ bypass: the restore went out at READY; not said again after this drop");
         }
     }
 
@@ -2542,11 +2533,11 @@ async fn tci_writer_task(
 }
 
 /// The TX audio waiting for Thetis's next TX_CHRONO request - one place for the
-/// three paths that feed it (regel 15). It is filled from the server's jitter
-/// buffer, which is not tied to TX (round 104), and emptied by Thetis's
+/// three paths that feed it. It is filled from the server's jitter
+/// buffer, which is not tied to TX, and emptied by Thetis's
 /// requests, which stop at TRX off. What is left when the next over starts was
 /// cut from the end of the previous one; since build 105 it is dropped there
-/// instead of going out first (owner's decision, twelfth measurement).
+/// instead of going out first (decided after the twelfth measurement).
 /// Reachable in the crate for the replay of the transmit chain (`tx_replay`,
 /// build 246).
 pub(crate) struct TxRing {
@@ -2582,8 +2573,8 @@ pub(crate) struct Waiting {
 }
 
 /// The longest a request waits for audio before it gets what there is, padded
-/// with silence (build 195; owner 13-10: "150 ms is goed"; 100 ms as part of
-/// tuning B, owner 2026-10-19, build 258). Thetis counts an
+/// with silence (build 195: 150 ms, judged right on 13-10; 100 ms as part of
+/// tuning B, 2026-10-19, build 258). Thetis counts an
 /// open request as audio to come for 250 ms after its last request and then
 /// asks again for all of it (`cmaster.cs`, `serviceTCITxProtocol`); this stays
 /// well under that, so Thetis never asks twice and no answer lands on top of a
@@ -2593,7 +2584,7 @@ pub(crate) const TX_HOLD_MAX: std::time::Duration = std::time::Duration::from_mi
 /// What one over did to the ring, to tell the two hypotheses for a leftover
 /// apart (build 105): a lead built up before Thetis started asking (`first_ready`
 /// and `lowest` stay high), or audio that came in after Thetis stopped asking
-/// (`fed_after_take`). `taken_after_feed` makes a 0 left unambiguous (round 104):
+/// (`fed_after_take`). `taken_after_feed` makes a 0 left unambiguous:
 /// nothing left, or fetched after the last audio came in.
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct OverStats {
@@ -2607,8 +2598,7 @@ pub(crate) struct OverStats {
     /// (build 183; across a split of TX_OVER_GAP since build 280).
     padded_mid: usize,
     short_mid: u32,
-    /// Samples pushed out of the full ring by newer audio (build 185; review
-    /// of 184).
+    /// Samples pushed out of the full ring by newer audio (build 185).
     overflow: usize,
     /// Audio that came 30-200 ms after the one before instead of ~20: a tick
     /// that brought nothing, and the lead it cost (ms beyond the 20) - build
@@ -2620,7 +2610,7 @@ pub(crate) struct OverStats {
     /// When Thetis first asked in this over, and what stood in the ring at its
     /// first request one second or more after that (build 193: where the lead
     /// of the first request goes; the lead at the last request read 0 in every
-    /// over, round 192).
+    /// over of build 192).
     first_request_at: Option<Instant>,
     lead_1s: Option<usize>,
     /// When the first `FIRST_REQUESTS` requests came, in ms after the first,
@@ -2645,7 +2635,7 @@ const FIRST_REQUESTS: usize = 8;
 const TX_FEED_GAP: std::time::Duration = std::time::Duration::from_millis(30);
 /// The pace the server feeds at: one frame per playout tick - the 20 ms of
 /// `playout_tick` in `network.rs` (a second place on purpose: the tick is an
-/// `interval` there, this only reads it; review of 192).
+/// `interval` there, this only reads it).
 const TX_FEED_PACE_MS: u64 = 20;
 
 /// Below this many samples in the ring (two 20 ms frames at 48 kHz) when a
@@ -2664,7 +2654,7 @@ pub const TX_RING_LOW: usize = 2 * 960;
 /// buffer's cushion against the line's jitter stays where it is. The total
 /// delay (buffer plus ring) does grow, by the ring's cushion: ~20-40 ms, at
 /// most ~40-60 ms, and only in overs whose ring ran low - what the trim would
-/// have thrown away now stands in the ring (review of 193). That cushion is
+/// have thrown away now stands in the ring. That cushion is
 /// what covers the next late feed. The mark: Thetis's `TX_RING_LOW` in
 /// samples, a Yaesu's lead in ms against its sound card's ring in ms (build
 /// 278), the replay's knob (build 255). Asked by `tx_recover::play_tick` for
@@ -2720,7 +2710,7 @@ impl TxRing {
         // a gap of TX_OVER_GAP or more counted nowhere).
         self.over.padded_mid += self.pending_pad.0;
         self.over.short_mid += self.pending_pad.1;
-        // Waiting requests stay at a new over (build 196; review of 195): a
+        // Waiting requests stay at a new over: a
         // gap of TX_OVER_GAP inside one MOX starts a new over here, and Thetis
         // still counts them as open - dropped, it asked nothing more for 250
         // ms and played zeros. After MOX off they are gone already.
@@ -2886,7 +2876,7 @@ impl TxRing {
 }
 
 /// The over line, built in one place so its arguments can be pinned by a test
-/// (build 193; review of 192: only the text was pinned, not the order).
+/// (only the text was pinned, not the order).
 fn over_line(r: &OverReport) -> String {
     let ms = |n: usize| n / 48; // 48 kHz mono
     let opt = |n: Option<usize>| n.map_or("-".to_string(), |n| ms(n).to_string());
@@ -2896,7 +2886,7 @@ fn over_line(r: &OverReport) -> String {
     } else {
         seen.iter().map(|t| format!("+{}", t)).collect::<Vec<_>>().join(" ")
     };
-    // Named in the plan before it was built (working rule 11; builds 105, 183,
+    // The field-log line for the TX ring (builds 105, 183,
     // 185, 192, 193, 194).
     format!(
         "TX ring, previous over: {} ms ready at Thetis's first request, lowest {} ms after a request, \
@@ -2929,7 +2919,7 @@ fn over_line(r: &OverReport) -> String {
 
 /// A TRX off for Thetis, on either receiver (build 196). In either case:
 /// `ZZTX0` through `send_cat` goes out as `trx:0,false;` (`cat_to_tci`), and
-/// Thetis reads both (build 197; review of 196).
+/// Thetis reads both.
 fn is_trx_off(cmd: &str) -> bool {
     cmd.get(..4).is_some_and(|head| head.eq_ignore_ascii_case("TRX:"))
         && cmd.trim_end_matches(';').split(',').nth(1).is_some_and(|v| v.eq_ignore_ascii_case("false"))
@@ -3069,9 +3059,8 @@ async fn tci_reader_task(
                             audio_drops[i] += 1;
                             let n = audio_drops[i];
                             if n == 1 || n % 100 == 0 {
-                                // Named in advance (working rule 11, builds 150 and 151).
                                 warn!(
-                                    "TCI RX{} audio frame dropped ({}) - {} so far; this receiver's audio has a hole where they fall",
+                                    "TCI RX{} audio frame dropped ({}): {} so far; this receiver's audio has a hole where they fall",
                                     i + 1, drop_reason(&e), n
                                 );
                             }
@@ -3086,9 +3075,8 @@ async fn tci_reader_task(
                                 audio_drops[2] += 1;
                                 let n = audio_drops[2];
                                 if n == 1 || n % 100 == 0 {
-                                    // Named in advance (working rule 11, builds 150 and 151).
                                     warn!(
-                                        "TCI BinR audio frame dropped ({}) - {} so far; binaural right loses a frame the left keeps",
+                                        "TCI BinR audio frame dropped ({}): {} so far; binaural right loses a frame the left keeps",
                                         drop_reason(&e), n
                                     );
                                 }
@@ -3109,7 +3097,7 @@ async fn tci_reader_task(
                             *n += 1;
                             if *n == 1 || *n % 100 == 0 {
                                 warn!(
-                                    "TCI RX{} IQ frame dropped ({}) - {} so far; the VRX on this receiver loses audio where they fall",
+                                    "TCI RX{} IQ frame dropped ({}): {} so far; the VRX on this receiver loses audio where they fall",
                                     i + 1, drop_reason(&e), n
                                 );
                             }
@@ -3148,7 +3136,7 @@ async fn tci_reader_task(
 /// Thetis sends `tune:1,…` when VFO B is the TX VFO - the same one transmitter,
 /// reported on the other receiver. Both writers of the TUNE state go through
 /// here (the notification, and the server's own `set_tune`), so neither can
-/// leave the other's receiver behind: a review on build 65 found `set_tune` writing
+/// leave the other's receiver behind: on build 65 `set_tune` was found writing
 /// the flag directly, and a receiver-1 TUNE could then be pushed away by a
 /// server-sent TUNE OFF. Returns whether any receiver is tuning.
 pub(crate) fn merge_tune(rx: &mut [bool; 2], receiver: usize, active: bool) -> bool {
@@ -3188,7 +3176,7 @@ mod tx_ring_tests {
         // A short pause is the same over: no report, nothing dropped.
         assert_eq!(r.feed(&[0.2; 960], t1 + Duration::from_millis(199)), None);
         // An over that Thetis empties after the last audio: 0 left, and it says
-        // it was taken - a 0 that is not ambiguous (round 104).
+        // it was taken - a 0 that is not ambiguous.
         r.take(5000);
         let rep = r.feed(&[0.3; 960], t1 + Duration::from_millis(199) + TX_OVER_GAP).unwrap();
         assert_eq!(rep.left, 0);
@@ -3358,7 +3346,7 @@ mod tx_ring_tests {
         assert_eq!((r.waiting.len(), r.over.dropped_waiting), (0, 1));
         assert!(r.answer_ready(t0 + Duration::from_secs(1)).is_empty(), "nothing goes out late");
         // A gap inside one MOX starts a new over of the ring, and the request
-        // waiting then gets the new audio (build 196; review of 195).
+        // waiting then gets the new audio.
         r.request(w(960, t0 + Duration::from_millis(200)));
         let rep = r.feed(&[0.2; 960], t0 + Duration::from_millis(250)).unwrap();
         assert_eq!(rep.stats.dropped_waiting, 1, "only the one at TRX off");
@@ -3383,7 +3371,7 @@ mod tx_ring_tests {
         assert_eq!(body_count("if is_trx_off(cmd) {"), 1);
         assert_eq!(body_count("self.tx_off_count.fetch_add(1, Ordering::Relaxed);"), 1);
         // And the count is read before anything is answered, at the top of the
-        // loop and before a request (review of 196: after it, the limit's
+        // loop and before a request (after it, the limit's
         // silence went out first - the fault of 195).
         let src = include_str!("tci.rs");
         let body = &sdr_remote_core::source_text::production_code(src);
@@ -3405,7 +3393,7 @@ mod tx_ring_tests {
     }
 
     /// The line's arguments in their order: every field of the report lands in
-    /// its own place (build 193; review of 192).
+    /// its own place.
     #[test]
     fn the_over_line_puts_every_field_in_its_place() {
         let stats = OverStats {
@@ -3466,8 +3454,8 @@ mod tx_ring_tests {
         assert_eq!(step.matches("loss.count_extra();").count(), 1);
         assert!(step.contains("crate::tci::pull_extra_for_ring_below(lead as usize, Some(level as usize), jitter.depth(), jitter.target_depth())"));
         // And the level reaches the tick: the reader's ring publishes into the
-        // connection's level, and the controller hands it on (review of 193:
-        // a reader on `TxRing::new()` left the level at 0 and pulled twice on
+        // connection's level, and the controller hands it on
+        // (a reader on `TxRing::new()` left the level at 0 and pulled twice on
         // every excess, unbounded; a connection without the level switched the
         // repair off - both stayed green).
         let src = include_str!("tci.rs");
@@ -3493,8 +3481,7 @@ mod tx_ring_tests {
         // More audio within the over: the 960 padded samples were a gap.
         assert_eq!(r.feed(&[0.1; 960], t0 + Duration::from_millis(100)), None);
         r.take(960);
-        // A second gap in the same over adds its own, not the first again
-        // (review of 183, T6).
+        // A second gap in the same over adds its own, not the first again.
         r.take(240);
         assert_eq!(r.feed(&[0.1; 960], t0 + Duration::from_millis(150)), None);
         r.take(960);
@@ -3538,9 +3525,9 @@ mod tx_ring_tests {
     }
 
     /// `take` pads with zeros; a chunk bigger than the ring keeps its newest part
-    /// (round 104, N7) - and ends: run on a thread with a bounded wait, so a
+    /// - and ends: run on a thread with a bounded wait, so a
     /// return of the endless trim loop turns this red instead of hanging the
-    /// suite (round 104, the same lesson as `run_writer_bounded`).
+    /// suite (the same lesson as `run_writer_bounded`).
     #[test]
     fn take_pads_and_an_oversize_chunk_keeps_its_newest_part() {
         let t0 = Instant::now();
@@ -3571,7 +3558,8 @@ mod tx_ring_tests {
         assert_eq!(r.over.overflow, 20 + 5 + TX_RING_CAPACITY, "the cut and the whole ring before it");
     }
 
-    /// The three paths that feed the ring all go through `TxRing` (regel 15).
+    /// The three paths that feed the ring all go through `TxRing`, the one
+    /// place that feeds it.
     #[test]
     fn every_tx_audio_path_feeds_the_one_ring() {
         let src = include_str!("tci.rs");
@@ -3621,7 +3609,7 @@ fn tune_command(cmd: &str) -> Option<(usize, bool)> {
 /// `tune:<r>,<bool>` it sends, and cleared when Thetis reports TUNE off. One
 /// flag, not one per receiver: Thetis has one `TUN` and ignores the receiver of
 /// a `tune:` (`handleTune`), and it reports TUNE on receiver 1 when VFO B
-/// transmits with RX2 on, while we always send `tune:0` (review of 215).
+/// transmits with RX2 on, while we always send `tune:0`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct TuneIntent {
     on: bool,
@@ -3651,11 +3639,11 @@ impl TuneIntent {
 /// An "off" clears what we asked only when it is not the first report on its
 /// receiver: at connect Thetis reports both receivers, 0 then 1, and with VFO B
 /// and RX2 that is `tune:0,false` then `tune:1,true` - the snapshot "off" on 0
-/// cleared our own TUNE, and the "on" on 1 then read as left behind (review of
-/// 216). A later "off" is Thetis's own (its button, a time-out, a SWR trip).
+/// cleared our own TUNE, and the "on" on 1 then read as left behind.
+/// A later "off" is Thetis's own (its button, a time-out, a SWR trip).
 ///
 /// When the first reports of both receivers are in and neither said "on", TUNE
-/// is off in Thetis, whatever we asked before (review of 217): Thetis reports
+/// is off in Thetis, whatever we asked before: Thetis reports
 /// both at connect, always (`sendTune(0, ..)` and `sendTune(1, ..)`).
 fn tune_report(first: &mut FirstReport, intent: &mut TuneIntent, receiver: u32, active: bool) -> bool {
     let was_first = !first.seen(receiver);
@@ -3707,7 +3695,7 @@ fn rx_only_stop_commands(trx_receiver: u32, tune_rx: [bool; 2]) -> Vec<String> {
 
 #[cfg(test)]
 mod first_trx_tests {
-    use super::{tune_command, tune_report, FirstReport as FirstTrx, TuneIntent};
+    use super::{tune_command, FirstReport as FirstTrx, TuneIntent};
 
     /// Only the first report per receiver counts, only "transmitting", and not
     /// while this server transmits; a new connection starts over (build 213).
@@ -3755,7 +3743,7 @@ mod first_trx_tests {
         // arm against it, the answer on that receiver, a fresh start on every
         // disconnect - and the RX-only gate on its receiver too.
         // The intent: on, off, and off when Thetis says so - and anything that is
-        // not a TUNE leaves it alone (review of 214: "never record an off" stayed green).
+        // not a TUNE leaves it alone ("never record an off" stayed green).
         let mut w = TuneIntent::default();
         w.sent("tune:0,true;");
         assert!(w.on());
@@ -3764,13 +3752,13 @@ mod first_trx_tests {
         w.sent("tune:0,false;");
         assert!(!w.on(), "our own off");
         // One TUN in Thetis: an off reported on receiver 1 (VFO B transmitting
-        // with RX2 on) clears what we asked with `tune:0` (review of 215).
+        // with RX2 on) clears what we asked with `tune:0`.
         w.sent("tune:0,true;");
         w.reported_off();
         assert!(!w.on(), "Thetis says it is off");
         let src = include_str!("tci.rs");
         let body = &src[..src.find("#[cfg(test)]\nmod first_trx_tests").unwrap()];
-        // Recorded before the connection is checked (review of 214).
+        // Recorded before the connection is checked.
         let send = &body[body.find("pub async fn send(&mut self, cmd: &str) {").unwrap()..];
         let recorded = send.find("self.we_tune.sent(cmd);").expect("recorded in send");
         let checked = send.find("if !self.connected {").unwrap();
@@ -3798,7 +3786,7 @@ mod tune_report_tests {
     use super::{tune_report, FirstReport, TuneIntent};
 
     /// Our own TUNE survives the snapshot Thetis sends when we connect, with
-    /// VFO A and with VFO B, and a later "off" still clears it (review of 216).
+    /// VFO A and with VFO B, and a later "off" still clears it.
     #[test]
     fn the_connect_snapshot_does_not_clear_our_own_tune() {
         // VFO B with RX2: tune:0,false then tune:1,true.
@@ -3830,7 +3818,7 @@ mod tune_report_tests {
         let mut first = FirstReport::default();
         assert!(!tune_report(&mut first, &mut intent, 0, false));
         assert!(intent.on(), "second connection, same snapshot rule");
-        // Both first reports off: TUNE is off in Thetis (review of 217) - in
+        // Both first reports off: TUNE is off in Thetis - in
         // either order, and only once both are in.
         assert!(!tune_report(&mut first, &mut intent, 1, false));
         assert!(!intent.on(), "both receivers said off at connect");
@@ -3896,8 +3884,8 @@ mod ctun_tx_tests {
     use super::TciConnection;
 
     /// "Transmitting" for the automatic recenter has one definition: our own
-    /// PTT, Thetis's TRX, or Tune (build 274; owner's decision 2026-10-20,
-    /// "ja, Tune ook"). The end of Tune lets recentering go on, as the end of
+    /// PTT, Thetis's TRX, or Tune (build 274, 2026-10-20: Tune
+    /// counts too). The end of Tune lets recentering go on, as the end of
     /// a transmission does.
     #[test]
     fn tune_holds_the_recenter_like_transmitting() {
@@ -3922,7 +3910,7 @@ mod ctun_tx_tests {
         assert_eq!(src.matches(concat!("self.thetis_tx_active", " || self.tune_active")).count(), 1, "spelled out once");
         assert_eq!(src.matches("let any_tx = self.transmitting_for_ctun();").count(), 2, "RX1 and RX2");
         assert_eq!(src.matches("let any_tx_now = self.transmitting_for_ctun();").count(), 1, "the transition");
-        // Private since build 276 (round 275): outside this file nobody can
+        // Private since build 276: outside this file nobody can
         // spell "on the air" out of the fields; the compiler keeps it.
         assert_eq!(src.matches(concat!("pub ", "thetis_tx_active: bool")).count(), 0);
         assert_eq!(src.matches(concat!("pub ", "tune_active: bool")).count(), 0);

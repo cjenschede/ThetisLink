@@ -130,7 +130,7 @@ fn choose_output(names: &[String], pat_name: &str, pos: usize) -> Option<OutputC
 pub(super) fn device_not_found(kind: &str, wanted: &str, pos: usize, available: &[String]) -> String {
     if available.is_empty() {
         format!(
-            "no {kind} devices AT ALL - Windows hands out an empty list, so '{wanted}' was never              looked for. The usual cause is a Remote Desktop session: while one is connected it              takes the machine's sound cards out of the session. Disconnect it, or set its audio              to play on the remote computer, and then restart the server - the device list is              only read at startup"
+            "no {kind} devices AT ALL: Windows hands out an empty list, so '{wanted}' was never              looked for. The usual cause is a Remote Desktop session: while one is connected it              takes the machine's sound cards out of the session. Disconnect it, or set its audio              to play on the remote computer, and then restart the server: the device list is              only read at startup"
         )
     } else {
         format!(
@@ -185,10 +185,10 @@ pub(super) fn build_capture_stream(
     let stream = device.build_input_stream(
         &config.into(),
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            // Operator LATENCY-WAIVER (release v2.0.0, operator: PA3GHM/cjenschede):
+            // Latency trade-off (since v2.0.0):
             // Per-callback Vec allocation is deliberately accepted on this server-side
-            // Yaesu RX path. The operator weighed the latency priority against the
-            // implementation cost and chose the current approach because:
+            // Yaesu RX path. Its latency cost is weighed against the cost of avoiding
+            // it, and it stays because:
             //   (a) the server runs on the Thetis PC, no local real-time audio output;
             //       audio latency is overshadowed by encode + network path
             //   (b) alloc cost ~50µs is <0.5% of the ~10ms frame budget - not
@@ -197,7 +197,7 @@ pub(super) fn build_capture_stream(
             //       input config
             //   (d) tokio::mpsc::Sender consumes the Vec (ownership move); zero
             //       alloc requires a Vec pool with a return channel - a non-trivial
-            //       refactor, planned for post-release optimization in v2.1+.
+            //       refactor.
             let frames = data.len() / channels.max(1);
             let mut mono: Vec<f32> = Vec::with_capacity(frames);
             if channels > 1 {
@@ -343,7 +343,7 @@ pub fn available_audio_inputs() -> Vec<String> {
 }
 
 /// Enumerate output (render) devices - for the separate Yaesu TX/output device
-/// picker (PATCH-yaesu-output-device).
+/// picker.
 pub fn available_audio_outputs() -> Vec<String> {
     let host = cpal::default_host();
     host.output_devices()

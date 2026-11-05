@@ -47,8 +47,8 @@ pub fn operate_allowed(active_pa: u8, pa_id: u8) -> bool {
 
 /// Is a PA amplifying right now?
 ///
-/// The two PAs mean different things by "no contact", and the difference is the
-/// owner's, measured on his own station (2026-09-16):
+/// The two PAs mean different things by "no contact", and the difference was
+/// measured on a real station (2026-09-16):
 ///
 /// - The **SPE** drops to Standby by itself when its CAT link goes away, and stays
 ///   there when the link comes back. No contact is therefore *not amplifying*.
@@ -73,8 +73,8 @@ pub fn spe_amplifying(connected: bool, state: u8) -> Amplifying {
     }
 }
 
-/// What the server knows of the RF2K-S. Named fields since build 226 (review
-/// of 224): by position, `reachable` and `reports_operate` swapped read an
+/// What the server knows of the RF2K-S. Named fields since build 226: by position,
+/// `reachable` and `reports_operate` swapped read an
 /// RF2K-S out of reach in Standby as amplifying, and one in Operate as off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rf2kReading {
@@ -114,7 +114,7 @@ pub fn worst(a: Amplifying, b: Amplifying) -> Amplifying {
 /// has gone **up** since we lost contact - the one move nobody can undo from the
 /// shack, and the PA cannot be told about it either.
 ///
-/// Named fields since build 229 (review of 228): by position, the two drives
+/// Named fields since build 229: by position, the two drives
 /// swapped turned the alarm round - it beeped at a lower drive and kept quiet
 /// at a higher one, the one move it exists for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,7 +156,7 @@ pub fn steady_in_operate(prev: Option<bool>, now: bool) -> bool {
 ///   the next time contact drops the alarm compares against a number from another
 ///   session.
 ///
-/// Named fields since build 228 (review of 226): by position, `out_of_reach`
+/// Named fields since build 228: by position, `out_of_reach`
 /// and `drive_known` swapped kept a baseline while the PA was in reach, and
 /// the alarm later compared against a number from another session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,15 +183,15 @@ impl AlarmBaseline {
     }
 }
 
-/// Does the red line stay up? Named fields since build 224 (review of 223):
+/// Does the red line stay up? Named fields since build 224:
 /// by position, `reachable` swapped with one of the others kept the line away
 /// while the PA was out of reach, with every test green.
 ///
-/// The beep and the line answer two different questions, and the owner asked for
-/// exactly that split after hearing it in the field (2026-09-16): the **beep** says
-/// "the drive is too high *right now*" and stops the moment he puts it back; the
+/// The beep and the line answer two different questions, and that split was
+/// chosen after hearing it in the field (2026-09-16): the **beep** says
+/// "the drive is too high *right now*" and stops the moment the operator puts it back; the
 /// **line** says "this happened while the PA was out of reach" and stays until the
-/// server can see the PA again - he may not have been in the room when it happened.
+/// server can see the PA again - the operator may not have been in the room when it happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriveWarning {
     /// The red line was up at the previous tick.
@@ -213,12 +213,12 @@ impl DriveWarning {
 
 /// Is the one startup attempt spent on this reading?
 ///
-/// Found by review on build 61: the flag went up as soon as Thetis was known - also
+/// Up to build 62 the flag went up as soon as Thetis was known - also
 /// on a tick where nothing was restored because the RF2K-S was still out of reach.
 /// Start with the SPE online and the RF2K-S ten seconds behind it, last seen in
 /// Operate, and the attempt was gone before the RF2K-S could say it was in Standby.
-/// The drive then stayed where the PA had left it, which is the report of §1 all
-/// over again. `Unknown` is a reading that says nothing, so it spends nothing.
+/// The drive then stayed where the PA had left it, which is the very fault this
+/// restore exists for, all over again. `Unknown` is a reading that says nothing, so it spends nothing.
 pub fn startup_attempt_used(amplifying: Amplifying, drive_known: bool) -> bool {
     drive_known && !matches!(amplifying, Amplifying::Unknown)
 }
@@ -229,7 +229,7 @@ pub fn startup_attempt_used(amplifying: Amplifying, drive_known: bool) -> bool {
 /// at the one place the tick builds this - the compiler refuses a literal with a
 /// field missing. The first version of this had four of the seven and was found
 /// wanting twice: the TL PTT machine alone (build 60), then without TUNE and the
-/// Yaesu radios (review finding, build 61). Whether the Yaesu radios drive these PAs at all
+/// Yaesu radios. Whether the Yaesu radios drive these PAs at all
 /// is a question of wiring on the desk; waiting for them is the side that never
 /// switches a PA under RF, so they count.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -249,7 +249,7 @@ pub struct TxSources {
     /// The second Yaesu radio, keyed through the server.
     pub yaesu2_ptt: bool,
     /// The first Yaesu radio as it reports itself: its own microphone, a
-    /// footswitch on the radio, anything the server did not ask for (review finding on
+    /// footswitch on the radio, anything the server did not ask for (found on
     /// build 62: the flag above is only what ThetisLink requested).
     pub yaesu_tx: bool,
     /// The second Yaesu radio as it reports itself.
@@ -265,7 +265,7 @@ impl TxSources {
     }
 }
 
-/// What the PA tick reads under the PTT lock (build 226, review of 224: by
+/// What the PA tick reads under the PTT lock (build 226; before it, by
 /// position, `tx_active` and `known` swapped kept "transmitting" true while
 /// Thetis was on, and no PA went to Standby).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,14 +280,14 @@ pub struct ThetisReading {
 
 /// Does a new Thetis run begin on this tick?
 ///
-/// The one startup attempt is per Thetis run, not per server run (review finding on build
+/// The one startup attempt is per Thetis run, not per server run (found on build
 /// 63): close Thetis with a PA in Operate, switch the PA off, start Thetis again,
-/// and Thetis comes back carrying the PA's drive - the report of §1, with the
+/// and Thetis comes back carrying the PA's drive - the original fault, with the
 /// server never having stopped. Thetis going from unknown to known is that
 /// boundary, and it costs nothing to check: on the very first tick the attempt
 /// has not been spent yet.
 ///
-/// Named fields since build 228 (review of 226): by position, the two swapped
+/// Named fields since build 228: by position, the two swapped
 /// fired when Thetis went away instead of when it came back, and the process
 /// check of build 226 looked at the wrong moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,7 +305,7 @@ impl ThetisKnown {
 }
 
 /// What Thetis came back as, once it is known again (build 226, owner after
-/// the review of 224: "only at a real restart of Thetis"). `handle_disconnect`
+/// "only at a real restart of Thetis"). `handle_disconnect`
 /// clears what Thetis said, so every new TCI connection made it known again -
 /// and the drive was put back after a short drop too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,7 +325,7 @@ pub enum ThetisBack {
     /// Not on this PC: no way to tell, so every new connection counts, as
     /// before build 226.
     NotSeen,
-    /// More than one Thetis.exe (build 227, review of 226): an old one still
+    /// More than one Thetis.exe: an old one still
     /// closing while the new one already talks TCI, or two radios. No way to
     /// tell which, so every new connection counts, as before build 226.
     Several { count: usize },
@@ -359,7 +359,7 @@ impl ThetisBack {
 
 /// The active-PA mark as it may be used: a mark on a PA this server does not
 /// have is no permission to switch off the one it does have. Named fields
-/// since build 228 (review of 226): by position, the two presences swapped
+/// since build 228: by position, the two presences swapped
 /// dropped the mark with only one PA configured, and with it the single-Operate
 /// rule and the drive choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -383,7 +383,7 @@ impl ActiveMark {
 }
 
 /// What the single-Operate rule decides on, for one PA. Named fields since
-/// build 224 (review of 223): by position, `in_operate` or `connected` swapped
+/// build 224: by position, `in_operate` or `connected` swapped
 /// with `tx_active` gave `Nothing` outside TX, so a PA that is not the active
 /// one stayed in Operate, with every test green.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,7 +501,7 @@ mod tests {
     }
 
     /// The five callers of the mark, the baseline and the Thetis run build
-    /// their inputs by name (build 228, review of 226).
+    /// their inputs by name.
     #[test]
     fn the_callers_hand_the_mark_the_baseline_and_the_run_over_by_name() {
         let net = include_str!("network.rs");
@@ -516,7 +516,7 @@ mod tests {
             (ui, "spe_present: self.spe.is_some(),", 1),
             (ui, "rf2k_present: true,", 1),
             (net, "prev: pa_drive_when_lost,", 1),
-            // The two drives (build 229, review of 228, K1).
+            // The two drives.
             (net, "pa_policy::DriveAlarm { state: rf_amp, drive_when_lost: base, drive_now }.raised()", 1),
             (net, "drive_known: thetis_known,", 1),
             (net, "(pa_policy::ThetisKnown { before: pa_prev_thetis_known, now: thetis_known }).became_known()", 1),
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(ui.matches("ActiveMark {").count(), 2);
     }
 
-    /// The loop hands its readings over by name (build 224, review of 223):
+    /// The loop hands its readings over by name:
     /// by position, two booleans swapped kept a PA that is not the active one
     /// in Operate, or kept the red line away while the PA was out of reach,
     /// with every test here green.
@@ -542,10 +542,10 @@ mod tests {
             "was_up: pa_drive_warning,",
             "alarm_now: pa_drive_alarm_now,",
             "reachable: !out_of_reach,",
-            // A copied row with the wrong PA (review of 224, P1).
+            // A copied row with the wrong PA.
             "pa_id: PA_SPE,",
             "pa_id: PA_RF2K,",
-            // The tick's own readings (build 226, review of 224).
+            // The tick's own readings.
             "pa_policy::ThetisReading { tx_active: tx.any(), drive: g.drive_level(), known: g.power_on() }",
             "out_of_reach,\n                                drive_known: thetis_known,",
             "let pa_policy::ThetisReading { tx_active: is_tx, drive: drive_now, known: thetis_known } = {",
@@ -553,7 +553,7 @@ mod tests {
             "reports_operate: rf_operate,",
             "last_seen_operate: pa_rf2k_last_seen,",
             "let back_input = pa_policy::ThetisBackInput { run_pid: pa_thetis_pid, pids_now: &pids_now };",
-            // The run's process id is kept (review of 226, PD1).
+            // The run's process id is kept.
             "pa_thetis_pid = back_input.run_pid_now();",
         ] {
             assert_eq!(net.matches(line).count(), 1, "{line}");
@@ -668,7 +668,7 @@ mod tests {
     fn a_standby_pa_at_startup_gets_the_drive_back() {
         // The default is written out here, not expressed in terms of itself: a
         // constant that only appears as its own name can be anything and the suite
-        // stays green (a review caught exactly that in the hold of build 47).
+        // stays green (exactly that happened in the hold of build 47).
         assert_eq!(DEFAULT_PA_DRIVE, 100);
         // Snapshot from a previous session: before Operate the drive was 100 %.
         assert_eq!(startup_restore(Amplifying::No, true, Some(100), DEFAULT_PA_DRIVE, 6), Some(100));
@@ -678,8 +678,8 @@ mod tests {
         assert_eq!(startup_restore(Amplifying::No, true, None, 80, 6), Some(80));
     }
 
-    /// The snapshot is what comes back, not the default, when both are there. A review
-    /// on build 61: every earlier test had the two equal, so a `restore_target`
+    /// The snapshot is what comes back, not the default, when both are there. Until
+    /// build 61 every earlier test had the two equal, so a `restore_target`
     /// that ignored the snapshot stayed green.
     #[test]
     fn the_snapshot_wins_over_the_default() {
@@ -711,7 +711,7 @@ mod tests {
         assert_eq!(back(Some(10), &[]), ThetisBack::NotSeen);
         assert!(back(Some(10), &[]).new_run(), "Thetis on another PC: as before 226");
         assert!(back(None, &[]).new_run());
-        // The old one still closing while the new one talks (review of 226):
+        // The old one still closing while the new one talks:
         // not "the same", whichever number is lower.
         assert_eq!(back(Some(10), &[10, 11]), ThetisBack::Several { count: 2 });
         assert!(back(Some(10), &[10, 11]).new_run());
@@ -735,7 +735,7 @@ mod tests {
     fn a_thetis_run_begins_when_it_becomes_known() {
         assert!(new_thetis_run(false, true), "Thetis just came up");
         assert!(!new_thetis_run(true, true), "still the same run");
-        assert!(!new_thetis_run(true, false), "Thetis went away - not a start");
+        assert!(!new_thetis_run(true, false), "Thetis went away: not a start");
         assert!(!new_thetis_run(false, false), "still away");
     }
 
@@ -837,7 +837,7 @@ mod tests {
         ];
         // One bool per field, so the size of the struct IS the number of fields:
         // a tenth field added to the struct and to any() but not to this list
-        // turns this red (review finding on build 63 - a literal 7 here did not).
+        // turns this red (found on build 63 - a literal 7 here did not).
         assert_eq!(std::mem::size_of::<TxSources>(), one_each.len(), "one entry per field");
         for src in one_each {
             assert!(src.any(), "{:?}", src);

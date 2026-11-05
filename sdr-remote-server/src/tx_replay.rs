@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The replay of the transmit chain (step 3 of `PLAN-zendketen-samen-met-thetis.md`,
-//! build 246). The arrival of every TX packet of a drive, as the server measured
+//! The replay of the transmit chain (build 246). The arrival of every TX packet of a drive, as the server measured
 //! it (`tx_arrivals.rs`), goes through the server's own code - the transmit
 //! buffer (`JitterBuffer::for_transmit`), the tick's rule for a second pull
 //! (`pull_extra_for_ring_below`) and the ring that answers Thetis (`TxRing`) - and then
@@ -18,7 +17,7 @@
 //! - TCI between the server and Thetis: a fixed delay each way (same pc);
 //! - Thetis: its queue, its requests and its counters.
 //!
-//! Not modelled at all (round 246, build 255): heartbeats (the measurement has
+//! Not modelled at all: heartbeats (the measurement has
 //! none, so a gap in the packets stands in for both safety clocks); the time-out
 //! of a silent holder outside TX (`TX_HOLDER_TIMEOUT_SECS`, 3 s; inside TX the
 //! safety takes the ownership first, build 251); Thetis's `"mox"` trigger; TRX
@@ -36,7 +35,7 @@
 //! silence the ring padded; a sample Thetis could not copy is a zero of its own
 //! (an underrun).
 //!
-//! A developer's tool (owner, 2026-10-12): the program is `--naspelen` with the
+//! A developer's tool: the program is `--naspelen` with the
 //! cargo feature `naspelen`, never in a release build.
 
 use std::collections::{HashMap, VecDeque};
@@ -68,7 +67,7 @@ const CONCEAL_MAX_FRAMES: u32 = 400;
 /// heartbeats, so a gap in the packets stands in for both; pinned by a test.
 const SAFETY_NS: u64 = 2_000 * MS;
 /// How often the safety looks (`safety_tick` in `network.rs`): every fifth
-/// playout tick (round 246: the model looked every 20 ms).
+/// playout tick (an earlier model looked every 20 ms).
 const SAFETY_TICK_NS: u64 = 100 * MS;
 /// What the server asks per answer (`AUDIO_STREAM_SAMPLES:960` in `tci.rs`).
 const REQUEST_SAMPLES: usize = 960;
@@ -1165,7 +1164,6 @@ mod tests {
     /// An answer still waiting at Thetis when MOX ends is emptied with the queue
     /// (`clearQueuedTxAudio`); one that comes after MOX off waits, and is the
     /// first audio of the next MOX (`handleBinaryFrame` does not look at MOX).
-    /// Round 246, paths A and E.
     #[test]
     fn a_late_answer_after_trx_off_stands_first_at_the_next_mox() {
         let s = Settings::default();
@@ -1263,7 +1261,7 @@ mod tests {
 
     /// A client that goes silent in the middle of an over (no release packet)
     /// is let go by the safety more than 2 s after its last packet, at its
-    /// 100 ms tick, as `check_safety` does (build 246; round 246). The safety
+    /// 100 ms tick, as `check_safety` does. The safety
     /// takes the ownership (251); the next press finds the loop's holder
     /// outlived and starts the buffer over (247) - and the next over starts as
     /// usual.
@@ -1334,7 +1332,7 @@ mod tests {
     }
 
     /// A packet missing inside an over is rebuilt from the next one: one frame
-    /// concealed, no zeros in the middle (round 246, path C).
+    /// concealed, no zeros in the middle.
     #[test]
     fn a_missing_packet_is_rebuilt_from_the_next_one() {
         let arrivals: Vec<Arrival> = steady_over(1_000, 0, 100).into_iter().filter(|a| a.seq != 50).collect();
@@ -1367,7 +1365,7 @@ wall_ms,mono_ms,kind,seq,ts,bytes,ptt,stream
     /// within 50 ms, the average queue within 10 ms, the zeros within 20 ms,
     /// the longest gap within two blocks. One over, not a drive: how well the
     /// model covers a whole drive is in the reports of step B and of the drive
-    /// of 2026-10-18 (round 246). The number of gaps is not held: the model
+    /// of 2026-10-18. The number of gaps is not held: the model
     /// counts fewer (3 against 5). And the tick's second pull, off, gives more
     /// zeros (build 246).
     #[test]
@@ -1462,7 +1460,7 @@ wall_ms,mono_ms,kind,seq,ts,bytes,ptt,stream
     }
 
     /// The numbers the replay copies from the server are still the server's
-    /// (working rule 15: a second place, with a test that catches drift).
+    /// (a second place, with a test that catches drift).
     #[test]
     fn the_replay_keeps_the_servers_numbers() {
         let ptt = include_str!("ptt.rs");
@@ -1492,8 +1490,8 @@ wall_ms,mono_ms,kind,seq,ts,bytes,ptt,stream
         assert!(tci.contains("const TX_HOLD_MAX: std::time::Duration = std::time::Duration::from_millis(100);"));
         // What the stand-in stands in for (build 258): the tick lets a quiet frame go.
         assert!(step.contains("if trim.let_go(&pcm, backlog, !let_go, now) {"));
-        // The holder rules the replay models (round 246; builds 175, 247, 249,
-        // 251), and the safety's tick.
+        // The holder rules the replay models (builds 175, 247, 249, 251), and
+        // the safety's tick.
         assert!(net.contains("let mut safety_tick = interval(Duration::from_millis(100));"));
         assert_eq!(SAFETY_TICK_NS, 100 * MS);
         assert!(net.contains("info!(\"TX holder {} again, keeping what the jitter buffer learned\", addr);\n                                    jitter_buf.discard();"));

@@ -144,8 +144,7 @@ impl SdrRemoteApp {
         // (Thetis-bug workaround), so block it in the UI too to avoid a misleading
         // indication.
         // Until the transmission is really over - the tail and someone else's
-        // included: the server drops a mode change for as long as it transmits
-        // (owner, 2026-10-11; build 172).
+        // included: the server drops a mode change for as long as it transmits.
         let ptt_active = self.thetis_mode_locked();
         let mode_action = self.with_rx_ctx(
             controls::RxChannel::Rx1,
@@ -363,7 +362,7 @@ impl SdrRemoteApp {
         let amber = Color32::from_rgb(255, 170, 40);
 
         // -- Top bar: frequency + mode (via render_frequency_display) --
-        // PATCH-rx2-inline-edit: RX2 now gets the same inline-edit UX as RX1
+        // RX2 gets the same inline-edit UX as RX1
         // (click VFO B label -> edit -> Enter -> dispatch). Scroll-wheel keeps
         // working (Extended density is not scroll-gated).
         let _ = is_popout; // parameter stays for signature-compat; not-popout is dead code.
@@ -502,8 +501,8 @@ impl SdrRemoteApp {
         );
         if let Some((click, true)) = mode_action {
             self.rx2_mode = click.mode;
-            // PATCH-tl2-rx2-mode-switch-filter-restore: mirror RX1 behavior
-            // (line 2786-2790). On click of an RX2 mode button we again accept
+            // Mirror the RX1 mode buttons.
+            // On click of an RX2 mode button we again accept
             // server-side filter updates (the server's rx_filter_band
             // after a mode switch overwrites the locally-adjusted filter
             // edges that applied to the old mode profile). Without this
@@ -663,11 +662,11 @@ impl SdrRemoteApp {
                 });
             }
         }
-        // PATCH-tl2-rx2-spectrum-filter-drag-isolation: RX2 filter-edge drag
-        // reader, mirrors the RX1 path (line ~3290). Previously wrote to
+        // RX2 filter-edge drag
+        // reader, mirrors the RX1 filter-edge path. Previously wrote to
         // the same global "spectrum_filter_low/high" keys, so the
         // RX1 reader passed the update on as an RX1 filter; now per-channel
-        // keys via SpectrumPlotConfig. The server expects the other edge
+        // keys via `spectrum::store_rx_action`. The server expects the other edge
         // in every filter update (low+high pair).
         use sdr_remote_core::protocol::ControlId;
         let drag_lo: Option<i32> = ctx.memory(|mem| mem.data.get_temp(egui::Id::new("rx2_spectrum_filter_low")));
@@ -701,136 +700,33 @@ impl SdrRemoteApp {
     pub(super) fn render_rx2_spectrum_only(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
 
         if !self.rx2_spectrum_bins.is_empty() {
-            // Row 1: Ref + Auto checkbox + Range (same as RX1)
-            ui.horizontal(|ui| {
-                ui.spacing_mut().slider_width = 80.0;
-                ui.label(rust_i18n::t!("main_ref_label").to_string());
-                if self.rx2_auto_ref_enabled {
-                    let mut display_val = self.rx2_spectrum_ref_db;
-                    ui.add_enabled(false, egui::Slider::new(&mut display_val, -90.0..=0.0)
-                        .suffix(" dB")
-                        .step_by(5.0)
-                    );
-                } else {
-                    let resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_ref_db, -90.0..=0.0)
-                        .suffix(" dB")
-                        .step_by(5.0)
-                    ).on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
-                    let scrolled = helpers::slider_wheel(ui, &resp, &mut self.rx2_spectrum_ref_db, -90.0..=0.0, 5.0);
-                    if resp.changed() || scrolled {
-                        self.save_full_config();
-                    }
-                }
-                if ui.checkbox(&mut self.rx2_auto_ref_enabled, rust_i18n::t!("main_auto").to_string()).on_hover_text(rust_i18n::t!("main_hover_auto_ref").to_string()).changed() {
-                    if self.rx2_auto_ref_enabled {
-                        self.rx2_spectrum.reset_auto_ref();
-                    }
-                    self.save_full_config();
-                }
-                ui.label(rust_i18n::t!("main_range_label").to_string());
-                let resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_range_db, 20.0..=130.0)
-                    .suffix(" dB")
-                    .step_by(5.0)
-                ).on_hover_text(rust_i18n::t!("main_hover_range").to_string());
-                let scrolled = helpers::slider_wheel(ui, &resp, &mut self.rx2_spectrum_range_db, 20.0..=130.0, 5.0);
-                if resp.changed() || scrolled {
-                    if self.rx2_auto_ref_enabled {
-                        self.rx2_spectrum.reset_auto_ref();
-                    }
-                    self.save_full_config();
-                }
+            // The view rows: the one set every spectrum panel has.
+            let rx2_ddc_rate = if self.ddc_sample_rate_rx2 > 0 { self.ddc_sample_rate_rx2 as u32 * 1000 } else { 384_000 };
+            let changes = super::spectrum::spectrum_view_rows(ui, super::spectrum::ViewControls {
+                ref_db: &mut self.rx2_spectrum_ref_db,
+                auto_ref: &mut self.rx2_auto_ref_enabled,
+                range_db: &mut self.rx2_spectrum_range_db,
+                fill_percent: &mut self.spectrum_fill_percent,
+                zoom: &mut self.rx2_spectrum_zoom,
+                allow_zoom_below_2x: &mut self.allow_zoom_below_2x,
+                pan: &mut self.rx2_spectrum_pan,
+                wf_contrast: &mut self.rx2_waterfall_contrast,
+                fft: super::spectrum::FftControl::Choose { size_k: &mut self.rx2_spectrum_fft_size_k, ddc_rate_hz: rx2_ddc_rate, salt: "rx2_fft_size" },
+                height: None,
             });
-            // Row 2: Zoom/Pan controls
-            ui.horizontal(|ui| {
-                ui.spacing_mut().slider_width = 80.0;
-                ui.label(rust_i18n::t!("main_zoom_label").to_string());
-                // TL2-1 ctun-auto-recenter: same zoom-min logic as RX1 (per-RX independent
-                // zoom but same checkbox-clamp policy).
-                let zoom_min_rx2: f32 = if self.allow_zoom_below_2x { 1.0 } else { 2.0 };
-                if self.rx2_spectrum_zoom < zoom_min_rx2 {
-                    self.rx2_spectrum_zoom = zoom_min_rx2;
-                }
-                let zoom_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0)
-                    .logarithmic(true)
-                    .custom_formatter(|v, _| format!("{:.0}x", v))
-                ).on_hover_text(rust_i18n::t!("main_hover_zoom").to_string());
-                let zoom_step = (self.rx2_spectrum_zoom as f64 * 0.1).max(1.0);
-                let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.rx2_spectrum_zoom, zoom_min_rx2..=1024.0, zoom_step);
-                let zoom_changed = zoom_resp.changed() || zoom_scrolled;
-                if zoom_changed {
-                    let max_pan = crate::ui::tuning::max_pan_fraction(self.rx2_spectrum_zoom);
-                    self.rx2_spectrum_pan = self.rx2_spectrum_pan.clamp(-max_pan, max_pan);
-                }
-                // The same checkbox as RX1 and VRX (build 242: RX2 had none).
-                self.zoom_below_2x_checkbox(ui);
-                ui.label(rust_i18n::t!("main_pan_label").to_string());
-                let max_pan = crate::ui::tuning::max_pan_fraction(self.rx2_spectrum_zoom);
-                let pan_resp = ui.add(egui::Slider::new(&mut self.rx2_spectrum_pan, -max_pan..=max_pan)
-                    .custom_formatter(|v, _| format!("{:+.2}", v))
-                ).on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
-                let pan_scrolled = helpers::slider_wheel(ui, &pan_resp, &mut self.rx2_spectrum_pan, -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
-                let pan_changed = pan_resp.changed() || pan_scrolled;
-                ui.label(rust_i18n::t!("main_wf_label").to_string());
-                let wf_resp = ui.add(egui::Slider::new(&mut self.rx2_waterfall_contrast, 0.3..=3.0)
-                    .logarithmic(true)
-                    .custom_formatter(|v, _| format!("{:.1}", v))
-                ).on_hover_text(rust_i18n::t!("main_hover_wf").to_string());
-                let wf_scrolled = helpers::slider_wheel(ui, &wf_resp, &mut self.rx2_waterfall_contrast, 0.3..=3.0, 0.1);
-                if wf_resp.changed() || wf_scrolled {
-                    self.save_full_config();
-                }
-
-                // RX2 FFT size selector
-                let rx2_ddc_rate = if self.ddc_sample_rate_rx2 > 0 { self.ddc_sample_rate_rx2 as u32 * 1000 } else { 384_000 };
-                let rx2_auto_fft = sdr_remote_core::ddc_fft_size(rx2_ddc_rate);
-                let rx2_auto_k = rx2_auto_fft / 1024;
-                let rx2_fft_label = if self.rx2_spectrum_fft_size_k == 0 {
-                    format!("FFT: Auto ({}K)", rx2_auto_k)
-                } else {
-                    format!("FFT: {}K", self.rx2_spectrum_fft_size_k)
-                };
-                let rx2_hop = |fft_k: u32| -> u32 { let fft = fft_k * 1024; rx2_ddc_rate / (fft / 8) };
-                let rx2_fft_options: Vec<(u16, String)> = {
-                    let mut opts = vec![(0u16, format!("Auto ({}K, ~{} FFT/s)", rx2_auto_k, rx2_hop(rx2_auto_k as u32)))];
-                    for &k in &[32u16, 64, 128, 256, 512, 1024] {
-                        let fft = k as u32 * 1024;
-                        if fft <= rx2_ddc_rate * 4 {
-                            let fps = rx2_hop(k as u32);
-                            if fps > 0 { opts.push((k, format!("{}K (~{} FFT/s)", k, fps))); }
-                        }
-                    }
-                    opts
-                };
-                egui::ComboBox::from_id_salt("rx2_fft_size")
-                    .selected_text(&rx2_fft_label)
-                    .width(80.0)
-                    .show_ui(ui, |ui| {
-                        for (k, label) in &rx2_fft_options {
-                            if ui.selectable_label(self.rx2_spectrum_fft_size_k == *k, label).clicked() {
-                                self.rx2_spectrum_fft_size_k = *k;
-                                let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, *k));
-                                self.save_full_config();
-                            }
-                        }
-                    });
-
-                if zoom_changed || pan_changed {
-                    self.rx2_zoom_pan_changed_at = Some(Instant::now());
-                }
-            });
-            // A rule under the button rows, as the VRX panel has (owner, build 240).
-            super::helpers::rule(ui);
+            self.rx_view_changed(true, changes);
 
             // Debounce: send zoom/pan to server after 100ms
             if let Some(changed_at) = self.rx2_zoom_pan_changed_at {
                 if changed_at.elapsed().as_millis() >= 100 {
                     let zoom_diff = (self.rx2_spectrum_zoom - self.rx2_last_sent_zoom).abs();
-                    let pan_diff = (self.rx2_spectrum_pan - self.rx2_last_sent_pan).abs();
+                    let pan_moved = sdr_remote_core::protocol::pack_spectrum_pan_fine(self.rx2_spectrum_pan)
+                        != sdr_remote_core::protocol::pack_spectrum_pan_fine(self.rx2_last_sent_pan);
                     if zoom_diff > 0.01 {
                         let _ = self.cmd_tx.send(Command::SetRx2SpectrumZoom(self.rx2_spectrum_zoom));
                         self.rx2_last_sent_zoom = self.rx2_spectrum_zoom;
                     }
-                    if pan_diff > 0.001 {
+                    if pan_moved {
                         let _ = self.cmd_tx.send(Command::SetRx2SpectrumPan(self.rx2_spectrum_pan));
                         self.rx2_last_sent_pan = self.rx2_spectrum_pan;
                     }
@@ -848,6 +744,7 @@ impl SdrRemoteApp {
                 self.rx2_frequency_hz,
                 self.rx2_full_span_hz(),
                 self.rx2_spectrum_pan,
+                self.server_fine_spectrum_view,
             );
             let rx2_tuning_active = Self::tuning_latch_active(
                 self.rx2_force_full_tuning,
@@ -914,50 +811,43 @@ impl SdrRemoteApp {
             } else {
                 (&self.rx2_full_spectrum_bins, self.rx2_full_spectrum_center_hz, self.rx2_full_spectrum_span_hz)
             };
-            spectrum_plot(
-                ui,
-                rx2_plot_bins,
-                rx2_plot_center_hz,
-                rx2_plot_span_hz,
-                rx2_smooth_center,
-                rx2_smooth_vfo,
-                self.rx2_frequency_hz,
-                self.rx2_spectrum_ref_db,
-                self.rx2_spectrum_range_db,
-                self.rx2_smeter,
-                false,
-                false,
-                // Fallback to RX1 filter values if RX2 filter not available (ZZRL/ZZRH unsupported)
-                if self.rx2_filter_low_hz != 0 || self.rx2_filter_high_hz != 0 {
-                    self.rx2_filter_low_hz
-                } else {
-                    self.filter_low_hz
+            let rx2_full_span = if self.full_spectrum_enabled { self.rx2_full_spectrum_span_hz } else { self.rx2_spectrum_span_hz } as f64;
+            let wf_window = super::spectrum::WaterfallWindow {
+                center_hz: rx2_smooth_center as f64,
+                span_hz: self.rx2_waterfall.display_span_hz(rx2_full_span / (self.rx2_spectrum_zoom as f64).max(1.0)),
+                row_span_hz: rx2_full_span,
+            };
+            // Fallback to RX1 filter values if RX2 filter not available (ZZRL/ZZRH unsupported)
+            let rx2_has_filter = self.rx2_filter_low_hz != 0 || self.rx2_filter_high_hz != 0;
+            let mut texture = self.rx2_waterfall.texture.take();
+            let panel = super::spectrum::SpectrumPanel {
+                id: "rx2",
+                bins: rx2_plot_bins,
+                bins_center_hz: rx2_plot_center_hz as f64,
+                bins_span_hz: rx2_plot_span_hz as f64,
+                view_center_hz: rx2_smooth_center as f64,
+                marker_hz: rx2_smooth_vfo,
+                filter_low_hz: if rx2_has_filter { self.rx2_filter_low_hz } else { self.filter_low_hz },
+                filter_high_hz: if rx2_has_filter { self.rx2_filter_high_hz } else { self.filter_high_hz },
+                ref_db: self.rx2_spectrum_ref_db,
+                range_db: self.rx2_spectrum_range_db,
+                fill_percent: self.spectrum_fill_percent,
+                wf_contrast: self.rx2_waterfall_contrast,
+                meter: super::spectrum::SpectrumMeter::Signal(self.rx2_smeter),
+                big_meter: true,
+                rit_hz: None,
+                band_markers: false,
+                dx_spots: &self.dx_spots,
+                tuning: super::spectrum::SpectrumTuning {
+                    tune_hz: self.rx2_frequency_hz,
+                    min_hz: 1_000,
+                    max_hz: u64::MAX,
+                    filter: super::spectrum::FilterEdges::Free,
                 },
-                if self.rx2_filter_low_hz != 0 || self.rx2_filter_high_hz != 0 {
-                    self.rx2_filter_high_hz
-                } else {
-                    self.filter_high_hz
-                },
-                0, // RX2 has no RIT
-                false,
-                spec_h,
-                &RX2_PLOT_CONFIG,
-                &self.dx_spots,
-            );
-            render_waterfall(
-                ui,
-                ctx,
-                &mut self.rx2_waterfall,
-                if self.full_spectrum_enabled { self.rx2_full_spectrum_span_hz } else { self.rx2_spectrum_span_hz },
-                rx2_smooth_center,
-                self.rx2_frequency_hz,
-                self.rx2_spectrum_zoom,
-                self.rx2_waterfall_contrast,
-                self.rx2_spectrum_ref_db,
-                self.rx2_spectrum_range_db,
-                wf_h,
-                &RX2_PLOT_CONFIG,
-            );
+            };
+            let action = super::spectrum::spectrum_panel_view(ui, ctx, &panel, &self.rx2_waterfall, wf_window, &mut texture, spec_h, wf_h);
+            self.rx2_waterfall.texture = texture;
+            super::spectrum::store_rx_action(ui, "rx2_", action);
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new(rust_i18n::t!("main_waiting_rx2_spectrum").to_string()).weak());

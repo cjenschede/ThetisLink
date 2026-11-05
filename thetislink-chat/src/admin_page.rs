@@ -7,8 +7,8 @@
 //! toolchain. Everything is inline, which also means there is nothing for a
 //! browser to fetch from anywhere else.
 //!
-//! It shows the list, opens one report, answers it and throws it away — the same
-//! four things `scripts/postbox.sh` does, because they are the same endpoints.
+//! It shows the list, opens one report, answers it and throws it away - the same
+//! four endpoints a command-line client uses.
 //! The page merely holds a session cookie instead of a bearer token.
 
 /// The page, with a one-off nonce stamped into its two inline blocks.
@@ -290,7 +290,7 @@ async function api(path, opts) {
     // back refused, the page drew nothing, and an empty postbox and a lost
     // session are the same picture. Say which it is.
     expired();
-    throw new Error("your session has expired - log in again");
+    throw new Error("your session has expired: log in again");
   }
   if (!r.ok) throw new Error(data.error || ("failed (" + r.status + ")"));
   return data;
@@ -393,8 +393,7 @@ async function refresh() {
       // when it arrived; a collected one has no arrival time kept - the marker
       // holds only the moment it was fetched, and that drives its expiry - so
       // it is labelled rather than passed off as the same thing. The list is
-      // ordered by report number, which is the one thing both share (raised in
-      // review, 2026-08-18).
+      // ordered by report number, which is the one thing both share.
       const when = r.collected
         ? "collected " + new Date(r.collected * 1000).toLocaleString()
         : new Date(r.at * 1000).toLocaleString();
@@ -450,7 +449,7 @@ async function keep_refresh() {
     });
     const runs = d.runs || [];
     if (runs.length === 0) {
-      say($("keephead"), "no round recorded yet - the first one runs at startup");
+      say($("keephead"), "no round recorded yet: the first one runs at startup");
     } else {
       const last = new Date(runs[0].at * 1000);
       const mins = Math.round((Date.now() - last.getTime()) / 60000);
@@ -483,7 +482,7 @@ async function keep_whatif() {
       "  " + d.delivered_replies + " delivered answer(s) past 7 days",
       "  " + d.undelivered_replies + " answer(s) never fetched, past 30 days",
       "  " + d.markers + " collected-report marker(s)",
-      "nothing was removed - this was a question, not an instruction",
+      "nothing was removed: this was a question, not an instruction",
     ].join(NL);
   } catch (e) { say($("keepmsg"), e.message); }
 }
@@ -547,7 +546,7 @@ async function mod_refresh() {
 async function ban_station(id, name) {
   const who = name || ("station " + id);
   if (!confirm("Ban " + who + "? They lose the chat and reporting, and are told so. What they wrote stays, and they can still leave the chat and collect an answer they were already sent.")) return;
-  const why = prompt("Why? (optional - your own note unless you send it below)") || "";
+  const why = prompt("Why? (optional: your own note unless you send it below)") || "";
   // Off unless it is asked for: a note written to remember why is shorter and
   // blunter than what you would say to the person, and the two should not be
   // the same sentence by accident.
@@ -623,8 +622,7 @@ function default_name() {
   // A different name when the report itself is not here. Saving under the
   // report's name would replace the file that holds the real report with one
   // holding the placeholder below - and that file is the only copy, because
-  // collecting is what removed it from the service (raised in review,
-  // 2026-08-18).
+  // collecting is what removed it from the service.
   return current_collected
     ? "thetislink-answer-" + current + ".txt"
     : "thetislink-report-" + current + ".txt";
@@ -642,8 +640,7 @@ function default_name() {
 // builds from what is on screen and writes the lot. Where the report is not on
 // screen - a collected one - the report section is left out and the file gets a
 // different name, so a saved answer can never replace the file holding the real
-// report. That is the only copy left once a report has been collected (raised
-// in review, 2026-08-18).
+// report. That is the only copy left once a report has been collected.
 function bundle_text() {
   const NL = String.fromCharCode(10);
   const parts = ["ThetisLink " + $("onehead").textContent];
@@ -657,7 +654,7 @@ function bundle_text() {
   }
   // Only when the report is actually on screen. For a collected one the body
   // holds an explanation of where it went, and writing that under a MELDING
-  // heading turns an explanation into a report. A later `postbox.sh reply`
+  // heading turns an explanation into a report. A later reply from the command-line client
   // merges the answer into the file that does hold the report.
   if (!current_collected) {
     parts.push("", "===== MELDING =====", "", $("body").textContent);
@@ -763,7 +760,7 @@ async function send_reply() {
     $("reply").value = "";
     say($("onemsg"), "answer sent and saved");
   } else {
-    say($("onemsg"), "answer SENT, but nothing was saved - the text is still here to copy");
+    say($("onemsg"), "answer SENT, but nothing was saved: the text is still here to copy");
   }
 }
 

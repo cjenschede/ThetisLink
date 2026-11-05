@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Phase 1 user-auth: per-station key registry backed by SQLite.
+//! User auth: per-station key registry backed by SQLite.
 //!
 //! Each station is identified by a high-entropy secret; the station **name** is
 //! only a label. The relay validates a presented secret against this registry and
@@ -8,13 +8,13 @@
 //! as long as their secrets differ). Only the secret **hash** is stored - never the
 //! plaintext. Secrets are machine-generated 256-bit values, so a fast hash
 //! (SHA-256) is sufficient for lookup; a slow KDF is only needed for human
-//! passwords (that arrives with the Phase 2 dashboard login).
+//! passwords (the admin dashboard login, Argon2id).
 //!
-//! The schema already reserves the Phase 2 quota columns so the dashboard can build
-//! on the same table without a migration.
+//! The quota columns live in the same table, so the dashboard builds on it
+//! without a migration.
 
-// Phase 2 dashboard store API (devices/admin/rotate) is added ahead of the admin API
-// that consumes it (next increment); allow dead_code until it is wired in.
+// Dashboard store API (devices/admin/rotate); allow dead_code for the parts
+// the admin API does not call.
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
@@ -54,11 +54,11 @@ pub struct Store {
 
 impl Store {
     /// Open (creating if needed) the station registry at `path`. Use `":memory:"`
-    /// for tests. WAL mode so the Phase 2 dashboard can write while the relay reads.
+    /// for tests. WAL mode so the admin dashboard can write while the relay reads.
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("opening station registry {path}"))?;
-        // WAL + busy_timeout: the Phase 2 dashboard writes while the relay reads
+        // WAL + busy_timeout: the admin dashboard writes while the relay reads
         // (security note). No-op / harmless on an in-memory db.
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
         let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
@@ -70,11 +70,11 @@ impl Store {
                 owner        TEXT    NOT NULL DEFAULT '',
                 enabled      INTEGER NOT NULL DEFAULT 1,
                 created_at   INTEGER NOT NULL DEFAULT 0,
-                -- Phase 2 quota columns (reserved; unused in Phase 1).
+                -- Quota columns (reserved; unused).
                 max_clients  INTEGER,
                 max_kbps     INTEGER
             );
-            -- Phase 2: per-device records (dashboard schema). install_id = stable key; name
+            -- Per-device records (dashboard schema). install_id = stable key; name
             -- is a label. Persistent analytics: last_seen / sessions / bytes_total.
             CREATE TABLE IF NOT EXISTS devices (
                 id           INTEGER PRIMARY KEY,
@@ -95,14 +95,14 @@ impl Store {
                 last_ip      TEXT,
                 UNIQUE(station_id, install_id)
             );
-            -- Phase 2: single admin account for the dashboard (id is pinned to 1).
+            -- Single admin account for the dashboard (id is pinned to 1).
             -- Human password -> Argon2id hash (never SHA-256, never plaintext).
             CREATE TABLE IF NOT EXISTS admin (
                 id            INTEGER PRIMARY KEY CHECK (id = 1),
                 password_hash TEXT    NOT NULL,
                 created_at    INTEGER NOT NULL DEFAULT 0
             );
-            -- Phase 3: per-station monthly usage buckets ('YYYY-MM'). One row per
+            -- Per-station monthly usage buckets ('YYYY-MM'). One row per
             -- station per month; a new month is simply a new row (no reset job).
             CREATE TABLE IF NOT EXISTS station_usage (
                 station_id INTEGER NOT NULL,
@@ -112,7 +112,7 @@ impl Store {
             );",
         )
         .context("creating tables")?;
-        // Additive migrations for DBs created before Phase 3 (ignore 'duplicate column'
+        // Additive migrations for DBs created before the usage caps (ignore 'duplicate column'
         // on a fresh DB where the column may already exist). max_devices = cap on
         // enrolled (enabled) devices; max_monthly_bytes = monthly data cap (NULL = no limit).
         for stmt in [
@@ -228,7 +228,7 @@ impl Store {
         Ok(n > 0)
     }
 
-    // --- Admin account (Phase 2 dashboard login) ---
+    // --- Admin account (dashboard login) ---
 
     pub fn has_admin(&self) -> Result<bool> {
         let n: i64 = self
@@ -400,7 +400,7 @@ impl Store {
         Ok(())
     }
 
-    // --- Phase 3: per-station monthly usage (data caps + analytics) ---
+    // --- Per-station monthly usage (data caps + analytics) ---
 
     /// Add a session's bytes to a station's monthly bucket (`ym` = "YYYY-MM").
     /// Called once on disconnect alongside `add_device_bytes` - never per frame.

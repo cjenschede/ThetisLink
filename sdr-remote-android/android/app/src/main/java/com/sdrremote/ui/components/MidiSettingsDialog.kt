@@ -183,7 +183,7 @@ fun MidiSettingsDialog(
                 // height to lay itself out in. The `weight(1f)` it carried had
                 // nothing to divide either - a weight needs a finite main axis.
                 // Neither of those is a compile error, which is why this survived
-                // a green build and a hand test (review finding).
+                // a green build and a hand test.
                 //
                 // It is a fixed handful of entries - MidiAction.entries - so
                 // laziness bought nothing here to begin with; the outer scroll

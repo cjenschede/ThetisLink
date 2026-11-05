@@ -57,7 +57,7 @@ private const val NUM_MEMORIES = 5
 private data class Memory(val freq: Long, val mode: Int)
 
 
-/** Parse memory string — supports "freq:mode" (new) and plain "freq" (legacy) */
+/** Parse memory string: supports "freq:mode" (new) and plain "freq" (legacy) */
 private fun parseMemories(saved: String?): Array<Memory?> {
     if (saved == null) return Array(NUM_MEMORIES) { null }
     val parts = saved.split(",")
@@ -272,7 +272,7 @@ fun SmeterBar(value: Float, transmitting: Boolean = false, otherTx: Boolean = fa
     }
 
     // 3-zone layout: labels above (10dp) + bar (14dp) + labels below (10dp) = 34dp
-    val labelH = 10f  // dp equivalent in canvas coords — scaled below
+    val labelH = 10f  // dp equivalent in canvas coords; scaled below
     val barH = 14f
 
     Canvas(

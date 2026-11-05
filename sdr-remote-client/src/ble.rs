@@ -7,7 +7,7 @@
 //! latching control next to MIDI (`ui/ble_screen.rs`).
 //!
 //! Windows: WinRT through the `windows` crate the client already depends on, so
-//! no new crate enters the workspace or the SBOM. Measured on the owner's button
+//! no new crate enters the workspace or the SBOM. Measured on a real button
 //! on 2026-09-17 before a line of this was written: Windows hands out the FFE1
 //! notifications **without** the button being paired in the OS (`IsPaired`
 //! stayed false throughout), the same as on Android. Other platforms get a
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use sdr_remote_logic::ble_ptt::BleButtonEvent;
 
 /// How long a scan runs before it stops on its own. Found by asking which exit
-/// nobody tries (working rule 10): leave the settings screen while it is
+/// nobody tries: leave the settings screen while it is
 /// looking for buttons, and the watcher ran for as long as the client did.
 pub const SCAN_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -31,9 +31,8 @@ pub fn scan_expired(since: Option<Instant>, now: Instant) -> bool {
     since.map(|s| now.duration_since(s) >= SCAN_TIMEOUT).unwrap_or(false)
 }
 
-/// FFE0 / FFE1: the Telink serial profile these buttons speak. Documented in the
-/// Android patch brief and measured on the owner's exemplar (see the memory on
-/// the YPC21): press = `0x01`, release = `0x00`, one byte per notification.
+/// FFE0 / FFE1: the Telink serial profile these buttons speak. Measured on a
+/// real YPC21: press = `0x01`, release = `0x00`, one byte per notification.
 pub const SERVICE_UUID: u128 = 0x0000ffe0_0000_1000_8000_00805f9b34fb;
 pub const CHARACTERISTIC_UUID: u128 = 0x0000ffe1_0000_1000_8000_00805f9b34fb;
 
@@ -374,7 +373,7 @@ mod win {
                             let _ = tx.send(BleEvent::Attached(generation));
                             let _ = tx.send(BleEvent::Link(generation, BleButtonEvent::Connected));
                         } else {
-                            info!("BLE PTT: attempt {} finished after it was replaced - let go", generation);
+                            info!("BLE PTT: attempt {} finished after it was replaced; let go", generation);
                         }
                     }
                     Err(e) => {
@@ -426,7 +425,7 @@ mod win {
                                         let _ = rtx.send(BleEvent::Attached(generation));
                                         let _ = rtx.send(BleEvent::Link(generation, BleButtonEvent::Connected));
                                     } else {
-                                        info!("BLE PTT: back in reach for attempt {} that is no longer current - let go", generation);
+                                        info!("BLE PTT: back in reach for attempt {} that is no longer current; let go", generation);
                                     }
                                 }
                                 Err(e) => {

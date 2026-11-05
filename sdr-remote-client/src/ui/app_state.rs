@@ -17,7 +17,7 @@ impl SdrRemoteApp {
         state_rx: watch::Receiver<RadioState>,
         cmd_tx: mpsc::UnboundedSender<Command>,
         log_buffer: LogBuffer,
-        // Phase C: if the relay is used as transport the monitor runs in
+        // If the relay is used as transport the monitor runs in
         // main.rs; then we only show its status (no second relay connection).
         external_relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
         sidetone: std::sync::Arc<sdr_remote_logic::sidetone::Sidetone>,
@@ -76,20 +76,26 @@ impl SdrRemoteApp {
         let _ = cmd_tx.send(Command::SetRx2Volume(config.rx2_volume));
         let _ = cmd_tx.send(Command::SetThetisWidebandAudio(config.thetis_wideband_audio));
         let _ = cmd_tx.send(Command::SetFullSpectrumEnabled(config.full_spectrum_enabled));
-        // Restore EQ + mic gain from active profile (radio 1)
-        if let Some((_, en, gains, mic_gain)) = config.yaesu_eq_profiles.iter()
-            .find(|(n, _, _, _)| n == &config.yaesu_eq_active) {
-            let _ = cmd_tx.send(Command::SetYaesuEqEnabled(*en));
-            for i in 0..5 { let _ = cmd_tx.send(Command::SetYaesuEqBand(i as u8, gains[i])); }
-            let _ = cmd_tx.send(Command::SetYaesuTxGain(*mic_gain));
+        // Restore the EQ from the active profile (radio 1). The mic gain is the
+        // one the slider shows and connecting sends: a profile is copied into
+        // it when chosen, and it may have been moved since.
+        if let Some(p) = config.yaesu_eq_profiles.iter().find(|p| p.name == config.yaesu_eq_active) {
+            let _ = cmd_tx.send(Command::SetYaesuEqEnabled(p.enabled));
+            for (i, b) in p.active_bands().iter().enumerate() { let _ = cmd_tx.send(Command::SetYaesuEqBandParams(i as u8, *b)); }
+            log::info!("Yaesu EQ profile {:?} at start: {}", p.name, if p.advanced { "advanced" } else { "standard" });
+        } else if !config.yaesu_eq_active.is_empty() {
+            log::warn!("Yaesu EQ profile {:?} at start: not in the settings file, the EQ starts flat", config.yaesu_eq_active);
         }
-        // Same for radio 2 (FTX-1): the engine gets the loaded EQ + mic-gain.
-        if let Some((_, en, gains, mic_gain)) = config.yaesu2_eq_profiles.iter()
-            .find(|(n, _, _, _)| n == &config.yaesu2_eq_active) {
-            let _ = cmd_tx.send(Command::SetYaesu2EqEnabled(*en));
-            for i in 0..5 { let _ = cmd_tx.send(Command::SetYaesu2EqBand(i as u8, gains[i])); }
-            let _ = cmd_tx.send(Command::SetYaesu2TxGain(*mic_gain));
+        let _ = cmd_tx.send(Command::SetYaesuTxGain(config.yaesu_mic_gain));
+        // Same for radio 2 (FTX-1).
+        if let Some(p) = config.yaesu2_eq_profiles.iter().find(|p| p.name == config.yaesu2_eq_active) {
+            let _ = cmd_tx.send(Command::SetYaesu2EqEnabled(p.enabled));
+            for (i, b) in p.active_bands().iter().enumerate() { let _ = cmd_tx.send(Command::SetYaesu2EqBandParams(i as u8, *b)); }
+            log::info!("Yaesu2 EQ profile {:?} at start: {}", p.name, if p.advanced { "advanced" } else { "standard" });
+        } else if !config.yaesu2_eq_active.is_empty() {
+            log::warn!("Yaesu2 EQ profile {:?} at start: not in the settings file, the EQ starts flat", config.yaesu2_eq_active);
         }
+        let _ = cmd_tx.send(Command::SetYaesu2TxGain(config.yaesu2_mic_gain));
         let _ = cmd_tx.send(Command::SetAgcEnabled(config.agc_enabled));
         // RX1 audio default ON on the server; only send if the client wants it OFF.
         if !config.rx1_enabled {
@@ -98,7 +104,7 @@ impl SdrRemoteApp {
         if config.rx2_enabled {
             let _ = cmd_tx.send(Command::SetRx2Enabled(true));
         }
-        // RX2 spectrum subscription separate from the audio (phase 4).
+        // RX2 spectrum subscription separate from the audio.
         if config.rx2_spectrum_enabled {
             let _ = cmd_tx.send(Command::EnableRx2Spectrum(true));
         }
@@ -116,6 +122,8 @@ impl SdrRemoteApp {
             let _ = cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, config.rx2_spectrum_fft_size_k));
         }
 
+        let active_eq = config.yaesu_eq_profiles.iter().find(|p| p.name == config.yaesu_eq_active);
+        let active_eq2 = config.yaesu2_eq_profiles.iter().find(|p| p.name == config.yaesu2_eq_active);
         let mut app = Self {
             state_rx,
             cmd_tx,
@@ -218,6 +226,7 @@ impl SdrRemoteApp {
             ptt_denial_seq: 0,
             usb_lost_last_true: [None, None],
             server_build: sdr_remote_core::protocol::PeerBuild::Unknown,
+            server_fine_spectrum_view: false,
             measurement_file: None,
             developer_mode: config.developer_mode,
             dev_code: String::new(),
@@ -248,6 +257,7 @@ impl SdrRemoteApp {
             playback_level_yaesu: 0.0,
             playback_level_yaesu2: 0.0,
             yaesu_mic_level: 0.0,
+            mic_input_clip: false,
             frequency_hz: 0,
             mode: 0,
             smeter: sdr_remote_logic::state::SMETER_NO_DATA_DBM,
@@ -397,14 +407,15 @@ impl SdrRemoteApp {
             // If user has persisted a zoom we trust it; otherwise let
             // first DDC-span arrival pick default_zoom_for_span.
             vrx1_zoom_initialized: false,
-            vrx1_filter_low_hz: config.vrx1_filter_low_hz.unwrap_or_else(|| {
+            // A filter saved before the raster was kept to lands on it here.
+            vrx1_filter_low_hz: crate::ui::spectrum::snap_vrx_filter_hz(config.vrx1_filter_low_hz.unwrap_or_else(|| {
                 if config.vrx1_mode.unwrap_or(0) == 1 { -3000 } else { 0 }
-            }),
-            vrx1_filter_high_hz: config.vrx1_filter_high_hz.unwrap_or_else(|| {
+            }) as f64),
+            vrx1_filter_high_hz: crate::ui::spectrum::snap_vrx_filter_hz(config.vrx1_filter_high_hz.unwrap_or_else(|| {
                 if config.vrx1_mode.unwrap_or(0) == 1 { 0 } else { 3000 }
-            }),
+            }) as f64),
             vrx1_high_res_spectrum: config.vrx1_high_res_spectrum.unwrap_or(false),
-            vrx1_high_res_last_span_khz: 0,
+            vrx1_high_res_last_span_hz: 0,
             vrx1_last_sent_pan_hz: 0,
             vrx2_last_sent_pan_hz: 0,
             vrx_pan_changed_at: None,
@@ -417,14 +428,14 @@ impl SdrRemoteApp {
             vrx2_pan: 0.0,
             vrx2_auto_ref: config.vrx2_auto_ref.unwrap_or(sdr_remote_logic::state::SPECTRUM_AUTO_REF_DEFAULT),
             vrx2_zoom_initialized: false,
-            vrx2_filter_low_hz: config.vrx2_filter_low_hz.unwrap_or_else(|| {
+            vrx2_filter_low_hz: crate::ui::spectrum::snap_vrx_filter_hz(config.vrx2_filter_low_hz.unwrap_or_else(|| {
                 if config.vrx2_mode.unwrap_or(0) == 1 { -3000 } else { 0 }
-            }),
-            vrx2_filter_high_hz: config.vrx2_filter_high_hz.unwrap_or_else(|| {
+            }) as f64),
+            vrx2_filter_high_hz: crate::ui::spectrum::snap_vrx_filter_hz(config.vrx2_filter_high_hz.unwrap_or_else(|| {
                 if config.vrx2_mode.unwrap_or(0) == 1 { 0 } else { 3000 }
-            }),
+            }) as f64),
             vrx2_high_res_spectrum: config.vrx2_high_res_spectrum.unwrap_or(false),
-            vrx2_high_res_last_span_khz: 0,
+            vrx2_high_res_last_span_hz: 0,
             vrx2_spectrum: ChannelSpectrum::new(ChannelId::Vrx2),
             vrx1_waterfall_texture: None,
             vrx2_waterfall_texture: None,
@@ -446,7 +457,7 @@ impl SdrRemoteApp {
             // shown, which dropped the operator onto an empty Devices list.
             active_tab: Tab::Server,
             last_connect_status: sdr_remote_logic::state::ConnectStatus::Disconnected,
-            // PATCH-3: kick off the mDNS browse on app start. Daemon-init failure
+            // Kick off the mDNS browse on app start. Daemon-init failure
             // is caught inside `BrowseHandle::start` and surfaces as an empty
             // dropdown - manual IP entry stays available.
             mdns_browse: Some(crate::mdns::BrowseHandle::start()),
@@ -459,7 +470,7 @@ impl SdrRemoteApp {
             relay_monitor,
             relay_status,
             relay_external,
-            // PATCH-4: arm the first-run wizard if the user has never had a
+            // Arm the first-run wizard if the user has never had a
             // successful connect (counter==0). Seeds with whatever
             // server/password the config already has - wizard still walks
             // through the steps but the fields are pre-populated.
@@ -626,12 +637,10 @@ impl SdrRemoteApp {
             // Standalone persistent mic-gain (last slider value), separate from
             // the EQ profile so the value is always remembered.
             yaesu2_mic_gain: config.yaesu2_mic_gain,
-            yaesu2_eq_enabled: config.yaesu2_eq_profiles.iter()
-                .find(|(n, _, _, _)| n == &config.yaesu2_eq_active)
-                .map(|(_, e, _, _)| *e).unwrap_or(false),
-            yaesu2_eq_gains: config.yaesu2_eq_profiles.iter()
-                .find(|(n, _, _, _)| n == &config.yaesu2_eq_active)
-                .map(|(_, _, g, _)| *g).unwrap_or([0.0; 5]),
+            yaesu2_eq_enabled: active_eq2.map(|p| p.enabled).unwrap_or(false),
+            yaesu2_eq_advanced: active_eq2.map(|p| p.advanced).unwrap_or(false),
+            yaesu2_eq_gains: active_eq2.map(|p| p.gains).unwrap_or([0.0; 5]),
+            yaesu2_eq_bands: active_eq2.map(|p| p.bands).unwrap_or_else(sdr_remote_logic::eq::default_bands),
             yaesu2_eq_profiles: config.yaesu2_eq_profiles.clone(),
             yaesu2_eq_active_profile: config.yaesu2_eq_active.clone(),
             yaesu2_eq_new_name: String::new(),
@@ -668,20 +677,18 @@ impl SdrRemoteApp {
             yaesu_mic_gain: config.yaesu_mic_gain,
             yaesu_compressor: config.yaesu_compressor,
             yaesu2_compressor: config.yaesu2_compressor,
+            yaesu_comp_attack_ms: config.yaesu_comp_attack_ms,
+            yaesu_comp_release_ms: config.yaesu_comp_release_ms,
+            yaesu2_comp_attack_ms: config.yaesu2_comp_attack_ms,
+            yaesu2_comp_release_ms: config.yaesu2_comp_release_ms,
             yaesu_tx_agc: config.yaesu_tx_agc,
             roger: config.roger,
             yaesu2_tx_agc: config.yaesu2_tx_agc,
-            yaesu_eq_enabled: {
-                // Load active EQ profile from config
-                config.yaesu_eq_profiles.iter()
-                    .find(|(n, _, _, _)| n == &config.yaesu_eq_active)
-                    .map(|(_, e, _, _)| *e).unwrap_or(false)
-            },
-            yaesu_eq_gains: {
-                config.yaesu_eq_profiles.iter()
-                    .find(|(n, _, _, _)| n == &config.yaesu_eq_active)
-                    .map(|(_, _, g, _)| *g).unwrap_or([0.0; 5])
-            },
+            // Load active EQ profile from config
+            yaesu_eq_enabled: active_eq.map(|p| p.enabled).unwrap_or(false),
+            yaesu_eq_advanced: active_eq.map(|p| p.advanced).unwrap_or(false),
+            yaesu_eq_gains: active_eq.map(|p| p.gains).unwrap_or([0.0; 5]),
+            yaesu_eq_bands: active_eq.map(|p| p.bands).unwrap_or_else(sdr_remote_logic::eq::default_bands),
             yaesu_eq_profiles: config.yaesu_eq_profiles.clone(),
             yaesu_eq_active_profile: config.yaesu_eq_active.clone(),
             yaesu_eq_new_name: String::new(),
@@ -832,6 +839,7 @@ impl SdrRemoteApp {
             rx2_spectrum_range_db: config.rx2_spectrum_range_db,
             rx2_auto_ref_enabled: config.rx2_auto_ref_enabled,
             rx2_waterfall_contrast: config.rx2_waterfall_contrast,
+            spectrum_fill_percent: config.spectrum_fill_percent,
             vfo_sync: false,
             mon_on: false,
             agc_mode: 3,

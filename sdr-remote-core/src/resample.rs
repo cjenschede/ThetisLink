@@ -42,7 +42,7 @@
 //!
 //! A `Resampler` knows its own filter, and the log lines read it from there:
 //! a line that asked again with the same numbers could say one thing while the
-//! resampler did another (round 260).
+//! resampler did another.
 
 use std::fmt;
 
@@ -276,7 +276,7 @@ mod tests {
             walk(&root.join(c).join("src"), &mut out);
         }
         // the one place that builds them - by its whole path: a second file
-        // named resample.rs elsewhere is read like any other (round 261)
+        // named resample.rs elsewhere is read like any other
         out.retain(|(p, _)| !p.ends_with("sdr-remote-core/src/resample.rs"));
         out
     }
@@ -296,7 +296,7 @@ mod tests {
         }
     }
 
-    /// Every number of every filter, the oversampling too (round 260: it was
+    /// Every number of every filter, the oversampling too (it used to be
     /// in no log line and no test).
     #[test]
     fn every_filter_is_pinned_by_value() {
@@ -314,8 +314,8 @@ mod tests {
     /// One source: no resampler is built outside this file, in any form - a
     /// ratio written another way, another rubato type. One built by hand gets
     /// its own filter numbers again, which is how eight copies came about, and
-    /// a reviewer's probe showed that a guard on the spelling of the ratio
-    /// missed one (round 259).
+    /// a probe showed that a guard on the spelling of the ratio
+    /// missed one.
     #[test]
     fn no_resampler_is_built_outside_this_file() {
         let kinds = [

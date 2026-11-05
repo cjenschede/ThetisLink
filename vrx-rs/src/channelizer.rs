@@ -104,7 +104,7 @@ pub struct VrxChannelizer {
     // FM previous-sample state for phase-diff demod.
     fm_last_sample: Complex32,
 
-    // Residual NCO — compensates for the sub-bin frequency offset.
+    // Residual NCO: compensates for the sub-bin frequency offset.
     // Bin-selection quantises to bin_width (typically 62.5 Hz). The
     // NCO rotates the complex baseband output after the iFFT so the
     // actual carrier lands exactly on the iFFT's zero frequency.
@@ -117,11 +117,7 @@ pub struct VrxChannelizer {
     samples_since_nco_renorm: u32,
 
     // AGC state
-    agc_envelope: f32,
-    agc_attack_alpha: f32,
-    agc_decay_alpha: f32,
-    agc_target: f32,
-    agc_max_gain: f32,
+    agc: crate::agc::VrxAgc,
 
     // SAM carrier-recovery PLL (2nd-order, mirrors Thetis/WDSP amd.c
     // mode 1). Only used in VrxMode::Sam. Tracks the carrier offset left
@@ -135,12 +131,12 @@ pub struct VrxChannelizer {
     pll_omega_min: f32, // integrator lower clamp (rad/sample) = -capture range
     pll_omega_max: f32, // integrator upper clamp (rad/sample) = +capture range
 
-    // SAM lock detector + unlock-decay (PATCH-vrx-wide-sam-ux). The lock
+    // SAM lock detector + unlock-decay. The lock
     // metric (in-phase vs quadrature power, amplitude-normalised) gates the
     // host's auto-tune AFC; the carrier-present reference drives an
     // unlock-decay that leaks the integrator back to 0 in a deep fade so
     // re-acquisition restarts from centre (the wider ±3 kHz clamp would
-    // otherwise leave it wandered). First-cut design — see patch brief §5.2.
+    // otherwise leave it wandered). First-cut design.
     pll_lock_pi: f32,      // ema of in-phase power Re(z_d)²
     pll_lock_pq: f32,      // ema of quadrature power Im(z_d)²
     pll_mag_peak: f32,     // slow-decaying peak of total power (carrier-present ref)
@@ -177,10 +173,6 @@ impl VrxChannelizer {
             })
             .collect();
 
-        let t_sample = 1.0 / output_rate_hz as f32;
-        let agc_attack_alpha = 1.0 - (-t_sample / 0.010).exp();
-        let agc_decay_alpha = 1.0 - (-t_sample / 0.500).exp();
-
         // Compute residual offset: target carrier may not land exactly
         // on a bin centre. NCO rotates by -residual_hz per sample to
         // bring the carrier to true zero in the iFFT output.
@@ -191,7 +183,7 @@ impl VrxChannelizer {
             -std::f32::consts::TAU * residual_hz / output_rate_hz as f32;
         let nco_rotor = Complex32::from_polar(1.0, theta_per_sample);
 
-        // SAM carrier-recovery PLL coefficients — mirrors Thetis/WDSP
+        // SAM carrier-recovery PLL coefficients: mirrors Thetis/WDSP
         // amd.c (Warren Pratt, GPL-2.0): ζ = 1.0, ωN = 250 rad/s, scaled
         // to the output rate. g1 = proportional, g2 = integral gain.
         // Capture/hold range ±3 kHz (Thetis uses ±2 kHz; widened to ±3 kHz
@@ -243,11 +235,7 @@ impl VrxChannelizer {
             // AGC target of 0.5 needs gain ~50 000, so the ceiling is
             // set to 100 000. The attack/decay envelope still limits
             // how fast the gain can climb on noise-only spans.
-            agc_envelope: 0.00001,
-            agc_attack_alpha,
-            agc_decay_alpha,
-            agc_target: 0.5,
-            agc_max_gain: 100_000.0,
+            agc: crate::agc::VrxAgc::new(output_rate_hz, crate::agc::VrxAgcSettings::default()),
             pll_phs: 0.0,
             pll_omega: 0.0,
             pll_fil_out: 0.0,
@@ -278,7 +266,7 @@ impl VrxChannelizer {
     }
 
     /// Tracked SAM carrier offset in Hz (the loop's smoothed frequency
-    /// estimate, i.e. the integrator — not the jittery instantaneous
+    /// estimate, i.e. the integrator; not the jittery instantaneous
     /// output). Meaningful only in `VrxMode::Sam` once locked; used by an
     /// external AFC ("auto-tune to carrier") to re-centre the tuning.
     pub fn sam_carrier_offset_hz(&self) -> f32 {
@@ -310,6 +298,11 @@ impl VrxChannelizer {
         self.input_rate_hz
     }
 
+    /// Follow the AGC settings of the receiver this channel listens on.
+    pub fn set_agc(&mut self, settings: crate::agc::VrxAgcSettings) {
+        self.agc.set(settings);
+    }
+
     /// Update SSB filter window (audio-bin offsets from carrier).
     /// Cheap mutation; safe to call every batch.
     pub fn set_filter(&mut self, lo_bins: usize, hi_bins: usize) {
@@ -327,7 +320,7 @@ impl VrxChannelizer {
         self.config.carrier_offset_hz = offset_hz;
         // Recompute residual NCO so sub-bin tuning is correct for the
         // new offset. We let the running `nco_phase_at_frame_start`
-        // continue from where it was — a small phase discontinuity is
+        // continue from where it was; a small phase discontinuity is
         // fine; resetting it would be worse (audible click).
         let bin_width = self.input_rate_hz as f32 / self.fft_n as f32;
         let nearest_bin = (offset_hz / bin_width).round();
@@ -448,7 +441,7 @@ impl VrxChannelizer {
                         mag - self.am_dc_filter
                     }
                     VrxMode::Sam => {
-                        // Synchronous AM — mirrors Thetis/WDSP amd.c mode 1
+                        // Synchronous AM: mirrors Thetis/WDSP amd.c mode 1
                         // (both-sideband): a 2nd-order PLL locks the carrier
                         // to the real axis; the in-phase component is the
                         // recovered audio. Removes the beat that plain Re(z)
@@ -460,7 +453,7 @@ impl VrxChannelizer {
                         let zd_im = z.im * cos_p - z.re * sin_p;
                         // Phase detector. atan2 gives the true carrier phase
                         // error; for AM-with-carrier Re(z_d) ≥ 0 at lock so
-                        // there is no Costas sign ambiguity — a plain PLL (not
+                        // there is no Costas sign ambiguity; a plain PLL (not
                         // Costas) is the correct choice vs suppressed carrier.
                         let det = if zd_re == 0.0 && zd_im == 0.0 {
                             0.0
@@ -470,7 +463,7 @@ impl VrxChannelizer {
                         // Lock detector (amplitude-normalised): at lock the
                         // in-phase power dominates the quadrature power. The
                         // slow peak of total power is a "carrier-present"
-                        // reference — during pull-in the carrier is present
+                        // reference; during pull-in the carrier is present
                         // (total ≈ peak) so the unlock-decay does NOT fire and
                         // a genuine wide-offset acquisition is preserved.
                         let pi_p = zd_re * zd_re;
@@ -523,16 +516,7 @@ impl VrxChannelizer {
                         prod.im.atan2(prod.re)
                     }
                 };
-                let abs_in = sample.abs();
-                let alpha = if abs_in > self.agc_envelope {
-                    self.agc_attack_alpha
-                } else {
-                    self.agc_decay_alpha
-                };
-                self.agc_envelope += alpha * (abs_in - self.agc_envelope);
-                let gain = (self.agc_target / self.agc_envelope.max(1e-6))
-                    .min(self.agc_max_gain);
-                audio_out.push(sample * gain);
+                audio_out.push(self.agc.process(sample));
             }
             for i in 0..self.output_hop {
                 self.ola_tail[i] = self.ifft_buf[i + self.output_hop] * norm;
@@ -549,6 +533,19 @@ impl VrxChannelizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The receiver's AGC settings reach the channel's AGC.
+    #[test]
+    fn set_agc_reaches_the_channels_agc() {
+        let mut ch = VrxChannelizer::new_with_output_rate(
+            VrxConfig { carrier_offset_hz: 0.0, mode: VrxMode::Usb, filter_lo_bins: 0, filter_hi_bins: 48 },
+            384_000,
+            8_000,
+        );
+        let s = crate::agc::VrxAgcSettings { mode: crate::agc::VrxAgcMode::Fast, top_db: 55.0 };
+        ch.set_agc(s);
+        assert_eq!(ch.agc.settings(), s);
+    }
 
     /// The share of the output power in a tone `tone_hz` from `carrier_hz`,
     /// measured over the second half of three seconds at 384 kHz. With
@@ -658,7 +655,7 @@ mod tests {
         // keeps the long tone numerically clean before casting to f32.
         let f = carrier as f64 + mistune_hz;
         let fs = input_rate as f64;
-        let n_total = input_rate as usize; // ~1 s — ample time to lock
+        let n_total = input_rate as usize; // ~1 s; ample time to lock
         let mut iq = Vec::with_capacity(n_total);
         for n in 0..n_total {
             let ph = std::f64::consts::TAU * f * (n as f64) / fs;
@@ -731,7 +728,7 @@ mod tests {
 
     /// The AFC handoff must be net-zero: after the host moves the tuning by
     /// `applied_hz`, subtracting the same amount from the loop estimate drives
-    /// the residual to ~0 — and with the correct sign/scale.
+    /// the residual to ~0; and with the correct sign/scale.
     #[test]
     fn afc_handoff_is_net_zero_and_signed() {
         let mut ch = sam_channelizer(5_000.0);

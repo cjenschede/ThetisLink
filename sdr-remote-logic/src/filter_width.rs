@@ -73,7 +73,7 @@ fn next_width(steps: &[i32], width: i32, dir: Step) -> Option<i32> {
 ///   47 did - but only while the low cut is one Thetis could have as its default
 ///   (0..=500 Hz). Outside that range it is replaced by 100 Hz. Thetis' control
 ///   always resets it; keeping a normal one is what an operator expects from a
-///   width button. Replacing an abnormal one is what ends the lockup of report 74:
+///   width button. Replacing an abnormal one is what ends a reported lockup:
 ///   with the low cut kept at 9630, every width landed above Thetis' clip at
 ///   10000 and came back unchanged.
 /// - **CW, DIGU, DIGL** keep the centre, pushed back onto their own side of the
@@ -241,20 +241,20 @@ mod tests {
 
     // ---- the reports -------------------------------------------------------
 
-    /// PD0PLK, report 74: low edge 9630, high clipped at 10000. Android showed
+    /// Reported from the field: low edge 9630, high clipped at 10000. Android showed
     /// 1.8 kHz, minus was disabled and plus sent 9630 .. 11730 every time.
     #[test]
-    fn report_74_plus_is_not_a_fixed_point() {
+    fn plus_at_a_clipped_high_edge_is_not_a_fixed_point() {
         let before = (9630, 10000);
         let after = press(USB, before, Step::Wider).expect("plus must be possible");
-        assert_ne!(after, before, "plus changed nothing - the lockup of report 74");
+        assert_ne!(after, before, "plus changed nothing: the reported lockup");
     }
 
-    /// The owner's reproductions on 2026-09-15, with the low edges TL received.
+    /// Reproductions on a real station on 2026-09-15, with the low edges TL received.
     /// Every one of them had a plus press that Thetis turned back into the
     /// state it came from.
     #[test]
-    fn owner_reproductions_never_stall_on_plus() {
+    fn reproductions_from_the_field_never_stall_on_plus() {
         for low in [6999, 7579, 7699, 9029] {
             let mut edges = thetis(low, low + 1000);
             let mut presses = 0;
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn the_bottom_of_each_ladder() {
         // Deliberately narrower than the bottom rung: a rung added underneath
-        // would be caught here, and at 3 kHz it was not (review mutant).
+        // would be caught here, and at 3 kHz it was not (shown by a mutation run).
         assert_eq!(step(AM, -1000, 1000, Step::Narrower), None);
         assert_eq!(step(AM, -1000, 1000, Step::Wider), Some((-2000, 2000)));
         assert_eq!(step(CWU, 580, 620, Step::Narrower), None);
@@ -488,7 +488,7 @@ mod tests {
     /// The hold is one second, and that number is written here rather than
     /// expressed in terms of itself. Every bound in the test below used
     /// `LOCAL_CHANGE_HOLD`, so the constant could be anything and the suite stayed
-    /// green - at an hour it is the defect this patch repairs (review finding, 2026-09-16).
+    /// green - at an hour it is the defect this patch repairs.
     #[test]
     fn the_hold_is_one_second() {
         assert_eq!(LOCAL_CHANGE_HOLD, Duration::from_millis(1000));

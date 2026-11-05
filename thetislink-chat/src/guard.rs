@@ -4,13 +4,13 @@
 //! has written, and what it just wrote.
 //!
 //! Both live in memory on purpose. They protect against a burst, not against a
-//! restart — losing them when the container restarts costs a station one extra
+//! restart; losing them when the container restarts costs a station one extra
 //! allowed message, which is not worth a database write per request on a machine
 //! that is also carrying audio.
 
 use std::collections::HashMap;
 
-/// Design §2.2. Twenty a minute is a conversation; more than that is not
+/// Twenty a minute is a conversation; more than that is not
 /// somebody typing.
 pub const MAX_MESSAGES_PER_MINUTE: usize = 20;
 
@@ -42,7 +42,7 @@ pub enum Refusal {
 
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // These reach the sender as well as the log (design §8): a window that
+        // These reach the sender as well as the log: a window that
         // does nothing, with no reason given, is the fault report nobody can
         // place.
         f.write_str(match self {
@@ -209,15 +209,14 @@ mod tests {
 impl Guard {
     /// Say once an hour, per station, that it was turned away.
     ///
-    /// Design §8 asks for a refused request to be visible with the station on
-    /// it. Saying it every time would drown the log it belongs in: a banned
+    /// A refused request has to be visible in the log with the station on it. Saying it every time would drown the log it belongs in: a banned
     /// client keeps polling every three seconds and never stops, because not
     /// polling is how it would fail to notice the ban being lifted.
     pub fn note_refusal(&mut self, station_id: i64, now: i64) {
         let last = self.refusal_said.get(&station_id).copied().unwrap_or(0);
         if now - last >= 3600 {
             self.refusal_said.insert(station_id, now);
-            log::info!("station {}: request refused - banned", station_id);
+            log::info!("station {}: request refused; banned", station_id);
         }
     }
 }

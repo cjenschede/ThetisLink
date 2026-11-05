@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! PATCH-4: first-run connection wizard.
+//! First-run connection wizard.
 //!
 //! Drives the user through Discover -> Password -> (2FA) -> Verifying ->
 //! Success in 4 visible steps. Reactive: subscribes to the same
-//! `RadioState.connect_status` that PATCH-1 produces and renders the
+//! `RadioState.connect_status` that the connect engine produces and renders the
 //! corresponding step. The wizard never invents new connect-state - it
-//! only navigates around it, so a fault that PATCH-1 already classifies
+//! only navigates around it, so a fault that the engine already classifies
 //! (`WrongPassword`, `AwaitingTotp`, `TciUnreachable`, ...) lands the
 //! user on the correct previous step with the matching i18n text.
 
@@ -18,7 +18,7 @@ use sdr_remote_logic::state::{ConnectError, ConnectStatus, RadioState};
 use tokio::sync::{mpsc, watch};
 
 /// Where the wizard is in its flow. Mirrors `ConnectStatus` plus
-/// pre-Connect data-entry steps that PATCH-1 doesn't model.
+/// pre-Connect data-entry steps that `ConnectStatus` doesn't model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WizardStep {
     DiscoverServer,
@@ -35,7 +35,7 @@ pub(crate) enum WizardOutcome {
     /// Stay in wizard mode; render again next frame.
     Continue,
     /// User pressed "Skip wizard" - switch to manual form without
-    /// touching the config (per brief §4 Stap 4: no `successful_connects`
+    /// touching the config (no `successful_connects`
     /// bump on skip - otherwise the wizard never re-appears).
     SkipToManual,
     /// Server returned `ConnectStatus::Connected` and the user pressed
@@ -187,7 +187,7 @@ pub(crate) fn render_wizard(
     }
     // What blocks the station, from the shared block. And when Connect cannot
     // be offered, every step below would wait for ever - so stop here, below
-    // the skip row, which stays as the way out (review 59).
+    // the skip row, which stays as the way out.
     {
         let s = state_rx.borrow();
         for line in sdr_remote_logic::station_notice::station_notice_lines(&s, lang) {
@@ -223,7 +223,7 @@ pub(crate) fn render_wizard(
         }
     }
 
-    // ── Sticky error footer (PATCH-1 i18n) ──────────────────────────────
+    // ── Sticky error footer ──────────────────────────────
     if let Some(ref err) = state.last_error {
         let (headline, action) = connect_error_text(err, lang, Platform::Desktop);
         super::helpers::rule(ui);
@@ -285,7 +285,7 @@ fn render_discover(
         ui.label(lang.pick("Address:", "Adres:", "Adresse:", "Adresse :"));
         ui.add(
             egui::TextEdit::singleline(&mut state.server_input)
-                .hint_text("192.168.1.79:4580")
+                .hint_text("192.168.1.2:4580")
                 .desired_width(180.0),
         );
     });

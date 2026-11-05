@@ -19,7 +19,7 @@ data class SdrUiState(
     // "QUIC via relay", Route::label); empty until the first state.
     val route: String = "",
     // Goes up on every new session on this link; the ViewModel lets go of a held
-    // PTT on that edge (PTT-NOOIT-HANGEN 2).
+    // PTT on that edge.
     val sessionGeneration: ULong = 0u,
     val pttDenied: Boolean = false,
     // What blocks the station and what helps, one line each - decided and
@@ -30,7 +30,7 @@ data class SdrUiState(
     val audioError: Boolean = false,
     val authRejected: Boolean = false,
     val totpRequired: Boolean = false,
-    // PATCH-1: pre-rendered connect-status text from Rust i18n.rs
+    // Pre-rendered connect-status text from Rust i18n.rs
     val connectStatusHeadline: String = "",
     val connectStatusAction: String = "",
     val connectStatusIsError: Boolean = false,
@@ -39,13 +39,15 @@ data class SdrUiState(
     val serverBuildDiffers: Boolean = false,
     /** What the server calls itself; empty when it agrees or was too old to say. */
     val serverBuild: String = "",
-    /** The measurement file being written (open point 34); null when measuring is off. */
+    /** The measurement file being written; null when measuring is off. */
     val measurementFile: String? = null,
     val relayOnly: Boolean = false,
     val forceTcp: Boolean = false,
     val viaRelay: Boolean = false,
     // The connection name (build 139), from Rust; empty while there is no session.
-    val pathShort: String = "",
+    // The letters in two parts: plain, and the red R of a gone relay session.
+    val pathShortPlain: String = "",
+    val pathShortRed: String = "",
     val pathName: String = "",
     val pathHint: String = "",
     val pathCoupling: Boolean = false,
@@ -81,6 +83,7 @@ data class SdrUiState(
     /// TX level of the Yaesu chain. The Thetis capture level is a different
     /// meter and reads silence while a Yaesu is keyed.
     val yaesuMicLevel: Float = 0f,
+    val micInputClip: Boolean = false,
     val playbackLevel: Float = 0f,
     val frequencyHz: Long = 0,
     val frequencyRx2Hz: Long = 0,
@@ -219,7 +222,7 @@ data class SdrUiState(
     val yaesuFeatureToggles: UInt = 0u,
     val yaesuFeatureLevels: List<Int> = emptyList(),
     val yaesuFeatureFreqs: List<Int> = emptyList(),
-    // Radio 2 (yaesu2) — Android shows one radio at a time; selectedRadio picks which.
+    // Radio 2 (yaesu2): Android shows one radio at a time; selectedRadio picks which.
     val yaesu2Connected: Boolean = false,
     val yaesu2Model: Int = 1,
     val yaesu2TunerState: Int = 0,

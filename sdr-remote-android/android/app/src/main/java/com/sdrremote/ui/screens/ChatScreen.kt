@@ -70,7 +70,7 @@ fun ChatScreen(
     onDismissAnswer: (Long) -> Unit,
     buildAttachment: suspend () -> String,
 ) {
-    // Reporting a problem does not need consent (design section 4): somebody who
+    // Reporting a problem does not need consent: somebody who
     // wants no part of the conversation can still report a fault, so the button
     // sits above the fork between the two screens.
     var showReport by rememberSaveable { mutableStateOf(false) }
@@ -106,8 +106,8 @@ fun ChatScreen(
             // the tall side and 260dp is about a quarter of it. The reasoning
             // that produced this line was about landscape, where 260dp would
             // have been two thirds of the screen - and that case does not exist
-            // in this app. Nobody checked the manifest before spending a review
-            // round on it (2026-08-21). The line stays because asking the
+            // in this app. Nobody checked the manifest before spending time
+            // on it (2026-08-21). The line stays because asking the
             // parent was wrong regardless, and because it is already right if
             // the lock is ever lifted.
             // A third of the screen, in the dp this composition draws in - and
@@ -164,7 +164,7 @@ fun ChatScreen(
         // does. Without one it cannot be sent - and the button was live anyway,
         // so the form could be filled in and the writing went nowhere. Greyed
         // instead of hidden: the note right above says why, and a control that
-        // vanishes explains nothing (owner, 2026-08-20).
+        // vanishes explains nothing.
         val canReport = state.offline == ChatOffline.None
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { showReport = true }, enabled = canReport) {
@@ -265,7 +265,7 @@ private fun ConsentScreen(onConsent: (String) -> Unit) {
         // choice is made. The desktop has said this since the screen existed;
         // the phone asked for a callsign and said nothing, which is the drift
         // the shared model was supposed to prevent and does not cover - the
-        // model is shared, the texts are two copies (found in review,
+        // model is shared, the texts are two copies (found on
         // 2026-08-18).
         Spacer(Modifier.height(4.dp))
         Text(
@@ -303,8 +303,7 @@ private fun ConsentScreen(onConsent: (String) -> Unit) {
         Spacer(Modifier.height(6.dp))
         // Under the button, as on the desktop: the sentence that says refusing
         // costs nothing. Not decoration - it is part of what makes the consent
-        // freely given, and it was in the resources without being on screen
-        // (found in review, 2026-08-18).
+        // freely given, and it was in the resources without being on screen.
         Text(
             stringResource(R.string.chat_consent_optional),
             fontSize = 12.sp,
@@ -360,7 +359,7 @@ private fun Conversation(
     // measured against an unscaled phone, and they stayed put when the app
     // learned to draw itself smaller: at 60% the screen holds far more of our
     // dp while the list kept its 420, which is what left over half the screen
-    // empty (owner, 2026-09-08).
+    // empty.
     //
     // The size is the screen MINUS what the rest of this screen costs, and not a
     // share of it. A share was the first repair and it was wrong for a reason
@@ -369,7 +368,7 @@ private fun Conversation(
     // stays roughly constant in the dp we draw in no matter how we scale. Only
     // the screen grows. So a fixed fraction leaves a gap that grows with it: at
     // 42% the list may take 997dp and the remaining 722 goes to something that
-    // needs about 300 (owner again, same evening, on the repair itself).
+    // needs about 300.
     //
     // CHAT_CHROME is derived, not chosen: the list used to be capped at 420dp on
     // a screen of 722, so the rest was costing about 300. At full scale this
@@ -599,7 +598,7 @@ private fun ReportDialog(
                         // Shown before it goes, and this is not decoration: the
                         // redaction is never complete, so the last thing between
                         // a phone's log and somebody else's postbox is a person
-                        // reading it (design 1.1 step 5).
+                        // reading it.
                         Text(
                             stringResource(R.string.chat_report_attach_shown),
                             fontSize = 12.sp,

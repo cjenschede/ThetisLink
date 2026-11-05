@@ -30,14 +30,14 @@ pub fn version() -> String {
 /// filled in but the token still empty, Kotlin called it configured while the
 /// Rust side did not - so filling in the token afterwards changed nothing on
 /// screen and the "restart to apply" notice never appeared, at exactly the
-/// moment the relay started working (review finding, 2026-08-20).
+/// moment the relay started working.
 pub fn relay_is_configured(enabled: bool, url: String, station: String, token: String) -> bool {
     sdr_remote_relay::is_configured(enabled, &url, &station, &token)
 }
 
 /// The word for the route these settings ask for, to hold against the
 /// state's `route` - the rule the bridge chooses with (`Route::asked_for`),
-/// handed to Compose rather than kept there a second time (review 118).
+/// handed to Compose rather than kept there a second time.
 pub fn expected_route_label(relay_enabled: bool, url: String, station: String, token: String) -> String {
     sdr_remote_logic::measure::Route::asked_for(sdr_remote_relay::is_configured(relay_enabled, &url, &station, &token))
         .label()
@@ -54,7 +54,7 @@ pub struct BridgeFilterEdges {
 /// The edges one press of a width button sends, or nothing when there is no step
 /// that way. The rule is `sdr_remote_logic::filter_width`, shared with the
 /// desktop; Compose kept its own copy until build 47, and that copy is the one
-/// report 74 locked up in.
+/// a reported lock-up happened in.
 pub fn filter_step(mode: u8, low_hz: i32, high_hz: i32, wider: bool) -> Option<BridgeFilterEdges> {
     use sdr_remote_logic::filter_width::{step, Step};
     let dir = if wider { Step::Wider } else { Step::Narrower };
@@ -77,6 +77,22 @@ pub fn s_meter_fraction(dbm: f32) -> f32 {
     f32::from(sdr_remote_core::dbm_to_display(dbm)) / 228.0
 }
 
+/// The TX gain slider in dB (Thetis and the Yaesu radios), the desktop's: its
+/// range, off below it, and the conversions. Compose had its own scale before.
+pub fn tx_gain_db_min() -> f32 { sdr_remote_logic::commands::TX_GAIN_DB_MIN }
+pub fn tx_gain_db_max() -> f32 { sdr_remote_logic::commands::TX_GAIN_DB_MAX }
+pub fn tx_gain_off_db() -> f32 { sdr_remote_logic::commands::TX_GAIN_OFF_DB }
+pub fn tx_gain_db(factor: f32) -> f32 { sdr_remote_logic::commands::tx_gain_db(factor) }
+pub fn tx_gain_factor(db: f32) -> f32 { sdr_remote_logic::commands::tx_gain_factor(db) }
+pub fn tx_gain_from_fraction(frac: f32) -> f32 { sdr_remote_logic::commands::tx_gain_from_fraction(frac) }
+/// The Yaesu mic gain as stored (a quarter of the factor) to dB and back.
+pub fn yaesu_mic_gain_db(stored: f32) -> f32 {
+    sdr_remote_logic::commands::tx_gain_db(stored * sdr_remote_logic::commands::YAESU_MIC_GAIN_SCALE)
+}
+pub fn yaesu_mic_gain_from_db(db: f32) -> f32 {
+    sdr_remote_logic::commands::tx_gain_factor(db) / sdr_remote_logic::commands::YAESU_MIC_GAIN_SCALE
+}
+
 /// A Yaesu CAT S-meter value in dBm, capped at S9+60 like the desktop
 /// (build 219).
 pub fn yaesu_s_meter_dbm(raw: u32) -> f32 {
@@ -87,7 +103,7 @@ pub fn yaesu_s_meter_dbm(raw: u32) -> f32 {
 mod filter_bridge_tests {
     use super::*;
 
-    /// The phone's S-meter scale is the desktop's (review of 218): S9 at
+    /// The phone's S-meter scale is the desktop's: S9 at
     /// 108/228, the ends clamped, and a Yaesu value past the scale is S9+60.
     #[test]
     fn the_phone_s_meter_scale_is_the_desktops() {
@@ -103,7 +119,7 @@ mod filter_bridge_tests {
 
     /// The two hops Kotlin makes: the direction flag and the edges that come back.
     /// The bridge had no test at all, so swapping `wider` left all of them green
-    /// (review finding, 2026-09-16) - and Compose would then narrow on plus.
+    /// - and Compose would then narrow on plus.
     #[test]
     fn the_direction_flag_and_the_edges_survive_the_bridge() {
         assert_eq!(
@@ -262,7 +278,7 @@ impl BlePttGate {
 // it, and Kotlin does what it says. Until now the ViewModel kept flags of its own
 // - `requestedPtt`, `requestedPttTarget` and `_transmitting`, the last of which
 // always moved together with the first. Two booleans that have to stay equal in
-// four places is exactly the shape Lane 6 clears up.
+// four places is exactly the shape that drifts apart.
 
 /// Which transmitter the phone is working.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -541,11 +557,12 @@ pub struct BridgeRadioState {
     /// selected one transmits. Without this the Yaesu panel showed the THETIS
     /// capture level, which sits at silence while a Yaesu is being keyed.
     pub yaesu_mic_level: f32,
+    pub mic_input_clip: bool,
     pub playback_level: f32,
     pub frequency_hz: u64,
     pub frequency_rx2_hz: u64,
     pub mode: u8,
-    /// S-meter — dBm in RX, watts in TX (use `other_tx` / client PTT to
+    /// S-meter: dBm in RX, watts in TX (use `other_tx` / client PTT to
     /// disambiguate, same as the desktop client and wire protocol).
     pub smeter: f32,
     pub power_on: bool,
@@ -573,7 +590,7 @@ pub struct BridgeRadioState {
     /// is a build too old to say which - the flag above is what separates
     /// "nothing to report" from "could not say".
     pub server_build: String,
-    /// The measurement file being written (open point 34), `None` when off.
+    /// The measurement file being written, `None` when off.
     pub measurement_file: Option<String>,
     /// "Relay only" as last switched (build 137, `RadioState::relay_only`).
     pub relay_only: bool,
@@ -587,7 +604,10 @@ pub struct BridgeRadioState {
     /// app's language, and whether it is the coupling wait (drawn amber). All
     /// empty or false while there is no session. The words come from
     /// `sdr_remote_logic::path_name`, so the phone keeps no table of its own.
-    pub path_short: String,
+    /// The letters in two parts, as `PathKind::short_parts` gives them: the
+    /// plain ones, and the red R of a relay session that is gone (2.13.1).
+    pub path_short_plain: String,
+    pub path_short_red: String,
     pub path_name: String,
     pub path_hint: String,
     pub path_coupling: bool,
@@ -762,10 +782,10 @@ pub struct BridgeRadioState {
     pub rotor_available: bool,
     // DX Cluster spots
     pub dx_spots: Vec<BridgeDxSpot>,
-    // Auth (legacy bools — Compose UI should prefer connect_status_* fields below)
+    // Auth (legacy bools: Compose UI should prefer connect_status_* fields below)
     pub auth_rejected: bool,
     pub totp_required: bool,
-    // PATCH-1: connect-status as pre-rendered text. Single source of truth in
+    // Connect-status as pre-rendered text. Single source of truth in
     // sdr-remote-logic::i18n (NL+EN). Compose UI just renders these strings.
     pub connect_status_headline: String,
     pub connect_status_action: String, // empty if no action hint
@@ -773,7 +793,7 @@ pub struct BridgeRadioState {
     pub connect_status_is_awaiting_totp: bool,
 }
 
-/// PATCH-1: build a BridgeRadioState with connect-status text rendered in the
+/// Build a BridgeRadioState with connect-status text rendered in the
 /// caller-specified language. `From<RadioState>` defaults to English for
 /// compatibility; call sites that know the user's language preference should
 /// use this helper.
@@ -822,7 +842,7 @@ impl From<RadioState> for BridgeRadioState {
             //
             // It does read them at delay(33), a window twice as wide as the
             // desktop's, so "it cannot happen there" is a statement about
-            // today's code and not a guarantee (review).
+            // today's code and not a guarantee.
             //
             // released_by_server_now() rather than the bare field: the reason
             // belongs to the event and is not taken back when the refusal is
@@ -861,6 +881,7 @@ impl From<RadioState> for BridgeRadioState {
             yaesu2_label: sdr_remote_core::protocol::radio_slot_label(1, s.yaesu2_model),
             capture_level: s.capture_level,
             yaesu_mic_level: s.yaesu_mic_level,
+            mic_input_clip: s.mic_input_clip,
             playback_level: s.playback_level,
             frequency_hz: s.frequency_hz,
             frequency_rx2_hz: s.frequency_rx2_hz,
@@ -887,7 +908,8 @@ impl From<RadioState> for BridgeRadioState {
             relay_only: s.relay_only,
             force_tcp: s.force_tcp,
             via_relay: s.route == sdr_remote_logic::measure::Route::QuicRelay,
-            path_short: s.path.map(|k| k.short().to_string()).unwrap_or_default(),
+            path_short_plain: s.path.map(|k| k.short_parts().0.to_string()).unwrap_or_default(),
+            path_short_red: s.path.map(|k| k.short_parts().1.to_string()).unwrap_or_default(),
             // English here; `bridge_state_from_radio_state` puts them in the
             // app's language, as it does the station notices.
             path_name: s.path.map(|k| sdr_remote_logic::path_name::long_name(k, sdr_remote_logic::i18n::Lang::En)).unwrap_or_default(),
@@ -1049,9 +1071,9 @@ impl From<RadioState> for BridgeRadioState {
             }).collect(),
             auth_rejected: s.auth_rejected,
             totp_required: s.totp_required,
-            // PATCH-1: render connect_status text once in Rust so Android Compose
+            // Render connect_status text once in Rust so Android Compose
             // UI is automatically lockstep with desktop egui UI on NL/EN strings.
-            // TODO(PATCH-1 follow-up): expose Lang as user config + OS-locale detect.
+            // TODO: expose Lang as user config + OS-locale detect.
             connect_status_headline: {
                 let (h, _) = sdr_remote_logic::i18n::connect_status_text(
                     &s.connect_status,
@@ -1117,11 +1139,11 @@ pub struct SdrBridge {
     ui_language: Mutex<String>,
     /// Follows the measurement file in the state, to copy the log when one ends.
     measurement_log: Mutex<crate::logging::MeasurementLogFollower>,
-    /// Phase C: keeps the relay monitor alive for as long as the bridge exists (it runs
+    /// Keeps the relay monitor alive for as long as the bridge exists (it runs
     /// on a thread of its own), and passes the phone's network events on to it.
     /// `None` in direct mode.
     relay_monitor: Mutex<Option<sdr_remote_relay::RelayMonitor>>,
-    /// Phase 3c: relay status handle to surface the transport (UDP / wss-fallback) to the
+    /// Relay status handle to surface the transport (UDP / wss-fallback) to the
     /// Compose UI. `None` in direct mode.
     relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
     /// The relay address this bridge was built with, exactly as configured -
@@ -1163,8 +1185,8 @@ impl SdrBridge {
 
         // The relay, for phones that cannot be reached straight (mobile behind
         // CGNAT): when its settings are complete, a client relay monitor signs in
-        // and hands its grants to the engine's QUIC client (phase 3b). Otherwise
-        // QUIC straight to the address typed.
+        // and hands its grants to the engine's QUIC client, which then runs QUIC
+        // through the relay. Otherwise QUIC straight to the address typed.
         let mut relay_monitor: Option<sdr_remote_relay::RelayMonitor> = None;
         // One condition, read twice: it decides both whether the relay is used
         // and whether the chat has a relay to reach. Splitting them is how the
@@ -1218,14 +1240,14 @@ impl SdrBridge {
             // net does not depend on the answer, only the sentence does.
             if let Some(previous) = PREVIOUS_MONITOR.lock().unwrap().replace(monitor.stop_handle()) {
                 if !previous.is_stopped() {
-                    warn!("a relay monitor was still running - stopping it, or the two would evict each other");
+                    warn!("a relay monitor was still running: stopping it, or the two would evict each other");
                 }
                 previous.stop();
             }
             relay_monitor = Some(monitor);
         }
-        // Which transport is logged by the engine, once, for both front ends
-        // (review 133). Never the relay's address: it is the one thing a report
+        // Which transport is logged by the engine, once, for both front ends.
+        // Never the relay's address: it is the one thing a report
         // must never carry (2026-08-17).
         let engine = engine.with_quic_relay(relay_quic_grants, relay_tcp_line);
 
@@ -1322,10 +1344,10 @@ impl SdrBridge {
         let _ = self.cmd_tx.send(Command::SetMicGateDelayMs(delay_ms));
     }
 
-    /// Measurement mode (open point 34): `Some(dir)` starts a new file in `dir`,
+    /// Measurement mode: `Some(dir)` starts a new file in `dir`,
     /// `None` stops it.
     /// The log copy next to a finished measurement is made in `get_state`, when
-    /// the state stops naming the file (round 91) - not here.
+    /// the state stops naming the file - not here.
     pub fn set_measurement(&self, dir: Option<String>) {
         let _ = self.cmd_tx.send(Command::SetMeasurement(dir));
     }
@@ -1389,7 +1411,6 @@ impl SdrBridge {
     /// The relay session still runs over the old one; the monitor ends it and
     /// starts one on the new network (build 186). Nothing to do in direct mode.
     pub fn network_changed(&self) {
-        // Named in advance (working rule 11, build 186).
         info!("Android: the default network changed");
         if let Some(monitor) = self.relay_monitor.lock().unwrap().as_ref() {
             monitor.network_changed();
@@ -1673,7 +1694,7 @@ impl SdrBridge {
     /// The server's copy of the memories (value 1), as the desktop asks: the
     /// server reads the radio once and gives every subscriber its copy. With
     /// 0 every switch of radio read the FTX-1 again - 3.5 s in which the
-    /// server refused the PTT (owner, 2026-10-11; build 169). A server
+    /// server refused the PTT. A server
     /// without a copy still reads the radio.
     pub fn yaesu_read_memories(&self) {
         let _ = self.cmd_tx.send(Command::SetControl(
@@ -1818,8 +1839,8 @@ impl SdrBridge {
         let state = rx.borrow().clone();
         // A measurement that just ended - by Stop, by a write error, or replaced -
         // gets the log next to it, with its name (`tl-meting-....log`), so one
-        // fetch over USB brings both (owner, 2026-10-03). On a thread of its own:
-        // up to 4 MB, and this is called from the screen's loop (round 91).
+        // fetch over USB brings both. On a thread of its own:
+        // up to 4 MB, and this is called from the screen's loop.
         let ended = self.measurement_log.lock().unwrap().step(state.measurement_file.as_deref());
         if let Some(dest) = ended {
             std::thread::spawn(move || match crate::logging::copy_log_to(&dest) {
@@ -1934,7 +1955,7 @@ impl SdrBridge {
     /// as text the app already holds. The cleaning is the shared one, rules and
     /// all. Returns the attachment, or a line saying why there is none; either
     /// way what comes back is what the screen shows and what `chat_report`
-    /// sends, because the preview is the actual safeguard (design 1.3).
+    /// sends, because the preview is the actual safeguard.
     pub fn chat_build_attachment(&self, log: String, settings: String) -> String {
         match sdr_remote_core::diagnose::build_attachment_from_text(
             &log,
@@ -1952,7 +1973,7 @@ impl SdrBridge {
     /// `attachment` is passed back exactly as `chat_build_attachment` returned
     /// it and is deliberately not rebuilt here: what leaves the phone has to be
     /// what was on the screen. Empty means the box was not ticked. Joining the
-    /// chat is not required (design section 4), so this works for somebody who
+    /// chat is not required to report, so this works for somebody who
     /// never consented.
     /// Fold an administrator answer away.
     ///
@@ -1992,7 +2013,7 @@ impl SdrBridge {
     pub fn shutdown(&self) {
         // A measurement still running when the app goes ends without the state
         // ever saying so: copy its log now, and here rather than on a thread of
-        // its own, which the process could take with it (round 92).
+        // its own, which the process could take with it.
         if let Some(dest) = self.measurement_log.lock().unwrap().step(None) {
             match crate::logging::copy_log_to(&dest) {
                 Ok(()) => log::info!("Measurement: log copied to {} at shutdown", dest.display()),
@@ -2006,7 +2027,7 @@ impl SdrBridge {
         drop(guard);
         // Also stop the relay monitor. Otherwise its background thread keeps the
         // relay connection (and its client_id slot) alive after this app instance is
-        // gone — and when the next instance starts with the same install id, the two
+        // gone, and when the next instance starts with the same install id, the two
         // ping-pong the slot (each reclaim closes the other, which reconnects after
         // RECONNECT_DELAY). Stopping the monitor here (ViewModel.onCleared) prevents
         // the zombie connection.
@@ -2015,10 +2036,10 @@ impl SdrBridge {
         // the end of the block (a scrutinee temporary, edition 2021), and the two
         // locks were nested in an order nobody had chosen or written down. No path
         // takes them the other way round today; not nesting them at all means none
-        // can start to (reviewer finding, 2026-09-25).
+        // can start to.
         let taken = self.relay_monitor.lock().unwrap().take();
         if let Some(monitor) = taken {
-            info!("bridge shutting down - stopping its relay monitor");
+            info!("bridge shutting down: stopping its relay monitor");
             let mine = monitor.stop_handle();
             monitor.stop();
             // And empty the duplicate-guard slot, which until now was filled in
@@ -2081,8 +2102,8 @@ mod denial_bridge_tests {
 mod relay_rule_tests {
     //! The bridge's own view of the relay rule. The rule itself is tested in
     //! `sdr-remote-relay`, and nothing said that the function Compose actually
-    //! calls hands the same answer through - so a review went looking for a
-    //! test on `relay_is_configured` and found none.
+    //! calls hands the same answer through - there was no test on
+    //! `relay_is_configured`.
 
     #[test]
     fn the_bridge_hands_through_the_shared_rule() {
@@ -2110,7 +2131,7 @@ mod relay_rule_tests {
 
     /// The same for the route word the settings compare with: the function
     /// Compose calls gives the shared rule's answer in every state of the relay
-    /// settings, a half-filled relay included (review 119).
+    /// settings, a half-filled relay included.
     #[test]
     fn the_bridge_hands_through_the_route_rule() {
         use sdr_remote_logic::measure::Route;
@@ -2242,7 +2263,7 @@ mod ble_ptt_bridge_tests {
         assert_eq!(ble_drop_policy(false), BleDropPolicy::Close);
     }
 
-    /// The scenario the review blocked on, over the boundary Kotlin calls.
+    /// A press from a replaced connection, over the boundary Kotlin calls.
     #[test]
     fn a_press_from_a_replaced_connection_stops_at_the_bridge() {
         let gate = BlePttGate::new();
@@ -2284,8 +2305,8 @@ mod ble_ptt_bridge_tests {
 mod udl_order_tests {
     //! UniFFI calls the Rust method by position, not by name: a UDL line and a
     //! Rust signature that list two arguments of the same type in a different
-    //! order compile, and every value lands in the other's place (review of
-    //! 210: the four `i32` of `measure_nr_cell` were written by hand in both).
+    //! order compile, and every value lands in the other's place (the four
+    //! `i32` of `measure_nr_cell` were written by hand in both).
 
     /// Argument names in order, from the text between the parentheses: the
     /// last word of each UDL argument (`i32 pci`), the part before `:` of each
@@ -2310,7 +2331,7 @@ mod udl_order_tests {
 
     /// The lines of one UDL block that declare a function: name and argument
     /// text. A line with a `(` that is not one whole declaration is refused, so
-    /// nothing is skipped without a word (review of 211: a comment after a line
+    /// nothing is skipped without a word (a comment after a line
     /// or a declaration over two lines was left out, and only a floor noticed).
     fn declarations(body: &str) -> Vec<(String, String)> {
         let mut out = Vec::new();
@@ -2329,8 +2350,8 @@ mod udl_order_tests {
     /// Every function in the UDL has the same argument names, in the same
     /// order, as its Rust side: a method as the method of that name in the
     /// `impl` block of its interface, a constructor as that block's `fn new`,
-    /// and a `namespace` function as the free `pub fn` of that name (review of
-    /// 211: the constructor's five strings and `ptt_button`'s two bools were not
+    /// and a `namespace` function as the free `pub fn` of that name (the
+    /// constructor's five strings and `ptt_button`'s two bools were once not
     /// covered).
     #[test]
     fn the_udl_and_the_rust_name_every_argument_in_the_same_order() {
@@ -2378,7 +2399,7 @@ mod udl_order_tests {
     }
 
     /// The one call that builds the bridge names its arguments: five strings in
-    /// a row, where Kotlin would otherwise go by position too (review of 211).
+    /// a row, where Kotlin would otherwise go by position too.
     #[test]
     fn the_app_builds_the_bridge_with_named_arguments() {
         let vm = include_str!("../android/app/src/main/java/com/sdrremote/viewmodel/SdrViewModel.kt");

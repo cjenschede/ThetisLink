@@ -26,7 +26,7 @@ pub mod tx_timing;
 pub mod line_ptt;
 use poll::*;
 
-/// Radio model for the dual-radio abstraction (PATCH-dual-radio-991a-ftx1).
+/// Radio model for the dual-radio abstraction.
 /// The Yaesu CAT dialect is shared across models; `RadioModel` only carries
 /// the few per-model differences (autodetect `ID;` code, audio device name,
 /// any mode-code extras). The FTX-1 is assumed CAT-compatible with the 991A.
@@ -52,7 +52,7 @@ pub enum AtuAction {
 
 impl RadioModel {
     /// The model behind a model code, for the places that hold only the code
-    /// (the shared atomic). Written out by hand twice before (review 318 r2).
+    /// (the shared atomic). Written out by hand twice before.
     pub fn from_code(code: u8) -> RadioModel {
         if code == RadioModel::Ftx1.as_code() {
             RadioModel::Ftx1
@@ -81,7 +81,7 @@ impl RadioModel {
     ///
     /// Here for the same reason as `atu_cat`, and found the same way: it sat
     /// one line above the ATU, in the same two mirrored blocks, still keyed on
-    /// the SLOT (review 2120A3, both reviewers). `parse.rs` already read the
+    /// the SLOT. `parse.rs` already read the
     /// scan state per model, so the two halves of one feature disagreed about
     /// what a radio is.
     pub fn scan_cat(self, on: bool) -> &'static str {
@@ -116,12 +116,9 @@ impl RadioModel {
     /// SLOT: the block for radio 1 spoke 991A and the block for radio 2 spoke
     /// FTX-1. Put an FTX-1 in slot 0 (which the crossed-slot field run of
     /// 2026-09-20 did) and the Tune button sent it a command it does not have,
-    /// while the 991A in slot 1 got the FTX-1's. `PATCH-yaesu-internal-atu.md`
-    /// named this as an existing bug at build 11 and it stayed; a doc is not a
-    /// mechanism (review 2120A2).
+    /// while the 991A in slot 1 got the FTX-1's. It was a known bug since build 11.
     ///
-    /// Reference: `PATCH-yaesu-internal-atu.md` sec. 2, both measured on the
-    /// radios themselves.
+    /// Both measured on the radios themselves.
     pub fn atu_cat(self, action: AtuAction) -> &'static str {
         match (self, action) {
             (RadioModel::Ft991a, AtuAction::Off) => "AC000;",
@@ -148,7 +145,7 @@ impl RadioModel {
     pub fn from_id_code(code: &str) -> Option<RadioModel> {
         match code.trim() {
             "0670" => Some(RadioModel::Ft991a),
-            // FTX-1 - captured live during the operator test 2026-06-14 (bring-up).
+            // FTX-1 - captured live from the radio.
             "0840" => Some(RadioModel::Ftx1),
             _ => None,
         }
@@ -174,7 +171,7 @@ pub fn log_input_devices() {
                 let names: Vec<String> = devs.iter().filter_map(|d| d.name().ok()).collect();
                 if names.is_empty() {
                     empty += 1;
-                    warn!("NO audio {} devices at all - Windows hands out an empty list", kind);
+                    warn!("NO audio {} devices at all: Windows hands out an empty list", kind);
                 } else {
                     info!("Available audio {} devices ({}): {:?}", kind, names.len(), names);
                 }
@@ -187,13 +184,13 @@ pub fn log_input_devices() {
     // "cannot find device X" is a consequence and not the fault.
     if empty > 0 {
         warn!(
-            "The machine has no sound cards to offer. The usual cause is a Remote Desktop              session: while one is connected it takes them out of the session. Disconnect it,              or set its audio to play on the remote computer, and restart the server - this              list is only read at startup."
+            "The machine has no sound cards to offer. The usual cause is a Remote Desktop              session: while one is connected it takes them out of the session. Disconnect it,              or set its audio to play on the remote computer, and restart the server: this              list is only read at startup."
         );
     }
 }
 
 /// Probe a serial port to detect the radio model via the Yaesu `ID;` command,
-/// with baud fallback (PATCH-dual-radio-991a-ftx1 §2.3). Tries `preferred_baud`
+/// with baud fallback. Tries `preferred_baud`
 /// first, then the common Yaesu CAT speeds, until a valid `ID...;` response
 /// arrives. Returns the detected model + the baud that worked.
 ///
@@ -323,7 +320,7 @@ pub fn detect_model_or_trouble(port_name: &str, preferred_baud: u32) -> Result<(
                 // read a single memory channel or menu value from. A guess is
                 // not a detection: keep asking.
                 log::warn!(
-                    "{}: ID; answered '{}', which is not a model this build knows - asking again",
+                    "{}: ID; answered '{}', which is not a model this build knows; asking again",
                     port_name,
                     code
                 );
@@ -336,7 +333,7 @@ pub fn detect_model_or_trouble(port_name: &str, preferred_baud: u32) -> Result<(
     // this as the ABSENCE of a line - and the caller's fallback then made the
     // result look like a detection.
     log::warn!(
-        "{}: opened, but nothing answered ID; on any supported baud rate -          the model cannot be detected and the caller will have to assume one",
+        "{}: opened, but nothing answered ID; on any supported baud rate;          the model cannot be detected and the caller will have to assume one",
         port_name
     );
     Err(sdr_remote_core::protocol::PORT_TROUBLE_NONE)
@@ -367,10 +364,10 @@ pub(crate) fn port_trouble_log_text(code: u8) -> Option<&'static str> {
     use sdr_remote_core::protocol::{PORT_TROUBLE_BUSY, PORT_TROUBLE_MISSING};
     match code {
         PORT_TROUBLE_BUSY => Some(
-            "the COM port is in use by another program - close other CAT/control software for this radio",
+            "the COM port is in use by another program: close other CAT/control software for this radio",
         ),
         PORT_TROUBLE_MISSING => Some(
-            "the COM port does not exist - check the USB cable, and the COM number in Device Manager",
+            "the COM port does not exist: check the USB cable, and the COM number in Device Manager",
         ),
         _ => None,
     }
@@ -478,8 +475,8 @@ impl Ft991aUsbRoutingSnapshot {
     /// value is known. The rule that makes the snapshot safe: a menu is
     /// changed only if it can be put back. It is also what makes reading a
     /// missing menu later safe (`fill_missing`) - a menu never written still
-    /// holds the operator's own value. (Review 315 round 2 proposed reading
-    /// again while incomplete; without this rule that would have stored our
+    /// holds the operator's own value. (Without this rule, reading
+    /// again while incomplete would have stored our
     /// own USB setting as the original of a menu that failed to read once.)
     fn routing_writes(&self, scope: Ft991aUsbRoutingScope) -> Vec<&'static [u8]> {
         let mut w: Vec<&'static [u8]> = Vec::new();
@@ -555,7 +552,7 @@ impl Ft991aUsbRoutingSnapshot {
     }
 }
 /// 991A high-SWR alarm threshold on the raw RM6 SWR-meter value (000-255).
-/// Calibrated on hardware 2026-07-21: RM6 ~110 at SWR 2.8 (owner's chosen trip point),
+/// Calibrated on hardware 2026-07-21: RM6 ~110 at SWR 2.8 (chosen trip point),
 /// ~0 at 1:1, 173-205 at SWR 4. Kept as a fallback in case the official RI0 Hi-SWR
 /// flag turns out unreliable on some 991A firmware (then revert to this RM6 threshold).
 #[allow(dead_code)]
@@ -580,7 +577,7 @@ pub(crate) fn release_on_reopen(ptt_commanded: bool) -> bool {
 /// this cannot fire: the radio really can keep transmitting until somebody
 /// walks over to it. Saying "it has stopped" there would be a guess dressed as
 /// a fact. That condition was in the code and in no test, which is how a
-/// safety net quietly stops being one (review finding).
+/// safety net quietly stops being one.
 pub(crate) fn release_on_timeout(
     ptt_commanded: bool,
     tot_minutes: u8,
@@ -613,8 +610,7 @@ mod safety_release_tests {
     /// One minute is the lowest setting the radio offers, and it is the one
     /// this whole subject was measured with. Every other test here uses ten or
     /// zero, so `tot_minutes > 0` could quietly become `> 1` and the net would
-    /// disappear for exactly that setting - in the way this file exists to stop
-    /// (review finding).
+    /// disappear for exactly that setting - in the way this file exists to stop.
     #[test]
     fn one_minute_is_a_time_out_like_any_other() {
         assert!(!release_on_timeout(true, 1, Duration::from_secs(59)));
@@ -639,7 +635,7 @@ mod safety_release_tests {
     fn a_radio_with_its_time_out_switched_off_is_never_assumed_to_have_stopped() {
         // One case, not three: `tot_minutes > 0` short-circuits before the
         // clock is read, so a longer wait walks the same path. Written as a
-        // range it only looked thorough (review finding).
+        // range it only looked thorough.
         assert!(
             !release_on_timeout(true, 0, Duration::from_secs(100 * 3600)),
             "claimed the radio stopped after a hundred hours with no time-out set"
@@ -716,31 +712,31 @@ pub struct YaesuState {
     pub last_memory_blob: Option<String>,
     /// The server's copy of the EX/menu values, so a client can be served without
     /// the radio being walked again - the FTX-1 scan is 405 parameters and seconds
-    /// of occupied CAT. See docs/internal/DESIGN-state-sync-push.md.
+    /// of occupied CAT.
     pub last_menu_blob: Option<String>,
     pub split_active: bool,  // true = split mode active
     pub scan_active: bool,   // true = scanning
-    /// Internal ATU state from the `AC;` readback (PATCH-yaesu-internal-atu), normalised:
+    /// Internal ATU state from the `AC;` readback, normalised:
     /// 0=off/bypass, 1=on, 2=tuning-in-progress. Never the raw CAT P3.
     pub tuner_state: u8,
-    /// DSP/function toggle bitfield (PATCH-yaesu-extra-controls): bit N = YaesuCtrl N
+    /// DSP/function toggle bitfield: bit N = YaesuCtrl N
     /// on/off, from the per-control read-parse. A1: RfAtt(0), BreakIn(1); A2: Narrow(2), AutoNotch(3).
     pub feature_toggles: u32,
-    /// Multi-state/level values indexed by YaesuCtrl (Phase B: Agc(6), PreAmp(7); Phase C: Nb(8),Dnr(9),Processor(10),Amc(11)).
+    /// Multi-state/level values indexed by YaesuCtrl (Agc(6), PreAmp(7); Nb(8),Dnr(9),Processor(10),Amc(11)).
     pub feature_levels: [u8; 16],
-    /// Phase D frequency values (u16): [0]=Contour, [1]=APF, [2]=Notch.
+    /// Frequency values (u16): [0]=Contour, [1]=APF, [2]=Notch.
     pub feature_freqs: [u16; 4],
     /// Squelch open (BUSY) according to the radio (FTX-1 `RI` response P8). True =
     /// signal present / squelch open -> audio passes. Default true (open) so
     /// radios without RI (991A) or before the first poll are never gated.
     /// Drives the server-side software squelch on the FTX-1 USB audio.
     pub squelch_open: bool,
-    /// High-SWR alarm (PATCH-swr-alarm): FTX-1 from RI P2; 991A now from RI0 P2
+    /// High-SWR alarm: FTX-1 from RI P2; 991A now from RI0 P2
     /// (official Hi-SWR flag, FT-991A CAT OM 1711-D) instead of the ungated RM6
     /// threshold. Only meaningful during TX; clears when the flag drops (P2=0).
     pub hi_swr: bool,
     /// Diagnostic: last raw 991A RM6 SWR-meter value (000-255). Not an alarm source
-    /// anymore — kept only so the RI0 Hi-SWR log can show the correlated RM6 reading
+    /// anymore, kept only so the RI0 Hi-SWR log can show the correlated RM6 reading
     /// (e.g. to confirm what a dummy load reads on RM6). Server-internal, not on the wire.
     pub swr_meter_raw: u16,
     /// Per-band max power from the 991A EX menus (EX137 HF, EX138 50M, EX139 144M,
@@ -800,9 +796,9 @@ pub struct YaesuState {
     /// `effective_capture_channel`.
     pub audio_channel: u8,
     /// The value menu 060 PC KEYING had when a CW run of this server first
-    /// wrote RTS over it (CW design step 6); `None` while we have not written
-    /// it. Kept here, not in the poll loop, so a reconnect does not read our
-    /// own RTS back as the original. Put back at exit (RestoreBeforeExit).
+    /// wrote RTS over it; `None` while we have not written it. Kept here, not
+    /// in the poll loop, so a reconnect does not read our own RTS back as the
+    /// original. Put back at exit (RestoreBeforeExit).
     pub cw_pc_keying_original: Option<String>,
     /// The menus that key this radio on RTS or DTR of its USB port, from the
     /// menu blob (build 296; `line_ptt`). Set only by `line_ptt::refresh`.
@@ -891,8 +887,8 @@ impl YaesuState {
     /// until then it is another radio's answer wearing this one's name.
     ///
     /// One list, next to the fields, because build 150 cleared exactly one of
-    /// them - the PC KEYING original - and left the rest (review 2120A2,
-    /// the review). The worst of the rest is `tot_minutes`: the PTT safety net uses
+    /// them - the PC KEYING original - and left the rest.
+    /// The worst of the rest is `tot_minutes`: the PTT safety net uses
     /// it as a deadline, so until the new scan finishes the server would hold
     /// this radio to the transmit time-out of the one that was unplugged.
     ///
@@ -938,8 +934,8 @@ impl YaesuState {
     /// Why this radio may not START transmitting now, if so. While the serial
     /// thread reads it after connecting, everything for the radio waits in its
     /// queue - a PTT-off too, and for the FTX-1's 405 menu items that is some
-    /// 40 s: a transmission started then could not be stopped (found preparing
-    /// review 318). So no PTT and no CW begins while it loads; the other way
+    /// 40 s: a transmission started then could not be stopped.
+    /// So no PTT and no CW begins while it loads; the other way
     /// round, no long read begins while it transmits (`on_the_air`, poll.rs).
     /// Letting go is never refused.
     pub fn tx_start_refusal(&self) -> Option<&'static str> {
@@ -971,11 +967,11 @@ impl YaesuState {
         }
     }
 
-    /// Max TX power (watt) for the CURRENT band (PATCH-yaesu-power-scaling).
+    /// Max TX power (watt) for the CURRENT band.
     /// 991A: from the read EX maxima (EX137-140) based on the VFO-A band; not-
     /// read or outside the amateur bands -> per-band default (the radio clamps its
     /// own maximum anyway, so an overly wide slider is never unsafe).
-    /// FTX-1 (phase B): coarse head-max (field=10, Optima=100) until the EX mapping is tested.
+    /// FTX-1: coarse head-max (field=10, Optima=100) until the EX mapping is tested.
     pub fn tx_power_max(&self) -> u8 {
         // FTX-1 field head: low power (5-10 W) on all bands.
         if self.power_head == 1 { return 10; }
@@ -1008,7 +1004,7 @@ pub enum YaesuCmd {
     RecallMemory(u16),  // MC command: select memory channel
     SelectVfo(u8),      // VS command: 0=VFO A, 1=VFO B, 2=swap, 3=V/M toggle
     RawCat(String),     // Send any CAT command string directly
-    /// Typed DSP/function control (PATCH-yaesu-extra-controls): (control=YaesuCtrl u8,
+    /// Typed DSP/function control: (control=YaesuCtrl u8,
     /// value). Encoded per-model in the command dispatch. Phase A1: RfAtt, BreakIn.
     SetFeature(u8, u16),
     WriteMemory {       // MW command: write a single memory channel
@@ -1035,9 +1031,9 @@ pub enum YaesuCmd {
     /// See `YaesuRadio::restore_before_exit` for why this is a command with
     /// an answer and not something that happens when the radio is dropped.
     RestoreBeforeExit(std::sync::mpsc::Sender<()>),
-    /// A CW run is about to key this radio through PC KEYING (CW design step
-    /// 6): read menu 060, remember its original, set it to RTS. Answers Ok, or
-    /// the reason it could not - then nothing was changed.
+    /// A CW run is about to key this radio through PC KEYING: read menu 060,
+    /// remember its original, set it to RTS. Answers Ok, or the reason it
+    /// could not - then nothing was changed.
     PrepareCwKeying(std::sync::mpsc::Sender<Result<(), String>>),
 }
 
@@ -1071,21 +1067,21 @@ impl ExitRadio for YaesuRadio {
 /// The last thing the server does with its radios. Two passes: every radio
 /// that is transmitting is unkeyed first, and only then is each one put back
 /// and waited for - one radio that does not answer must not keep another on
-/// the air for the length of its wait (review 315). A Yaesu is keyed by
+/// the air for the length of its wait. A Yaesu is keyed by
 /// a CAT command, so one left keyed at exit transmits until its own time-out,
 /// which on a 991A is often off.
 pub fn put_back_before_exit(radios: &[&dyn ExitRadio], wait: std::time::Duration) {
     for r in radios {
         if r.transmitting() {
             r.unkey();
-            warn!("[radio{}] was transmitting at exit - PTT off first", r.exit_slot());
+            warn!("[radio{}] was transmitting at exit: PTT off first", r.exit_slot());
         }
     }
     for r in radios {
         if r.put_back(wait) {
-            info!("[radio{}] put back before exit - confirmed", r.exit_slot());
+            info!("[radio{}] put back before exit: confirmed", r.exit_slot());
         } else {
-            warn!("[radio{}] put back before exit - not confirmed within {} ms (radio off, or its serial thread busy with a long read?)", r.exit_slot(), wait.as_millis());
+            warn!("[radio{}] put back before exit: not confirmed within {} ms (radio off, or its serial thread busy with a long read?)", r.exit_slot(), wait.as_millis());
         }
     }
 }
@@ -1230,7 +1226,7 @@ mod ask_and_wait_tests {
         assert!(waited < Duration::from_secs(1), "and no longer: in headless mode this is the only brake on shutdown ({waited:?})");
         let t = Instant::now();
         // The request could not be sent, and the answer channel is still held
-        // somewhere: no wait at all - not the five seconds (review 315: the
+        // somewhere: no wait at all - not the five seconds (the
         // early return was only equivalent for today's caller).
         assert!(!ask_and_wait(|ack| { std::mem::forget(ack); false }, Duration::from_secs(5)));
         assert!(t.elapsed() < Duration::from_secs(1), "no wait for a request that never left ({:?})", t.elapsed());
@@ -1248,7 +1244,7 @@ pub const INTERNAL_C4FM: u8 = 12;
 /// The code used to claim the two radios swap CW, and mapped the 991A's '3' to
 /// CW-L. They do not swap: both use '3' for the normal CW and '7' for the reversed
 /// one, and the FTX-1 manual simply spells the names out where the 991A uses the
-/// older ones. Straight from the two CAT books in docs/internal/referentie:
+/// older ones. Straight from the two CAT manuals:
 ///
 ///   FTX-1 (MD, p.20):  3: CW-U    7: CW-L
 ///   991A  (IF/MR P6):   3: CW      7: CW-R
@@ -1284,8 +1280,8 @@ fn yaesu_mode_to_internal(yaesu: char, model: RadioModel) -> u8 {
 /// Map internal mode to Yaesu MD0x mode character (model-dependent, see above).
 /// FM is sent as native FM ('4') for normal RX with built-in audio. The USB-mic
 /// TX path switches at runtime temporarily to DATA-FM ('A') - see the SetPtt handler in
-/// yaesu_poll_loop. An earlier implementation always forced DATA-FM; the operator test
-/// 2026-05-08 showed that USB-mic audio in FM mode now works after the auto-toggle.
+/// yaesu_poll_loop. An earlier implementation always forced DATA-FM; USB-mic audio in FM
+/// mode works with the auto-toggle.
 fn internal_mode_to_yaesu(internal: u8, model: RadioModel) -> char {
     let ftx1 = matches!(model, RadioModel::Ftx1);
     match internal {
@@ -1314,7 +1310,7 @@ impl YaesuRadio {
         port_name: &str,
         baud: u32,
         audio_device: Option<&str>,
-        // Separate TX/output device (PATCH-yaesu-output-device). None -> use the input
+        // Separate TX/output device. None -> use the input
         // `audio_device` pattern for output too (legacy behaviour). Set it when the
         // capture and render endpoints have different names, so TX audio can't fall
         // back onto the wrong USB codec.
@@ -1410,7 +1406,7 @@ impl YaesuRadio {
                 Err(e) => warn!("{} audio capture init failed: {}", prefix, e),
             }
             // Output (TX to Yaesu) - separate output device if configured, else the
-            // input pattern (PATCH-yaesu-output-device).
+            // input pattern.
             let out_dev = output_device.unwrap_or(dev);
             // The sound card counts its gaps for the radio's over line (build 263).
             let gaps = status.lock().unwrap().tx_timing.output_gaps();
@@ -1439,7 +1435,7 @@ impl YaesuRadio {
                 let rt = match tokio::runtime::Runtime::new() {
                     Ok(rt) => rt,
                     Err(e) => {
-                        log::error!("{} TX audio bridge: tokio runtime init failed: {} - TX-audio disabled, RX/CAT keep working", prefix_tx, e);
+                        log::error!("{} TX audio bridge: tokio runtime init failed: {}; TX-audio disabled, RX/CAT keep working", prefix_tx, e);
                         return;
                     }
                 };
@@ -1447,7 +1443,6 @@ impl YaesuRadio {
                     while let Some(samples) = rx.recv().await {
                         let taken = hold.take(samples, timing.keyed(), timing.over(), hold_max);
                         if let Some(n) = hold.take_report() {
-                            // Named in advance (working rule 11, build 184).
                             info!(
                                 "{} TX audio: {} ms held while the radio was not keyed thrown away (previous over)",
                                 timing.label(),
@@ -1467,7 +1462,7 @@ impl YaesuRadio {
                         let pad = lead_start.pad(timing.over(), (timing.lead_ms() * tx_rate as u64 / 1000) as usize, samples.len());
                         // What reaches the sound card, in mono samples: a busy
                         // lock, no output, or a full ring loses the rest (build
-                        // 185; review of 184).
+                        // 185).
                         let mut written = 0usize;
                         let mut queued_ms = 0u64;
                         if let Ok(ref mut guard) = producer.try_lock() {
@@ -1492,7 +1487,6 @@ impl YaesuRadio {
                         if written > 0 {
                             if let Some(summary) = over_output.written(timing.over(), crate::ptt::turnaround_clock(), queued_ms, timing.lead_ms()) {
                                 let (frames, gaps) = timing.take_gaps();
-                                // Named in advance (working rule 11, builds 263 and 278).
                                 dev_info!(
                                     "{}",
                                     tx_timing::output_line(timing.label(), frames * 1000 / tx_rate.max(1) as u64, gaps, &summary)
@@ -1500,7 +1494,6 @@ impl YaesuRadio {
                             }
                         }
                         if let Some(n) = unwritten.add(timing.over(), samples.len() - written) {
-                            // Named in advance (working rule 11, build 185).
                             info!(
                                 "{} TX audio: {} ms not written to the sound card (previous over)",
                                 timing.label(),
@@ -1520,7 +1513,7 @@ impl YaesuRadio {
             warn!("{} {}: {}", prefix, port_name, text);
         } else {
             info!(
-                "{} serial not detected on {} @ {} baud - background retry until radio comes online",
+                "{} serial not detected on {} @ {} baud: background retry until radio comes online",
                 prefix, port_name, baud
             );
         }
@@ -1597,8 +1590,8 @@ impl YaesuRadio {
     /// cc67ff42) - and the thread's `alive` check returns without a restore.
     /// So the Exit button, written for exactly this (a 991A left in USB mode
     /// after shutdown), restored nothing: "command channel closed" appears in
-    /// no server log (found 2026-09-18, building CW step 6, which needs the
-    /// same thing for menu 060).
+    /// no server log (found 2026-09-18, building CW keying of the 991A, which
+    /// needs the same thing for menu 060).
     /// Ask the serial thread to make the radio ready for CW keying through
     /// PC KEYING (menu 060 to RTS), and wait up to `wait` for the answer.
     pub fn prepare_cw_keying(&self, wait: std::time::Duration) -> Result<(), String> {
@@ -1613,7 +1606,7 @@ impl YaesuRadio {
             // ~0.7 s - but a long read it still is). Naming only the two causes
             // that need a cable sent people to the shack for a queue.
             Err(format!(
-                "the radio did not answer within {} ms - it may be off, its port away, or its serial thread busy with a long read",
+                "the radio did not answer within {} ms: it may be off, its port away, or its serial thread busy with a long read",
                 wait.as_millis()
             ))
         })
@@ -1693,9 +1686,9 @@ impl YaesuRadio {
         let merged = out.join("\n");
         st.last_menu_blob = Some(merged.clone());
         // The radio's TX time-out, and ThetisLink lets go of the PTT just
-        // before it fires. Changed here, it has to follow (review 318;
-        // owner's decision) - but only to a value the radio takes
-        // (memory::tot_after_menu_write, review 318 round 2).
+        // before it fires. Changed here, it has to follow
+        // (by design) - but only to a value the radio takes
+        // (memory::tot_after_menu_write).
         let model = RadioModel::from_code(self.model_code());
         match crate::yaesu::memory::tot_after_menu_write(model, key, value) {
             crate::yaesu::memory::TotAfterWrite::Set(tot) if tot != st.tot_minutes => {
@@ -1704,7 +1697,7 @@ impl YaesuRadio {
             }
             crate::yaesu::memory::TotAfterWrite::NotTaken => {
                 warn!(
-                    "[{}] TX time-out written as '{}' - not the two digits 00-30 the radio takes; still {} min",
+                    "[{}] TX time-out written as '{}': not the two digits 00-30 the radio takes; still {} min",
                     model.label(),
                     value,
                     st.tot_minutes
@@ -1763,7 +1756,7 @@ mod channel_walk_tests {
     /// The grace covers the gap between an admitted packet and the playout
     /// holding the radio (the playout delay plus one safety tick), and not
     /// much more: a minute would keep a radio "on the air" - no tone read, a
-    /// red CW button, a PA guard seeing RF - long after the run (review 317).
+    /// red CW button, a PA guard seeing RF - long after the run.
     #[test]
     fn the_grace_covers_the_gap_and_not_much_more() {
         let gap = crate::cw_playout::PLAYOUT_DELAY + Duration::from_millis(100);
@@ -1811,7 +1804,7 @@ mod channel_walk_tests {
         assert!(s.on_the_air(), "what we asked it for");
         s.ptt_commanded = false;
         assert!(s.begin_cw_keying(Instant::now()));
-        assert!(s.on_the_air(), "a CW run on its key line - the 991A does not report that");
+        assert!(s.on_the_air(), "a CW run on its key line: the 991A does not report that");
     }
 
     /// The field test of 2026-09-19 14:53, both ways round.
@@ -1895,8 +1888,8 @@ mod channel_walk_tests {
     }
 
     /// Scan and the memory range follow the model too. They sat one line above
-    /// the ATU in the same two blocks and were still keyed on the slot (review
-    /// 2120A3, both reviewers) - so the repair of build 156 had walked past
+    /// the ATU in the same two blocks and were still keyed on the slot - so
+    /// the repair of build 156 had walked past
     /// them.
     #[test]
     fn scan_and_the_memory_range_follow_the_model_as_well() {
@@ -1919,8 +1912,7 @@ mod channel_walk_tests {
     /// Each radio gets its own ATU dialect, and the two do not overlap. They
     /// used to be chosen by SLOT, in two mirrored blocks in network.rs: put an
     /// FTX-1 in slot 0 and the Tune button sent it `AC002`, which that radio
-    /// does not have (review 2120A2; named as a known bug in
-    /// PATCH-yaesu-internal-atu since build 11 and left there).
+    /// does not have (a known bug since build 11).
     #[test]
     fn the_atu_speaks_the_models_dialect_and_not_the_slots() {
         use super::{AtuAction, RadioModel};
@@ -1935,7 +1927,7 @@ mod channel_walk_tests {
             RadioModel::Ftx1.atu_cat(AtuAction::TuneNow),
         ];
         assert_eq!(a991, ["AC000;", "AC001;", "AC002;"], "the 991A writes AC00P3");
-        assert_eq!(ftx1, ["AC100;", "AC101;", "AC103;"], "the FTX-1 writes AC10P3 - P1=0 it ignores");
+        assert_eq!(ftx1, ["AC100;", "AC101;", "AC103;"], "the FTX-1 writes AC10P3: P1=0 it ignores");
         for c in a991 {
             assert!(!ftx1.contains(&c), "{c} is sent to both models, so one of them is getting the other's");
         }
@@ -2020,7 +2012,7 @@ mod model_id_tests {
     #[test]
     fn an_id_answer_without_a_known_id_frame_names_nothing() {
         // "MD04;0840;": a bare code after the first frame is some other command's
-        // payload - the old read named nothing there either (review build 55).
+        // payload - the old read named nothing there either.
         for resp in ["", ";", "?;", "ID0841;", "ID;", "007077100;MD04;TX0;AG0041;", "IF0840;", "08400;", "MD04;0840;"] {
             assert_eq!(model_from_id_response(resp), None, "{resp:?} must not name a model");
         }
@@ -2045,7 +2037,7 @@ pub static ACTIVE_CAT_SLOTS: std::sync::atomic::AtomicUsize =
 /// speculation about a second one.
 pub fn two_slot_hint() -> &'static str {
     if ACTIVE_CAT_SLOTS.load(std::sync::atomic::Ordering::Relaxed) > 1 {
-        " - NOTE: two radio slots hold a CAT connection. If both ports lead to the same radio (a 991A's USB offers more than one, and both accept CAT), their questions and answers interleave and this is the likely cause. Use one slot for CAT."
+        ". NOTE: two radio slots hold a CAT connection. If both ports lead to the same radio (a 991A's USB offers more than one, and both accept CAT), their questions and answers interleave and this is the likely cause. Use one slot for CAT."
     } else {
         ""
     }
@@ -2103,7 +2095,7 @@ mod cw_mode_tests {
 
     /// The FTX-1 was already right and must stay untouched.
     ///
-    /// Verified on the radio by the owner on 2026-09-11, at the same time as the 991A
+    /// Verified on the radio on 2026-09-11, at the same time as the 991A
     /// fault. A fix to one model that quietly moves the other is the worst outcome
     /// here, and nothing else in the suite would have noticed.
     #[test]

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! The direct path over QUIC (phase 3, `OPZET-fase3-quic-direct-pad.md`).
+//! The direct path over QUIC.
 //!
 //! Two halves with the shape the relay tunnel already has - a channel of
 //! `(address, packet)` in each direction - so neither the server's sessions nor
@@ -13,10 +13,10 @@
 //! - [`QuicClient`]: connects to whatever address the engine sends to, and tags
 //!   what comes back with that same address, as a direct UDP socket would.
 //!
-//! Both can also go through the relay (phase 3b, `route.rs`): quinn then sees
+//! Both can also go through the relay (`route.rs`): quinn then sees
 //! each relay client at a fixed address in `192.0.2.0/24` (TEST-NET-1) - a third
 //! made-up range, below the sentinels the sessions see. And from there the two
-//! punch a hole and carry the same connection directly (phase 3c, `punch.rs`).
+//! punch a hole and carry the same connection directly (`punch.rs`).
 //!
 //! What travels how: a packet that fits one QUIC datagram goes as a datagram
 //! (audio, control - never held back after a loss); anything larger goes on a
@@ -82,7 +82,7 @@ pub const CONNECT_BACKLOG: usize = 32;
 /// Large packets (streams) in flight per connection. On a connection that has
 /// stopped moving, each would wait for credit with its own copy of the packet
 /// until the 30 s silence limit; past this many a new one is dropped instead -
-/// what travels on streams (spectrum, lists) is sent again (review 108).
+/// what travels on streams (spectrum, lists) is sent again.
 pub const MAX_STREAMS_IN_FLIGHT: usize = 16;
 
 /// Queue `packet` while a connection is made: at most [`CONNECT_BACKLOG`], the
@@ -94,7 +94,7 @@ fn queue(backlog: &mut VecDeque<Vec<u8>>, packet: Vec<u8>) {
     backlog.push_back(packet);
 }
 
-/// The congestion controller. Not decided (OPZET §7): BBR until 3a measures.
+/// The congestion controller: BBR, until a measurement decides otherwise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Congestion {
     /// BBR with the small datagram queue ("qb" in the experiments).
@@ -156,8 +156,8 @@ fn provider() -> Arc<rustls::crypto::CryptoProvider> {
 
 /// What `send_packet` did with what it was handed. quinn counts what it sent,
 /// not what it dropped from its queue, and nothing of what never reached it:
-/// these are the rest, so that "all zero" in the line means "not ours" (review
-/// 122: the stream path and a refused datagram were counted nowhere).
+/// these are the rest, so that "all zero" in the line means "not ours" (the
+/// stream path and a refused datagram used to be counted nowhere).
 #[derive(Default)]
 struct LinkCounts {
     /// Datagrams `send_datagram` took.
@@ -303,7 +303,7 @@ fn send_packet(link: &Link, packet: Vec<u8>) {
     link.counts.streams.fetch_add(1, Ordering::Relaxed);
     let Ok(slot) = link.streams.clone().try_acquire_owned() else {
         link.counts.streams_no_slot.fetch_add(1, Ordering::Relaxed);
-        debug!("QUIC: {} streams in flight - a {} B packet dropped", MAX_STREAMS_IN_FLIGHT, bytes.len());
+        debug!("QUIC: {} streams in flight; a {} B packet dropped", MAX_STREAMS_IN_FLIGHT, bytes.len());
         return;
     };
     let conn = conn.clone();
@@ -353,7 +353,7 @@ fn spawn_readers(
     tokio::spawn(async move {
         while let Ok(mut s) = conn.accept_uni().await {
             // Nobody listens any more: stop taking streams, as the datagram
-            // reader stops (review 108).
+            // reader stops.
             if inbound.is_closed() {
                 break;
             }
@@ -377,7 +377,7 @@ fn spawn_readers(
 /// One live connection on the server: its binding, the connection itself (for
 /// the peer's real address), and whether it came in through the relay. That
 /// last is said once, at the accept: the address follows a move to the client's
-/// local address (L+R, build 142), and after it no longer tells (review 142).
+/// local address (L+R, build 142), and after it no longer tells.
 struct Held {
     binding: Binding,
     conn: Connection,
@@ -397,7 +397,7 @@ impl Bindings {
     /// The real address of the peer behind `sentinel`, now (it follows a
     /// migration). The server keys what must not restart with every new
     /// connection - the brake on password guessing - on this, not on the
-    /// sentinel, which is new for every connection (review 109).
+    /// sentinel, which is new for every connection.
     pub fn peer(&self, sentinel: SocketAddr) -> Option<SocketAddr> {
         self.0.lock().unwrap().get(&sentinel).map(|h| h.conn.remote_address())
     }
@@ -420,6 +420,7 @@ impl Ways {
             via_relay,
             |id| self.route.as_ref().is_some_and(|r| r.direct_only(id)),
             |id| self.route.as_ref().is_some_and(|r| r.tcp_only(id)),
+            self.route.as_ref().is_some_and(|r| r.relay_session_gone()),
         ))
     }
 
@@ -436,16 +437,21 @@ impl Ways {
 /// straight is L or D by its address. The server knows no coupling: it says
 /// D+R only once nothing came through the relay for `RELAY_QUIET`. At its relay
 /// address and heard over the relay's TCP line only, it is `R (TCP)` (build 146).
-fn way_of(now: SocketAddr, via_relay: bool, direct_only: impl Fn(u8) -> bool, tcp_only: impl Fn(u8) -> bool) -> PathKind {
+/// With the server's own relay session gone, a client that carries on straight
+/// says so: the red R (2.13.1 build 3).
+fn way_of(now: SocketAddr, via_relay: bool, direct_only: impl Fn(u8) -> bool, tcp_only: impl Fn(u8) -> bool, relay_gone: bool) -> PathKind {
+    let direct = if relay_gone { PathKind::DirectRelayGone } else { PathKind::DirectViaRelay };
     match relay_peer_id(now) {
-        Some(id) if direct_only(id) => PathKind::DirectViaRelay,
+        Some(id) if direct_only(id) => direct,
         Some(id) if tcp_only(id) => PathKind::RelayTcp,
         Some(_) => PathKind::Relay,
         None if via_relay => {
-            if sdr_remote_core::path::is_local(now.ip()) {
-                PathKind::LocalViaRelay
+            if !sdr_remote_core::path::is_local(now.ip()) {
+                direct
+            } else if relay_gone {
+                PathKind::LocalRelayGone
             } else {
-                PathKind::DirectViaRelay
+                PathKind::LocalViaRelay
             }
         }
         None => PathKind::without_relay(now.ip()),
@@ -457,7 +463,7 @@ const WAY_REPORT_EVERY: Duration = Duration::from_millis(500);
 
 /// The clients whose way to say now: each one seen for the first time, or with
 /// another way than last said. `said` forgets the ones that are gone. The log
-/// task's decision as a function with a table test (review 143: none of its
+/// task's decision as a function with a table test (none of its
 /// three branches had a test).
 fn ways_to_say(now: &[(SocketAddr, PathKind)], said: &mut HashMap<SocketAddr, PathKind>) -> Vec<(SocketAddr, PathKind)> {
     said.retain(|tag, _| now.iter().any(|(t, _)| t == tag));
@@ -518,7 +524,7 @@ pub struct QuicServerLink {
     /// datagram, so the close can never overtake a frame that came before it (a
     /// second channel could: a select reads two ready channels in either order).
     /// Without it a session would linger until the server's timeout, holding a
-    /// transmitter for up to three seconds (review 110).
+    /// transmitter for up to three seconds.
     pub inbound_rx: mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>,
     /// Packets for a client, by its sentinel. Unknown sentinels are dropped.
     pub uplink_tx: mpsc::UnboundedSender<(SocketAddr, Vec<u8>)>,
@@ -530,7 +536,7 @@ impl QuicServer {
         Self::start_with(bind, congestion, None)
     }
 
-    /// Listen on `bind`, and with `relay` also through the relay (phase 3b): one
+    /// Listen on `bind`, and with `relay` also through the relay: one
     /// endpoint for both, a relay client seen at [`relay_peer_for`] its id.
     pub fn start_with(
         bind: SocketAddr,
@@ -572,11 +578,11 @@ impl QuicServer {
         let mut route = None;
         let runtime = quinn::default_runtime().ok_or_else(|| std::io::Error::other("no async runtime"))?;
         let endpoint = match relay {
-            // Without a relay, quinn's own socket handling, as before phase 3b
-            // (what `Endpoint::server` does after binding).
+            // Without a relay, quinn's own socket handling (what
+            // `Endpoint::server` does after binding).
             None => {
                 if direct == Direct::RelayOnly {
-                    warn!("QUIC: relay only was asked without a relay - direct connections stay allowed, or no one could connect");
+                    warn!("QUIC: relay only was asked without a relay; direct connections stay allowed, or no one could connect");
                 }
                 Endpoint::new(quinn::EndpointConfig::default(), Some(config), socket, runtime)?
             }
@@ -610,7 +616,7 @@ impl QuicServer {
                         };
                         let tag = sentinel(counter.fetch_add(1, Ordering::Relaxed));
                         let Some(binding) = binding_of(&conn) else {
-                            warn!("QUIC: no binding for {} - connection refused", conn.remote_address());
+                            warn!("QUIC: no binding for {}; connection refused", conn.remote_address());
                             conn.close(1u32.into(), b"no binding");
                             return;
                         };
@@ -660,8 +666,8 @@ impl QuicServer {
                         _ = tick.tick() => {}
                     }
                     for (tag, kind) in ways_to_say(&ways.all(), &mut said) {
-                        // Named in the brief before it was built (working rule 11, build 143).
-                        info!("QUIC client {tag}: connection {}", kind.short());
+                        // The words the client's log uses too (2.13.1 build 7).
+                        info!("QUIC client {tag}: connection {} ({})", kind.short(), kind.log_word());
                     }
                 }
             });
@@ -670,7 +676,7 @@ impl QuicServer {
     }
 
     /// The client behind `sentinel` proved the password: its connection may
-    /// punch a hole now (phase 3c). The one way an offer is ever answered - the
+    /// punch a hole now. The one way an offer is ever answered - the
     /// server's session layer calls it at each admission.
     pub fn allow_punch(&self, sentinel: SocketAddr) {
         self.punch_gate().allow(sentinel)
@@ -748,7 +754,7 @@ pub struct QuicClient {
     /// To end the client with its close sent ([`QuicStop`]).
     pub stop: QuicStop,
     /// What `send_packet` did on the live connection (`None` before the
-    /// first), so a test can see which path a packet took (review 123). Read
+    /// first), so a test can see which path a packet took. Read
     /// by the tests only, for now.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) counts: watch::Receiver<Option<Arc<LinkCounts>>>,
@@ -783,7 +789,7 @@ fn restart_on_relay_session(live: bool, connecting: Option<SocketAddr>) -> Optio
 /// Whether the close of connection `closed` is the end of the live one. The
 /// close of an older connection - the server's end, or the silence limit of one
 /// the client already left - arrives at any later moment and must not clear the
-/// live one (review 108; a function so it is tested in both states, review 109).
+/// live one (a function so it is tested in both states).
 fn is_live(live: Option<usize>, closed: usize) -> bool {
     live == Some(closed)
 }
@@ -796,7 +802,7 @@ impl QuicClient {
     }
 
     /// As [`QuicClient::start`], and with `relay` every packet goes through the
-    /// relay (phase 3b) - whatever address the engine sends to.
+    /// relay - whatever address the engine sends to.
     pub fn start_with(congestion: Congestion, relay: Option<RelayRoute>) -> std::io::Result<QuicClient> {
         let mut crypto = rustls::ClientConfig::builder_with_provider(provider())
             .with_protocol_versions(&[&rustls::version::TLS13])
@@ -811,7 +817,7 @@ impl QuicClient {
         config.transport_config(transport(congestion, relay.is_some()));
         let mut route = None;
         let mut endpoint = match relay {
-            // IPv4 only, as the direct mode everywhere else (decision 6, 05-10).
+            // IPv4 only, as the direct mode everywhere else.
             None => Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 0)))?,
             Some(relay) => {
                 let runtime = quinn::default_runtime().ok_or_else(|| std::io::Error::other("no async runtime"))?;
@@ -893,7 +899,7 @@ impl QuicClient {
                         }
                         // The engine left the old server: close it now, not only
                         // once the new connection stands - otherwise a failing
-                        // new one keeps the old one alive on keepalives (review 108).
+                        // new one keeps the old one alive on keepalives.
                         if let Some((_, old)) = live.take() {
                             old.conn.close(0u32.into(), b"new server");
                             let _ = binding_tx.send(None);
@@ -915,8 +921,7 @@ impl QuicClient {
                     }
                     Event::RelaySession(session) => {
                         if let Some(addr) = restart_on_relay_session(live.is_some(), connecting.map(|(a, _)| a)) {
-                            // Named in advance (working rule 11, build 178).
-                            info!("QUIC: relay session {session} while connecting to {addr} - starting the connection again");
+                            info!("QUIC: relay session {session} while connecting to {addr}; starting the connection again");
                             attempts += 1;
                             connecting = Some((addr, attempts));
                             connect(addr, attempts);
@@ -940,7 +945,7 @@ impl QuicClient {
                             }
                         };
                         let Some(binding) = binding_of(&conn) else {
-                            warn!("QUIC: no binding on the connection to {addr} - closed");
+                            warn!("QUIC: no binding on the connection to {addr}; closed");
                             conn.close(1u32.into(), b"no binding");
                             backlog.clear();
                             continue;
@@ -952,7 +957,7 @@ impl QuicClient {
                         );
                         // The binding first: a frame the readers deliver is answered
                         // with it, so it must be there before the first one can come
-                        // (review 110 - it held by timing and a safety net, now by order).
+                        // (it held by timing and a safety net, now by order).
                         let _ = binding_tx.send(Some(binding));
                         let side = route.clone().map_or(punch::Side::Plain, punch::Side::Client);
                         spawn_readers(conn.clone(), addr, inbound_tx.clone(), side);
@@ -992,11 +997,11 @@ impl QuicClient {
             // whole runtime - is gone. What this wait carries for certain is
             // the order: `done` is sent after it, so `stop()` returning means
             // the close has left - the engine drops its runtime right after.
-            // Measured once too (review 112): three runs of twenty stop cycles,
+            // Measured once too: three runs of twenty stop cycles,
             // each on a runtime dropped at once, beside six busy loops and disk
             // traffic - 3 of 60 closes too late without this wait, 0 of 20 with it, none
-            // on an idle machine; with eight busy loops alone 0 of 48 (review
-            // 113). No test shows it reliably, so this note is what stands
+            // on an idle machine; with eight busy loops alone 0 of 48. No test
+            // shows it reliably, so this note is what stands
             // between it and a clean-up.
             let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
             let _ = done_tx.send(true);
@@ -1017,7 +1022,7 @@ impl QuicClient {
 /// The signature check below is the standard TLS one and proves nothing about
 /// WHO the server is: a party in the middle with its own certificate and key
 /// passes it too. The only thing that does is the password proof bound to this
-/// session's [`Binding`] (OPZET §3; review 108 pointed out the old wording).
+/// session's [`Binding`].
 #[derive(Debug)]
 struct NoIssuerCheck(Arc<rustls::crypto::CryptoProvider>);
 
@@ -1126,7 +1131,7 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(5);
 
-    /// The log task's decision (build 144, review 143): a client's way is said
+    /// The log task's decision: a client's way is said
     /// when first seen and at each change, not at every look; one that is gone
     /// is forgotten, and said again if it comes back.
     #[test]
@@ -1148,22 +1153,31 @@ mod tests {
     /// The server's name for a client's way (build 143), one row per branch:
     /// at its relay address R, or D+R once sent to directly only; came in
     /// through the relay and moved, L+R at a local address; came straight, L
-    /// or D by its address.
+    /// or D by its address. Both with the server's relay session and without
+    /// it: then the two that carry on straight say the relay is gone (2.13.1
+    /// build 3), and the rest stay as they were.
     #[test]
     fn a_client_s_way_by_where_it_is_and_where_it_came_in() {
         let at = |s: &str| -> SocketAddr { s.parse().unwrap() };
         let relay_2 = relay_peer_for(2);
         let no = |_: u8| false;
-        assert_eq!(way_of(relay_2, true, no, no), PathKind::Relay);
-        assert_eq!(way_of(relay_2, true, |id| id == 2, no), PathKind::DirectViaRelay);
-        assert_eq!(way_of(relay_2, true, |id| id == 3, no), PathKind::Relay, "another client's punch");
-        assert_eq!(way_of(relay_2, true, no, |id| id == 2), PathKind::RelayTcp, "heard over TCP only");
-        assert_eq!(way_of(relay_2, true, no, |id| id == 3), PathKind::Relay, "another client's TCP");
-        assert_eq!(way_of(relay_2, true, |id| id == 2, |id| id == 2), PathKind::DirectViaRelay, "a confirmed punch first");
-        assert_eq!(way_of(at("192.168.1.50:50000"), true, |_| true, no), PathKind::LocalViaRelay);
-        assert_eq!(way_of(at("203.0.113.97:50000"), true, |_| true, no), PathKind::DirectViaRelay);
-        assert_eq!(way_of(at("192.168.1.50:50000"), false, |_| true, no), PathKind::Local);
-        assert_eq!(way_of(at("203.0.113.97:50000"), false, |_| true, no), PathKind::Direct);
+        for gone in [false, true] {
+            let (d_r, l_r) = if gone {
+                (PathKind::DirectRelayGone, PathKind::LocalRelayGone)
+            } else {
+                (PathKind::DirectViaRelay, PathKind::LocalViaRelay)
+            };
+            assert_eq!(way_of(relay_2, true, no, no, gone), PathKind::Relay, "{gone}");
+            assert_eq!(way_of(relay_2, true, |id| id == 2, no, gone), d_r, "{gone}");
+            assert_eq!(way_of(relay_2, true, |id| id == 3, no, gone), PathKind::Relay, "{gone}: another client's punch");
+            assert_eq!(way_of(relay_2, true, no, |id| id == 2, gone), PathKind::RelayTcp, "{gone}: heard over TCP only");
+            assert_eq!(way_of(relay_2, true, no, |id| id == 3, gone), PathKind::Relay, "{gone}: another client's TCP");
+            assert_eq!(way_of(relay_2, true, |id| id == 2, |id| id == 2, gone), d_r, "{gone}: a confirmed punch first");
+            assert_eq!(way_of(at("192.168.1.50:50000"), true, |_| true, no, gone), l_r, "{gone}");
+            assert_eq!(way_of(at("203.0.113.97:50000"), true, |_| true, no, gone), d_r, "{gone}");
+            assert_eq!(way_of(at("192.168.1.50:50000"), false, |_| true, no, gone), PathKind::Local, "{gone}");
+            assert_eq!(way_of(at("203.0.113.97:50000"), false, |_| true, no, gone), PathKind::Direct, "{gone}");
+        }
     }
 
     /// A server that sends every packet straight back to whoever sent it.
@@ -1186,7 +1200,7 @@ mod tests {
     }
 
     /// Send `packet` to `to` and wait for it to come back, tagged with `to`. A
-    /// failure says how long it waited and for what (review 109: an unexplained
+    /// failure says how long it waited and for what (an unexplained
     /// failure must be readable the next time).
     async fn round_trip(client: &mut QuicClient, to: SocketAddr, packet: Vec<u8>) {
         client.uplink_tx.send((to, packet.clone())).unwrap();
@@ -1205,14 +1219,14 @@ mod tests {
 
     /// A small packet goes and comes back - the very first one too, though it
     /// was sent before there was a connection (the backlog). Twice, without a
-    /// restart (working rule 9).
+    /// restart.
     #[tokio::test]
     async fn a_packet_goes_and_comes_back() {
         let (server, _, _) = echo_server(Congestion::Bbr);
         let mut client = QuicClient::start(Congestion::Bbr).unwrap();
         round_trip(&mut client, server, b"first, before the connection".to_vec()).await;
         round_trip(&mut client, server, b"second".to_vec()).await;
-        // A small packet is a datagram, and counted as one (review 123).
+        // A small packet is a datagram, and counted as one.
         let counts = client.counts.borrow().clone().expect("a live connection");
         assert!(counts.offered.load(Ordering::Relaxed) >= 2, "the datagrams were not counted");
         assert_eq!(counts.streams.load(Ordering::Relaxed), 0, "a small packet took a stream");
@@ -1226,7 +1240,7 @@ mod tests {
         round_trip(&mut client, server, b"open".to_vec()).await;
         let big: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
         round_trip(&mut client, server, big).await;
-        // ... and the large one is counted on the stream path (review 123).
+        // ... and the large one is counted on the stream path.
         let counts = client.counts.borrow().clone().expect("a live connection");
         assert_eq!(counts.streams.load(Ordering::Relaxed), 1, "the large packet was not counted as a stream");
         assert_eq!(counts.streams_no_slot.load(Ordering::Relaxed), 0);
@@ -1261,7 +1275,7 @@ mod tests {
 
     /// Another server address closes the old connection and makes a new one;
     /// back to the first makes yet another, with a new binding - a session never
-    /// carries over (working rule 9: the second pass).
+    /// carries over - the second pass included.
     #[tokio::test]
     async fn a_new_address_is_a_new_connection_with_a_new_binding() {
         let (one, _, _) = echo_server(Congestion::Bbr);
@@ -1288,13 +1302,13 @@ mod tests {
         let code = include_str!("lib.rs");
         let code = &code[..code.find("mod tests {").unwrap()];
         assert!(code.contains("Ok(session) => Event::RelaySession(session),"));
-        // The arm that waits for the session runs, not a pending (review of 178, Q3).
+        // The arm that waits for the session runs, not a pending.
         assert_eq!(code.matches("Some(rx) => rx.changed().await.map(|()| *rx.borrow_and_update()),").count(), 1);
         assert!(code.contains("if let Some(addr) = restart_on_relay_session(live.is_some(), connecting.map(|(a, _)| a)) {"));
         assert!(code.contains("attempts += 1;\n                            connecting = Some((addr, attempts));\n                            connect(addr, attempts);\n                        }\n                    }\n                    Event::Connected(addr, attempt, result, t0) => {\n                        if connecting != Some((addr, attempt)) {"));
         let route = include_str!("route.rs");
         assert_eq!(route.matches("leg.new_session.send_replace(g.session);").count(), 1, "every new relay socket says so");
-        // In the branch that made the socket, not where it failed (review of 178, Q4).
+        // In the branch that made the socket, not where it failed.
         assert!(route.contains("punch: ClientPunch::default(),\n                        });\n                        leg.new_session.send_replace(g.session);"));
     }
 
@@ -1307,7 +1321,7 @@ mod tests {
     }
 
     /// Sending to another address closes the old connection at once, even when
-    /// the new one never comes (review 108: a failing new connection kept the
+    /// the new one never comes (a failing new connection kept the
     /// old one alive on keepalives).
     #[tokio::test]
     async fn leaving_a_server_closes_its_connection_even_if_the_next_fails() {
@@ -1329,7 +1343,7 @@ mod tests {
 
     /// A closed connection is reported by its sentinel, as an empty frame on
     /// the inbound channel, so the server can end its session at once - and
-    /// nothing from that connection comes after it (review 110). The client's
+    /// nothing from that connection comes after it. The client's
     /// own empty datagram is not passed on: it would read as a close.
     #[tokio::test]
     async fn a_closed_connection_is_reported_after_its_frames() {
@@ -1365,7 +1379,7 @@ mod tests {
     /// workers, as the server's. The close and the frames come from two tasks
     /// (the connection's and its datagram reader) on one channel, and a channel
     /// keeps the order per sender, not between senders: without the wait for the
-    /// reader, frames land after the close here (review 111 measured 5 of 10
+    /// reader, frames land after the close here (measured 5 of 10
     /// cycles; on one thread, never). How many frames arrive is not fixed; that
     /// none comes after the close is.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1407,7 +1421,7 @@ mod tests {
         let client_thread = std::thread::spawn(move || {
             // One thread, on purpose: with a second worker the client task could
             // still close the connection after `block_on` returned, and a stop
-            // signal that never arrives would pass (review 114: 1 of 5 green
+            // signal that never arrives would pass (1 of 5 green
             // on two workers; a stop arm that does not break stays red).
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async move {
@@ -1455,7 +1469,7 @@ mod tests {
 
     /// The signature check in the verifier is the standard one; it proves no
     /// identity, but it keeps the handshake honest and costs nothing. A text pin
-    /// (review 108: no test saw it go).
+    /// (no test saw it go).
     #[test]
     fn the_verifier_still_checks_the_signature() {
         let src = include_str!("lib.rs");
@@ -1464,7 +1478,7 @@ mod tests {
         assert_eq!(src.matches(call).count(), 1);
     }
 
-    /// The measuring controller works end to end too (both settings, rule 13).
+    /// The measuring controller works end to end too (both settings).
     #[tokio::test]
     async fn the_no_brake_setting_carries_packets_too() {
         let (server, _, _) = echo_server(Congestion::NoBrake);
@@ -1480,7 +1494,7 @@ mod tests {
     fn sentinels_are_their_own_range_and_do_not_repeat() {
         assert!(is_quic_sentinel(sentinel(0)));
         assert!(!is_quic_sentinel("203.0.113.1:1".parse().unwrap()), "the relay's range is not ours");
-        assert!(!is_quic_sentinel("192.168.1.97:4580".parse().unwrap()));
+        assert!(!is_quic_sentinel("192.168.1.50:4580".parse().unwrap()));
         let mut seen = std::collections::HashSet::new();
         for n in (0..300_000u32).step_by(7) {
             assert!(seen.insert(sentinel(n)), "sentinel {n} repeated");

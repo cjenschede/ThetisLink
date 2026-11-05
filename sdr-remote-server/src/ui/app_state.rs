@@ -48,6 +48,7 @@ impl ServerApp {
             ssb_switch_on_ptt: [config.yaesu_ssb_switch_on_ptt, config.yaesu2_ssb_switch_on_ptt],
             memory_write_ack: [config.yaesu_memory_write_ack, config.yaesu2_memory_write_ack],
             audio_channel: [config.yaesu_audio_channel, config.yaesu2_audio_channel],
+            yaesu_rx_levels_tuned: config.yaesu_rx_levels_tuned,
             probe_model: [config.yaesu_model_last, config.yaesu2_model_last],
             probe_busy: [false; 2],
             probe_attempted: [false; 2],

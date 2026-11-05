@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-//! ThetisLink chat — phase 1: one text channel.
+//! ThetisLink chat: one text channel and the diagnosis postbox.
 //!
-//! Phase 0 was a container that only reported its version, so that a chat deploy
-//! could be shown to leave the relay running before anything worth risking was
-//! inside it. That held, so this is what goes in it.
+//! It runs in a container of its own, so a chat deploy leaves the relay
+//! running.
 //!
-//! What it serves: consent, one shared channel, and leaving again. Everything
-//! else the design describes — the diagnosis postbox, moderation, Android — is a
-//! later phase and deliberately absent here.
+//! What it serves: consent, one shared channel, leaving again, and the
+//! diagnosis postbox (`postbox`, `admin_page`).
 //!
-//! See `docs/internal/DESIGN-relay-chat.md` §2 for the separation and §2.5 for
-//! why the version handshake here is its own, independent of the ThetisLink wire
+//! The version handshake here is its own, independent of the ThetisLink wire
 //! protocol: the two update separately, so a shared version number would force
 //! them to move together again.
 
@@ -36,7 +33,7 @@ use tokio::net::{TcpListener, TcpStream};
 /// The chat's own protocol version, deliberately not ThetisLink's `VERSION`.
 ///
 /// A client that speaks a higher number than this must fall back rather than
-/// break, and so must this server (design §2.5). Phase 0 has nothing to
+/// break, and so must this server. There is nothing to
 /// negotiate yet, but the number ships from the start so a client can ask before
 /// there is anything to ask about.
 const CHAT_PROTOCOL: u32 = 1;
@@ -45,13 +42,13 @@ const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// How long a single request may take from accept to response.
 ///
-/// Phase 0 serves one tiny answer, so this is not about throughput: it is about
-/// a connection that opens and then says nothing holding a task forever. Design
-/// §2.2 puts the real limits on the container and on Caddy; this is the one the
+/// Requests are small, so this is not about throughput: it is about
+/// a connection that opens and then says nothing holding a task forever. The
+/// deployment puts the real limits on the container and on Caddy; this is the one the
 /// process can enforce by itself.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Largest request this phase will read.
+/// Largest request this server will read.
 ///
 #[tokio::main]
 async fn main() {
@@ -59,7 +56,7 @@ async fn main() {
 
     let listen = parse_listen(std::env::args().skip(1));
     info!(
-        "ThetisLink chat v{} (protocol {}) - phase 2, chat + diagnosis postbox",
+        "ThetisLink chat v{} (protocol {}): chat + diagnosis postbox",
         PKG_VERSION, CHAT_PROTOCOL
     );
 
@@ -68,7 +65,7 @@ async fn main() {
         // Refusing to start is the only safe reading: with no key every ticket
         // fails, so the service would answer nothing but 403 while looking
         // healthy. A container that will not start is a problem somebody sees.
-        error!("THETISLINK_CHAT_KEYS is not set - refusing to start without it");
+        error!("THETISLINK_CHAT_KEYS is not set: refusing to start without it");
         std::process::exit(1);
     }
     info!("{} signing key(s) accepted", keys.len());
@@ -89,7 +86,7 @@ async fn main() {
     // answer 404 like any other unknown one.
     let admin_token = std::env::var("THETISLINK_CHAT_ADMIN_TOKEN").ok().filter(|t| !t.trim().is_empty());
     if admin_token.is_none() {
-        info!("no admin token set - the diagnosis postbox has no administrator side");
+        info!("no admin token set: the diagnosis postbox has no administrator side");
     }
 
     let app = Arc::new(routes::App {
@@ -131,8 +128,8 @@ async fn main() {
                         }
                     };
                     // The postbox has its own expiry and was never on this
-                    // timer, so an uncollected report sat there for good - the
-                    // design says thirty days (section 1.4).
+                    // timer, so an uncollected report sat there for good - it
+                    // is meant to keep a report for thirty days.
                     let postbox = match postbox::prune(&store.conn, now) {
                         Ok(counts) => counts,
                         Err(e) => {
@@ -161,7 +158,7 @@ async fn main() {
                             run.messages, run.reports, run.replies, run.markers,
                         );
                     } else {
-                        warn!("housekeeping ran but did not finish - see the errors above");
+                        warn!("housekeeping ran but did not finish: see the errors above");
                     }
                     // And written down, so this can be watched from the admin
                     // page. Reading it out of a container's log means an ssh
@@ -252,9 +249,9 @@ fn unix_now() -> i64 {
 
 /// The signing keys the relay uses, from the environment.
 ///
-/// Never from the repository (design §3.3). Comma-separated so two can be live
+/// Never from the repository. Comma-separated so two can be live
 /// at once during a rotation: the relay switches to the new one while the chat
-/// still accepts both, and only then is the old one dropped — no relay restart
+/// still accepts both, and only then is the old one dropped; no relay restart
 /// anywhere in that sequence.
 fn keys_from_env() -> Vec<Vec<u8>> {
     match std::env::var("THETISLINK_CHAT_KEYS") {

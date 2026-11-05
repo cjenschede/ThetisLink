@@ -46,15 +46,15 @@ chat_offline_unreachable:
 # in panel.rs, so all four languages break in the same places. Keep the
 # paragraphs short - this is the one screen a curious operator reads cold.
 chat_offline_what_it_is:
-  en: "The chat is a service on the relay, not a part of ThetisLink itself.\n\nIt needs two things at once: this station runs through a relay, and that relay has a chat service behind it. If either is missing, there is nothing to open here.\n\nEverything else in ThetisLink works exactly as it always did. The same goes for Report a problem - that travels over the relay too."
-  nl: "De chat is een dienst op de relay, geen onderdeel van ThetisLink zelf.\n\nEr zijn twee dingen tegelijk voor nodig: dit station loopt via een relay, en die relay heeft ook een chatdienst draaien. Ontbreekt een van beide, dan valt hier niets te openen.\n\nDe rest van ThetisLink werkt precies zoals altijd. Hetzelfde geldt voor Probleem melden - dat gaat ook over de relay."
-  de: "Der Chat ist ein Dienst auf dem Relay und kein Teil von ThetisLink selbst.\n\nZwei Dinge muessen gleichzeitig zutreffen: diese Station laeuft ueber ein Relay, und dieses Relay hat einen Chatdienst dahinter. Fehlt eines von beiden, gibt es hier nichts zu oeffnen.\n\nAlles andere in ThetisLink funktioniert genau wie zuvor. Dasselbe gilt fuer Problem melden - das geht ebenfalls ueber das Relay."
-  fr: "La discussion est un service du relais, pas une partie de ThetisLink lui-meme.\n\nIl faut deux choses a la fois : que cette station passe par un relais, et que ce relais heberge un service de discussion. S'il en manque une, il n'y a rien a ouvrir ici.\n\nTout le reste de ThetisLink fonctionne comme avant. Il en va de meme pour Signaler un probleme - cela passe aussi par le relais."
+  en: "The chat is a service on the relay, not a part of ThetisLink itself.\n\nIt needs two things at once: this station runs through a relay, and that relay has a chat service behind it. If either is missing, there is nothing to open here.\n\nEverything else in ThetisLink works exactly as it always did. The same goes for Report a problem: that travels over the relay too."
+  nl: "De chat is een dienst op de relay, geen onderdeel van ThetisLink zelf.\n\nEr zijn twee dingen tegelijk voor nodig: dit station loopt via een relay, en die relay heeft ook een chatdienst draaien. Ontbreekt een van beide, dan valt hier niets te openen.\n\nDe rest van ThetisLink werkt precies zoals altijd. Hetzelfde geldt voor Probleem melden: dat gaat ook over de relay."
+  de: "Der Chat ist ein Dienst auf dem Relay und kein Teil von ThetisLink selbst.\n\nZwei Dinge muessen gleichzeitig zutreffen: diese Station laeuft ueber ein Relay, und dieses Relay hat einen Chatdienst dahinter. Fehlt eines von beiden, gibt es hier nichts zu oeffnen.\n\nAlles andere in ThetisLink funktioniert genau wie zuvor. Dasselbe gilt fuer Problem melden: Das geht ebenfalls ueber das Relay."
+  fr: "La discussion est un service du relais, pas une partie de ThetisLink lui-meme.\n\nIl faut deux choses a la fois : que cette station passe par un relais, et que ce relais heberge un service de discussion. S'il en manque une, il n'y a rien a ouvrir ici.\n\nTout le reste de ThetisLink fonctionne comme avant. Il en va de meme pour Signaler un probleme : cela passe aussi par le relais."
 chat_offline_what_a_relay_is:
-  en: "A relay is worth knowing about on its own.\n\nReaching your station over the internet normally means letting a connection in from outside: a port forwarded on the router, and an address that does not change.\n\nThrough a relay, both sides make an outgoing connection instead - to a meeting point that pairs them. That is the kind of connection a router already allows.\n\nSo your network at home stops being critical. In most cases nothing on the router has to change, and it works where an incoming connection is not possible at all: behind CGNAT, or on mobile data."
-  nl: "Een relay is op zichzelf al de moeite waard om te kennen.\n\nJe station over internet bereiken betekent normaal dat er van buitenaf een verbinding naar binnen moet: een poort doorgezet op de router, en een adres dat niet verandert.\n\nVia een relay maken beide kanten juist een uitgaande verbinding - naar een ontmoetingspunt dat ze aan elkaar knoopt. Dat is het soort verbinding dat een router al toestaat.\n\nJe netwerk thuis is daarmee niet langer kritisch. Meestal hoeft er aan de router niets gewijzigd te worden, en het werkt ook waar een inkomende verbinding helemaal niet kan: achter CGNAT, of op mobiel internet."
-  de: "Ein Relay ist schon fuer sich genommen wissenswert.\n\nDie eigene Station ueber das Internet zu erreichen heisst normalerweise, eine Verbindung von aussen hereinzulassen: eine im Router weitergeleitete Portnummer und eine Adresse, die sich nicht aendert.\n\nUeber ein Relay bauen stattdessen beide Seiten eine ausgehende Verbindung auf - zu einem Treffpunkt, der sie zusammenfuehrt. Das ist die Art Verbindung, die ein Router ohnehin erlaubt.\n\nDamit ist das Netz zu Hause nicht mehr kritisch. Meist muss am Router gar nichts geaendert werden, und es funktioniert auch dort, wo eine eingehende Verbindung schlicht unmoeglich ist: hinter CGNAT oder im Mobilfunk."
-  fr: "Un relais vaut la peine d'etre connu en soi.\n\nJoindre sa station par internet suppose normalement de laisser entrer une connexion depuis l'exterieur : un port redirige sur le routeur, et une adresse qui ne change pas.\n\nAvec un relais, les deux cotes etablissent au contraire une connexion sortante - vers un point de rendez-vous qui les apparie. C'est le genre de connexion qu'un routeur autorise deja.\n\nLe reseau domestique cesse donc d'etre critique. Le plus souvent rien n'a besoin d'etre modifie sur le routeur, et cela fonctionne la ou une connexion entrante est tout simplement impossible : derriere un CGNAT, ou en donnees mobiles."
+  en: "A relay is worth knowing about on its own.\n\nReaching your station over the internet normally means letting a connection in from outside: a port forwarded on the router, and an address that does not change.\n\nThrough a relay, both sides make an outgoing connection instead; to a meeting point that pairs them. That is the kind of connection a router already allows.\n\nSo your network at home stops being critical. In most cases nothing on the router has to change, and it works where an incoming connection is not possible at all: behind CGNAT, or on mobile data."
+  nl: "Een relay is op zichzelf al de moeite waard om te kennen.\n\nJe station over internet bereiken betekent normaal dat er van buitenaf een verbinding naar binnen moet: een poort doorgezet op de router, en een adres dat niet verandert.\n\nVia een relay maken beide kanten juist een uitgaande verbinding; naar een ontmoetingspunt dat ze aan elkaar knoopt. Dat is het soort verbinding dat een router al toestaat.\n\nJe netwerk thuis is daarmee niet langer kritisch. Meestal hoeft er aan de router niets gewijzigd te worden, en het werkt ook waar een inkomende verbinding helemaal niet kan: achter CGNAT, of op mobiel internet."
+  de: "Ein Relay ist schon fuer sich genommen wissenswert.\n\nDie eigene Station ueber das Internet zu erreichen heisst normalerweise, eine Verbindung von aussen hereinzulassen: eine im Router weitergeleitete Portnummer und eine Adresse, die sich nicht aendert.\n\nUeber ein Relay bauen stattdessen beide Seiten eine ausgehende Verbindung auf; zu einem Treffpunkt, der sie zusammenfuehrt. Das ist die Art Verbindung, die ein Router ohnehin erlaubt.\n\nDamit ist das Netz zu Hause nicht mehr kritisch. Meist muss am Router gar nichts geaendert werden, und es funktioniert auch dort, wo eine eingehende Verbindung schlicht unmoeglich ist: hinter CGNAT oder im Mobilfunk."
+  fr: "Un relais vaut la peine d'etre connu en soi.\n\nJoindre sa station par internet suppose normalement de laisser entrer une connexion depuis l'exterieur : un port redirige sur le routeur, et une adresse qui ne change pas.\n\nAvec un relais, les deux cotes etablissent au contraire une connexion sortante ; vers un point de rendez-vous qui les apparie. C'est le genre de connexion qu'un routeur autorise deja.\n\nLe reseau domestique cesse donc d'etre critique. Le plus souvent rien n'a besoin d'etre modifie sur le routeur, et cela fonctionne la ou une connexion entrante est tout simplement impossible : derriere un CGNAT, ou en donnees mobiles."
 chat_offline_get_access:
   en: "You can run a relay yourself. The source ships with every release, the manual walks through it, and the chat is a separate container you can put beside it.\n\nPA3GHM also runs one, with this chat room and the Report a problem button. You can be added to it on request.\n\nIt is an experimental setup with a limited number of places, run as a hobby beside the project, with no guarantee of availability or continuity. Whoever runs a relay may decline a request or stop the service, and a no needs no explanation.\n\nEmail PA3GHM@gmail.com with your callsign and a short note about your setup."
   nl: "Je kunt zelf een relay draaien. De broncode zit bij elke release, de handleiding loopt hem door, en de chat is een aparte container die je ernaast zet.\n\nPA3GHM draait er ook een, met deze chatruimte en de knop Probleem melden. Je kunt daar op verzoek bij komen.\n\nHet is een experimentele opzet met een beperkt aantal plaatsen, als hobby naast het project gedraaid, zonder garantie op beschikbaarheid of continuiteit. Wie een relay draait mag een verzoek weigeren of ermee stoppen, en een nee hoeft niet toegelicht te worden.\n\nMail PA3GHM@gmail.com met je call en een korte toelichting op je opstelling."
@@ -63,14 +63,14 @@ chat_offline_get_access:
 
 chat_consent_access:
   en: "Want to know what is kept about you? Just ask. What ThetisLink already records about connections, apart from the chat, is in the manual."
-  nl: "Wil je weten wat er over je bewaard wordt? Vraag het. Wat ThetisLink zelf al over verbindingen bijhoudt - los van de chat - staat in de handleiding."
+  nl: "Wil je weten wat er over je bewaard wordt? Vraag het. Wat ThetisLink zelf al over verbindingen bijhoudt (los van de chat) staat in de handleiding."
   de: "Moechten Sie wissen, was ueber Sie gespeichert wird? Fragen Sie einfach. Was ThetisLink ohnehin ueber Verbindungen aufzeichnet, steht im Handbuch."
   fr: "Vous voulez savoir ce qui est conserve a votre sujet ? Demandez-le. Ce que ThetisLink enregistre deja sur les connexions figure dans le manuel."
 chat_consent_agree:
-  en: "I agree - join the chat"
-  nl: "Ik ga akkoord - meedoen"
-  de: "Ich stimme zu - teilnehmen"
-  fr: "J'accepte - participer"
+  en: "I agree, join the chat"
+  nl: "Ik ga akkoord, meedoen"
+  de: "Ich stimme zu, teilnehmen"
+  fr: "J'accepte, participer"
 chat_consent_callsign_warning:
   en: "Note: a callsign appears in a public register with name and address. Choose your own name if you would rather not share that."
   nl: "Let op: een roepletter staat in een openbaar register met naam en adres. Kies een eigen naam als je dat liever niet deelt."
@@ -102,20 +102,20 @@ chat_consent_optional:
   de: "Ohne Zustimmung funktioniert der Rest von ThetisLink wie gewohnt; nur der Chat ist nicht verfuegbar."
   fr: "Sans accord, le reste de ThetisLink fonctionne normalement ; seule la discussion est indisponible."
 chat_consent_stored:
-  en: "What is kept: the name you choose and your messages, with the time. Messages are removed after 90 days, and sooner if the storage fills up. The administrator can read all messages on the server. Files and photos cannot be shared here - use e-mail for those."
+  en: "What is kept: the name you choose and your messages, with the time. Messages are removed after 90 days, and sooner if the storage fills up. The administrator can read all messages on the server. Files and photos cannot be shared here: use e-mail for those."
   nl: "Wat er bewaard wordt: je gekozen naam en je berichten, met het tijdstip. Berichten worden na 90 dagen verwijderd, en eerder als de opslagruimte vol raakt. De beheerder kan alle berichten op de server lezen. Bestanden en foto's kun je hier niet delen; gebruik daarvoor e-mail."
-  de: "Was gespeichert wird: der gewaehlte Name und Ihre Nachrichten mit Zeitstempel. Nachrichten werden nach 90 Tagen geloescht, frueher wenn der Speicher voll ist. Der Administrator kann alle Nachrichten auf dem Server lesen. Dateien und Fotos koennen hier nicht geteilt werden - nutzen Sie dafuer E-Mail."
-  fr: "Ce qui est conserve : le nom choisi et vos messages, avec l'heure. Les messages sont supprimes apres 90 jours, et plus tot si l'espace de stockage est plein. L'administrateur peut lire tous les messages sur le serveur. Les fichiers et photos ne peuvent pas etre partages ici - utilisez le courriel."
+  de: "Was gespeichert wird: der gewaehlte Name und Ihre Nachrichten mit Zeitstempel. Nachrichten werden nach 90 Tagen geloescht, frueher wenn der Speicher voll ist. Der Administrator kann alle Nachrichten auf dem Server lesen. Dateien und Fotos koennen hier nicht geteilt werden: nutzen Sie dafuer E-Mail."
+  fr: "Ce qui est conserve : le nom choisi et vos messages, avec l'heure. Les messages sont supprimes apres 90 jours, et plus tot si l'espace de stockage est plein. L'administrateur peut lire tous les messages sur le serveur. Les fichiers et photos ne peuvent pas etre partages ici : utilisez le courriel."
 chat_consent_title:
   en: "Joining the ThetisLink chat"
   nl: "Meedoen aan de ThetisLink-chat"
   de: "Am ThetisLink-Chat teilnehmen"
   fr: "Rejoindre la discussion ThetisLink"
 chat_consent_withdraw:
-  en: "You can withdraw at any time. 'Leave the chat' removes your name; your messages stay without it, so other people's conversations remain readable. If you wrote your callsign into the text of a message it is still there - 'leave and delete my messages' removes those too."
-  nl: "Je kunt dit altijd intrekken. 'Verlaat de chat' verwijdert je naam; je berichten blijven staan zonder die naam, zodat gesprekken van anderen leesbaar blijven. Schreef je je roepletter in de tekst van een bericht, dan staat die er nog - 'verlaat de chat en verwijder mijn berichten' haalt ook die weg."
-  de: "Sie koennen dies jederzeit widerrufen. 'Chat verlassen' entfernt Ihren Namen; Ihre Nachrichten bleiben ohne diesen stehen, damit Gespraeche anderer lesbar bleiben. Steht Ihr Rufzeichen im Text einer Nachricht, bleibt es dort - 'verlassen und meine Nachrichten loeschen' entfernt auch diese."
-  fr: "Vous pouvez retirer votre accord a tout moment. 'Quitter la discussion' supprime votre nom ; vos messages restent sans celui-ci, afin que les conversations des autres restent lisibles. Si vous avez ecrit votre indicatif dans le texte d'un message, il y figure encore - 'quitter et supprimer mes messages' les enleve aussi."
+  en: "You can withdraw at any time. 'Leave the chat' removes your name; your messages stay without it, so other people's conversations remain readable. If you wrote your callsign into the text of a message it is still there: 'leave and delete my messages' removes those too."
+  nl: "Je kunt dit altijd intrekken. 'Verlaat de chat' verwijdert je naam; je berichten blijven staan zonder die naam, zodat gesprekken van anderen leesbaar blijven. Schreef je je roepletter in de tekst van een bericht, dan staat die er nog: 'verlaat de chat en verwijder mijn berichten' haalt ook die weg."
+  de: "Sie koennen dies jederzeit widerrufen. 'Chat verlassen' entfernt Ihren Namen; Ihre Nachrichten bleiben ohne diesen stehen, damit Gespraeche anderer lesbar bleiben. Steht Ihr Rufzeichen im Text einer Nachricht, bleibt es dort: 'verlassen und meine Nachrichten loeschen' entfernt auch diese."
+  fr: "Vous pouvez retirer votre accord a tout moment. 'Quitter la discussion' supprime votre nom ; vos messages restent sans celui-ci, afin que les conversations des autres restent lisibles. Si vous avez ecrit votre indicatif dans le texte d'un message, il y figure encore : 'quitter et supprimer mes messages' les enleve aussi."
 chat_banned:
   en: "You have been removed from the chat by the administrator."
   nl: "Je bent door de beheerder uit de chat verwijderd."
@@ -142,9 +142,9 @@ chat_diag_attach_hint:
   de: "Bitte tun Sie das, wenn moeglich: die meisten Probleme lassen sich nicht allein aus einer Beschreibung klaeren. Sie sehen genau, was gesendet wird, bevor etwas rausgeht."
   fr: "Faites-le si possible : la plupart des problemes ne se resolvent pas avec une simple description. Vous voyez exactement ce qui part avant tout envoi."
 chat_diag_attach_shown:
-  en: "This is what goes with it. Read it through - this is your last chance to hold something back. Your password, keys and access codes are not in it, and addresses and names have been removed from the log."
-  nl: "Dit gaat er mee. Lees het even door - dit is je laatste kans om iets tegen te houden. Je wachtwoord, sleutels en toegangscodes zitten er niet in, en adressen en namen zijn uit de log gehaald."
-  de: "Das geht mit. Lesen Sie es durch - das ist Ihre letzte Gelegenheit, etwas zurueckzuhalten. Passwort, Schluessel und Zugangscodes sind nicht dabei, Adressen und Namen wurden aus dem Log entfernt."
+  en: "This is what goes with it. Read it through: this is your last chance to hold something back. Your password, keys and access codes are not in it, and addresses and names have been removed from the log."
+  nl: "Dit gaat er mee. Lees het even door: dit is je laatste kans om iets tegen te houden. Je wachtwoord, sleutels en toegangscodes zitten er niet in, en adressen en namen zijn uit de log gehaald."
+  de: "Das geht mit. Lesen Sie es durch: Das ist Ihre letzte Gelegenheit, etwas zurueckzuhalten. Passwort, Schluessel und Zugangscodes sind nicht dabei, Adressen und Namen wurden aus dem Log entfernt."
   fr: "Voici ce qui part avec. Lisez-le : c'est votre derniere occasion de retenir quelque chose. Votre mot de passe, vos cles et vos codes d'acces n'y figurent pas, et les adresses et les noms ont ete retires du journal."
 chat_diag_button:
   en: "Report a problem"
@@ -172,9 +172,9 @@ chat_diag_note_label:
   de: "Was ist das Problem? Beschreiben Sie es in eigenen Worten."
   fr: "Quel est le probleme ? Decrivez-le avec vos propres mots."
 chat_diag_note_needed:
-  en: "Write down what is wrong first - that is the part nobody else can supply."
-  nl: "Schrijf eerst op wat er mis gaat - dat is het deel dat niemand anders kan invullen."
-  de: "Schreiben Sie zuerst auf, was nicht stimmt - das kann niemand sonst liefern."
+  en: "Write down what is wrong first: that is the part nobody else can supply."
+  nl: "Schrijf eerst op wat er mis gaat: dat is het deel dat niemand anders kan invullen."
+  de: "Schreiben Sie zuerst auf, was nicht stimmt: Das kann niemand sonst liefern."
   fr: "Ecrivez d'abord ce qui ne va pas : c'est la partie que personne d'autre ne peut fournir."
 chat_diag_send:
   en: "Send"
@@ -217,9 +217,9 @@ chat_leave_title:
   de: "Sich aus dem Chat austragen?"
   fr: "Vous retirer de la discussion ?"
 chat_leave_explain:
-  en: "This takes your name off everything you wrote. You do not need it to finish for the day - just close this window, you stay in the chat. Your messages can stay without your name, so other people's conversations remain readable, or go with you if your call sign is in the text itself."
-  nl: "Dit haalt je naam van alles wat je schreef. Je hebt het niet nodig om te stoppen voor vandaag - sluit gewoon dit venster, je blijft lid. Je berichten kunnen zonder je naam blijven staan zodat gesprekken van anderen leesbaar blijven, of ze gaan met je mee als je roepletters in de tekst zelf staan."
-  de: "Das nimmt Ihren Namen von allem, was Sie geschrieben haben. Zum Feierabend brauchen Sie es nicht - schliessen Sie einfach dieses Fenster, Sie bleiben im Chat. Ihre Nachrichten koennen ohne Ihren Namen bleiben, damit Gespraeche anderer lesbar bleiben, oder mit Ihnen gehen, wenn Ihr Rufzeichen im Text steht."
+  en: "This takes your name off everything you wrote. You do not need it to finish for the day: just close this window, you stay in the chat. Your messages can stay without your name, so other people's conversations remain readable, or go with you if your call sign is in the text itself."
+  nl: "Dit haalt je naam van alles wat je schreef. Je hebt het niet nodig om te stoppen voor vandaag: sluit gewoon dit venster, je blijft lid. Je berichten kunnen zonder je naam blijven staan zodat gesprekken van anderen leesbaar blijven, of ze gaan met je mee als je roepletters in de tekst zelf staan."
+  de: "Das nimmt Ihren Namen von allem, was Sie geschrieben haben. Zum Feierabend brauchen Sie es nicht: Schliessen Sie einfach dieses Fenster, Sie bleiben im Chat. Ihre Nachrichten koennen ohne Ihren Namen bleiben, damit Gespraeche anderer lesbar bleiben, oder mit Ihnen gehen, wenn Ihr Rufzeichen im Text steht."
   fr: "Cela retire votre nom de tout ce que vous avez ecrit. Inutile pour terminer votre session : fermez simplement cette fenetre, vous restez dans la discussion. Vos messages peuvent rester sans votre nom afin que les conversations des autres restent lisibles, ou partir avec vous si votre indicatif figure dans le texte."
 chat_leave_delete:
   en: "Remove me and delete my messages"
@@ -227,14 +227,14 @@ chat_leave_delete:
   de: "Austragen und meine Nachrichten loeschen"
   fr: "Me retirer et supprimer mes messages"
 chat_leave_delete_hover:
-  en: "Also removes everything you wrote - including a callsign inside the text of a message. This cannot be undone."
-  nl: "Verwijdert ook alles wat je schreef - inclusief een roepletter in de tekst van een bericht. Dit kan niet ongedaan gemaakt worden."
-  de: "Entfernt auch alles, was Sie geschrieben haben - einschliesslich eines Rufzeichens im Text. Das laesst sich nicht rueckgaengig machen."
-  fr: "Supprime aussi tout ce que vous avez ecrit - y compris un indicatif dans le texte. Irreversible."
+  en: "Also removes everything you wrote, including a callsign inside the text of a message. This cannot be undone."
+  nl: "Verwijdert ook alles wat je schreef, inclusief een roepletter in de tekst van een bericht. Dit kan niet ongedaan gemaakt worden."
+  de: "Entfernt auch alles, was Sie geschrieben haben, einschliesslich eines Rufzeichens im Text. Das laesst sich nicht rueckgaengig machen."
+  fr: "Supprime aussi tout ce que vous avez ecrit, y compris un indicatif dans le texte. Irreversible."
 chat_leave_hover:
-  en: "Takes your name off everything you wrote and returns you to the consent screen. You do not need this to finish for the day - just close the window."
-  nl: "Haalt je naam van alles wat je schreef en zet je terug op het toestemmingsscherm. Je hebt dit niet nodig om te stoppen voor vandaag - sluit gewoon het venster."
-  de: "Nimmt Ihren Namen von allem, was Sie geschrieben haben, und bringt Sie zurueck zum Einwilligungsbildschirm. Zum Feierabend brauchen Sie das nicht - schliessen Sie einfach das Fenster."
+  en: "Takes your name off everything you wrote and returns you to the consent screen. You do not need this to finish for the day: just close the window."
+  nl: "Haalt je naam van alles wat je schreef en zet je terug op het toestemmingsscherm. Je hebt dit niet nodig om te stoppen voor vandaag: sluit gewoon het venster."
+  de: "Nimmt Ihren Namen von allem, was Sie geschrieben haben, und bringt Sie zurueck zum Einwilligungsbildschirm. Zum Feierabend brauchen Sie das nicht: Schliessen Sie einfach das Fenster."
   fr: "Retire votre nom de tout ce que vous avez ecrit et vous ramene a l'ecran de consentement. Inutile pour terminer votre session : fermez simplement la fenetre."
 chat_left_user:
   en: "a user:"
@@ -247,15 +247,15 @@ chat_send:
   de: "Senden"
   fr: "Envoyer"
 chat_diag_without_joining:
-  en: "You do not have to join to report a problem - that goes only to the administrator."
-  nl: "Je hoeft niet mee te doen om een probleem te melden - dat gaat alleen naar de beheerder."
-  de: "Sie muessen nicht teilnehmen, um ein Problem zu melden - das geht nur an den Administrator."
+  en: "You do not have to join to report a problem: that goes only to the administrator."
+  nl: "Je hoeft niet mee te doen om een probleem te melden: dat gaat alleen naar de beheerder."
+  de: "Sie muessen nicht teilnehmen, um ein Problem zu melden: Das geht nur an den Administrator."
   fr: "Vous n'avez pas besoin de participer pour signaler un probleme : cela ne va qu'a l'administrateur."
 chat_diag_what_happens:
-  en: "What happens to it: the administrator collects the report onto their own computer and removes it from the server as soon as the problem is settled. Once collected it cannot be withdrawn. Your password, keys and access codes are not in it - only named settings are sent - and addresses have been removed from the log."
-  nl: "Wat ermee gebeurt: de beheerder haalt de melding naar zijn eigen computer en verwijdert hem van de server zodra het probleem opgelost is. Eenmaal opgehaald kun je hem niet meer intrekken. Je wachtwoord, sleutels en toegangscodes zitten er niet in - alleen instellingen die op een vaste lijst staan gaan mee - en adressen zijn uit de log gehaald."
-  de: "Was damit geschieht: der Administrator holt den Bericht auf seinen eigenen Rechner und entfernt ihn vom Server, sobald das Problem geklaert ist. Einmal abgeholt, laesst er sich nicht mehr zurueckziehen. Passwort, Schluessel und Zugangscodes sind nicht dabei - nur benannte Einstellungen werden gesendet - und Adressen wurden aus dem Log entfernt."
-  fr: "Ce qu'il en advient : l'administrateur recupere le rapport sur son propre ordinateur et le retire du serveur des que le probleme est regle. Une fois recupere, il ne peut plus etre retire. Votre mot de passe, vos cles et vos codes d'acces n'y figurent pas - seuls les reglages nommes sont envoyes - et les adresses ont ete retirees du journal."
+  en: "What happens to it: the administrator collects the report onto their own computer and removes it from the server as soon as the problem is settled. Once collected it cannot be withdrawn. Your password, keys and access codes are not in it (only named settings are sent), and addresses have been removed from the log."
+  nl: "Wat ermee gebeurt: de beheerder haalt de melding naar zijn eigen computer en verwijdert hem van de server zodra het probleem opgelost is. Eenmaal opgehaald kun je hem niet meer intrekken. Je wachtwoord, sleutels en toegangscodes zitten er niet in (alleen instellingen die op een vaste lijst staan gaan mee), en adressen zijn uit de log gehaald."
+  de: "Was damit geschieht: der Administrator holt den Bericht auf seinen eigenen Rechner und entfernt ihn vom Server, sobald das Problem geklaert ist. Einmal abgeholt, laesst er sich nicht mehr zurueckziehen. Passwort, Schluessel und Zugangscodes sind nicht dabei (nur benannte Einstellungen werden gesendet), und Adressen wurden aus dem Log entfernt."
+  fr: "Ce qu'il en advient : l'administrateur recupere le rapport sur son propre ordinateur et le retire du serveur des que le probleme est regle. Une fois recupere, il ne peut plus etre retire. Votre mot de passe, vos cles et vos codes d'acces n'y figurent pas (seuls les reglages nommes sont envoyes), et les adresses ont ete retirees du journal."
 chat_diag_read_when:
   en: "Log and settings read %{age}."
   nl: "Log en instellingen %{age} ingelezen."
@@ -307,10 +307,10 @@ chat_edit_hover:
   de: "Diese Nachricht korrigieren. 15 Minuten lang aenderbar; danach gehoert sie dem Gespraech."
   fr: "Corriger ce message. Modifiable pendant 15 minutes ; ensuite il appartient a la conversation."
 chat_editing:
-  en: "editing your message - Send saves the correction"
-  nl: "je wijzigt je bericht - Verstuur bewaart de verbetering"
-  de: "Nachricht wird geaendert - Senden speichert die Korrektur"
-  fr: "modification du message - Envoyer enregistre la correction"
+  en: "editing your message: Send saves the correction"
+  nl: "je wijzigt je bericht: Verstuur bewaart de verbetering"
+  de: "Nachricht wird geaendert: Senden speichert die Korrektur"
+  fr: "modification du message : Envoyer enregistre la correction"
 chat_edit_cancel:
   en: "Stop editing; the message stays as it was."
   nl: "Stop met wijzigen; het bericht blijft zoals het was."
@@ -362,25 +362,25 @@ chat_diag_left:
   de: "Noch %{n} Meldung(en) heute."
   fr: "Encore %{n} signalement(s) aujourd'hui."
 chat_diag_server_wait_send:
-  en: "The server's log is still on its way - sending waits until it is here (or untick it)."
-  nl: "De serverlog is nog onderweg - versturen wacht tot die er is (of haal het vinkje weg)."
-  de: "Das Server-Log ist noch unterwegs - das Senden wartet, bis es da ist (oder Haken entfernen)."
-  fr: "Le journal du serveur est encore en route - l'envoi attend qu'il arrive (ou decochez la case)."
+  en: "The server's log is still on its way: sending waits until it is here (or untick it)."
+  nl: "De serverlog is nog onderweg: versturen wacht tot die er is (of haal het vinkje weg)."
+  de: "Das Server-Log ist noch unterwegs: Das Senden wartet, bis es da ist (oder Haken entfernen)."
+  fr: "Le journal du serveur est encore en route : l'envoi attend qu'il arrive (ou decochez la case)."
 chat_diag_server_ready:
   en: "server log received (%{kb} kB), cleaned on the server itself"
   nl: "serverlog ontvangen (%{kb} kB), op de server zelf opgeschoond"
   de: "Server-Log empfangen (%{kb} kB), auf dem Server selbst bereinigt"
   fr: "journal du serveur recu (%{kb} kB), nettoye sur le serveur meme"
 chat_diag_server_none:
-  en: "the server did not answer - it sends one report per 20 seconds; wait a moment and press read again"
-  nl: "de server antwoordde niet - hij stuurt een rapport per 20 seconden; wacht even en druk opnieuw op lezen"
-  de: "der Server hat nicht geantwortet - er sendet einen Bericht pro 20 Sekunden; kurz warten und erneut lesen"
-  fr: "le serveur n'a pas repondu - il envoie un rapport par 20 secondes ; patientez puis relisez"
+  en: "the server did not answer: it sends one report per 20 seconds; wait a moment and press read again"
+  nl: "de server antwoordde niet: hij stuurt een rapport per 20 seconden; wacht even en druk opnieuw op lezen"
+  de: "der Server hat nicht geantwortet: Er sendet einen Bericht pro 20 Sekunden; kurz warten und erneut lesen"
+  fr: "le serveur n'a pas repondu : il envoie un rapport par 20 secondes ; patientez puis relisez"
 chat_diag_server_failed:
-  en: "only %{have} of %{parts} parts arrived - nothing is attached; try again"
-  nl: "slechts %{have} van %{parts} delen aangekomen - er gaat niets mee; probeer opnieuw"
-  de: "nur %{have} von %{parts} Teilen angekommen - nichts wird angehaengt; erneut versuchen"
-  fr: "seulement %{have} des %{parts} parties recues - rien n'est joint ; reessayez"
+  en: "only %{have} of %{parts} parts arrived: nothing is attached; try again"
+  nl: "slechts %{have} van %{parts} delen aangekomen: er gaat niets mee; probeer opnieuw"
+  de: "nur %{have} von %{parts} Teilen angekommen: Nichts wird angehaengt; erneut versuchen"
+  fr: "seulement %{have} des %{parts} parties recues : rien n'est joint ; reessayez"
 chat_diag_server_shown:
   en: "And this comes from the server. It was cleaned there, before it was sent here."
   nl: "En dit komt van de server. Dat is daar opgeschoond, voordat het hierheen ging."
@@ -392,7 +392,7 @@ chat_consent_age:
   de: "Ich bin 16 Jahre oder aelter"
   fr: "J'ai 16 ans ou plus"
 chat_consent_need_age:
-  en: "Under 16 a parent has to agree - ask them first."
-  nl: "Onder de 16 moet een ouder akkoord geven - vraag het eerst."
-  de: "Unter 16 muss ein Elternteil zustimmen - fragen Sie zuerst."
+  en: "Under 16 a parent has to agree: ask them first."
+  nl: "Onder de 16 moet een ouder akkoord geven: vraag het eerst."
+  de: "Unter 16 muss ein Elternteil zustimmen: Fragen Sie zuerst."
   fr: "En dessous de 16 ans, un parent doit donner son accord : demandez d'abord."

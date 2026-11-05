@@ -121,7 +121,7 @@ impl Default for ChatModel {
             unread: 0,
             dismiss_asked: std::collections::HashSet::new(),
             // Until a relay says otherwise, there is nothing to talk to. Saying
-            // which of the three (§8) beats one word covering all of them.
+            // which of the three beats one word covering all of them.
             offline: Some(OfflineReason::NoRelay),
             error: None,
             reports_left: -1,
@@ -143,7 +143,7 @@ impl ChatModel {
     /// `open` is the host's own flag for whether its chat screen is showing:
     /// while it is, the conversation is polled briskly; while it is not, once
     /// every half minute, which is what feeds the unread count on whatever
-    /// button opens it (design §1.7). A counter that only counts while you are
+    /// button opens it. A counter that only counts while you are
     /// already watching counts nothing.
     pub fn tick(&mut self, relay_url: &str, ticket: Option<&str>, open: bool) {
         if self.tx.is_none() {
@@ -458,7 +458,7 @@ impl ChatModel {
 
     /// One problem report, already cleaned and already seen by the user. The
     /// redaction happens before this: what leaves the machine has to be what was
-    /// shown on screen, or the preview is theatre (design 1.3).
+    /// shown on screen, or the preview is theatre.
     pub fn send_diagnosis(&mut self, report: &str) {
         self.error = None;
         self.send_cmd(ChatCommand::SendDiagnosis {
@@ -785,7 +785,7 @@ mod tests {
         );
     }
 
-    /// The hole from §12.2: send once, fail once, and it was never tried again.
+    /// The hole this closes: send once, fail once, and it was never tried again.
     /// The service's own list is the judge - if it still hands back an answer we
     /// consider folded away, it did not hear us, and we say it again.
     #[test]
@@ -809,8 +809,8 @@ mod tests {
         assert_eq!(count_dismiss(&rx, 2), 0, "repeat once per session, not on every fetch");
     }
 
-    /// The doc on dismiss_answer says idempotent, and locally it was. Review
-    /// pointed out that the command was not: pressing twice sent twice.
+    /// The doc on dismiss_answer says idempotent, and locally it was. The
+    /// command was not: pressing twice sent twice.
     #[test]
     fn folding_the_same_answer_away_twice_asks_once() {
         let (mut m, rx) = wired();

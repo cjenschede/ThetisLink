@@ -125,7 +125,7 @@ class MidiController(private val context: Context) {
             }
             openDevice = device
 
-            // Open output port (receive from device) — port 0
+            // Open output port (receive from device); port 0
             if (info.outputPortCount > 0) {
                 val port = device.openOutputPort(0)
                 port?.connect(object : MidiReceiver() {
@@ -136,7 +136,7 @@ class MidiController(private val context: Context) {
                 outputPort = port
             }
 
-            // Open input port (send to device for LEDs) — port 0
+            // Open input port (send to device for LEDs); port 0
             if (info.inputPortCount > 0) {
                 inputPort = device.openInputPort(0)
             }
@@ -189,7 +189,7 @@ class MidiController(private val context: Context) {
 
     /** Save mappings to SharedPreferences. */
     fun saveMappings() {
-        val prefs = context.getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
         val editor = prefs.edit()
         // Clear old mappings
         var i = 0
@@ -205,7 +205,7 @@ class MidiController(private val context: Context) {
 
     /** Load mappings from SharedPreferences. */
     fun loadMappings() {
-        val prefs = context.getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
         mappings.clear()
         var i = 0
         while (true) {
@@ -217,7 +217,7 @@ class MidiController(private val context: Context) {
 
     /** Get saved device name from preferences. */
     fun getSavedDevice(): String {
-        val prefs = context.getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
         return prefs.getString("midi_device", "") ?: ""
     }
 

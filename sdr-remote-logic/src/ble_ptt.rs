@@ -10,7 +10,7 @@
 //! Everything here is a pure function of the events that arrive. No threads,
 //! no Android, no button.
 
-/// What the button reports on `FFE0`/`FFE1`. Measured, see the patch brief.
+/// What the button reports on `FFE0`/`FFE1`. Measured on the button.
 const PRESSED: u8 = 0x01;
 const RELEASED: u8 = 0x00;
 
@@ -44,7 +44,7 @@ pub enum BlePttAction {
     /// releasing nothing when there was something costs four seconds of
     /// unattended carrier.
     Gone,
-    /// A byte this button is not known to send. Log it and change nothing —
+    /// A byte this button is not known to send. Log it and change nothing,
     /// this device already turned out to send more than was documented.
     Unrecognised(u8),
 }
@@ -62,7 +62,7 @@ pub enum DropPolicy {
 
 /// Should a dropped link be waited for, or let go?
 ///
-/// One input now. It had two - `wanted` and `same_client` - and a review showed
+/// One input now. It had two - `wanted` and `same_client` - and it turned out
 /// that the second half had quietly become unreachable: the staleness check ran
 /// ahead of this call, so `same_client` was true every time it was asked. Two
 /// of the four rows were guarded by a test that the scenario could no longer
@@ -88,7 +88,7 @@ pub fn on_drop(wanted: bool) -> DropPolicy {
 /// Compose button - and the exits could not reach it. Stop the transmitter from
 /// the screen while this button was toggled on, and the gate still believed it
 /// was on: the next press turned it "off" and did nothing at all, and only the
-/// press after that keyed the radio (owner, build 59).
+/// press after that keyed the radio.
 ///
 /// So it keeps only what nothing else can know: which connection attempt an
 /// event belongs to, and whether the physical button is down. What a press
@@ -195,7 +195,7 @@ impl BlePttState {
 ///
 /// `configured` is Thetis, Yaesu slot 0, Yaesu slot 1 - the same order as
 /// `PttTarget` and the server's slots. `chosen` is the operator's setting in
-/// that numbering. Decided with the owner on 2026-09-17: the list follows what
+/// that numbering. By design (2026-09-17): the list follows what
 /// the **server** has configured, powered on or not; with a single radio there
 /// is nothing to choose and that one is taken; and a choice that points at a
 /// radio the server no longer has falls back to the first one it does have,
@@ -238,10 +238,10 @@ mod tests {
         (state, actions)
     }
 
-    /// The rule from section 3 of the brief, and the reason this module exists.
+    /// The safety rule, and the reason this module exists.
     ///
     /// The link drops while the button is held. The release byte never arrives
-    /// — it cannot, the link is gone. If nothing else stops it, the radio keeps
+    /// (it cannot, the link is gone). If nothing else stops it, the radio keeps
     /// transmitting with nobody reporting it. The supervision timeout is
     /// 4000 ms, so this is four seconds of unattended carrier.
     #[test]
@@ -260,7 +260,7 @@ mod tests {
     }
 
     /// Connecting says nothing about whether the button is down. The current
-    /// state cannot be read back — notifications only carry changes — so the
+    /// state cannot be read back (notifications only carry changes) so the
     /// only safe assumption is that it is not.
     #[test]
     fn connecting_never_starts_a_transmission() {
@@ -282,8 +282,8 @@ mod tests {
     }
 
     /// A release with nothing to release. Emitting a stop here would clear a
-    /// transmission started somewhere else — the screen button, the volume
-    /// keys — which is not this module's to end.
+    /// transmission started somewhere else; the screen button, the volume
+    /// keys, which is not this module's to end.
     #[test]
     fn a_release_without_a_press_does_nothing() {
         let (state, actions) = run(&[Connected, Notification(RELEASED)]);
@@ -324,7 +324,7 @@ mod tests {
         assert!(!state.held());
     }
 
-    /// This device sends bytes nobody documented — that is how the second
+    /// This device sends bytes nobody documented; that is how the second
     /// notification channel was found. An unknown byte is worth a log line and
     /// nothing else; guessing at it is how a transmitter gets keyed by
     /// accident.
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(effective_target([false, false, false], 2, false), 2);
         assert_eq!(effective_target([true, false, false], 0, false), 0);
         assert_eq!(effective_target([true, false, false], 9, false), 0, "a choice out of range is Thetis, as before");
-        // The boundary itself (review 316 r2: `<= 3` survived with only 9).
+        // The boundary itself (`<= 3` survived with only 9).
         assert_eq!(effective_target([true, false, false], 3, false), 0, "3 is out of range too");
         // Known: the rule of the design applies again.
         assert_eq!(effective_target([true, false, false], 1, true), 0);
@@ -407,13 +407,13 @@ mod tests {
         // Nothing configured at all (server not reached yet): Thetis, harmlessly.
         assert_eq!(effective_target([false, false, false], 2, true), 0);
         // Out of range never panics - including 3, the first index past the
-        // array, where `< 3` and `<= 3` part ways (review finding: the only value the
+        // array, where `< 3` and `<= 3` part ways (the only value the
         // surviving mutant differed on, and its consequence was a panic).
         assert_eq!(effective_target([true, true, true], 3, true), 0);
         assert_eq!(effective_target([true, true, true], 9, true), 0);
     }
 
-    /// The scenario a code review named, and the reason the generation exists.
+    /// The scenario that is the reason the generation exists.
     ///
     /// A press arrives from a connection that has already been replaced - the
     /// user picked a different button, or switched off, while a callback was
@@ -423,8 +423,8 @@ mod tests {
     /// reach it: disabling that check entirely broke nothing anywhere in the
     /// suite. It came here so that it would. Then it was deleted along with the
     /// mode tests it had nothing to do with, and disabling `is_current` again
-    /// broke nothing again - found by a reviewer who checked exactly that
-    /// (review finding, 2026-09-04). The file warns about this on its own line 66.
+    /// broke nothing again - found by checking exactly that.
+    /// The doc comment on `on_drop` warns about this.
     #[test]
     fn a_press_from_a_replaced_connection_does_not_transmit() {
         let mut state = BlePttState::new();
@@ -508,8 +508,8 @@ mod tests {
     /// **Five more went with them that had nothing to do with the mode**, and
     /// that was a mistake, not a decision: I cut from the first mode test to the
     /// end of the file. The two generation tests, the drop-policy test and the
-    /// repeated-drop test are back above; a reviewer found them missing by
-    /// disabling `is_current` and watching all 92 tests pass (review finding).
+    /// repeated-drop test are back above; they were found missing by
+    /// disabling `is_current` and watching all 92 tests pass.
     #[test]
     fn the_mode_moved_out_and_the_safety_rule_did_not() {
         let (state, actions) = run(&[Connected, Notification(PRESSED), Disconnected]);

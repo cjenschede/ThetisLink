@@ -7,8 +7,7 @@
 //! sets two voltage thresholds (switch level + hysteresis) on the yellow line;
 //! samples below `threshold - hyst/2` count as tune-active, samples above
 //! `threshold + hyst/2` count as tune-idle. See `tuner.rs` for the full tune
-//! sequence and `docs/internal/referentie/MCP2221A-JC4s-wiring.md` for the
-//! schema.
+//! sequence.
 //!
 //! USB I/O via `mcp2221-hal` is synchronous and fast (sub-ms per call), so
 //! the tuner thread and the UI thread both call in directly. State is guarded

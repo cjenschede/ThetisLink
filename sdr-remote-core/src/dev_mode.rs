@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The developer mode (owner decision 2026-10-23, on the way to a release):
+//! The developer mode (2026-10-23, on the way to a release):
 //! one program for everyone, and the measurement tools and the extra log lines
 //! only after a code typed in the settings. The one place that knows what the
 //! mode is: the code, the log target of a developer line, and the rule every
@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub const LOG_TARGET: &str = "thetislink::dev";
 
 /// The code that switches the mode on. It stands in the public source: this
-/// hides the tools from an ordinary user, it does not protect anything (owner,
-/// 2026-10-23).
+/// hides the tools from an ordinary user, it does not protect anything
+/// (by design).
 pub const CODE: &str = "PA3GHM73";
 
 static ON: AtomicBool = AtomicBool::new(false);
@@ -74,7 +74,7 @@ mod tests {
     use super::*;
     use crate::source_text::{production_code, rust_files};
 
-    /// Both states (working rule 13): a developer line passes only in the
+    /// Both states: a developer line passes only in the
     /// mode, every other line always.
     #[test]
     fn a_developer_line_passes_only_in_the_mode() {
@@ -105,7 +105,7 @@ mod tests {
         assert!(body[..200].contains("info!(target: $crate::dev_mode::LOG_TARGET, $($arg)+)"));
     }
 
-    /// What a line's text says about how often it comes (review of 294): every
+    /// What a line's text says about how often it comes: every
     /// 10 s, per over, per press, per release.
     const MEASURING: [&str; 5] = ["PTT metrics", "previous over", "per over", "RX after TX", "heartbeat: feed"];
 
@@ -113,7 +113,7 @@ mod tests {
     /// with its reason: (file, a piece of the line).
     const ORDINARY: [(&str, &str); 6] = [
         // Only when a frame was lost; the server's only trace of loss on the
-        // way to it (owner, 2026-10-24).
+        // way to it.
         ("tx_recover.rs", "TX audio (10 s): {} lost frame(s)"),
         // Only when the receive audio had gaps - the same rule.
         ("engine.rs", "concealing (10 s)"),
@@ -128,7 +128,7 @@ mod tests {
     ];
 
     /// Does the text say "every N s" - `(10 s)`, `(10s)`, `({} s)`, `({:.1} s)`,
-    /// `({secs} s)`? A placeholder takes the space (review of 295): without
+    /// `({secs} s)`? A placeholder takes the space: without
     /// it, `({:.1}s)` is the length of a recording, said once, and stays out.
     fn says_every_n_seconds(text: &str) -> bool {
         text.match_indices('(').any(|(at, _)| {
@@ -169,8 +169,8 @@ mod tests {
     }
 
     /// A measurement line written with a plain `info!` lands in every user's
-    /// log, and the count of `dev_info!` in `fitness.ps1` cannot see it - it
-    /// only sees a label that goes away (review of 294). Here every plain
+    /// log, and a count of `dev_info!` calls cannot see it - it
+    /// only sees a label that goes away. Here every plain
     /// `info!` in the programs' own code whose text says how often it comes
     /// must be on the list above, with its reason. Not seen: a line built by a
     /// function and logged as `"{}"`.
@@ -202,9 +202,9 @@ mod tests {
                 }
             }
         }
-        assert!(plain.is_empty(), "a measurement line with a plain info! - make it dev_info!, or put it on ORDINARY with the reason: {plain:#?}");
+        assert!(plain.is_empty(), "a measurement line with a plain info!: make it dev_info!, or put it on ORDINARY with the reason: {plain:#?}");
         for (i, (file, piece)) in ORDINARY.iter().enumerate() {
-            assert_eq!(used[i], 1, "{file}: `{piece}` is on the list but not found once - take it off, or fix the piece");
+            assert_eq!(used[i], 1, "{file}: `{piece}` is on the list but not found once; take it off, or fix the piece");
         }
     }
 

@@ -14,5 +14,5 @@ anyhow = { workspace = true }
 chrono = "0.4"
 
 [dev-dependencies]
-# The stand-in relay, for the engine's tests through the relay (phase 3b).
+# The stand-in relay, for the engine's tests through the relay.
 sdr-remote-quic = { path = "../sdr-remote-quic", features = ["testing"] }

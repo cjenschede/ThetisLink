@@ -12,7 +12,7 @@
 //! patch narrowed one of them to `rx1_enabled` alone, which is not the rule: a
 //! desktop in Mono, BIN or Split with RX1 audio off and RX2 on still receives
 //! CH2, and dropping it from the selection takes away the error correction of
-//! the very listener whose link is worst. Two independent reviews found it.
+//! the very listener whose link is worst.
 //!
 //! So the per-channel rule lives here once, and "receives anything" is derived
 //! from it rather than restated.
@@ -160,7 +160,7 @@ mod tests {
     // ---- worst_receiver ----
     //
     // Five assertions, and three of them would have caught something real: the
-    // RX2-only case is the defect two reviews found in build 34, the
+    // RX2-only case is the defect found in build 34, the
     // nobody-receiving case is the phone in data-saving mode that pinned maximum
     // redundancy on a desktop, and the tie is the one that has no defect behind
     // it yet - it is pinned so a refactor cannot move it by accident.

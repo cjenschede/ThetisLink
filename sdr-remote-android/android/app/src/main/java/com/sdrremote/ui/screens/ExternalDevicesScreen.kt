@@ -105,6 +105,8 @@ fun ExternalDevicesScreen(
     onYaesuCompressor: (Int) -> Unit = {},
     onYaesuTxAgc: (Boolean) -> Unit = {},
     onYaesuTxGain: (Float) -> Unit = {},
+    onYaesuChoosePreset: (String) -> Unit = {},
+    yaesuTxLoad: com.sdrremote.viewmodel.YaesuTxLoad? = null,
     yaesuActive: Boolean = false,
     selectedTab: Int = 0,
     onTabChange: (Int) -> Unit = {},
@@ -197,7 +199,8 @@ fun ExternalDevicesScreen(
             3 -> Rf2kTab(state, onRf2kOperate, onRf2kTune, onRf2kAnt1, onRf2kAnt2, onRf2kAnt3, onRf2kAnt4, onRf2kAntExt, onRf2kErrorReset, onRf2kClose, onRf2kDriveUp, onRf2kDriveDown, onRf2kTunerMode, onRf2kTunerBypass, onRf2kTunerReset, onRf2kTunerStore, onRf2kTunerLUp, onRf2kTunerLDown, onRf2kTunerCUp, onRf2kTunerCDown, onRf2kTunerK)
             4 -> UltraBeamTab(state, onUbSetFrequency, onUbRetract, onUbReadElements)
             5 -> RotorTab(state, onRotorGoTo, onRotorStop, onRotorCw, onRotorCcw)
-            6 -> YaesuTab(state, onYaesuEnable, onYaesuPtt, onYaesuVolume, onYaesuSelectVfo, onYaesuMode, onYaesuButton, onYaesuRecallMemory, onYaesuControl, onYaesuFreq, yaesuActive, onYaesuEqBand, onYaesuEqEnabled, onYaesuTxGain, onYaesuSelectRadio, onYaesuDspControl, onYaesuCompressor, onYaesuTxAgc, onPowerOnOff = onYaesuPowerOnOff)
+            6 -> YaesuTab(state, onYaesuEnable, onYaesuPtt, onYaesuVolume, onYaesuSelectVfo, onYaesuMode, onYaesuButton, onYaesuRecallMemory, onYaesuControl, onYaesuFreq, yaesuActive, onYaesuEqBand, onYaesuEqEnabled, onYaesuTxGain, onYaesuSelectRadio, onYaesuDspControl, onYaesuCompressor, onYaesuTxAgc, onPowerOnOff = onYaesuPowerOnOff,
+                onChoosePreset = onYaesuChoosePreset, yaesuTxLoad = yaesuTxLoad)
         }
     }
 }
@@ -235,7 +238,7 @@ private fun AmplitecTab(
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-    // Port A — TX+RX
+    // Port A (TX+RX)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             stringResource(R.string.dev_port_a),
@@ -269,7 +272,7 @@ private fun AmplitecTab(
 
     Spacer(Modifier.height(12.dp))
 
-    // Port B — RX
+    // Port B (RX)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             stringResource(R.string.dev_port_b),
@@ -306,7 +309,7 @@ private fun AmplitecTab(
  * Two-line antenna button - visually matched to the server and
  * desktop version (`antenna_button` in `amplitec.rs` / `devices.rs`).
  * Top line: `Ant<N>` (small, identifier).
- * Bottom line: alias (larger, functional name) — only when the
+ * Bottom line: alias (larger, functional name); only when the
  * alias differs from the Ant<N> default, because otherwise it visually becomes a
  * double line.
  *
@@ -525,7 +528,7 @@ private fun SpeExpertTab(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Power — shows current state
+        // Power: shows current state
         if (!state.speConnected || state.speState == 0) {
             Button(
                 onClick = onSpePowerOn,
@@ -544,7 +547,7 @@ private fun SpeExpertTab(
             }
         }
 
-        // Operate/Standby — shows current state with color
+        // Operate/Standby: shows current state with color
         val (opText, opColor) = when (state.speState) {
             2 -> stringResource(R.string.dev_operate) to Color(0xFF32B432)
             1 -> stringResource(R.string.dev_standby) to amber
@@ -1021,7 +1024,7 @@ private fun Rf2kTab(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(stringResource(R.string.dev_tuner_label, tunerModeText), color = tunerColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-        // MAN/AUTO toggle — shows current state
+        // MAN/AUTO toggle: shows current state
         if (state.rf2kTunerMode == 2 || state.rf2kTunerMode == 4) {
             val toggleText = if (isManual) stringResource(R.string.dev_manual) else stringResource(R.string.dev_auto)
             Button(
@@ -1032,7 +1035,7 @@ private fun Rf2kTab(
                 modifier = Modifier.height(28.dp),
             ) { Text(toggleText, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White) }
         }
-        // Bypass — shows current state with color
+        // Bypass: shows current state with color
         val isBypass = state.rf2kTunerMode == 1 || state.rf2kTunerSetup == "BYPASS"
         val bypColor = if (isBypass) Color(0xFFFFAA28) else ButtonDefaults.buttonColors().containerColor
         Button(
@@ -1214,8 +1217,8 @@ private fun Rf2kTab(
     }
 
     // Ext, the band and the frequency on a line of their own: on a phone the
-    // antenna row is full at button 4, and they fell off the edge (owner,
-    // 2026-10-15; Ext stayed off until build 206).
+    // antenna row is full at button 4, and they fell off the edge
+    // (2026-10-15; Ext stayed off until build 206).
     Spacer(Modifier.height(4.dp))
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1261,7 +1264,7 @@ private fun ubBandName(band: Int): String = when (band) {
 /**
  * Determine which VFO frequency to use for UltraBeam tracking,
  * based on which Amplitec port has the UltraBeam connected.
- * Returns (frequencyHz, label) — e.g. (14200000, "VFO A") or (7100000, "VFO B").
+ * Returns (frequencyHz, label): e.g. (14200000, "VFO A") or (7100000, "VFO B").
  * Falls back to VFO A if no Amplitec active or UltraBeam not found in labels.
  */
 private fun ubTrackVfo(state: SdrUiState): Pair<Long, String> {
@@ -1791,6 +1794,8 @@ private fun YaesuTab(
     onCompressor: (Int) -> Unit = {}, // client-side speech compressor 0-100 (shared)
     onTxAgc: (Boolean) -> Unit = {},  // client-side TX AGC on/off (shared)
     onPowerOnOff: (Boolean) -> Unit = {}, // radio power on/off (CAT PS) - only clickable on the 991A
+    onChoosePreset: (String) -> Unit = {}, // a preset to the selected radio: bands and TX chain
+    yaesuTxLoad: com.sdrremote.viewmodel.YaesuTxLoad? = null, // the last preset load: a signal, the values are in the store
 ) {
     // Android works one Yaesu radio at a time. For radio 2 we show the yaesu2_* state
     // through the existing yaesu_* field, so the rest of this composable stays
@@ -1959,10 +1964,10 @@ private fun YaesuTab(
             // transmission is no reason this operator cannot switch radios
             // while listening, and until now it was - the flag says "this radio
             // is transmitting" and every client read it as "you may not touch
-            // anything" (owner, build 24).
+            // anything".
             val switchLocked = fullState.transmitting
             // The active radio stays blue while locked: the line below says why
-            // nothing can be pressed, and a grey button read as "radio gone" (owner).
+            // nothing can be pressed, and a grey button read as "radio gone".
             val activeColor = ButtonDefaults.buttonColors(
                 containerColor = Color(0xFF005AC8),
                 disabledContainerColor = Color(0xFF005AC8),
@@ -1978,15 +1983,15 @@ private fun YaesuTab(
                         onClick = { onSelectRadio(0) },
                         enabled = !switchLocked,
                         colors = if (sel == 0) activeColor else ButtonDefaults.outlinedButtonColors(),
-                    ) { Text("1 - $r1") }
+                    ) { Text("1: $r1") }
                     Button(
                         onClick = { onSelectRadio(1) },
                         enabled = !switchLocked,
                         colors = if (sel == 1) activeColor else ButtonDefaults.outlinedButtonColors(),
-                    ) { Text("2 - $r2") }
+                    ) { Text("2: $r2") }
                 }
                 // Always laid out, only visible while locked: a line that comes and
-                // goes moved everything below it at every PTT press (owner).
+                // goes moved everything below it at every PTT press.
                 Text(
                     stringResource(R.string.dev_radio_locked),
                     fontSize = 11.sp,
@@ -2014,7 +2019,7 @@ private fun YaesuTab(
 
         Spacer(Modifier.height(6.dp))
 
-        // Frequency display — click VFO A to enter frequency (VFO mode only)
+        // Frequency display: click VFO A to enter frequency (VFO mode only)
         var showFreqDialog by remember { mutableStateOf(false) }
 
         if (showFreqDialog) {
@@ -2230,27 +2235,31 @@ private fun YaesuTab(
                 valueRange = 0f..255f, modifier = Modifier.weight(1f))
             Text("${rfGain.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
-        // Mic Gain (local client-side, before Opus encoding). Stored per radio
-        // as the internal engine multiplier; UI display 0.5 maps to internal 0.2.
-        val micEqPrefs = remember { context.getSharedPreferences("thetislink_eq", android.content.Context.MODE_PRIVATE) }
-        fun micDisplayToEngine(v: Float): Float = (v * 0.4f).coerceIn(0.02f, 0.4f)
-        fun micEngineToDisplay(v: Float): Float = (v / 0.4f).coerceIn(0.05f, 1f)
+        // Mic gain (in this client, at the front of the TX chain), per radio.
+        val micEqPrefs = remember { context.getSharedPreferences(YaesuTxPrefs.STORE, android.content.Context.MODE_PRIVATE) }
+        // In dB like the desktop, at the front of the chain; the range and the
+        // conversion come from the Rust core. Stored as before (a quarter of the factor).
+        val micOffDb = uniffi.sdr_remote.txGainOffDb()
+        val micMaxDb = uniffi.sdr_remote.txGainDbMax()
         val micRadio = fullState.selectedRadio
-        var localMicGain by remember(micRadio) {
-            mutableFloatStateOf(micEngineToDisplay(YaesuTxPrefs.micGain(micEqPrefs, micRadio)))
+        var localMicDb by remember(micRadio) {
+            mutableFloatStateOf(kotlin.math.round(uniffi.sdr_remote.yaesuMicGainDb(YaesuTxPrefs.micGain(micEqPrefs, micRadio))))
         }
         // No push on radio switch here: this tab is not always composed, so the
         // engine would keep the previous radio's gain. SdrViewModel.syncTxChainForRadio
         // does it from the state stream; the slider below still pushes on change.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Mic:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
-            Slider(value = localMicGain, onValueChange = {
-                localMicGain = it
-                val engineGain = micDisplayToEngine(it)
+            Slider(value = localMicDb, onValueChange = {
+                localMicDb = kotlin.math.round(it)
+                val engineGain = uniffi.sdr_remote.yaesuMicGainFromDb(localMicDb)
                 onTxGain(engineGain)
                 YaesuTxPrefs.setMicGain(micEqPrefs, micRadio, engineGain)
-            }, valueRange = 0.05f..1f, modifier = Modifier.weight(1f))
-            Text("${String.format("%.1f", localMicGain)}x", fontSize = 11.sp, modifier = Modifier.width(36.dp))
+            }, valueRange = micOffDb..micMaxDb, modifier = Modifier.weight(1f))
+            Text(
+                com.sdrremote.ui.components.gainDbText(localMicDb),
+                fontSize = 11.sp, modifier = Modifier.width(44.dp),
+            )
         }
         // Client-side TX compressor (for Yaesu USB audio; radio shaping is bypassed on
         // USB). Deliberately HERE, inline next to Mic gain: in the EQ block (further down)
@@ -2284,14 +2293,14 @@ private fun YaesuTab(
             Text("${rfPower.coerceIn(5f, pwrMax).toInt()}W", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
 
-        // DSP/function controls (phase 2) - collapsible, shared for the selected radio.
+        // DSP/function controls - collapsible, shared for the selected radio.
         Spacer(Modifier.height(8.dp))
         YaesuDspSection(state, onDspControl)
 
         // 5-band EQ (persistent via SharedPreferences)
         Spacer(Modifier.height(8.dp))
         val context = LocalContext.current
-        val eqPrefs = remember { context.getSharedPreferences("thetislink_eq", android.content.Context.MODE_PRIVATE) }
+        val eqPrefs = remember { context.getSharedPreferences(YaesuTxPrefs.STORE, android.content.Context.MODE_PRIVATE) }
         // Independent EQ per radio: keys carry the slot index (0/1), with a fallback
         // to the old shared key while there is no radio-specific value yet, so an
         // existing curve is kept and can diverge per radio afterwards.
@@ -2322,22 +2331,11 @@ private fun YaesuTab(
         // cover the same CASE: the loader returns early unless a Yaesu is the
         // operating radio, and this one also runs while the operator is on Thetis
         // with the screen open. Removing it would silently change that case.
-        // Written down rather than left to be rediscovered (working rule 15); if a
+        // Written down rather than left to be rediscovered; if a
         // Kotlin test harness ever exists, this is one to pin.
         LaunchedEffect(state.selectedRadio) {
             onEqEnabled(eqEnabled)
             for (i in 0..4) onEqBand(i, eqGains[i].floatValue)
-        }
-        // Sync EQ enabled from SharedPreferences (auto-switch by ViewModel) — per radio.
-        LaunchedEffect(eqRadio) {
-            while (true) {
-                kotlinx.coroutines.delay(500)
-                val prefsVal = eqPrefs.getBoolean("eq_enabled_$eqRadio", eqEnabled) // deliberately raw: the poll wants THIS slot only
-                if (prefsVal != eqEnabled) {
-                    eqEnabled = prefsVal
-                    onEqEnabled(prefsVal)
-                }
-            }
         }
         // The AGC is NOT re-sent from here. It used to be, on first composition and
         // on a radio change - which meant the engine only ever learned about this
@@ -2377,49 +2375,37 @@ private fun YaesuTab(
         }
 
         // EQ Presets
-        val presetKey = "eq_presets"
-        var presetNames by remember { mutableStateOf<List<String>>(
-            try {
-                val json = org.json.JSONObject(eqPrefs.getString(presetKey, "{}") ?: "{}")
-                json.keys().asSequence().toList().sorted()
-            } catch (_: Exception) { emptyList() }
-        ) }
-        var selectedPreset by remember { mutableStateOf("") }
+        var presetNames by remember { mutableStateOf(YaesuTxPrefs.presetNames(eqPrefs)) }
+        var selectedPreset by remember(eqRadio) { mutableStateOf("") }
         var presetMenuExpanded by remember { mutableStateOf(false) }
         var showSaveDialog by remember { mutableStateOf(false) }
         // The preset assignment (BT/Mic automatic choice) is remembered per radio: on a
         // radio change it is reloaded from the slot-specific key. That is the whole point
-        // - each radio its own chosen EQ preset (operator, 2026-07-04).
-        var btPreset by remember(eqRadio) { mutableStateOf(eqPrefs.getString("eq_preset_bt_$eqRadio", "") ?: "") }
-        var micPreset by remember(eqRadio) { mutableStateOf(eqPrefs.getString("eq_preset_mic_$eqRadio", "") ?: "") }
+        // - each radio its own chosen EQ preset.
+        var btPreset by remember(eqRadio) { mutableStateOf(YaesuTxPrefs.assignedPreset(eqPrefs, eqRadio, headset = true)) }
+        var micPreset by remember(eqRadio) { mutableStateOf(YaesuTxPrefs.assignedPreset(eqPrefs, eqRadio, headset = false)) }
 
-        // Helper: load a preset by name into sliders + engine
-        fun loadPreset(name: String) {
-            if (name.isBlank()) return
-            try {
-                val json = org.json.JSONObject(eqPrefs.getString(presetKey, "{}") ?: "{}")
-                if (!json.has(name)) return
-                val arr = json.getJSONArray(name)
-                for (i in 0..4) {
-                    val g = arr.getDouble(i).toFloat()
-                    eqGains[i].floatValue = g
-                    onEqBand(i, g)
-                    YaesuTxPrefs.setBand(eqPrefs, eqRadio, i, g)
-                }
-                selectedPreset = name
-            } catch (_: Exception) {}
-        }
-
-        // Sync preset from ViewModel auto-switch (BT connect/disconnect)
-        LaunchedEffect(Unit) {
-            while (true) {
-                kotlinx.coroutines.delay(500)
-                val pending = eqPrefs.getString("eq_preset_pending", null)
-                if (pending != null) {
-                    eqPrefs.edit().remove("eq_preset_pending").apply()
-                    loadPreset(pending)
-                }
-            }
+        // A preset loaded by the ViewModel (a headset change, a radio change, the
+        // start, a choice in the list below): the sliders take what is now stored
+        // for the radio on screen. The load is the signal and the stored settings
+        // the source: this tab is composed again on every tab switch and the effect
+        // runs then too, with the last load still there, so copying the load's own
+        // values put back any slider move made since.
+        LaunchedEffect(yaesuTxLoad, eqRadio) {
+            val load = yaesuTxLoad ?: return@LaunchedEffect
+            if (load.radio != eqRadio) return@LaunchedEffect
+            eqEnabled = YaesuTxPrefs.eqEnabled(eqPrefs, eqRadio)
+            for (i in 0..4) eqGains[i].floatValue = YaesuTxPrefs.band(eqPrefs, eqRadio, i)
+            localMicDb = kotlin.math.round(uniffi.sdr_remote.yaesuMicGainDb(YaesuTxPrefs.micGain(eqPrefs, eqRadio)))
+            compLevel = YaesuTxPrefs.compressor(eqPrefs, eqRadio)
+            txAgc = YaesuTxPrefs.txAgc(eqPrefs, eqRadio)
+            if (load.preset.isNotBlank()) selectedPreset = load.preset
+            // What the sliders now hold, so a field log can lay it beside
+            // "Yaesu EQ loaded" above it.
+            val micText = com.sdrremote.ui.components.gainDbLabel(localMicDb) ?: "off"
+            val bandsText = (0..4).joinToString(" ") { String.format(java.util.Locale.ROOT, "%.1f", eqGains[it].floatValue) }
+            android.util.Log.i("YaesuTab", "Yaesu screen took the load (radio=${load.radio}, preset=${load.preset}, " +
+                "seq=${load.seq}, on=$eqEnabled, mic gain $micText, comp ${compLevel.toInt()}, AGC $txAgc, bands $bandsText)")
         }
 
         Row(
@@ -2459,7 +2445,7 @@ private fun YaesuTab(
                             },
                             onClick = {
                                 presetMenuExpanded = false
-                                loadPreset(name)
+                                onChoosePreset(name)
                             },
                         )
                     }
@@ -2472,20 +2458,15 @@ private fun YaesuTab(
             Button(
                 onClick = {
                     if (selectedPreset.isNotEmpty()) {
-                        try {
-                            val json = org.json.JSONObject(eqPrefs.getString(presetKey, "{}") ?: "{}")
-                            json.remove(selectedPreset)
-                            eqPrefs.edit().putString(presetKey, json.toString()).apply()
-                            presetNames = json.keys().asSequence().toList().sorted()
-                            // Clear auto-assign if deleted preset was assigned
-                            if (selectedPreset == btPreset) {
-                                btPreset = ""; eqPrefs.edit().putString("eq_preset_bt_$eqRadio", "").apply()
-                            }
-                            if (selectedPreset == micPreset) {
-                                micPreset = ""; eqPrefs.edit().putString("eq_preset_mic_$eqRadio", "").apply()
-                            }
-                            selectedPreset = ""
-                        } catch (_: Exception) {}
+                        presetNames = YaesuTxPrefs.deletePreset(eqPrefs, selectedPreset)
+                        // Clear auto-assign if deleted preset was assigned
+                        if (selectedPreset == btPreset) {
+                            btPreset = ""; YaesuTxPrefs.setAssignedPreset(eqPrefs, eqRadio, headset = true, name = "")
+                        }
+                        if (selectedPreset == micPreset) {
+                            micPreset = ""; YaesuTxPrefs.setAssignedPreset(eqPrefs, eqRadio, headset = false, name = "")
+                        }
+                        selectedPreset = ""
                     }
                 },
                 enabled = selectedPreset.isNotEmpty(),
@@ -2505,7 +2486,7 @@ private fun YaesuTab(
                 onClick = {
                     if (selectedPreset.isNotEmpty()) {
                         btPreset = selectedPreset
-                        eqPrefs.edit().putString("eq_preset_bt_$eqRadio", selectedPreset).apply()
+                        YaesuTxPrefs.setAssignedPreset(eqPrefs, eqRadio, headset = true, name = selectedPreset)
                     }
                 },
                 enabled = selectedPreset.isNotEmpty(),
@@ -2524,7 +2505,7 @@ private fun YaesuTab(
                 onClick = {
                     if (selectedPreset.isNotEmpty()) {
                         micPreset = selectedPreset
-                        eqPrefs.edit().putString("eq_preset_mic_$eqRadio", selectedPreset).apply()
+                        YaesuTxPrefs.setAssignedPreset(eqPrefs, eqRadio, headset = false, name = selectedPreset)
                     }
                 },
                 enabled = selectedPreset.isNotEmpty(),
@@ -2558,15 +2539,10 @@ private fun YaesuTab(
                 confirmButton = {
                     TextButton(onClick = {
                         if (saveName.isNotBlank()) {
-                            try {
-                                val json = org.json.JSONObject(eqPrefs.getString(presetKey, "{}") ?: "{}")
-                                val arr = org.json.JSONArray()
-                                for (i in 0..4) arr.put(eqGains[i].floatValue.toDouble())
-                                json.put(saveName.trim(), arr)
-                                eqPrefs.edit().putString(presetKey, json.toString()).apply()
-                                presetNames = json.keys().asSequence().toList().sorted()
-                                selectedPreset = saveName.trim()
-                            } catch (_: Exception) {}
+                            // The bands, the mic gain, the compressor and the AGC
+                            // of this radio as they stand.
+                            presetNames = YaesuTxPrefs.savePreset(eqPrefs, saveName.trim(), eqRadio)
+                            selectedPreset = saveName.trim()
                         }
                         showSaveDialog = false
                     }) { Text(stringResource(R.string.common_save)) }
@@ -2778,7 +2754,7 @@ private val YAESU_MENU_NAMES = mapOf(
     141 to "TUNER SELECT", 142 to "VOX SELECT", 143 to "VOX GAIN", 144 to "VOX DELAY",
 )
 
-// ========== Yaesu DSP / function controls (phase 2) ==========
+// ========== Yaesu DSP / function controls ==========
 // Typed YaesuControl channel: onDspControl(control index, value). Feature state
 // comes from state.yaesuFeature* (already remapped to the selected radio).
 // Per-model differences (NB/DNR 991A toggle+slider vs FTX-1 slider, AMC FTX-1
@@ -2845,7 +2821,7 @@ private fun YaesuDspSection(state: SdrUiState, onDspControl: (Int, Int) -> Unit)
             DspFreqRow("APF", 16, bit(16), 19, frq(1), 0f, 50f, isCw, onDspControl)
             DspFreqRow("Notch", 17, bit(17), 20, frq(2), 1f, 320f, !isFm, onDspControl)
 
-            // Clarifier (phase 3): RIT/XIT on/off (bits 21/22) + offset (freqs[3], signed) + step.
+            // Clarifier: RIT/XIT on/off (bits 21/22) + offset (freqs[3], signed) + step.
             val ritOn = bit(21)
             val xitOn = bit(22)
             val off = frq(3).let { if (it > 32767) it - 65536 else it } // i16-as-u16 → signed Hz
@@ -2947,7 +2923,7 @@ private fun DspFreqRow(
     }
 }
 
-// Digit-tap tuning (phase 4): every digit position is tappable; the upper half
+// Digit-tap tuning: every digit position is tappable; the upper half
 // steps that decade up, the lower half down. Grouping dots are not tappable.
 @Composable
 private fun YaesuDigitTuner(freqHz: Long, onLongPress: () -> Unit, onDelta: (Long) -> Unit) {
@@ -2985,7 +2961,7 @@ private fun YaesuDigitTuner(freqHz: Long, onLongPress: () -> Unit, onDelta: (Lon
     }
 }
 
-// Touch stepper (phase 4): - / + with a settable step size (10 Hz to 1 MHz).
+// Touch stepper: - / + with a settable step size (10 Hz to 1 MHz).
 @Composable
 private fun YaesuFreqStepper(onDelta: (Long) -> Unit) {
     var stepHz by rememberSaveable { mutableStateOf(1000L) }
@@ -3032,7 +3008,7 @@ private fun formatFreqMhz(hz: Long): String {
  * A vertical Material slider. Compose ships only a horizontal Slider, so we render
  * a normal one and rotate it 270 degrees, swapping the measured width/height so it
  * occupies a tall-and-narrow box and hit-testing stays correct. Dragging up raises
- * the value (bottom = min, top = max) — the natural direction for a graphic EQ.
+ * the value (bottom = min, top = max); the natural direction for a graphic EQ.
  * The caller sizes the on-screen footprint via `modifier` (e.g. width x height).
  */
 @Composable

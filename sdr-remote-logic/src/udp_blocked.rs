@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Whether this network lets UDP through to the relay (build 137, design phase
-//! 3d §7). Since build 133 every connection is QUIC, which is UDP; a network
+//! Whether this network lets UDP through to the relay (build 137). Since
+//! build 133 every connection is QUIC, which is UDP; a network
 //! that blocks UDP gets no connection at all, also not through the relay. Over
 //! the relay that can be told apart from "the server is down": the sign-in over
 //! wss stands (a grant is there), but the relay never says where it sees our
@@ -8,8 +8,8 @@
 //! route layer sends it a keepalive every second.
 //!
 //! Without a relay there is nothing to tell it by, and this says nothing.
-//! A relay that never sends `udp-seen` (one older than phase 3c) would read as
-//! blocked; ours does send it.
+//! An older relay that never sends `udp-seen` would read as blocked; ours does
+//! send it.
 
 use std::time::{Duration, Instant};
 
@@ -18,15 +18,14 @@ use sdr_remote_quic::UdpGrant;
 /// How long a relay session may stand without `udp-seen` before UDP counts as
 /// blocked. The route layer sends a keepalive every second, so ten without an
 /// answer is no lost packet. The VPS counts its own after 30 s; the app says it
-/// sooner, because the operator is waiting. Named in the brief before it was
-/// built (working rule 11, build 137).
+/// sooner, because the operator is waiting.
 pub const UDP_SEEN_WAIT: Duration = Duration::from_secs(10);
 
 // The band the wait must stay in, checked by the compiler: above a couple of the
 // route layer's one-second keepalives, so one lost packet is not a block, and
 // below the 30 s the VPS counts with, so the app says it first. The band, not
-// the value: 5 s or 20 s still compile and keep every test green (review 137,
-// review 138) - the 10 is a choice inside the band.
+// the value: 5 s or 20 s still compile and keep every test green
+// - the 10 is a choice inside the band.
 const _: () = assert!(UDP_SEEN_WAIT.as_secs() >= 2 && UDP_SEEN_WAIT.as_secs() < 30);
 
 /// Follows the engine's relay grant and says when UDP becomes blocked, and
@@ -65,7 +64,7 @@ impl UdpBlockedWatch {
                 // `since.is_none()`: the same session that lost its `udp-seen`.
                 // The relay never takes it back within a session today (it sets
                 // `public_seen` once per session), so this is a net for a relay
-                // that one day does - then the clock starts there (review 137).
+                // that one day does - then the clock starts there.
                 if self.session != Some(g.session) || self.since.is_none() {
                     self.session = Some(g.session);
                     self.since = Some(now);

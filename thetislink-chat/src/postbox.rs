@@ -2,9 +2,9 @@
 //
 //! The diagnosis postbox: reports come in, the administrator takes them out.
 //!
-//! A postbox and not an archive (design §1.4). A report stays only until it has
+//! A postbox and not an archive. A report stays only until it has
 //! been collected, which keeps the VPS empty, keeps other people's data off
-//! somebody else's server, and lets whoever studies a report do it locally —
+//! somebody else's server, and lets whoever studies a report do it locally,
 //! reading one means searching it several times, and pulling it off a machine
 //! that is carrying audio every time is the wrong place to do that.
 //!
@@ -15,7 +15,7 @@
 use log::{info, warn};
 use rusqlite::{params, Connection};
 
-/// §1.2. A report is a log tail plus settings, and since the client can bring
+/// A report is a log tail plus settings, and since the client can bring
 /// the server's log as well it is two of those in one body.
 ///
 /// Half a megabyte looked generous when a report was one machine's log. It is
@@ -26,7 +26,7 @@ use rusqlite::{params, Connection};
 /// against the postbox ceiling below and against a machine with no swap.
 pub const MAX_REPORT_BYTES: usize = 4 * 1024 * 1024;
 
-/// §1.2. Enough for a bad day, few enough that the postbox cannot be filled by
+/// Enough for a bad day, few enough that the postbox cannot be filled by
 /// one station.
 ///
 /// Raised from five once the server GUI got the same window as the client, and
@@ -43,20 +43,20 @@ pub const MAX_REPORT_BYTES: usize = 4 * 1024 * 1024;
 /// so an emptied postbox restores the allowance immediately.
 pub const MAX_REPORTS_PER_STATION_PER_DAY: i64 = 100;
 
-/// §1.2. The postbox holds what has not been collected yet, so this is a ceiling
+/// The postbox holds what has not been collected yet, so this is a ceiling
 /// on a backlog rather than on an archive.
 ///
 /// Raised with the per-report limit: twenty megabytes was five full reports
 /// under the new ceiling, which is a backlog one bad evening can produce.
 pub const MAX_POSTBOX_BYTES: i64 = 200 * 1024 * 1024;
 
-/// §1.4. How long a claim holds a report before it falls back to unclaimed.
+/// How long a claim holds a report before it falls back to unclaimed.
 ///
 /// Long enough to read and save one, short enough that a browser closed midway
 /// does not strand it.
 pub const CLAIM_LEASE_SECS: i64 = 900;
 
-/// §1.4. Not a retention period - a report that nobody collects should not sit
+/// Not a retention period - a report that nobody collects should not sit
 /// there forever.
 pub const UNCOLLECTED_MAX_DAYS: i64 = 30;
 
@@ -112,7 +112,7 @@ pub enum PostboxError {
     /// Releasing something that was never claimed, or claimed by another.
     NotClaimed,
     /// One answer per report: this stays an answer and does not become a
-    /// conversation (design section 1.5).
+    /// conversation.
     AlreadyReplied,
 }
 
@@ -123,11 +123,11 @@ impl std::fmt::Display for PostboxError {
         f.write_str(match self {
             PostboxError::TooLarge => "that report is too large",
             // Says the number and what changes it. "several" told nobody
-            // whether to wait a minute or a day (design section 8).
+            // whether to wait a minute or a day.
             PostboxError::TooMany => {
-                "that is the most reports this station can send in a day - they free up                  again as they are collected, or after a day"
+                "that is the most reports this station can send in a day: they free up                  again as they are collected, or after a day"
             }
-            PostboxError::Full => "the postbox is full - try again later",
+            PostboxError::Full => "the postbox is full: try again later",
             PostboxError::NotFound => "no such report",
             PostboxError::NotClaimed => "that report is not claimed",
             PostboxError::AlreadyReplied => "that report has already been answered",
@@ -140,7 +140,7 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         "CREATE TABLE IF NOT EXISTS diagnoses (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             -- NULL after the sender left the chat: an uncollected report of
-            -- theirs goes with them (design §6.4), so this only survives for
+            -- theirs goes with them, so this only survives for
             -- one already collected, which no longer lives here anyway.
             station_id    INTEGER,
             display_name  TEXT,
@@ -155,7 +155,7 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
 
         -- An answer used to live in two columns on the report it answered, and
         -- that put two promises against each other: collecting a report deletes
-        -- it (section 1.4, the VPS is a postbox and not an archive), so the
+        -- it (the VPS is a postbox and not an archive), so the
         -- answer went out with it and the sender waited for something that had
         -- been written AND thrown away. Keeping the row instead would have kept
         -- the whole report body on the server, which is the promise the other
@@ -242,7 +242,7 @@ pub fn submit(
     conn: &Connection,
     station_id: i64,
     // The name they chose to show in the chat, when they are in it. A report
-    // does not require one (design section 4), so this is optional.
+    // does not require one, so this is optional.
     display_name: Option<&str>,
     body: &str,
     now: i64,
@@ -444,8 +444,8 @@ pub fn release(conn: &Connection, id: i64, now: i64) -> Result<(), PostboxError>
     // insert that follows had its error thrown away, so on a full disk or an
     // I/O fault the report was gone AND unanswerable - `reply` looks in exactly
     // these two places and would find neither. Silently, at the moment the
-    // administrator was collecting it to help somebody. Found in review
-    // (2026-08-18); it matters more since the marker also decides whether a
+    // administrator was collecting it to help somebody. Found on
+    // 2026-08-18; it matters more since the marker also decides whether a
     // collected report is still listed at all.
     let tx = conn.unchecked_transaction().map_err(|_| PostboxError::NotFound)?;
     if let Some(station) = station {
@@ -456,21 +456,21 @@ pub fn release(conn: &Connection, id: i64, now: i64) -> Result<(), PostboxError>
             params![id, station, now],
         )
         .map_err(|e| {
-            warn!("diagnosis {}: could not record the collection ({}) - not removing it", id, e);
+            warn!("diagnosis {}: could not record the collection ({}); not removing it", id, e);
             PostboxError::NotFound
         })?;
     }
     tx.execute("DELETE FROM diagnoses WHERE id = ?1", params![id])
         .map_err(|_| PostboxError::NotFound)?;
     tx.commit().map_err(|e| {
-        warn!("diagnosis {}: collection could not be committed ({}) - it stays in the postbox", id, e);
+        warn!("diagnosis {}: collection could not be committed ({}); it stays in the postbox", id, e);
         PostboxError::NotFound
     })?;
     info!("diagnosis {} released and removed from the postbox", id);
     Ok(())
 }
 
-/// One short answer back to whoever sent a report (design §1.5).
+/// One short answer back to whoever sent a report.
 pub fn reply(conn: &Connection, id: i64, text: &str, now: i64) -> Result<i64, PostboxError> {
     // The station, from the report if it is still here and from the marker if it
     // has been collected. Answering after collecting is the ORDINARY case - the
@@ -572,8 +572,8 @@ pub fn replies_for(
 }
 
 
-/// An uncollected report of somebody who just left the chat goes with them
-/// (design §6.4). One already collected lives on the administrator's own
+/// An uncollected report of somebody who just left the chat goes with them.
+/// One already collected lives on the administrator's own
 /// machine and is beyond the reach of anything here, which the consent text
 /// says in as many words.
 pub fn forget_station(conn: &Connection, station_id: i64) -> rusqlite::Result<usize> {
@@ -581,7 +581,7 @@ pub fn forget_station(conn: &Connection, station_id: i64) -> rusqlite::Result<us
     if n > 0 {
         info!("station {}: {} uncollected diagnosis report(s) removed", station_id, n);
     }
-    // Their answers and markers go with them (design section 6.4). An answer to
+    // Their answers and markers go with them. An answer to
     // a report that no longer exists, for a station that no longer exists, is
     // exactly the kind of row nobody thinks to look for.
     let _ = conn.execute("DELETE FROM replies WHERE station_id = ?1", params![station_id]);
@@ -806,7 +806,7 @@ mod tests {
         assert!(got[1].collected_at.is_some(), "the one on the administrator's PC");
     }
 
-    /// The blocker from the release review: collecting used to delete the report
+    /// A blocker found before release: collecting used to delete the report
     /// and then write the marker with its error thrown away. On a full disk that
     /// left the report gone AND unanswerable - `reply` looks in the report table
     /// or the marker table and would find neither - silently, at the moment
@@ -844,7 +844,7 @@ mod tests {
     /// report in one transaction - but "should not" is exactly what a listing
     /// built from two tables has to survive. The live side wins because its
     /// body is still here and still claimable; showing the marker instead would
-    /// hide a report that can be read (raised in review, 2026-08-18).
+    /// hide a report that can be read.
     #[test]
     fn a_marker_beside_a_live_report_shows_one_row_and_it_is_the_live_one() {
         let c = db();
@@ -873,7 +873,7 @@ mod tests {
         assert_eq!(release(&c, id, T), Err(PostboxError::NotFound));
     }
 
-    /// The collision the review found: collecting a report deletes it, and the
+    /// A collision: collecting a report deletes it, and the
     /// answer used to live in that same row - so it went out with it and the
     /// sender waited for something that had been written and thrown away.
     #[test]
@@ -1056,7 +1056,7 @@ mod tests {
         assert_eq!(waiting[0].reply.as_deref(), Some("wat ik terugschreef"));
     }
 
-    /// Leaving the chat takes an uncollected report with it (§6.4).
+    /// Leaving the chat takes an uncollected report with it.
     #[test]
     fn leaving_the_chat_removes_an_uncollected_report() {
         let c = db();

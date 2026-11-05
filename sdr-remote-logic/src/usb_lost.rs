@@ -6,7 +6,7 @@
 //! bare carrier: the other station hears a signal and no voice. The operator
 //! has to know that, and today the opposite happened - the radio's window was
 //! removed the instant it went absent, so the one screen that could have said
-//! anything was gone (owner, 2026-09-06, an FTX-1 that took its own USB down
+//! anything was gone (2026-09-06, an FTX-1 that took its own USB down
 //! with its own RF).
 //!
 //! Two rules, and the second is the reason this is a module rather than an
@@ -24,7 +24,7 @@
 
 use std::time::Duration;
 
-/// How long the notice stays up after the cable is back. Chosen with the owner:
+/// How long the notice stays up after the cable is back. Chosen to be
 /// long enough to read after a one-second blip, short enough not to stand in
 /// the way of the next transmission.
 pub const MINIMUM: Duration = Duration::from_secs(3);
@@ -75,14 +75,14 @@ mod tests {
     /// notice could have been stretched to thirty seconds and nothing would
     /// have gone red. It sits on the transmit control, and this module argues
     /// on its own first page why it has to be short - so the number is part of
-    /// the claim and belongs in the assertion (review finding).
+    /// the claim and belongs in the assertion.
     #[test]
     fn and_it_does_go_away_after_three_seconds() {
         assert!(showing(false, true, Some(Duration::from_millis(2_999))));
         assert!(!showing(false, true, Some(Duration::from_millis(3_001))));
         // Documentation, not a net: the two lines above already catch a change
         // to the value. This one says out loud which number they are about, and
-        // a reviewer checked that removing it changes nothing.
+        // removing it was checked to change nothing.
         assert_eq!(MINIMUM, Duration::from_secs(3));
     }
 

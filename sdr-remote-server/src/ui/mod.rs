@@ -135,6 +135,8 @@ pub struct ServerApp {
     ssb_switch_on_ptt: [bool; 2],
     memory_write_ack: [bool; 2],
     audio_channel: [u8; 2],
+    /// `ServerConfig::yaesu_rx_levels_tuned`: one box for both radios.
+    yaesu_rx_levels_tuned: bool,
     /// What model is on each slot's port, as far as the settings screen knows:
     /// remembered from last time, refreshed by a probe when a port is picked.
     /// `None` means nobody has answered on that port yet, and then the screen
@@ -234,7 +236,7 @@ pub struct ServerApp {
     // VFO frequencies shared from network thread (for UltraBeam auto-track)
     vfo_freq_shared: Arc<AtomicU64>,
     vfo_b_freq_shared: Arc<AtomicU64>,
-    // RF2K-S debug/drive UI state (Phase D)
+    // RF2K-S debug/drive UI state
     rf2k_show_debug: bool,
     rf2k_show_drive_config: bool,
     rf2k_confirm_high_power: bool,
@@ -289,9 +291,9 @@ pub struct ServerApp {
     password: String,
     totp_enabled: bool,
     totp_secret: String,
-    // PATCH-3 mDNS friendly name (optional human-readable label)
+    // mDNS friendly name (optional human-readable label)
     friendly_name: String,
-    // Phase A relay monitor settings (status only; no TL frames routed yet).
+    // Relay monitor settings (status only; no TL frames routed yet).
     relay_enabled: bool,
     relay_url: String,
     relay_station: String,
@@ -324,7 +326,7 @@ pub struct ServerApp {
     /// button inside it is what actually grants `memory_write_ack` - for the
     /// slot it was opened from, which is why this carries one.
     show_memory_condition: Option<u8>,
-    // Chat and problem reporting (docs/internal/DESIGN-relay-chat.md), the same
+    // Chat and problem reporting, the same
     // component the desktop client draws. The server is a station in its own
     // right, so it gets the same window rather than a smaller one.
     pub(crate) chat: sdr_remote_chat::ChatPanel,
@@ -332,12 +334,12 @@ pub struct ServerApp {
     chat_window_pos: Option<[f32; 2]>,
     chat_window_size: Option<[f32; 2]>,
     chat_window_init_applied: bool,
-    /// PATCH-2: shared Status-panel probes - `Some` while a server is running,
+    /// Shared Status-panel probes - `Some` while a server is running,
     /// `None` before start_server / after Settings teardown.
     status_panel_state: Option<crate::audio_stats::StatusPanelShared>,
-    /// PATCH-2: bind address shown in the Status panel (e.g. "0.0.0.0:4580").
+    /// Bind address shown in the Status panel (e.g. "0.0.0.0:4580").
     status_bind_addr: String,
-    /// PATCH-2: which Mode::Running view is active.
+    /// Which Mode::Running view is active.
     status_view: StatusView,
     // "Vensters schikken" matrix placer (session state only, not persistent):
     // a grid PER monitor in which you "paint" the server windows over cells.
@@ -361,7 +363,7 @@ pub struct ServerApp {
     ui_language: String,
 }
 
-/// PATCH-2: top-level view in Mode::Running - Logs (existing) or
+/// Top-level view in Mode::Running - Logs (existing) or
 /// Status (new compact server-state panel).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusView {
@@ -424,7 +426,7 @@ impl Drop for ServerApp {
     fn drop(&mut self) {
         // The window was closed - the one way out since the Exit button went
         // (2026-09-19). The 991A must not be left in USB mode or on PC KEYING
-        // RTS (PE1FMC asked for a clean shutdown): the server's own end puts
+        // RTS: the server's own end puts
         // each Yaesu back and says so ("put back before exit"); this waits.
         self.save_window_positions();
         self.stop_server_and_wait(std::time::Duration::from_millis(2500));

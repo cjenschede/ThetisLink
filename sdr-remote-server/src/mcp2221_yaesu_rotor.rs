@@ -4,7 +4,7 @@
 //! directly via an Adafruit MCP2221A breakout at 5 V, without an
 //! intermediate EA7HG PCB).
 //!
-//! Hardware mapping (see memory `project_yaesu_rotor_mcp2221_plan`):
+//! Hardware mapping:
 //!
 //! | MCP2221A pin | Function | DIN-7 pin Yaesu | Notes |
 //! |--------------|---------|-----------------|-------------|
@@ -22,7 +22,7 @@
 //! This module contains only low-level primitives + an initialization
 //! routine that sets the board's SRAM settings to the correct mode.
 //! Server integration (RotorBackend, EquipmentCommand handlers, polling
-//! thread) follows in phase 3 of PATCH-yaesu-rotor-mcp2221.
+//! thread) lives elsewhere in the server.
 
 use anyhow::{anyhow, Context, Result};
 use log::{debug, info, warn};
@@ -223,7 +223,7 @@ impl YaesuRotorDriver {
     /// Snapshot of the current driver state (without a USB call).
     /// Computes both mean (for log diagnostics) and median (for UI display)
     /// over the moving-average buffer. The median is robust against noise
-    /// spikes that pull the mean away - operator finding 2026-06-04: EMI
+    /// spikes that pull the mean away - observed 2026-06-04: EMI
     /// pickup causes spreads of ~150 raw counts regardless of rotor
     /// position, a median over 10 samples filters the outliers out
     /// effectively while rotor movements still track immediately.
@@ -929,8 +929,8 @@ fn rotor_poll_thread(
                 // Shortest-route option: for rotors with an overlap zone
                 // (max_deg > 360) an alternative target = primary
                 // ± 360° can yield physically the same antenna direction,
-                // but via a shorter mechanical route. Operator choice
-                // 2026-06-04: per-rotor checkbox, default off.
+                // but via a shorter mechanical route. A per-rotor
+                // checkbox, default off.
                 let chosen = if cal_snap.shortest_route_in_overlap
                     && cal_snap.max_deg > 360
                 {

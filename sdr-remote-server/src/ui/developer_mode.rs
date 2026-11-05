@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-//! The developer mode, in the server GUI (build 294; owner decision
-//! 2026-10-23). What the mode is - the code, the log target, the logger's
+//! The developer mode, in the server GUI (build 294).
+//! What the mode is - the code, the log target, the logger's
 //! rule - is `sdr_remote_core::dev_mode`; this file is the server's switch and
 //! its sign. The switch is stored with the settings (`developer_mode`), and
 //! acts on the log at once.
@@ -59,7 +59,6 @@ impl ServerApp {
     fn switch_developer_mode(&mut self, on: bool) {
         self.developer_mode = on;
         sdr_remote_core::dev_mode::set(on);
-        // Named in advance (`logregels-build294.md`).
         log::info!("{}", sdr_remote_core::dev_mode::state_line(on));
         // Outside the mode every over gets the lead of every user (build 296):
         // a choice made in the mode does not outlive it.
@@ -92,8 +91,8 @@ mod tests {
         assert!(main.contains("log::set_boxed_logger(Box::new(DevGate(env_log))).unwrap();"), "the command line uses it");
         assert_eq!(main.matches("set_boxed_logger(").count(), 2, "and no third logger");
         // The saved mode reaches the switch as the GUI opens, and the start line
-        // says what the switch holds, not what the settings say (review of 294:
-        // without the first the log said "on" and held every developer line back).
+        // says what the switch holds, not what the settings say
+        // (without the first the log said "on" and held every developer line back).
         assert_eq!(main.matches("let config = config::load();\n        // The developer mode as saved (build 294), before anything is logged\n        // that it holds back.\n        sdr_remote_core::dev_mode::set(config.developer_mode);").count(), 1);
         assert_eq!(main.matches("dev_mode::set(").count(), 1);
         assert_eq!(main.matches("state_line(sdr_remote_core::dev_mode::is_on())").count(), 1);
@@ -125,7 +124,7 @@ mod tests {
             let code = &src[..src.find("#[cfg(test)]\nmod tests").unwrap_or(src.len())];
             let named = code.matches("tx_measurement").count();
             let allowed = code.matches("tx_measurement: false,").count();
-            assert_eq!(named, allowed, "{file} reads the box without the mode - use measuring()");
+            assert_eq!(named, allowed, "{file} reads the box without the mode: use measuring()");
         }
     }
 }

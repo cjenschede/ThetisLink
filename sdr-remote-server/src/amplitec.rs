@@ -245,7 +245,7 @@ fn send_and_scan(
     // length test on the wrong bytes and reports `connected` with switch
     // positions that are one answer behind, for as long as the thread lives.
     // Every other serial device here already drained (spe_expert, ultrabeam,
-    // yaesu/cat, yaesu/mod); this one was the exception, found in review.
+    // yaesu/cat, yaesu/mod); this one was the exception.
     let _ = port.clear(serialport::ClearBuffer::Input);
 
     // Send the command
@@ -334,9 +334,9 @@ mod tests {
     /// The bytes that move the antenna, written out.
     ///
     /// Seventy-eight of them, read out of the original Amplitec PC Control Pro 2
-    /// software, and until now held by nothing: a reviewer replaced `CMD_SCAN`
-    /// and a whole row of `CMD_SWITCH_A` with `DE AD BE EF` and all 380 tests
-    /// stayed green. The test that looked like it covered this compared what was
+    /// software, and until now held by nothing: replacing `CMD_SCAN` and a
+    /// whole row of `CMD_SWITCH_A` with `DE AD BE EF` left all 380 tests
+    /// green. The test that looked like it covered this compared what was
     /// written against the very constant that was written - the same tautology
     /// found and repaired one file over, in this same commit.
     ///
@@ -370,8 +370,8 @@ mod tests {
     /// Renamed. It used to be called `switch_a_and_switch_b_send_from_their_own_table`,
     /// which promised something it never reached: choosing the table from the
     /// position happens in `run_amplitec_session`, and no test here calls that.
-    /// A reviewer made switch A send B's command and all five tests passed.
-    /// **That selection is still untested** (open point 6); the name no longer
+    /// Making switch A send B's command left all five tests passing.
+    /// **That selection is still untested**; the name no longer
     /// says otherwise.
     #[test]
     fn whatever_command_it_is_given_is_what_goes_out() {
@@ -392,7 +392,7 @@ mod tests {
     /// bytes. So `if n == 0` in `send_and_scan` is a guard that cannot fire
     /// against a port that behaves like one, and this test says so rather than
     /// asserting a message that never appears. Removing the branch is a
-    /// behaviour decision and not this patch's to make (open point 6).
+    /// behaviour decision that is still open.
     #[test]
     fn silence_is_an_error_and_leaves_it_disconnected() {
         let fake = FakeSerial::new(); // answers nothing at all
@@ -419,7 +419,7 @@ mod tests {
 
     /// Bytes left over from a previous answer do not become this one.
     ///
-    /// This is the defect a reviewer traced on 2026-09-24, and it starts with
+    /// This is the defect traced on 2026-09-24, and it starts with
     /// the short answer pinned below. A reply that arrives in two reads leaves
     /// its tail in the port; nothing here ever drained it, while `spe_expert`,
     /// `ultrabeam`, `yaesu/cat` and `yaesu/mod` all do. The next poll then reads
@@ -454,7 +454,7 @@ mod tests {
     /// so the caller does not reconnect, while the switch positions stay at
     /// whatever they were and the device never counts as connected. A partial
     /// read of a good answer looks exactly like this. Changing it is a
-    /// behaviour decision and not this patch's to make (open point 6).
+    /// behaviour decision that is still open.
     #[test]
     fn a_short_answer_is_silently_accepted_and_changes_nothing() {
         let fake = FakeSerial::answering_each_command(&["AAAACAA"]); // one byte short

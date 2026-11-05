@@ -130,7 +130,7 @@ pub fn mode_factor(mode: u8) -> Option<f32> {
 /// Returns `Some(watts)` if the position has a max AND the mode has a
 /// factor; otherwise `None` (no cap).
 ///
-/// Named fields since build 229 (review of 228): by position, the position and
+/// Named fields since build 229: by position, the position and
 /// the mode - both a `u8` from 1 to 6-ish - swapped gave the cap of another
 /// position, or none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,7 +152,7 @@ impl CapFor {
     }
 }
 
-/// What one cap check reads (build 229, review of 228): `active_pa` and
+/// What one cap check reads: `active_pa` and
 /// `mode` are both a `u8`, three arguments apart, and swapped the cap chose
 /// its PA from the mode.
 #[derive(Debug, Clone, Copy)]
@@ -306,7 +306,7 @@ mod tests {
     }
 
     /// The cap check gets its reading by name, and passes position and mode on
-    /// by name (build 229, review of 228: K2 and K3 stayed green by position).
+    /// by name (K2 and K3 stayed green by position).
     #[test]
     fn the_cap_check_reads_position_pa_and_mode_by_name() {
         let pc = include_str!("power_cap.rs");

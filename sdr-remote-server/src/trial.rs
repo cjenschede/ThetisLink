@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Step 4 of the transmit chain (`PLAN-stap4-proefopstelling.md`, build 256): a
+//! A trial of the transmit chain (build 256): a
 //! development build of the server plays the TX arrivals of a drive into its own
 //! receive path (`--inspelen <servermeting.csv>`), with a recording in the packets
 //! (`--geluid`, build 257). From the receive path on everything is the real server
@@ -8,7 +8,7 @@
 //! pauses were trial options (`--zendafstelling B`, `--inlopen pauzes`) until they
 //! became the server's own in build 258.
 //!
-//! Only with the cargo feature `naspelen` (owner, 2026-10-12: a developer's tool,
+//! Only with the cargo feature `naspelen` (2026-10-12: a developer's tool,
 //! never in a release); compiled for the tests too, so it cannot rot.
 #![cfg_attr(not(feature = "naspelen"), allow(dead_code))]
 
@@ -249,8 +249,7 @@ pub fn play(
             }
             admit();
             if to_server.send((TRIAL_CLIENT, s.bytes)).is_err() {
-                // Named in advance (working rule 11, build 257).
-                log::warn!("Trial: the way in is gone - the replay stops after {} packets", sent);
+                log::warn!("Trial: the way in is gone; the replay stops after {} packets", sent);
                 return;
             }
             sent += 1;

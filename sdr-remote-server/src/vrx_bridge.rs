@@ -21,16 +21,15 @@ use sdr_remote_core::MAX_PACKET_SIZE;
 use vrx_rs::VrxAudioCallback;
 
 // NOTE: the former process-wide `vrx_control_thetislink()` singleton is removed -
-// per-client VRX control-state now lives in `vrx_manager::PerClientVrxManager`
-// (PATCH-vrx-per-client).
+// per-client VRX control-state now lives in `vrx_manager::PerClientVrxManager`.
 
-/// Per-stream feed-timing tracker (observability, PATCH-vrx-per-client §4bis).
+/// Per-stream feed-timing tracker (observability).
 /// Measures the fraction of the real-time batch budget that VRX `feed()` consumes
 /// and warns as it approaches the deadline - the primary early-warning for stutter
 /// now that there is no hard client cap. EMA + rate-limit keep the hot path
 /// log-quiet in steady state (only value-crossings and a 30 s heartbeat emit).
 ///
-/// Step 0 (baseline): instrumented on the current 2-runtime loop before the
+/// Baseline: instrumented on the 2-runtime loop before the
 /// per-client refactor, so we have a pre-refactor µs/batch reference and close the
 /// observability gap noted in the audio-stutter diagnosis.
 pub struct VrxFeedTimer {
@@ -86,7 +85,7 @@ impl VrxFeedTimer {
         if sustained {
             if self.last_warn.map_or(true, |t| now.duration_since(t).as_secs() >= 5) {
                 log::error!(
-                    "VRX {}: sustained feed overload - EMA {:.0}% of budget, peak {:.0}%, {} consecutive miss(es), {} active runtime(s)",
+                    "VRX {}: sustained feed overload; EMA {:.0}% of budget, peak {:.0}%, {} consecutive miss(es), {} active runtime(s)",
                     self.label, self.ema_ratio * 100.0, self.peak_ratio * 100.0,
                     self.consecutive_miss, active
                 );
@@ -96,18 +95,18 @@ impl VrxFeedTimer {
             // Transient spike absorbed by the jitter buffer - visible in the
             // heartbeat's peak field, but no alarm.
             log::debug!(
-                "VRX {}: transient feed spike {:.0}% (absorbed, EMA ~{:.0}%) - {} active runtime(s)",
+                "VRX {}: transient feed spike {:.0}% (absorbed, EMA ~{:.0}%); {} active runtime(s)",
                 self.label, ratio * 100.0, self.ema_ratio * 100.0, active
             );
         } else if self.ema_ratio > 0.8 && !self.warned_80 {
             log::warn!(
-                "VRX {}: feed ~{:.0}% of budget (EMA) - {} active runtime(s), stutter imminent",
+                "VRX {}: feed ~{:.0}% of budget (EMA); {} active runtime(s), stutter imminent",
                 self.label, self.ema_ratio * 100.0, active
             );
             self.warned_80 = true;
         } else if self.ema_ratio > 0.5 && !self.warned_50 {
             log::warn!(
-                "VRX {}: feed ~{:.0}% of budget (EMA) - {} active runtime(s)",
+                "VRX {}: feed ~{:.0}% of budget (EMA); {} active runtime(s)",
                 self.label, self.ema_ratio * 100.0, active
             );
             self.warned_50 = true;

@@ -69,8 +69,8 @@ pub fn build_tune_url(base_url: &str, freq_hz: u64, mode: u8) -> String {
 ///
 /// Both paths - the window TL opens itself and a browser outside it - follow the
 /// "WebSDR mute on TX" checkbox. Until build 51 the window TL opens ignored the
-/// checkbox and muted on every transmission; the owner confirmed on 2026-09-16
-/// that off has to mean off, after PE1FMC reported it (report 75).
+/// checkbox and muted on every transmission; since 2026-09-16 off means
+/// off.
 pub fn mute_wanted(enabled: bool, transmitting: bool) -> bool {
     enabled && transmitting
 }
@@ -210,6 +210,7 @@ impl CatSync {
     }
 
     /// Which SDR the window is being driven as. Follows the URL.
+    #[cfg(test)]
     pub fn sdr_type(&self) -> crate::websdr::SdrType {
         self.sdr_type
     }
@@ -229,8 +230,7 @@ impl CatSync {
         // The type follows the URL, window open or not. Until build 52 it was
         // decided once, when the window opened: "Use here" pointed an open KiwiSDR
         // window at a WebSDR and TL kept sending KiwiSDR JS, which that page does
-        // not know - so it was never muted and its frequency never followed
-        // (PE1FMC/owner, 2026-09-16).
+        // not know - so it was never muted and its frequency never followed.
         self.sdr_type = crate::websdr::SdrType::detect(&self.websdr_url);
         if self.websdr_tx.is_none() {
             return;

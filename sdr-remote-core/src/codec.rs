@@ -19,7 +19,7 @@ pub const NB_RX_BITRATE: i32 = 12_800;
 /// 18 kbps Opus puts no usable redundancy in a narrowband packet: rebuilding a
 /// lost frame from the next one gave bit for bit what concealment gave, at
 /// 12.8, 16 and 17 kbps at the loss percentages the server sets (5 to 20). From
-/// 18 kbps it does, at every one of them (measured twice, review of build
+/// 18 kbps it does, at every one of them (measured twice, build
 /// 153). 20 kbps is two steps above that threshold, as a margin: Opus decides
 /// it internally, and one step below it the redundancy goes without a word.
 /// The price is about 27 to 47 bytes a frame, only while a link is losing
@@ -46,7 +46,7 @@ pub const NB_PROTECTED_BITRATE: i32 = 20_000;
 /// three SILK frames each put a voice-activity bit first, so the flag sits
 /// further down. libopus 1.5 (`opus_packet_has_lbrr`, not in the bundled 1.3)
 /// counts those frames and finds it; this function does not and says no
-/// instead. All our encoders send 20 ms (build 156, review of 155).
+/// instead. All our encoders send 20 ms.
 pub fn carries_redundancy(packet: &[u8]) -> bool {
     if packet.len() < 2 {
         return false;
@@ -170,7 +170,7 @@ impl OpusEncoder {
     ///
     /// While protecting, the bitrate goes up to [`NB_PROTECTED_BITRATE`], the
     /// lowest at which narrowband redundancy is usable at all, and back to the
-    /// encoder's own when protection ends (build 153, owner's choice "b").
+    /// encoder's own when protection ends.
     pub fn set_loss_protection(&mut self, on: bool, loss_pct: u8) -> Result<()> {
         let bitrate = if on { self.base_bitrate.max(NB_PROTECTED_BITRATE) } else { self.base_bitrate };
         self.encoder
@@ -273,7 +273,7 @@ impl OpusEncoderWideband {
         let mut encoder = Encoder::new(SampleRate::Hz16000, Channels::Mono, Application::Voip)
             .context("failed to create wideband Opus encoder")?;
 
-        // 24 kbps — good quality for wideband voice
+        // 24 kbps: good quality for wideband voice
         encoder
             .set_bitrate(Bitrate::BitsPerSecond(24_000))
             .context("set bitrate")?;
@@ -427,7 +427,7 @@ mod tests {
 
     /// Every branch of `carries_redundancy`, on hand-made TOC bytes: the ones
     /// that make it safe are the ones no encoder in the receive path produces
-    /// today, and the transmit side will (build 156, review of 155).
+    /// today, and the transmit side will.
     #[test]
     fn redundancy_is_read_only_where_the_flag_is() {
         let cases: [(&[u8], bool, &str); 12] = [
@@ -449,7 +449,7 @@ mod tests {
         }
         // And every one of the 32 configurations, from RFC 6716 3.1 written out
         // here rather than from the function's own set: the toggled set has to
-        // be wrong somewhere for this to stay green (build 157; review of 156:
+        // be wrong somewhere for this to stay green (build 157:
         // letting config 3 back in - the 60 ms fault this repairs - stayed green).
         // SILK NB/MB/WB 10, 20, 40, 60 ms; hybrid SWB, FB 10, 20 ms; CELT.
         let one_silk_frame: [bool; 32] = [
@@ -776,7 +776,7 @@ mod tests {
                 }
             }
             println!(
-                "PLC {} - last real peak {}, {}, inaudible (<1%) after {}",
+                "PLC {}: last real peak {}, {}, inaudible (<1%) after {}",
                 if wide { "wideband" } else { "narrowband" },
                 last_real,
                 trace.trim(),

@@ -14,8 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * PATCH-3: NSD-based mDNS discovery for ThetisLink servers on the local
- * network. Mirrors the desktop client's `mdns.rs` browse — same service
+ * NSD-based mDNS discovery for ThetisLink servers on the local
+ * network. Mirrors the desktop client's `mdns.rs` browse; same service
  * type, same display-label convention.
  *
  * Owns a `MulticastLock` and an `NsdManager.DiscoveryListener`. Lifecycle
@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
  * multicast lock is released and discovery stops.
  *
  * mDNS failure (permission denied, no Wi-Fi, AP-isolation) leaves the
- * `servers` flow empty — the manual IP field always stays usable.
+ * `servers` flow empty: the manual IP field always stays usable.
  */
 class MdnsDiscovery(private val context: Context) {
 
@@ -86,7 +86,7 @@ class MdnsDiscovery(private val context: Context) {
         try {
             nsdManager.stopServiceDiscovery(listener)
         } catch (e: IllegalArgumentException) {
-            // Already stopped — fine.
+            // Already stopped: fine.
         }
         discoveryListener = null
         releaseLockSafe()

@@ -17,7 +17,7 @@ path = "src/main.rs"
 env_logger = "0.11"
 log = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
-# Ticket verification (design §3): HMAC-SHA256, the same primitive the rest of
+# Ticket verification: HMAC-SHA256, the same primitive the rest of
 # ThetisLink already uses for network auth.
 hmac = "0.12"
 sha2 = "0.10"

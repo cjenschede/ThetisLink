@@ -8,14 +8,14 @@ services:
     restart: unless-stopped
     environment:
       THETISLINK_RELAY_TOKEN: ${THETISLINK_RELAY_TOKEN:?set THETISLINK_RELAY_TOKEN in .env}
-      # Persistent station registry (Fase 1 auth). Empty registry -> legacy token mode.
+      # Persistent station registry (per-station keys). Empty registry -> legacy token mode.
       THETISLINK_RELAY_DB: /data/stations.db
       RUST_LOG: ${RUST_LOG:-info}
-      # PATCH-relay-audio-udp fase 2: bind the kale-UDP audio data path. Audio + PTT
+      # Bind the bare-UDP audio data path. Audio + PTT
       # travel over UDP (no retransmit); control/spectrum stay on wss via Caddy.
       THETISLINK_RELAY_UDP_LISTEN: 0.0.0.0:443
       # The relay signs chat tickets with this; the chat verifies with the same
-      # value (design §3.3). Optional: without it the relay simply offers no
+      # value. Optional: without it the relay simply offers no
       # ticket, which is a relay with no chat behind it.
       THETISLINK_CHAT_KEYS: ${THETISLINK_CHAT_KEYS:-}
     volumes:
@@ -25,20 +25,25 @@ services:
     expose:
       - "18080"
       - "18081"
-    # Published to the host: UDP 443 for the audio data path (fase 2). This is UDP;
-    # Caddy keeps TCP 443 for wss — same port number, different protocol, no conflict.
+    # Published to the host: UDP 443 for the audio data path. This is UDP;
+    # Caddy keeps TCP 443 for wss; same port number, different protocol, no conflict.
     ports:
       - "443:443/udp"
     # Migration aid: uncomment to also serve plain ws:// on the host during the switch.
     # ports:
     #   - "18080:18080"
 
-  # Phase 0 of the chat (docs/internal/DESIGN-relay-chat.md). Its own container,
+  # The chat. Its own container,
   # its own volume and its own route, so `docker compose up -d --build
   # thetislink-chat` touches nothing else: the relay carries audio and PTT and
   # must keep running across a chat update. The dependency points one way - the
   # chat may need the relay, never the reverse - so there is no depends_on here.
+  # Optional, behind the profile "chat": a plain `docker compose up` starts the
+  # relay and Caddy only, also from the relay source package, which has no
+  # ../thetislink-chat. COMPOSE_PROFILES=chat in .env, or naming the service,
+  # starts it too.
   thetislink-chat:
+    profiles: ["chat"]
     build:
       context: ../thetislink-chat
       dockerfile: Dockerfile
@@ -47,16 +52,18 @@ services:
     restart: unless-stopped
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      # The key the relay signs tickets with (design §3.3). Never in the repo -
+      # The key the relay signs tickets with. Never in the repo -
       # set it in .env next to the relay token. Comma-separated to keep two live
-      # during a rotation, so changing it needs no relay restart.
-      THETISLINK_CHAT_KEYS: ${THETISLINK_CHAT_KEYS:?set THETISLINK_CHAT_KEYS in .env}
+      # during a rotation, so changing it needs no relay restart. Not required
+      # here, because compose reads this file whole, also with the profile off;
+      # the chat itself refuses to start without it, and says so in its log.
+      THETISLINK_CHAT_KEYS: ${THETISLINK_CHAT_KEYS:-}
       THETISLINK_CHAT_DB: /data/chat.db
       # The administrator credential for the diagnosis postbox, separate from any
-      # station ticket (design §1.4). Absent means those paths simply do not
+      # station ticket. Absent means those paths simply do not
       # exist, which is a chat with no administrator side rather than an open one.
       THETISLINK_CHAT_ADMIN_TOKEN: ${THETISLINK_CHAT_ADMIN_TOKEN:-}
-    # Hard limits, not "bounded" (design §2.2). This host has 1.9 GB of RAM and
+    # Hard limits, not "bounded". This host has 1.9 GB of RAM and
     # NO SWAP: when memory runs out the kernel kills the biggest process rather
     # than slowing down, and that could be the relay. A capped chat gets killed
     # instead of its neighbour.

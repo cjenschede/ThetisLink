@@ -247,7 +247,7 @@ fn main() -> Result<()> {
     });
 
     info!("ThetisLink Client v{} starting", sdr_remote_core::version_string());
-    // Named in advance (`logregels-build295.md`): in which mode this log is written.
+    // In which mode this log is written.
     info!("{}", sdr_remote_core::dev_mode::state_line(sdr_remote_core::dev_mode::is_on()));
 
     let (engine, state_rx, cmd_tx) = ClientEngine::new();
@@ -256,7 +256,7 @@ fn main() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // The relay, when it is set up: a client relay monitor signs in and hands its
-    // grants to the engine's QUIC client (phase 3b), and the UI gets its status.
+    // grants to the engine's QUIC client, and the UI gets its status.
     // Otherwise QUIC straight to the address typed. Chosen once at start.
     let relay_cfg_loaded = ui::config::load_config();
     // Apply the persisted UI language before the egui app starts.
@@ -361,7 +361,7 @@ fn main() -> Result<()> {
             viewport = viewport.with_position(egui::pos2(pos[0], pos[1]));
         } else {
             log::warn!(
-                "main window saved pos ({}, {}) is off all connected monitors - opening on primary",
+                "main window saved pos ({}, {}) is off all connected monitors: opening on primary",
                 pos[0], pos[1]
             );
         }
@@ -394,4 +394,35 @@ fn main() -> Result<()> {
 
     info!("Client stopped.");
     Ok(())
+}
+
+#[cfg(test)]
+mod locale_tests {
+    /// Every text in the desktop client's and the server's translations has the
+    /// four languages: a key added in English only falls back silently, and
+    /// nothing else reads these files.
+    #[test]
+    fn every_text_has_the_four_languages() {
+        for (name, yml) in [
+            ("client", include_str!("../locales/app.yml")),
+            ("server", include_str!("../../sdr-remote-server/locales/app.yml")),
+        ] {
+            let mut keys: Vec<(&str, Vec<&str>)> = Vec::new();
+            for line in yml.lines() {
+                let trimmed = line.trim_start();
+                if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
+                if !line.starts_with(' ') {
+                    let key = line.split(':').next().unwrap();
+                    if key != "_version" { keys.push((key, Vec::new())); }
+                } else if let (Some(last), Some((lang, _))) = (keys.last_mut(), trimmed.split_once(':')) {
+                    last.1.push(lang);
+                }
+            }
+            assert!(keys.len() > 150, "{name}: the scan found {} texts", keys.len());
+            for (key, mut langs) in keys {
+                langs.sort_unstable();
+                assert_eq!(langs, ["de", "en", "fr", "nl"], "{name}: {key}");
+            }
+        }
+    }
 }

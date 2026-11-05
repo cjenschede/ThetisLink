@@ -1,4 +1,4 @@
-# ThetisLink relay — TLS front (Caddy). Terminates wss:// on 443 and reverse-proxies
+# ThetisLink relay: TLS front (Caddy). Terminates wss:// on 443 and reverse-proxies
 # to the internal plain-ws relay. Caddy fetches + auto-renews a free Let's Encrypt
 # certificate for $RELAY_DOMAIN.
 #
@@ -22,10 +22,10 @@
   # (Argon2 login + CSRF + login rate-limit); Caddy just terminates TLS and forwards.
   # Caddy adds X-Forwarded-For so the relay records the real client IP.
   #
-  # Optional hardening — lock the dashboard to known admin IPs by uncommenting:
+  # Optional hardening: lock the dashboard to known admin IPs by uncommenting:
   #   @notadmin not remote_ip 203.0.113.5 198.51.100.0/24
   #   abort @notadmin
-  # Chat (design §2.1). Its own route to its own container, and its own limits -
+  # Chat. Its own route to its own container, and its own limits -
   # the first bound belongs at the edge, not in the application. A chat message
   # is 2000 characters; the size here is set by the other thing this route
   # carries, a problem report with a client log AND a server log in it. At 1 MB

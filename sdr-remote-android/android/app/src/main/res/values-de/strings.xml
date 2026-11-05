@@ -27,7 +27,7 @@
     <string name="conn_choose_server">Gefundenen Server wählen (%1$d)</string>
     <string name="conn_2fa_code">2FA-Code</string>
     <string name="conn_verify">Bestätigen</string>
-    <string name="conn_audio_error">Audiofehler — neu verbinden…</string>
+    <string name="conn_audio_error">Audiofehler, neu verbinden…</string>
 
     <!-- SettingsDialog -->
     <string name="settings_title">Einstellungen</string>
@@ -36,8 +36,8 @@
     <string name="settings_password_required">Passwort zum Verbinden erforderlich</string>
     <string name="settings_connect_via_relay">Über Relay verbinden:</string>
     <string name="settings_relay_hint">Für Clients ohne Portweiterleitung (z. B. mobil). App neu starten zum Anwenden.</string>
-    <string name="settings_relay_saved_stop">Gespeichert - App neu starten, um das Relay nicht mehr zu nutzen</string>
-    <string name="settings_relay_saved_start">Gespeichert - App neu starten, um über das Relay zu verbinden</string>
+    <string name="settings_relay_saved_stop">Gespeichert: App neu starten, um das Relay nicht mehr zu nutzen</string>
+    <string name="settings_relay_saved_start">Gespeichert: App neu starten, um über das Relay zu verbinden</string>
     <string name="settings_relay_url">Relay-URL</string>
     <string name="settings_station_name">Stationsname</string>
     <string name="settings_token">Token</string>
@@ -106,6 +106,7 @@
     <!-- StatsPanel -->
     <string name="stats_rx_volume">RX-Lautstärke</string>
     <string name="stats_tx_gain">TX-Gain</string>
+    <string name="gain_off">aus</string>
     <string name="stats_audio_levels">Audiopegel:</string>
     <string name="stats_statistics">Statistiken:</string>
     <string name="stats_measure">Messung</string>
@@ -114,7 +115,7 @@
     <string name="stats_relay_only">Nur Relay</string>
     <string name="stats_relay_only_hint">Kein direkter Weg, solange dies an ist; ein direkter Weg wechselt sofort zurück zum Relay. Wird nach einem Neustart nicht gespeichert.</string>
     <string name="stats_force_tcp">TCP erzwingen</string>
-    <string name="stats_force_tcp_hint">Alles über das Relay per TCP, solange dies an ist, wie in einem Netzwerk ohne UDP - um zu messen, was das kostet. Wird nach einem Neustart nicht gespeichert.</string>
+    <string name="stats_force_tcp_hint">Alles über das Relay per TCP, solange dies an ist, wie in einem Netzwerk ohne UDP, um zu messen, was das kostet. Wird nach einem Neustart nicht gespeichert.</string>
     <string name="stats_relay_only_no_relay">Nur bei einer Verbindung über das Relay.</string>
     <string name="stats_link_loss">Verbindungsverlust</string>
     <string name="stats_down">Runter</string>
@@ -173,8 +174,8 @@
     <string name="main_devices">Geräte</string>
     <string name="main_native_error">Fehler in nativer Bibliothek: %1$s</string>
     <string name="main_key">Taste: %1$s</string>
-    <string name="main_yaesu_active_hint">Yaesu aktiv - zu Geräte wechseln</string>
-    <string name="main_yaesu_hint">Yaesu - zu Geräte für Bedienung</string>
+    <string name="main_yaesu_active_hint">Yaesu aktiv: zu Geräte wechseln</string>
+    <string name="main_yaesu_hint">Yaesu: zu Geräte für Bedienung</string>
     <string name="main_spectrum">Spektrum</string>
     <string name="main_about">Über</string>
     <string name="main_wizard">Assistent</string>
@@ -252,8 +253,8 @@
     <string name="dev_ex_menu">EX-Menü (%1$d)</string>
     <string name="dev_menu_num">Menü %1$d</string>
     <string name="dev_dsp_functions">DSP / Funktionen</string>
-    <string name="dev_port_a">Port A — ANT1 (TX+RX)</string>
-    <string name="dev_port_b">Port B — RX2 (RX)</string>
+    <string name="dev_port_a">Port A: ANT1 (TX+RX)</string>
+    <string name="dev_port_b">Port B: RX2 (RX)</string>
     <string name="dev_digit_tuner_hint">Ziffer tippen = abstimmen · lang drücken = eingeben</string>
 
     <!-- Chat am Relay -->
@@ -265,18 +266,18 @@
     <string name="chat_reply">antworten</string>
     <string name="chat_edit">aendern</string>
     <string name="chat_edited">(geaendert)</string>
-    <string name="chat_editing">Nachricht wird geaendert - Senden speichert die Korrektur</string>
+    <string name="chat_editing">Nachricht wird geaendert: Senden speichert die Korrektur</string>
     <string name="chat_replying_to">Antwort an %1$s</string>
     <string name="chat_input_hint">Ihre Nachricht</string>
     <string name="chat_as_name">Sie sind hier als %1$s</string>
     <string name="chat_leave">Austragen</string>
     <string name="chat_leave_title">Sich aus dem Chat austragen?</string>
-    <string name="chat_leave_explain">Das nimmt Ihren Namen von allem, was Sie geschrieben haben. Zum Feierabend brauchen Sie es nicht - wechseln Sie einfach den Tab, Sie bleiben im Chat. Ihre Nachrichten koennen ohne Ihren Namen bleiben, damit Gespraeche anderer lesbar bleiben, oder mit Ihnen gehen, wenn Ihr Rufzeichen im Text steht.</string>
+    <string name="chat_leave_explain">Das nimmt Ihren Namen von allem, was Sie geschrieben haben. Zum Feierabend brauchen Sie es nicht: Wechseln Sie einfach den Tab, Sie bleiben im Chat. Ihre Nachrichten koennen ohne Ihren Namen bleiben, damit Gespraeche anderer lesbar bleiben, oder mit Ihnen gehen, wenn Ihr Rufzeichen im Text steht.</string>
     <string name="chat_leave_keep">Austragen, Nachrichten behalten</string>
     <string name="chat_leave_delete">Austragen und loeschen</string>
     <string name="chat_report_needs_relay">Ein Problem zu melden laeuft ebenfalls ueber das Relay, also wird auch dafuer eines gebraucht.</string>
-    <string name="chat_offline_what_a_relay_is">Ein Relay ist schon fuer sich genommen wissenswert. Die eigene Station ueber das Internet zu erreichen heisst normalerweise, eine Verbindung von aussen hereinzulassen: eine im Router weitergeleitete Portnummer und eine Adresse, die sich nicht aendert.\n\nUeber ein Relay bauen stattdessen beide Seiten eine ausgehende Verbindung auf - zu einem Treffpunkt, der sie zusammenfuehrt. Das Netz zu Hause ist damit nicht mehr kritisch: meist muss am Router nichts geaendert werden, und es funktioniert auch hinter CGNAT oder im Mobilfunk.</string>
-    <string name="chat_offline_get_access">Sie koennen selbst ein Relay betreiben - der Quelltext liegt jeder Version bei. PA3GHM betreibt ebenfalls eines, mit diesem Chatraum und der Schaltflaeche Problem melden, zu dem Sie auf Anfrage hinzugefuegt werden koennen: ein experimenteller Aufbau mit begrenzter Platzzahl, als Hobby betrieben, ohne Garantie auf Verfuegbarkeit oder Fortbestand. Wer ein Relay betreibt, darf eine Anfrage ablehnen oder den Dienst einstellen, und ein Nein braucht keine Begruendung. Schreiben Sie an PA3GHM@gmail.com mit Ihrem Rufzeichen und einer kurzen Notiz zu Ihrer Station.</string>
+    <string name="chat_offline_what_a_relay_is">Ein Relay ist schon fuer sich genommen wissenswert. Die eigene Station ueber das Internet zu erreichen heisst normalerweise, eine Verbindung von aussen hereinzulassen: eine im Router weitergeleitete Portnummer und eine Adresse, die sich nicht aendert.\n\nUeber ein Relay bauen stattdessen beide Seiten eine ausgehende Verbindung auf; zu einem Treffpunkt, der sie zusammenfuehrt. Das Netz zu Hause ist damit nicht mehr kritisch: meist muss am Router nichts geaendert werden, und es funktioniert auch hinter CGNAT oder im Mobilfunk.</string>
+    <string name="chat_offline_get_access">Sie koennen selbst ein Relay betreiben: Der Quelltext liegt jeder Version bei. PA3GHM betreibt ebenfalls eines, mit diesem Chatraum und der Schaltflaeche Problem melden, zu dem Sie auf Anfrage hinzugefuegt werden koennen: ein experimenteller Aufbau mit begrenzter Platzzahl, als Hobby betrieben, ohne Garantie auf Verfuegbarkeit oder Fortbestand. Wer ein Relay betreibt, darf eine Anfrage ablehnen oder den Dienst einstellen, und ein Nein braucht keine Begruendung. Schreiben Sie an PA3GHM@gmail.com mit Ihrem Rufzeichen und einer kurzen Notiz zu Ihrer Station.</string>
     <string name="chat_offline_no_relay">Es ist kein Relay eingerichtet, also gibt es keinen Chat. Der Chat laeuft neben dem Relay, ueber das Sie verbinden.</string>
     <string name="chat_offline_no_ticket">Dieses Relay bietet keinen Chat.</string>
     <string name="chat_offline_unreachable">Der Chat antwortet nicht. Audio, PTT und das Funkgeraet sind davon unberuehrt.</string>
@@ -294,7 +295,7 @@
     <string name="chat_consent_ban">Der Administrator kann eine Station aus dem Chat entfernen, wenn es unhaltbar wird. Sie werden informiert, Ihre Beitraege bleiben stehen, und auch die Problemmeldung wird geschlossen. Das Verlassen des Chats hebt eine Entfernung nicht auf.</string>
     <string name="chat_consent_access">Alle, die mit diesem Relay verbunden sind, koennen mitlesen, was Sie hier schreiben.</string>
     <string name="chat_consent_age">Ich bin sechzehn oder aelter, oder ein Elternteil stimmt zu.</string>
-    <string name="chat_consent_agree">Ich stimme zu - teilnehmen</string>
+    <string name="chat_consent_agree">Ich stimme zu, teilnehmen</string>
     <string name="chat_report_button">Problem melden</string>
     <string name="chat_report_title">Problem melden</string>
     <string name="chat_report_explain">Was haben Sie getan, was haben Sie erwartet, und was ist stattdessen passiert? Ihre Beschreibung ist die Meldung.</string>
@@ -303,7 +304,7 @@
     <string name="chat_report_send">Meldung senden</string>
     <string name="chat_report_attach">Log und Einstellungen mitsenden</string>
     <string name="chat_report_reading">Log und Einstellungen werden gelesen...</string>
-    <string name="chat_report_attach_shown">Das geht mit. Lesen Sie es vor dem Senden durch: Adressen, Namen und alles, was nach einem Passwort aussah, wurden entfernt - die letzte Kontrolle liegt bei Ihnen.</string>
+    <string name="chat_report_attach_shown">Das geht mit. Lesen Sie es vor dem Senden durch: Adressen, Namen und alles, was nach einem Passwort aussah, wurden entfernt; die letzte Kontrolle liegt bei Ihnen.</string>
     <string name="settings_roger">Rogerpiep</string>
     <string name="settings_roger_hint">Ein kurzer Ton am Ende der Aussendung. Der Sender bleibt so lange getastet, damit die Gegenstelle ihn hoert. Nie in Daten- oder Digitalmodi.</string>
     <string name="settings_roger_volume">Pegel</string>
@@ -318,7 +319,7 @@
     <string name="settings_ble_ptt_no_permission">Bluetooth-Berechtigung abgelehnt</string>
     <string name="settings_ble_ptt_connected">Verbunden: %1$s</string>
     <string name="settings_ble_ptt_connecting">Verbinde…</string>
-    <string name="settings_ble_ptt_waiting">Ausser Reichweite — verbindet sich selbst</string>
+    <string name="settings_ble_ptt_waiting">Ausser Reichweite, verbindet sich selbst</string>
     <string name="settings_ble_ptt_reconnect">Neu verbinden</string>
     <string name="settings_ble_ptt_forget">Diese Taste vergessen</string>
     <string name="settings_ui_scale">Anzeigegröße:</string>
@@ -326,6 +327,6 @@
     <string name="settings_ui_scale_landscape_off">Bei dieser Größe bleibt die App im Hochformat. Kleiner erlaubt das Drehen.</string>
     <!-- Shown when the server is not running this app's build. It only tells;
          nothing on this screen refuses to work over it. -->
-    <string name="stats_build_mismatch">Der Server läuft mit %1$s und diese App mit %2$s - das sollte derselbe Build sein.</string>
+    <string name="stats_build_mismatch">Der Server läuft mit %1$s und diese App mit %2$s: Das sollte derselbe Build sein.</string>
     <string name="stats_build_too_old">ein Build, der zu alt ist, um es zu sagen</string>
 </resources>

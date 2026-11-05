@@ -1,2 +1,11 @@
 [target.aarch64-linux-android]
 rustflags = ["-C", "link-arg=-lc++_static", "-C", "link-arg=-lc++abi"]
+
+# The C runtime goes inside the Windows exes, so they start without the Visual
+# C++ Redistributable and no other installer can replace that runtime under
+# them. A RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS variable overrides this line
+# entirely; the release build clears both and passes its own flags with --config
+# (build 12-13), and `Get-DesktopRuntimeImports` checks the finished exes in both
+# build paths.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

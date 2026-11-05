@@ -35,12 +35,12 @@ fn antenna_button(
     let pos_galley = ui.painter().layout_no_wrap(
         pos_text.clone(),
         pos_font.clone(),
-        Color32::TEMPORARY_COLOR,
+        Color32::PLACEHOLDER,
     );
     let alias_galley = ui.painter().layout_no_wrap(
         alias_text.to_string(),
         alias_font.clone(),
-        Color32::TEMPORARY_COLOR,
+        Color32::PLACEHOLDER,
     );
 
     let pad_x = 10.0_f32;
@@ -875,10 +875,9 @@ impl SdrRemoteApp {
             }
         });
 
-        // --- Debug section (Phase D) ---
+        // --- Debug section ---
         if self.rf2k_debug_available {
-            // The same chevron and lines as every other fold, and remembered
-            // (owner, 2026-10-15).
+            // The same chevron and lines as every other fold, and remembered.
             super::helpers::rule(ui);
             self.folds_open = super::helpers::settings_group(
                 ui,

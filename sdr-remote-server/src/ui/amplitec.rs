@@ -8,8 +8,7 @@ use crate::amplitec::AmplitecSwitch;
 #[derive(Clone, Copy)]
 enum AntennaState {
     /// This position is the actively selected one - blue fill
-    /// (ThetisLink convention for toggled-on, see memory
-    /// `feedback_ui_button_color_convention`).
+    /// (ThetisLink convention for toggled-on).
     Active,
     /// This position is occupied by the other port - disabled-ish look.
     Blocked,
@@ -27,7 +26,7 @@ enum AntennaState {
 ///
 /// Button fill: blue for `Active`, muted grey for `Blocked`,
 /// default for `Inactive`. On hover: lighter fill for visual
-/// feedback (per `feedback_ui_hover_always`). The `max_width` cap
+/// feedback. The `max_width` cap
 /// ensures a row of 6 buttons scales with the window width:
 /// never larger than natural, but smaller is allowed.
 fn antenna_button(
@@ -55,12 +54,12 @@ fn antenna_button(
     let pos_galley = ui.painter().layout_no_wrap(
         pos_text.clone(),
         pos_font.clone(),
-        Color32::TEMPORARY_COLOR,
+        Color32::PLACEHOLDER,
     );
     let alias_galley = ui.painter().layout_no_wrap(
         alias_text.to_string(),
         alias_font.clone(),
-        Color32::TEMPORARY_COLOR,
+        Color32::PLACEHOLDER,
     );
 
     let pad_x = 10.0_f32;

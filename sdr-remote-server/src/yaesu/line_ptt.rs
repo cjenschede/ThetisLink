@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-//! A Yaesu that transmits on a line of its USB port (build 296; owner,
+//! A Yaesu that transmits on a line of its USB port (build 296;
 //! 2026-10-24). Both radios can key on RTS or DTR of their USB COM ports, per
-//! mode, and Windows raises those lines when it starts: the owner's radios went
+//! mode, and Windows raises those lines when it starts: two radios on a test station went
 //! into transmit while the PC booted, with ThetisLink not even running. The
 //! cause was menus 071 and 076 of the FT-991A and every RPTT SELECT of the
 //! FTX-1 on RTS. Yaesu warns of it itself (FTX-1 CAT OM 2508-C, p. 2): "When
 //! using the USB cable for TX control, the transceiver may switch to the
 //! transmit mode when the computer is started." The same table prints RTS in
 //! bold - its mark for the factory default - for PRESET1-5 RPTT SELECT, where
-//! the text above it says OFF (review of 296).
+//! the text above it says OFF.
 //!
 //! ThetisLink keys by CAT (`TX1;`/`TX0;`) and needs none of these lines - the
 //! one exception is PC KEYING, which the server sets to RTS itself for a CW
@@ -58,8 +58,7 @@ impl LineKeyed {
 }
 
 /// The FT-991A's menus that can key on a line: (menu, name, the value that is
-/// RTS, the value that is DTR). CAT OM 1711-D, OM p. 125-127; the same values
-/// as `docs/internal/referentie/Yaesu-FT-991A-153-EX-menuparameters-via-CAT.md`.
+/// RTS, the value that is DTR). CAT OM 1711-D, OM p. 125-127.
 const FT991A: [(&str, &str, &str, &str); 5] = [
     ("047", "AM PTT SELECT", "1", "2"),
     ("060", "PC KEYING", "2", "3"),
@@ -141,8 +140,7 @@ pub fn shown(st: &super::YaesuState) -> Vec<&LineKeyed> {
 pub enum MenuRead {
     /// A full read: at every connect (the 991A), or when the FTX-1's scan is
     /// done. Says the list each time, so also on a second connect to the same
-    /// radio - `forget_previous_radio` runs only when the model changes
-    /// (review of 296).
+    /// radio - `forget_previous_radio` runs only when the model changes.
     Full,
     /// One value written from a client's menu screen: says the list only when
     /// it changed.
@@ -154,9 +152,8 @@ pub enum MenuRead {
 /// so in the log.
 pub(super) fn refresh(st: &mut super::YaesuState, model: RadioModel, prefix: &str, read: MenuRead) {
     if let Some(menus) = update(st, model, read) {
-        // Named in advance (`logregels-build296.md`, `logregels-build297.md`).
         log::warn!(
-            "{} PTT on a USB line: {} - the radio transmits when Windows raises the line (at start-up, for example); ThetisLink keys by CAT and does not need it",
+            "{} PTT on a USB line: {}; the radio transmits when Windows raises the line (at start-up, for example); ThetisLink keys by CAT and does not need it",
             prefix,
             menus
         );
@@ -178,10 +175,10 @@ fn update(st: &mut super::YaesuState, model: RadioModel, read: MenuRead) -> Opti
 mod tests {
     use super::*;
 
-    /// The owner's two radios as they were (2026-10-24): 071 and 076 on RTS
+    /// The two radios of the test station as they were (2026-10-24): 071 and 076 on RTS
     /// on the 991A, every RPTT SELECT on 1 on the FTX-1.
     #[test]
-    fn the_owners_radios_are_found_as_they_were() {
+    fn the_test_station_radios_are_found_as_they_were() {
         let a = "046:0\n047:0\n060:0\n071:1\n076:1\n108:0\n109:1";
         let found = line_keyed(RadioModel::Ft991a, a);
         assert_eq!(found.iter().map(|m| (m.key, m.line)).collect::<Vec<_>>(), [("071", Line::Rts), ("076", Line::Rts)]);
@@ -222,25 +219,25 @@ mod tests {
         assert_eq!(radio.matches("        line_ptt::refresh(&mut st, model, &format!(\"[{}]\", model.label()), line_ptt::MenuRead::OneValue);\n        drop(st);\n        *self.menu_data.lock().unwrap() = Some(format!(\"MENU:{}\", merged));").count(), 1);
         assert_eq!(radio.matches("        self.last_menu_blob = None;\n        self.line_keyed.clear();").count(), 1);
         for (file, src) in [("poll.rs", poll), ("mod.rs", radio)] {
-            assert_eq!(src.matches("last_menu_blob = Some(").count(), 1 + usize::from(file == "mod.rs"), "{file}: a new writer of the copy - refresh the list there too");
+            assert_eq!(src.matches("last_menu_blob = Some(").count(), 1 + usize::from(file == "mod.rs"), "{file}: a new writer of the copy; refresh the list there too");
         }
         let own = include_str!("line_ptt.rs");
         let own = &own[..own.find("#[cfg(test)]\nmod tests").unwrap()];
         assert_eq!(own.matches("st.line_keyed = found;").count(), 1);
         assert_eq!(radio.matches(".line_keyed = ").count(), 0, "set only by refresh");
         // The screen takes what to show from `shown`, with this server's CW
-        // flag in it (review of 296: `false` there stayed green).
+        // flag in it (`false` there stayed green).
         let panel = include_str!("../ui/status_panel.rs");
         assert_eq!(panel.matches("    let shown = line_ptt::shown(&st);").count(), 1);
         assert_eq!(panel.matches("to_show(").count(), 0);
         assert_eq!(own.matches("to_show(&st.line_keyed, st.cw_pc_keying_original.is_some())").count(), 1);
-        // The advice names OFF for 060, where DAKY is the rear jack (review of 296).
+        // The advice names OFF for 060, where DAKY is the rear jack.
         assert_eq!(include_str!("../../locales/app.yml").matches("DAKY (FT-991A; 060 PC KEYING: OFF)").count(), 4);
     }
 
     /// When the log says it: after every full read, so also on a second
     /// connect to the same radio; after one value written only when the list
-    /// changed; and never what the screen leaves out (review of 296).
+    /// changed; and never what the screen leaves out.
     #[test]
     fn a_full_read_says_it_each_time_and_one_value_only_when_it_changes() {
         let mut st = crate::yaesu::YaesuState::default();

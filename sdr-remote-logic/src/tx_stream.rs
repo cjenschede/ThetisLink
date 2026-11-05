@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! One transmit stream to the server, per transmitter (build 291, step 2a of
-//! `KOPPELING-ZONDER-MECHANISME.md` point 18): Thetis and each Yaesu. What
+//! One transmit stream to the server, per transmitter (build 291): Thetis and
+//! each Yaesu. What
 //! every packet of the microphone's audio carries - its type, its sequence,
 //! its PTT flag - and the burst of packets after the flag changes, built in
 //! one place. Until 291 the engine built them in five places, Thetis's three
 //! (microphone, WAV, flag only) with one counter and the radios' two with
 //! another, and burst in two ways.
 //!
-//! One way to burst since build 292, Thetis's (owner, 2026-10-23): a change of
+//! One way to burst since build 292, Thetis's: a change of
 //! the flag is seen at the audio tick; while the burst lasts every audio frame
 //! goes twice (same sequence); a tick with no audio sends one packet with only
 //! the flag. Until 292 a radio sent a packet with only the flag at once on the

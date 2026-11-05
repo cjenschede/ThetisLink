@@ -123,7 +123,13 @@ impl SdrRemoteApp {
                 if !self.vrx2_high_res_spectrum { self.toggle_vrx_spectrum(VrxChannel::Vrx2); }
             }
             SnapWindow::Yaesu1 => { self.yaesu_popout = true; self.yaesu_popout_init_applied = false; }
-            SnapWindow::Yaesu2 => { self.yaesu2_popout = true; self.yaesu2_popout_init_applied = false; }
+            // The slot-2 window's open state lives in the PTT config, which a
+            // full save keeps as it stands in the file.
+            SnapWindow::Yaesu2 => {
+                self.yaesu2_popout = true;
+                self.yaesu2_popout_init_applied = false;
+                self.save_ptt_config();
+            }
         }
     }
 
@@ -232,7 +238,7 @@ impl SdrRemoteApp {
                 // incomplete, so remember the intent and carry it out the moment the
                 // window becomes available. The geometry is stored right away as
                 // well, so opening it by hand in the meantime also lands correctly.
-                log::info!("Arrangement {}: {:?} not available yet - queued until it appears",
+                log::info!("Arrangement {}: {:?} not available yet; queued until it appears",
                            idx + 1, w);
                 self.snap_set_geometry(w, pos, size);
                 self.layout_pending.retain(|(pw, _, _)| *pw != w);
@@ -368,7 +374,7 @@ impl SdrRemoteApp {
             self.snap_open(w);
             self.snap_move_now(ctx, w, pos, size);
             self.snap_set_geometry(w, pos, size);
-            log::info!("Queued arrangement: {:?} appeared - placed at {:.0},{:.0} {:.0}x{:.0}",
+            log::info!("Queued arrangement: {:?} appeared; placed at {:.0},{:.0} {:.0}x{:.0}",
                        w, pos.x, pos.y, size.x, size.y);
         }
         self.save_full_config();
@@ -450,7 +456,7 @@ impl SdrRemoteApp {
                     if areas.len() > 1 {
                         ui.horizontal(|ui| {
                             ui.label(rust_i18n::t!("screen").to_string());
-                            egui::ComboBox::from_id_source("layout_monitor")
+                            egui::ComboBox::from_id_salt("layout_monitor")
                                 .selected_text(rust_i18n::t!("main_screen_n", n = sel_mon + 1).to_string())
                                 .show_ui(ui, |ui| {
                                     for i in 0..areas.len() {

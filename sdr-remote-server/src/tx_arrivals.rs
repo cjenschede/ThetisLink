@@ -2,11 +2,11 @@
 //! The server's measurement of transmit packets (build 230): one line per
 //! TX audio packet that goes into a jitter buffer - when it arrived, its
 //! sequence number, the phone's timestamp and, since build 263, which
-//! transmitter it is for (`stream`: Thetis or one of the Yaesu radios). Step 2 of
-//! `PLAN-zendketen-samen-met-thetis.md`: the replay of step 3 needs the
+//! transmitter it is for (`stream`: Thetis or one of the Yaesu radios). The
+//! replay (`tx_replay.rs`) needs the
 //! arrival of every packet, and the 10 s summaries in the log are too coarse.
 //!
-//! Developer only (owner, 2026-10-12): on by a checkbox in the server's
+//! Developer only: on by a checkbox in the server's
 //! settings screen (`tx_measurement`), read when the server starts.
 //!
 //! The receive loop must not wait on a disk: a row is handed to a writer
@@ -114,7 +114,6 @@ impl TxArrivals {
         }
         if self.said_at.elapsed() >= SAY_EVERY {
             self.said_at = Instant::now();
-            // Named in advance (`logregels-build230.md`, `logregels-build231.md`).
             log::info!(
                 "Measurement (server): {} packet(s) written, {} dropped (channel full), {} dropped (writer stopped)",
                 self.sent, self.dropped_full, self.dropped_stopped
@@ -142,7 +141,6 @@ impl Drop for TxArrivals {
     fn drop(&mut self) {
         if self.writer.is_some() {
             let (written, dropped) = self.close();
-            // Named in advance (`logregels-build230.md`).
             log::info!(
                 "Measurement (server) off: {}, {} packet(s) written, {} dropped",
                 self.path.display(), written, dropped
@@ -162,7 +160,7 @@ fn write_rows(rx: Receiver<TxArrival>, mut file: impl Write) -> u64 {
                 if writeln!(file, "{},{},tx_arrival,{},{},{},{},{}", r.wall_ms, r.mono_ms, r.seq, r.ts, r.bytes, r.ptt as u8, r.stream.file_word())
                     .is_err()
                 {
-                    log::warn!("Measurement (server): a write failed - the file ends here");
+                    log::warn!("Measurement (server): a write failed; the file ends here");
                     return written;
                 }
                 written += 1;
@@ -237,7 +235,7 @@ mod tests {
     }
 
     /// A writer that stopped (a write failed) is not a full channel: the rows
-    /// are counted apart, so the log says which (review of 230).
+    /// are counted apart, so the log says which.
     #[test]
     fn a_stopped_writer_is_not_a_full_channel() {
         let (tx, rx) = sync_channel(8);

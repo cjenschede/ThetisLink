@@ -43,6 +43,16 @@ namespace sdr_remote {
     // (build 219); Compose had its own copies.
     f32 s_meter_fraction(f32 dbm);
     f32 yaesu_s_meter_dbm(u32 raw);
+    // The TX gain slider in dB, the desktop's (build 36): its range, off below
+    // it, the conversions, a knob's fraction, and the Yaesu stored value.
+    f32 tx_gain_db_min();
+    f32 tx_gain_db_max();
+    f32 tx_gain_off_db();
+    f32 tx_gain_db(f32 factor);
+    f32 tx_gain_factor(f32 db);
+    f32 tx_gain_from_fraction(f32 frac);
+    f32 yaesu_mic_gain_db(f32 stored);
+    f32 yaesu_mic_gain_from_db(f32 db);
 };
 
 dictionary BridgeFilterEdges {
@@ -62,7 +72,7 @@ enum BleDropPolicy {
 
 // What a PTT button shows. Decided in sdr-remote-logic, where the rows are
 // tested, rather than written a second time in Kotlin - which is what happened
-// the night the rule was centralised (review finding, round 1).
+// the night the rule was centralised.
 enum PttButton {
     "Busy",
     "Transmitting",
@@ -244,6 +254,7 @@ dictionary BridgeRadioState {
     string yaesu2_label;
     f32 capture_level;
     f32 yaesu_mic_level;
+    boolean mic_input_clip;
     f32 playback_level;
     u64 frequency_hz;
     u64 frequency_rx2_hz;
@@ -266,12 +277,13 @@ dictionary BridgeRadioState {
     boolean agc_enabled;
     boolean server_build_differs;
     string server_build;
-    // The measurement file being written (open point 34), or null when off.
+    // The measurement file being written, or null when off.
     string? measurement_file;
     boolean relay_only;
     boolean force_tcp;
     boolean via_relay;
-    string path_short;
+    string path_short_plain;
+    string path_short_red;
     string path_name;
     string path_hint;
     boolean path_coupling;
@@ -441,7 +453,7 @@ interface SdrBridge {
     void set_ptt(boolean active);
     void set_roger_beep(BridgeRogerBeep beep);
     void set_mic_gate_delay_ms(u32 delay_ms);
-    // Measurement mode (open point 34): a folder starts a new file there, null stops it.
+    // Measurement mode: a folder starts a new file there, null stops it.
     void set_measurement(string? dir);
     void set_relay_only(boolean on);
     // "Force TCP" on the measurement screen (build 146).

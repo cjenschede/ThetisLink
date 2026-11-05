@@ -73,7 +73,7 @@ pub struct PttDenial {
     /// it is never taken back: a reader that arrives one frame late still has
     /// to know what to let go of.
     ///
-    /// This is the half that was still a level, and a reviewer caught it. The
+    /// This is the half that was still a level. The
     /// notification could not be missed any more, but the reader then asked
     /// "which transmitters is it about" of the current situation - and by then
     /// the refusal could already be settled, so the answer was "none" and the
@@ -138,9 +138,9 @@ impl PttDenial {
         // The packet's own type, not an index worked out by the caller. That
         // step had nowhere to be tested - it sat in the engine loop, and a
         // caller that quietly passed `None` would have thrown the server's
-        // answer away with every test still green. Twice now a reviewer has
-        // found exactly that shape: a hop between the packet and the rule that
-        // nothing exercised.
+        // answer away with every test still green. That exact shape has turned
+        // up twice now: a hop between the packet and the rule that nothing
+        // exercised.
         let mask = match target.index() {
             Some(i) if i < TRANSMITTERS && asking[i] => 1u8 << i,
             Some(_) => 0,
@@ -190,7 +190,7 @@ impl PttDenial {
     ///
     /// It stores the new report itself (`*report = now_tx`): the edge exists
     /// only if this runs before the store, and with the store here that order
-    /// cannot be turned round at a call site (review 317).
+    /// cannot be turned round at a call site.
     ///
     /// Field test 2026-09-19 15:28: the first packet after a server restart
     /// came before the server had found the 991A and was refused; the next
@@ -271,7 +271,7 @@ impl PttDenial {
 /// Releasing everything on a jump was the first answer and it was too broad. A
 /// held Thetis that is being refused produces refusals at audio rate, so two
 /// in one frame is ordinary rather than exotic - and it let go of both radios
-/// every time, for refusals that were only ever about Thetis (review finding).
+/// every time, for refusals that were only ever about Thetis.
 pub fn transmitters_to_release(missed: u32, covered: u8, outstanding: u8) -> u8 {
     if missed <= 1 {
         covered
@@ -368,7 +368,7 @@ mod tests {
     /// The first version of this test had only the first reader, so it proved
     /// nothing about the difference: with no counter in the old code it failed
     /// at every sample rate for the same reason, and N=1 and N=10 did exactly
-    /// the same thing. A reviewer put the level reader beside it and the table
+    /// the same thing. With the level reader beside it the table
     /// appeared - `by_level` sees the refusal at N=1 and misses it from N=2,
     /// and `could_act` was 0 from N=2 as well, because the reader was asking
     /// what is refused now instead of what that refusal was about.
@@ -450,7 +450,7 @@ mod tests {
     /// `default()` and did exactly one refusal. It would put back the fault
     /// this module was written for: `covered` only ever grows, so after one
     /// refusal about radio 1 that latch is released on every later refusal,
-    /// whatever it was about (review finding).
+    /// whatever it was about.
     #[test]
     fn a_second_refusal_replaces_the_first() {
         let mut d = PttDenial::default();
@@ -467,8 +467,7 @@ mod tests {
     /// And so does its reason. The desktop reads `server_released` straight
     /// off the record when `seq` moves, so it has to describe THAT refusal:
     /// setting it only when it is true leaves the previous answer standing,
-    /// and a held key is then released for a reason that has passed
-    /// (review finding).
+    /// and a held key is then released for a reason that has passed.
     #[test]
     fn the_reason_belongs_to_the_refusal_that_carries_it() {
         let mut d = PttDenial::default();
@@ -486,7 +485,7 @@ mod tests {
     /// `outstanding` is empty there and `covered = outstanding | mask` cannot
     /// be told apart from `covered = mask`. That is the wrong case to prove it
     /// on: the ordinary way to be refused twice is to still be holding the
-    /// first (review finding).
+    /// first.
     #[test]
     fn a_second_refusal_replaces_the_first_while_the_first_still_stands() {
         let mut d = PttDenial::default();
@@ -506,7 +505,7 @@ mod tests {
     /// Thetis PTT riding on the audio packets. If such a refusal cleared the
     /// record, the payload would be gone before the reader had looked, while
     /// `seq` had already moved. That is the same hole as reading the level,
-    /// through a third door (review finding).
+    /// through a third door.
     #[test]
     fn a_refusal_that_applies_to_nothing_erases_nothing() {
         let mut d = PttDenial::default();
@@ -551,7 +550,7 @@ mod tests {
     /// above ends on `active()`, which is still true with the newer refusal's
     /// bit alone - so it could not tell the two apart. This one settles the
     /// newer refusal and asks whether the older one is still standing, which
-    /// nothing but accumulation can answer (review finding).
+    /// nothing but accumulation can answer.
     #[test]
     fn a_standing_refusal_survives_a_refusal_about_something_else() {
         let mut d = PttDenial::default();
@@ -572,7 +571,7 @@ mod tests {
     /// Nothing exercised `to_release` or `releases` - the two the client calls.
     /// Swapping the helper's arguments survived, and so did a `releases` that
     /// ignores which transmitter it is asked about, which is "let go of
-    /// everything": the answer round three took out (review finding).
+    /// everything": the answer round three took out.
     #[test]
     fn what_the_interface_reads_off_a_real_record() {
         let mut d = PttDenial::default();
@@ -690,7 +689,7 @@ mod cw_keyed_after_all_tests {
     fn a_refused_first_packet_comes_down_once_the_radio_is_keyed() {
         let mut r = true;
         PttDenial::default().cw_keyed_after_all(1, &mut r, false, false, 0, [false; 3]);
-        assert!(!r, "a falling report is stored as well (review 317 r2)");
+        assert!(!r, "a falling report is stored as well");
         let mut r = false;
         assert!({ let mut d = PttDenial::default(); d.cw_keyed_after_all(1, &mut r, true, false, 0, [false; 3]); r }, "the report is stored");
         let mut d = PttDenial::default();

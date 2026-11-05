@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 //! What a transmit audio packet does when it arrives, for every transmitter -
-//! Thetis and both Yaesu radios (build 285, step 1a of `KOPPELING` 18). Since
+//! Thetis and both Yaesu radios (build 285). Since
 //! build 282 the PTT is the flag on the audio for all of them, but Thetis and
 //! the radios each had their own arm deciding what a packet does: take the
 //! transmitter, play, or nothing. The filter on late packets (283) was in the
 //! radios' arm only. The decision is here now, with a test; what follows it -
 //! a radio keyed on arrival, Thetis keyed when its buffer plays, where the
-//! audio goes - stays with each transmitter (owner, 2026-10-04: only the
+//! audio goes - stays with each transmitter (by design: only the
 //! handling towards the radio itself may differ).
 //!
 //! The rule is the radios' arm of build 283, the more complete of the two.
@@ -78,13 +78,13 @@ pub fn intake(a: Arrival) -> Intake {
 /// The line for the first of a run of `Intake::Stale` packets, every
 /// transmitter's (`label`: "Thetis", "Radio 1", ...). Its words since build 282.
 pub fn stale_line(label: impl std::fmt::Display, addr: SocketAddr, seq: u32) -> String {
-    format!("{} PTT: a PTT frame from {} older than its newest (seq {}) - ignored", label, addr, seq)
+    format!("{} PTT: a PTT frame from {} older than its newest (seq {}); ignored", label, addr, seq)
 }
 
 /// The line for the first of a run of `Intake::LetGoByRadio` packets. Its
 /// words since build 282.
 pub fn let_go_line(label: impl std::fmt::Display, addr: SocketAddr) -> String {
-    format!("{} PTT: {} was let go by the server - its PTT frames are ignored until it lets go", label, addr)
+    format!("{} PTT: {} was let go by the server; its PTT frames are ignored until it lets go", label, addr)
 }
 
 /// Is sequence `a` after `b`, across the wrap (build 282)?
@@ -98,7 +98,7 @@ pub fn sequence_after(a: u32, b: u32) -> bool {
 /// (build 283): the filter is for the late packets of a press that just ended.
 /// A client that restarted behind the same address - over the relay it can -
 /// begins at sequence 0 again, and was kept off its radio until its count
-/// caught up (round 282). Past the window the safety catches a late packet
+/// caught up. Past the window the safety catches a late packet
 /// anyway.
 pub fn older_than_the_newest(newest: Option<(SocketAddr, u32, Instant)>, addr: SocketAddr, seq: u32, now: Instant) -> bool {
     newest.is_some_and(|(from, n, at)| {
@@ -200,7 +200,7 @@ mod tests {
         let thetis = |ptt, from_holder, stale| intake(Arrival { ptt, from_holder, keyed: from_holder, stale, let_go_by_radio: false });
         assert_eq!(thetis(true, false, false), Intake::Claim, "a press asks for Thetis");
         assert_eq!(thetis(true, true, false), Intake::Play, "the holder's press plays");
-        assert_eq!(thetis(true, true, true), Intake::Play, "the holder's own repeat plays - the buffer drops a duplicate");
+        assert_eq!(thetis(true, true, true), Intake::Play, "the holder's own repeat plays: the buffer drops a duplicate");
         assert_eq!(thetis(false, true, false), Intake::Play, "the holder's release plays");
         assert_eq!(thetis(false, false, false), Intake::Pass, "nobody's release: nothing");
         assert_eq!(thetis(true, false, true), Intake::Stale, "new in 285: a late press after the release takes nothing");
@@ -214,8 +214,8 @@ mod tests {
         assert_eq!(radio(true, false), Intake::Claim);
         assert_eq!(radio(true, true), Intake::Play);
         assert_eq!(radio(false, true), Intake::Claim, "another sender asks, and is refused by the session");
-        // Golden rows of their own (round 285: the table test computes its
-        // answer with a second copy of the rule).
+        // Golden rows of their own (the table test computes its answer with a
+        // second copy of the rule).
         let late = intake(Arrival { ptt: true, from_holder: false, keyed: true, stale: true, let_go_by_radio: true });
         assert_eq!(late, Intake::Stale, "a late press of an over that ended takes nothing, before anything else is asked");
         let let_go = intake(Arrival { ptt: true, from_holder: false, keyed: false, stale: false, let_go_by_radio: true });
@@ -257,7 +257,7 @@ mod tests {
 
     /// The filter on late packets holds only inside the packet window, and only
     /// for the same address (build 283): a client that restarted behind the
-    /// same address begins at 0 again and keys its radio (round 282).
+    /// same address begins at 0 again and keys its radio.
     /// Twice, the second over a newest that moved on.
     #[test]
     fn a_late_packet_is_old_only_inside_the_window() {

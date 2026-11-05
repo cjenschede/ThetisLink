@@ -122,7 +122,7 @@ pub const EX_CHART: &[(&str, &str, &str, &str)] = &[
     ("010605", "RADIO SETTING", "DIGITAL", "RADIO ID -"),
     // WIRES-X (RADIO SETTING sub-07): new firmware feature, does NOT appear in
     // 2506-CAT-Table-3. Field names + order read off the FTX-1 display
-    // (operator, build 120). Addresses sequential 010701-010706; 02/03 (freq-presets)
+    // (build 120). Addresses sequential 010701-010706; 02/03 (freq-presets)
     // did not come back in the live scan when not configured.
     ("010701", "RADIO SETTING", "WIRES-X", "PRESET SEARCH MANUAL / PRESET"),
     ("010702", "RADIO SETTING", "WIRES-X", "VFO PRESET FREQ (preset frequency, e.g. 145.780 MHz)"),
@@ -471,7 +471,7 @@ pub fn lookup(addr: &str) -> Option<(&'static str, &'static str, &'static str)> 
 ///
 /// In build 146 this also gave the other side (addresses the radio answered
 /// that the chart lacks), and that was the measurement the chart was completed
-/// from: the owner's FTX-1 answered 405 of the chart's 444 and nothing
+/// from: a real FTX-1 answered 405 of the chart's 444 and nothing
 /// outside it. Since 147 the scan only asks the chart's addresses, so that
 /// side is empty by construction and would read as evidence while measuring
 /// nothing; it is gone.
@@ -506,7 +506,8 @@ mod tests {
     }
 
     /// The Android labels are a copy of this chart (another language, another
-    /// build): every chart address has one, and nothing else (werkregel 15).
+    /// build): every chart address has one, and nothing else (a second place,
+    /// with a test that catches drift).
     #[test]
     fn the_android_labels_follow_the_chart() {
         let kt = include_str!("../../sdr-remote-android/android/app/src/main/java/com/sdrremote/ui/screens/Ftx1MenuNames.kt");
@@ -518,7 +519,7 @@ mod tests {
         let chart: std::collections::BTreeSet<&str> = EX_CHART.iter().map(|e| e.0).collect();
         assert_eq!(keys, chart);
         // And the labels themselves: each one opens with this address's
-        // subgroup. A changed label used to pass unseen (review 319).
+        // subgroup. A changed label used to pass unseen.
         let labels: std::collections::BTreeMap<&str, &str> = kt
             .lines()
             .filter_map(|l| l.trim().strip_prefix('"'))

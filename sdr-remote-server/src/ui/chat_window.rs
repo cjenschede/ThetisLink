@@ -4,8 +4,8 @@
 //!
 //! The window is this file's business; everything inside it belongs to
 //! `sdr_remote_chat::ChatPanel`, the same component the desktop client draws.
-//! The server is a station in its own right — it runs beside Thetis and drives
-//! the radio whether or not anybody has a client open — so it gets the same
+//! The server is a station in its own right; it runs beside Thetis and drives
+//! the radio whether or not anybody has a client open; so it gets the same
 //! chat and the same problem reporting, not a smaller version of them.
 //!
 //! Sharing the component is what keeps them identical. A consent text painted
@@ -18,7 +18,7 @@ use super::ServerApp;
 
 impl ServerApp {
     /// The button, for the top bar. Carries the unread count, because a channel
-    /// nobody opens is as empty as no channel at all (design §1.7).
+    /// nobody opens is as empty as no channel at all.
     pub(super) fn render_chat_button(&mut self, ui: &mut egui::Ui) {
         // Shown always, including on a station with no relay at all. It was
         // hidden there for a while, on the rule that an unexplained dead control
@@ -26,7 +26,7 @@ impl ServerApp {
         // say "no chat here". Now that it explains what the chat is and how to
         // reach one, the button is the way in rather than a dead end: somebody
         // curious enough to click gets the answer, and the relay gets found by
-        // the people who would benefit from it (owner, 2026-08-20).
+        // the people who would benefit from it.
         let unread = self.chat.unread();
         let label = if unread > 0 {
             format!("{} ({})", rust_i18n::t!("srv_chat"), unread)
@@ -45,7 +45,7 @@ impl ServerApp {
     /// Keep the worker fed, and draw the window when it is open.
     ///
     /// The ticket rides in on the relay's ready-reply, next to the UDP token. No
-    /// relay, or a relay with no chat behind it, simply means no ticket — a
+    /// relay, or a relay with no chat behind it, simply means no ticket; a
     /// normal state that the window reports in its own words.
     pub(super) fn chat_tick_and_render(&mut self, ctx: &egui::Context) {
         let ticket = self
@@ -112,7 +112,7 @@ impl ServerApp {
         // An answer folded away is written down straight away. The server has
         // its own config file and its own copy of the panel, so remembering it
         // in the client and on the phone left this window forgetting on every
-        // restart (owner, 2026-08-21).
+        // restart.
         if self.chat.take_answers_seen_changed() {
             let ids: Vec<String> = self.chat.seen_ids().iter().map(|i| i.to_string()).collect();
             let joined = ids.join(",");
@@ -136,6 +136,7 @@ fn chat_files() -> sdr_remote_chat::ChatFiles {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     sdr_remote_chat::ChatFiles {
         log: crate::server_log_path().to_string_lossy().to_string(),
+        previous_log: Some(crate::previous_log_path(&crate::server_log_path()).to_string_lossy().to_string()),
         conf: dir.join("thetislink-server.conf").to_string_lossy().to_string(),
     }
 }

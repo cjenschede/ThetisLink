@@ -2,7 +2,7 @@
 
 //! The CW keyer: paddle contacts in, key edges out.
 //!
-//! This is step 1 of `docs/internal/DESIGN-remote-cw.md`. It lives in the
+//! It lives in the
 //! shared crate so that every front end keys the same way, and it is pure: the
 //! caller samples the contacts (the MCP2221A reads all of them in one
 //! transaction, about every 2 ms) and hands them in with a timestamp; the keyer
@@ -52,7 +52,7 @@ pub enum PaddleMode {
 
 /// How long a contact has to read the same way before it counts. One place,
 /// used by `Default` and by the tests' grid arithmetic, so the two cannot
-/// drift apart (review finding on build 86: on a 2 ms grid, 3 and 4 were
+/// drift apart (found in build 86: on a 2 ms grid, 3 and 4 were
 /// indistinguishable and nothing pinned the number).
 pub const DEBOUNCE_MS: u32 = 3;
 
@@ -285,7 +285,7 @@ impl Keyer {
         // previous sample, so a press first seen now may have been there.
         // Only after that is the sample read against the phase that is
         // current *now* - never against one that had already ended when the
-        // sample arrived (review finding on build 86: a late sample used to
+        // sample arrived (found in build 86: a late sample used to
         // latch a fresh press as "touched during" an element that was over).
         loop {
             match self.phase {
@@ -762,7 +762,7 @@ mod tests {
     /// A planned edge is handed out at the first sample on or after its planned
     /// time - never before it, and never a whole sample interval after it. This
     /// is the bound the reader's "late N ms" log figure lives by, and it is a
-    /// property of the keyer, not of the board (review finding on build 90).
+    /// property of the keyer, not of the board (found in build 90).
     #[test]
     fn no_edge_is_handed_out_later_than_one_sample_interval() {
         for step in [1u64, 2, 5, 7] {
@@ -812,7 +812,7 @@ mod tests {
     /// from before, so in A they latch nothing, and letting go stops after
     /// the element in flight. What this pins is that the paddle levels are
     /// remembered in BOTH modes - tracking them in A only looks like a tidy-up
-    /// and makes a held paddle read as one that just closed (review finding).
+    /// and makes a held paddle read as one that just closed.
     #[test]
     fn switching_from_b_to_a_while_squeezing_makes_nothing_up() {
         let mut k = with(PaddleMode::IambicB);
@@ -836,7 +836,7 @@ mod tests {
 
     /// The design's defaults, in one place, so a change is a visible diff.
     #[test]
-    fn the_defaults_are_what_the_owner_chose() {
+    fn the_defaults_are_the_chosen_ones() {
         let s = KeyerSettings::default();
         assert_eq!(s.mode, PaddleMode::IambicB);
         assert!(!s.reversed, "left = dot");

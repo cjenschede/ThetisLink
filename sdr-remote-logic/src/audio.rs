@@ -17,20 +17,19 @@ pub const SWR_ALARM: AlarmTone = AlarmTone { hz: 880.0, level: 0.25, period_ms: 
 /// The drive was raised while a PA may be amplifying out of reach. Lower in pitch
 /// and level than the SWR beep, and slower: it has to be audible over the radio
 /// without drowning it, and it must not be mistaken for the SWR alarm - it says
-/// something entirely different (owner, 2026-09-16: "niet heel erg luid, wel
-/// hoorbaar").
+/// something entirely different (2026-09-16: not very loud, but audible).
 pub const PA_DRIVE_ALARM: AlarmTone = AlarmTone { hz: 660.0, level: 0.12, period_ms: 1500, on_ms: 200 };
 /// The press was let go because the session went (build 253): three short
 /// beeps, once. A pitch of its own between the other two and well apart from
-/// both, so it is not taken for the SWR or the drive warning (owner, 2026-10-18:
-/// "door die toon weet de gebruiker dat er iets is en ga je op het scherm kijken").
+/// both, so it is not taken for the SWR or the drive warning (2026-10-18:
+/// the tone tells the operator something is wrong, so they look at the screen).
 pub const PTT_DROPPED_ALARM: AlarmTone = AlarmTone { hz: 520.0, level: 0.2, period_ms: 333, on_ms: 150 };
 /// Three beeps and part of the silence after the third (it ends at 816 ms). The
 /// mixer counts the hold down per callback, not per sample, so a hold of three
 /// whole periods would let a fourth beep start in the callback that crosses 999 ms;
 /// ending in the gap leaves room for callbacks of up to ~99 ms: one that starts
 /// just before 900 ms with a frame still on the counter plays its whole length,
-/// and has to be done before 999 ms (round 253).
+/// and has to be done before 999 ms.
 pub const PTT_DROPPED_ALARM_MS: u32 = 900;
 
 /// Samples of the dropped-press beeps, at the given rate.
@@ -191,8 +190,6 @@ mod alarm_tone_tests {
 pub trait AudioBackend: Send + 'static {
     fn read_capture(&mut self, buf: &mut [f32]) -> usize;
     fn write_playback(&mut self, buf: &[f32]) -> usize;
-    fn capture_level(&self) -> f32;
-    fn playback_level(&self) -> f32;
     fn has_error(&self) -> bool;
     /// The chosen microphone that was not found, by the name it was chosen
     /// under; `None` when there is no choice or it was found. Nothing else is

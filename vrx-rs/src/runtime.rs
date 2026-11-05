@@ -7,7 +7,7 @@
 //! enabled, encodes Opus 20 ms frames and invokes a user-supplied
 //! callback for each frame.
 //!
-//! The runtime is intentionally sync and free of async runtimes —
+//! The runtime is intentionally sync and free of async runtimes,
 //! the host application's async loop (tokio / async-std / smol /
 //! single-threaded) calls `feed()` whenever a new IQ batch arrives.
 
@@ -73,7 +73,7 @@ impl Default for VrxRuntimeOptions {
 
 /// Callback invoked once per encoded Opus frame (20 ms at 8 kHz NB,
 /// `FRAME_SAMPLES` audio samples). The host implements this to ship
-/// the audio anywhere it wants — UDP, local playback, file, etc.
+/// the audio anywhere it wants; UDP, local playback, file, etc.
 pub trait VrxAudioCallback {
     fn on_frame(
         &mut self,
@@ -85,7 +85,7 @@ pub trait VrxAudioCallback {
 
     /// Called (throttled) while SAM auto-tune is following the carrier,
     /// with the new absolute listen frequency (Hz) so the host can update
-    /// the client VFO. Default no-op — hosts that don't use auto-tune
+    /// the client VFO. Default no-op; hosts that don't use auto-tune
     /// (e.g. `vrx-spike`) need not implement it.
     fn on_carrier_freq(&mut self, _vrx_id: u8, _freq_hz: u64) {}
 }
@@ -109,7 +109,7 @@ pub struct VrxRuntime {
     /// there is deliberately no accessor promising more than that.
     edge_clamped: bool,
     last_logged_clamp: bool,
-    // SAM auto-tune AFC (PATCH-vrx-wide-sam-ux). `afc_offset_hz` is the
+    // SAM auto-tune AFC. `afc_offset_hz` is the
     // accumulated correction added to the user's tuned frequency to follow
     // the carrier; reset when the user retunes or auto-tune is inactive.
     afc_offset_hz: f32,
@@ -170,7 +170,7 @@ impl VrxRuntime {
         if let Some(enc) = self.opus.as_mut() {
             if enc.set_loss_protection(on, loss_pct).is_err() {
                 warn!(
-                    "VRX{} runtime: encoder refused the error-correction change - keeping its previous setting",
+                    "VRX{} runtime: encoder refused the error-correction change; keeping its previous setting",
                     self.opts_vrx_id + 1
                 );
             }
@@ -210,9 +210,9 @@ impl VrxRuntime {
         ddc_center_hz: u64,
         callback: &mut impl VrxAudioCallback,
     ) {
-        let (enabled, target_freq_hz, mode, filter_low_hz, filter_high_hz, sam_auto_tune) = {
+        let (enabled, target_freq_hz, mode, filter_low_hz, filter_high_hz, sam_auto_tune, agc) = {
             let s = self.control.lock().expect("VrxControlState mutex poisoned").clone();
-            (s.enabled, s.target_freq_hz, s.mode, s.filter_low_hz, s.filter_high_hz, s.sam_auto_tune)
+            (s.enabled, s.target_freq_hz, s.mode, s.filter_low_hz, s.filter_high_hz, s.sam_auto_tune, s.agc)
         };
         if !enabled {
             // Reset opus accumulator so a stop/start doesn't bleed
@@ -257,7 +257,7 @@ impl VrxRuntime {
             let ifft_n = self.channelizer.as_ref().map(|c| c.ifft_size()).unwrap_or(0);
             let bin_hz = iq_sample_rate_hz as f32 / fft_n.max(1) as f32;
             info!(
-                "VRX{} runtime: channelizer (re)built — input_rate={} Hz, FFT_N={}, iFFT={}, output_rate={} Hz, bin={:.1} Hz, mode={:?}",
+                "VRX{} runtime: channelizer (re)built: input_rate={} Hz, FFT_N={}, iFFT={}, output_rate={} Hz, bin={:.1} Hz, mode={:?}",
                 self.opts_vrx_id + 1,
                 iq_sample_rate_hz,
                 fft_n,
@@ -269,6 +269,10 @@ impl VrxRuntime {
         } else if let Some(ch) = self.channelizer.as_mut() {
             // Live filter update: cheap, just mutates two usize fields.
             ch.set_filter(lo_bins, hi_bins);
+        }
+        // Every batch, also right after a rebuild: a no-op unless they changed.
+        if let Some(ch) = self.channelizer.as_mut() {
+            ch.set_agc(agc);
         }
 
         // target_freq_hz=0 → fall back to VFO so the listener hears
@@ -302,7 +306,7 @@ impl VrxRuntime {
             self.last_logged_clamp = self.edge_clamped;
             if self.edge_clamped {
                 warn!(
-                    "VRX{} at DDC band edge: requested offset {:.0} Hz held at {:.0} Hz                      (usable half-band {:.0} Hz, filter edge {:.0} Hz) - retune RX or re-centre CTUN",
+                    "VRX{} at DDC band edge: requested offset {:.0} Hz held at {:.0} Hz                      (usable half-band {:.0} Hz, filter edge {:.0} Hz); retune RX or re-centre CTUN",
                     self.opts_vrx_id + 1, requested_offset_hz, effective_offset_hz,
                     usable_half_hz, filter_edge_hz,
                 );
@@ -354,7 +358,7 @@ impl VrxRuntime {
                 // with a short averaging constant. Within AFC_GEAR_HZ switch to
                 // a SLOW (~2 s) constant: a strong/wide AM carrier's modulation
                 // pulls the inner PLL and the estimate wobbles, and at low SNR
-                // it is noisy — slow averaging rejects both so a centred carrier
+                // it is noisy; slow averaging rejects both so a centred carrier
                 // sits below the deadband → zero corrections → silent. This
                 // keeps the fast phase going until close (no long humming tail)
                 // while the locked end-state stays stable. Time-based α keeps
@@ -376,7 +380,7 @@ impl VrxRuntime {
                     let step = self.afc_resid_ema.clamp(-AFC_MAX_STEP_HZ, AFC_MAX_STEP_HZ);
                     // Clamp-aware handoff: at the ±3 kHz capture edge the offset
                     // moves less than `step`, so remove from the estimate and
-                    // hand off only what was actually applied — keeps the handoff
+                    // hand off only what was actually applied; keeps the handoff
                     // net-zero (no double-count / drift at the edge).
                     let old_offset = self.afc_offset_hz;
                     self.afc_offset_hz = (old_offset + step).clamp(-3000.0, 3000.0);
@@ -420,7 +424,7 @@ impl VrxRuntime {
                 }
                 Err(e) => {
                     warn!(
-                        "VRX{} runtime: Opus encoder init failed: {} — audio frames dropped",
+                        "VRX{} runtime: Opus encoder init failed: {}; audio frames dropped",
                         self.opts_vrx_id + 1,
                         e
                     );
@@ -452,7 +456,7 @@ impl VrxRuntime {
                 }
                 Err(e) => {
                     warn!(
-                        "VRX{} runtime: Opus encode failed: {} — frame dropped",
+                        "VRX{} runtime: Opus encode failed: {}; frame dropped",
                         self.opts_vrx_id + 1,
                         e
                     );

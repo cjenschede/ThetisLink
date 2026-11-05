@@ -24,7 +24,7 @@ use crate::state::RadioState;
 
 /// The client's one transport since build 133: a QUIC connection, straight to
 /// the address the operator typed or through the relay. Plain UDP and the
-/// classic relay tunnel are gone (phase 3d).
+/// classic relay tunnel are gone.
 ///
 /// Mimics the part of `UdpSocket`'s surface the engine uses (`send_to`,
 /// `recv_from`), so the call sites read as they did over UDP.
@@ -37,7 +37,7 @@ struct ClientTransport {
     /// The address the engine last sent to; what comes back is tagged with it
     /// (`quic_label`).
     engine_addr: std::sync::Mutex<Option<SocketAddr>>,
-    /// QUIC via the relay (phase 3b): every packet goes to this one address,
+    /// QUIC via the relay: every packet goes to this one address,
     /// whatever the engine names. The route layer underneath carries it
     /// through the relay.
     relay_peer: Option<SocketAddr>,
@@ -86,7 +86,7 @@ impl ClientTransport {
             let Some((from, data)) = self.client.lock().await.inbound_rx.recv().await else {
                 return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "QUIC client stopped"));
             };
-            // Too large for the buffer: dropped whole, never cut (review 109).
+            // Too large for the buffer: dropped whole, never cut.
             let Some(n) = sdr_remote_core::take_frame(&data, buf) else { continue };
             let tag = quic_label(from, *self.engine_addr.lock().unwrap());
             return Ok((n, tag));
@@ -116,7 +116,7 @@ impl ClientTransport {
 
 /// The connection kind of a client through the relay, from what its route
 /// layer says. A function of its own, with a table test: the three arms sat in
-/// the loop, and swapping two of them kept every test green (review 139).
+/// the loop, and swapping two of them kept every test green.
 fn kind_through_the_relay(path: sdr_remote_quic::ClientPath) -> sdr_remote_core::path::PathKind {
     use sdr_remote_core::path::PathKind;
     use sdr_remote_quic::ClientPath;
@@ -126,29 +126,15 @@ fn kind_through_the_relay(path: sdr_remote_quic::ClientPath) -> sdr_remote_core:
         ClientPath::Direct => PathKind::DirectViaRelay,
         ClientPath::Local => PathKind::LocalViaRelay,
         ClientPath::RelayTcp => PathKind::RelayTcp,
-    }
-}
-
-/// The log's word for a connection kind, after its letters (working rule 11,
-/// build 139): English, like every log line.
-fn path_log_word(kind: sdr_remote_core::path::PathKind) -> &'static str {
-    use sdr_remote_core::path::PathKind;
-    match kind {
-        PathKind::Local => "local",
-        PathKind::Direct => "direct",
-        PathKind::Relay => "relay",
-        PathKind::RelayCoupling => "coupling",
-        PathKind::DirectViaRelay => "direct, via relay",
-        PathKind::LocalViaRelay => "local, via relay",
-        PathKind::RelayTcp => "relay over TCP",
+        ClientPath::DirectRelayGone => PathKind::DirectRelayGone,
+        ClientPath::LocalRelayGone => PathKind::LocalRelayGone,
     }
 }
 
 /// What a frame that came over QUIC reads as: the IP is the connection's own,
 /// only the port is the one the engine sent to (the server's UDP port, which
 /// the operator typed). So it passes the receive filter like a UDP frame - and a
-/// late frame from a server the engine left can never read as the new one
-/// (review 110).
+/// late frame from a server the engine left can never read as the new one.
 fn quic_label(from: SocketAddr, sent_to: Option<SocketAddr>) -> SocketAddr {
     match sent_to {
         Some(e) => SocketAddr::new(from.ip(), e.port()),
@@ -159,13 +145,13 @@ fn quic_label(from: SocketAddr, sent_to: Option<SocketAddr>) -> SocketAddr {
 /// Whether an authentication result belongs to a QUIC connection that is gone:
 /// the binding the answer was made with is not the one now. Its proof is about
 /// another TLS session, so it neither connects nor refuses - the server of the
-/// new connection asks again (review 108, requirement 4).
+/// new connection asks again.
 fn result_is_stale(answered_with: Option<sdr_remote_quic::Binding>, now: Option<sdr_remote_quic::Binding>) -> bool {
     answered_with != now
 }
 
-/// An authentication in flight (phase 2 of the direct connection): what the
-/// client sent, and the key it will mean if the server's proof verifies.
+/// An authentication in flight (mutual authentication with a session key): what
+/// the client sent, and the key it will mean if the server's proof verifies.
 /// `verified` is set at the password step when 2FA follows, because the final
 /// result after the code carries no proof of its own.
 struct PendingAuth {
@@ -181,7 +167,7 @@ struct PendingAuth {
 /// The address this client can send to and listen from: the first IPv4 one.
 /// The socket is bound on 0.0.0.0, so an IPv6 literal or an AAAA-only name is no
 /// address for it - `None`, and the Connect arm says so. One rule for the
-/// literal and the looked-up way in (review 69: the literal way had none).
+/// literal and the looked-up way in (the literal way had none).
 pub(crate) fn first_ipv4(addrs: impl IntoIterator<Item = std::net::SocketAddr>) -> Option<std::net::SocketAddr> {
     addrs.into_iter().find(|a| a.is_ipv4())
 }
@@ -192,7 +178,7 @@ mod server_address_tests {
 
     /// Each way the route layer names maps to its own kind: all through the
     /// relay is R, a direct path being tried is still R but coupling, and a
-    /// confirmed direct path is D+R (review 139: swapping coupling and D+R kept
+    /// confirmed direct path is D+R (swapping coupling and D+R kept
     /// every test green).
     #[test]
     fn the_route_layer_s_way_maps_to_one_kind_each() {
@@ -203,6 +189,8 @@ mod server_address_tests {
         assert_eq!(super::kind_through_the_relay(ClientPath::Direct), PathKind::DirectViaRelay);
         assert_eq!(super::kind_through_the_relay(ClientPath::Local), PathKind::LocalViaRelay);
         assert_eq!(super::kind_through_the_relay(ClientPath::RelayTcp), PathKind::RelayTcp);
+        assert_eq!(super::kind_through_the_relay(ClientPath::DirectRelayGone), PathKind::DirectRelayGone);
+        assert_eq!(super::kind_through_the_relay(ClientPath::LocalRelayGone), PathKind::LocalRelayGone);
     }
 
     /// A QUIC frame keeps the IP it came from and takes the port the engine
@@ -210,14 +198,14 @@ mod server_address_tests {
     #[test]
     fn a_quic_frame_keeps_its_own_address() {
         use super::quic_label;
-        let from = a("192.168.1.97:4581");
-        assert_eq!(quic_label(from, Some(a("192.168.1.97:4580"))), a("192.168.1.97:4580"), "the server the operator typed");
-        assert_eq!(quic_label(from, Some(a("10.0.0.5:4580"))), a("192.168.1.97:4580"), "a late frame from the server left behind");
+        let from = a("192.168.1.50:4581");
+        assert_eq!(quic_label(from, Some(a("192.168.1.50:4580"))), a("192.168.1.50:4580"), "the server the operator typed");
+        assert_eq!(quic_label(from, Some(a("10.0.0.5:4580"))), a("192.168.1.50:4580"), "a late frame from the server left behind");
         assert_eq!(quic_label(from, None), from, "nothing sent yet");
     }
 
     /// A result for another QUIC connection is stale; the same binding, or none
-    /// on both sides (no connection), is not (requirement 4 of review 108).
+    /// on both sides (no connection), is not.
     #[test]
     fn a_result_for_another_connection_is_stale() {
         use super::result_is_stale;
@@ -234,11 +222,11 @@ mod server_address_tests {
 
     #[test]
     fn only_an_ipv4_address_is_one_for_this_client() {
-        assert_eq!(first_ipv4(Some(a("192.168.1.97:4580"))), Some(a("192.168.1.97:4580")));
+        assert_eq!(first_ipv4(Some(a("192.168.1.50:4580"))), Some(a("192.168.1.50:4580")));
         assert_eq!(first_ipv4(Some(a("[2001:db8::1]:4580"))), None, "an IPv6 literal");
         assert_eq!(
-            first_ipv4([a("[2001:db8::1]:4580"), a("192.168.1.97:4580")]),
-            Some(a("192.168.1.97:4580")),
+            first_ipv4([a("[2001:db8::1]:4580"), a("192.168.1.50:4580")]),
+            Some(a("192.168.1.50:4580")),
             "a dual-stack name: the AAAA record first, the A record wins"
         );
         assert_eq!(first_ipv4([a("[2001:db8::1]:4580")]), None, "an AAAA-only name");
@@ -258,8 +246,8 @@ const PROOF_INVALID: u8 = 0xff;
 /// Likewise: an ACCEPTED that arrives for a session that is already verified,
 /// with nothing in flight - a duplicate or a replay, not a new session.
 const RESULT_REPEATED: u8 = 0xfe;
-/// Likewise: an accepting answer without a proof - a server from before phase
-/// 2, which this client does not connect to (owner's decision F).
+/// Likewise: an accepting answer without a proof - a server that does not prove
+/// it knows the password, which this client does not connect to.
 const RESULT_NO_PROOF: u8 = 0xfd;
 /// Likewise: an accepting answer while no authentication is in flight and no
 /// session is verified - typically the answer to an attempt that a lost link
@@ -288,6 +276,7 @@ pub(crate) fn apply_yaesu_presence(state: &mut RadioState, p: &YaesuPresencePack
     // switch is on (found in the field, 2026-09-17).
     state.yaesu_configured = p.slot0_configured;
     state.yaesu2_configured = p.slot1_configured;
+    state.yaesu_rx_levels_tuned = p.rx_levels_tuned;
     state.radios_known = true;
     // An absent radio cannot report high SWR. Without this an old
     // hi_swr flag stays set and the other radio keeps the alarm alive
@@ -312,8 +301,8 @@ pub(crate) const HEARTBEAT_INTERVAL_MS: u64 = 500;
 const CONNECTION_TIMEOUT_MIN_MS: u64 = 6000;
 
 /// While transmitting, the link counts as gone after this long without an
-/// answer to a heartbeat (build 265; owner's decision 2026-10-20: "na 3 sec,
-/// niet 6"). Longer than the server's own window of 2 s (`ptt.rs`
+/// answer to a heartbeat (build 265, 2026-10-20: 3 s rather than 6).
+/// Longer than the server's own window of 2 s (`ptt.rs`
 /// `PTT_PACKET_TIMEOUT_MS`), so the server has let go first, and a link that
 /// comes back inside the difference keys the transmitter again with the press
 /// still held. The server pins the relation (`session.rs`). Not stretched by
@@ -387,19 +376,194 @@ impl TxAgc {
     }
 }
 
+/// The Yaesu TX levels over ten seconds of live-mic audio, for the field log:
+/// the peak before the EQ, at the AGC's input, what the AGC does, and what goes
+/// to Opus. All on the scale where 1.0 is full scale; the last one is the mic
+/// meter. The window counts transmitted frames, not the clock; switching the
+/// AGC, moving the gain or letting go of the PTT closes it, so a line is about
+/// one AGC setting, one gain and one over. The averages are over frames with
+/// speech in them: in a pause the AGC gain climbs to its maximum, and counting
+/// that read as a gain the voice never got.
+#[derive(Default)]
+struct TxLevelLog {
+    frames: u32,
+    speech: u32,
+    pre_eq_max: f32,
+    agc_in_sum: f32,
+    agc_in_max: f32,
+    agc_gain_sum: f32,
+    out_sum: f32,
+    out_max: f32,
+    limiter_min: f32,
+    gain: f32,
+    agc_on: bool,
+}
+
+/// Ten seconds of 20 ms frames.
+const TX_LEVEL_LOG_FRAMES: u32 = 500;
+/// A window closed early with less than half a second in it gives no line: a
+/// line about 20 ms is noise in the log.
+const TX_LEVEL_LOG_MIN_FRAMES: u32 = 25;
+/// A frame counts as speech when its peak at the AGC's input is above -40 dBFS.
+const TX_LEVEL_SPEECH: f32 = 0.01;
+
+impl TxLevelLog {
+    /// One frame. Gives a line when the window is full, and when the AGC was
+    /// switched or the gain moved: then the window so far is closed first and a
+    /// new one begins. A drag over the slider gives windows under half a
+    /// second, which give no line, so the line after it is about the last gain.
+    #[allow(clippy::too_many_arguments)]
+    fn add(&mut self, radio: &str, gain: f32, pre_eq: f32, agc_in: f32, agc_gain: f32, limiter: f32, out: f32,
+           agc_on: bool) -> Option<String> {
+        let switched = if self.frames > 0 && (self.agc_on != agc_on || self.gain != gain) { self.close(radio) } else { None };
+        if self.frames == 0 { self.limiter_min = 1.0; }
+        self.frames += 1;
+        self.gain = gain;
+        self.limiter_min = self.limiter_min.min(limiter);
+        self.pre_eq_max = self.pre_eq_max.max(pre_eq);
+        self.agc_in_max = self.agc_in_max.max(agc_in);
+        self.out_max = self.out_max.max(out);
+        if agc_in > TX_LEVEL_SPEECH {
+            self.speech += 1;
+            self.agc_in_sum += agc_in;
+            self.agc_gain_sum += agc_gain;
+            self.out_sum += out;
+        }
+        self.agc_on = agc_on;
+        if self.frames >= TX_LEVEL_LOG_FRAMES {
+            return Some(self.take_line(radio));
+        }
+        switched
+    }
+
+    /// The window ends early (an AGC switch, a gain move, the PTT let go): its
+    /// line if it holds half a second or more, and a fresh window either way.
+    fn close(&mut self, radio: &str) -> Option<String> {
+        if self.frames >= TX_LEVEL_LOG_MIN_FRAMES {
+            Some(self.take_line(radio))
+        } else {
+            *self = Self::default();
+            None
+        }
+    }
+
+    /// The line for the window so far, and a fresh window after it.
+    fn take_line(&mut self, radio: &str) -> String {
+        let n = self.speech.max(1) as f32;
+        let db = |v: f32| if v > 0.0001 { 20.0 * v.log10() } else { -80.0 };
+        let gain = if self.gain > 0.0 { format!("{:+.0} dB", crate::commands::tx_gain_db(self.gain)) } else { "off".to_string() };
+        let line = format!(
+            "{radio} TX level ({:.1} s, {:.0}% speech, gain {gain}, AGC {}): before EQ peak max {:.2}, \
+             AGC in peak avg {:.2} max {:.2}, AGC gain avg {:.2}, limiter min {:.2}, \
+             to Opus peak avg {:.2} max {:.2} ({:.0} dB)",
+            self.frames as f32 * 0.02, 100.0 * self.speech as f32 / self.frames.max(1) as f32,
+            if self.agc_on { "on" } else { "off" }, self.pre_eq_max,
+            self.agc_in_sum / n, self.agc_in_max, self.agc_gain_sum / n, self.limiter_min,
+            self.out_sum / n, self.out_max, db(self.out_max));
+        *self = Self::default();
+        line
+    }
+}
+
+/// A raw microphone frame this close to full scale has clipped before
+/// ThetisLink: the float stream from the operating system stops at 1.0.
+const INPUT_CLIP: f32 = 0.99;
+/// How long the clip lamp stays on after the last clipped frame, as long as
+/// the meter holds its peak.
+const INPUT_CLIP_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Whether the peak of a raw microphone frame (before the EQ, the compressor and
+/// the AGC) is a clip. The same test for Thetis and both Yaesu radios.
+fn input_clips(raw_peak: f32) -> bool {
+    raw_peak >= INPUT_CLIP
+}
+
+/// The TX gain at the front of the chain, for a Yaesu radio: the live
+/// microphone gets four times the stored mic gain (the boost that used to sit
+/// at the end), a WAV the stored gain itself. The same factors as before, so a
+/// profile with the compressor and the AGC off sounds as loud as it did.
+fn yaesu_front_gain(stored: f32, playback: bool) -> f32 {
+    if playback { stored } else { stored * crate::commands::YAESU_MIC_GAIN_SCALE }
+}
+
+fn apply_gain(samples: &mut [f32], gain: f32) {
+    for s in samples.iter_mut() {
+        *s *= gain;
+    }
+}
+
+/// Just under the encoder's clamp: -1 dB.
+const LIMITER_CEILING: f32 = 0.891;
+/// How fast the limiter lets go again.
+const LIMITER_RELEASE_MS: f32 = 50.0;
+
+/// The last step before the encoder, for Thetis and the Yaesu radios: a sample
+/// that would go over the ceiling is brought down to it at once, and the gain
+/// comes back over about 50 ms. No look-ahead: latency comes first, so the
+/// attack is the sample itself. Below the ceiling it does nothing.
+struct TxLimiter {
+    gain: f32,
+    release: f32,
+}
+
+impl TxLimiter {
+    fn new() -> Self {
+        let samples = LIMITER_RELEASE_MS * 1e-3 * NETWORK_SAMPLE_RATE_WIDEBAND as f32;
+        Self { gain: 1.0, release: 1.0 - (-1.0 / samples).exp() }
+    }
+
+    /// Limits the frame; returns the lowest gain it used, 1.0 when it did nothing.
+    fn process(&mut self, samples: &mut [f32]) -> f32 {
+        let mut lowest = 1.0f32;
+        for s in samples.iter_mut() {
+            let a = s.abs();
+            if a * self.gain > LIMITER_CEILING {
+                self.gain = LIMITER_CEILING / a;
+            }
+            *s *= self.gain;
+            lowest = lowest.min(self.gain);
+            self.gain += (1.0 - self.gain) * self.release;
+        }
+        lowest
+    }
+}
+
 // --- TX Compressor (speech compressor for the Yaesu USB-TX chain) ---
 // The radio's own processor does not work on USB audio; this client-side compressor
 // fills that gap. `amount` 0.0..1.0 (0=off): compresses peaks above a threshold
 // (ratio) and applies makeup gain → more density/punch.
+// Attack and release are time constants in ms at the wideband rate it runs at.
+// The defaults reproduce the former fixed per-sample coefficients (0.30 and 0.02).
 struct TxCompressor {
     amount: f32,
     env: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
 }
 
 impl TxCompressor {
-    fn new() -> Self { Self { amount: 0.0, env: 0.0 } }
+    fn new() -> Self {
+        let mut c = Self { amount: 0.0, env: 0.0, attack_coeff: 0.0, release_coeff: 0.0 };
+        c.set_timing(crate::commands::COMP_ATTACK_DEFAULT_MS, crate::commands::COMP_RELEASE_DEFAULT_MS);
+        c
+    }
 
-    fn set_amount(&mut self, a: f32) { self.amount = a.clamp(0.0, 1.0); }
+    /// Returns whether the amount changed, so the caller logs only a change.
+    fn set_amount(&mut self, a: f32) -> bool {
+        let a = a.clamp(0.0, 1.0);
+        let changed = a != self.amount;
+        self.amount = a;
+        changed
+    }
+
+    fn set_timing(&mut self, attack_ms: f32, release_ms: f32) {
+        let coeff = |ms: f32| {
+            let samples = ms.max(0.01) * 1e-3 * NETWORK_SAMPLE_RATE_WIDEBAND as f32;
+            1.0 - (-1.0 / samples).exp()
+        };
+        self.attack_coeff = coeff(attack_ms);
+        self.release_coeff = coeff(release_ms);
+    }
 
     fn process(&mut self, samples: &mut [f32]) {
         if self.amount <= 0.001 { return; }
@@ -410,7 +574,7 @@ impl TxCompressor {
         let exp = 1.0 / ratio - 1.0;                // negative exponent → gain reduction
         for s in samples.iter_mut() {
             let a = s.abs();
-            let coeff = if a > self.env { 0.30 } else { 0.02 }; // attack / release
+            let coeff = if a > self.env { self.attack_coeff } else { self.release_coeff };
             self.env += (a - self.env) * coeff;
             let gain = if self.env > threshold {
                 (self.env / threshold).powf(exp)
@@ -430,8 +594,8 @@ pub struct ClientEngine {
 
 /// Runs the engine thread's body, and if it panics or returns an error, leaves
 /// "no connection" on screen and marks the engine dead (`engine_dead`). The engine owns the state sender and dies with it, so the last state it
-/// sent stood for good - connected, and transmitting if it was - on both clients
-/// (reviewers, round 45). This holds its own clone of the sender, taken before the
+/// sent stood for good - connected, and transmitting if it was - on both clients.
+/// This holds its own clone of the sender, taken before the
 /// engine is moved into its thread. The relay thread has the same guard
 /// (`run_reporting_a_panic` in sdr-remote-relay).
 pub struct EngineStopReporter {
@@ -442,8 +606,8 @@ impl EngineStopReporter {
     /// Returns whether the engine stopped by a fault: a panic, or an error out
     /// of `ClientEngine::run`. The error is the likelier of the two - `run`
     /// returns one when its socket or its audio device cannot be opened, and
-    /// both clients used to log it and leave Connect on a dead engine
-    /// (review 59). A normal return (shutdown) changes nothing.
+    /// both clients used to log it and leave Connect on a dead engine.
+    /// A normal return (shutdown) changes nothing.
     pub fn run(self, body: impl FnOnce() -> Result<()>) -> bool {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
             Ok(Ok(())) => false,
@@ -479,7 +643,7 @@ impl ClientEngine {
         (Self { state_tx, cmd_rx, quic_relay: None }, state_rx, cmd_tx)
     }
 
-    /// Connect over QUIC through the relay (phase 3b): `grants` are the relay
+    /// Connect over QUIC through the relay: `grants` are the relay
     /// library's (`RelayMonitor::start_threaded_quic`), and `tcp` its TCP line
     /// for a network that lets no UDP through (build 144). Chosen once, for the
     /// engine's life; without grants the engine connects straight to the
@@ -521,8 +685,7 @@ impl ClientEngine {
             None => {
                 let client = sdr_remote_quic::QuicClient::start(sdr_remote_quic::Congestion::Bbr)
                     .context("start the QUIC client")?;
-                // Named in the brief before it was built (working rule 11, build 133);
-                // the one place both front ends log the transport.
+                // The one place both front ends log the transport.
                 info!("Client transport: QUIC straight to the address typed");
                 ClientTransport::new(client, None)
             }
@@ -556,7 +719,7 @@ impl ClientEngine {
         let mut st_yaesu = RxStream::new(playback_rate, "Yaesu")?;
         let mut yaesu_jitter_buf = JitterBuffer::new(3, 40);
         let mut yaesu_logged_first = false;
-        // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — own independent
+        // Dual-radio slot 1: own independent
         // channel, exact mirror of slot 0.
         let mut st_yaesu2 = RxStream::new(playback_rate, "Yaesu2")?;
         let mut yaesu2_jitter_buf = JitterBuffer::new(3, 40);
@@ -581,8 +744,8 @@ impl ClientEngine {
         // 260). A short filter (sinc_len 32) once cut
         // NT-USB content >8 kHz insufficiently, causing those frequencies to
         // alias back into 0-8 kHz during the 48→16 kHz decimation and be
-        // audible on the RF output as "weird sounding" high tones (operator
-        // finding 2026-06-02).
+        // audible on the RF output as "weird sounding" high tones (field
+        // report, 2026-06-02).
         let mut yaesu_tx_resampler = resampler(capture_rate, NETWORK_SAMPLE_RATE_WIDEBAND, capture_frame_samples, UpFilter::Long)
             .context("create Yaesu TX resampler")?;
 
@@ -598,7 +761,7 @@ impl ClientEngine {
         let mut wav_res_out_wb = resampler(NETWORK_SAMPLE_RATE_WIDEBAND, playback_rate, FRAME_SAMPLES_WIDEBAND, UpFilter::Short)
             .context("WAV 16k->device resampler")?;
 
-        // VRX1 + VRX2 — each is a separate jitter buf plus its own RxStream.
+        // VRX1 + VRX2: each is a separate jitter buf plus its own RxStream.
         // Server-side FFT-channelizers feed these streams; both get mixed into
         // the main playback alongside RX1/RX2/Yaesu. VRX1 listens on RX1 IQ +
         // VFO-A, VRX2 on RX2 IQ + VFO-B.
@@ -625,10 +788,10 @@ impl ClientEngine {
         let mut vrx1_volume: f32 = 0.0;
         let mut vrx2_jitter_buf = JitterBuffer::new(3, 40);
         let mut vrx2_logged_first = false;
-        let mut vrx2_volume: f32 = 0.0; // start muted — see vrx1_volume
+        let mut vrx2_volume: f32 = 0.0; // start muted; see vrx1_volume
 
         // The TX-capture decimation 48 → 16 kHz, with the same filter as
-        // yaesu_tx_resampler (`resample::resampler`) — wide USB mics
+        // yaesu_tx_resampler (`resample::resampler`), wide USB mics
         // (NT-USB and the like) have content up to 16 kHz that otherwise aliases
         // back into 0-8 kHz and becomes audible on the ANAN/Thetis TX output
         // during FM/AM-TX (SSB stays within 3 kHz so it is subtler).
@@ -649,17 +812,17 @@ impl ClientEngine {
         let mut server_addr: Option<String> = None;
         let mut auth_password: Option<String> = None;
         let mut _auth_completed = false;
-        // Phase 2 of the direct connection: the authentication in flight, and
-        // the key of the session it made. Nothing reads the key before phase 5
-        // (per-packet encryption); it is cleared with the session.
+        // Mutual authentication: the authentication in flight, and the key of
+        // the session it made. Nothing reads the key yet (it is meant for
+        // per-packet encryption); it is cleared with the session.
         let mut pending_auth: Option<PendingAuth> = None;
         let mut session_key: Option<[u8; 32]> = None;
-        // Phase 2b: numbers every control on its way out and repeats what the
+        // Numbers every control on its way out and repeats what the
         // server does not acknowledge (sdr_remote_core::control_ack). Declared
         // here, before the macros that use it.
         let mut controls_out = sdr_remote_core::control_ack::ControlSender::new();
         let mut controls_report_at = Instant::now();
-        // Measurement mode (open point 34): off until the operator switches it
+        // Measurement mode: off until the operator switches it
         // on; then every audio arrival and heartbeat round trip goes to a file.
         // Declared here, before the macros that use it.
         let mut measure = crate::measure::Recorder::off();
@@ -674,10 +837,10 @@ impl ClientEngine {
         // its own PTT - for the measurement only: during a Yaesu transmission
         // the server keeps sending (silence), so the ring stands at its target
         // at the release and the silence sits in the jitter buffer; skipping it
-        // there drained the cushion (review of 178; build 179, owner's choice a).
+        // there drained the cushion.
         let mut after_tx_yaesu = crate::after_tx::AfterTx::default();
         let mut after_tx_yaesu2 = crate::after_tx::AfterTx::default();
-        // Around a PTT edge the buffers are written at every tick (round 100).
+        // Around a PTT edge the buffers are written at every tick.
         let mut measure_ptt_was = false;
         let mut measure_buffers_burst_until: u64 = 0;
         // What the playout rule decided tick by tick, for the ring line, and when
@@ -705,7 +868,7 @@ impl ClientEngine {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
-        // PATCH-1: track when Connect was issued + whether we've ever seen
+        // Track when Connect was issued + whether we've ever seen
         // any reply from the server, so we can surface NoUdpResponse after
         // a timeout, and distinguish "never heard anything" from "got bad bytes".
         let mut connect_started_at: Option<Instant> = None;
@@ -747,7 +910,7 @@ impl ClientEngine {
         // 0 = Thetis, 1 = Yaesu slot 0, 2 = Yaesu slot 1. It was a single bool,
         // so letting go of the 991A also cleared an outstanding request for
         // Thetis - and then a refusal aimed at Thetis counted as stale and was
-        // thrown away (review finding, round 2).
+        // thrown away.
         // [Thetis, radio one, radio two] - the same three, in the same order, as
         // ptt_denial::TRANSMITTERS and DeniedTarget::index(). Three places count
         // these and none of them can see the other two.
@@ -778,19 +941,18 @@ impl ClientEngine {
         // Disconnect, the link going away from outside, the server's Disconnect,
         // the time-out, and a Connect that replaces a live session), and until
         // build 83 four of them spelled this list out by hand and the fifth did
-        // not spell it at all (review finding). What differs per path - which
+        // not spell it at all. What differs per path - which
         // buffers to drain, which counters to zero - stays with that path.
         // Which build the server last said it runs, so the log writes a line
         // when that CHANGES rather than twice a second. Declared above
         // `session_lost!` because a macro in a function body binds the locals
         // it can see at its definition, not at its call.
         let mut last_server_build = sdr_remote_core::protocol::PeerBuild::Unknown;
-        // Open point 38, step 2; guarantee 1 on the map.
         // Leave a server the client has refused (it proved nothing, or proved
         // itself wrongly) or that refused the password: stop talking to it.
         // Without this the heartbeats went on, the server held the session it
         // had admitted and kept sending audio to a client that showed
-        // "refused" (review 76, measured: eleven packets in six seconds).
+        // "refused" (eleven packets in six seconds).
         //
         // This drops the ADDRESS and nothing else, on purpose: an address that
         // went None is the link-down signal, and the block at the top of the
@@ -798,7 +960,7 @@ impl ClientEngine {
         // tick - the jitter buffers, the connected flag the controls read,
         // `session_lost!()` with the transmit flags and what the server said
         // about itself, the metrics. One door; a second copy of that list here
-        // would drift from it (review 77 asked for the copy, and the mutants
+        // would drift from it (the mutants
         // showed the block already covers it: the second-session tests stay
         // green with and without one). `tell` sends the Disconnect first, for
         // a server that admitted us; `silent` does not - a server that refused
@@ -828,13 +990,12 @@ impl ClientEngine {
         macro_rules! clear_transmit_flags {
             ($why:literal) => {{
                 if thetis_ptt || yaesu_ptt || yaesu2_ptt {
-                    warn!(concat!($why, " (thetis={} yaesu1={} yaesu2={}) - transmit flags cleared"),
+                    warn!(concat!($why, " (thetis={} yaesu1={} yaesu2={}): transmit flags cleared"),
                         thetis_ptt, yaesu_ptt, yaesu2_ptt);
                     // Heard, not only seen: the operator may be talking on
-                    // without looking at the screen (build 253; named in
-                    // advance, working rule 11).
+                    // without looking at the screen (build 253).
                     audio.sound_ptt_dropped();
-                    info!("PTT dropped with the session - warning tone");
+                    info!("PTT dropped with the session: warning tone");
                 }
                 thetis_ptt = false;
                 ptt = false;
@@ -863,19 +1024,19 @@ impl ClientEngine {
                 // session as "the edges before this one" and key it.
                 cw_recent.clear();
                 cw_asked = 0;
-                // The key belongs to the session that is gone (phase 2), and so
+                // The key belongs to the session that is gone, and so
                 // do the nonces of an authentication in flight: a late or
                 // replayed result must not verify against them after a
-                // Disconnect (review 66). The wait on an unanswered code and a
+                // Disconnect. The wait on an unanswered code and a
                 // refused code are the two places that end an attempt WITHOUT
                 // this: there the nonces stay, because the answer to the next
-                // code is verified by them (reviews 73 and 75).
+                // code is verified by them.
                 if session_key.take().is_some() {
                     debug!("Session key dropped with the session");
                 }
                 pending_auth = None;
                 // And the clock on a code that was out: `forget_session` lets go of
-                // the code step itself (review 71).
+                // the code step itself.
                 totp_code_sent_at = None;
                 // Nothing of the session that is gone is repeated into the next
                 // one, and the next server has to show again that it acknowledges.
@@ -891,6 +1052,9 @@ impl ClientEngine {
         let mut auto_ref_hold = crate::ptt_button::AutoRefHold::default();
         let mut mic_gate_delay_ms: u32 = 0;
         let mut last_capture_ptt = false;
+        // The last playback mute asked for: a new backend starts unmuted, and both
+        // front ends send it only on the edge of a press.
+        let mut playback_muted = false;
         let mut last_hb_sent = Instant::now();
         let mut last_hb_ack_time: Option<Instant> = None;
         // While RX1 is being concealed: when it started, the first peak, how many
@@ -930,6 +1094,11 @@ impl ClientEngine {
         // Radio 2 (FTX-1): own compressor/AGC so the TX chain is configurable per radio
         // (like the per-radio EQ). PTT is mutually exclusive → the right chain per PTT.
         let mut yaesu2_agc = TxAgc::new();
+        let mut yaesu_level_log = [TxLevelLog::default(), TxLevelLog::default()];
+        let mut input_clip_at: Option<Instant> = None;
+        let mut thetis_limiter = TxLimiter::new();
+        // One per radio, like the compressor and the AGC.
+        let mut yaesu_limiters = [TxLimiter::new(), TxLimiter::new()];
         let mut yaesu2_tx_agc_enabled = false;
         let mut yaesu2_compressor = TxCompressor::new();
         let mut agc_enabled = false;
@@ -939,7 +1108,7 @@ impl ClientEngine {
         let mut smeter_source: u8 = 1;     // 0=Sig, 1=Avg (default), 2=MaxBin
         // Track last Binaural ControlPacket value sent on PTT-side-effect path.
         // Avoids spamming the server with redundant rx_bin_enable cmds when the
-        // PTT-state hasn't actually flipped (alpha-5 testlog: 38k events/session).
+        // PTT-state hasn't actually flipped (an early version sent 38k per session).
         let mut last_sent_bin: Option<u16> = None;
         let stereo_output = audio.supports_stereo(); // false on Android
 
@@ -983,16 +1152,19 @@ impl ClientEngine {
         let mut thetis_txeq_bypassed: bool = false;
 
         let mut yaesu_volume: f32 = 0.5;   // Yaesu audio volume (client-only)
-        // Slot-1 volume starts MUTED (0.0) — required per lesson from build 88
-        // (VRX peak at startup, project_audio_stutter_diagnose): each new
+        // Slot-1 volume starts MUTED (0.0); required per lesson from build 88
+        // (VRX peak at startup): each new
         // audio channel starts muted until the UI/effective volume has arrived.
         let mut yaesu2_volume: f32 = 0.0;
         let mut yaesu_local_mic_gain: f32 = 0.2; // Local Yaesu mic gain (before Opus encoding)
-        let mut yaesu_eq = crate::eq::Equalizer::new(48000.0); // EQ at capture rate
-        // Slot-1 (FTX-1) own TX-mic EQ + gain — applied when transmitting on radio 2
+        // The TX-mic EQ runs on the capture frames, so it is built for the capture
+        // rate and follows it in `resync_audio_rates!`.
+        let mut yaesu_eq = crate::eq::Equalizer::new(capture_rate as f32);
+        // Slot-1 (FTX-1) own TX-mic EQ + gain; applied when transmitting on radio 2
         // (PTT mutually exclusive, so chosen per PTT in the encode chain).
         let mut yaesu2_local_mic_gain: f32 = 0.2;
-        let mut yaesu2_eq = crate::eq::Equalizer::new(48000.0);
+        let mut yaesu2_eq = crate::eq::Equalizer::new(capture_rate as f32);
+        info!("Yaesu TX EQ at the capture rate: {} Hz", capture_rate);
         let mut last_sent_rx2_volume: u16 = 0;
         let mut rx2_volume_synced: bool = false; // Don't send ZZLB until server value received
         let mut rx2_volume_user_changed: bool = false; // Only send when user changed slider
@@ -1005,6 +1177,10 @@ impl ClientEngine {
         let mut spectrum_max_bins: u16 = sdr_remote_core::DEFAULT_SPECTRUM_BINS as u16;
         let mut spectrum_fft_size_k: u16 = 0;
         let mut rx2_spectrum_fft_size_k: u16 = 0;
+        // Per VRX: its receiver's FFT size went out this session while it was
+        // open. The screen re-sends the subscription on every zoom step; only
+        // an open carries the size.
+        let mut vrx_fft_sent = [false; 2];
 
         // Pending frequency: prevents stale server CAT values from overwriting local changes
         let mut pending_freq: Option<u64> = None;
@@ -1033,11 +1209,11 @@ impl ClientEngine {
         // RX bytes are summed on every recv_from(); TX bytes via the
         // `send_tx!` macro that wraps every send_to call-site. On every
         // window rollover the kbps is computed and written to `state.down_kbps`/
-        // `up_kbps` — shown in the Server-tab Statistics grid.
+        // `up_kbps`: shown in the Server-tab Statistics grid.
         let mut bw_window_start = Instant::now();
         let mut bw_rx_bytes: u64 = 0;
         let mut bw_tx_bytes: u64 = 0;
-        // Per-PacketType byte counter for the RX stream — indexed on
+        // Per-PacketType byte counter for the RX stream; indexed on
         // the `packet_type` byte (data[2]). Every 5 s a top-5
         // overview is logged to info! so the operator can see which
         // stream consumes the most (without a UI extension).
@@ -1054,6 +1230,9 @@ impl ClientEngine {
         // checks the header's packet type, so this recognises a control exactly
         // instead of guessing from the length.
         let mut session_intent = crate::session_intent::SessionIntent::new();
+        // What send_control! held back from a server that does not take it,
+        // sent by the restore block once one does.
+        let mut held_back = crate::session_intent::HeldBack::default();
 
         // The Thetis streams while a Yaesu is the radio being heard. Kept here
         // rather than in the Android screen: it is a timing rule with three
@@ -1068,7 +1247,7 @@ impl ClientEngine {
         // attempts and fifty log lines per second - and the condition where a
         // send fails IS a network switch, which is exactly when the log has to
         // survive to prove this works. The repair that made the flag honest
-        // could otherwise erase its own evidence (review finding).
+        // could otherwise erase its own evidence.
         let mut thetis_stream_retry_at: Option<Instant> = None;
         let mut thetis_stream_warned_at: Option<Instant> = None;
 
@@ -1079,7 +1258,7 @@ impl ClientEngine {
                 crate::session_intent::record_if_control(&mut session_intent, __buf);
                 // Direct mode sends to the address resolved at Connect - the one
                 // the receive filter expects - instead of resolving the name
-                // again for every packet (review 67, both reviewers: the two
+                // again for every packet (the two
                 // resolutions need not agree, and a name is resolved per send).
                 match server_sockaddr {
                     Some(sa) => socket.send_to(__buf, sa).await,
@@ -1090,7 +1269,7 @@ impl ClientEngine {
 
         // Every control the client sends goes through here: one place that builds
         // the packet and hands it to send_tx (which records it for the session
-        // replay). Phase 2b gives each control a sequence number and a retry, and
+        // replay). Each control gets a sequence number and a retry here, and
         // that has to happen in one place, not in sixty (build 86 brought them
         // together; behaviour unchanged). Evaluates to send_tx's Result.
         // An audio packet of `$stream` arrived: the loss meter counts it, and
@@ -1114,19 +1293,54 @@ impl ClientEngine {
             }};
         }
 
+        // The spectrum pan goes out twice: the coarse one an older server knows,
+        // then the fine one (build 75) a newer server takes instead. One place
+        // for the pair, so no send site can forget the fine one. The fine one
+        // only reaches a server that knows it (send_control!).
+        macro_rules! send_pan {
+            ($coarse:expr, $fine:expr, $pan:expr, $addr:expr) => {{
+                let __pan: f32 = $pan;
+                let _ = send_control!($coarse, sdr_remote_core::protocol::pack_spectrum_pan(__pan), $addr);
+                let _ = send_control!($fine, sdr_remote_core::protocol::pack_spectrum_pan_fine(__pan), $addr);
+            }};
+        }
         macro_rules! send_control {
             ($id:expr, $value:expr, $addr:expr) => {{
                 let __id: ControlId = $id;
-                let mut __cbuf = [0u8; ControlPacket::SIZE];
-                ControlPacket { control_id: __id, value: $value }.serialize(&mut __cbuf);
-                // Phase 2b: numbered here, and kept for repeating once this
-                // session's server has acknowledged a control (control_ack.rs).
-                let __numbered = controls_out.send(
-                    &__cbuf,
-                    Instant::now(),
-                    Duration::from_millis(last_hb_ack_rtt as u64),
-                );
-                send_tx!(&__numbered, $addr)
+                if !state.server_takes(__id) {
+                    // A server without the fine view cannot parse this one, so
+                    // it never acknowledges it: four repeats and a "given up"
+                    // in the log for nothing. Nothing sent (Ok(0)); held for
+                    // the restore block, so it is not lost either.
+                    held_back.hold(__id, $value);
+                    Ok(0)
+                } else {
+                    let mut __cbuf = [0u8; ControlPacket::SIZE];
+                    ControlPacket { control_id: __id, value: $value }.serialize(&mut __cbuf);
+                    // Numbered here, and kept for repeating once this
+                    // session's server has acknowledged a control (control_ack.rs).
+                    let __numbered = controls_out.send(
+                        &__cbuf,
+                        Instant::now(),
+                        Duration::from_millis(last_hb_ack_rtt as u64),
+                    );
+                    send_tx!(&__numbered, $addr)
+                }
+            }};
+        }
+
+        // What send_control! held back, to a server that takes it, once. Two
+        // callers in the ack: in the restore block right after the replay (so
+        // the hand-written sends of the current values land after it), and after
+        // every ack for a session without a restore (a Connect to a server
+        // without a password).
+        macro_rules! send_held_back {
+            ($addr:expr) => {{
+                if state.server_fine_spectrum_view {
+                    for (id, value) in held_back.take() {
+                        let _ = send_control!(id, value, $addr);
+                    }
+                }
             }};
         }
 
@@ -1147,7 +1361,7 @@ impl ClientEngine {
         let mut last_audio_received: Option<Instant> = None;
 
         // A Yaesu's received audio, both radios through this one block (build
-        // 293, step 3 of `KOPPELING` 18; until then a copy per radio). Its
+        // 293; until then a copy per radio). Its
         // playout is one block too (`mix_yaesu_rx!`).
         macro_rules! yaesu_audio_in {
             ($pkt:expr, $name:literal, $jb:ident, $st:ident, $logged_first:ident, $meter:ident, $stream:expr,
@@ -1203,8 +1417,8 @@ impl ClientEngine {
         // (build 188).
         let mut mic_looked_at = Instant::now();
         // How long until the next try, doubled after each failed opening and
-        // back to MIC_LOOK_EVERY after one that worked (build 190; review of
-        // 189: a failing opening costs 0.5-0.9 s on the engine's thread).
+        // back to MIC_LOOK_EVERY after one that worked (build 190;
+        // a failing opening costs 0.5-0.9 s on the engine's thread).
         let mut mic_try_every = MIC_LOOK_EVERY;
 
         // Input/output device names for reconnect
@@ -1222,7 +1436,7 @@ impl ClientEngine {
         // The packet right after a gap in a jitter buffer, if it is there: the one
         // whose redundancy can rebuild the lost frame. One place for all five
         // streams, Thetis included (build 156; the Thetis arm had its own copy
-        // and no test looked at it - review of 155).
+        // and no test looked at it).
         macro_rules! next_after_gap {
             ($jb:ident) => {
                 $jb.next_seq_peek().and_then(|seq| $jb.peek_frame(seq))
@@ -1241,7 +1455,7 @@ impl ClientEngine {
 
         // All five receive jitter buffers back to empty, in one list (build
         // 155). There were four hand-written lists, and the one for a change of
-        // sound device left out radio 2's (review of 154).
+        // sound device left out radio 2's.
         macro_rules! reset_jitter_buffers {
             () => {{
                 jitter_buf.reset();
@@ -1270,6 +1484,12 @@ impl ClientEngine {
                     // and a headset slower than the stream go down (build 260).
                     if let Ok(r) = resampler(capture_rate, NETWORK_SAMPLE_RATE_WIDEBAND, capture_frame_samples, UpFilter::Long) { resampler_in = r; }
                     if let Ok(r) = resampler(capture_rate, NETWORK_SAMPLE_RATE_WIDEBAND, capture_frame_samples, UpFilter::Long) { yaesu_tx_resampler = r; }
+                    // Two statements, so neither call can be short-circuited away.
+                    let eq1_moved = yaesu_eq.set_sample_rate(capture_rate as f32);
+                    let eq2_moved = yaesu2_eq.set_sample_rate(capture_rate as f32);
+                    if eq1_moved || eq2_moved {
+                        info!("Yaesu TX EQ at the capture rate: {} Hz", capture_rate);
+                    }
                     if let Ok(r) = resampler(NETWORK_SAMPLE_RATE, playback_rate, FRAME_SAMPLES, UpFilter::Short) { wav_res_out = r; }
                     if let Ok(r) = resampler(NETWORK_SAMPLE_RATE_WIDEBAND, playback_rate, FRAME_SAMPLES_WIDEBAND, UpFilter::Short) { wav_res_out_wb = r; }
                     // Every receive stream at once. This list used to be sixteen
@@ -1292,6 +1512,32 @@ impl ClientEngine {
             }};
         }
 
+        // A new audio backend in place of the old one: a device switch, the
+        // recovery after an audio error (a Bluetooth headset joining reopens the
+        // stream) and a missing microphone coming back. A new backend starts on
+        // its defaults, and two of the settings it carries are only sent on the
+        // edge of a press: the capture gate (a press held across the reopen sent
+        // nothing more, and the server let the radio go after its packet window
+        // while the button stayed red) and the playback mute. Both are set again
+        // here. The gate only while a press is still on: a session lost in the same
+        // turn of the loop has cleared the flags before the edge has seen it.
+        macro_rules! take_new_audio {
+            ($new:expr) => {{
+                audio = $new;
+                state.mic_missing = audio.missing_input();
+                mic_try_every = MIC_LOOK_EVERY;
+                audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
+                audio.set_playback_mute(playback_muted);
+                resync_audio_rates!();
+                if last_capture_ptt && (ptt || yaesu_ptt || yaesu2_ptt) {
+                    accum_buf.clear();
+                    yaesu_tx_accum.clear();
+                    audio.set_capture_gate(true);
+                    info!("Audio reopened during a press: the capture gate is open again");
+                }
+            }};
+        }
+
         // When a receive error was last reported.
         //
         // A burst of the same error must not be able to bury the log - see the
@@ -1303,7 +1549,7 @@ impl ClientEngine {
         // repair only did the first: a transport that is permanently dead and
         // answers something other than BrokenPipe still ran at full speed, just
         // quietly. It took the evidence away for the half of the cases it did
-        // not fix (review finding).
+        // not fix.
         let mut recv_err_streak: u32 = 0;
 
         loop {
@@ -1326,7 +1572,7 @@ impl ClientEngine {
             while let Some(cmd) = own_commands.pop().or_else(|| self.cmd_rx.try_recv().ok()) {
                 match cmd {
                     Command::Connect(addr, pw) => {
-                        // PATCH-1 smoke-test follow-up (2026-05-12): if we are already in
+                        // If we are already in
                         // a forward-progress connect-state (AwaitingTotp or Connected) and
                         // the user clicks Connect again with the SAME server+password, do
                         // not regress the status - the server's session is still alive
@@ -1348,7 +1594,7 @@ impl ClientEngine {
                             continue;
                         }
 
-                        // PATCH-1 smoke-test follow-up (2026-05-12 #2): if we have an
+                        // If we have an
                         // existing server-side session (had passed through any state
                         // beyond Disconnected, including Failed), send a Disconnect
                         // packet to the previous address before starting a new connect.
@@ -1368,14 +1614,14 @@ impl ClientEngine {
                                 // disconnect before the new heartbeat arrives.
                                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                             }
-                            // The fifth way to lose a session, found by a review on
-                            // build 82: it told the old server goodbye and carried
+                            // The fifth way to lose a session, found on build 82:
+                            // it told the old server goodbye and carried
                             // the transmit flags to the new one.
                             session_lost!().replaced_by_a_new_session();
                         }
 
-                        // PATCH-1 review finding (B1, part 1): up-front DNS / parse check.
-                        // If the address is a plain "IP:port" it parses synchronously — no DNS
+                        // Up-front DNS / parse check.
+                        // If the address is a plain "IP:port" it parses synchronously; no DNS
                         // needed. If it has a hostname, try lookup_host once. Either failure
                         // mode produces a specific ConnectError so the UI can show a precise
                         // message instead of a generic "Disconnected".
@@ -1385,14 +1631,14 @@ impl ClientEngine {
                         // A literal address goes through the same rule as a looked-up
                         // one: an IPv6 literal is no address for this socket either, and
                         // it fell through to the sender before, which failed every send
-                        // in silence and reported "no reply" after the time-out (review
-                        // 69). Filtered out here, it reaches the lookup below, which says
+                        // in silence and reported "no reply" after the time-out.
+                        // Filtered out here, it reaches the lookup below, which says
                         // what is wrong.
                         let mut resolved: Option<std::net::SocketAddr> = first_ipv4(addr.parse().ok());
                         let resolved_ok = if socket.via_relay() || resolved.is_some() {
                             true
                         } else {
-                            // Async DNS lookup with a tight timeout — don't block the
+                            // Async DNS lookup with a tight timeout; don't block the
                             // command-processing loop forever on a slow resolver.
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(5),
@@ -1405,7 +1651,7 @@ impl ClientEngine {
                                     // AAAA record first would be a dead end - and a
                                     // name with no A record at all is a failure to
                                     // say, like its two neighbours: a silent `false`
-                                    // here left the screen as it was (review 68).
+                                    // here left the screen as it was.
                                     resolved = first_ipv4(iter);
                                     if resolved.is_none() {
                                         state.connect_status =
@@ -1413,7 +1659,7 @@ impl ClientEngine {
                                                 crate::state::ConnectError::DnsResolutionFailed {
                                                     host: addr.clone(),
                                                     io_kind: std::io::ErrorKind::AddrNotAvailable,
-                                                    message: "no IPv4 address for this host - this client sends over IPv4".to_string(),
+                                                    message: "no IPv4 address for this host: this client sends over IPv4".to_string(),
                                                 },
                                             );
                                     }
@@ -1447,7 +1693,6 @@ impl ClientEngine {
 
                         if resolved_ok {
                             server_sockaddr = if socket.via_relay() { None } else { resolved };
-                            // Named in the brief before it was built (working rule 11, build 133).
                             match server_sockaddr {
                                 Some(to) => info!("Connect: QUIC to {} (typed: {})", to, addr),
                                 None => info!("Connect: QUIC via the relay (label: {})", addr),
@@ -1458,15 +1703,15 @@ impl ClientEngine {
                             connect_started_at = Some(Instant::now());
                             connect_any_reply_seen = false;
                             resumed_after_code_step = false;
-                            // PATCH-1: signal "Connecting" so the UI can show progress.
+                            // Signal "Connecting" so the UI can show progress.
                             // Specific failure modes (NoUdpResponse via timeout, MalformedResponse
                             // via parser, ProtocolVersionMismatch via magic+version check) are
                             // surfaced from the network paths below.
                             state.connect_status =
                                 crate::state::ConnectStatus::Connecting;
-                            // Operator-smoke-test fix (2026-05-13): broadcast immediately so the
+                            // Broadcast immediately (2026-05-13) so the
                             // UI clears the previous Failed(WrongPassword/...) banner the
-                            // moment Connect is pressed — without this the user keeps seeing
+                            // moment Connect is pressed; without this the user keeps seeing
                             // "Wrong password" for several seconds until the next packet
                             // event triggers a state-broadcast.
                             let _ = self.state_tx.send(state.clone());
@@ -1477,7 +1722,7 @@ impl ClientEngine {
                             server_sockaddr = None;
                             auth_password = None;
                             connect_started_at = None;
-                            // Same reasoning as above — the DNS-fail Failed state must
+                            // Same reasoning as above: the DNS-fail Failed state must
                             // also be broadcast immediately.
                             let _ = self.state_tx.send(state.clone());
                         }
@@ -1498,7 +1743,7 @@ impl ClientEngine {
                     Command::Disconnect => {
                         // Send disconnect to server before clearing
                         if let Some(ref addr) = server_addr {
-                            // Restore Thetis TXEQ if a WAV-playback left it bypassed —
+                            // Restore Thetis TXEQ if a WAV-playback left it bypassed,
                             // must happen while the server address is still valid.
                             if thetis_txeq_bypassed {
                                 let _ = send_control!(ControlId::ThetisTxeq, 1, addr.as_str());
@@ -1557,6 +1802,7 @@ impl ClientEngine {
                         audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
                     }
                     Command::SetPlaybackMute(v) => {
+                        playback_muted = v;
                         audio.set_playback_mute(v);
                     }
                     Command::SetPtt(v) => {
@@ -1578,7 +1824,7 @@ impl ClientEngine {
                         ) {
                             crate::roger::PttVerdict::Ignore => continue,
                             crate::roger::PttVerdict::HoldForBeep => {
-                                info!("Roger beep: Thetis, {} Hz for {} ms - PTT held until it has gone",
+                                info!("Roger beep: Thetis, {} Hz for {} ms; PTT held until it has gone",
                                     roger_cfg.freq_hz, roger_cfg.duration_ms);
                                 roger_tone = Some((
                                     crate::roger::RogerTone::new(NETWORK_SAMPLE_RATE_WIDEBAND, &roger_cfg),
@@ -1626,7 +1872,7 @@ impl ClientEngine {
                         vfo_a_volume = v;
                     }
                     Command::SetTxGain(v) => {
-                        tx_gain = v;
+                        tx_gain = crate::commands::clamp_tx_gain(v);
                     }
                     Command::SetRogerBeep(cfg) => {
                         roger_cfg = cfg.clamped();
@@ -1660,30 +1906,28 @@ impl ClientEngine {
                     Command::SetRelayOnly(on) => match &relay_only_switch {
                         Some(switch) => {
                             switch.store(on, std::sync::atomic::Ordering::Relaxed);
-                            // Named in the brief before it was built (working rule 11, build 137).
                             if on {
-                                info!("Relay only (measurement screen): on - no direct path is offered");
+                                info!("Relay only (measurement screen): on; no direct path is offered");
                             } else {
                                 info!("Relay only (measurement screen): off");
                             }
                             state.relay_only = on;
                             measure.event(start.elapsed().as_millis() as u64, crate::measure::Event::RelayOnly(on));
                         }
-                        None => info!("Relay only (measurement screen): no relay in use - nothing to switch"),
+                        None => info!("Relay only (measurement screen): no relay in use; nothing to switch"),
                     },
                     Command::SetForceTcp(on) => match &force_tcp_switch {
                         Some(switch) => {
                             switch.store(on, std::sync::atomic::Ordering::Relaxed);
-                            // Named in the brief before it was built (working rule 11, build 146).
                             if on {
-                                info!("Force TCP (measurement screen): on - all traffic over the relay's TCP line");
+                                info!("Force TCP (measurement screen): on; all traffic over the relay's TCP line");
                             } else {
                                 info!("Force TCP (measurement screen): off");
                             }
                             state.force_tcp = on;
                             measure.event(start.elapsed().as_millis() as u64, crate::measure::Event::ForceTcp(on));
                         }
-                        None => info!("Force TCP (measurement screen): no relay in use - nothing to switch"),
+                        None => info!("Force TCP (measurement screen): no relay in use; nothing to switch"),
                     },
                     Command::MeasureNetwork(sample) => {
                         measure.record(crate::measure::Record::Net { mono_ms: start.elapsed().as_millis() as u64, sample });
@@ -1694,11 +1938,11 @@ impl ClientEngine {
                                 let label = sdr_remote_core::version_string();
                                 match measure.start(std::path::Path::new(&dir), start, &label) {
                                     Ok(path) => {
-                                        // Where things stand at the start (round 93): every
+                                        // Where things stand at the start: every
                                         // transmitter that is keyed now - the next loop writes its
                                         // "on", so a release later always has its key in the file.
                                         let now = start.elapsed().as_millis() as u64;
-                                        // The session that is running, and its way (round 94):
+                                        // The session that is running, and its way:
                                         // the line a session would have written had the
                                         // measurement been on when it began.
                                         if was_connected {
@@ -1720,7 +1964,6 @@ impl ClientEngine {
                                             measure.event(now, crate::measure::Event::Path(kind));
                                         }
                                         ptt_seen = crate::measure::PttSeen::default();
-                                        // Named in the brief before it was built (working rule 11).
                                         info!("Measurement on: {}", path.display());
                                         state.measurement_file = Some(path.display().to_string());
                                     }
@@ -1733,9 +1976,9 @@ impl ClientEngine {
                             None => {
                                 let path = measure.path().map(|p| p.display().to_string());
                                 // A write error in the last drain is said, not logged as
-                                // a clean stop (round 102): the file ends at the error.
+                                // a clean stop: the file ends at the error.
                                 if measure.stop(start) {
-                                    warn!("Measurement stopped with a write error - the file ends there: {}", path.unwrap_or_default());
+                                    warn!("Measurement stopped with a write error: the file ends there: {}", path.unwrap_or_default());
                                 } else if let Some(p) = path {
                                     info!("Measurement off: {}", p);
                                 }
@@ -1745,7 +1988,14 @@ impl ClientEngine {
                     }
                     Command::SetControl(id, value) => {
                         if let Some(ref addr) = server_addr {
-                            let _ = send_control!(id, value, addr.as_str());
+                            // RX2's FFT size as RX1's: the receiver's for every
+                            // client, so live only from one that looks, as in the
+                            // restore block.
+                            let looks = id != ControlId::Rx2SpectrumFftSize
+                                || (was_connected && state.rx2_spectrum_enabled);
+                            if looks {
+                                let _ = send_control!(id, value, addr.as_str());
+                            }
                         }
                         // Track RX2 FFT size locally for reconnect
                         if id == ControlId::Rx2SpectrumFftSize {
@@ -1785,11 +2035,7 @@ impl ClientEngine {
                             let out_name = if output_device_name.is_empty() { None } else { Some(output_device_name.as_str()) };
                             match audio_factory(in_name, out_name) {
                                 Ok(new_audio) => {
-                                    audio = new_audio;
-                                    state.mic_missing = audio.missing_input();
-                                    mic_try_every = MIC_LOOK_EVERY;
-                                    audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
-                                    resync_audio_rates!();
+                                    take_new_audio!(new_audio);
                                     info!("Audio input device switched to {:?}", in_name.unwrap_or("(default)"));
                                     state.audio_error = false;
                                     audio_error_since = None;
@@ -1797,11 +2043,10 @@ impl ClientEngine {
                                 Err(e) => {
                                     warn!("Failed to switch audio input device: {}", e);
                                     // The old audio stays, with another microphone than
-                                    // the chosen one: refuse to transmit on it (build 189;
-                                    // review of 188, B).
+                                    // the chosen one: refuse to transmit on it
+                                    // (build 189).
                                     if !input_device_name.is_empty() {
-                                        // Named in advance (working rule 11, build 189).
-                                        warn!("Microphone '{}' could not be opened - transmitting is refused", input_device_name);
+                                        warn!("Microphone '{}' could not be opened: transmitting is refused", input_device_name);
                                         state.mic_missing = Some(input_device_name.clone());
                                         mic_looked_at = Instant::now();
                                         mic_try_every = MIC_LOOK_EVERY;
@@ -1817,11 +2062,7 @@ impl ClientEngine {
                             let out_name = if output_device_name.is_empty() { None } else { Some(output_device_name.as_str()) };
                             match audio_factory(in_name, out_name) {
                                 Ok(new_audio) => {
-                                    audio = new_audio;
-                                    state.mic_missing = audio.missing_input();
-                                    mic_try_every = MIC_LOOK_EVERY;
-                                    audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
-                                    resync_audio_rates!();
+                                    take_new_audio!(new_audio);
                                     info!("Audio output device switched to {:?}", out_name.unwrap_or("(default)"));
                                     state.audio_error = false;
                                     audio_error_since = None;
@@ -1833,18 +2074,20 @@ impl ClientEngine {
                         }
                     }
                     Command::EnableSpectrum(enabled) => {
+                        let was_open = spectrum_enabled;
                         spectrum_enabled = enabled;
                         if let Some(ref addr) = server_addr {
                             if was_connected {
                                 // The wish is remembered above; what goes on
                                 // the wire also has to respect the saving.
                                 // Same reasoning as Rx1Enable below.
-                                let _ = send_control!(
-                                    ControlId::SpectrumEnable,
-                                    crate::thetis_streams::stream_value(
-                                        enabled, thetis_streams_stopped) as u16,
-                                    addr.as_str()
-                                );
+                                let on = crate::thetis_streams::stream_value(
+                                    enabled, thetis_streams_stopped);
+                                let _ = send_control!(ControlId::SpectrumEnable, on as u16, addr.as_str());
+                                // A spectrum that opens gets the size its rows show.
+                                if on && !was_open && spectrum_fft_size_k != 0 {
+                                    let _ = send_control!(ControlId::SpectrumFftSize, spectrum_fft_size_k, addr.as_str());
+                                }
                             }
                         }
                     }
@@ -1870,10 +2113,10 @@ impl ClientEngine {
                         // same value: sent here, received there. A pan that moves the
                         // scale but not the trace is one of those two going missing,
                         // and until now neither end wrote it down.
-                        log::info!("Spectrum pan sent: {:+.4}", pan);
+                        log::info!("Spectrum pan sent: {:+.6}", pan);
                         if let Some(ref addr) = server_addr {
                             if was_connected {
-                                let _ = send_control!(ControlId::SpectrumPan, ((pan + 0.5) * 10000.0) as u16, addr.as_str());
+                                send_pan!(ControlId::SpectrumPan, ControlId::SpectrumPanFine, pan, addr.as_str());
                             }
                         }
                     }
@@ -1888,7 +2131,11 @@ impl ClientEngine {
                     Command::SetSpectrumFftSize(size_k) => {
                         spectrum_fft_size_k = size_k;
                         if let Some(ref addr) = server_addr {
-                            if was_connected {
+                            // The receiver's size, for every client: only from one
+                            // that looks (the phone asks for 128K on every connect,
+                            // also one that changes nothing).
+                            if was_connected && crate::thetis_streams::stream_value(
+                                spectrum_enabled, thetis_streams_stopped) {
                                 let _ = send_control!(ControlId::SpectrumFftSize, size_k, addr.as_str());
                             }
                         }
@@ -1913,23 +2160,6 @@ impl ClientEngine {
                                 data: vec![pos],
                             };
                             let mut buf = Vec::with_capacity(8);
-                            pkt.serialize(&mut buf);
-                            let _ = send_tx!(&buf, addr.as_str());
-                        }
-                    }
-                    Command::SetAmplitecPowerTable { max_w, tx_blocked } => {
-                        if let Some(ref addr) = server_addr {
-                            let mut data = Vec::with_capacity(18);
-                            for i in 0..6 {
-                                data.extend_from_slice(&max_w[i].to_be_bytes());
-                                data.push(tx_blocked[i] as u8);
-                            }
-                            let pkt = EquipmentCommandPacket {
-                                device_type: DeviceType::Amplitec6x2,
-                                command_id: sdr_remote_core::protocol::CMD_AMPLITEC_SET_POWER_TABLE,
-                                data,
-                            };
-                            let mut buf = Vec::with_capacity(EquipmentCommandPacket::MIN_SIZE + 18);
                             pkt.serialize(&mut buf);
                             let _ = send_tx!(&buf, addr.as_str());
                         }
@@ -2388,11 +2618,11 @@ impl ClientEngine {
                                                 extra, samples.len() as f32 / rate.max(1) as f32, rate);
                                             playback_extra.push(ExtraPlayback { samples, rate, pos: 0, res_nb, res_wb });
                                         }
-                                        _ => warn!("Playback: no resampler for {} - left out", extra),
+                                        _ => warn!("Playback: no resampler for {}; left out", extra),
                                     }
                                 }
-                                Ok((other, _)) => warn!("Playback: {} has an unsupported rate ({} Hz) - left out", extra, other),
-                                Err(e) => warn!("Playback: {} could not be read ({}) - left out", extra, e),
+                                Ok((other, _)) => warn!("Playback: {} has an unsupported rate ({} Hz); left out", extra, other),
+                                Err(e) => warn!("Playback: {} could not be read ({}); left out", extra, e),
                             }
                         }
                         let path = paths.first().cloned().unwrap_or_default();
@@ -2413,7 +2643,7 @@ impl ClientEngine {
                                 other => {
                                     // TL records only 8 k / 16 k. Reject other rates rather
                                     // than misplay them at the wrong speed.
-                                    warn!("Playback: unsupported WAV sample rate {} Hz (only 8000/16000 Hz supported) - not played", other);
+                                    warn!("Playback: unsupported WAV sample rate {} Hz (only 8000/16000 Hz supported); not played", other);
                                 }
                             },
                             Err(e) => warn!("Failed to load WAV: {}", e),
@@ -2483,7 +2713,7 @@ impl ClientEngine {
                             // stream given up to save data, handing it back here
                             // would defeat the saving silently - and the tick
                             // would not notice, because its flag still says
-                            // stopped. Review finding, and stricter than the one
+                            // stopped. Stricter than the one
                             // it follows: that one healed itself on the next
                             // reconnect, this one would not.
                             let _ = send_control!(ControlId::Rx1Enable, crate::thetis_streams::stream_value(
@@ -2502,7 +2732,7 @@ impl ClientEngine {
                     }
                     Command::SetMultiTx(on) => {
                         if multi_tx != on {
-                            info!("Multi-TX {}", if on { "on - the same microphone to every keyed Yaesu" } else { "off - one transmitter at a time" });
+                            info!("Multi-TX {}", if on { "on: the same microphone to every keyed Yaesu" } else { "off: one transmitter at a time" });
                         }
                         multi_tx = on;
                     }
@@ -2515,14 +2745,27 @@ impl ClientEngine {
                     Command::SetYaesuEqBand(band, gain_db) => {
                         yaesu_eq.set_band_gain(band as usize, gain_db);
                     }
+                    Command::SetYaesuEqBandParams(band, params) => {
+                        yaesu_eq.set_band(band as usize, params);
+                    }
                     Command::SetYaesuEqEnabled(on) => {
                         yaesu_eq.set_enabled(on);
                         info!("Yaesu EQ: {}", if on { "ON" } else { "OFF" });
                     }
                     Command::SetYaesuCompressor(level) => {
                         // Client-side speech compressor radio 1 (0-100 → 0.0-1.0).
-                        yaesu_compressor.set_amount(level as f32 / 100.0);
-                        info!("Yaesu compressor: {}", level);
+                        if yaesu_compressor.set_amount(level as f32 / 100.0) {
+                            info!("Yaesu compressor: {}", level);
+                        }
+                    }
+                    // Not logged here: a drag sends a new value every frame. The
+                    // client logs the timing when the slider is let go, and once
+                    // per session with the rest of the chain.
+                    Command::SetYaesuCompTiming(attack_ms, release_ms) => {
+                        yaesu_compressor.set_timing(attack_ms, release_ms);
+                    }
+                    Command::SetYaesu2CompTiming(attack_ms, release_ms) => {
+                        yaesu2_compressor.set_timing(attack_ms, release_ms);
                     }
                     Command::SetYaesuTxAgc(on) => {
                         yaesu_tx_agc_enabled = on;
@@ -2530,8 +2773,9 @@ impl ClientEngine {
                     }
                     Command::SetYaesu2Compressor(level) => {
                         // Client-side speech compressor radio 2 (FTX-1).
-                        yaesu2_compressor.set_amount(level as f32 / 100.0);
-                        info!("Yaesu2 compressor: {}", level);
+                        if yaesu2_compressor.set_amount(level as f32 / 100.0) {
+                            info!("Yaesu2 compressor: {}", level);
+                        }
                     }
                     Command::SetYaesu2TxAgc(on) => {
                         yaesu2_tx_agc_enabled = on;
@@ -2620,15 +2864,15 @@ impl ClientEngine {
                         }
                     }
                     Command::SetYaesuControl(slot, control, value) => {
-                        // Typed Yaesu DSP/function control (PATCH-yaesu-extra-controls).
+                        // Typed Yaesu DSP/function control.
                         if let Some(ref addr) = server_addr {
                             let pkt = YaesuControlPacket { slot, control, value };
                             let mut buf = [0u8; YaesuControlPacket::SIZE];
                             pkt.serialize(&mut buf);
-                            // Numbered and repeated like a control (phase 2b): it was
+                            // Numbered and repeated like a control: it was
                             // the one control with no repair at all - not in the
                             // session replay, and only the radio's read-back shows
-                            // that it did not arrive (review 86).
+                            // that it did not arrive.
                             let numbered = controls_out.send(
                                 &buf,
                                 Instant::now(),
@@ -2666,7 +2910,7 @@ impl ClientEngine {
                         ) {
                             crate::roger::PttVerdict::Ignore => continue,
                             crate::roger::PttVerdict::HoldForBeep => {
-                                info!("Roger beep: radio 1, {} Hz for {} ms - PTT held until it has gone",
+                                info!("Roger beep: radio 1, {} Hz for {} ms; PTT held until it has gone",
                                     roger_cfg.freq_hz, roger_cfg.duration_ms);
                                 roger_tone = Some((
                                     crate::roger::RogerTone::new(NETWORK_SAMPLE_RATE_WIDEBAND, &roger_cfg),
@@ -2688,7 +2932,7 @@ impl ClientEngine {
                         // from the Yaesu side and cleared only from the Thetis
                         // side, so a refused Yaesu press left the button orange
                         // and "TX in use" for good - no press on either client
-                        // could take it off (owner, build 21).
+                        // could take it off.
                         if !on {
                             state.ptt_denial.transmitter_off(1);
                         }
@@ -2699,9 +2943,9 @@ impl ClientEngine {
                     Command::SetYaesuTxGain(v) => {
                         // Local Yaesu mic gain (applied before Opus encoding).
                         // UI display 0.5 maps to the empirically matched internal 0.2.
-                        yaesu_local_mic_gain = v.clamp(0.02, 0.4);
+                        yaesu_local_mic_gain = crate::commands::clamp_yaesu_mic_gain(v);
                     }
-                    // --- Dual-radio slot 1 commands (PATCH-dual-radio-991a-ftx1) ---
+                    // --- Dual-radio slot 1 commands ---
                     Command::SetYaesu2Enable(on) => {
                         // Outside the guard, same reason as VRX1 above.
                         if !on { st_yaesu2.reset(); }
@@ -2725,7 +2969,7 @@ impl ClientEngine {
                         ) {
                             crate::roger::PttVerdict::Ignore => continue,
                             crate::roger::PttVerdict::HoldForBeep => {
-                                info!("Roger beep: radio 2, {} Hz for {} ms - PTT held until it has gone",
+                                info!("Roger beep: radio 2, {} Hz for {} ms; PTT held until it has gone",
                                     roger_cfg.freq_hz, roger_cfg.duration_ms);
                                 roger_tone = Some((
                                     crate::roger::RogerTone::new(NETWORK_SAMPLE_RATE_WIDEBAND, &roger_cfg),
@@ -2759,10 +3003,13 @@ impl ClientEngine {
                     }
                     Command::SetYaesu2TxGain(v) => {
                         // Own mic gain for radio 2 (applied when transmitting on slot 1).
-                        yaesu2_local_mic_gain = v.clamp(0.02, 0.4);
+                        yaesu2_local_mic_gain = crate::commands::clamp_yaesu_mic_gain(v);
                     }
                     Command::SetYaesu2EqBand(band, gain_db) => {
                         yaesu2_eq.set_band_gain(band as usize, gain_db);
+                    }
+                    Command::SetYaesu2EqBandParams(band, params) => {
+                        yaesu2_eq.set_band(band as usize, params);
                     }
                     Command::SetYaesu2EqEnabled(on) => {
                         yaesu2_eq.set_enabled(on);
@@ -2880,16 +3127,35 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 }, sdr_remote_core::protocol::pack_vrx_pan(offset_hz), addr.as_str());
                         }
                     }
-                    Command::SetVrxHighResSpectrum(vrx_id, enabled, span_khz) => {
+                    Command::SetVrxHighResSpectrum(vrx_id, enabled, span_hz) => {
                         if let Some(ref addr) = server_addr {
-                            let (en_id, span_id) = if vrx_id == 0 {
-                                (ControlId::VrxSpectrumEnable, ControlId::VrxSpectrumSpanKhz)
+                            let (en_id, span_id, fine_id) = if vrx_id == 0 {
+                                (ControlId::VrxSpectrumEnable, ControlId::VrxSpectrumSpanKhz, ControlId::VrxSpectrumSpanFine)
                             } else {
-                                (ControlId::VrxSpectrumEnable2, ControlId::VrxSpectrumSpanKhz2)
+                                (ControlId::VrxSpectrumEnable2, ControlId::VrxSpectrumSpanKhz2, ControlId::VrxSpectrumSpanFine2)
                             };
                             let _ = send_control!(en_id, if enabled { 1 } else { 0 }, addr.as_str());
-                            if enabled && span_khz > 0 {
-                                let _ = send_control!(span_id, span_khz, addr.as_str());
+                            if enabled && span_hz > 0 {
+                                // Whole kHz for an older server, then the fine
+                                // width a newer one takes instead (build 75).
+                                let _ = send_control!(span_id, sdr_remote_core::protocol::vrx_span_khz(span_hz), addr.as_str());
+                                let _ = send_control!(fine_id, sdr_remote_core::protocol::pack_vrx_span_fine(span_hz), addr.as_str());
+                            }
+                            // The VRX is cut from its receiver's spectrum: one that
+                            // opens gets the size its receiver's rows show, as an
+                            // RX spectrum does. Once per open: a zoom step sends
+                            // this command too.
+                            let (fft_id, fft_k) = if vrx_id == 0 {
+                                (ControlId::SpectrumFftSize, spectrum_fft_size_k)
+                            } else {
+                                (ControlId::Rx2SpectrumFftSize, rx2_spectrum_fft_size_k)
+                            };
+                            let sent = &mut vrx_fft_sent[(vrx_id as usize).min(1)];
+                            if !enabled {
+                                *sent = false;
+                            } else if was_connected && !*sent && fft_k != 0 {
+                                let _ = send_control!(fft_id, fft_k, addr.as_str());
+                                *sent = true;
                             }
                         }
                     }
@@ -2937,11 +3203,6 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             let _ = send_tx!(&buf[..n], addr.as_str());
                         }
                     }
-                    Command::CwMacroStop => {
-                        if let Some(ref addr) = server_addr {
-                            let _ = send_control!(ControlId::CwMacroStop, 0, addr.as_str());
-                        }
-                    }
                     Command::SetVfoSync(enabled) => {
                         state.vfo_sync = enabled;
                         if let Some(ref addr) = server_addr {
@@ -2968,16 +3229,14 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         vfo_b_volume = v;
                     }
                     Command::EnableRx2Spectrum(enabled) => {
+                        let was_open = state.rx2_spectrum_enabled;
                         state.rx2_spectrum_enabled = enabled;
                         if let Some(ref addr) = server_addr {
                             let _ = send_control!(ControlId::Rx2SpectrumEnable, enabled as u16, addr.as_str());
                             info!("RX2 spectrum enable sent: {}", enabled);
-                        }
-                    }
-                    Command::SetRx2SpectrumFps(fps) => {
-                        if let Some(ref addr) = server_addr {
-                            if was_connected {
-                                let _ = send_control!(ControlId::Rx2SpectrumFps, fps as u16, addr.as_str());
+                            // As RX1's: a spectrum that opens gets the size its rows show.
+                            if was_connected && enabled && !was_open && rx2_spectrum_fft_size_k != 0 {
+                                let _ = send_control!(ControlId::Rx2SpectrumFftSize, rx2_spectrum_fft_size_k, addr.as_str());
                             }
                         }
                     }
@@ -2993,7 +3252,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         rx2_spectrum_pan = pan;
                         if let Some(ref addr) = server_addr {
                             if was_connected {
-                                let _ = send_control!(ControlId::Rx2SpectrumPan, ((pan + 0.5) * 10000.0) as u16, addr.as_str());
+                                send_pan!(ControlId::Rx2SpectrumPan, ControlId::Rx2SpectrumPanFine, pan, addr.as_str());
                             }
                         }
                     }
@@ -3073,7 +3332,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                 // The link is gone, so nothing is outstanding any more. Three of
                 // the four link-down paths did not do this, and each one left the
                 // "PTT blocked" sign standing over a connection that no longer
-                // exists (review finding).
+                // exists.
                 let forgotten = session_lost!();
                 state.link_down(forgotten);
                 state.rtt_ms = 0;
@@ -3130,13 +3389,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // relay tunnel closes it answers BrokenPipe every
                             // single time, and the loop then ran as fast as the
                             // processor allowed with a log line per turn: 1.2
-                            // million lines in a quarter of an hour on the
-                            // owner's phone, which rolled the ring buffer and
+                            // million lines in a quarter of an hour on a
+                            // test phone, which rolled the ring buffer and
                             // took every other line with it. The loop that made
                             // the fault also destroyed the evidence for it
                             // (2026-09-05).
                             if e.kind() == std::io::ErrorKind::BrokenPipe {
-                                warn!("receive path is gone ({e}) - ending the network loop");
+                                warn!("receive path is gone ({e}): ending the network loop");
                                 break;
                             }
                             // Everything else may be temporary and must not end
@@ -3167,13 +3426,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     // over the relay the transport already names it). The client
                     // used to read anything that reached its port, and answered
                     // any AuthChallenge from anywhere - HMACs over nonces of a
-                    // stranger's choosing, and a broken authentication in flight
-                    // (review 66). Said once per five minutes.
+                    // stranger's choosing, and a broken authentication in flight.
+                    // Said once per five minutes.
                     if let Some(expected) = server_sockaddr {
                         if from != expected {
                             if stray_said_at.map_or(true, |t| t.elapsed() > Duration::from_secs(300)) {
                                 stray_said_at = Some(Instant::now());
-                                warn!("Datagram from {} dropped - not the server ({})", from, expected);
+                                warn!("Datagram from {} dropped: not the server ({})", from, expected);
                             }
                             continue;
                         }
@@ -3283,11 +3542,16 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
                             last_server_build = server_build.clone();
                             state.server_build = server_build;
+                            // Before the restore below, which sends the fine pan
+                            // and width only to a server that says it takes them.
+                            state.server_fine_spectrum_view = ack.capabilities.has(
+                                sdr_remote_core::protocol::Capabilities::FINE_SPECTRUM_VIEW,
+                            );
 
-                            // PATCH-1 review finding (B3): only trust state_flags
+                            // Only trust state_flags
                             // when the server explicitly advertises REPORTS_STATE_FLAGS.
-                            // Old servers (pre-PATCH-1, e.g. v2.0.0 release tag) leave
-                            // both capabilities and state_flags at NONE — interpreting
+                            // Old servers (without state flags, e.g. v2.0.0 release tag) leave
+                            // both capabilities and state_flags at NONE; interpreting
                             // an absent flag as "TCI down" would false-positive against
                             // a perfectly-working old server.
                             let server_reports_state_flags = ack.capabilities.has(
@@ -3312,13 +3576,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     },
                                 );
                                 if thetis_autostart.step(thetis_autostart_enabled, report) {
-                                    info!("Thetis autostart: the server's first report after connecting says Thetis is not running - sending power-on");
+                                    info!("Thetis autostart: the server's first report after connecting says Thetis is not running; sending power-on");
                                     own_commands.push(Command::SetControl(ControlId::PowerOnOff, 1));
                                 }
-                                // PATCH-1 operator-feedback (2026-05-13): suppress TciUnreachable
+                                // Suppress TciUnreachable
                                 // while the server is in the launch phase (orange Start button).
                                 // Showing "TCI not reachable" during the normal 60s startup
-                                // grace period is wrong — the launch is still in progress.
+                                // grace period is wrong; the launch is still in progress.
                                 let thetis_starting_now = ack.state_flags.has(
                                     sdr_remote_core::protocol::ServerStateFlags::THETIS_STARTING,
                                 );
@@ -3345,7 +3609,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // in each front end: the desktop had its own copy
                                 // of this rule and the phone had none, which is
                                 // why the phone showed the tick ON against a
-                                // server with no cluster at all (owner,
+                                // server with no cluster at all (seen
                                 // 2026-08-20). It also lands BEFORE the
                                 // just-connected re-send below, which then carries
                                 // the corrected value - so the server is told
@@ -3385,7 +3649,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     )
                                 ) {
                                     // Recover to Connected if TCI is up OR Thetis is in the
-                                    // middle of launching (transient — wait for the launch
+                                    // middle of launching (transient; wait for the launch
                                     // to either succeed or timeout before complaining).
                                     if tci_up || thetis_starting_now {
                                         state.connect_status =
@@ -3412,6 +3676,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             if let Some(ref addr) = server_addr {
                                 if !was_connected {
                                     info!("Connected to server (rtt={}ms, ring={})", rtt, audio.playback_buffer_level());
+                                    // A new session: the screen's subscription anew is an open.
+                                    vrx_fft_sent = [false; 2];
                                     // Reset jitter buffer and codec state on (re)connect so audio starts fresh
                                     jitter_buf.reset();
                                     // Both formats, which the three separate lines
@@ -3449,8 +3715,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // patch could not have worked: over six seconds
                                     // the line appears, under six seconds it does
                                     // not, and under six seconds is exactly where
-                                    // the defect lives. Review finding, and the
-                                    // cheapest one of the round.
+                                    // the defect lives.
                                     yaesu_logged_first = false;
                                     yaesu2_logged_first = false;
                                     vrx1_logged_first = false;
@@ -3476,15 +3741,18 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // meant every one of them went twice on every
                                     // single connect, and the count in the log line
                                     // included packets sent a microsecond earlier
-                                    // by the block above. Found by re-reading my own
-                                    // patch before sending it to review.
+                                    // by the block above.
                                     //
                                     // Replaying first also settles which value wins
                                     // when the two disagree: the hand-written sends
                                     // read the current variables, so they are the
                                     // more authoritative of the two and they should
                                     // land last.
-                                    let replay = session_intent.replay();
+                                    let mut replay = session_intent.replay();
+                                    // Only what this server takes; the rest is in
+                                    // `held_back`, so the count below is of what
+                                    // could go.
+                                    replay.retain(|(id, _)| state.server_takes(*id));
                                     let mut replay_sent = 0usize;
                                     for (id, value) in &replay {
                                         // The Result is READ here, unlike the sends
@@ -3492,42 +3760,55 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         // is most likely to fail, and a line that
                                         // counted what it queued would read green
                                         // through exactly the failure it exists to
-                                        // show (review finding).
-                                        if send_control!(*id, *value, addr.as_str()).is_ok() {
+                                        // show.
+                                        if matches!(send_control!(*id, *value, addr.as_str()), Ok(n) if n > 0) {
                                             replay_sent += 1;
                                         }
                                     }
-                                    // Named in the patch brief before it was built
-                                    // (working rule 11): this branch sits in a loop
+                                    // This branch sits in a loop
                                     // no assertion can open, so a field log is the
                                     // only place it can be seen. The two Yaesu
                                     // values are spelled out because they are the
                                     // ones an operator can hear.
                                     info!("{}", crate::session_intent::restore_summary(&replay, replay_sent));
+                                    // What the gate held back: newer than the replay,
+                                    // which may carry the value of the last server
+                                    // that took it; older than the hand-written sends
+                                    // below, which read the current variables - a pan
+                                    // made while the link was down went nowhere, and
+                                    // only those carry it.
+                                    send_held_back!(addr.as_str());
 
-                                    // Send deferred spectrum settings now that server knows us
-                                    if crate::thetis_streams::stream_value(
-                                        spectrum_enabled, thetis_streams_stopped) {
-
-                                        let _ = send_control!(ControlId::SpectrumEnable, 1, addr.as_str());
+                                    // Send deferred spectrum settings now that server knows us:
+                                    // on or off, and the view either way. Only when on, it
+                                    // left a spectrum closed during the gap on (the replay
+                                    // carries the last 1 that went out), and a zoom or pan
+                                    // made then, with the spectrum off, never arrived.
+                                    {
+                                        let on = crate::thetis_streams::stream_value(
+                                            spectrum_enabled, thetis_streams_stopped);
+                                        let _ = send_control!(ControlId::SpectrumEnable, on as u16, addr.as_str());
 
                                         let _ = send_control!(ControlId::SpectrumFps, spectrum_fps as u16, addr.as_str());
 
                                         // Re-send zoom and pan so server generates correct view
                                         let _ = send_control!(ControlId::SpectrumZoom, (spectrum_zoom * 10.0) as u16, addr.as_str());
 
-                                        let _ = send_control!(ControlId::SpectrumPan, ((spectrum_pan + 0.5) * 10000.0) as u16, addr.as_str());
+                                        send_pan!(ControlId::SpectrumPan, ControlId::SpectrumPanFine, spectrum_pan, addr.as_str());
 
                                         let _ = send_control!(ControlId::SpectrumMaxBins, spectrum_max_bins, addr.as_str());
 
-                                        if spectrum_fft_size_k != 0 {
+                                        // The FFT size is the receiver's, for every client on the
+                                        // server, not a view of this one: only from a client that
+                                        // looks at it.
+                                        if on && spectrum_fft_size_k != 0 {
                                             let _ = send_control!(ControlId::SpectrumFftSize, spectrum_fft_size_k, addr.as_str());
                                         }
                                     }
 
                                     // Re-send RX1 audio subscription on reconnect.
                                     // Server default = ON, so only relevant if
-                                    // the client wants RX1 OFF — but always sending is
+                                    // the client wants RX1 OFF; but always sending is
                                     // idempotent and covers both cases.
                                     {
                                         // Not the bare wish: if the grace period has
@@ -3547,21 +3828,24 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         info!("RX2 audio re-sent on reconnect");
                                     }
                                     // Re-send RX2 SPECTRUM subscription on reconnect, SEPARATE from the
-                                    // audio subscription (phase 3b/4) — otherwise an RX2-spectrum-
+                                    // audio subscription, otherwise an RX2-spectrum-
                                     // without-audio client gets no spectrum after reconnecting.
-                                    if state.rx2_spectrum_enabled {
-                                        let _ = send_control!(ControlId::Rx2SpectrumEnable, 1, addr.as_str());
+                                    // On or off, and the view either way, as RX1 above.
+                                    {
+                                        let _ = send_control!(ControlId::Rx2SpectrumEnable, state.rx2_spectrum_enabled as u16, addr.as_str());
 
+                                        // RX1's count: both clients send RX2 the same as RX1.
                                         let _ = send_control!(ControlId::Rx2SpectrumMaxBins, spectrum_max_bins, addr.as_str());
 
                                         let _ = send_control!(ControlId::Rx2SpectrumZoom, (rx2_spectrum_zoom * 10.0) as u16, addr.as_str());
 
-                                        let _ = send_control!(ControlId::Rx2SpectrumPan, ((rx2_spectrum_pan + 0.5) * 10000.0) as u16, addr.as_str());
+                                        send_pan!(ControlId::Rx2SpectrumPan, ControlId::Rx2SpectrumPanFine, rx2_spectrum_pan, addr.as_str());
 
-                                        if rx2_spectrum_fft_size_k != 0 {
+                                        // As RX1's: the receiver's for everyone, so only when on.
+                                        if state.rx2_spectrum_enabled && rx2_spectrum_fft_size_k != 0 {
                                             let _ = send_control!(ControlId::Rx2SpectrumFftSize, rx2_spectrum_fft_size_k, addr.as_str());
                                         }
-                                        info!("RX2 spectrum re-sent on reconnect");
+                                        info!("RX2 spectrum re-sent on reconnect (on={})", state.rx2_spectrum_enabled);
                                     }
                                     // Send AudioMode so server knows our channel requirements
                                     let _ = send_control!(ControlId::AudioMode, audio_mode, addr.as_str());
@@ -3576,7 +3860,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         _ => 0x22,
                                     };
                                     let _ = send_control!(ControlId::SmeterSources, mask, addr.as_str());
-                                    // Re-send DX-spots opt-out — server's ClientSession resets
+                                    // Re-send DX-spots opt-out: server's ClientSession resets
                                     // to default ON on every new insert, so without this path
                                     // the client would visually show OFF while the server, after
                                     // reconnect, sends Spot frames again.
@@ -3586,6 +3870,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 }
                                 state.connected = true;
                                 was_connected = true;
+                                // And on every ack, not only in the restore: a
+                                // Connect to another server without a password has
+                                // no new-session edge, and the restore does not run
+                                // there. After a restore this finds nothing.
+                                send_held_back!(addr.as_str());
                             }
                         }
                         Ok(Packet::Frequency(freq_pkt)) => {
@@ -3717,7 +4006,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         // AND the primary `state.smeter` / `state.smeter_rx2`
                         // are updated so the existing render path (which reads
                         // `state.smeter`) transparently follows the active
-                        // source — the server only sends one source per RX
+                        // source, the server only sends one source per RX
                         // unless the client subscribes to multiple.
                         Ok(Packet::SmeterSig(sm_pkt)) => {
                             let dbm = sm_pkt.level as f32 / 10.0;
@@ -3814,6 +4103,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 }
                                 ControlId::SpectrumEnable | ControlId::SpectrumFps
                                 | ControlId::SpectrumZoom | ControlId::SpectrumPan
+                                | ControlId::SpectrumPanFine | ControlId::Rx2SpectrumPanFine
                                 | ControlId::SpectrumMaxBins | ControlId::SpectrumFftSize
                                 | ControlId::SpectrumBinDepth
                                 // Client -> server only; the server never echoes it back.
@@ -3874,7 +4164,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 ControlId::ThetisWidebandAudio => {} // client→server only; server echoes ignored
                                 ControlId::Rx2SpectrumEnable | ControlId::Rx2SpectrumFps
                                 | ControlId::Rx2SpectrumZoom | ControlId::Rx2SpectrumPan
-                                | ControlId::Rx2SpectrumMaxBins
+                                | ControlId::Rx2SpectrumMaxBins | ControlId::Rx2SpectrumFftSize
                                 | ControlId::VfoSwap
                                 | ControlId::ThetisTune | ControlId::YaesuEnable
                                 | ControlId::YaesuPtt | ControlId::YaesuFreq
@@ -3893,13 +4183,6 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 ControlId::DiversityEnable => state.diversity_enabled = ctrl.value != 0,
                                 ControlId::DiversityAutoNull => {
                                     state.diversity_autonull_result = ctrl.value;
-                                }
-                                ControlId::Rx2SpectrumFftSize => {
-                                    rx2_spectrum_fft_size_k = ctrl.value;
-                                    // Also forward to server
-                                    if let Some(ref addr) = server_addr {
-                                        let _ = send_control!(ctrl.control_id, ctrl.value, addr.as_str());
-                                    }
                                 }
                                 ControlId::DiversityRef => state.diversity_ref = ctrl.value as u8,
                                 ControlId::DiversitySource => state.diversity_source = ctrl.value as u8,
@@ -3930,6 +4213,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 ControlId::VrxSpectrumEnable2 => {} // client→server only
                                 ControlId::VrxSpectrumSpanKhz => {} // client→server only
                                 ControlId::VrxSpectrumSpanKhz2 => {} // client→server only
+                                ControlId::VrxSpectrumSpanFine | ControlId::VrxSpectrumSpanFine2 => {} // client→server only
                                 // Dual-radio slot 1 (Option B-prime): client→server only;
                                 // server echoes ignored (same pattern as slot-0 Yaesu + Vrx).
                                 ControlId::Yaesu2Enable | ControlId::Yaesu2Ptt
@@ -4041,7 +4325,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         if parts.len() >= 28 {
                                             state.rf2k_active = parts[27] == "1";
                                         }
-                                        // Debug fields (Phase D) - parts[28..47]
+                                        // Debug fields - parts[28..47]
                                         if parts.len() >= 44 {
                                             state.rf2k_debug_available = parts[28] == "1";
                                             state.rf2k_bias_pct_x10 = parts[29].parse().unwrap_or(0);
@@ -4070,7 +4354,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                             state.rf2k_band_gap_allowed = parts[42] == "1";
                                             state.rf2k_controller_version = parts[43].parse().unwrap_or(0);
                                         }
-                                        // Drive config (Phase D) - parts[44..46]
+                                        // Drive config - parts[44..46]
                                         if parts.len() >= 47 {
                                             state.rf2k_drive_config =
                                                 sdr_remote_core::rf2k_drive::from_wire([parts[44], parts[45], parts[46]]);
@@ -4160,8 +4444,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             }
                         }
                         Ok(Packet::YaesuState(ys)) => {
-                            // connected no longer comes from here — presence authority is
-                            // now YaesuPresence (PATCH-android-yaesu-presence-datasaver),
+                            // connected no longer comes from here; presence authority is
+                            // now YaesuPresence,
                             // so dropping/appearing is dynamic instead of sticky.
                             state.yaesu_freq_a = ys.freq_a;
                             state.yaesu_freq_b = ys.freq_b;
@@ -4200,7 +4484,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         // Client -> server only: a client never receives its own key edges.
                         Ok(Packet::CwEdges(_)) => {}
                         Ok(Packet::YaesuFeature(pkt)) => {
-                            // Yaesu DSP/function feature-state feedback (PATCH-yaesu-extra-controls).
+                            // Yaesu DSP/function feature-state feedback.
                             if pkt.slot == 0 {
                                 state.yaesu_feature_toggles = pkt.toggles;
                                 state.yaesu_feature_levels = pkt.levels;
@@ -4217,10 +4501,10 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.tx_filter_low_hz = pkt.low_hz;
                             state.tx_filter_high_hz = pkt.high_hz;
                             // Once per session, on the edge: the line a field log
-                            // shows after a reconnect (named in advance, build 83).
+                            // shows after a reconnect (build 83).
                             if !state.tx_filter_supported {
                                 info!(
-                                    "TX filter band reported by the server ({}..{} Hz) - setting it is supported",
+                                    "TX filter band reported by the server ({}..{} Hz): setting it is supported",
                                     pkt.low_hz, pkt.high_hz
                                 );
                             }
@@ -4259,7 +4543,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     audio_arrived!(vrx1, crate::loss_window::Stream::Vrx1, pkt.sequence, pkt.timestamp, frame.opus_data.len(), &frame.opus_data);
                                     if !vrx1_logged_first {
                                         debug!(
-                                            "VRX1 audio: first packet received (seq={}, opus_bytes={}) - {} ms after enable",
+                                            "VRX1 audio: first packet received (seq={}, opus_bytes={}); {} ms after enable",
                                             pkt.sequence, frame.opus_data.len(),
                                             vrx1_enable_at.map(|t| t.elapsed().as_millis() as i64).unwrap_or(-1)
                                         );
@@ -4279,7 +4563,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     audio_arrived!(vrx2, crate::loss_window::Stream::Vrx2, pkt.sequence, pkt.timestamp, frame.opus_data.len(), &frame.opus_data);
                                     if !vrx2_logged_first {
                                         debug!(
-                                            "VRX2 audio: first packet received (seq={}, opus_bytes={}) - {} ms after enable",
+                                            "VRX2 audio: first packet received (seq={}, opus_bytes={}); {} ms after enable",
                                             pkt.sequence, frame.opus_data.len(),
                                             vrx2_enable_at.map(|t| t.elapsed().as_millis() as i64).unwrap_or(-1)
                                         );
@@ -4358,7 +4642,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // reaction, no line, while the phone answered within
                             // fifty milliseconds. Whether the packet arrives and
                             // is then dropped, or never arrives, cannot be told
-                            // from the outside (owner, 2026-09-05).
+                            // from the outside.
                             info!(
                                 "PTT refused by the server (target={:?}, server_released={}, server_closed={}, asking={:?})",
                                 target, server_released, server_closed, ptt_requested
@@ -4412,9 +4696,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 yaesu2_ptt = false;
                             }
                         }
-                        // Dual-radio slot 1 (Option B-prime) — exact mirror of slot 0.
+                        // Dual-radio slot 1 (Option B-prime): exact mirror of slot 0.
                         Ok(Packet::YaesuState2(ys)) => {
-                            // connected no longer comes from here — see YaesuPresence (3c).
+                            // connected no longer comes from here; see YaesuPresence (3c).
                             state.yaesu2_freq_a = ys.freq_a;
                             state.yaesu2_freq_b = ys.freq_b;
                             state.yaesu2_mode = ys.mode;
@@ -4447,17 +4731,37 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             else if slot == 1 { state.yaesu2_model = model; }
                         }
                         Ok(Packet::YaesuPresence(p)) => {
-                            // Presence authority (PATCH-android-yaesu-presence-datasaver):
+                            // Presence authority:
                             // connected + model come from here (broadcast to all
                             // clients), NOT from the subscription-gated YaesuState. Pure
                             // application in apply_yaesu_presence (unit-tested).
+                            let before = (
+                                state.radios_known,
+                                [state.yaesu_model, state.yaesu2_model],
+                                state.yaesu_rx_levels_tuned,
+                            );
                             let (c0, c1) = apply_yaesu_presence(&mut state, &p);
                             // Presence may have cleared the hi_swr flag; the alarm
                             // must follow that drop immediately.
                             audio.set_swr_alarm(state.yaesu_hi_swr || state.yaesu2_hi_swr);
-                            // Value-change-only logging (L4) — shared, so desktop too.
+                            // Value-change-only logging (L4): shared, so desktop too.
                             if c0 { info!("[radio0] presence: {}", if p.slot0_present { "connected" } else { "disconnected" }); }
                             if c1 { info!("[radio1] presence: {}", if p.slot1_present { "connected" } else { "disconnected" }); }
+                            // Which receive correction each radio gets: once per
+                            // session (`radios_known` is cleared with the link) and
+                            // whenever the model or the server's choice changes.
+                            let models = [p.slot0_model, p.slot1_model];
+                            for (slot, (present, came)) in [(p.slot0_present, c0), (p.slot1_present, c1)].into_iter().enumerate() {
+                                if present && (came || !before.0 || before.1[slot] != models[slot] || before.2 != p.rx_levels_tuned) {
+                                    info!(
+                                        "[radio{}] receive correction: {} levels, {:+.1} dB ({})",
+                                        slot,
+                                        if p.rx_levels_tuned { "tuned" } else { "factory" },
+                                        20.0 * yaesu_rx_correction(models[slot], p.rx_levels_tuned).log10(),
+                                        sdr_remote_core::protocol::radio_model_name(models[slot]),
+                                    );
+                                }
+                            }
                         }
                         Ok(Packet::FrequencyYaesu2(_)) => {} // client→server only
                         Ok(Packet::YaesuMemoryData2(text)) => {
@@ -4487,8 +4791,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             clear_transmit_flags!("A new session is starting while transmitting");
                             // And nothing of the old session is repeated into the
                             // new one: an unacknowledged `YaesuPtt=1` or tune from
-                            // before the switch would be applied by it (build 254,
-                            // rounds 252). `session_lost!` does the same again at
+                            // before the switch would be applied by it (build 254).
+                            // `session_lost!` does the same again at
                             // "Auth accepted", and finds nothing.
                             let open = controls_out.unacknowledged();
                             if open > 0 {
@@ -4497,7 +4801,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             controls_out.session_ended();
                             if let (Some(ref addr), Some(ref pw)) = (&server_addr, &auth_password) {
                                 if test_auth_delay_secs > 0 {
-                                    warn!("THETISLINK_TEST_AUTH_DELAY_SECS is set: answering {} s late - a test, not a fault", test_auth_delay_secs);
+                                    warn!("THETISLINK_TEST_AUTH_DELAY_SECS is set: answering {} s late; a test, not a fault", test_auth_delay_secs);
                                     tokio::time::sleep(Duration::from_secs(test_auth_delay_secs)).await;
                                 }
                                 // Over QUIC the answer covers this connection's binding.
@@ -4505,7 +4809,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 let hmac = sdr_remote_core::auth::compute_hmac(pw, &nonce, binding.as_ref());
                                 // Our nonce goes along, and the key is derived now;
                                 // it becomes the session's once the server's proof
-                                // verifies (phase 2).
+                                // verifies.
                                 let client_nonce = sdr_remote_core::auth::generate_client_nonce();
                                 pending_auth = Some(PendingAuth {
                                     server_nonce: nonce,
@@ -4529,18 +4833,18 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         Ok(Packet::AuthResult { .. })
                             if pending_auth.as_ref().map_or(false, |p| result_is_stale(p.binding, socket.binding())) =>
                         {
-                            info!("Auth result for a QUIC connection that is gone - waiting for the new one's challenge");
+                            info!("Auth result for a QUIC connection that is gone: waiting for the new one's challenge");
                             pending_auth = None;
                         }
                         Ok(Packet::AuthResult { code: result, proof }) => {
                             // Whatever it says, it is the answer the code step was waiting
-                            // for. Invariant three asymmetries lean on (review 72): the only
+                            // for. Invariant three asymmetries lean on: the only
                             // place that sets `totp_required` is the TOTP_REQUIRED arm below
                             // this wipe, so a new code step always starts with an empty
                             // clock - which is why a wrong code may keep the flag and drop
                             // the clock, and `engine_stopped` the other way round.
                             totp_code_sent_at = None;
-                            // PATCH-1: phase-based classification of AUTH_REJECTED.
+                            // Phase-based classification of AUTH_REJECTED.
                             // - If we hadn't yet been told "TOTP required" → reject = WrongPassword
                             // - If we had been told TOTP required and just submitted a code → reject = WrongTotp
                             // `state.totp_required` at this moment functions as the phase indicator.
@@ -4548,10 +4852,10 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // (`verified` is set at the password step, so a refusal
                             // after it can only be a refused code), not in the screen
                             // flag, which the wait cleared: a late refusal of the code
-                            // read as a wrong password (review 74, measured).
+                            // read as a wrong password (measured).
                             let was_in_totp_phase = state.totp_required
                                 || pending_auth.as_ref().map_or(false, |p| p.verified);
-                            // Phase 2: the server's proof that it knows the password,
+                            // The server's proof that it knows the password,
                             // checked before the code is believed. `None` is no proof
                             // at all: an older server, or the result after the TOTP
                             // step (the proof went with the password step).
@@ -4575,23 +4879,23 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // - a second ACCEPTED for the verified session (a UDP
                             //   duplicate, a replay) belongs to no authentication in
                             //   flight; believing it would forget the session, key
-                            //   included (review 66);
+                            //   included;
                             // - an accepting answer with nothing in flight and no
                             //   verified session (the answer to an attempt a lost link
                             //   just forgot) has nothing to be judged by: ignored
                             //   (field test 2026-10-06);
                             // - an accepting answer without a proof, to an attempt in
                             //   flight, is a server that
-                            //   proves nothing - from before phase 2 - and this client
-                            //   does not connect to one (owner's decision F, 2026-10-02,
-                            //   replacing decision A: connect with a warning).
+                            //   proves nothing - an older server - and this client
+                            //   does not connect to one (since 2026-10-02;
+                            //   before that it connected with a warning).
                             // The wire knows three codes. Anything else is not one
                             // of this side's verdicts (chosen below) but a sender's:
-                            // refused, and said out loud (review 68). Refused rather
+                            // refused, and said out loud. Refused rather
                             // than ignored, although the server ignores what answers
                             // nothing: a code this build does not know is more likely
                             // a future meaning than line noise, and silence here
-                            // would hang the connect with no message (review 69).
+                            // would hang the connect with no message.
                             let result = if matches!(
                                 result,
                                 sdr_remote_core::protocol::AUTH_REJECTED
@@ -4600,7 +4904,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             ) {
                                 result
                             } else {
-                                warn!("AuthResult with an unknown code 0x{:02x} - refused", result);
+                                warn!("AuthResult with an unknown code 0x{:02x}; refused", result);
                                 sdr_remote_core::protocol::AUTH_REJECTED
                             };
                             let accepting = result == sdr_remote_core::protocol::AUTH_ACCEPTED
@@ -4623,13 +4927,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             };
                             match result {
                                 RESULT_REPEATED => {
-                                    info!("Auth accepted - repeated result for the verified session, ignored");
+                                    info!("Auth accepted: repeated result for the verified session, ignored");
                                 }
                                 RESULT_NOT_IN_FLIGHT => {
-                                    info!("Auth accepted - no attempt in flight (a late answer after the link was lost, or a stray one); ignored, the next challenge starts a new attempt");
+                                    info!("Auth accepted: no attempt in flight (a late answer after the link was lost, or a stray one); ignored, the next challenge starts a new attempt");
                                 }
                                 RESULT_NO_PROOF => {
-                                    warn!("Auth accepted by a server that proves nothing (an attempt in flight, no proof in the answer) - refused; update the server");
+                                    warn!("Auth accepted by a server that proves nothing (an attempt in flight, no proof in the answer): refused; update the server");
                                     leave_server!(tell);
                                     pending_auth = None;
                                     session_key = None;
@@ -4643,7 +4947,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // Whatever the code says: a server that cannot prove
                                     // it knows the password is not ours - and the key of
                                     // the session it was replacing goes with it.
-                                    warn!("Auth rejected - server proof invalid");
+                                    warn!("Auth rejected: server proof invalid");
                                     leave_server!(tell);
                                     pending_auth = None;
                                     session_key = None;
@@ -4664,13 +4968,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // again (field test build 59, 2026-10-01 13:31).
                                     // Nothing to clear on a first connect.
                                     session_lost!().replaced_by_a_new_session();
-                                    // Phase 2: whose session is this? Verified now, or at
+                                    // Whose session is this? Verified now, or at
                                     // the password step (the TOTP result carries no proof).
                                     // Verified above: every path that reaches this arm
                                     // has a key (the others became verdicts of their own).
                                     session_key = verified_key;
-                                    info!("Auth accepted - server verified");
-                                    // Which way this session runs goes into the file (round 90): two
+                                    info!("Auth accepted: server verified");
+                                    // Which way this session runs goes into the file: two
                                     // measurements of one build over two transports must differ.
                                     let route = socket.route();
                                     measure.event(start.elapsed().as_millis() as u64, crate::measure::Event::SessionStart(route));
@@ -4695,7 +4999,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // timeout later, on the next authentication, which is
                                     // the seventeen to twenty seconds in the log.
                                     //
-                                    // The owner found the tell: the noise from the
+                                    // The tell: the noise from the
                                     // draining jitter buffer IS that window. Restart
                                     // inside the noise and the client never noticed it had
                                     // been away (2026-08-16).
@@ -4721,7 +5025,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // one, and charging this one for it is what
                                     // made the server switch on error correction
                                     // two seconds after every connect and then
-                                    // have no reason to let go (open point 15).
+                                    // have no reason to let go.
                                     loss_meter.reset();
                                     last_worst_stream = None;
                                     last_stale_windows = 0;
@@ -4747,11 +5051,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // (RESULT_REPEATED); without it here one late
                                 // duplicate took a live session down - "wrong
                                 // password", the address gone, and the server still
-                                // holding the client as admitted (review 77,
-                                // measured). The server applies the same rule to a
+                                // holding the client as admitted (measured).
+                                // The server applies the same rule to a
                                 // response with nothing pending.
                                 _ if pending_auth.is_none() => {
-                                    info!("Auth rejected - no attempt in progress, a repeated or stray result; ignored");
+                                    info!("Auth rejected: no attempt in progress, a repeated or stray result; ignored");
                                 }
                                 _ => {
                                     warn!("Auth rejected");
@@ -4763,9 +5067,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // own: it is verified by the nonces kept here.
                                     // Clearing them made that ACCEPTED read as a
                                     // server that proves nothing, with the server
-                                    // already holding the client as admitted (review
-                                    // 75, measured). Third place in the row of the
-                                    // wait (74) and `session_lost!()` (66): the
+                                    // already holding the client as admitted
+                                    // (measured). Third place in the row of the
+                                    // wait and `session_lost!()`: the
                                     // attempt ends with the session, not with a
                                     // refused code.
                                     if !was_in_totp_phase {
@@ -4776,7 +5080,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         // heartbeat every half second would answer it
                                         // with the same wrong password five times and
                                         // block the address for a minute. No Disconnect:
-                                        // there is nothing there to end (review 76).
+                                        // there is nothing there to end.
                                         pending_auth = None;
                                         leave_server!(silent);
                                     }
@@ -4797,7 +5101,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         }
                         Ok(Packet::ControlAck(seq)) => {
                             if !controls_out.server_acknowledges() {
-                                info!("The server acknowledges controls - lost ones are sent again from now on");
+                                info!("The server acknowledges controls: lost ones are sent again from now on");
                             }
                             controls_out.acknowledged(seq, Instant::now());
                         }
@@ -4805,7 +5109,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             info!("TOTP challenge received");
                         }
                         Ok(Packet::AuthResponse { .. }) | Ok(Packet::TotpResponse(_)) => {} // server-only
-                        // Phase 3c: punching. The route layer takes these from
+                        // Hole punching. The route layer takes these from
                         // build 124; until then a server that sends one is
                         // ahead of this client, and nothing happens.
                         Ok(Packet::PunchReady(_)) | Ok(Packet::PunchOffer(_)) | Ok(Packet::PunchLocal(_)) => {}
@@ -4829,7 +5133,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // The link is gone, so nothing is outstanding any more. Three of
                             // the four link-down paths did not do this, and each one left the
                             // "PTT blocked" sign standing over a connection that no longer
-                            // exists (review finding).
+                            // exists.
                             let forgotten = session_lost!();
                             state.link_down(forgotten);
                             state.connect_status = crate::state::ConnectStatus::Disconnected;
@@ -4843,9 +5147,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             state.full_spectrum_sequence = 0;
                         }
                         Err(e) => {
-                            // PATCH-1 review finding (B1, parts 2 + 3):
-                            // distinguish protocol-version mismatch from generic
-                            // malformed bytes, but only during the connect phase —
+                            // Distinguish protocol-version mismatch from generic
+                            // malformed bytes, but only during the connect phase;
                             // during a normal session we just log and keep running
                             // (single bad packet is not fatal).
                             let is_connecting = matches!(
@@ -4881,7 +5184,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         }
                     }
 
-                    // PATCH-1: any reply (even a bad one) means the server-port replied —
+                    // Any reply (even a bad one) means the server-port replied,
                     // useful for distinguishing "wrong bytes" from "no reply at all".
                     connect_any_reply_seen = true;
 
@@ -4899,8 +5202,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     };
                     if path != state.path {
                         if let Some(kind) = path {
-                            // Named in the brief before it was built (working rule 11, build 139).
-                            info!("Connection: {} ({})", kind.short(), path_log_word(kind));
+                            info!("Connection: {} ({})", kind.short(), kind.log_word());
                             measure.event(start.elapsed().as_millis() as u64, crate::measure::Event::Path(kind));
                         }
                         state.path = path;
@@ -4909,14 +5211,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     if let Some(grants) = &relay_grants {
                         let changed = udp_blocked_watch.observe(grants.borrow().as_ref(), Instant::now());
                         if let Some(blocked) = changed {
-                            // Named in the brief before it was built (working rule 11, build 137).
                             if blocked {
                                 warn!(
-                                    "UDP to the relay blocked: signed in, but no UDP seen by the relay within {} s - the traffic goes over the relay's TCP line",
+                                    "UDP to the relay blocked: signed in, but no UDP seen by the relay within {} s; the traffic goes over the relay's TCP line",
                                     crate::udp_blocked::UDP_SEEN_WAIT.as_secs()
                                 );
                             } else {
-                                info!("UDP to the relay seen again - the notice goes");
+                                info!("UDP to the relay seen again: the notice goes");
                             }
                             state.udp_blocked = blocked;
                             let _ = self.state_tx.send(state.clone());
@@ -4962,8 +5263,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         // Resuming never waits. The module says so in as many
                         // words, and the back-off broke that promise for a full
                         // second - precisely while the operator is looking at a
-                        // waterfall that has stopped moving. Both findings from the
-                        // same review.
+                        // waterfall that has stopped moving.
                         let backing_off = !want
                             && thetis_stream_retry_at.map_or(false, |t| Instant::now() < t);
                         if act != ThetisStreamAction::None && !backing_off {
@@ -4983,10 +5283,15 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // so a flag set on an intent that never reached the
                                 // server would keep handing back a stream the
                                 // server is still sending - and nothing would say
-                                // so. Same finding as the previous patch, one
-                                // patch later, and worse here because of that.
+                                // so - and that is worse here, because the flag
+                                // drives the restore block.
                                 if rx_ok && sp_ok {
                                     thetis_streams_stopped = !want;
+                                    // The spectrum opens again on the wire: the size
+                                    // its rows show goes with it, as on an open.
+                                    if spec_wire && spectrum_fft_size_k != 0 {
+                                        let _ = send_control!(ControlId::SpectrumFftSize, spectrum_fft_size_k, addr.as_str());
+                                    }
                                     if thetis_stream_retry_at.take().is_some() {
                                         info!("Thetis stream change reached the socket after all");
                                     }
@@ -5186,7 +5491,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 if rx1_d.is_some() || bin_r_d.is_some() || rx2_d.is_some() {
                                     // Measurement mode: one line per frame in which ANY channel of
                                     // the bundle was filled in - RX1, RX2 or binaural right - so an
-                                    // operator listening to RX2 leaves a trace too (round 93).
+                                    // operator listening to RX2 leaves a trace too.
                                     if [&rx1_d, &rx2_d, &bin_r_d].iter().any(|d| d.as_ref().is_some_and(|d| d.concealed)) {
                                         measure.conceal(start.elapsed().as_millis() as u64, crate::loss_window::Stream::Thetis);
                                     }
@@ -5272,7 +5577,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         dev
                                     });
 
-                                    // RX1 audio can be deliberately off (Rx1Enable, phase 3a):
+                                    // RX1 audio can be deliberately off (Rx1Enable):
                                     // then left_dev is empty. RX2 is mixed additively into L
                                     // (Mono/BIN) and the output-gate only writes if L
                                     // is not empty - so without this seed RX2 audio drops out
@@ -5346,7 +5651,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         let sound = crate::after_tx::peak(&left_dev).max(crate::after_tx::peak(&right_dev));
                                         let (write, outcome) = after_tx.frame(sound, ring_now, frame_ms, Instant::now());
                                         match outcome {
-                                            // Named before it was built (working rule 11).
+                                            // Named before it was built.
                                             // A developer's line (build 295): one per release.
                                             Some(crate::after_tx::Outcome::FirstSound { after_ms, skipped_ms, ring_ms }) => dev_info!(
                                                 "RX after TX: first sound {} ms after the release, {} ms of silence skipped, ring {} ms, jitter depth {}",
@@ -5402,6 +5707,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // recorder, level, volume, model and PTT; the ring is shared.
                             // A macro and not a function: the block reads a dozen of the
                             // tick's locals, as `rebuild_or_conceal!` does.
+                            // Read before the block: a macro sees the locals of where it is written.
+                            // Until this session's first presence packet the client does not know
+                            // which table the server chose (`forget_session` clears it with the
+                            // link), while a radio's audio can already arrive. Then the small one:
+                            // at worst a moment too quiet, never 22 dB too loud (build 63).
+                            let rx_levels_tuned = state.yaesu_rx_levels_tuned || !state.radios_known;
                             macro_rules! mix_yaesu_rx {
                                 ($stream:expr, $name:literal, $logged_first:ident, $jb:ident, $wanted:ident,
                                  $st:ident, $rec:ident, $accum:ident, $count:ident, $volume:ident,
@@ -5416,6 +5727,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     // dropout - only a gap with real frames on both sides.
                                     if $logged_first
                                         && ($jb.depth() > 0 || (was_connected && $wanted)) {
+                                        // One gain for the speaker, the bar and the recording.
+                                        let rx_gain = yaesu_rx_correction(state.$model, rx_levels_tuned);
                                         // One ring: as long as what was written before, or the tick's count
                                         // when nothing was (build 156).
                                         let opened = crate::after_tx::open_tick(&mut playback_buf, frames_wanted, frame_samples);
@@ -5444,26 +5757,30 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                                 }
                                             };
                                             match decoded {
-                                                Some(d) => {
+                                                Some(mut d) => {
                                                     if d.concealed {
                                                         measure.conceal(start.elapsed().as_millis() as u64, $stream);
                                                     }
+                                                    // The recording gets the receive correction too,
+                                                    // and not the volume: it then sounds as loud as
+                                                    // what is heard, like RX1 and VRX (build 62).
                                                     if let Some(ref mut w) = $rec {
+                                                        for s in d.pcm.iter_mut() {
+                                                            *s = (*s as f32 * rx_gain).round().clamp(-32768.0, 32767.0) as i16;
+                                                        }
                                                         let _ = w.write_samples(&d.pcm, d.rate);
                                                     }
                                                     let concealed = d.concealed;
                                                     let mut resampled = d.dev;
-                                                    // Pre-volume energy: the Yaesu volume carries a
-                                                    // x20 make-up factor, which would otherwise dominate
-                                                    // the bar instead of the received signal. Concealed
-                                                    // frames stay out of it - see RX1.
+                                                    // Pre-volume energy: the bar shows what is received,
+                                                    // not where the volume stands. Concealed frames stay
+                                                    // out of it - see RX1.
                                                     if !concealed {
                                                         $accum += resampled.iter().map(|s| s * s).sum::<f32>();
                                                         $count += resampled.len();
                                                     }
                                                     // (calibrated to the Thetis RX path below)
-                                                    apply_volume(&mut resampled,
-                                                        $volume * yaesu_rx_meter_cal(state.$model) * local_volume);
+                                                    apply_volume(&mut resampled, $volume * rx_gain * local_volume);
                                                     // Measured only after this radio's own release (build 179):
                                                     // every frame goes into the ring.
                                                     if !$ptt && !concealed && !resampled.is_empty() {
@@ -5471,7 +5788,6 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                                         let ring_now = crate::measure::ring_ms(ring_level, playback_rate, stereo_output) + after_tx_added_ms;
                                                         let (_, outcome) = $after_tx.frame(crate::after_tx::peak(&resampled), ring_now, frame_ms, Instant::now());
                                                         match outcome {
-                                                            // Named in advance (working rule 11, builds 178 and 179).
                                                             // A developer's line (build 295): one per release.
                                                             Some(crate::after_tx::Outcome::FirstSound { after_ms, ring_ms, .. }) => dev_info!(
                                                                 concat!($name, " RX after TX: first sound {} ms after the release, ring {} ms, jitter depth {}"),
@@ -5500,8 +5816,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         // empty at the start of the tick (above). Radio 1 always did
                                         // this; radio 2 used to drop it to zero (build 180).
                                         if $count > 0 {
-                                            state.$level = yaesu_rx_meter_cal(state.$model)
-                                                * ($accum / $count as f32).sqrt();
+                                            state.$level = rx_gain * ($accum / $count as f32).sqrt();
                                         }
                                         // Mix into both L and R (additive, clamped)
                                         for (i, sample) in radio_buf.iter().enumerate() {
@@ -5873,7 +6188,6 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             link_lost(transmitting, last_hb_ack_rtt, since_ack, since_audio)
                         {
                             if transmitting {
-                                // Named in advance (working rule 11, build 265).
                                 info!(
                                     "Connection lost while transmitting (no answer to a heartbeat for {} ms, window {} ms)",
                                     since_ack.map_or(0, |d| d.as_millis()),
@@ -5901,7 +6215,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // The link is gone, so nothing is outstanding any more. Three of
                             // the four link-down paths did not do this, and each one left the
                             // "PTT blocked" sign standing over a connection that no longer
-                            // exists (review finding).
+                            // exists.
                             let forgotten = session_lost!();
                             state.link_down(forgotten);
                             state.rtt_ms = 0;
@@ -5927,15 +6241,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             let out_name = if output_device_name.is_empty() { None } else { Some(output_device_name.as_str()) };
                             match audio_factory(in_name, out_name) {
                                 Ok(new_audio) => {
-                                    audio = new_audio;
-                                    state.mic_missing = audio.missing_input();
-                                    mic_try_every = MIC_LOOK_EVERY;
-                                    audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
-                                    // The reopened stream may be on a different device at a
-                                    // different sample rate (a Bluetooth route change reopens
-                                    // on the BT-SCO device at 8/16 kHz) -> rebuild the resamplers
-                                    // for the new rate, otherwise the audio comes out choppy.
-                                    resync_audio_rates!();
+                                    take_new_audio!(new_audio);
                                     info!("Audio reconnected successfully");
                                     state.audio_error = false;
                                     audio_error_since = None;
@@ -5962,25 +6268,19 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         let back = audio.missing_input_is_back();
                         if back || audio.missing_input().is_none() {
                             if back {
-                                // Named in advance (working rule 11, build 188).
-                                info!("Microphone '{}' is back - opening it", state.mic_missing.as_deref().unwrap_or(""));
+                                info!("Microphone '{}' is back: opening it", state.mic_missing.as_deref().unwrap_or(""));
                             }
                             let in_name = if input_device_name.is_empty() { None } else { Some(input_device_name.as_str()) };
                             let out_name = if output_device_name.is_empty() { None } else { Some(output_device_name.as_str()) };
                             match audio_factory(in_name, out_name) {
                                 Ok(new_audio) => {
-                                    audio = new_audio;
-                                    state.mic_missing = audio.missing_input();
-                                    mic_try_every = MIC_LOOK_EVERY;
-                                    audio.set_capture_gate_delay_ms(mic_gate_delay_ms);
-                                    resync_audio_rates!();
+                                    take_new_audio!(new_audio);
                                     accum_buf.clear();
                                 }
                                 Err(e) => {
                                     mic_try_every = next_mic_try(mic_try_every);
-                                    // Named in advance (working rule 11, build 190).
                                     warn!(
-                                        "Microphone '{}' could not be opened - trying again in {} s ({})",
+                                        "Microphone '{}' could not be opened: trying again in {} s ({})",
                                         state.mic_missing.as_deref().unwrap_or(""),
                                         mic_try_every.as_secs(),
                                         e
@@ -5992,17 +6292,17 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
 
                     // Measurement mode: the writer gave up (full disk, storage gone).
                     // Said in the log by the writer; here the screen stops saying it
-                    // measures (round 90). One atomic load per tick.
+                    // measures. One atomic load per tick.
                     if let Some(p) = measure.take_failure() {
                         warn!("Measurement off after a write error: {}", p.display());
                         state.measurement_file = None;
                     }
                     // Once a second: what stands between arrival and the speaker for
-                    // the main stream - the jitter buffer and the playout ring
-                    // (`PLAN-meting-buffers-en-omschakeltijd.md`). A no-op when off.
+                    // the main stream - the jitter buffer and the playout ring.
+                    // A no-op when off.
                     // For a second after each Thetis PTT edge, at every tick: the ring
                     // is not refilled during TX and empties, then refills - the
-                    // resting line a second never sees that (round 100).
+                    // resting line a second never sees that.
                     let now_ms = start.elapsed().as_millis() as u64;
                     // Any radio's PTT edge opens the burst (build 178).
                     let any_ptt = ptt || yaesu_ptt || yaesu2_ptt;
@@ -6054,9 +6354,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     }
                     let addr = server_addr.as_ref().unwrap();
 
-                    // Phase 2b: send again what the server has not acknowledged, and
+                    // Send again what the server has not acknowledged, and
                     // say what was given up. One line per 10 s, only when something
-                    // was repeated or given up (named in advance, working rule 11).
+                    // was repeated or given up.
                     let due = controls_out.due(Instant::now());
                     for bytes in &due.resend {
                         let _ = send_tx!(bytes, addr.as_str());
@@ -6066,7 +6366,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     }
                     for key in &due.given_up {
                         measure.record(crate::measure::Record::GiveUp { mono_ms: start.elapsed().as_millis() as u64, key: *key });
-                        warn!("Control {:?} not acknowledged after {} repeats - given up", key, sdr_remote_core::control_ack::MAX_REPEATS);
+                        warn!("Control {:?} not acknowledged after {} repeats; given up", key, sdr_remote_core::control_ack::MAX_REPEATS);
                     }
                     if controls_report_at.elapsed() >= Duration::from_secs(10) {
                         controls_report_at = Instant::now();
@@ -6101,17 +6401,17 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     // heartbeats, so its session is reaped - after two minutes
                     // since build 71; or its address changed) and answers a late
                     // code with nothing since build 68. Without this the client
-                    // waited at the code field for ever (review 70). Letting go
+                    // waited at the code field for ever. Letting go
                     // of the code step resumes the heartbeats; the server
                     // challenges the next one, and the client walks the
                     // authentication again up to a fresh code field - which is
                     // what the screen shows, and what a "connect again" told the
-                    // operator to do while the engine did it anyway (review 71).
+                    // operator to do while the engine did it anyway.
                     if state.totp_required {
                         if let Some(sent) = totp_code_sent_at {
                             if sent.elapsed() > Duration::from_secs(TOTP_ANSWER_TIMEOUT_SECS) {
                                 warn!(
-                                    "No answer to the TOTP code within {} s - the server has forgotten this attempt; a new one starts and the code is asked again",
+                                    "No answer to the TOTP code within {} s: the server has forgotten this attempt; a new one starts and the code is asked again",
                                     TOTP_ANSWER_TIMEOUT_SECS
                                 );
                                 totp_code_sent_at = None;
@@ -6122,7 +6422,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // verified one it is. Without them it read as a server
                                 // that proves nothing on a first session, and as a
                                 // duplicate on a second, where it then sat at Connecting
-                                // for good (review 73, both measured). A new challenge
+                                // for good (both measured). A new challenge
                                 // replaces them anyway. This is the opposite of what
                                 // `session_lost!()` does with them, for the opposite
                                 // reason: there the session is gone, here only the wait.
@@ -6133,7 +6433,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // from before build 72 holds the old code step and does
                                 // not challenge the knock, and without this the client sat
                                 // at Connecting for ever - the watchdog wants a reply-less
-                                // attempt (review 72, measured at 21 s).
+                                // attempt (measured at 21 s).
                                 connect_started_at = Some(Instant::now());
                                 connect_any_reply_seen = false;
                                 resumed_after_code_step = true;
@@ -6164,15 +6464,14 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 vrx2_wanted,
                             ),
                         );
-                        // Named in advance (working rule 11): this patch moves a
-                        // threshold in a layer the suite cannot watch, so the
-                        // proof is this line in a field log. One line when the
+                        // No test watches this threshold, so the proof that
+                        // it works is this line in a field log. One line when the
                         // stream that loses the MOST changes - not one per window,
                         // which is how the conceal report once filled three
                         // quarters of the log. Note that a client with a single
                         // stream therefore gets this line once and never again:
                         // there is nothing for it to change to.
-                        // Open point 18. The figure stands when no stream has
+                        // The figure stands when no stream has
                         // anything to say, which is right - silence is not proof
                         // of a clean link - but until now nothing said that it
                         // had stopped being current. Eight places in the server
@@ -6190,7 +6489,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 stale as u64 * HEARTBEAT_INTERVAL_MS / 1000;
                             if loss_meter.has_measured() {
                                 info!(
-                                    "loss meter: no stream to measure for {} s - the {}% it reports is the last real measurement, not a statement about now",
+                                    "loss meter: no stream to measure for {} s; the {}% it reports is the last real measurement, not a statement about now",
                                     seconds, state.loss_percent
                                 );
                             } else {
@@ -6198,9 +6497,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // link is clean. Calling that "the last real
                                 // measurement" is the same mistake as reading
                                 // silence as a clean link, one sentence further
-                                // along. Review finding.
+                                // along.
                                 info!(
-                                    "loss meter: nothing has been measured in {} s since this session began - the {}% it reports is a starting value, not a finding",
+                                    "loss meter: nothing has been measured in {} s since this session began; the {}% it reports is a starting value, not a finding",
                                     seconds, state.loss_percent
                                 );
                             }
@@ -6226,8 +6525,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // that is running; the stream named is only where
                                 // most of the missing packets were. Saying it
                                 // "decides" was left over from when the worst
-                                // stream set the figure on its own, and a reviewer
-                                // caught that the words had outlived the code.
+                                // stream set the figure on its own.
                                 info!("loss meter: link at {}%, most of it missing on {}",
                                     state.loss_percent, stream.name());
                             }
@@ -6252,7 +6550,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             last_conceal_report = Instant::now();
                         }
 
-                        // Bandwidth-window flush — in sync with the heartbeat
+                        // Bandwidth-window flush: in sync with the heartbeat
                         // tick (~500 ms). bytes × 8 / window_ms = bits/ms = kbps.
                         let win_ms = bw_window_start.elapsed().as_millis().max(1) as u64;
                         state.down_kbps = (bw_rx_bytes.saturating_mul(8) / win_ms) as u32;
@@ -6261,7 +6559,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         bw_tx_bytes = 0;
                         bw_window_start = Instant::now();
 
-                        // Per-PacketType breakdown every 5 s — published to
+                        // Per-PacketType breakdown every 5 s: published to
                         // `state.bw_breakdown` so the Server tab in the UI
                         // can show a drill-down detail without log spam.
                         if bw_breakdown_start.elapsed() >= Duration::from_secs(5) {
@@ -6301,7 +6599,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         let _ = send_tx!(&buf, addr.as_str());
                         last_hb_sent = Instant::now();
 
-                        // PATCH-1 review finding (B1, part 4): NoUdpResponse
+                        // NoUdpResponse
                         // watchdog. If we've been "Connecting" for longer than the
                         // timeout and have never seen any reply from the server,
                         // surface a precise error instead of leaving the UI in an
@@ -6319,7 +6617,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 {
                                     if resumed_after_code_step {
                                         warn!(
-                                            "No challenge after the code step was let go - a server from before v2.13 (build 72) holds the old attempt for its deadline, or this address is blocked for a minute after five refused codes (the server log says which); update the server, or connect again later"
+                                            "No challenge after the code step was let go: a server from before v2.13 (build 72) holds the old attempt for its deadline, or this address is blocked for a minute after five refused codes (the server log says which); update the server, or connect again later"
                                         );
                                         resumed_after_code_step = false;
                                     }
@@ -6362,6 +6660,16 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             audio.set_capture_gate(false);
                             accum_buf.clear();
                             yaesu_tx_accum.clear();
+                            // The over ends: its level window with it.
+                            for (slot, radio) in [(0, "Yaesu"), (1, "Yaesu2")] {
+                                if let Some(line) = yaesu_level_log[slot].close(radio) {
+                                    dev_info!("{line}");
+                                }
+                            }
+                            // And the limiters start the next over at unity, not on
+                            // the tail of a peak just before the release.
+                            thetis_limiter = TxLimiter::new();
+                            yaesu_limiters = [TxLimiter::new(), TxLimiter::new()];
                         }
                         last_capture_ptt = capture_ptt;
                     }
@@ -6379,6 +6687,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         state.capture_level = 0.0;
                         state.yaesu_mic_level = 0.0;
                     }
+                    state.mic_input_clip = input_clip_at.is_some_and(|t| t.elapsed() < INPUT_CLIP_HOLD);
 
                     // Thetis-TXEQ-bypass during WAV-playback to the MAIN RADIO (Thetis-PTT):
                     // turn off the mic-profile TX-EQ during Play and restore on stop/PTT-release/
@@ -6431,16 +6740,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     wav_thetis_accum.extend_from_slice(&w.feed(&src_f32));
                                 }
                                 while wav_thetis_accum.len() >= FRAME_SAMPLES_WIDEBAND {
-                                    let f16: Vec<f32> = wav_thetis_accum.drain(..FRAME_SAMPLES_WIDEBAND).collect();
-                                    // Meter = the frame as encoded, tx_gain included.
-                                    state.capture_level = peak_scaled(
-                                        &f16[..FRAME_SAMPLES_WIDEBAND], tx_gain);
-                                    let pcm_i16: Vec<i16> = f16[..FRAME_SAMPLES_WIDEBAND]
-                                        .iter()
-                                        .map(|&s| {
-                                            (s * tx_gain * 32767.0).clamp(-32768.0, 32767.0) as i16
-                                        })
-                                        .collect();
+                                    let mut f16: Vec<f32> = wav_thetis_accum.drain(..FRAME_SAMPLES_WIDEBAND).collect();
+                                    // The TX gain as before, then the limiter. Meter = the frame as encoded.
+                                    apply_gain(&mut f16, tx_gain);
+                                    thetis_limiter.process(&mut f16);
+                                    let (level, pcm_i16) = to_encoder(&f16[..FRAME_SAMPLES_WIDEBAND], 1.0);
+                                    state.capture_level = level;
                                     match encoder.encode(&pcm_i16) {
                                         Ok(opus_data) => {
                                             let out = thetis_tx.audio(thetis_ptt, opus_data, start.elapsed().as_millis() as u32);
@@ -6513,12 +6818,19 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
 
                     // Process complete frames from accumulation buffer
                     while accum_buf.len() >= capture_frame_samples {
-                        let chunk: Vec<f32> = accum_buf.drain(..capture_frame_samples).collect();
+                        let mut chunk: Vec<f32> = accum_buf.drain(..capture_frame_samples).collect();
+                        if input_clips(peak_scaled(&chunk, 1.0)) {
+                            input_clip_at = Some(Instant::now());
+                        }
+                        // The TX gain at the front, so the AGC works on the set level.
+                        apply_gain(&mut chunk, tx_gain);
                         let mut pcm_8k = resample_to_network(&mut resampler_in, &chunk);
 
-                        // AGC: normalize mic level before manual TX gain
-                        // (runs always to keep AGC state warm for instant PTT response)
-                        if agc_enabled {
+                        // The AGC is fed by every captured frame (there is capture
+                        // during any over, also a Yaesu one), but not while the gain
+                        // is off: on silence its gain climbs to the maximum, and the
+                        // first frame after opening the slider would come out loud.
+                        if agc_enabled && tx_gain > 0.0 {
                             agc.process(&mut pcm_8k);
                         }
 
@@ -6535,8 +6847,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         // (2026-08-14). Here it inherits the pacing that speech
                         // has always had.
                         //
-                        // Past the AGC and the gain trim on purpose. Those
-                        // exist to even out a voice; a fixed tone handed to
+                        // Past the AGC on purpose (and past the gain at the front):
+                        // those exist to even out a voice; a fixed tone handed to
                         // them comes out swelling, and what is set in the panel
                         // is what should go out.
                         let mut roger_here = false;
@@ -6545,13 +6857,13 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             roger_here = true;
                         }
 
-                        // Meter = what is encoded: after AGC, with tx_gain applied.
-                        let level_gain = if roger_here { 1.0 } else { tx_gain };
-                        state.capture_level = peak_scaled(&pcm_8k, level_gain);
-                        let pcm_i16: Vec<i16> = pcm_8k
-                            .iter()
-                            .map(|&s| (s * level_gain * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                            .collect();
+                        // The limiter last, but not over the beep: what is set in the
+                        // panel is what goes out. Meter = what is encoded.
+                        if !roger_here {
+                            thetis_limiter.process(&mut pcm_8k);
+                        }
+                        let (level, pcm_i16) = to_encoder(&pcm_8k, 1.0);
+                        state.capture_level = level;
 
                         if pcm_i16.len() >= FRAME_SAMPLES_WIDEBAND {
                             match encoder.encode(&pcm_i16[..FRAME_SAMPLES_WIDEBAND]) {
@@ -6597,7 +6909,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 crate::roger::OVERDUE_MARGIN_MS,
                             );
                             if over && !t.finished() {
-                                warn!("Roger beep did not play out in time - releasing PTT anyway");
+                                warn!("Roger beep did not play out in time: releasing PTT anyway");
                             }
                             over
                         }
@@ -6617,7 +6929,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // the transmitter and left the request standing,
                                 // so a late refusal could latch the busy sign
                                 // again - the fault build 35 fixed, reopened
-                                // through the courtesy beep (review, round 2).
+                                // through the courtesy beep.
                                 ptt_requested[0] = false;
                                 if let Some(ref addr) = server_addr {
                                     if audio_mode == 1 && last_sent_bin != Some(1) {
@@ -6633,7 +6945,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 // for it, and this branch did not - so a
                                 // refusal on a radio could stay standing after
                                 // the beep had already released it, with the
-                                // busy sign left over (review).
+                                // busy sign left over.
                                 state.ptt_denial.transmitter_off(1);
                                 ptt_requested[1] = false;
                             }
@@ -6643,7 +6955,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 ptt_requested[2] = false;
                             }
                         }
-                        info!("Roger beep done - PTT released");
+                        info!("Roger beep done: PTT released");
                         roger_tone = None;
                     }
 
@@ -6661,8 +6973,17 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         // Resample to 16kHz, encode wideband Opus
                         while yaesu_tx_accum.len() >= capture_frame_samples {
                             let mut chunk: Vec<f32> = yaesu_tx_accum.drain(..capture_frame_samples).collect();
+                            let pre_eq_peak = if playback_is_tx { 0.0 } else { peak_scaled(&chunk, 1.0) };
+                            if !playback_is_tx && input_clips(pre_eq_peak) {
+                                input_clip_at = Some(Instant::now());
+                            }
+                            // The mic gain at the front, so the compressor and the AGC
+                            // work on the set level and not on whatever the microphone gives.
+                            let mic_gain = if yaesu2_ptt { yaesu2_local_mic_gain } else { yaesu_local_mic_gain };
+                            let front_gain = yaesu_front_gain(mic_gain, playback_is_tx);
+                            apply_gain(&mut chunk, front_gain);
 
-                            // Apply 5-band EQ at capture rate (before resampling).
+                            // Apply the 20-channel EQ at capture rate (before resampling).
                             // Per radio: slot-1 PTT → radio-2 EQ, otherwise radio-1 EQ.
                             // ONLY for the live mic: the TX-mic-EQ belongs to the microphone,
                             // not to a direct WAV-playback (which must sound as
@@ -6675,25 +6996,30 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 }
                             }
 
-                            // Resample to 16kHz and apply Yaesu-specific mic gain before Opus.
-                            let mic_gain = if yaesu2_ptt { yaesu2_local_mic_gain } else { yaesu_local_mic_gain };
+                            // Resample to 16kHz.
                             let mut resampled = resample_to_network(&mut yaesu_tx_resampler, &chunk);
                             // Client-side TX chain (radio processing does not work on USB):
-                            // compressor → AGC, before the manual tx_gain/mic_gain trim.
+                            // compressor → AGC, after the mic gain at the front.
                             // Per radio (like the EQ): slot-1 PTT → radio-2 chain.
                             // Compressor is self-gated on amount; AGC on its own toggle.
                             // Mic chain (compressor + AGC) ONLY for live mic, not for
                             // WAV-playback (which is already line level; comp/AGC would distort it).
+                            let mut agc_in_peak = 0.0;
+                            let mut agc_gain = 1.0;
                             if !playback_is_tx {
                                 if yaesu2_ptt {
                                     yaesu2_compressor.process(&mut resampled);
-                                    if yaesu2_tx_agc_enabled {
+                                    agc_in_peak = peak_scaled(&resampled, 1.0);
+                                    if yaesu2_tx_agc_enabled && front_gain > 0.0 {
                                         yaesu2_agc.process(&mut resampled);
+                                        agc_gain = yaesu2_agc.gain;
                                     }
                                 } else {
                                     yaesu_compressor.process(&mut resampled);
-                                    if yaesu_tx_agc_enabled {
+                                    agc_in_peak = peak_scaled(&resampled, 1.0);
+                                    if yaesu_tx_agc_enabled && front_gain > 0.0 {
                                         yaesu_agc.process(&mut resampled);
+                                        agc_gain = yaesu_agc.gain;
                                     }
                                 }
                             }
@@ -6710,15 +7036,8 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     roger_here = true;
                                 }
                             }
-                            // Live mic gets the 4x quiet-mic boost; WAV-playback goes at
-                            // line level (only mic_gain, no 4x) so it does not clip.
-                            let final_scale = if roger_here {
-                                1.0
-                            } else if playback_is_tx {
-                                mic_gain
-                            } else {
-                                mic_gain * 4.0
-                            };
+                            // The limiter last, but not over the beep (as on Thetis).
+                            let limiter_gain = if roger_here { 1.0 } else { yaesu_limiters[usize::from(yaesu2_ptt)].process(&mut resampled) };
                             let desired_bitrate = yaesu_tx_bitrate_for_mode(if yaesu2_ptt { state.yaesu2_mode } else { state.yaesu_mode });
                             if desired_bitrate != yaesu_tx_bitrate_bps {
                                 match yaesu_tx_encoder.set_bitrate_bps(desired_bitrate) {
@@ -6729,13 +7048,20 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     Err(e) => warn!("Yaesu TX Opus bitrate change failed: {}", e),
                                 }
                             }
-                            // Meter = the frame as encoded: EQ, compressor and AGC
-                            // applied, scaled by the same final gain. Covers live mic
-                            // and WAV-playback, which share this chain.
-                            state.yaesu_mic_level = peak_scaled(&resampled, final_scale);
-                            let pcm_i16: Vec<i16> = resampled.iter()
-                                .map(|&s| (s * final_scale * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                                .collect();
+                            // Meter = the frame as encoded: the gain at the front, EQ,
+                            // compressor, AGC and limiter applied. Covers live mic and
+                            // WAV-playback, which share this chain.
+                            let (level, pcm_i16) = to_encoder(&resampled, 1.0);
+                            state.yaesu_mic_level = level;
+                            if !playback_is_tx && !roger_here {
+                                let slot = usize::from(yaesu2_ptt);
+                                let agc_on = if yaesu2_ptt { yaesu2_tx_agc_enabled } else { yaesu_tx_agc_enabled };
+                                let radio = if yaesu2_ptt { "Yaesu2" } else { "Yaesu" };
+                                if let Some(line) = yaesu_level_log[slot].add(radio, front_gain, pre_eq_peak, agc_in_peak, agc_gain,
+                                                                              limiter_gain, level, agc_on) {
+                                    dev_info!("{line}");
+                                }
+                            }
 
                             if pcm_i16.len() >= FRAME_SAMPLES_WIDEBAND {
                                 if let Ok(opus_data) = yaesu_tx_encoder.encode(&pcm_i16[..FRAME_SAMPLES_WIDEBAND]) {
@@ -6749,7 +7075,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         //
                                         // Otherwise: with multi-TX to EVERY keyed slot, and without it to that one. It
                                         // was always that one, with slot 1 as the winner, and then the other one sat
-                                        // transmitting without modulation (owner, 2026-09-03).
+                                        // transmitting without modulation.
                                         let (to_slot0, to_slot1) = match roger_tone {
                                             Some((_, ch, _)) => (ch == 1, ch == 2),
                                             None if multi_tx => (yaesu_ptt, yaesu2_ptt),
@@ -6759,7 +7085,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                         // uplink. Each copy carries its own radio's flag and sequence (build 282), on
                                         // its own stream (build 291).
                                         // The last radio it goes to gets the frame itself, the
-                                        // other a copy (round 291: a copy for every radio).
+                                        // other a copy (before build 292 every radio got a copy).
                                         let mut frame = Some(opus_data);
                                         for (slot, to, keyed, last) in [(0usize, to_slot0, yaesu_ptt, !to_slot1), (1, to_slot1, yaesu2_ptt, true)] {
                                             if !to {
@@ -6808,6 +7134,9 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                         }
                         let mut buf = [0u8; DisconnectPacket::SIZE];
                         DisconnectPacket::serialize(&mut buf);
+                        // The last send before `break`: its bytes reach no
+                        // window, and the compiler flags this one count.
+                        #[allow(unused_assignments)]
                         let _ = send_tx!(&buf, addr.as_str());
                         info!("Sent disconnect to server");
                     }
@@ -6877,6 +7206,15 @@ fn peak_scaled(samples: &[f32], gain: f32) -> f32 {
     samples.iter().fold(0.0f32, |m, &s| m.max(s.abs())) * gain.abs()
 }
 
+/// The last step before an Opus encoder, the same for Thetis and both Yaesu
+/// radios: the frame times `gain` as 16-bit samples, and its peak for the mic
+/// meter on that same scale. 1.0 on the meter (0 dB) is the clamp at 32767:
+/// no room left on the Opus line.
+fn to_encoder(samples: &[f32], gain: f32) -> (f32, Vec<i16>) {
+    let pcm = samples.iter().map(|&s| (s * gain * 32767.0).clamp(-32768.0, 32767.0) as i16).collect();
+    (peak_scaled(samples, gain), pcm)
+}
+
 /// How often the engine asks whether a missing chosen microphone is back
 /// (build 188); the looking itself is on the audio's own thread (build 189).
 const MIC_LOOK_EVERY: Duration = Duration::from_secs(2);
@@ -6892,9 +7230,9 @@ fn next_mic_try(wait: Duration) -> Duration {
 /// Input calibration for a Yaesu receive meter, per radio model.
 ///
 /// A Yaesu USB CODEC delivers a markedly lower line level than the Thetis DDC
-/// audio, which is why the volume path carries a x20 make-up factor. That
-/// factor is the operator's volume range and is excluded from the meter, so
-/// without calibration the Yaesu bars sit below RX/VRX for the same signal.
+/// audio, so without calibration the Yaesu bars sit below RX/VRX for the same
+/// signal. (The volume path carried a x20 make-up factor for this until build
+/// 106; the calibration below replaced it.)
 ///
 /// The two radios are not alike: measured on comparable signals where RX/VRX
 /// peak near -10 dB, the FT-991A needed +10 dB and the FTX-1 +24.5 dB (first
@@ -6902,18 +7240,29 @@ fn next_mic_try(wait: Duration) -> Duration {
 /// One shared constant therefore lined up one radio and left the other far
 /// behind. Keyed on the model rather than the slot, so it follows the radio
 /// when the slots are swapped.
-/// Receive calibration per radio model. Used for BOTH the level meter and the
-/// playback gain: the two CODECs deliver line levels about 14 dB apart, so one
-/// flat constant cannot serve both radios.
+/// Receive calibration per radio model. Used for the level meter, the
+/// playback gain and the recording (build 62): the two CODECs deliver line
+/// levels about 14 dB apart, so one flat constant cannot serve both radios.
 ///
 /// The audio path used a flat 20.0 (+26 dB) for both until build 106, while the
 /// meter had been per-model since build 75/76. That left the 991A about 16 dB
 /// hot - audible at the very bottom of the volume slider, where every other
 /// channel had already gone quiet.
-fn yaesu_rx_meter_cal(model: u8) -> f32 {
-    match model {
-        1 => 16.8,  // FTX-1, +24.5 dB
-        _ => 3.16,  // FT-991A, +10 dB
+///
+/// Two tables since build 62, chosen by the server (`rx_levels_tuned` in its
+/// presence packet). Factory: the radios as they come, the values above. Tuned:
+/// the radios set by the installation guide, so the USB CODEC itself runs near
+/// -10 dBFS and only a small step is left. Measured 2026-11-02 with a -73 dBm
+/// carrier on SSB, 1 kHz off, AGC on, as the mean level of a recording against
+/// Thetis RX1 (-10.2 dBFS): FT-991A (OUT LEVEL 100, Windows 0 dB) -16.2 dBFS,
+/// so +6.0 dB; FTX-1 (Windows +23 dB, one receiver's channel) -12.2 dBFS, so
+/// +2.0 dB.
+fn yaesu_rx_correction(model: u8, tuned: bool) -> f32 {
+    match (model, tuned) {
+        (1, false) => 16.8,  // FTX-1, +24.5 dB
+        (_, false) => 3.16,  // FT-991A, +10 dB
+        (1, true) => 1.26,   // FTX-1, +2.0 dB
+        (_, true) => 2.0,    // FT-991A, +6.0 dB
     }
 }
 
@@ -6954,8 +7303,423 @@ fn apply_volume(samples: &mut [f32], volume: f32) {
 mod tests {
     use super::*;
 
-    /// Both Yaesu's received audio through one block (build 293, step 3 of
-    /// `KOPPELING` 18; until then a copy per radio, and radio 2's log line
+    /// Every spectrum pan goes out as the pair, coarse then fine, through the one
+    /// macro (build 75): no send site of its own, and none that forgets the fine
+    /// one a newer server reads. The VRX width the same way.
+    #[test]
+    fn every_pan_and_vrx_width_goes_out_coarse_then_fine() {
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        assert!(!body.contains("* 10000.0"), "no pan encoded by hand");
+        assert_eq!(body.matches("send_pan!(ControlId::SpectrumPan, ControlId::SpectrumPanFine, ").count(), 2, "RX1: on change, on reconnect");
+        assert_eq!(body.matches("send_pan!(ControlId::Rx2SpectrumPan, ControlId::Rx2SpectrumPanFine, ").count(), 2, "RX2: the same");
+        // Each value under its own number: the whole send, not only the value.
+        let mac = &body[body.find("macro_rules! send_pan {").unwrap()..];
+        let mac = &mac[..mac.find("}};").unwrap()];
+        let coarse = mac.find("send_control!($coarse, sdr_remote_core::protocol::pack_spectrum_pan(__pan), $addr)").expect("coarse");
+        let fine = mac.find("send_control!($fine, sdr_remote_core::protocol::pack_spectrum_pan_fine(__pan), $addr)").expect("fine");
+        assert!(coarse < fine, "coarse first, so a newer server ends on the fine one");
+        let vrx = &body[body.find("Command::SetVrxHighResSpectrum(vrx_id, enabled, span_hz) => {").unwrap()..];
+        let vrx = &vrx[..vrx.find("Command::SetMonitor").unwrap()];
+        assert!(vrx.contains("(ControlId::VrxSpectrumEnable, ControlId::VrxSpectrumSpanKhz, ControlId::VrxSpectrumSpanFine)"));
+        assert!(vrx.contains("(ControlId::VrxSpectrumEnable2, ControlId::VrxSpectrumSpanKhz2, ControlId::VrxSpectrumSpanFine2)"));
+        let khz = vrx.find("send_control!(span_id, sdr_remote_core::protocol::vrx_span_khz(span_hz), addr.as_str())").expect("whole kHz");
+        let fine = vrx.find("send_control!(fine_id, sdr_remote_core::protocol::pack_vrx_span_fine(span_hz), addr.as_str())").expect("fine");
+        assert!(khz < fine);
+    }
+
+    /// The fine controls reach only a server that says it takes them (build
+    /// 76): an older one fails to parse them, never acknowledges them, and the
+    /// log fills with repeats given up. The gate sits in the one macro every
+    /// control goes through, so the replay and the restore pass it too; the
+    /// flag comes from the ack before the restore reads it, and goes with the
+    /// session.
+    #[test]
+    fn the_fine_view_goes_only_to_a_server_that_takes_it() {
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let mac = &body[body.find("macro_rules! send_control {").unwrap()..];
+        let mac = &mac[..mac.find("}};").unwrap()];
+        let gate = mac.find("if !state.server_takes(__id) {").expect("the gate");
+        assert!(gate < mac.find("controls_out.send(").unwrap(), "before it is numbered and kept for repeating");
+        let held = &mac[gate..mac.find("} else {").unwrap()];
+        assert!(held.contains("held_back.hold(__id, $value);\n                    Ok(0)"), "held, and nothing sent");
+        // The flag: from the ack, whole, and set nowhere else.
+        let flag = "state.server_fine_spectrum_view = ack.capabilities.has(\n                                sdr_remote_core::protocol::Capabilities::FINE_SPECTRUM_VIEW,\n                            );";
+        let set = body.find(flag).expect("from the ack");
+        assert_eq!(body.matches("state.server_fine_spectrum_view =").count(), 1, "one place sets it");
+        let replay = body.find("let mut replay = session_intent.replay();").unwrap();
+        assert!(set < replay, "before the restore");
+        assert!(body[replay..].starts_with("let mut replay = session_intent.replay();\n                                    // Only what this server takes;"));
+        assert!(body.contains("replay.retain(|(id, _)| state.server_takes(*id));"), "the replay offers only what the server takes");
+        assert!(body.contains("matches!(send_control!(*id, *value, addr.as_str()), Ok(n) if n > 0)"), "the replay counts what went out");
+        // The held values: only to a server that takes them, from one macro.
+        let mac_held = &body[body.find("macro_rules! send_held_back {").unwrap()..];
+        let mac_held = &mac_held[..mac_held.find("}};").unwrap()];
+        assert!(mac_held.contains("if state.server_fine_spectrum_view {\n                    for (id, value) in held_back.take() {\n                        let _ = send_control!(id, value, $addr);"));
+        // In the restore: after the replay, before the hand-written sends of the
+        // current values (a pan made while the link was down is only in
+        // those, and the held one must not land after it).
+        let in_restore = body
+            .find("info!(\"{}\", crate::session_intent::restore_summary(&replay, replay_sent));\n")
+            .expect("the replay summary");
+        let held_restore = body[in_restore..].find("send_held_back!(addr.as_str());").unwrap() + in_restore;
+        assert!(held_restore < body.find("send_pan!(ControlId::SpectrumPan, ControlId::SpectrumPanFine, spectrum_pan, addr.as_str());").unwrap());
+        assert!(held_restore < body.find("send_pan!(ControlId::Rx2SpectrumPan, ControlId::Rx2SpectrumPanFine, rx2_spectrum_pan, addr.as_str());").unwrap());
+        // And on every ack, right after the restore block.
+        assert!(body.contains("was_connected = true;\n                                // And on every ack, not only in the restore:"));
+        let after = body.find("was_connected = true;\n                                // And on every ack").unwrap();
+        assert!(body[after..].find("send_held_back!(addr.as_str());").unwrap() < 400);
+        assert_eq!(body.matches("send_held_back!(").count(), 2, "the two callers");
+        // Held only where the gate holds, and kept across a session: no other
+        // use of the name than these.
+        assert_eq!(body.matches("held_back.hold(").count(), 1, "only what the gate stopped");
+        assert_eq!(body.matches("held_back.take()").count(), 1);
+        // The name in the code, not the comments: the declaration, hold, take,
+        // the macro and its two calls. A reset in any spelling (`= ...`,
+        // `std::mem::take(&mut held_back)`) adds one.
+        let in_code: usize = body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.matches("held_back").count())
+            .sum();
+        assert_eq!(in_code, 6, "never reset");
+        assert_eq!(body.matches("let mut held_back").count(), 1);
+        assert_eq!(body.matches("held_back.").count(), 2, "hold and take");
+        // The restore's call stands outside every spectrum block, right before
+        // them: inside the RX1 one, RX1 off would leave RX2 with the held pan last.
+        assert!(body.contains("send_held_back!(addr.as_str());\n\n                                    // Send deferred spectrum settings now that server knows us:\n"));
+        // The spectrum state goes either way, as Rx1Enable does: on or off, and
+        // the view with it, not only when on.
+        assert!(body.contains("let _ = send_control!(ControlId::SpectrumEnable, on as u16, addr.as_str());"));
+        assert!(body.contains("let _ = send_control!(ControlId::Rx2SpectrumEnable, state.rx2_spectrum_enabled as u16, addr.as_str());"));
+        assert!(!body.contains("if state.rx2_spectrum_enabled {\n                                        let _ = send_control!(ControlId::Rx2SpectrumEnable"));
+        let st = include_str!("state.rs");
+        let forget = &st[st.find("pub fn forget_session").unwrap()..];
+        assert!(forget[..forget.find("\n    }").unwrap()].contains("self.server_fine_spectrum_view = false;"));
+        assert_eq!(st.matches("self.server_fine_spectrum_view = ").count(), 1, "and nowhere else in the state");
+        assert!(st.contains("self.server_fine_spectrum_view || !sdr_remote_core::protocol::needs_fine_spectrum_view(id)"));
+    }
+
+    /// The level line gives the four points of the chain over ten seconds of
+    /// audio, the averages over the frames with speech, and starts a fresh
+    /// window after it.
+    #[test]
+    fn the_tx_level_line_sums_up_its_window() {
+        let mut log = TxLevelLog::default();
+        assert_eq!(log.add("Yaesu", 0.8, 0.8, 0.7, 0.4, 1.0, 0.5, true), None);
+        for i in 1..TX_LEVEL_LOG_FRAMES - 1 {
+            // Every tenth frame a pause: below the speech threshold, gain at its top.
+            let (agc_in, gain, out) = if i % 10 == 0 { (0.001, 10.0, 0.01) } else { (0.5, 0.5, 0.1) };
+            // The limiter once, early: the line gives the lowest, not the last.
+            let limiter = if i == 7 { 0.5 } else { 1.0 };
+            assert_eq!(log.add("Yaesu", 0.8, 0.6, agc_in, gain, limiter, out, true), None);
+        }
+        let line = log.add("Yaesu", 0.8, 0.6, 0.5, 0.5, 1.0, 0.1, true).expect("ten seconds of audio");
+        assert_eq!(line, "Yaesu TX level (10.0 s, 90% speech, gain -2 dB, AGC on): before EQ peak max 0.80, \
+             AGC in peak avg 0.50 max 0.70, AGC gain avg 0.50, limiter min 0.50, \
+             to Opus peak avg 0.10 max 0.50 (-6 dB)");
+        assert_eq!(log.frames, 0);
+    }
+
+    /// Switching the AGC closes the window with its own line, so a line is
+    /// about one setting and a gain below 1.0 never reads "AGC off".
+    #[test]
+    fn an_agc_switch_closes_the_window() {
+        let mut log = TxLevelLog::default();
+        for _ in 0..100 {
+            assert_eq!(log.add("Yaesu2", 0.8, 0.3, 0.3, 0.4, 1.0, 0.2, true), None);
+        }
+        let line = log.add("Yaesu2", 0.8, 0.3, 0.3, 1.0, 1.0, 0.3, false).expect("the window so far");
+        assert!(line.starts_with("Yaesu2 TX level (2.0 s, 100% speech, gain -2 dB, AGC on):"), "{line}");
+        assert!(line.contains("AGC gain avg 0.40"), "{line}");
+        assert_eq!((log.frames, log.agc_on), (1, false), "the new window holds the frame after the switch");
+    }
+
+    /// Moving the gain closes the window like an AGC switch, so the gain in a
+    /// line is the gain of every frame in it; a gain at zero reads "off".
+    #[test]
+    fn a_gain_move_closes_the_window() {
+        let mut log = TxLevelLog::default();
+        for _ in 0..100 {
+            assert_eq!(log.add("Yaesu", 1.0, 0.05, 0.05, 1.0, 1.0, 0.05, false), None);
+        }
+        let line = log.add("Yaesu", 10.0, 0.05, 0.5, 1.0, 1.0, 0.5, false).expect("the window so far");
+        assert!(line.starts_with("Yaesu TX level (2.0 s, 100% speech, gain +0 dB, AGC off):"), "{line}");
+        assert!(line.contains("AGC in peak avg 0.05 max 0.05"), "only the frames at +0 dB: {line}");
+        assert_eq!((log.frames, log.gain), (1, 10.0), "the new window holds the frame after the move");
+        // Down by one dB at the low end, where a step is small as a factor: the
+        // direction and the size the setting procedure uses.
+        let (minus5, minus6) = (crate::commands::tx_gain_factor(-5.0), crate::commands::tx_gain_factor(-6.0));
+        let mut down = TxLevelLog::default();
+        for _ in 0..100 {
+            down.add("Yaesu", minus5, 0.2, 0.2, 1.0, 1.0, 0.2, false);
+        }
+        let line = down.add("Yaesu", minus6, 0.2, 0.2, 1.0, 1.0, 0.2, false).expect("one dB down closes too");
+        assert!(line.starts_with("Yaesu TX level (2.0 s, 100% speech, gain -5 dB, AGC off):"), "{line}");
+        let mut off = TxLevelLog::default();
+        for _ in 0..TX_LEVEL_LOG_MIN_FRAMES {
+            off.add("Yaesu2", 0.0, 0.2, 0.0, 1.0, 1.0, 0.0, false);
+        }
+        assert!(off.close("Yaesu2").unwrap().starts_with("Yaesu2 TX level (0.5 s, 0% speech, gain off, AGC off):"));
+    }
+
+    /// The end of an over closes the window; under half a second it gives no
+    /// line, and either way the next over starts fresh.
+    #[test]
+    fn the_end_of_an_over_closes_the_window() {
+        let mut log = TxLevelLog::default();
+        for _ in 0..TX_LEVEL_LOG_MIN_FRAMES {
+            log.add("Yaesu", 0.8, 0.3, 0.3, 1.0, 1.0, 0.3, false);
+        }
+        assert!(log.close("Yaesu").expect("half a second").starts_with("Yaesu TX level (0.5 s,"));
+        for _ in 0..TX_LEVEL_LOG_MIN_FRAMES - 1 {
+            log.add("Yaesu", 0.8, 0.3, 0.3, 1.0, 1.0, 0.3, false);
+        }
+        assert_eq!(log.close("Yaesu"), None, "less than half a second");
+        assert_eq!(log.frames, 0);
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let release = body.find("// The over ends: its level window with it.").expect("the release");
+        assert!(body[..release].trim_end().ends_with("yaesu_tx_accum.clear();"));
+        assert!(body[release..].contains("for (slot, radio) in [(0, \"Yaesu\"), (1, \"Yaesu2\")] {"));
+        let release = &body[release..release + 800];
+        assert!(release.contains("thetis_limiter = TxLimiter::new();"), "the limiters start each over fresh");
+        assert!(release.contains("yaesu_limiters = [TxLimiter::new(), TxLimiter::new()];"));
+    }
+
+    /// The level line comes every ten seconds of an over: a measurement line,
+    /// so a developer line. It is built by `TxLevelLog` and written as
+    /// `"{line}"`, which the general check on measurement lines cannot see.
+    #[test]
+    fn the_level_line_is_a_developer_line() {
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        assert_eq!(body.matches("dev_info!(\"{line}\");").count(), 2, "the window's end and the ten seconds");
+        assert_eq!(body.matches("info!(\"{line}\");").count(), 2, "and no plain one beside them");
+        assert_eq!(body.matches("yaesu_level_log[slot].close(radio)").count(), 1);
+        assert_eq!(body.matches("yaesu_level_log[slot].add(radio,").count(), 1);
+    }
+
+    /// The window is fed from the Yaesu branch with the four points in their
+    /// order, per radio, and only for the live microphone; for both radios the
+    /// AGC's input is read before the AGC and the gain reported is the AGC's.
+    #[test]
+    fn the_level_line_is_fed_in_order_per_radio_from_the_live_mic() {
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        assert!(body.contains("let pre_eq_peak = if playback_is_tx { 0.0 } else { peak_scaled(&chunk, 1.0) };"));
+        let at = body.find("yaesu_level_log[slot].add(radio, front_gain, pre_eq_peak, agc_in_peak, agc_gain,").expect("the feed");
+        let rest = body[at..].split_once("agc_gain,").unwrap().1.trim_start();
+        assert!(rest.starts_with("limiter_gain, level, agc_on)"), "the last three: {}", &rest[..40]);
+        let before = &body[..at];
+        let guard = before.rfind("if !playback_is_tx && !roger_here {").expect("the guard");
+        assert!(before[guard..].contains("let slot = usize::from(yaesu2_ptt);"));
+        assert!(before[guard..].contains("let radio = if yaesu2_ptt { \"Yaesu2\" } else { \"Yaesu\" };"));
+        for (agc, gain) in [("yaesu2_agc.process(&mut resampled);", "agc_gain = yaesu2_agc.gain;"),
+                            ("yaesu_agc.process(&mut resampled);", "agc_gain = yaesu_agc.gain;")] {
+            let at_agc = body.find(agc).unwrap();
+            let agc_in = body[..at_agc].rfind("agc_in_peak = peak_scaled(&resampled, 1.0);").unwrap();
+            assert!(body[agc_in..at_agc].matches("process(").count() <= 1, "the AGC input is read right before {agc}");
+            assert!(body[at_agc..].trim_start_matches(agc).trim_start().starts_with(gain), "{gain} right after {agc}");
+        }
+    }
+
+    /// A raw frame at full scale lights the clip lamp, one just below does not;
+    /// Thetis and the Yaesu branch test the raw frame, before the EQ, the same way.
+    #[test]
+    fn a_microphone_at_full_scale_lights_the_clip_lamp() {
+        assert!(input_clips(peak_scaled(&[0.1, -1.0, 0.2], 1.0)));
+        assert!(input_clips(0.995));
+        assert!(!input_clips(peak_scaled(&[0.5, -0.98], 1.0)));
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        assert!(body.contains("if input_clips(peak_scaled(&chunk, 1.0)) {"), "Thetis");
+        let yaesu = body.find("if !playback_is_tx && input_clips(pre_eq_peak) {").expect("the Yaesu branch; a WAV is not the microphone");
+        assert!(yaesu < body.find("yaesu2_eq.process(&mut chunk);").unwrap(), "before the EQ");
+        assert!(body.contains("state.mic_input_clip = input_clip_at.is_some_and(|t| t.elapsed() < INPUT_CLIP_HOLD);"));
+    }
+
+    /// The AGC brings a steady voice to its target: a loud one down, a quiet
+    /// one up. Below the gate it leaves the gain where it is.
+    #[test]
+    fn the_agc_lowers_a_loud_voice_and_lifts_a_quiet_one() {
+        let settle = |level: f32| {
+            let mut agc = TxAgc::new();
+            let mut out = Vec::new();
+            for _ in 0..200 {
+                out = vec![level; 320];
+                agc.process(&mut out);
+            }
+            (agc.gain, out[0])
+        };
+        let (gain, out) = settle(0.8);
+        assert!(gain < 1.0 && (out - AGC_TARGET).abs() < 0.01, "loud: gain {gain}, out {out}");
+        let (gain, out) = settle(0.1);
+        assert!(gain > 1.0 && (out - AGC_TARGET).abs() < 0.01, "quiet: gain {gain}, out {out}");
+        let (gain, _) = settle(AGC_GATE / 2.0);
+        assert_eq!(gain, 1.0, "below the gate");
+    }
+
+    /// The gain moved to the front is the factor that was at the end: four
+    /// times the stored mic gain for the live microphone, the stored gain for a
+    /// WAV. With the compressor and the AGC off a profile sounds as loud as it
+    /// did, as the owner decided.
+    #[test]
+    fn the_gain_at_the_front_is_the_one_that_was_at_the_end() {
+        for g in [0.02f32, 0.1, 0.2, 0.4] {
+            assert_eq!(yaesu_front_gain(g, false), g * 4.0, "live");
+            assert_eq!(yaesu_front_gain(g, true), g, "WAV");
+        }
+        let mut v = [0.1f32, -0.2];
+        apply_gain(&mut v, 2.0);
+        assert_eq!(v, [0.2, -0.4], "the gain is applied");
+    }
+
+    /// The EQ is linear, so a gain in front of it gives what the same gain
+    /// behind it gave: moving the gain changes nothing with comp and AGC off.
+    #[test]
+    fn the_eq_is_linear_so_the_gain_may_move_to_the_front() {
+        let mut bands = crate::eq::default_bands();
+        bands[0].gain_db = 6.0;
+        bands[6] = crate::eq::EqBand { kind: crate::eq::FilterKind::HighPass, freq_hz: 150.0, q: 0.71, gain_db: 0.0 };
+        let make = || {
+            let mut e = crate::eq::Equalizer::new(48_000.0);
+            e.set_enabled(true);
+            for (i, b) in bands.iter().enumerate() { e.set_band(i, *b); }
+            e
+        };
+        let input: Vec<f32> = (0..960).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+        let k = 3.2;
+        let mut front: Vec<f32> = input.iter().map(|s| s * k).collect();
+        make().process(&mut front);
+        let mut back = input.clone();
+        make().process(&mut back);
+        assert!(back.iter().zip(input.iter()).any(|(b, i)| (b - i).abs() > 1e-3), "the EQ does something");
+        // Within float rounding through twenty biquads: -80 dB of the frame's peak.
+        let peak = back.iter().fold(0.0f32, |m, s| m.max(s.abs())) * k;
+        for (a, b) in front.iter().zip(back.iter()) {
+            assert!((a - b * k).abs() <= 1e-4 * peak, "{a} vs {}", b * k);
+        }
+    }
+
+    /// Below the ceiling the limiter does nothing; a peak over it is brought to
+    /// the ceiling and no sample goes past it; afterwards the gain comes back.
+    #[test]
+    fn the_limiter_holds_the_ceiling_and_lets_go() {
+        assert!((LIMITER_CEILING - 10f32.powf(-1.0 / 20.0)).abs() < 1e-3, "the ceiling is -1 dB, as decided");
+        let mut lim = TxLimiter::new();
+        let mut quiet = vec![0.5f32; 320];
+        assert_eq!(lim.process(&mut quiet), 1.0);
+        assert!(quiet.iter().all(|&s| s == 0.5));
+        let mut loud: Vec<f32> = (0..320).map(|i| if i % 40 == 0 { 2.0 } else { 0.3 }).collect();
+        let lowest = lim.process(&mut loud);
+        assert!(loud.iter().all(|s| s.abs() <= LIMITER_CEILING + 1e-6), "past the ceiling");
+        assert!((lowest - LIMITER_CEILING / 2.0).abs() < 1e-6, "{lowest}");
+        for _ in 0..20 {
+            let mut f = vec![0.1f32; 320];
+            lim.process(&mut f);
+        }
+        assert!(lim.gain > 0.99, "it lets go: {}", lim.gain);
+    }
+
+    /// The order of the chain: on the raw frame the clip lamp, then the gain at
+    /// the front, then (Yaesu) the EQ; the limiter right before the encoder and
+    /// not over the roger beep. Thetis the same, without EQ and compressor.
+    #[test]
+    fn the_gain_is_in_front_and_the_limiter_last() {
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let pos = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        // Yaesu
+        assert!(pos("if !playback_is_tx && input_clips(pre_eq_peak) {") < pos("apply_gain(&mut chunk, front_gain);"));
+        assert!(pos("apply_gain(&mut chunk, front_gain);") < pos("yaesu2_eq.process(&mut chunk);"));
+        let lim = pos("let limiter_gain = if roger_here { 1.0 } else { yaesu_limiters[usize::from(yaesu2_ptt)].process(&mut resampled) };");
+        assert!(lim < pos("let (level, pcm_i16) = to_encoder(&resampled, 1.0);"));
+        assert!(pos("tone.fill(&mut resampled, roger_cfg.volume);") < lim, "the beep is in before the limiter is skipped for it");
+        // Thetis
+        assert!(pos("if input_clips(peak_scaled(&chunk, 1.0)) {") < pos("apply_gain(&mut chunk, tx_gain);"));
+        assert!(pos("apply_gain(&mut chunk, tx_gain);") < pos("let mut pcm_8k = resample_to_network(&mut resampler_in, &chunk);"));
+        assert!(pos("thetis_limiter.process(&mut pcm_8k);") < pos("let (level, pcm_i16) = to_encoder(&pcm_8k, 1.0);"));
+        assert!(body.contains("if !roger_here {\n                            thetis_limiter.process(&mut pcm_8k);"), "not over the beep");
+        // The AGCs rest while the gain is off.
+        for agc in ["if agc_enabled && tx_gain > 0.0 {", "if yaesu_tx_agc_enabled && front_gain > 0.0 {",
+                    "if yaesu2_tx_agc_enabled && front_gain > 0.0 {"] {
+            assert!(body.contains(agc), "{agc}");
+        }
+        assert!(pos("apply_gain(&mut f16, tx_gain);") < pos("thetis_limiter.process(&mut f16);"));
+        // No gain left at the end: every path encodes at 1.0.
+        for call in ["to_encoder(&f16[..FRAME_SAMPLES_WIDEBAND], 1.0);", "to_encoder(&pcm_8k, 1.0);", "to_encoder(&resampled, 1.0);"] {
+            assert!(body.contains(call), "{call}");
+        }
+        assert!(!body.contains("mic_gain * 4.0"), "the old boost at the end is gone");
+    }
+
+    /// The meter and the encoder see the same frame on the same scale: a peak
+    /// of 1.0 is the clamp, and beyond it the samples are clamped, not wrapped.
+    #[test]
+    fn the_meter_reads_what_the_encoder_gets() {
+        let (peak, pcm) = to_encoder(&[0.25, -0.6, 0.5], 2.0);
+        assert_eq!(peak, 1.2);
+        assert_eq!(pcm, [16383, -32768, 32767]);
+        let (peak, _) = to_encoder(&[0.5], 1.0);
+        assert_eq!(peak, 0.5, "half scale, -6 dB on the meter");
+    }
+
+    /// Thetis (live and WAV) and both Yaesu radios go through `to_encoder`,
+    /// so their meters measure the room on the Opus line the same way.
+    #[test]
+    fn every_tx_path_meters_through_to_encoder() {
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        assert_eq!(body.matches("= to_encoder(").count(), 3);
+        assert_eq!(body.matches("32767.0).clamp(").count(), 1, "one conversion, in to_encoder");
+        assert!(!body.contains("_level = peak_scaled("), "a meter written past to_encoder");
+    }
+
+    /// The default compressor timing gives the former fixed coefficients, so
+    /// someone who never touches the sliders hears no change.
+    #[test]
+    fn compressor_default_timing_matches_the_former_coefficients() {
+        let c = TxCompressor::new();
+        assert!((c.attack_coeff - 0.30).abs() < 0.005, "attack {}", c.attack_coeff);
+        assert!((c.release_coeff - 0.02).abs() < 0.0005, "release {}", c.release_coeff);
+        let mut slow = TxCompressor::new();
+        slow.set_timing(10.0, 200.0);
+        assert!(slow.attack_coeff < c.attack_coeff && slow.release_coeff < c.release_coeff);
+    }
+
+    /// The compressor arms log only a change of the amount; a slider sends
+    /// the same value again on many frames.
+    #[test]
+    fn the_compressor_reports_only_a_change() {
+        let mut c = TxCompressor::new();
+        assert!(!c.set_amount(0.0));
+        assert!(c.set_amount(0.4));
+        assert!(!c.set_amount(0.4));
+    }
+
+    /// The TX-mic EQ runs on the capture frames, so both are built for the
+    /// capture rate and both follow a device switch, each in a statement of
+    /// its own. A test could drive the loop with the engine harness of
+    /// `tests/connect_state_machine.rs`; none does yet, so the log line
+    /// "Yaesu TX EQ at the capture rate" is the proof.
+    #[test]
+    fn both_tx_eqs_follow_the_capture_rate() {
+        let src = include_str!("engine.rs");
+        let src = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        assert_eq!(src.matches("crate::eq::Equalizer::new(capture_rate as f32)").count(), 2);
+        assert_eq!(src.matches("Equalizer::new(").count(), 2);
+        let resync = &src[src.find("macro_rules! resync_audio_rates").unwrap()..];
+        let resync = &resync[..resync.find("info!(\"Resamplers rebuilt").unwrap()];
+        for (moved, eq) in [("eq1_moved", "yaesu_eq"), ("eq2_moved", "yaesu2_eq")] {
+            assert!(resync.contains(&format!("let {moved} = {eq}.set_sample_rate(capture_rate as f32);")), "{eq}");
+        }
+        assert!(resync.contains("if eq1_moved || eq2_moved {"));
+    }
+
+    /// Both Yaesu's received audio through one block (build 293; until then a
+    /// copy per radio, and radio 2's log line
     /// said "[radio1]"). Each arm calls it once, with its own radio's buffer,
     /// stream, first-packet mark, loss meter, measurement stream and screen
     /// figures - a name of the other radio in an arm is the fault this pins.
@@ -6977,11 +7741,11 @@ mod tests {
         assert_eq!(src.matches("$jb.push(").count(), 1);
     }
 
-    /// A radio's PTT is the flag on its audio (build 282, open point 39): no
+    /// A radio's PTT is the flag on its audio (build 282): no
     /// control keys a Yaesu any more, every copy of a frame carries its own
     /// radio's flag and sequence, and each radio's burst runs outside the audio
     /// block - after a release no audio comes, and the burst carries the "off".
-    /// The loop, which no test drives (working rule 11: the field log is the
+    /// The loop, which no test drives (the field log is the
     /// proof that it runs).
     #[test]
     fn a_radios_ptt_rides_on_its_audio() {
@@ -7062,26 +7826,57 @@ mod tests {").unwrap()];
         let src = &src[..src.find("#[cfg(test)]
 mod tests {").unwrap()];
         let lines: Vec<&str> = src.lines().map(str::trim).collect();
-        let reopens: Vec<usize> = (0..lines.len()).filter(|&i| lines[i] == "audio = new_audio;").collect();
-        assert_eq!(reopens.len(), 4, "the device switches, the recovery and the microphone coming back");
-        for i in reopens {
-            assert_eq!(lines[i + 1], "state.mic_missing = audio.missing_input();", "a reopen at line {} forgets the microphone", i + 1);
-            // And the tries start over at 2 s (build 191; review of 190).
-            assert_eq!(lines[i + 2], "mic_try_every = MIC_LOOK_EVERY;", "a reopen at line {} keeps an old rhythm", i + 1);
-        }
+        // All four through one block: the device switches, the recovery and the
+        // microphone coming back.
+        assert_eq!(src.matches("take_new_audio!(new_audio);").count(), 4);
+        assert!(!lines.contains(&"audio = new_audio;"), "a reopen beside the block");
+        let at = lines.iter().position(|l| *l == "audio = $new;").expect("the block");
+        assert_eq!(lines[at + 1], "state.mic_missing = audio.missing_input();", "a reopen forgets the microphone");
+        // And the tries start over at 2 s.
+        assert_eq!(lines[at + 2], "mic_try_every = MIC_LOOK_EVERY;", "a reopen keeps an old rhythm");
         assert_eq!(src.matches("if state.mic_missing.is_some() && mic_looked_at.elapsed() >= mic_try_every {").count(), 1);
         // Back, or audio that could not open the chosen one and so cannot watch
-        // for it (build 189; review of 188, B).
+        // for it (build 189).
         assert_eq!(src.matches("if back || audio.missing_input().is_none() {").count(), 1);
         // A failed try waits longer, one that worked starts over (build 190).
         assert_eq!(src.matches("mic_try_every = next_mic_try(mic_try_every);").count(), 1);
-        assert_eq!(src.matches("mic_try_every = MIC_LOOK_EVERY;").count(), 6, "the start, the four reopens, and a new failure");
+        assert_eq!(src.matches("mic_try_every = MIC_LOOK_EVERY;").count(), 3, "the start, the reopen block, and a new failure");
         // A chosen microphone that fails to open refuses to transmit too.
         assert_eq!(src.matches("state.mic_missing = Some(input_device_name.clone());").count(), 1);
     }
 
+    /// A press held across a reopen of the audio keeps transmitting: the new
+    /// backend's gate is shut and only the edge of a press opens it, so the
+    /// reopen block opens it when a press is held, and says so. Until build 42 a
+    /// headset joining during an over stopped the audio; the server let the radio
+    /// go while the button stayed red.
+    #[test]
+    fn a_press_held_across_a_reopen_of_the_audio_keeps_its_gate_open() {
+        let src = include_str!("engine.rs");
+        let src = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let block = &src[src.find("macro_rules! take_new_audio").expect("the block")..];
+        let block = &block[..block.find("}};").expect("its end")];
+        let compact: String = block.split_whitespace().collect::<Vec<_>>().join(" ");
+        // The whole block, to its end, so no line of it can move, go or follow.
+        assert!(compact.ends_with("($new:expr) => {{ audio = $new; state.mic_missing = audio.missing_input(); \
+            mic_try_every = MIC_LOOK_EVERY; audio.set_capture_gate_delay_ms(mic_gate_delay_ms); \
+            audio.set_playback_mute(playback_muted); resync_audio_rates!(); \
+            if last_capture_ptt && (ptt || yaesu_ptt || yaesu2_ptt) { accum_buf.clear(); yaesu_tx_accum.clear(); \
+            audio.set_capture_gate(true); info!(\"Audio reopened during a press: the capture gate is open again\"); }"));
+        // The mute it sets is the last one asked for, kept where it is asked.
+        let compact_src: String = src.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(compact_src.contains("Command::SetPlaybackMute(v) => { playback_muted = v; audio.set_playback_mute(v);"));
+        assert_eq!(src.matches("set_playback_mute(").count(), 2, "the command and the block");
+        assert_eq!(src.matches("playback_muted =").count(), 2, "declared, and written by the command only");
+        // A backend is made at the start and in the block's four callers, nowhere else.
+        assert_eq!(src.matches("audio_factory(").count(), 5);
+        // The flag it reads is the one the edge keeps.
+        assert_eq!(src.matches("last_capture_ptt = capture_ptt;").count(), 1);
+        assert_eq!(src.matches("let capture_ptt = ptt || yaesu_ptt || yaesu2_ptt;").count(), 1);
+    }
+
     /// The tries to open a microphone that will not open come further apart:
-    /// 2, 4, 8, 16, 30, 30 s (build 190; review of 189).
+    /// 2, 4, 8, 16, 30, 30 s.
     #[test]
     fn tries_to_open_a_microphone_come_further_apart() {
         let mut w = MIC_LOOK_EVERY;
@@ -7096,8 +7891,7 @@ mod tests {").unwrap()];
     /// `ptt` mirrors `thetis_ptt` for the audio side: it keeps RX1 out of the
     /// playout ring while transmitting. Every place that sets `thetis_ptt` sets the
     /// mirror within the next two lines - a fifth link-down that forgets it leaves
-    /// `ptt` true, and the operator hears silence (round 101; waarborg 1,
-    /// `PTT-NOOIT-HANGEN.md`).
+    /// `ptt` true, and the operator hears silence.
     #[test]
     fn the_ptt_mirror_follows_thetis_ptt() {
         let src = include_str!("engine.rs");
@@ -7109,7 +7903,7 @@ mod tests {").unwrap()];
         assert!(!thetis.is_empty());
         assert_eq!(thetis.len(), mirror.len(), "every thetis_ptt assignment has its ptt mirror");
         for &i in &thetis {
-            // The value too (round 102): `ptt = true;` next to `thetis_ptt = false;`
+            // The value too: `ptt = true;` next to `thetis_ptt = false;`
             // is exactly the silence this test is for.
             let want = if lines[i] == "thetis_ptt = false;" { "ptt = false;" } else { "ptt = thetis_ptt;" };
             assert!(
@@ -7122,7 +7916,7 @@ mod tests {").unwrap()];
     }
 
     /// The engine thread runs through the reporter, and a panic in it leaves
-    /// "no connection" on screen instead of the last state (reviewers, round 45).
+    /// "no connection" on screen instead of the last state.
     /// A body that returns normally changes nothing - the engine said its own
     /// last word already.
     #[test]
@@ -7142,14 +7936,14 @@ mod tests {").unwrap()];
         let s = rx.borrow().clone();
         assert!(!s.connected, "a dead engine still showed a connection");
         assert!(!s.server_tx, "a dead engine still showed a transmitter");
-        assert_eq!(s.path, None, "a dead engine still named a way on two screens (review 139)");
+        assert_eq!(s.path, None, "a dead engine still named a way on two screens");
         assert_eq!(s.connect_status, crate::state::ConnectStatus::Disconnected);
         assert!(s.engine_dead);
     }
 
     /// An engine that returns an error - its audio device would not open - is
-    /// as dead as one that panicked, and the screens have to say so. Only a
-    /// panic counted until review 59.
+    /// as dead as one that panicked, and the screens have to say so. At first only
+    /// a panic counted.
     #[test]
     fn an_engine_that_returns_an_error_is_dead_too() {
         let (engine, rx, _cmd) = ClientEngine::new();
@@ -7161,7 +7955,7 @@ mod tests {").unwrap()];
         assert!(!s.connected);
     }
 
-    // Regression: the presence flip is the core requirement — presence determines connected,
+    // Regression: the presence flip is the core requirement; presence determines connected,
     // dynamically true/false. Tests the pure apply_yaesu_presence seam.
     #[test]
     fn presence_drives_connected_flip() {
@@ -7171,7 +7965,7 @@ mod tests {").unwrap()];
 
         // Both present → both connected, models adopted, both changed.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true, rx_levels_tuned: false,
         });
         assert!(c0 && c1);
         assert!(state.yaesu_connected && state.yaesu2_connected);
@@ -7181,7 +7975,7 @@ mod tests {").unwrap()];
         // Slot 0 drops out → connected flips to false (core of the dynamics),
         // slot 1 unchanged (no change flag).
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true, rx_levels_tuned: false,
         });
         assert!(c0 && !c1);
         assert!(!state.yaesu_connected);
@@ -7189,33 +7983,33 @@ mod tests {").unwrap()];
 
         // Idempotent: same presence again → no change flags.
         let (c0, c1) = apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+            slot0_present: false, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true, rx_levels_tuned: false,
         });
         assert!(!c0 && !c1);
     }
 
     // Regression: an absent radio must not leave a hi_swr flag set. Otherwise
-    // the other radio keeps renewing the SWR alarm on every state push —
+    // the other radio keeps renewing the SWR alarm on every state push,
     // the alarm then never goes out.
     #[test]
     fn presence_absence_clears_hi_swr() {
         let mut state = RadioState::default();
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+            slot0_present: true, slot0_model: 0, slot1_present: true, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true, rx_levels_tuned: false,
         });
         state.yaesu_hi_swr = true;
         state.yaesu2_hi_swr = true;
 
         // Slot 1 disappears → only its flag is cleared.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+            slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true, rx_levels_tuned: false,
         });
         assert!(state.yaesu_hi_swr, "the radio that is present keeps its flag");
         assert!(!state.yaesu2_hi_swr, "the radio that is gone loses its flag");
 
         // Slot 0 disappears too → nothing remains to feed the alarm.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
-            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+            slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1, slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true, rx_levels_tuned: false,
         });
         assert!(!state.yaesu_hi_swr && !state.yaesu2_hi_swr);
     }
@@ -7229,14 +8023,14 @@ mod tests {").unwrap()];
         assert!(!state.yaesu_configured && !state.yaesu2_configured);
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
             slot0_present: false, slot0_model: 0, slot1_present: false, slot1_model: 1,
-            slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true,
+            slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: true, rx_levels_tuned: false,
         });
         assert!(state.yaesu_configured && state.yaesu2_configured, "both configured");
         assert!(!state.yaesu_connected && !state.yaesu2_connected, "neither connected");
         // The server loses slot 1 from its configuration: the flag follows.
         apply_yaesu_presence(&mut state, &YaesuPresencePacket {
             slot0_present: true, slot0_model: 0, slot1_present: false, slot1_model: 1,
-            slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: false,
+            slot0_trouble: 0, slot1_trouble: 0, slot0_configured: true, slot1_configured: false, rx_levels_tuned: false,
         });
         assert!(state.yaesu_configured && !state.yaesu2_configured);
     }

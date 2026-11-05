@@ -2,6 +2,79 @@
 
 use sdr_remote_core::protocol::ControlId;
 
+/// Yaesu TX compressor time constants (ms). The defaults give the same
+/// behaviour as the former fixed coefficients.
+pub const COMP_ATTACK_DEFAULT_MS: f32 = 0.175;
+pub const COMP_RELEASE_DEFAULT_MS: f32 = 3.1;
+pub const COMP_ATTACK_RANGE_MS: std::ops::RangeInclusive<f32> = 0.1..=50.0;
+pub const COMP_RELEASE_RANGE_MS: std::ops::RangeInclusive<f32> = 1.0..=1000.0;
+
+/// The TX gain at the front of the chain (Thetis and both Yaesu radios), in dB:
+/// the range of the slider. Below its bottom the slider has one more position,
+/// off, which is a gain of zero (as `tx_gain = 0` always was).
+pub const TX_GAIN_DB_MIN: f32 = -24.0;
+pub const TX_GAIN_DB_MAX: f32 = 30.0;
+/// Where the slider shows off: one step under the range.
+pub const TX_GAIN_OFF_DB: f32 = TX_GAIN_DB_MIN - 1.0;
+
+/// The factor for a slider position in dB; off below the range.
+pub fn tx_gain_factor(db: f32) -> f32 {
+    if !(db >= TX_GAIN_DB_MIN) { return 0.0; }
+    10f32.powf(db.min(TX_GAIN_DB_MAX) / 20.0)
+}
+
+/// The slider position in dB for a factor; off for zero.
+pub fn tx_gain_db(factor: f32) -> f32 {
+    if !(factor > 0.0) { return TX_GAIN_OFF_DB; }
+    (20.0 * factor.log10()).clamp(TX_GAIN_DB_MIN, TX_GAIN_DB_MAX)
+}
+
+/// A factor as the engine and the settings take it: zero (off), or within the
+/// range. A NaN is off.
+pub fn clamp_tx_gain(factor: f32) -> f32 {
+    if !(factor > 0.0) { return 0.0; }
+    factor.clamp(tx_gain_factor(TX_GAIN_DB_MIN), tx_gain_factor(TX_GAIN_DB_MAX))
+}
+
+/// The factor for a knob turned to `frac` (0 to 1): over the slider's dB range,
+/// and all the way down is off. The desktop's MIDI knob and the phone's.
+pub fn tx_gain_from_fraction(frac: f32) -> f32 {
+    if !(frac > 0.0) { return 0.0; }
+    tx_gain_factor(TX_GAIN_DB_MIN + frac.min(1.0) * (TX_GAIN_DB_MAX - TX_GAIN_DB_MIN))
+}
+
+/// A Yaesu radio keeps its mic gain stored as a quarter of the factor: it was
+/// boosted four times at the end of the chain, and the stored number keeps that
+/// meaning so a profile sounds as loud as before and an older version reads it.
+pub const YAESU_MIC_GAIN_SCALE: f32 = 4.0;
+
+/// The stored Yaesu mic gain (a quarter of the factor), clamped like the factor.
+pub fn clamp_yaesu_mic_gain(stored: f32) -> f32 {
+    clamp_tx_gain(stored * YAESU_MIC_GAIN_SCALE) / YAESU_MIC_GAIN_SCALE
+}
+
+#[cfg(test)]
+mod tx_gain_tests {
+    use super::*;
+
+    /// dB and factor go back and forth; the bottom is off; the old ranges fit.
+    #[test]
+    fn the_gain_slider_reads_both_ways_and_has_off_at_the_bottom() {
+        for db in [-24.0, -6.0, 0.0, 4.0, 30.0] {
+            assert!((tx_gain_db(tx_gain_factor(db)) - db).abs() < 1e-4, "{db}");
+        }
+        assert_eq!(tx_gain_factor(TX_GAIN_OFF_DB), 0.0);
+        assert_eq!(tx_gain_db(0.0), TX_GAIN_OFF_DB);
+        assert_eq!(clamp_tx_gain(f32::NAN), 0.0);
+        // Thetis 0..3 and the Yaesu 0.02..0.4 (x4) of before all keep their value.
+        for t in [0.0, 0.5, 3.0] { assert_eq!(clamp_tx_gain(t), t); }
+        for g in [0.02, 0.2, 0.4] { assert!((clamp_yaesu_mic_gain(g) - g).abs() < 1e-6, "{g}"); }
+        assert!((tx_gain_db(0.02 * YAESU_MIC_GAIN_SCALE) - -21.94).abs() < 0.01, "the old bottom is inside");
+        assert_eq!(tx_gain_from_fraction(0.0), 0.0, "a knob all the way down is off");
+        assert!((tx_gain_db(tx_gain_from_fraction(1.0)) - TX_GAIN_DB_MAX).abs() < 1e-4);
+    }
+}
+
 /// Commands sent from UI to engine via mpsc channel.
 /// Replaces SharedState write operations.
 pub enum Command {
@@ -25,7 +98,7 @@ pub enum Command {
     SetFrequency(u64),
     SetMode(u8),
     SetControl(ControlId, u16),
-    /// Measurement mode (open point 34): `Some(dir)` starts writing a raw
+    /// Measurement mode: `Some(dir)` starts writing a raw
     /// measurement file in `dir` (a new file each time), `None` stops it.
     SetMeasurement(Option<String>),
     /// "Relay only" (build 137, the measurement screen): while on, a connection
@@ -48,13 +121,9 @@ pub enum Command {
     SetSpectrumZoom(f32),
     SetSpectrumPan(f32),
     SetSpectrumMaxBins(u16),
-    SetSpectrumFftSize(u16),  // FFT size in K (32, 65, 131, 262)
+    SetSpectrumFftSize(u16),  // FFT size in K (0=auto, 32 up to MAX_FFT_SIZE_K)
     SetAmplitecSwitchA(u8),  // 1-6
     SetAmplitecSwitchB(u8),  // 1-6
-    /// Set the Amplitec power-cap table. `max_w[i]` = 0 means "no cap"
-    /// for position i+1. `tx_blocked[i]` = true means RX-only (server
-    /// refuses all server-initiated TX paths on that position).
-    SetAmplitecPowerTable { max_w: [u16; 6], tx_blocked: [bool; 6] },
     TunerTune,
     TunerAbort,
     SpeOperate,
@@ -88,7 +157,7 @@ pub enum Command {
     Rf2kTunerCUp,
     Rf2kTunerCDown,
     Rf2kTunerK,
-    // RF2K-S debug (Phase D)
+    // RF2K-S debug
     Rf2kSetHighPower(bool),
     Rf2kSetTuner6m(bool),
     Rf2kSetBandGap(bool),
@@ -116,7 +185,7 @@ pub enum Command {
     /// address on an FTX-1. It travels as text either way; typing it as `u16`
     /// here is what made an FTX-1 in slot 1 unwritable (2026-08-20).
     SetYaesuMenu(String, String),
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror of the slot-0
+    // Dual-radio slot 1: mirror of the slot-0
     // Yaesu commands, routed to radio 1 (Yaesu2*-controls / FrequencyYaesu2).
     SetYaesu2Enable(bool),
     SetYaesu2Volume(f32),
@@ -125,8 +194,9 @@ pub enum Command {
     SetYaesu2Mode(u8),
     SetYaesu2TxGain(f32),
     SetYaesu2EqBand(u8, f32),
+    SetYaesu2EqBandParams(u8, crate::eq::EqBand),
     SetYaesu2EqEnabled(bool),
-    /// FTX-1 EX-menu set (Phase C): (address "p1p2p3", value). Travels as
+    /// FTX-1 EX-menu set: (address "p1p2p3", value). Travels as
     /// YaesuMemoryData2 with a "SETMENU:" prefix to the server.
     SetYaesu2Menu(String, String),
     // VRX1 (Virtual RX on RX1 IQ + VFO-A)
@@ -137,11 +207,11 @@ pub enum Command {
     /// (vrx_id 0|1, filter_low_hz, filter_high_hz). Server quantises to
     /// 62.5 Hz audio bins; client should pre-snap so visual = audio.
     SetVrxFilter(u8, i32, i32),
-    /// (vrx_id 0|1, enabled, span_khz). When enabled, server emits
+    /// (vrx_id 0|1, enabled, span_hz). When enabled, server emits
     /// SpectrumVrx1/SpectrumVrx2 packets containing a high-resolution
     /// extracted view centered on the VRX freq with the given span.
-    /// span_khz=0 with enabled=true defaults to 24 kHz server-side.
-    SetVrxHighResSpectrum(u8, bool, u16),
+    /// span_hz=0 with enabled=true defaults to 24 kHz server-side.
+    SetVrxHighResSpectrum(u8, bool, u32),
     /// Where the VRX spectrum window sits relative to the listening
     /// frequency, in Hz. The server cuts its window there instead of always
     /// centring, which is what lets VRX pan the way the main spectrum does.
@@ -151,24 +221,26 @@ pub enum Command {
     SetVrx2Mode(u8),
     SetVrx2Frequency(u64),
     SetVrx2Volume(f32),
-    // VRX wide / synchronous-AM UX (PATCH-vrx-wide-sam-ux)
-    /// VRX1 audio-rate mode: 0=NB, 1=WB, 2=Auto (PATCH-vrx-per-client).
+    // VRX wide / synchronous-AM UX
+    /// VRX1 audio-rate mode: 0=NB, 1=WB, 2=Auto.
     SetVrxRateMode(u8),
-    /// VRX2 audio-rate mode: 0=NB, 1=WB, 2=Auto — per-client per-VRX (VrxAudioRate2).
+    /// VRX2 audio-rate mode: 0=NB, 1=WB, 2=Auto; per-client per-VRX (VrxAudioRate2).
     SetVrxRateMode2(u8),
-    /// (vrx_id 0|1, on) — SAM auto-tune-to-carrier per VRX.
+    /// (vrx_id 0|1, on): SAM auto-tune-to-carrier per VRX.
     SetVrxAutoTune(u8, bool),
-    /// TX modulation filter band (low_hz, high_hz) — PATCH-tx-modulation-bandwidth.
+    /// TX modulation filter band (low_hz, high_hz).
     /// Main-radio TX, not VRX. Server applies via tx_filter_band_ex.
     SetTxFilter(i32, i32),
-    /// Typed Yaesu DSP/function control (PATCH-yaesu-extra-controls):
+    /// Typed Yaesu DSP/function control:
     /// (slot 0=radio1/1=radio2, control=YaesuCtrl as u8, value=toggle 0/1 or level).
     SetYaesuControl(u8, u8, u16),
     WriteYaesuMemories(String), // tab-separated text to write to radio
-    WriteYaesu2Memories(String), // same for radio 2 (Phase B)
+    WriteYaesu2Memories(String), // same for radio 2
     SetYaesuTxGain(f32),
-    // Yaesu EQ: (band 0-4, gain_db -12..+12)
+    // Yaesu EQ: (channel, gain_db) - only the gain, from the phone's five sliders
     SetYaesuEqBand(u8, f32),
+    // Yaesu EQ: (channel 0-19, kind, frequency, Q and gain)
+    SetYaesuEqBandParams(u8, crate::eq::EqBand),
     SetYaesuEqEnabled(bool),
     // Client-side Yaesu TX chain per radio (just like the EQ): compressor-amount 0-100
     // and its own AGC toggle (separate from the Thetis AGC). Radio processing does not work over USB.
@@ -176,6 +248,9 @@ pub enum Command {
     SetYaesuTxAgc(bool),
     SetYaesu2Compressor(u8),
     SetYaesu2TxAgc(bool),
+    // Compressor attack and release time constants in ms, per radio
+    SetYaesuCompTiming(f32, f32),
+    SetYaesu2CompTiming(f32, f32),
     // Thetis TUNE (ZZTU) with PA bypass
     ThetisTune(bool),
     // TX Monitor
@@ -204,7 +279,6 @@ pub enum Command {
     SetModeRx2(u8),
     SetRx2Volume(f32),       // local RX2 playback volume
     EnableRx2Spectrum(bool),
-    SetRx2SpectrumFps(u8),
     SetRx2SpectrumZoom(f32),
     SetRx2SpectrumPan(f32),
     // UltraBeam RCU-06
@@ -229,7 +303,6 @@ pub enum Command {
     SetThetisAutostart(bool),
     /// How long the server holds the transmitter after the last key-up, ms.
     SetCwHang(u16),
-    CwMacroStop,
     // Audio recording
     StartRecording { rx1: bool, rx2: bool, yaesu: bool, yaesu2: bool, vrx1: bool, vrx2: bool, path: String },
     StopRecording,

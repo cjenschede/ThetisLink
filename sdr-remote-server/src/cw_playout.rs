@@ -3,7 +3,7 @@
 //! The CW playout: key edges in, with the length of the state each one ends;
 //! key commands out, at exact moments.
 //!
-//! Step 4 of `docs/internal/DESIGN-remote-cw.md`, section 5.5. The keyer in
+//! The keyer in
 //! the client made the timing; the network scrambled the arrival times; this
 //! is where the timing is put back. The first edge of a run plays at its
 //! arrival plus a fixed delay `D`, every following edge at *the previous
@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 use sdr_remote_core::protocol::CwEdgesPacket;
 
 /// How long after its arrival the first edge of a run plays. Fixed to start
-/// with; measurement 6 (5G and wifi) says whether it can come down, and it may
+/// with; a measurement over 5G and wifi says whether it can come down, and it may
 /// only ever move between two runs, never inside a character.
 pub const PLAYOUT_DELAY: Duration = Duration::from_millis(80);
 /// When a run has to raise MOX first, its first edge waits this long instead
@@ -79,7 +79,7 @@ pub const NO_WORK_WAIT: Duration = Duration::from_millis(100);
 ///
 /// Named on 2026-09-24. Both this and `NO_WORK_WAIT` were bare literals in the
 /// thread body, which is why they were outside the nine timings a test pins -
-/// a reviewer moved them to 40 ms and 400 ms and nothing said a word. A number
+/// moving them to 40 ms and 400 ms made nothing say a word. A number
 /// that is not a constant is a number no rule reaches.
 pub const SLEEP_STEP: Duration = Duration::from_millis(2);
 
@@ -152,7 +152,7 @@ pub struct CwPlayout {
     run: u64,
     pub played: u64,
     pub late_count: u64,
-    /// Measurement 5: how far past its moment the thread took the last edge,
+    /// How far past its moment the thread took the last edge,
     /// and the worst so far, in microseconds.
     pub last_deviation_us: u64,
     pub max_deviation_us: u64,
@@ -229,8 +229,7 @@ impl CwPlayout {
     /// edges, the relay and UDP both duplicate, and a packet of old news that
     /// arrived after its run was over used to take the Thetis lock, key MOX
     /// for two seconds with nothing to send, and leave the lock and the run
-    /// with a client that was doing nothing (found reading the ingest arm
-    /// before review 313).
+    /// with a client that was doing nothing (found reading the ingest arm).
     pub fn has_news(&self, addr: SocketAddr, pkt: &CwEdgesPacket) -> bool {
         let seen = self.seen.get(&addr).copied();
         pkt.edges.iter().any(|e| newer(e.seq, seen))
@@ -575,19 +574,19 @@ mod tests {
     /// `filter_width.rs` (`the_hold_is_one_second`, 2026-09-16) and repaired the
     /// same way.
     ///
-    /// Review 2120A1 named three of these — `WATCHDOG`, `IDLE_RELEASE` and
+    /// A first pass named three of these - `WATCHDOG`, `IDLE_RELEASE` and
     /// `HOLD_GRACE`. It was nine: none of the timings in this file was pinned,
-    /// and a reviewer reads the paths he walks, not the list. So the list here
-    /// is taken from the declarations above rather than from the review.
+    /// and a reader sees the paths he walks, not the list. So the list here
+    /// is taken from the declarations above rather than from a reading.
     ///
     /// It is eleven now. Taking the list from the declarations still missed two,
     /// because two of the thread's timings were not declarations at all but bare
-    /// literals in its body - found by a reviewer who moved them and watched
-    /// nothing happen. Three passes over the same file, three different answers:
+    /// literals in its body - found by moving them and watching nothing
+    /// happen. Three passes over the same file, three different answers:
     /// a list of what is named cannot see what was never given a name.
     ///
     /// What this catches: a value changed without meaning to, and a value
-    /// changed on purpose without saying so — the failure IS the conversation,
+    /// changed on purpose without saying so; the failure IS the conversation,
     /// and the doc comment on the constant is what has to be brought back in
     /// line with it. What it does NOT catch: a value that is simply wrong. That
     /// takes a measurement, and for three of these the measurement is in the
@@ -650,7 +649,7 @@ mod tests {
         assert_eq!(planned, vec![ms(80), ms(128), ms(176)]);
         assert_eq!(p.late_count, 0);
         // And what goes to Thetis with each edge: the length of the state it
-        // ends, which is what Thetis gives the element (review 313: no test
+        // ends, which is what Thetis gives the element (no test
         // looked at the payload, only at the timing).
         assert_eq!(due.iter().map(|e| e.len_ms).collect::<Vec<_>>(), vec![0, 48, 48]);
     }
@@ -658,7 +657,7 @@ mod tests {
     /// Every edge carries the run it belongs to, and that is the current run
     /// - also after an earlier run ended, when the number is no longer 0. An
     /// edge with a wrong number is dropped by the sender as stale, and the
-    /// key never goes on the air (review 313: `run: 0` passed every test,
+    /// key never goes on the air (`run: 0` passed every test,
     /// because every test ran in run 0).
     #[test]
     fn every_edge_carries_its_own_run() {
@@ -1148,7 +1147,7 @@ mod tests {
         }
     }
 
-    /// Step 6: a run belongs to one radio - Thetis (0) or a Yaesu slot (1, 2) -
+    /// A run belongs to one radio - Thetis (0) or a Yaesu slot (1, 2) -
     /// and every edge of it says which, so the sender keys the right line.
     /// The key-ups the playout makes itself (watchdog, release) go to the
     /// run's radio too: a Yaesu has no watchdog of its own, and a key-up sent
@@ -1194,7 +1193,7 @@ mod tests {
     /// is a run playing that this packet cannot join - another client's, or
     /// this client's on another radio? Without it the gates took the lock
     /// (and for Thetis raised MOX) and only the ingest refused, leaving the
-    /// lock with a client that had no run (found reading step 6).
+    /// lock with a client that had no run (fixed in build 125).
     #[test]
     fn a_packet_that_cannot_join_the_playing_run_is_known_before_anything_is_taken() {
         let (mut p, t0) = fresh();
@@ -1235,8 +1234,7 @@ mod tests {
     /// This is the PLAN, not the waiting. It catches a deadline computed wrong;
     /// it does not catch a notify that never arrives, because `next_deadline`
     /// answers the same either way. Said plainly here because the comment that
-    /// replaced the old ceiling claimed this test covered that, and it does not
-    /// (review 2120A1 round 2).
+    /// replaced the old ceiling claimed this test covered that, and it does not.
     #[test]
     fn the_next_deadline_is_the_edges_own_moment() {
         let (mut p, t0) = fresh();
@@ -1283,7 +1281,7 @@ mod tests {
         assert!(e.down && e.planned == t0 + ms(80));
         assert!(took >= ms(80), "early: {took:?}");
         // And no ceiling here. There was one - 95 ms - and it was the third
-        // flaky test of this cycle: the test review measured 8 failures in 15 runs under
+        // flaky test of this cycle: it measured 8 failures in 15 runs under
         // CPU load, at 115-142 ms, and ruled out the Windows timer (a 2 ms
         // sleep measures 2.4 ms here). It is thread scheduling, which this
         // test does not control and cannot promise.
@@ -1294,11 +1292,11 @@ mod tests {
         // 100 ms poll instead of its own moment. No test covers that any more,
         // and a clockless one cannot: the defect costs ~100 ms and the
         // scheduling noise under load reaches 62 ms, so a single time
-        // assertion is either flaky or blind (review 2120A1 round 2, the review,
-        // who looked for one and did not find it either).
+        // assertion is either flaky or blind (a search for one found none
+        // either).
         //
         // What covers it instead is a line in a field log, named here so it
-        // can be looked for rather than remembered (working rule 11):
+        // can be looked for rather than remembered:
         //
         //     cw playout: N edges played, worst deviation so far X.XX ms
         //

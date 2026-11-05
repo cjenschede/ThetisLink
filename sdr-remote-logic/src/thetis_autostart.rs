@@ -11,7 +11,7 @@
 //! Kotlin.
 
 /// The state flags of the server's push that speak about Thetis - named, not
-/// five booleans in a row (review 318). Only a server that reports its
+/// five booleans in a row. Only a server that reports its
 /// state flags gives them; an old one never reaches the rule.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ThetisFlags {

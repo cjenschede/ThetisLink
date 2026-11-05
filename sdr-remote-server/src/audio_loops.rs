@@ -269,7 +269,7 @@ impl LossProtection {
 /// buffer is when a frame is taken, how often there was nothing to take, and
 /// how often it was cut back at its ceiling of ten frames - which is where a
 /// source clock running slightly ahead of the 20 ms tick would leave 200 ms of
-/// standing delay (review of the receive path, 2026-10-09).
+/// standing delay.
 struct FeedStats {
     ticks: u32,
     starved: u32,
@@ -309,6 +309,7 @@ impl FeedStats {
         self.cut += 1;
     }
 
+    #[cfg(test)]
     fn cuts(&self) -> u32 {
         self.cut
     }
@@ -434,7 +435,8 @@ impl RxWindow {
 /// calls `step` and does the encoding and sending with what comes back; the
 /// tests call the same `step`, so a reading rule for the feed lines is checked
 /// against the arithmetic the loop runs and not against what it is expected
-/// to do - three review rounds in a row found a rule that was not.
+/// to do - a reading rule that matched the expectation and not the
+/// arithmetic has been found more than once.
 ///
 /// RX1 and the binaural right come from one TCI frame (`decode_audio_payload_stereo`
 /// fills both in one loop), so the two buffers grow by the same amount. They
@@ -461,7 +463,7 @@ struct ThetisBuffers {
 /// Empty ticks in a row before the Thetis loop calls it a pause and rebuilds
 /// the wideband chain (build 160): a transmission or a real break, not one
 /// block of Thetis audio that came a tick late. Until then every empty tick
-/// rebuilt it - 708 times in one day's log (`logregels-build160.md`).
+/// rebuilt it - 708 times in one day's log.
 const PAUSE_TICKS: u32 = 5;
 
 /// Ticks a receive buffer is watched before it may give anything back (one
@@ -480,14 +482,13 @@ const BACKLOG_MEMORY: usize = 10;
 ///
 /// What may go is only what lay above one frame at every tick of the last
 /// `BACKLOG_MEMORY` seconds - the reserve that caught a late block in that time
-/// stays (review of build 160: taking every second's spare turned each later
+/// stays (build 160: taking every second's spare turned each later
 /// late block into a gap). And it goes one frame at most per second, so a big
-/// backlog leaves in steps of 20 ms rather than one jump (owner, 2026-10-10:
-/// "200ms weggooien is wel hoorbaar ... stapje kleiner, maar daardoor wat
-/// vaker"). An empty tick is a dip to nothing. The client's playout ring has a
+/// backlog leaves in steps of 20 ms rather than one jump (2026-10-10: dropping
+/// 200 ms at once is audible; a smaller step, taken more often, is preferred). An empty tick is a dip to nothing. The client's playout ring has a
 /// rule of the same family (`after_tx::Settle`, build 159) but a different
 /// question - how far a reading swings, in ms, at the speaker - so the two are
-/// kept apart on purpose (working rule 15).
+/// kept apart on purpose.
 #[derive(Default)]
 struct Backlog {
     ticks: u32,
@@ -519,7 +520,7 @@ impl Backlog {
         // At most one frame, and the memory moves down with it: it holds
         // fills, and after the step every one of them would read a step too
         // high - an old dip that used the reserve would then let the reserve
-        // go too (build 162; review of 161: 161 left this out on the claim that
+        // go too (build 162: 161 left this out on the claim that
         // the minimum already covered it, which held only for a dip down to one
         // frame).
         let take = spare.min(frame);
@@ -606,7 +607,7 @@ impl ThetisBuffers {
         // Counted only while someone listens (build 149). With nobody there
         // Thetis keeps delivering and nothing is taken, so the buffer sits at
         // its ceiling and is cut every tick - which read exactly like a clock
-        // running ahead (review of build 148).
+        // running ahead.
         let listening = self.listening;
         if self.rx1.len() > max {
             if listening { win.feed.trimmed(); }
@@ -647,8 +648,8 @@ impl ThetisBuffers {
         if self.resume_pending {
             // Every empty tick still lines all three up to one frame, so the
             // binaural right never runs ahead of the left after a late block -
-            // that is how binaural has always worked, and it stays so (owner,
-            // 2026-10-10). Only a real pause rebuilds the wideband chain and
+            // that is how binaural has always worked, and it stays so by design
+            // (2026-10-10). Only a real pause rebuilds the wideband chain and
             // gets a line (build 160).
             self.resume_pending = false;
             out.resumed = paused >= PAUSE_TICKS;
@@ -925,7 +926,6 @@ pub async fn tci_multichannel_audio_loop(
                 if win.m_since.elapsed() >= Duration::from_secs(10) {
                     if win.feed.ticks() > 0 {
                         dev_info!("RX1 audio feed (10 s): {}", win.feed.summary(tci_frame_samples));
-                        // Named in advance (working rule 11, builds 149 and 150).
                         if win.feed_rx2.delivered() {
                             dev_info!("RX2 audio feed (10 s): {}", win.feed_rx2.side_summary(tci_frame_samples));
                         }
@@ -956,7 +956,7 @@ pub async fn tci_multichannel_audio_loop(
                         const ALARM_AT: f64 = TICK_MS * 2.0 / 3.0;
                         if worst_ms >= ALARM_AT {
                             warn!(
-                                "RX1 bundler work (10 s): avg {:.2} ms, worst {:.2} ms of the {:.0} ms tick - past {:.1} ms this loop starts starving every other audio stream",
+                                "RX1 bundler work (10 s): avg {:.2} ms, worst {:.2} ms of the {:.0} ms tick; past {:.1} ms this loop starts starving every other audio stream",
                                 avg_ms, worst_ms, TICK_MS, ALARM_AT,
                             );
                         } else {
@@ -975,7 +975,6 @@ pub async fn tci_multichannel_audio_loop(
                     continue;
                 }
                 if let Some(n) = step.settled {
-                    // Named in advance (working rule 11, build 160).
                     info!("RX1 audio: dropped {} ms of standing backlog the last {} s never needed", n * 20 / tci_frame_samples, BACKLOG_MEMORY);
                 }
                 if step.resumed {
@@ -1030,7 +1029,7 @@ pub async fn tci_multichannel_audio_loop(
                 }
                 if step.no_listener {
                     // Nobody hears Thetis: a turnaround wait would measure the gap
-                    // until a client returns (round 99).
+                    // until a client returns.
                     rx_back.cancel();
                     continue;
                 }
@@ -1156,7 +1155,7 @@ pub async fn tci_multichannel_audio_loop(
                         // a desktop on a perfect cable twenty percent redundancy -
                         // and until now the line said the percentage without saying
                         // whose it was. That cost an evening of looking at the wrong
-                        // client (2026-09-13, open point 15a).
+                        // client (2026-09-13).
                         // Only clients we are actually SENDING to. thetis_audio_addrs
                         // returns every authenticated client, including one that has
                         // switched its Thetis audio off - and the loss such a client
@@ -1191,20 +1190,20 @@ pub async fn tci_multichannel_audio_loop(
                             if e.set_loss_protection(on, pct).is_err() { failed += 1; }
                         }
                         if failed > 0 {
-                            warn!("RX audio: {} of 6 encoders refused the error-correction change - they keep their previous setting", failed);
+                            warn!("RX audio: {} of 6 encoders refused the error-correction change; they keep their previous setting", failed);
                         }
                         if on {
                             let who = worst_pair
                                 .map_or_else(|| "?".to_string(), |(a, _)| a.to_string());
                             info!(
-                                "RX audio: packet loss {}% at {} (worst of {} receiving client(s)) - error correction on at {}% for all of them, narrowband at {} kbps",
+                                "RX audio: packet loss {}% at {} (worst of {} receiving client(s)); error correction on at {}% for all of them, narrowband at {} kbps",
                                 worst_loss, who,
                                 n_receiving,
                                 pct,
                                 sdr_remote_core::codec::NB_PROTECTED_BITRATE / 1000
                             );
                         } else {
-                            info!("RX audio: link clean again - error correction off, all bits to the sound");
+                            info!("RX audio: link clean again; error correction off, all bits to the sound");
                         }
                     }
 
@@ -1316,8 +1315,8 @@ pub async fn yaesu_audio_loop(
     const SQL_HANG_FRAMES: u32 = 8;   // ~160 ms hang before the gate closes (anti-flutter)
     const SQL_FADE_STEP: f32 = 0.10;  // ~10 frames ≈ 200 ms full fade
 
-    // The same feed line as the Thetis loop, while someone listens (step 1 of
-    // the receive-path proposal, 2026-10-09: measure before changing anything).
+    // The same feed line as the Thetis loop, while someone listens: measure
+    // the receive path before changing anything in it.
     let mut feed = FeedStats::new();
     let mut feed_since = Instant::now();
 
@@ -1356,18 +1355,18 @@ pub async fn yaesu_audio_loop(
                     if enc_nb.set_loss_protection(on, pct).is_err()
                         || enc_wb.set_loss_protection(on, pct).is_err()
                     {
-                        warn!("Radio {} audio: an encoder refused the error-correction change - it keeps its previous setting", slot + 1);
+                        warn!("Radio {} audio: an encoder refused the error-correction change; it keeps its previous setting", slot + 1);
                     }
                     if on {
                         let who = worst_pair
                             .map_or_else(|| "?".to_string(), |(a, _)| a.to_string());
                         info!(
-                            "Radio {} audio: packet loss {}% at {} (worst of {} listener(s)) - error correction on at {}% for all of them, narrowband at {} kbps",
+                            "Radio {} audio: packet loss {}% at {} (worst of {} listener(s)); error correction on at {}% for all of them, narrowband at {} kbps",
                             slot + 1, worst_loss, who, subs.len(), pct,
                             sdr_remote_core::codec::NB_PROTECTED_BITRATE / 1000
                         );
                     } else {
-                        info!("Radio {} audio: link clean again - error correction off", slot + 1);
+                        info!("Radio {} audio: link clean again; error correction off", slot + 1);
                     }
                 }
                 let step = buf.step(&mut feed, !subs.is_empty(), || {
@@ -1381,21 +1380,19 @@ pub async fn yaesu_audio_loop(
                             true
                         }
                         _ => {
-                            log::error!("Yaesu encoder reset failed - Yaesu audio RX skipped this tick (server keeps running)");
+                            log::error!("Yaesu encoder reset failed: Yaesu audio RX skipped this tick (server keeps running)");
                             false
                         }
                     }
                 });
                 if feed_since.elapsed() >= Duration::from_secs(10) {
                     if feed.ticks() > 0 {
-                        // Named in advance (working rule 11, build 148).
                         dev_info!("Radio {} audio feed (10 s): {}", slot + 1, feed.summary(frame_samples));
                     }
                     feed = FeedStats::new();
                     feed_since = Instant::now();
                 }
                 if let Some(n) = buf.settled.take() {
-                    // Named in advance (working rule 11, build 160).
                     info!("Radio {} audio: dropped {} ms of standing backlog the last {} s never needed", slot + 1, n * 20 / frame_samples, BACKLOG_MEMORY);
                 }
                 let mut frame = match step {
@@ -1430,7 +1427,7 @@ pub async fn yaesu_audio_loop(
                 };
                 // TX-mute: during transmit RX-audio must never come back. The 991A mutes
                 // its USB-RX in hardware during TX; the FTX-1 does not -> there RX-sound
-                // continued during PTT (operator-test 2026-07-04). Model-independent in software:
+                // continued during PTT. Model-independent in software:
                 // on TX go straight to silence (no squelch-hang), for the 991A a no-op
                 // because (almost) silence is coming in there anyway.
                 let effective_open = !tx_active && (mode != 5 || sql_open);
@@ -1466,9 +1463,9 @@ pub async fn yaesu_audio_loop(
                 // doing is not an event; the radio's own squelch state is, and
                 // that is logged separately and rarely (`squelch: OPEN (BUSY)`).
                 if start_g > 0.0 && end_g == 0.0 {
-                    log::debug!("Yaesu squelch: gate closed - audio muted");
+                    log::debug!("Yaesu squelch: gate closed; audio muted");
                 } else if start_g == 0.0 && end_g > 0.0 {
-                    log::debug!("Yaesu squelch: gate open - audio resumed");
+                    log::debug!("Yaesu squelch: gate open; audio resumed");
                 }
 
                 let need_wb = subs.iter().any(|(_, wb)| *wb);
@@ -1548,7 +1545,7 @@ struct ClientRt {
 /// Resolve the per-VRX wideband flag from the client's NB/WB/Auto mode + filter
 /// width. Auto switches up at ≥4 kHz audio BW and back below ~3.75 kHz (hysteresis
 /// against rebuild-thrash while dragging the filter edge). Rate-mode is now
-/// per-client (PATCH-vrx-per-client), passed in rather than read from a global.
+/// per-client, passed in rather than read from a global.
 fn vrx_desired_wb(mode_u8: u8, low_hz: i32, high_hz: i32, current_wb: bool) -> bool {
     let mode = vrx_rs::VrxRateMode::from_u8(mode_u8);
     vrx_rs::rate_mode_wants_wideband(mode, low_hz, high_hz, current_wb)
@@ -1578,6 +1575,8 @@ fn service_vrx_channel(
     // Reported loss per listener, in the same order as `audio_addrs`.
     losses: &[u8],
     protect: &mut std::collections::HashMap<std::net::SocketAddr, LossProtection>,
+    // The AGC mode and AGC-T of the receiver this channel listens on.
+    agc: vrx_rs::VrxAgcSettings,
 ) {
     // No set allocation on the hot path: the subscriber list is tiny (one entry
     // per client), so a linear `contains` is cheaper than building a HashSet.
@@ -1585,7 +1584,7 @@ fn service_vrx_channel(
     rts.retain(|a, _| audio_addrs.contains(a));
     if rts.len() != before {
         log::info!(
-            "VRX destroy ch={} reason=disable removed={} - active_runtimes(ch)={}",
+            "VRX destroy ch={} reason=disable removed={}: active_runtimes(ch)={}",
             ch + 1, before - rts.len(), rts.len()
         );
     }
@@ -1605,13 +1604,12 @@ fn service_vrx_channel(
                 rt.runtime.set_loss_protection(on, pct);
             }
             if on {
-                // Named in advance (working rule 11, build 153).
                 log::info!(
-                    "VRX{} for {}: packet loss {}% - error correction on at {}%, narrowband at {} kbps",
+                    "VRX{} for {}: packet loss {}%; error correction on at {}%, narrowband at {} kbps",
                     ch + 1, addr, loss, pct, vrx_rs::opus::NB_PROTECTED_BITRATE / 1000
                 );
             } else {
-                log::info!("VRX{} for {}: link clean again - error correction off", ch + 1, addr);
+                log::info!("VRX{} for {}: link clean again; error correction off", ch + 1, addr);
             }
         }
     }
@@ -1635,7 +1633,7 @@ fn service_vrx_channel(
                 control.clone(),
             );
             rts.insert(addr, ClientRt { runtime, control, current_wb: wb, created: std::time::Instant::now(), first_frame_logged: false });
-            log::info!("VRX create client={} ch={} wideband={} - active_runtimes(ch)={}",
+            log::info!("VRX create client={} ch={} wideband={}: active_runtimes(ch)={}",
                 addr, ch + 1, wb, rts.len());
         }
         let rate_mode = mgr.lock().unwrap().rate_mode(&addr, ch);
@@ -1659,7 +1657,18 @@ fn service_vrx_channel(
             rt.current_wb = want_wb;
         }
         let auto = auto_addrs.contains(&addr);
-        rt.control.lock().unwrap().sam_auto_tune = auto;
+        {
+            let mut c = rt.control.lock().unwrap();
+            c.sam_auto_tune = auto;
+            // Only the log line asks whether it changed; the value goes either way.
+            if c.agc != agc {
+                log::info!(
+                    "VRX{} AGC for {}: mode {:?}, top {} dB",
+                    ch + 1, addr, agc.mode, agc.top_db
+                );
+            }
+            c.agc = agc;
+        }
         sink.addrs.clear();
         sink.addrs.push(addr);
         sink.autotune_addrs.clear();
@@ -1723,13 +1732,13 @@ pub async fn tci_iq_consumer(
     // a per-channel sub-dir later if needed).
     let vrx_dir = std::env::var("VRX_LIVE_DIR").ok();
     // VRX output rate is now per-VRX, decoupled from the global Thetis-WB
-    // toggle (PATCH-vrx-wide-sam-ux): each VRX follows the NB/WB/Auto
+    // toggle: each VRX follows the NB/WB/Auto
     // dropdown (VRX_AUDIO_RATE_MODE) resolved against its own filter width.
     // Start narrowband; the loop bumps to WB on the first batch if needed.
-    // Per-client VRX runtimes (PATCH-vrx-per-client). The audio loop owns these
+    // Per-client VRX runtimes. The audio loop owns these
     // maps; each client with a VRX audio subscription gets its own channelizer per
     // channel, created lazily in service_vrx_channel(). Per-client WAV capture is
-    // disabled to avoid file collisions (§3f); the VRX_DUMP one-shot still works.
+    // disabled to avoid file collisions; the VRX_DUMP one-shot still works.
     let _ = &vrx_dir;
     let mut vrx1_rts: std::collections::HashMap<std::net::SocketAddr, ClientRt> =
         std::collections::HashMap::new();
@@ -1815,7 +1824,7 @@ pub async fn tci_iq_consumer(
                         let l: Vec<u8> = a.iter().map(|&x| sess.client_loss(x)).collect();
                         (a, sess.vrx_autotune_addrs(0), sess.active_addrs(), l)
                     };
-                    // Cleanup vangnet (§3a): drop per-client control-state for clients
+                    // Cleanup safety net: drop per-client control-state for clients
                     // no longer active-authed - covers both explicit disconnect and
                     // session timeout/stale (is_active_authed). Runtimes auto-prune in
                     // service_vrx_channel via the subscriber set.
@@ -1825,16 +1834,19 @@ pub async fn tci_iq_consumer(
                             (m.retain_active(&active), m.client_count())
                         };
                         if dropped > 0 {
-                            info!("VRX retain_active: dropped {} stale client(s) - vrx_clients={}", dropped, count);
+                            info!("VRX retain_active: dropped {} stale client(s); vrx_clients={}", dropped, count);
                         }
                     }
-                    let tx_active = ptt.lock().await.is_tx_or_prefill();
+                    let (tx_active, agc) = {
+                        let p = ptt.lock().await;
+                        (p.is_tx_or_prefill(), vrx_rs::VrxAgcSettings::from_thetis(p.agc_mode(), p.agc_gain()))
+                    };
                     let ts = server_start.elapsed().as_millis() as u32;
                     service_vrx_channel(
                         0, frame_rate, &iq_pairs, vfo_hz, ddc_center_hz,
                         &audio_addrs, &auto_addrs, tx_active, ts,
                         &mut vrx1_rts, &vrx_mgr, &mut vrx1_sink, &mut vrx1_timer,
-                        &losses, &mut vrx1_protect,
+                        &losses, &mut vrx1_protect, agc,
                     );
                 }
                 let cur_fft = spectrum.lock().await.ddc_fft_size();
@@ -1845,7 +1857,6 @@ pub async fn tci_iq_consumer(
                 }
                 // A band jump: the window's samples are of the old band (build 236).
                 if let Some(jump) = spectrum.lock().await.band_jump_since(rx1_window_gen) {
-                    // Named in advance (`logregels-build236.md`).
                     info!("Spectrum RX1: band jump {} -> {} kHz, {} old samples dropped",
                         jump.from_hz / 1000, jump.to_hz / 1000, rx1_accum.len());
                     rx1_window_gen = jump.generation;
@@ -1892,13 +1903,16 @@ pub async fn tci_iq_consumer(
                         let l: Vec<u8> = a.iter().map(|&x| sess.client_loss(x)).collect();
                         (a, sess.vrx_autotune_addrs(1), l)
                     };
-                    let tx_active = ptt.lock().await.is_tx_or_prefill();
+                    let (tx_active, agc) = {
+                        let p = ptt.lock().await;
+                        (p.is_tx_or_prefill(), vrx_rs::VrxAgcSettings::from_thetis(p.rx2_agc_mode(), p.rx2_agc_gain()))
+                    };
                     let ts = server_start.elapsed().as_millis() as u32;
                     service_vrx_channel(
                         1, frame_rate, &iq_pairs, vfo_hz, ddc_center_hz,
                         &audio_addrs, &auto_addrs, tx_active, ts,
                         &mut vrx2_rts, &vrx_mgr, &mut vrx2_sink, &mut vrx2_timer,
-                        &losses, &mut vrx2_protect,
+                        &losses, &mut vrx2_protect, agc,
                     );
                 }
                 let cur_fft = rx2_spectrum.lock().await.ddc_fft_size();
@@ -1909,7 +1923,6 @@ pub async fn tci_iq_consumer(
                 }
                 // As on RX1 (build 236).
                 if let Some(jump) = rx2_spectrum.lock().await.band_jump_since(rx2_window_gen) {
-                    // Named in advance (`logregels-build236.md`).
                     info!("Spectrum RX2: band jump {} -> {} kHz, {} old samples dropped",
                         jump.from_hz / 1000, jump.to_hz / 1000, rx2_accum.len());
                     rx2_window_gen = jump.generation;
@@ -1933,6 +1946,35 @@ pub async fn tci_iq_consumer(
 #[cfg(test)]
 mod tests {
     use super::{FeedStats, LevelStats};
+
+    /// Each VRX's AGC follows the mode and AGC-T of the receiver it listens
+    /// on: VRX1 RX1's, VRX2 RX2's, handed to every runtime of that channel.
+    #[test]
+    fn each_vrx_follows_the_agc_of_its_receiver() {
+        let src = include_str!("audio_loops.rs");
+        let body = &src[..src.find("#[cfg(test)]
+mod tests {").unwrap()];
+        for (getters, ch) in [("p.agc_mode(), p.agc_gain()", 0), ("p.rx2_agc_mode(), p.rx2_agc_gain()", 1)] {
+            let from = format!("vrx_rs::VrxAgcSettings::from_thetis({getters})");
+            assert_eq!(body.matches(&from).count(), 1, "{from}");
+            let at = body.find(&from).unwrap();
+            let call = format!("service_vrx_channel(
+                        {ch}, frame_rate,");
+            let next = body[at..].find("service_vrx_channel(").unwrap();
+            assert!(body[at + next..].starts_with(&call), "VRX{} gets its own receiver's AGC", ch + 1);
+        }
+        assert_eq!(body.matches("&losses, &mut vrx1_protect, agc,").count(), 1);
+        assert_eq!(body.matches("&losses, &mut vrx2_protect, agc,").count(), 1);
+        let svc = &body[body.find("fn service_vrx_channel(").unwrap()..];
+        let set = svc.find("            c.agc = agc;
+").expect("handed to the runtime's control");
+        let logged = svc.find("            if c.agc != agc {
+").expect("a log line when it changes");
+        let closed = logged + svc[logged..].find("            }
+").unwrap();
+        assert!(set > closed, "the value goes whatever the log line decides");
+        assert!(svc[closed..].starts_with("            }\n            c.agc = agc;\n"), "straight after it, inside nothing");
+    }
 
     /// The feed line keeps the exact text of the RX1 line it came from, so a
     /// search over old logs still finds the new ones (build 148).
@@ -2015,7 +2057,7 @@ mod tests {
     thread_local! {
         /// Every sample a value of its own, rising, so a test can see which
         /// frame left and in what order (build 153: with zeros, taking the
-        /// newest frame instead of the oldest stayed green - review of 152).
+        /// newest frame instead of the oldest stayed green in build 152).
         static NEXT: std::cell::Cell<f32> = std::cell::Cell::new(1.0);
     }
 
@@ -2071,7 +2113,7 @@ mod tests {
     /// A standing backlog goes in steps of one frame at most, one a second,
     /// and only once the whole memory saw it standing; on every tick that
     /// gives one back the right goes with the left, oldest first, so they come
-    /// out as one (builds 160, 161; review of 160: no test looked at that tick,
+    /// out as one (builds 160, 161: no test looked at that tick,
     /// and "drop all above one frame" read the same as the rule).
     #[test]
     fn a_standing_backlog_leaves_in_steps_of_one_frame_with_left_and_right_together() {
@@ -2099,7 +2141,7 @@ mod tests {
                 // On the step the left skips exactly the one frame given back,
                 // its oldest. The right, cut ahead at the burst, plays on or
                 // skips with it - but never repeats a frame or goes back
-                // (review of 160: taking the right's newest samples instead
+                // (taking the right's newest samples instead
                 // stayed green).
                 let (one, two) = (F as f32, 2.0 * F as f32);
                 assert_eq!(l - prev_l, two, "tick {tick}: the left skips one frame");
@@ -2150,18 +2192,18 @@ mod tests {
     /// one step takes the frame that is never used, and then nothing - no
     /// second step, no empty tick. The memory moves down with the step, or an
     /// old dip reads a frame too high and the reserve goes too (build 162;
-    /// review of 161: build 161 took both, and then every eighth second was a
+    /// build 161 took both, and then every eighth second was a
     /// gap).
     #[test]
     fn a_reserve_used_now_and_then_stays_after_a_step() {
         // The late block at every place within its second, the deciding tick
-        // included (build 163; review of 162: no phase put it in the second
+        // included (build 163: no phase put it in the second
         // that decides the step).
         for phase in 0..super::BACKLOG_TICKS as usize {
             reserve_run(phase);
         }
         // ...and in every second of its eight, so it also falls in the second
-        // that decides a step (build 164; review of 163: C5 was still open).
+        // that decides a step (C5 was still open).
         for phase in (0..398).step_by(13) {
             reserve_run(phase);
         }
@@ -2196,7 +2238,7 @@ mod tests {
 
     /// The memory itself: a dip on the very first tick of a second is kept
     /// (`ticks.max(1)`), and a reset forgets everything, so nothing goes for
-    /// the next ten seconds (build 162; review of 161: neither was tested).
+    /// the next ten seconds (neither was tested).
     #[test]
     fn the_backlog_memory_keeps_a_dip_on_a_seconds_first_tick_and_forgets_on_reset() {
         let f = F;
@@ -2233,15 +2275,14 @@ mod tests {
     }
 
     /// The radio after a second start (a listener gone and back): the old
-    /// memory is gone, so a standing half frame waits ten seconds again
-    /// (build 162; review of 161).
+    /// memory is gone, so a standing half frame waits ten seconds again.
     #[test]
     fn a_radio_that_starts_again_waits_ten_seconds() {
         let mut f = super::FeedStats::new();
         let mut r = super::RadioBuffer::new(F);
         assert!(matches!(r.step(&mut f, true, || true), super::RadioTick::Started));
         r.push(&next_frame()[..F / 2]);
-        // A first session shorter than the memory (build 163; review of 162:
+        // A first session shorter than the memory (build 163:
         // with twelve seconds a step had already lowered the old memory, and
         // the test held without the reset too).
         for _ in 0..super::BACKLOG_TICKS * 5 {
@@ -2266,7 +2307,7 @@ mod tests {
     /// The radio loop under the same rule: a standing half frame (the 991A's
     /// `avg 1.50`) goes once the memory saw it for ten seconds, once; less than
     /// half a frame stays; an empty tick within the memory keeps the reserve
-    /// (builds 160, 161; review of 160: without the memory a shifted chunk
+    /// (builds 160, 161: without the memory a shifted chunk
     /// after the step became an empty tick, a whole frame, and a step again).
     #[test]
     fn a_radio_buffer_lets_a_standing_backlog_go_only_when_the_memory_never_needed_it() {
@@ -2305,8 +2346,8 @@ mod tests {
 
     /// VRX has its own encoder and its own copy of the two narrowband
     /// bitrates, because `vrx-rs` does not depend on the core crate. This
-    /// server builds both, so it keeps them the same (build 153, working rule
-    /// 15).
+    /// server builds both, so it keeps them the same (build 153; a second place,
+    /// with a test that catches drift).
     #[test]
     fn the_narrowband_bitrates_agree() {
         assert_eq!(sdr_remote_core::codec::NB_RX_BITRATE, vrx_rs::opus::NB_RX_BITRATE);
@@ -2314,7 +2355,7 @@ mod tests {
     }
 
     /// The oldest frame leaves first, on all three channels and on the radio
-    /// (build 153; review of 152 found no test that looked at which samples
+    /// (build 153; in build 152 no test looked at which samples
     /// left).
     #[test]
     fn the_oldest_frame_leaves_first() {
@@ -2337,7 +2378,7 @@ mod tests {
 
     /// The right channel missing one frame that the left got shows as one
     /// more tick with nothing to send on BinR than on RX1 - the reading rule
-    /// for a frame lost on one side (build 153; review of 152).
+    /// for a frame lost on one side.
     #[test]
     fn a_frame_lost_on_the_right_shows_as_a_starved_tick_on_binr() {
         let (mut b, mut w) = (super::ThetisBuffers::new(F), super::RxWindow::new());
@@ -2420,7 +2461,7 @@ mod tests {
             // Half the runs low enough to stay at two frames - an empty tick
             // now and then, two frames only right after one - so the binaural
             // rule below is checked in its own state and not only skipped
-            // (review of build 151: 0 of 300 runs reached it).
+            // (in build 151, 0 of 300 runs reached it).
             let low = run % 2 == 0;
             let mut last = 1usize;
             let feed: Vec<usize> = (0..400)
@@ -2489,7 +2530,7 @@ mod tests {
         // The listener leaves on a tick that brings eleven frames: the ceiling
         // cuts while `listening` is still true, so the old window counts it
         // (build 153: before, nothing was ever cut while counting, and the
-        // check below could not fail - review of 152).
+        // check below could not fail).
         thetis_run(&mut b, &mut w, &[11], true, false);
         assert_eq!(w.feed.trimmed, 1, "the cut on the way out is counted");
         thetis_run(&mut b, &mut w, &[1; 19], true, false);

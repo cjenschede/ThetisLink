@@ -658,7 +658,7 @@ mod tests {
     /// It carried 0x02 at both 0 and 9, 0x03 at both 2 and 4, and 0x01 at both 6
     /// and 7, so three of the swaps it claims to catch went straight through -
     /// `direction` reading byte 7, `motors_moving` reading byte 0 and
-    /// `operation` reading byte 4 all survived a reviewer's mutations. The
+    /// `operation` reading byte 4 all survived mutation testing. The
     /// comment was the promise; the array was the test.
     #[test]
     fn every_status_byte_lands_in_its_own_field() {

@@ -108,7 +108,7 @@ mod translation_key_tests {
     /// paragraphs. That only works while the translation carries real newlines:
     /// a YAML scalar in single quotes keeps `\n` as two characters, and the
     /// screen would silently go back to one wall of text per block - readable
-    /// enough in review, wrong on screen.
+    /// enough in the YAML, wrong on screen.
     #[test]
     fn the_offline_paragraphs_still_break() {
         for locale in ["en", "nl", "de", "fr"] {
@@ -137,7 +137,7 @@ mod consent_text_tests {
     /// that the claim held. Version 3 is the one that added the clause about
     /// being removed from the chat - and the next time the text changes without
     /// the constant, or the constant without the text, it would be silent
-    /// again (raised in review, 2026-08-18).
+    /// again.
     ///
     /// This is not a full guard: it cannot know what a future version means. It
     /// binds the one thing that is already promised - that agreement recorded
@@ -151,7 +151,7 @@ mod consent_text_tests {
 
         assert_eq!(
             crate::CONSENT_TEXT_VERSION, 3,
-            "the consent version changed - decide what the new one promises and              say it here, rather than leaving this test asserting the old one"
+            "the consent version changed: decide what the new one promises and              say it here, rather than leaving this test asserting the old one"
         );
         assert!(
             yml.contains("chat_consent_ban"),
@@ -161,7 +161,7 @@ mod consent_text_tests {
 
     /// A gate on this repository's layout, not a library test: it reaches across
     /// crates by relative path and breaks if a directory moves - loudly, which
-    /// is the point. Recorded as deliberate at the review's request.
+    /// is the point. Deliberately so.
     ///
     /// The consent text exists twice: here for the desktop, and in the Android
     /// resources. The model is shared and the words are not, and the header of
@@ -200,15 +200,14 @@ mod consent_text_tests {
             .filter(|k| k.starts_with("chat_consent_"))
             .filter(|k| !SAID_THROUGH_THE_UI_INSTEAD.contains(k))
             .collect();
-        assert!(!desktop.is_empty(), "no consent keys found - has the file moved?");
+        assert!(!desktop.is_empty(), "no consent keys found: has the file moved?");
 
         // On SCREEN, not merely in the resources. The first version of this
         // guard checked strings.xml alone and went green in the very commit
         // that added it: one of the two strings had been added and never
         // rendered, so the phone still did not say that refusing costs nothing
         // while the test pointed at yes. Present is not connected - the same
-        // fault it exists to catch, one level down (found in review,
-        // 2026-08-18).
+        // fault it exists to catch, one level down (2026-08-18).
         let screen_path = here
             .join("../sdr-remote-android/android/app/src/main/java/com/sdrremote/ui/screens/ChatScreen.kt");
         let screen = match std::fs::read_to_string(&screen_path) {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-//! The developer mode, on the desktop's server screen (build 295; owner
-//! decision 2026-10-23). What the mode is - the code, the log target, the
+//! The developer mode, on the desktop's server screen (build 295).
+//! What the mode is - the code, the log target, the
 //! logger's rule - is `sdr_remote_core::dev_mode`; this file is the desktop's
 //! switch and its sign. The server has its own (`sdr-remote-server`,
 //! `ui/developer_mode.rs`), deliberately: another program with its own
@@ -52,7 +52,6 @@ impl SdrRemoteApp {
         self.developer_mode = on;
         crate::ui::config::save_developer_mode(on);
         sdr_remote_core::dev_mode::set(on);
-        // Named in advance (`logregels-build295.md`).
         log::info!("{}", sdr_remote_core::dev_mode::state_line(on));
         if !on {
             let (relay_only, force_tcp) = {
@@ -99,7 +98,7 @@ mod tests {
         let src = include_str!("server_screen.rs");
         let gate = src.find("                self.render_developer_mode(ui);\n                if self.developer_mode {\n")
             .expect("the tools behind the mode");
-        // All of it in one group behind its own chevron (owner, 2026-10-24).
+        // All of it in one group behind its own chevron.
         let group = src.find("super::config::Fold::Developer,").expect("the developer group");
         assert!(group < gate, "the code field and the tools inside the group");
         assert_eq!(src.matches("self.render_developer_mode(ui);").count(), 1);
@@ -111,8 +110,8 @@ mod tests {
     }
 
     /// What closing the mode does, all of it: the switch the logger reads, and
-    /// the three tools that would otherwise run on out of sight (review of 295:
-    /// each of the four could go and every test stayed green).
+    /// the three tools that would otherwise run on out of sight
+    /// (each of the four could go and every test stayed green).
     #[test]
     fn closing_the_mode_ends_what_only_the_mode_starts() {
         let src = include_str!("developer_mode.rs");

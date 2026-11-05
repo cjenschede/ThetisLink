@@ -6,11 +6,11 @@
 
 use egui::{ViewportBuilder, ViewportId};
 use super::*;
-use sdr_remote_logic::ptt_button::{ptt_button, PttButton};
+use sdr_remote_logic::ptt_button::PttButton;
 
 
 /// Identifies a detachable popout window - selects its persisted geometry
-/// slot, ViewportId, title and default size (model B, Phase 2). New windows
+/// slot, ViewportId, title and default size. New windows
 /// join by adding a variant + its rows in the match arms above.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PopoutKind {
@@ -24,14 +24,14 @@ pub(super) enum PopoutKind {
     /// - the two are mutually exclusive (joined XOR separate) so they share the
     /// one OS window - but has its own `popout_joined_*` geometry slot.
     Joined,
-    /// The chat window (docs/internal/DESIGN-relay-chat.md). Joins the same
+    /// The chat window. Joins the same
     /// lifecycle as every other detachable window rather than growing its own -
     /// geometry, focus and persistence come for free, and the arranger sees it.
     Chat,
 }
 
 impl SdrRemoteApp {
-    // ---- Model B Phase 2: shared popout lifecycle ---------------------------
+    // ---- Shared popout lifecycle ---------------------------------------------
     // One declarative place for every detachable window's geometry / focus /
     // close / save, instead of the same lifecycle re-implemented per window.
 
@@ -80,14 +80,14 @@ impl SdrRemoteApp {
     /// forms fit one signature.
     fn popout_meta(&self, k: PopoutKind) -> (&'static str, String, [f32; 2]) {
         match k {
-            PopoutKind::Rx1 => ("spectrum_popout", "ThetisLink - RX1 / VFO-A".to_string(), [900.0, 600.0]),
-            PopoutKind::Rx2 => ("rx2_popout", "ThetisLink - RX2 / VFO-B".to_string(), [900.0, 600.0]),
-            PopoutKind::Vrx1 => ("vrx1_popout", "ThetisLink - VRX1".to_string(), [460.0, 480.0]),
-            PopoutKind::Vrx2 => ("vrx2_popout", "ThetisLink - VRX2".to_string(), [460.0, 480.0]),
+            PopoutKind::Rx1 => ("spectrum_popout", "ThetisLink: RX1 / VFO-A".to_string(), [900.0, 600.0]),
+            PopoutKind::Rx2 => ("rx2_popout", "ThetisLink: RX2 / VFO-B".to_string(), [900.0, 600.0]),
+            PopoutKind::Vrx1 => ("vrx1_popout", "ThetisLink: VRX1".to_string(), [460.0, 480.0]),
+            PopoutKind::Vrx2 => ("vrx2_popout", "ThetisLink: VRX2".to_string(), [460.0, 480.0]),
             PopoutKind::Yaesu1 => ("yaesu_popout", self.yaesu_window_title(0), [465.0, 335.0]),
             PopoutKind::Yaesu2 => ("yaesu2_popout", self.yaesu_window_title(1), [465.0, 335.0]),
-            PopoutKind::Joined => ("spectrum_popout", "ThetisLink - RX1 + RX2".to_string(), [900.0, 900.0]),
-            PopoutKind::Chat => ("chat_popout", "ThetisLink - Chat".to_string(), [520.0, 620.0]),
+            PopoutKind::Joined => ("spectrum_popout", "ThetisLink: RX1 + RX2".to_string(), [900.0, 900.0]),
+            PopoutKind::Chat => ("chat_popout", "ThetisLink: Chat".to_string(), [520.0, 620.0]),
         }
     }
 
@@ -176,7 +176,7 @@ impl SdrRemoteApp {
             self.vrx1_waterfall_texture = None;
             if self.vrx1_high_res_spectrum {
                 self.vrx1_high_res_spectrum = false;
-                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, false, self.vrx1_high_res_last_span_khz));
+                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, false, self.vrx1_high_res_last_span_hz));
                 self.vrx1_spectrum.clear();
             }
         } else {
@@ -184,7 +184,7 @@ impl SdrRemoteApp {
             self.vrx2_waterfall_texture = None;
             if self.vrx2_high_res_spectrum {
                 self.vrx2_high_res_spectrum = false;
-                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, false, self.vrx2_high_res_last_span_khz));
+                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, false, self.vrx2_high_res_last_span_hz));
                 self.vrx2_spectrum.clear();
             }
         }
@@ -267,7 +267,7 @@ impl SdrRemoteApp {
     }
 
     /// Close side-effects for the RX1 spectrum popout: turns the RX1 spectrum
-    /// fully off (owner choice - closing the window is "stop the spectrum", not
+    /// fully off (by design - closing the window is "stop the spectrum", not
     /// "go inline"; the inline/popout choice is the separate popout toggle).
     fn close_rx1_popout(&mut self) {
         self.spectrum_popout = false;
@@ -334,7 +334,7 @@ impl SdrRemoteApp {
     }
 
     /// Close side-effects for the joined RX1+RX2 popout: window closed = both
-    /// spectra fully off (owner choice: consistent with RX2/VRX, no inline
+    /// spectra fully off (by design: consistent with RX2/VRX, no inline
     /// fallback). `rx2_popout` derives from `rx2_spectrum_enabled` (model B).
     fn close_joined_popout(&mut self) {
         self.spectrum_popout = false;
@@ -542,7 +542,7 @@ impl SdrRemoteApp {
     /// one place for both slots, in this order:
     /// - the USB cable is gone while we key the radio (nothing matters more);
     /// - a CW run of ours keys this radio: red "CW", locked, as the Thetis
-    ///   button has had since step 4 - it stayed grey while the 991A was
+    ///   button already has - it stayed grey while the 991A was
     ///   keyed (field test 2026-09-19);
     /// - the server refused this radio for us a moment ago: "PTT blocked",
     ///   not "TX elsewhere", which is this client's own arbitration;
@@ -606,7 +606,7 @@ impl SdrRemoteApp {
 
     /// While the server is still reading this radio after it connected, say so
     /// at the top of its window: the CAT port is busy and every control
-    /// answers slowly until it is done (owner's wish, 2026-09-19 - in the
+    /// answers slowly until it is done (since 2026-09-19 - in the
     /// radio's own window, not the main screen). Above the scroll area, so it
     /// is seen without scrolling.
     fn yaesu_loading_notice(&self, ui: &mut egui::Ui, slot: usize) {
@@ -642,8 +642,7 @@ impl SdrRemoteApp {
     fn render_yaesu1_popout_body(&mut self, ctx: &egui::Context) {
         // Fixed PTT button at bottom
         // The panel's edge, as `rule` (its own border line is off). The content
-        // above scrolls, so its last line is not always in view (owner,
-        // 2026-10-15).
+        // above scrolls, so its last line is not always in view.
         egui::TopBottomPanel::bottom("yaesu_ptt_panel").show_separator_line(false).show(ctx, |ui| {
             super::helpers::rule(ui);
             ui.horizontal(|ui| {
@@ -764,8 +763,7 @@ impl SdrRemoteApp {
     /// from the inline update-loop block.
     fn render_yaesu2_popout_body(&mut self, ctx: &egui::Context) {
         // The panel's edge, as `rule` (its own border line is off). The content
-        // above scrolls, so its last line is not always in view (owner,
-        // 2026-10-15).
+        // above scrolls, so its last line is not always in view.
         egui::TopBottomPanel::bottom("yaesu2_ptt_panel").show_separator_line(false).show(ctx, |ui| {
             super::helpers::rule(ui);
             ui.horizontal(|ui| {
@@ -923,7 +921,7 @@ impl SdrRemoteApp {
                     b = b.with_position(egui::pos2(p.x / z, p.y / z));
                 } else {
                     log::warn!(
-                        "popout: saved pos ({}, {}) falls outside all connected monitors - opening on primary screen",
+                        "popout: saved pos ({}, {}) falls outside all connected monitors; opening on primary screen",
                         p.x, p.y
                     );
                 }
@@ -1015,6 +1013,7 @@ impl SdrRemoteApp {
             // Per-profile names, so two instances on one PC each report their own.
             log: super::config::per_profile_file("thetislink-client", "log"),
             conf: super::config::config_file_name(),
+            previous_log: None,
         };
         // What the engine has collected from the connected server, if anything.
         let server = {
@@ -1038,7 +1037,7 @@ impl SdrRemoteApp {
             },
             |app| {
                 app.chat_open = false;
-                app.save_full_config();
+                app.save_ptt_config();
             },
         );
     }

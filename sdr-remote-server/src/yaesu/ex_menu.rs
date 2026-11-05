@@ -134,7 +134,7 @@ pub(super) fn restore_991a_usb_routing_snapshot(
 ///   2 DTR (CAT OM 2508-C, Table 3). Other values than the 991A's, so this is
 ///   per model and never per slot.
 ///
-/// Both measured on the owner's station with `yaesu-key-test`: the key is RTS
+/// Both measured on a real station with `yaesu-key-test`: the key is RTS
 /// of the port beside the radio's CAT port - 991A COM12 next to COM13
 /// (2026-09-18), FTX-1 COM27 next to COM25 (2026-09-20, the TX and PTT lamps
 /// following the dots).
@@ -152,8 +152,8 @@ pub(super) fn pc_keying_menu(model: RadioModel) -> (&'static str, &'static str) 
 /// Returns the original to remember - `Some` only once we have written RTS
 /// over something - and whether RTS has to be written now.
 ///
-/// An original is remembered only when RTS is actually written (review 316,
-/// the review). It used to be remembered on the first look, so a radio found on
+/// An original is remembered only when RTS is actually written.
+/// It used to be remembered on the first look, so a radio found on
 /// RTS remembered "2"; set to OFF by hand after that and prepared again (a
 /// USB cable out and in), it got RTS written over the OFF - and at exit
 /// there was nothing to put back.
@@ -233,9 +233,9 @@ mod pc_keying_tests {
         assert_eq!(pc_keying_plan("2", Some("3"), Some("1")), Ok((Some("1".to_string()), true)));
     }
 
-    /// Review 316: every write of RTS must leave something to put back.
+    /// Every write of RTS must leave something to put back.
     /// The path that broke it: the first run found 060 already on RTS (the
-    /// owner's radio after measurement 3) and remembered "2"; the owner set it
+    /// test radio after a bench test) and remembered "2"; the operator set it
     /// to OFF by hand; the next preparation wrote RTS - and at exit there was
     /// nothing to restore, so the radio stayed on RTS.
     #[test]
@@ -250,7 +250,7 @@ mod pc_keying_tests {
                 }
             }
         }
-        // The owner's path, step by step.
+        // That path, step by step.
         let (first, wrote) = pc_keying_plan("2", Some("2"), None).unwrap();
         assert!(!wrote && first.is_none(), "already RTS: nothing written, nothing of ours to remember");
         let (second, wrote) = pc_keying_plan("2", Some("0"), first.as_deref()).unwrap();
@@ -266,8 +266,8 @@ mod pc_keying_tests {
     }
 
     /// Per model, never per slot: the FTX-1 keys on `1` of address 020114,
-    /// the 991A on `2` of menu 060 (CW design, decision 8; measured
-    /// 2026-09-20 on COM27 beside its CAT port).
+    /// the 991A on `2` of menu 060 (measured 2026-09-20 on COM27 beside
+    /// its CAT port).
     #[test]
     fn each_model_has_its_own_pc_keying_menu() {
         assert_eq!(pc_keying_menu(RadioModel::Ft991a), ("060", "2"));

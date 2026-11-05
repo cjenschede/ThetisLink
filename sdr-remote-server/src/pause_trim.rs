@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Catching up the transmit buffer in the pauses of speech
-//! (`PLAN-inlopen-in-pauzes.md`, build 257). Instead of one frame every ~250 ms
+//! (build 257). Instead of one frame every ~250 ms
 //! wherever it falls (`TRIM_EVERY_PULLS`), the playout tick decodes each frame,
 //! and with a backlog lets a quiet one go - a frame within a few dB of the noise
 //! floor of the last seconds. When no quiet frame comes within `MAX_WAIT`, the
@@ -8,12 +8,12 @@
 //!
 //! Measured against the noise floor, not a fixed level: over the radio a pause
 //! is noise, not silence, and a compressor narrows the gap to the speech. On
-//! two recordings of the owner a quiet frame came within 0.5-0.8 s nine times in
-//! ten (owner, 2026-10-19: "Ik persoonlijk stoor me daar erg aan, [aan veel
-//! kleine hapjes], maar dan 1 keer 200ms").
+//! two recordings of one operator a quiet frame came within 0.5-0.8 s nine times in
+//! ten (2026-10-19), and many small cuts are more disturbing to hear than a single
+//! one of 200 ms.
 //!
 //! First a trial in a development build (build 257, trial run 3); in the server
-//! since build 258 (owner 2026-10-19: "1, en B mag ook mee in stap 5").
+//! since build 258.
 
 use std::time::{Duration, Instant};
 
@@ -29,7 +29,7 @@ pub const FLOOR_FRAMES: usize = 150;
 pub const FLOOR_PERCENTILE: f32 = 0.10;
 /// Before half a second of levels there is no floor, and nothing counts as quiet.
 pub const FLOOR_WARMUP_FRAMES: usize = 25;
-/// The longest wait for a quiet frame with a backlog (owner, 2026-10-19: "1 s is goed").
+/// The longest wait for a quiet frame with a backlog (2026-10-19: "1 s is goed").
 pub const MAX_WAIT: Duration = Duration::from_millis(1000);
 /// How often the counts are said.
 pub const LOG_EVERY: Duration = Duration::from_secs(10);
@@ -57,7 +57,7 @@ pub fn backlog(depth_after_pull: usize, target: u32) -> bool {
 }
 
 /// On the transmit path, once per decoded frame: nothing is allocated - the
-/// levels sit in a fixed ring, sorted in a fixed copy (round 257).
+/// levels sit in a fixed ring, sorted in a fixed copy.
 pub struct PauseTrim {
     /// The levels of the last `FLOOR_FRAMES` frames, oldest at `next` once full.
     levels: [f32; FLOOR_FRAMES],
@@ -65,7 +65,7 @@ pub struct PauseTrim {
     next: usize,
     sorted: [f32; FLOOR_FRAMES],
     /// When the last frame was noted: after a silence past the safety's packet
-    /// window the levels are another over's (round 257).
+    /// window the levels are another over's.
     last_noted: Option<Instant>,
     backlog_since: Option<Instant>,
     in_pause: u64,
@@ -106,7 +106,7 @@ impl PauseTrim {
     /// may go (`may_go`: not a second one this tick), and it is quiet or the
     /// wait is over. Each over has its own levels: after a silence past the
     /// safety's packet window - another operator, a new over, a line that went -
-    /// the earlier ones are forgotten (round 257: a soft voice after a noisy
+    /// the earlier ones are forgotten (build 257: a soft voice after a noisy
     /// line counted as quiet for seconds).
     pub fn let_go(&mut self, pcm: &[i16], backlog: bool, may_go: bool, now: Instant) -> bool {
         if self.last_noted.is_some_and(|t| crate::ptt::silence_ended_the_over(Some(now.saturating_duration_since(t)))) {
@@ -268,8 +268,8 @@ mod tests {
     }
 
     /// After a silence past the safety's packet window the levels are another
-    /// over's: a soft voice on a quiet line after a noisy one is not a pause
-    /// (a reviewer's probe, round 257). Within the window they stay. Both ways.
+    /// over's: a soft voice on a quiet line after a noisy one is not a pause.
+    /// Within the window they stay. Both ways.
     #[test]
     fn a_silence_past_the_packet_window_forgets_the_levels() {
         let goes = |silence_ms: u64| {
@@ -288,7 +288,7 @@ mod tests {
     }
 
     /// Every frame counts for the floor, also one that may not go (a second in
-    /// the same tick): 25 of them make the warm-up (round 257).
+    /// the same tick): 25 of them make the warm-up.
     #[test]
     fn a_frame_that_may_not_go_still_counts_for_the_floor() {
         let t0 = Instant::now();

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Phase 2 admin dashboard HTTP API (axum), served on an INTERNAL port behind Caddy.
+//! Admin dashboard HTTP API (axum), served on an INTERNAL port behind Caddy.
 //!
-//! Security baseline (PATCH-relay-admin-dashboard-fase2 section 11):
+//! Security baseline:
 //! - bound to localhost only (Caddy terminates TLS + proxies /admin -> here);
 //! - Argon2id admin login (verify in store); no public "create admin" - bootstrap CLI;
 //! - HttpOnly + Secure + SameSite=Strict session cookie, sliding idle TTL, logout;
-//! - CSRF token per session, required on mutating requests (added in increment 3);
+//! - CSRF token per session, required on mutating requests;
 //! - per-IP login rate-limit; responses that carry secrets are `no-store`;
 //! - no wildcard CORS (same-origin only - the dashboard is served from here).
 
@@ -774,7 +774,7 @@ const ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 <text x="256" y="430" font-family="system-ui,sans-serif" font-size="72" font-weight="700" fill="#fff" text-anchor="middle">TL</text>
 </svg>"##;
 
-/// Full mobile-friendly dashboard (increment 5): login, live stats, station CRUD
+/// Full mobile-friendly dashboard: login, live stats, station CRUD
 /// (create / rename / enable / rotate-secret / delete) and, per station, its device
 /// list with block / rename / delete and traffic/last-seen columns. All
 /// mutations carry the CSRF token; secrets are revealed exactly once in an overlay.

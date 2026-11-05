@@ -32,7 +32,7 @@
     <string name="conn_choose_server">Choose discovered server (%1$d)</string>
     <string name="conn_2fa_code">2FA Code</string>
     <string name="conn_verify">Verify</string>
-    <string name="conn_audio_error">Audio error — reconnecting…</string>
+    <string name="conn_audio_error">Audio error, reconnecting…</string>
 
     <!-- SettingsDialog -->
     <string name="settings_title">Settings</string>
@@ -41,8 +41,8 @@
     <string name="settings_password_required">Password is required to connect</string>
     <string name="settings_connect_via_relay">Connect via relay:</string>
     <string name="settings_relay_hint">For clients that cannot port-forward (e.g. mobile). Restart the app to apply.</string>
-    <string name="settings_relay_saved_stop">Saved - restart the app to stop using the relay</string>
-    <string name="settings_relay_saved_start">Saved - restart the app to connect via relay</string>
+    <string name="settings_relay_saved_stop">Saved: restart the app to stop using the relay</string>
+    <string name="settings_relay_saved_start">Saved: restart the app to connect via relay</string>
     <string name="settings_relay_url">Relay URL</string>
     <string name="settings_station_name">Station name</string>
     <string name="settings_token">Token</string>
@@ -111,6 +111,7 @@
     <!-- StatsPanel -->
     <string name="stats_rx_volume">RX Volume</string>
     <string name="stats_tx_gain">TX Gain</string>
+    <string name="gain_off">off</string>
     <string name="stats_audio_levels">Audio Levels:</string>
     <string name="stats_statistics">Statistics:</string>
     <string name="stats_measure">Measurement</string>
@@ -119,7 +120,7 @@
     <string name="stats_relay_only">Relay only</string>
     <string name="stats_relay_only_hint">No direct path while on; a direct one goes back to the relay at once. Not kept after a restart.</string>
     <string name="stats_force_tcp">Force TCP</string>
-    <string name="stats_force_tcp_hint">Everything over the relay via TCP while on, as on a network without UDP - to measure what that costs. Not kept after a restart.</string>
+    <string name="stats_force_tcp_hint">Everything over the relay via TCP while on, as on a network without UDP, to measure what that costs. Not kept after a restart.</string>
     <string name="stats_relay_only_no_relay">Only when connected through the relay.</string>
     <string name="stats_link_loss">Connection loss</string>
     <string name="stats_down">Down</string>
@@ -178,8 +179,8 @@
     <string name="main_devices">Devices</string>
     <string name="main_native_error">Native library error: %1$s</string>
     <string name="main_key">Key: %1$s</string>
-    <string name="main_yaesu_active_hint">Yaesu active - go to Devices</string>
-    <string name="main_yaesu_hint">Yaesu - go to Devices for controls</string>
+    <string name="main_yaesu_active_hint">Yaesu active: go to Devices</string>
+    <string name="main_yaesu_hint">Yaesu: go to Devices for controls</string>
     <string name="main_spectrum">Spectrum</string>
     <string name="main_about">About</string>
     <string name="main_wizard">Wizard</string>
@@ -257,8 +258,8 @@
     <string name="dev_ex_menu">EX Menu (%1$d)</string>
     <string name="dev_menu_num">Menu %1$d</string>
     <string name="dev_dsp_functions">DSP / functions</string>
-    <string name="dev_port_a">Port A — ANT1 (TX+RX)</string>
-    <string name="dev_port_b">Port B — RX2 (RX)</string>
+    <string name="dev_port_a">Port A: ANT1 (TX+RX)</string>
+    <string name="dev_port_b">Port B: RX2 (RX)</string>
     <string name="dev_digit_tuner_hint">tap digit = tune · long-press = enter</string>
 
     <!-- Chat on the relay (shared design with the desktop window; the wording
@@ -272,18 +273,18 @@
     <string name="chat_reply">reply</string>
     <string name="chat_edit">edit</string>
     <string name="chat_edited">(edited)</string>
-    <string name="chat_editing">editing your message - Send saves the correction</string>
+    <string name="chat_editing">editing your message: Send saves the correction</string>
     <string name="chat_replying_to">answering %1$s</string>
     <string name="chat_input_hint">Your message</string>
     <string name="chat_as_name">You are here as %1$s</string>
     <string name="chat_leave">Remove me</string>
     <string name="chat_leave_title">Remove yourself from the chat?</string>
-    <string name="chat_leave_explain">This takes your name off everything you wrote. You do not need it to finish for the day - just leave the tab, you stay in the chat. Your messages can stay without your name so other people\'s conversations remain readable, or go with you if your call sign is in the text itself.</string>
+    <string name="chat_leave_explain">This takes your name off everything you wrote. You do not need it to finish for the day: just leave the tab, you stay in the chat. Your messages can stay without your name so other people\'s conversations remain readable, or go with you if your call sign is in the text itself.</string>
     <string name="chat_leave_keep">Remove me, keep messages</string>
     <string name="chat_leave_delete">Remove me and delete</string>
     <string name="chat_report_needs_relay">Reporting a problem travels over the relay too, so it needs one as well.</string>
-    <string name="chat_offline_what_a_relay_is">A relay is worth knowing about on its own. Reaching your station over the internet normally means letting a connection in from outside: a port forwarded on the router, and an address that does not change.\n\nThrough a relay, both sides make an outgoing connection instead - to a meeting point that pairs them. So your network at home stops being critical: usually nothing on the router has to change, and it works behind CGNAT or on mobile data.</string>
-    <string name="chat_offline_get_access">You can run a relay yourself - the source ships with every release. PA3GHM also runs one, with this chat room and the Report a problem button, that you can be added to on request: an experimental setup with a limited number of places, run as a hobby, with no guarantee of availability or continuity. Whoever runs a relay may decline a request or stop the service, and a no needs no explanation. Email PA3GHM@gmail.com with your callsign and a short note about your setup.</string>
+    <string name="chat_offline_what_a_relay_is">A relay is worth knowing about on its own. Reaching your station over the internet normally means letting a connection in from outside: a port forwarded on the router, and an address that does not change.\n\nThrough a relay, both sides make an outgoing connection instead; to a meeting point that pairs them. So your network at home stops being critical: usually nothing on the router has to change, and it works behind CGNAT or on mobile data.</string>
+    <string name="chat_offline_get_access">You can run a relay yourself: the source ships with every release. PA3GHM also runs one, with this chat room and the Report a problem button, that you can be added to on request: an experimental setup with a limited number of places, run as a hobby, with no guarantee of availability or continuity. Whoever runs a relay may decline a request or stop the service, and a no needs no explanation. Email PA3GHM@gmail.com with your callsign and a short note about your setup.</string>
     <string name="chat_offline_no_relay">No relay is set up, so there is no chat. The chat runs beside the relay you connect through.</string>
     <string name="chat_offline_no_ticket">This relay offers no chat.</string>
     <string name="chat_offline_unreachable">The chat is not answering. Audio, PTT and the radio are unaffected.</string>
@@ -301,7 +302,7 @@
     <string name="chat_consent_ban">The administrator can remove a station from the chat if it becomes unworkable. You are told when that happens, what you wrote stays, and it also closes problem reporting. Leaving the chat does not undo a removal.</string>
     <string name="chat_consent_access">Everyone connected to this relay can read what you write here.</string>
     <string name="chat_consent_age">I am sixteen or older, or a parent agrees.</string>
-    <string name="chat_consent_agree">I agree - join</string>
+    <string name="chat_consent_agree">I agree, join</string>
     <string name="chat_report_button">Report a problem</string>
     <string name="chat_report_title">Report a problem</string>
     <string name="chat_report_explain">What were you doing, what did you expect, and what happened instead? Your description is the report.</string>
@@ -325,7 +326,7 @@
     <string name="settings_ble_ptt_no_permission">Bluetooth permission refused</string>
     <string name="settings_ble_ptt_connected">Connected: %1$s</string>
     <string name="settings_ble_ptt_connecting">Connecting…</string>
-    <string name="settings_ble_ptt_waiting">Out of range — reconnects by itself</string>
+    <string name="settings_ble_ptt_waiting">Out of range, reconnects by itself</string>
     <string name="settings_ble_ptt_reconnect">Connect again</string>
     <string name="settings_ble_ptt_forget">Forget this button</string>
     <string name="settings_ui_scale">Display size:</string>
@@ -333,6 +334,6 @@
     <string name="settings_ui_scale_landscape_off">At this size the app stays upright. A smaller size lets it turn.</string>
     <!-- Shown when the server is not running this app's build. It only tells;
          nothing on this screen refuses to work over it. -->
-    <string name="stats_build_mismatch">The server runs %1$s and this app is %2$s - they should be the same build.</string>
+    <string name="stats_build_mismatch">The server runs %1$s and this app is %2$s: they should be the same build.</string>
     <string name="stats_build_too_old">a build too old to say which</string>
 </resources>

@@ -20,22 +20,25 @@ impl SdrRemoteApp {
                         && !l.starts_with("yaesu2_popout=")
                         && !l.starts_with("yaesu_mic_gain=") && !l.starts_with("yaesu2_mic_gain=")
                         && !l.starts_with("yaesu_compressor=") && !l.starts_with("yaesu2_compressor=")
+                        && !l.starts_with("yaesu_comp_") && !l.starts_with("yaesu2_comp_")
                         && !l.starts_with("yaesu_tx_agc=") && !l.starts_with("yaesu2_tx_agc=")
                         && !l.starts_with("multi_tx=")
                         && !l.starts_with("ble_ptt_"))
                     .collect::<Vec<_>>().join("\n");
                 content.push_str(&format!(
-                    "\nchat_open={}\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\nmulti_tx={}\nble_ptt_enabled={}\nble_ptt_address={}\nble_ptt_name={}\nble_ptt_target={}\nble_ptt_toggle={}\n",
+                    "\nchat_open={}\nptt_toggle={}\nyaesu_ptt_toggle={}\nmidi_ptt_toggle={}\nyaesu2_enabled={}\nyaesu2_ptt_toggle={}\nyaesu2_popout={}\nyaesu_mic_gain={:.3}\nyaesu2_mic_gain={:.3}\nyaesu_compressor={}\nyaesu2_compressor={}\nyaesu_comp_attack={:.3}\nyaesu_comp_release={:.1}\nyaesu2_comp_attack={:.3}\nyaesu2_comp_release={:.1}\nyaesu_tx_agc={}\nyaesu2_tx_agc={}\nmulti_tx={}\nble_ptt_enabled={}\nble_ptt_address={}\nble_ptt_name={}\nble_ptt_target={}\nble_ptt_toggle={}\n",
                     self.chat_open,
                     self.ptt_toggle_mode, self.yaesu_ptt_toggle_mode, self.midi_ptt_toggle_mode,
                     self.yaesu2_enabled, self.yaesu2_ptt_toggle_mode,
                     self.yaesu2_popout, self.yaesu_mic_gain, self.yaesu2_mic_gain,
-                    self.yaesu_compressor, self.yaesu2_compressor, self.yaesu_tx_agc, self.yaesu2_tx_agc,
+                    self.yaesu_compressor, self.yaesu2_compressor,
+                    self.yaesu_comp_attack_ms, self.yaesu_comp_release_ms, self.yaesu2_comp_attack_ms, self.yaesu2_comp_release_ms,
+                    self.yaesu_tx_agc, self.yaesu2_tx_agc,
                     self.multi_tx,
                     self.ble_enabled,
                     if self.ble_address == 0 { String::new() } else { crate::ble::format_addr(self.ble_address) },
                     self.ble_name, self.ble_target, self.ble_toggle));
-                let _ = std::fs::write(path, content);
+                let _ = std::fs::write(path, super::config::grouped(&content));
             }
         }
     }
@@ -147,6 +150,7 @@ impl SdrRemoteApp {
             self.rx2_spectrum_range_db,
             self.rx2_auto_ref_enabled,
             self.rx2_waterfall_contrast,
+            self.spectrum_fill_percent,
             self.rx1_enabled,
             self.rx2_enabled,
             self.rx2_spectrum_enabled,
@@ -208,8 +212,7 @@ impl SdrRemoteApp {
         let (flo, fhi) = if (flo, fhi) == (0, 0) || sdr_remote_logic::filter_width::edges_fit_mode(mode, flo, fhi) {
             (flo, fhi)
         } else {
-            // Named in advance (`logregels-build243.md`).
-            log::info!("Band memory {}: filter {} .. {} Hz does not fit mode {} - not kept", bl, flo, fhi, mode);
+            log::info!("Band memory {}: filter {} .. {} Hz does not fit mode {}: not kept", bl, flo, fhi, mode);
             (0, 0)
         };
         self.band_mem.insert(bl.to_string(), BandMemory {
@@ -249,12 +252,11 @@ impl SdrRemoteApp {
             // every return to the band. Otherwise Thetis keeps its own filter for
             // the mode.
             // The mode Thetis keeps: the remembered one, unless its change was
-            // skipped above while transmitting (build 244, review of 243).
+            // skipped above while transmitting.
             let kept_mode = if mem.mode != cur_mode && block_mode { cur_mode } else { mem.mode };
             let fits = sdr_remote_logic::filter_width::edges_fit_mode(kept_mode, mem.filter_low_hz, mem.filter_high_hz);
             if (mem.filter_low_hz != 0 || mem.filter_high_hz != 0) && !fits {
-                // Named in advance (`logregels-build243.md`).
-                log::info!("Band memory {}: filter {} .. {} Hz does not fit mode {} - not restored",
+                log::info!("Band memory {}: filter {} .. {} Hz does not fit mode {}: not restored",
                     label, mem.filter_low_hz, mem.filter_high_hz, kept_mode);
             }
             if fits {
@@ -268,7 +270,7 @@ impl SdrRemoteApp {
                     Vfo::A => { self.filter_low_hz = mem.filter_low_hz; self.filter_high_hz = mem.filter_high_hz; self.filter_changed_at = Some(Instant::now()); }
                     // RX2 gets the same hold as RX1: without it the next server
                     // state overwrites the restored filter before Thetis has
-                    // echoed it back (review finding, 2026-09-16).
+                    // echoed it back.
                     Vfo::B => { self.rx2_filter_low_hz = mem.filter_low_hz; self.rx2_filter_high_hz = mem.filter_high_hz; self.rx2_filter_changed_at = Some(Instant::now()); }
                 }
             }

@@ -30,8 +30,8 @@ use sdr_remote_core::protocol::{ControlId, ControlPacket, PacketType, SESSION_SC
 ///
 /// This sits in the send path of **every** outgoing packet, so it has to be
 /// cheap on the packets it is not interested in. The first version simply called
-/// [`ControlPacket::deserialize`] and ignored the error; a review measured what
-/// that costs on the way out: the error path formats a message into an
+/// [`ControlPacket::deserialize`] and ignored the error; measured, that costs on
+/// the way out: the error path formats a message into an
 /// `anyhow::Error`, so every heartbeat and every transmitted audio packet paid a
 /// heap allocation to be told something this code already knew. In a project
 /// whose first priority is latency, on the path that carries transmitted audio,
@@ -52,9 +52,9 @@ pub fn record_if_control(intent: &mut SessionIntent, buf: &[u8]) {
 /// The line the field log is read for after a reconnect.
 ///
 /// Kept as a function so its wording is testable: a log line that only exists
-/// inside a loop no assertion can open is the one thing working rule 11 wants
+/// inside a loop no assertion can open is exactly what needs to be
 /// pinned down, and "I will check it by eye in the console" is how the wording
-/// drifts away from what the patch brief promised.
+/// drifts away from the line that was planned.
 ///
 /// `sent` is the number that actually left the socket, not the number that was
 /// queued. Those differ exactly when it matters - a network switch is the moment
@@ -131,6 +131,36 @@ impl SessionIntent {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// What the engine held back from a server that does not take it (the fine
+/// spectrum view): the last value per control, sent once a server says it
+/// does.
+///
+/// Not cleared when a session ends. A pan made while connected to an older
+/// server is the operator's latest wish, and the next server that takes the
+/// fine pan has to get that one - not the one the replay remembers from the
+/// last newer server. It can be older than the engine's own variable: a pan
+/// made while the link is down goes nowhere and is not held, so the restore
+/// sends what is held before the hand-written sends that read the variables.
+#[derive(Debug, Default)]
+pub struct HeldBack {
+    values: Vec<(ControlId, u16)>,
+}
+
+impl HeldBack {
+    /// Keep `value` for `id`, in place of an earlier one.
+    pub fn hold(&mut self, id: ControlId, value: u16) {
+        match self.values.iter_mut().find(|(held, _)| *held == id) {
+            Some(slot) => slot.1 = value,
+            None => self.values.push((id, value)),
+        }
+    }
+
+    /// Everything held, in the order it was first held, and nothing left.
+    pub fn take(&mut self) -> Vec<(ControlId, u16)> {
+        std::mem::take(&mut self.values)
     }
 }
 
@@ -257,8 +287,8 @@ mod tests {
     ///
     /// Why this shape: the restore branch sits inside a loop that no assertion
     /// can open, so nothing can call it from a test. Reverting the two engine
-    /// hunks would leave every other test in this file green - a reviewer
-    /// pointed that out, and he was right. This is the cheapest thing that
+    /// hunks would leave every other test in this file green.
+    /// This is the cheapest thing that
     /// notices, and it fails with a sentence saying what went missing.
     #[test]
     fn the_engine_still_records_what_it_sends_and_replays_it() {
@@ -277,7 +307,7 @@ mod tests {
         assert!(
             src.contains("restore_summary(&replay"),
             "the restore no longer logs its named line, so a field log cannot \
-             show whether this works (working rule 11)"
+             show whether this works"
         );
         for flag in [
             "yaesu_logged_first = false",
@@ -323,5 +353,16 @@ mod tests {
                 "{id:?} did not come back as recorded"
             );
         }
+    }
+
+    /// The last value per control, once; taking empties it (build 77).
+    #[test]
+    fn held_back_keeps_the_last_value_per_control() {
+        let mut held = HeldBack::default();
+        held.hold(ControlId::SpectrumPanFine, 1);
+        held.hold(ControlId::VrxSpectrumSpanFine, 15);
+        held.hold(ControlId::SpectrumPanFine, 2);
+        assert_eq!(held.take(), vec![(ControlId::SpectrumPanFine, 2), (ControlId::VrxSpectrumSpanFine, 15)]);
+        assert!(held.take().is_empty(), "sent once");
     }
 }

@@ -57,9 +57,8 @@ fn is_process_running(name: &str) -> bool {
 
 /// Every Thetis.exe process id on this PC, lowest first. Empty when Thetis
 /// runs elsewhere (TCI over the network) or not at all. A Thetis run is a
-/// process (build 226, review of 224): a TCI connection that comes back to the
-/// same process is not a new run - and only one process says which that is
-/// (build 227, review of 226).
+/// process: a TCI connection that comes back to the
+/// same process is not a new run - and only one process says which that is.
 pub fn thetis_process_ids() -> Vec<u32> {
     let mut ids = process_ids("Thetis.exe");
     ids.sort_unstable();
@@ -189,16 +188,16 @@ enum SafetyAction {
     ReleaseNoPackets,
 }
 
-/// Named fields since build 229 (review of 228): two clocks and two windows of
+/// Named fields since build 229: two clocks and two windows of
 /// the same type in a row. Equal windows today, so a swap only turned the
 /// reason in the log round - but this is the rule that keeps a PTT from
-/// hanging (`PTT-NOOIT-HANGEN.md`).
+/// hanging.
 ///
 /// Decide, from two clocks, whether the transmitter must be unkeyed.
 ///
 /// Free and testable because everything around it talks to a radio. The two tests
 /// this file first had asserted a relation and a lower bound between the constants,
-/// and a review showed both survive setting each constant to a full minute - so they
+/// and both survive setting each constant to a full minute - so they
 /// guarded nothing that this layer exists for. This is what can actually be asserted:
 /// what the layer DOES, per tick, for every shape the clocks can take.
 ///
@@ -239,7 +238,7 @@ impl SafetyClocks {
 /// Past the packet window of the safety, with the same comparison: where the
 /// safety lets the transmitter go, the audio waiting in the buffer from before
 /// the silence is no longer this over's - played first, with PTT, it keyed
-/// Thetis with speech seconds old (round 247). Never a packet: nothing of it
+/// Thetis with speech seconds old. Never a packet: nothing of it
 /// is buffered.
 pub fn silence_ended_the_over(since_packet: Option<Duration>) -> bool {
     since_packet.is_some_and(|d| d > Duration::from_millis(PTT_PACKET_TIMEOUT_MS))
@@ -267,7 +266,7 @@ pub enum PttState {
 /// What the `tx_blocked` gate means, for the three places that log it. Two
 /// things shut it: an RX-only Amplitec position, and the server's safety task
 /// stopping (`network.rs` `safety_task_lost`) - the log used to name only the
-/// first (review build 57).
+/// first.
 const TX_BLOCKED_WHY: &str =
     "transmitting is blocked (an RX-only Amplitec position, or the safety task stopped)";
 
@@ -297,7 +296,7 @@ pub struct PttController {
     /// `shutdown_ex;` is a request over TCI and closing takes seconds. Without
     /// this, a power-on arriving in that window sees a process on its way out,
     /// calls it "already running", and waits for a connection that cannot come
-    /// (PD0PLK, report 67, 2026-09-01).
+    /// (seen in the field, 2026-09-01).
     thetis_shutdown_time: Option<Instant>,
     /// A power-on waiting for a closing Thetis to actually disappear.
     thetis_relaunch_when_gone: bool,
@@ -327,7 +326,7 @@ pub struct PttController {
 
 /// The time from "TRX off" to the first block of RX audio from Thetis that is not
 /// silence - the part of the turnaround that sits after our tail, measured on one
-/// clock (`PLAN-meting-buffers-en-omschakeltijd.md`, 2026-10-04). Shared with the
+/// clock (2026-10-04). Shared with the
 /// RX audio loop as one atomic: no lock on the audio path, and one load per frame
 /// when nothing is waited for.
 #[derive(Clone, Debug, Default)]
@@ -368,7 +367,7 @@ impl RxBackWatch {
     }
 
     /// No client hears Thetis any more: a wait running now would measure the
-    /// gap until one returns, not the turnaround (round 99: a 1.4 s network
+    /// gap until one returns, not the turnaround (a 1.4 s network
     /// switch would have logged as "RX audio back 1400 ms"). Called by the RX
     /// loop when it finds no client.
     pub fn cancel(&self) {
@@ -383,7 +382,7 @@ impl RxBackWatch {
 
     /// `rx_block` at a given time on `turnaround_clock()` - the clock as an
     /// argument, so a test can stand a wait in the past. Returns the turnaround
-    /// it reported, so a test can tell "reported" from "cancelled" (round 99).
+    /// it reported, so a test can tell "reported" from "cancelled".
     pub(crate) fn rx_block_at(&self, now_ms: u64, block: &[f32], backlog_samples: usize) -> Option<u64> {
         let off_at = self.off_at.load(Ordering::Relaxed);
         if off_at == 0 {
@@ -402,7 +401,6 @@ impl RxBackWatch {
             return None;
         }
         let ms = now_ms.saturating_sub(off_at);
-        // Named in the plan before it was built (working rule 11).
         dev_info!("{}PTT metrics: RX audio back {} ms after TRX off (peak {:.4}, backlog {} ms)", self.prefix, ms, peak, backlog_samples / 48);
         Some(ms)
     }
@@ -470,7 +468,7 @@ impl PttController {
 
     /// What the heartbeat tells the clients about Thetis, by name (build 217):
     /// four booleans in a tuple went by position, and two of them swapped
-    /// stayed green (review of 216).
+    /// stayed green.
     pub fn thetis_status(&self) -> ThetisStatus {
         ThetisStatus {
             tci_connected: self.tci_connected(),
@@ -562,7 +560,7 @@ impl PttController {
     /// and lost its first elements in the rise (field test of build 96,
     /// 2026-09-18 00:05). With the TCI PTT active Thetis leaves MOX alone.
     ///
-    /// What it does to the microphone's state, on purpose (review 313 asked):
+    /// What it does to the microphone's state, on purpose:
     /// a microphone tail release that was pending is cancelled - the CW run
     /// holds the transmitter now, and the run hands it back; a microphone
     /// prefill that was pending is dropped - MOX goes up here at once, so the
@@ -570,8 +568,7 @@ impl PttController {
     /// prefill of its own. `tail_delay_ms` is left alone: the next microphone
     /// release computes its own. Pinned by `activate_for_cw_takes_over_the_microphones_pending_state`.
     /// A microphone that keys during the run rides on the run's MOX, and the
-    /// run's idle release drops it: that is fault 4 of the step-4 brief (§3d),
-    /// left so on purpose (the owner, 2026-09-18).
+    /// run's idle release drops it: a known limitation, left so on purpose.
     pub async fn activate_for_cw(&mut self) -> bool {
         if self.tx_blocked.load(Ordering::Relaxed) {
             return false;
@@ -609,8 +606,7 @@ impl PttController {
 
     /// Start the tail. Returns whether it started one - false while a tail is
     /// already running (every non-PTT frame in the tail calls this) or when not
-    /// transmitting - so the caller sets one timer per tail, not one per frame
-    /// (round 103).
+    /// transmitting - so the caller sets one timer per tail, not one per frame.
     pub fn release_from_playout(&mut self, jitter_depth: usize) -> bool {
         if self.state == PttState::Tx && self.pending_release.is_none() {
             let now = Instant::now();
@@ -645,8 +641,8 @@ impl PttController {
 
     /// Whether the pending tail is over at `now` - and only while transmitting: a
     /// tail left behind by another release must never send TRX off to a Thetis
-    /// that transmits for another reason (front panel, another TCI client; round
-    /// 103). One condition, for the timer and the tick alike.
+    /// that transmits for another reason (front panel, another TCI client).
+    /// One condition, for the timer and the tick alike.
     fn tail_due(&self, now: Instant) -> bool {
         self.state == PttState::Tx
             && self.pending_release
@@ -697,7 +693,7 @@ impl PttController {
         }
 
         // The net under the tail timer (build 103): normally the timer has ended
-        // the tail already. One place ends a tail (round 103).
+        // the tail already. One place ends a tail.
         self.finish_tail_if_due().await;
 
         // Poll radio backend
@@ -716,8 +712,8 @@ impl PttController {
             // with "launching it now as asked" while nobody had asked. The
             // timeout that would have cleared it begins with pending_power_on,
             // which this line has just made false, so it could never run
-            // again (found in review of report 67 - the second pass of the very
-            // fault this code was written for).
+            // again (the second pass of the very fault this code was written
+            // for).
             self.thetis_relaunch_when_gone = false;
             self.thetis_shutdown_time = None;
         }
@@ -747,7 +743,7 @@ impl PttController {
                     // sent the reporter of #67 looking at the wrong thing.
                     if self.thetis_relaunch_when_gone {
                         warn!(
-                            "Thetis was asked to close {}s ago and is still running - giving up on the power-on",
+                            "Thetis was asked to close {}s ago and is still running: giving up on the power-on",
                             THETIS_LAUNCH_TIMEOUT_S
                         );
                     } else {
@@ -773,7 +769,7 @@ impl PttController {
             ) {
                 if waited > THETIS_LAUNCH_TIMEOUT_S {
                     warn!(
-                        "Thetis was asked to close {}s ago and is still running - no longer treating it as closing",
+                        "Thetis was asked to close {}s ago and is still running: no longer treating it as closing",
                         waited
                     );
                 }
@@ -859,7 +855,7 @@ impl PttController {
         info!("PTT: {:?} -> {:?} (TCI: {})", old, new_state, cmd);
         self.tci.send(cmd).await;
         // After the command has gone, so the turnaround starts at "TRX off sent"
-        // and not at the server's decision (round 99).
+        // and not at the server's decision.
         if is_tx {
             self.rx_back.trx_on();
         } else if old == PttState::Tx {
@@ -872,7 +868,6 @@ impl PttController {
     }
 
     /// Public accessor for HeartbeatAck `TCI_CONNECTED` flag.
-    /// (PATCH-1 client-connect-error-feedback)
     pub fn tci_connected(&self) -> bool {
         self.tci.is_connected()
     }
@@ -883,7 +878,7 @@ impl PttController {
     }
 
     /// What the RX-only loop reads of the transmitter, by name (build 226,
-    /// review of 224: by position, two of the three swapped made the stop of a
+    /// by position, two of the three swapped made the stop of a
     /// TX Thetis was making silently never come).
     pub fn tx_now(&self) -> TxNow {
         TxNow {
@@ -893,9 +888,8 @@ impl PttController {
         }
     }
 
-    /// What the RX-only loop reads of the TCI link, by name (build 226, review
-    /// of 224: by position, "unguarded" never came for a Thetis older than
-    /// v2.10.3.14).
+    /// What the RX-only loop reads of the TCI link, by name (build 226; by
+    /// position, "unguarded" never came for a Thetis older than v2.10.3.14).
     pub fn tci_link_now(&self) -> TciLinkNow {
         TciLinkNow {
             up: self.tci_connected(),
@@ -1098,7 +1092,7 @@ impl PttController {
         self.tci.filter_high_hz
     }
 
-    // TX modulation filter (PATCH-tx-modulation-bandwidth)
+    // TX modulation filter
     pub fn tx_filter_low_hz(&self) -> i32 {
         self.tci.tx_filter_low_hz
     }
@@ -1137,7 +1131,7 @@ impl PttController {
     }
 
     pub async fn set_power(&mut self, on: bool) {
-        info!("set_power({}) called - connected={}, thetis_path={:?}", on, self.is_connected(), self.thetis_path.is_some());
+        info!("set_power({}) called: connected={}, thetis_path={:?}", on, self.is_connected(), self.thetis_path.is_some());
         if !on {
             self.pending_power_on = false;
             self.thetis_launch_time = None;
@@ -1453,9 +1447,9 @@ impl PttController {
 
     pub async fn set_vfo_sync_thetis(&mut self, on: bool) {
         // Stock .14/.15 supports vfo_sync_ex without advertising the cap (cap-check is
-        // a TL-26 legacy). Use the optimistic _ex setter directly - operator choice 1a:
-        // "Plus align the vfo_sync_ex _ex path". Compat statement (alpha-4 ≥ Thetis
-        // v2.10.3.14) makes the old run_cat(ZZSY) fallback unnecessary.
+        // a TL-26 legacy). Use the optimistic _ex setter directly, like the other
+        // _ex paths. The minimum Thetis version (v2.10.3.14) makes the old
+        // run_cat(ZZSY) fallback unnecessary.
         self.tci.set_vfo_sync(on).await;
     }
 
@@ -1708,7 +1702,7 @@ impl PttController {
 
     /// DDC sample rate per receiver in Hz. In stock mode both RX1 and RX2 have the same
     /// value (TCI exposes one global `iq_samplerate`); per-RX divergence comes
-    /// back via TL2-x fork extensions (Phase 3).
+    /// back via TL2-x fork extensions.
     pub fn ddc_sample_rate(&self, rx: usize) -> u32 {
         if rx == 0 { self.tci.ddc_sample_rate_rx1 } else { self.tci.ddc_sample_rate_rx2 }
     }
@@ -1788,11 +1782,11 @@ mod tests {
         assert_eq!(w.rx_block_at(t + 100, &quiet, 0), None, "silence does not end the wait");
         assert_eq!(w.rx_block_at(t + 180, &sound, 960), Some(180), "the first sound reports");
         assert_eq!(w.rx_block_at(t + 200, &sound, 0), None, "and only once");
-        // Second pass without a restart (working rule 9): off, then TX again before
+        // Second pass without a restart: off, then TX again before
         // any sound - cancelled, never reported.
         w.trx_off();
         assert_ne!(w.off_at.load(Ordering::Relaxed), 0, "trx_off arms the wait");
-        w.off_at.store(t, Ordering::Relaxed); // on the made-up clock from here (round 100: B4)
+        w.off_at.store(t, Ordering::Relaxed); // on the made-up clock from here
         w.trx_on();
         assert_eq!(w.rx_block_at(t + 300, &sound, 0), None, "a TX in between cancels the wait");
         // The RX loop found no client: the same.
@@ -1812,12 +1806,12 @@ mod tests {
 
     /// What no unit test can drive: the RX loop feeds the watch and cancels it
     /// without clients, `set_state` arms it only on Tx -> Rx and after the command
-    /// has gone, and the named log line exists (round 99: B5, B7, B8 stayed green).
+    /// has gone, and the named log line exists.
     #[test]
     fn the_turnaround_watch_is_wired_where_it_must_be() {
         let ptt = include_str!("ptt.rs");
         let ptt = &sdr_remote_core::source_text::production_code(ptt);
-        // Per trimmed line, so a commented-out call does not count (round 100: D10),
+        // Per trimmed line, so a commented-out call does not count,
         // and within the Thetis RX loop, not the first such branch in the file.
         let lp = include_str!("audio_loops.rs");
         let lp = &lp[lp.find("pub async fn tci_multichannel_audio_loop(").unwrap()..];
@@ -1857,7 +1851,7 @@ mod tests {
         assert!(p.state == PttState::Rx && p.pending_release.is_none(), "due: back to RX");
         p.finish_tail_if_due().await;
         assert!(p.state == PttState::Rx, "twice: harmless");
-        // Not transmitting: a tail left behind ends nothing (round 103, M6).
+        // Not transmitting: a tail left behind ends nothing.
         p.pending_release = Some(Instant::now() - Duration::from_millis(500));
         assert!(!p.tail_due(Instant::now()), "Rx: never due");
         // One tail per release: a second call while one runs starts nothing.
@@ -1866,10 +1860,10 @@ mod tests {
         assert!(p.release_from_playout(2));
         assert!(!p.release_from_playout(3), "a tail is running: no second one");
         assert_eq!(p.tail_delay(), Duration::from_millis(50), "and its length unchanged");
-        // Keyed again during the tail: the tail goes (round 103, M5 - the microphone half).
+        // Keyed again during the tail: the tail goes (the microphone half).
         p.activate_from_playout();
         assert!(p.pending_release.is_none() && p.state == PttState::Tx, "re-keyed: still transmitting, no tail");
-        // The floor: depth 0 is 25 ms, not 10 (round 103, J7).
+        // The floor: depth 0 is 25 ms, not 10.
         let mut p = PttController::new_tci(None, None);
         p.state = PttState::Tx;
         p.release_from_playout(0);
@@ -1886,7 +1880,7 @@ mod tests {
         let at = lines.iter().position(|l| *l == "let started = ptt.release_from_playout(depth);").unwrap();
         let after = &lines[at..(at + 25).min(lines.len())];
         assert!(after.contains(&"let tail = ptt.tail_delay();"), "{after:?}");
-        assert!(after.contains(&"tokio::time::sleep(tail).await;"), "it waits (round 103, J5): {after:?}");
+        assert!(after.contains(&"tokio::time::sleep(tail).await;"), "it waits: {after:?}");
         assert!(after.contains(&"ptt.lock().await.finish_tail_if_due().await;"), "{after:?}");
     }
 
@@ -1929,7 +1923,7 @@ mod tests {
         );
     }
 
-    /// `activate_for_cw` had no test at all (review 313). What it does: the
+    /// `activate_for_cw` had no test at all. What it does: the
     /// Amplitec gate refuses and changes nothing; otherwise MOX goes up now, a
     /// pending microphone prefill is dropped (MOX is up already, the
     /// microphone needs none), a pending tail release is cancelled (the run
@@ -1959,7 +1953,7 @@ mod tests {
     }
 
     /// The order of the deadlines when a link dies, which the safety of a
-    /// transmitter rests on and which until review 314 stood only in prose:
+    /// transmitter rests on and which once stood only in prose:
     /// MOX drops first (heartbeat, 2 s), and only then is the transmitter
     /// given away (the holder's session time-out) or the CW key lifted by the
     /// playout's own watchdog. The packet watchdog may never outlast the
@@ -1977,24 +1971,24 @@ mod tests {
     /// The ceiling. This is the property the whole layer exists for.
     ///
     /// The first version of these tests asserted that the packet guard does not
-    /// outlive the heartbeat guard, and that both leave room for jitter. A review
-    /// showed that setting BOTH constants to a full minute passes all of it: a
+    /// outlive the heartbeat guard, and that both leave room for jitter. But
+    /// setting BOTH constants to a full minute passes all of it: a
     /// relation and a lower bound say nothing about how long a transmitter may run
     /// on. Mutating one constant was not the proof; mutating both together was.
     ///
-    /// Two seconds is the owner's decision, in his words "de ptt of na 2 sec is echt
-    /// snel genoeg", and that decision is what this number is anchored to. Raising it
+    /// Two seconds is a deliberate choice - a PTT that drops after 2 s is fast enough -
+    /// and that choice is what this number is anchored to. Raising it
     /// is allowed - by changing this line, deliberately, with a reason.
     #[test]
-    fn a_transmitter_is_never_left_keyed_longer_than_the_owner_allowed() {
-        const OWNER_CEILING_MS: u64 = 2000;
+    fn a_transmitter_is_never_left_keyed_longer_than_the_ceiling_allows() {
+        const CEILING_MS: u64 = 2000;
         assert!(
-            HEARTBEAT_TIMEOUT_MS <= OWNER_CEILING_MS,
-            "a transmitter may not run on longer than the owner decided"
+            HEARTBEAT_TIMEOUT_MS <= CEILING_MS,
+            "a transmitter may not run on longer than the chosen ceiling"
         );
         assert!(
-            PTT_PACKET_TIMEOUT_MS <= OWNER_CEILING_MS,
-            "a transmitter may not run on longer than the owner decided"
+            PTT_PACKET_TIMEOUT_MS <= CEILING_MS,
+            "a transmitter may not run on longer than the chosen ceiling"
         );
     }
 
@@ -2214,8 +2208,8 @@ impl StockRxOnly {
 /// How often `ZZTI1` is said again on an RX-only position (build 221).
 pub const STOCK_RX_ONLY_REASSERT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// What the stock "Receive only" step decides on. Named fields (build 223,
-/// review of 222): four booleans in a row went by position, and two of them
+/// What the stock "Receive only" step decides on. Named fields (build 223):
+/// four booleans in a row went by position, and two of them
 /// swapped brought back the `ZZTI0` of 221 with every test green.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StockRxOnlyInput {
@@ -2262,7 +2256,7 @@ pub enum RxOnlyTxOff {
 }
 
 /// What the RX-only loop's TX stop decides on (build 220). Named fields since
-/// build 223 (review of 222, the same class as the stock step): with the
+/// build 223 (the same class as the stock step): with the
 /// position and our TX swapped, a TX on an RX-only position was silently never
 /// stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2315,7 +2309,7 @@ pub struct TciLinkNow {
 
 /// What decides whether an RX-only Amplitec position is guarded by Thetis
 /// itself (builds 215-216). Named fields: three booleans in a row went by
-/// position, and two of them swapped made the warning never come (review of 215).
+/// position, and two of them swapped made the warning never come.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RxOnlyGuard {
     /// The active Amplitec position is marked receive-only.
@@ -2335,7 +2329,7 @@ impl RxOnlyGuard {
     /// than v2.10.3.14; since build 221 a newer stock gets CAT `ZZTI1`). Then
     /// the server can stop only a TCI PTT and a TUNE, not a footswitch or the
     /// MOX button in Thetis. With TCI down there is nothing to say about Thetis
-    /// at all - a choice of the owner (2026-10-16): the screens already say
+    /// at all - by design (2026-10-16): the screens already say
     /// Thetis is not reachable.
     pub fn unguarded(self) -> bool {
         self.position_rx_only && self.tci_connected && !self.has_rx_only_ex && !self.answers_run_cat_ex
@@ -2359,7 +2353,7 @@ mod rx_only_unguarded_tests {
         assert!(!u(false, true, false, false), "not an RX-only position");
         assert!(!u(true, false, false, false), "TCI down: nothing to say about Thetis");
         // One place computes it (the RX-only loop) and stores it; the heartbeat
-        // reads it by name (review of 216).
+        // reads it by name.
         let net = include_str!("network.rs");
         assert_eq!(net.matches("crate::ptt::RxOnlyGuard {").count(), 1, "the RX-only loop only");
         assert_eq!(net.matches("rx_only_unguarded_gate.store(unguarded_now, Ordering::Relaxed);").count(), 1);
@@ -2368,13 +2362,13 @@ mod rx_only_unguarded_tests {
     }
 
     /// The protection per antenna position runs whether or not a client is
-    /// connected (review of 217): the equipment tick skips the rest of its work
+    /// connected: the equipment tick skips the rest of its work
     /// without clients, and the TX gate, "Receive only" in the fork, the reactive
     /// ZZTX0 and the power cap sat behind that skip. Build 219: also the drive
     /// restore on a position change, the DX spots to Thetis, and no other
-    /// `continue` above the skip (review of 218, P1 and P2). Build 220: the
+    /// `continue` above the skip. Build 220: the
     /// tuner's stale check, the spots' TCI bookkeeping, and the stop of a TX
-    /// Thetis was already making (review of 219).
+    /// Thetis was already making.
     #[test]
     fn the_protection_per_antenna_position_runs_before_the_no_client_skip() {
         let net = include_str!("network.rs");
@@ -2401,7 +2395,7 @@ mod rx_only_unguarded_tests {
         let above = &tick[..skip];
         let mut words = above.split(|c: char| !(c.is_alphanumeric() || c == '_'));
         assert!(!words.any(|w| w == "continue"), "a second skip above the protection");
-        // The server window gets the flag (review of 217, B1).
+        // The server window gets the flag.
         let main = include_str!("main.rs");
         assert_eq!(main.matches(".set(ptt.lock().await.rx_only_unguarded_handle());").count(), 1);
     }
@@ -2409,7 +2403,7 @@ mod rx_only_unguarded_tests {
     /// "Receive only" in stock Thetis through CAT `ZZTI` (build 221): on at a
     /// new RX-only position or a new TCI connection on one, and again every
     /// second while RX-only, because stock does not report it back. Off only to
-    /// undo this server's own `ZZTI1` (build 222, review of 221): a "Receive
+    /// undo this server's own `ZZTI1`: a "Receive
     /// only" set by a transverter band or by hand is never touched, with or
     /// without an Amplitec.
     #[test]
@@ -2438,8 +2432,8 @@ mod rx_only_unguarded_tests {
         assert_eq!(StockRxOnly::Reassert.zzti(), "ZZTI1");
         assert_eq!(StockRxOnly::Release.zzti(), "ZZTI0");
         assert!(StockRxOnly::TakeOver.ours() && StockRxOnly::Reassert.ours() && !StockRxOnly::Release.ours());
-        // The loop keeps what it sent, and hands it over by name (review of
-        // 222: four booleans in a row, two swapped stayed green).
+        // The loop keeps what it sent, and hands it over by name (with four
+        // booleans in a row, two swapped stayed green).
         let net = include_str!("network.rs");
         assert_eq!(net.matches("stock_rx_only_ours = step.ours();").count(), 1);
         assert_eq!(net.matches("we_set_it: stock_rx_only_ours,").count(), 1);
@@ -2456,7 +2450,7 @@ mod rx_only_unguarded_tests {
     #[test]
     fn the_rx_only_loop_stops_ours_and_one_thetis_was_already_making() {
         use super::{RxOnlyTxInput, RxOnlyTxOff};
-        // Named, like the stock step (review of 222, place B): two of three
+        // Named, like the stock step: two of three
         // booleans swapped made this stop silently never come.
         let rx_only_tx_off = |pos_is_blocked, our_tx, thetis_tx| {
             RxOnlyTxInput { pos_is_blocked, our_tx, thetis_tx }.tx_off()
@@ -2471,8 +2465,8 @@ mod rx_only_unguarded_tests {
         assert_eq!(net.matches("our_tx: tx_active,").count(), 1);
     }
 
-    /// The safety check hands its clocks and windows over by name (build 229,
-    /// review of 228): each window with its own constant.
+    /// The safety check hands its clocks and windows over by name (build 229):
+    /// each window with its own constant.
     #[test]
     fn the_safety_check_hands_its_clocks_over_by_name() {
         let src = include_str!("ptt.rs");
@@ -2487,7 +2481,7 @@ mod rx_only_unguarded_tests {
     }
 
     /// The RX-only loop reads the transmitter and the TCI link by name (build
-    /// 226, review of 224): each field from its own source, and the loop takes
+    /// 226): each field from its own source, and the loop takes
     /// them apart by name too.
     #[test]
     fn the_rx_only_loop_reads_its_state_by_name() {

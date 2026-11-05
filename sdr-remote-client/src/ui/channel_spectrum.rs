@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// One self-contained channel spectrum. See docs/internal/patch-briefs/
-// REFACTOR-audio-spectrum-per-channel.md §6.1.
+// One self-contained channel spectrum.
 //
 // The boundary is enforced by the type system, not by discipline: bins
 // arrive EXCLUSIVELY via `ingest(SpectrumSnapshot)`, and the snapshot carries
 // a `ChannelId` that is matched against `self.channel`. `update_smeter` /
-// `update_auto_ref` derive from `self.bins` — never from another channel. A
+// `update_auto_ref` derive from `self.bins`; never from another channel. A
 // function that operates on a `ChannelSpectrum` cannot by construction read RX
 // data: it is not in scope.
 
@@ -41,7 +40,7 @@ impl ChannelId {
 }
 
 /// Typed input. The ONLY way to get bins into a `ChannelSpectrum`.
-/// `channel` proves which stream the bins come from — a wrong
+/// `channel` proves which stream the bins come from; a wrong
 /// source fails the assert (test) / is ignored (release).
 pub(crate) struct SpectrumSnapshot {
     pub channel: ChannelId,
@@ -51,17 +50,17 @@ pub(crate) struct SpectrumSnapshot {
     pub sequence: u16,
 }
 
-/// S-meter state for the no-data contract (§6.7): no NaN/sentinel jump
+/// S-meter state for the no-data contract: no NaN/sentinel jump
 /// when there is (still) no data.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum SmeterState {
-    /// Channel off, or no bins received yet — s-meter not valid.
+    /// Channel off, or no bins received yet; s-meter not valid.
     NoData,
     /// Live measurement from own bins.
     Active,
 }
 
-/// Auto-ref state (§6.7).
+/// Auto-ref state.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum AutoRefState {
     /// No bins yet to base a ref on.
@@ -73,10 +72,10 @@ pub(crate) enum AutoRefState {
 }
 
 /// Everything for ONE channel spectrum + s-meter. A method that operates on
-/// this cannot read another channel — the RX data is not in scope.
+/// this cannot read another channel; the RX data is not in scope.
 pub(crate) struct ChannelSpectrum {
     channel: ChannelId,
-    // Received data (this channel) — private, fillable only via ingest().
+    // Received data (this channel): private, fillable only via ingest().
     bins: Vec<u16>,
     center_hz: u32,
     span_hz: u32,
@@ -230,7 +229,7 @@ impl ChannelSpectrum {
     /// partial-bin weighting at the edges, EMA ballistics. Source: `self.bins`
     /// (own channel), never an RX field. `cal_offset_db` matches the main RX meter.
     ///
-    /// No-data contract (§6.7): disabled or empty bins → NoData without
+    /// No-data contract: disabled or empty bins → NoData without
     /// jump/NaN; at the first real frame the EMA settles in smoothly.
     pub(crate) fn update_smeter(
         &mut self,
@@ -337,7 +336,7 @@ impl ChannelSpectrum {
     /// Per-VRX auto-ref: EMA on the average noise floor (SSB passband ±3 kHz
     /// around the VRX freq skipped). Source: `self.bins` (own channel). Returns
     /// the new `ref_db` (the caller writes it to its `vrx*_ref_db`), or
-    /// `None` if there are (still) no bins — then no jump.
+    /// `None` if there are (still) no bins; then no jump.
     /// Auto-ref from the noise floor, excluding the passband being listened to.
     ///
     /// `pass_lo_hz`/`pass_hi_hz` are offsets from `listen_freq_hz`, so a caller
@@ -359,7 +358,7 @@ impl ChannelSpectrum {
         // Each channel restarts the fast phase on its own band change (build
         // 238). Until then only RX1 did, from `sync_state.rs`, and RX2 and the
         // VRX channels crept to the new floor at the slow rate until "auto" was
-        // switched off and on (owner, 2026-10-17).
+        // switched off and on.
         let band = super::helpers::freq_to_band(listen_freq_hz);
         if band != self.auto_ref_band {
             self.auto_ref_band = band;
@@ -408,7 +407,7 @@ impl ChannelSpectrum {
         Some(self.auto_ref_value)
     }
 
-    /// Observability (§6.7): compact per-channel state for a log line.
+    /// Observability: compact per-channel state for a log line.
     pub(crate) fn debug_line(&self, audio_on: bool, spectrum_on: bool) -> String {
         format!(
             "ch {}: audio={} spectrum={} bins={} seq={} center={} span={} smeter={:.0}dBm/{:?}",
@@ -429,9 +428,9 @@ impl ChannelSpectrum {
 mod boundary_guard {
     use super::{AutoRefState, ChannelId, ChannelSpectrum, SpectrumSnapshot};
 
-    // CI boundary (REFACTOR-audio-spectrum-per-channel §6.7): the channel-spectrum logic
+    // CI boundary: the channel-spectrum logic
     // may NEVER read the flat RX fields of another channel. This test fails the
-    // build as soon as such a reference creeps into this file — the type system enforces
+    // build as soon as such a reference creeps into this file; the type system enforces
     /// Build a channel with a flat noise floor plus one loud bin inside the
     /// passband, so auto-ref has something to exclude.
     fn seeded(channel: ChannelId, center_hz: u32, span_hz: u32) -> ChannelSpectrum {
@@ -452,7 +451,7 @@ mod boundary_guard {
 
     #[test]
     fn every_channel_derives_auto_ref_the_same_way() {
-        // Lane 3 phase 1: RX1, RX2, VRX1 and VRX2 each carried their own copy of
+        // Once RX1, RX2, VRX1 and VRX2 each carried their own copy of
         // this loop - the same arithmetic four times, differing only in which
         // band it skipped. Identical input on any two channels must therefore
         // give an identical result; if it does not, the copies drifted again.
@@ -482,7 +481,7 @@ mod boundary_guard {
             assert_eq!(settle(&mut cs, 14_200_000), AutoRefState::Settled, "{ch:?}");
             cs.update_auto_ref(true, 14_250_000, -3_000, 3_000, 60.0);
             assert_eq!(cs.auto_ref_state(), AutoRefState::Settled, "{ch:?}: the same band stays slow");
-            // Twice (working rule 9): to another band and back.
+            // Twice: to another band and back.
             for freq in [7_100_000u64, 14_200_000] {
                 cs.update_auto_ref(true, freq, -3_000, 3_000, 60.0);
                 assert_eq!(cs.auto_ref_state(), AutoRefState::Converging, "{ch:?}: a new band at {freq}");
@@ -568,7 +567,7 @@ mod boundary_guard {
             assert!(
                 !src.contains(needle),
                 "channel_spectrum.rs holds a forbidden cross-channel RX reference: '{}'. \
-                 Channel spectrum logic must derive ONLY from self.bins (§6.1/§6.7).",
+                 Channel spectrum logic must derive ONLY from self.bins.",
                 needle
             );
         }

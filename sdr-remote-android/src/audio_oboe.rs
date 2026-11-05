@@ -25,7 +25,6 @@ const RING_CAPACITY: usize = 48_000 * 2;
 
 struct CaptureCallback {
     producer: ringbuf::HeapProd<f32>,
-    level: Arc<AtomicU32>,
     error: Arc<AtomicBool>,
     gate: Arc<AtomicBool>,
     gate_delay_samples: Arc<AtomicU32>,
@@ -47,7 +46,6 @@ impl AudioInputCallback for CaptureCallback {
         if !gate_open {
             self.was_open = false;
             self.gate_delay_remaining = 0;
-            self.level.store(0u32, Ordering::Relaxed);
             return DataCallbackResult::Continue;
         }
 
@@ -60,13 +58,8 @@ impl AudioInputCallback for CaptureCallback {
         self.gate_delay_remaining = self.gate_delay_remaining.saturating_sub(skip as u32);
         let data = &data[skip..];
         if data.is_empty() {
-            self.level.store(0u32, Ordering::Relaxed);
             return DataCallbackResult::Continue;
         }
-
-        let rms =
-            (data.iter().map(|&s| s * s).sum::<f32>() / data.len().max(1) as f32).sqrt();
-        self.level.store(rms.to_bits(), Ordering::Relaxed);
 
         self.producer.push_slice(data);
 
@@ -96,7 +89,6 @@ impl AudioInputCallback for CaptureCallback {
 
 struct PlaybackCallback {
     consumer: ringbuf::HeapCons<f32>,
-    level: Arc<AtomicU32>,
     error: Arc<AtomicBool>,
     mute: Arc<AtomicBool>,
     /// High-SWR alarm watchdog: samples of beep left to play (see
@@ -135,7 +127,6 @@ impl AudioOutputCallback for PlaybackCallback {
         if self.mute.load(Ordering::Relaxed) {
             self.consumer.pop_slice(data);
             data.fill(0.0);
-            self.level.store(0u32, Ordering::Relaxed);
             // High SWR is a TX condition, so the alarm has to survive the TX
             // mute - it plays into the silenced buffer.
             mix_swr_alarm(data, 1, self.sample_rate, &self.swr_alarm,
@@ -153,16 +144,6 @@ impl AudioOutputCallback for PlaybackCallback {
         for sample in &mut data[read..] {
             *sample = 0.0;
         }
-
-        // RMS level of played audio (before the alarm is mixed in, so the meter
-        // keeps showing received audio only)
-        let rms = (data[..read]
-            .iter()
-            .map(|&s| s * s)
-            .sum::<f32>()
-            / read.max(1) as f32)
-            .sqrt();
-        self.level.store(rms.to_bits(), Ordering::Relaxed);
 
         mix_swr_alarm(data, 1, self.sample_rate, &self.swr_alarm,
             &mut self.alarm_pos, &mut self.alarm_phase);
@@ -199,8 +180,6 @@ impl AudioOutputCallback for PlaybackCallback {
 pub struct OboeAudioBackend {
     capture_consumer: ringbuf::HeapCons<f32>,
     playback_producer: ringbuf::HeapProd<f32>,
-    capture_level: Arc<AtomicU32>,
-    playback_level: Arc<AtomicU32>,
     audio_error: Arc<AtomicBool>,
     capture_gate: Arc<AtomicBool>,
     capture_gate_delay_samples: Arc<AtomicU32>,
@@ -210,7 +189,7 @@ pub struct OboeAudioBackend {
     ptt_dropped_alarm: Arc<AtomicU32>,
     capture_sample_rate: u32,
     playback_sample_rate: u32,
-    // Keep streams alive — dropped when OboeAudioBackend is dropped
+    // Keep streams alive: dropped when OboeAudioBackend is dropped
     _capture_stream: AudioStreamAsync<Input, CaptureCallback>,
     _playback_stream: AudioStreamAsync<Output, PlaybackCallback>,
 }
@@ -220,8 +199,6 @@ impl OboeAudioBackend {
         let (capture_producer, capture_consumer) = HeapRb::<f32>::new(RING_CAPACITY).split();
         let (playback_producer, playback_consumer) = HeapRb::<f32>::new(RING_CAPACITY).split();
 
-        let capture_level = Arc::new(AtomicU32::new(0));
-        let playback_level = Arc::new(AtomicU32::new(0));
         let audio_error = Arc::new(AtomicBool::new(false));
         let capture_gate = Arc::new(AtomicBool::new(false));
         let capture_gate_delay_samples = Arc::new(AtomicU32::new(0));
@@ -233,7 +210,6 @@ impl OboeAudioBackend {
         // Capture stream (microphone)
         let capture_cb = CaptureCallback {
             producer: capture_producer,
-            level: capture_level.clone(),
             error: audio_error.clone(),
             gate: capture_gate.clone(),
             gate_delay_samples: capture_gate_delay_samples.clone(),
@@ -257,7 +233,6 @@ impl OboeAudioBackend {
         // Playback stream (speaker/earpiece)
         let playback_cb = PlaybackCallback {
             consumer: playback_consumer,
-            level: playback_level.clone(),
             error: audio_error.clone(),
             mute: playback_mute.clone(),
             swr_alarm: swr_alarm.clone(),
@@ -301,8 +276,6 @@ impl OboeAudioBackend {
         Ok(Self {
             capture_consumer,
             playback_producer,
-            capture_level,
-            playback_level,
             audio_error,
             capture_gate,
             capture_gate_delay_samples,
@@ -325,14 +298,6 @@ impl AudioBackend for OboeAudioBackend {
 
     fn write_playback(&mut self, buf: &[f32]) -> usize {
         self.playback_producer.push_slice(buf)
-    }
-
-    fn capture_level(&self) -> f32 {
-        f32::from_bits(self.capture_level.load(Ordering::Relaxed))
-    }
-
-    fn playback_level(&self) -> f32 {
-        f32::from_bits(self.playback_level.load(Ordering::Relaxed))
     }
 
     fn has_error(&self) -> bool {

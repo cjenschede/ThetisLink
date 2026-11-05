@@ -15,7 +15,7 @@ fn main() {
         let mut res = winresource::WindowsResource::new();
         res.set_icon(&icon_path);
         res.set("ProductName", "ThetisLink");
-        res.set("FileDescription", "ThetisLink Client — SDR Remote for Thetis");
+        res.set("FileDescription", "ThetisLink Client, SDR Remote for Thetis");
         res.set("LegalCopyright", "Copyright © 2025-2026 Chiron van der Burgt");
         res.compile().unwrap();
     }

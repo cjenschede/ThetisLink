@@ -8,176 +8,123 @@
 use super::*;
 
 impl SdrRemoteApp {
-    /// The "Zoom <2x" checkbox of every spectrum panel - RX1, RX2 and VRX share
-    /// one flag (build 242: RX2 had none, RX1 and VRX each a copy of this). TL2-1
-    /// ctun-auto-recenter setup: persisted and pushed to the server on a toggle;
-    /// the server enforces the strictest - as long as one client has it off, it
-    /// clamps to 2x.
-    pub(super) fn zoom_below_2x_checkbox(&mut self, ui: &mut egui::Ui) {
-        if ui.checkbox(&mut self.allow_zoom_below_2x, rust_i18n::t!("main_allow_zoom_2x").to_string())
-            .on_hover_text(rust_i18n::t!("hover_zoom_below_2x").to_string())
-            .changed()
-        {
-            crate::ui::config::save_allow_zoom_below_2x(self.allow_zoom_below_2x);
-            let _ = self.cmd_tx.send(Command::SetControl(
-                sdr_remote_core::protocol::ControlId::AllowZoomBelow2x,
-                if self.allow_zoom_below_2x { 1 } else { 0 },
-            ));
+    /// The "Zoom <2x" flag changed in a panel's rows: one flag for RX1, RX2 and
+    /// VRX (build 242). TL2-1 ctun-auto-recenter setup: persisted and pushed to
+    /// the server; the server enforces the strictest - as long as one client
+    /// has it off, it clamps to 2x.
+    pub(super) fn zoom_below_2x_changed(&mut self) {
+        crate::ui::config::save_allow_zoom_below_2x(self.allow_zoom_below_2x);
+        let _ = self.cmd_tx.send(Command::SetControl(
+            sdr_remote_core::protocol::ControlId::AllowZoomBelow2x,
+            if self.allow_zoom_below_2x { 1 } else { 0 },
+        ));
+    }
+
+    /// What follows a change of RX1's (`rx2` false) or RX2's view, from its
+    /// rows or from MIDI: one place, so both keep the same rules.
+    pub(super) fn rx_view_changed(&mut self, rx2: bool, changes: super::spectrum::ViewChanges) {
+        if rx2 {
+            if changes.restart_auto_ref(self.rx2_auto_ref_enabled) {
+                self.rx2_spectrum.reset_auto_ref();
+            }
+            if let Some(k) = changes.fft {
+                let _ = self.cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, k));
+            }
+            if changes.zoom || changes.pan {
+                self.rx2_zoom_pan_changed_at = Some(Instant::now());
+            }
+        } else {
+            if changes.restart_auto_ref(self.auto_ref_enabled) {
+                self.rx1_spectrum.reset_auto_ref();
+            }
+            if let Some(k) = changes.fft {
+                let _ = self.cmd_tx.send(Command::SetSpectrumFftSize(k));
+            }
+            if changes.wf_contrast {
+                if let Some(ref band) = self.current_band {
+                    self.wf_contrast_per_band.insert(band.clone(), self.waterfall_contrast);
+                }
+            }
+            if changes.zoom || changes.pan {
+                self.zoom_pan_changed_at = Some(Instant::now());
+            }
         }
+        if changes.allow_zoom_below_2x {
+            self.zoom_below_2x_changed();
+        }
+        if changes.settings() {
+            self.save_full_config();
+        }
+    }
+
+    /// A zoom from MIDI, inside the rows' limits; the pan follows into what
+    /// the new zoom allows, as in the rows.
+    pub(super) fn midi_set_zoom(&mut self, rx2: bool, zoom: f32) {
+        let zooms = super::spectrum::zoom_range(self.allow_zoom_below_2x);
+        let zoom = zoom.clamp(*zooms.start(), *zooms.end());
+        let max_pan = super::spectrum::pan_limit(zoom);
+        let (z, p) = if rx2 { (&mut self.rx2_spectrum_zoom, &mut self.rx2_spectrum_pan) } else { (&mut self.spectrum_zoom, &mut self.spectrum_pan) };
+        *z = zoom;
+        *p = p.clamp(-max_pan, max_pan);
+        self.rx_view_changed(rx2, super::spectrum::ViewChanges { zoom: true, ..Default::default() });
+    }
+
+    /// A pan from MIDI, inside what the zoom allows.
+    pub(super) fn midi_set_pan(&mut self, rx2: bool, pan: f32) {
+        let (z, p) = if rx2 { (self.rx2_spectrum_zoom, &mut self.rx2_spectrum_pan) } else { (self.spectrum_zoom, &mut self.spectrum_pan) };
+        let max_pan = super::spectrum::pan_limit(z);
+        *p = pan.clamp(-max_pan, max_pan);
+        self.rx_view_changed(rx2, super::spectrum::ViewChanges { pan: true, ..Default::default() });
+    }
+
+    /// A reference level from MIDI, inside the rows' limits; it turns Auto off.
+    pub(super) fn midi_set_ref(&mut self, rx2: bool, ref_db: f32) {
+        let (r, auto) = if rx2 { (&mut self.rx2_spectrum_ref_db, &mut self.rx2_auto_ref_enabled) } else { (&mut self.spectrum_ref_db, &mut self.auto_ref_enabled) };
+        *r = ref_db.clamp(*super::spectrum::REF_DB_RANGE.start(), *super::spectrum::REF_DB_RANGE.end());
+        let was_auto = std::mem::replace(auto, false);
+        self.rx_view_changed(rx2, super::spectrum::ViewChanges { ref_db: true, auto_ref: was_auto, ..Default::default() });
+    }
+
+    /// A waterfall contrast from MIDI, inside the rows' limits.
+    pub(super) fn midi_set_contrast(&mut self, rx2: bool, contrast: f32) {
+        let c = if rx2 { &mut self.rx2_waterfall_contrast } else { &mut self.waterfall_contrast };
+        *c = contrast.clamp(*super::spectrum::WF_CONTRAST_RANGE.start(), *super::spectrum::WF_CONTRAST_RANGE.end());
+        self.rx_view_changed(rx2, super::spectrum::ViewChanges { wf_contrast: true, ..Default::default() });
     }
 
     /// Render spectrum controls + plot + waterfall (used by both inline and pop-out)
     pub(super) fn render_spectrum_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, reserve_bottom: f32, is_popout: bool) {
-        // Row 1: Ref + Auto checkbox + Range
-        ui.horizontal(|ui| {
-            ui.spacing_mut().slider_width = 80.0;
-            ui.label(rust_i18n::t!("main_ref_label").to_string());
-            if self.auto_ref_enabled {
-                // Show value but non-interactive
-                let mut display_val = self.spectrum_ref_db;
-                ui.add_enabled(false, egui::Slider::new(&mut display_val, -90.0..=0.0)
-                    .suffix(" dB")
-                    .step_by(5.0)
-                );
-            } else {
-                let resp = ui.add(egui::Slider::new(&mut self.spectrum_ref_db, -90.0..=0.0)
-                    .suffix(" dB")
-                    .step_by(5.0)
-                ).on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
-                let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_ref_db, -90.0..=0.0, 5.0);
-                if resp.changed() || scrolled {
-                    self.save_full_config();
-                }
-            }
-            if ui.checkbox(&mut self.auto_ref_enabled, rust_i18n::t!("main_auto").to_string()).on_hover_text(rust_i18n::t!("main_hover_auto_ref").to_string()).changed() {
-                if self.auto_ref_enabled {
-                    self.rx1_spectrum.reset_auto_ref();
-                }
-                self.save_full_config();
-            }
-            ui.label(rust_i18n::t!("main_range_label").to_string());
-            let resp = ui.add(egui::Slider::new(&mut self.spectrum_range_db, 20.0..=130.0)
-                .suffix(" dB")
-                .step_by(5.0)
-            ).on_hover_text(rust_i18n::t!("main_hover_range").to_string());
-            let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_range_db, 20.0..=130.0, 5.0);
-            if resp.changed() || scrolled {
-                if self.auto_ref_enabled {
-                    self.rx1_spectrum.reset_auto_ref();
-                }
-                self.save_full_config();
-            }
+        // The view rows: the one set every spectrum panel has.
+        let ddc_rate = if self.ddc_sample_rate_rx1 > 0 { self.ddc_sample_rate_rx1 as u32 * 1000 } else { 384_000 };
+        let changes = super::spectrum::spectrum_view_rows(ui, super::spectrum::ViewControls {
+            ref_db: &mut self.spectrum_ref_db,
+            auto_ref: &mut self.auto_ref_enabled,
+            range_db: &mut self.spectrum_range_db,
+            fill_percent: &mut self.spectrum_fill_percent,
+            zoom: &mut self.spectrum_zoom,
+            allow_zoom_below_2x: &mut self.allow_zoom_below_2x,
+            pan: &mut self.spectrum_pan,
+            wf_contrast: &mut self.waterfall_contrast,
+            fft: super::spectrum::FftControl::Choose { size_k: &mut self.spectrum_fft_size_k, ddc_rate_hz: ddc_rate, salt: "fft_size" },
+            // Only in the main Radio tab; a window of its own fills itself.
+            height: if is_popout { None } else { Some(&mut self.spectrum_total_h) },
         });
-        // Row 2: Zoom + Pan + WF Contrast
-        ui.horizontal(|ui| {
-            ui.spacing_mut().slider_width = 80.0;
-            ui.label(rust_i18n::t!("main_zoom_label").to_string());
-            // TL2-1 ctun-auto-recenter: zoom-min = 2.0 default (anti-smear feature workable);
-            // 1.0 allowed via setup checkbox "Allow zoom <2x" (smear trade-off).
-            let zoom_min: f32 = if self.allow_zoom_below_2x { 1.0 } else { 2.0 };
-            // Clamp current zoom to new minimum (when the checkbox toggles off)
-            if self.spectrum_zoom < zoom_min {
-                self.spectrum_zoom = zoom_min;
-            }
-            let zoom_resp = ui.add(egui::Slider::new(&mut self.spectrum_zoom, zoom_min..=1024.0)
-                .logarithmic(true)
-                .custom_formatter(|v, _| format!("{:.0}x", v))
-            ).on_hover_text(rust_i18n::t!("main_hover_zoom").to_string());
-            let zoom_step = (self.spectrum_zoom as f64 * 0.1).max(1.0);
-            let zoom_scrolled = helpers::slider_wheel(ui, &zoom_resp, &mut self.spectrum_zoom, zoom_min..=1024.0, zoom_step);
-            let zoom_changed = zoom_resp.changed() || zoom_scrolled;
-            if zoom_changed {
-                let max_pan = crate::ui::tuning::max_pan_fraction(self.spectrum_zoom);
-                self.spectrum_pan = self.spectrum_pan.clamp(-max_pan, max_pan);
-            }
-            self.zoom_below_2x_checkbox(ui);
-            ui.label(rust_i18n::t!("main_pan_label").to_string());
-            let max_pan = crate::ui::tuning::max_pan_fraction(self.spectrum_zoom);
-            let pan_resp = ui.add(egui::Slider::new(&mut self.spectrum_pan, -max_pan..=max_pan)
-                .custom_formatter(|v, _| format!("{:+.2}", v))
-            ).on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
-            let pan_scrolled = helpers::slider_wheel(ui, &pan_resp, &mut self.spectrum_pan, -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
-            let pan_changed = pan_resp.changed() || pan_scrolled;
-            ui.label(rust_i18n::t!("main_wf_label").to_string());
-            let wf_resp = ui.add(egui::Slider::new(&mut self.waterfall_contrast, 0.3..=3.0)
-                .logarithmic(true)
-                .custom_formatter(|v, _| format!("{:.1}", v))
-            ).on_hover_text(rust_i18n::t!("main_hover_wf").to_string());
-            let wf_scrolled = helpers::slider_wheel(ui, &wf_resp, &mut self.waterfall_contrast, 0.3..=3.0, 0.1);
-            if wf_resp.changed() || wf_scrolled {
-                // Update per-band storage
-                if let Some(ref band) = self.current_band {
-                    self.wf_contrast_per_band.insert(band.clone(), self.waterfall_contrast);
-                }
-                self.save_full_config();
-            }
-
-            // FFT size selector - labels computed from current DDC sample rate
-            let ddc_rate = if self.ddc_sample_rate_rx1 > 0 { self.ddc_sample_rate_rx1 as u32 * 1000 } else { 384_000 };
-            let auto_fft = sdr_remote_core::ddc_fft_size(ddc_rate);
-            let auto_k = auto_fft / 1024;
-            let fft_label = if self.spectrum_fft_size_k == 0 {
-                format!("FFT: Auto ({}K)", auto_k)
-            } else {
-                format!("FFT: {}K", self.spectrum_fft_size_k)
-            };
-            // Build options: Auto + fixed sizes that make sense for this sample rate
-            let hop = |fft_k: u32| -> u32 { let fft = fft_k * 1024; ddc_rate / (fft / 8) };
-            let options: Vec<(u16, String)> = {
-                let mut opts = vec![(0u16, format!("Auto ({}K, ~{} FFT/s)", auto_k, hop(auto_k as u32)))];
-                for &k in &[32u16, 64, 128, 256, 512, 1024] {
-                    let fft = k as u32 * 1024;
-                    if fft <= ddc_rate * 4 { // reasonable range
-                        let fps = hop(k as u32);
-                        if fps > 0 {
-                            opts.push((k, format!("{}K (~{} FFT/s)", k, fps)));
-                        }
-                    }
-                }
-                opts
-            };
-            egui::ComboBox::from_id_salt("fft_size")
-                .selected_text(&fft_label)
-                .width(80.0)
-                .show_ui(ui, |ui| {
-                    for (k, label) in &options {
-                        if ui.selectable_label(self.spectrum_fft_size_k == *k, label).clicked() {
-                            self.spectrum_fft_size_k = *k;
-                            let _ = self.cmd_tx.send(Command::SetSpectrumFftSize(*k));
-                            self.save_full_config();
-                        }
-                    }
-                });
-            // Height slider - only in the main Radio tab. Popouts fill the
-            // whole window and ignore this setting.
-            if !is_popout {
-                ui.label("H:");
-                let resp = ui.add(egui::Slider::new(&mut self.spectrum_total_h, 300.0..=1200.0)
-                    .custom_formatter(|v, _| format!("{:.0}", v))
-                ).on_hover_text(rust_i18n::t!("main_hover_spectrum_height").to_string());
-                let scrolled = helpers::slider_wheel(ui, &resp, &mut self.spectrum_total_h, 300.0..=1200.0, 20.0);
-                if resp.changed() || scrolled {
-                    self.save_full_config();
-                }
-            }
-            if zoom_changed || pan_changed {
-                self.zoom_pan_changed_at = Some(Instant::now());
-            }
-        });
-        // A rule under the button rows, as the VRX panel has (owner, build 240).
-        super::helpers::rule(ui);
+        self.rx_view_changed(false, changes);
 
         // Debounce: send zoom/pan + dynamic bins to server after 100ms stability
         if let Some(changed_at) = self.zoom_pan_changed_at {
             if changed_at.elapsed().as_millis() >= 100 {
                 let zoom_diff = (self.spectrum_zoom - self.last_sent_zoom).abs();
-                let pan_diff = (self.spectrum_pan - self.last_sent_pan).abs();
+                // Every change the server can see, however small: a pan below a
+                // threshold was drawn here and never reached the server.
+                let pan_moved = sdr_remote_core::protocol::pack_spectrum_pan_fine(self.spectrum_pan)
+                    != sdr_remote_core::protocol::pack_spectrum_pan_fine(self.last_sent_pan);
                 if zoom_diff > 0.01 {
                     let _ = self.cmd_tx.send(Command::SetSpectrumZoom(self.spectrum_zoom));
                     self.last_sent_zoom = self.spectrum_zoom;
                     self.view_sent_at = Some(Instant::now());
                 }
-                if pan_diff > 0.001 {
+                if pan_moved {
                     let _ = self.cmd_tx.send(Command::SetSpectrumPan(self.spectrum_pan));
                     self.last_sent_pan = self.spectrum_pan;
                     self.view_sent_at = Some(Instant::now());
@@ -200,6 +147,7 @@ impl SdrRemoteApp {
             self.frequency_hz,
             self.rx1_full_span_hz(),
             self.spectrum_pan,
+            self.server_fine_spectrum_view,
         );
         let rx1_tuning_active = Self::tuning_latch_active(
             self.rx1_force_full_tuning,
@@ -247,7 +195,7 @@ impl SdrRemoteApp {
         // target centre was, by definition, the server's centre, so the jump
         // was measured as zero and the latch never engaged. Build 82 made the
         // target centre VFO-derived, which is the whole fix, and in doing so
-        // opened this branch for the first time. Found in review (2026-08-15):
+        // opened this branch for the first time. Found on 2026-08-15:
         // a repair from two days earlier, activated by the repair that replaced
         // it, putting back the very construction it removed - the axis from the
         // VFO, the marker from the server, one round trip apart.
@@ -346,41 +294,47 @@ impl SdrRemoteApp {
             (&self.full_spectrum_bins, self.full_spectrum_center_hz, self.full_spectrum_span_hz)
         };
 
-        spectrum_plot(
-            ui,
-            plot_bins,
-            plot_center_hz,
-            plot_span_hz,
-            smooth_center,
-            smooth_vfo,
-            self.frequency_hz,
-            self.spectrum_ref_db,
-            self.spectrum_range_db,
-            self.smeter,
-            self.smeter_tx,
-            self.other_tx,
-            self.filter_low_hz,
-            self.filter_high_hz,
-            self.rit_offset as i32,
-            self.rit_enable,
-            spec_h,
-            &SpectrumPlotConfig { is_popout, ..RX1_PLOT_CONFIG },
-            &self.dx_spots,
-        );
-        render_waterfall(
-            ui,
-            ctx,
-            &mut self.waterfall,
-            if self.full_spectrum_enabled { self.full_spectrum_span_hz } else { self.spectrum_span_hz },
-            smooth_center,
-            self.frequency_hz,
-            self.spectrum_zoom,
-            self.waterfall_contrast,
-            self.spectrum_ref_db,
-            self.spectrum_range_db,
-            wf_h,
-            &SpectrumPlotConfig { is_popout, ..RX1_PLOT_CONFIG },
-        );
+        let full_span = if self.full_spectrum_enabled { self.full_spectrum_span_hz } else { self.spectrum_span_hz } as f64;
+        let wf_window = super::spectrum::WaterfallWindow {
+            center_hz: smooth_center as f64,
+            span_hz: self.waterfall.display_span_hz(full_span / (self.spectrum_zoom as f64).max(1.0)),
+            row_span_hz: full_span,
+        };
+        let mut texture = self.waterfall.texture.take();
+        let panel = super::spectrum::SpectrumPanel {
+            id: "rx1",
+            bins: plot_bins,
+            bins_center_hz: plot_center_hz as f64,
+            bins_span_hz: plot_span_hz as f64,
+            view_center_hz: smooth_center as f64,
+            marker_hz: smooth_vfo,
+            filter_low_hz: self.filter_low_hz,
+            filter_high_hz: self.filter_high_hz,
+            ref_db: self.spectrum_ref_db,
+            range_db: self.spectrum_range_db,
+            fill_percent: self.spectrum_fill_percent,
+            wf_contrast: self.waterfall_contrast,
+            meter: if self.other_tx {
+                super::spectrum::SpectrumMeter::OtherTransmits(self.smeter)
+            } else if self.smeter_tx {
+                super::spectrum::SpectrumMeter::Transmitting(self.smeter)
+            } else {
+                super::spectrum::SpectrumMeter::Signal(self.smeter)
+            },
+            big_meter: is_popout,
+            rit_hz: self.rit_enable.then_some(self.rit_offset as i32),
+            band_markers: true,
+            dx_spots: &self.dx_spots,
+            tuning: super::spectrum::SpectrumTuning {
+                tune_hz: self.frequency_hz,
+                min_hz: 1_000,
+                max_hz: u64::MAX,
+                filter: super::spectrum::FilterEdges::Free,
+            },
+        };
+        let action = super::spectrum::spectrum_panel_view(ui, ctx, &panel, &self.waterfall, wf_window, &mut texture, spec_h, wf_h);
+        self.waterfall.texture = texture;
+        super::spectrum::store_rx_action(ui, "", action);
         // Drag-handle for resizing spectrum + waterfall height in the main
         // Radio tab. Popouts skip - they always fill their window.
         if !is_popout {

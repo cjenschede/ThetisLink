@@ -15,7 +15,7 @@ use super::*;
 /// Exists so command sequences can be exercised without a radio attached. The
 /// FTX-1 memory/tone path in particular is written from its CAT manual and
 /// cannot be tried on hardware here, and a wrong channel-recall form is
-/// invisible in review but fatal on the wire - so the sequence is pinned by
+/// invisible when reading the code but fatal on the wire - so the sequence is pinned by
 /// tests through this trait instead.
 pub(super) trait CatPort {
     fn query(&mut self, cmd: &str) -> String;
@@ -123,7 +123,7 @@ fn cat_query_impl(
     loop {
         if Instant::now() > deadline {
             if diag && response.is_empty() {
-                warn!("cat_query {}: TIMEOUT after {:?} - radio sent no bytes", cmd.trim_end_matches(';'), timeout);
+                warn!("cat_query {}: TIMEOUT after {:?}; radio sent no bytes", cmd.trim_end_matches(';'), timeout);
             }
             break;
         }
@@ -137,7 +137,7 @@ fn cat_query_impl(
             Ok(_) => {}
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => {
-                if diag { warn!("cat_query {}: read error: {:?} ({}) - aborting query", cmd.trim_end_matches(';'), e.kind(), e); }
+                if diag { warn!("cat_query {}: read error: {:?} ({}); aborting query", cmd.trim_end_matches(';'), e.kind(), e); }
                 break;
             }
         }
@@ -168,7 +168,7 @@ pub(super) fn bringup_probe(
     // right after the port opened, where nothing is in flight; and the poll
     // loop when a radio that was on standby comes on, which first lets the
     // line settle (`poll.rs`, `settle_line`) so whatever was still coming is
-    // in the poll's buffer and not thrown away here (review build 56).
+    // in the poll's buffer and not thrown away here.
     let _ = port.clear(serialport::ClearBuffer::Input);
     let mut id_resp = String::new();
     let mut id_code = String::new();
@@ -179,7 +179,7 @@ pub(super) fn bringup_probe(
             break;
         }
         if attempt < 2 {
-            log::debug!("{} ID; attempt {} gave {:?} - asking again", prefix, attempt + 1, id_resp);
+            log::debug!("{} ID; attempt {} gave {:?}; asking again", prefix, attempt + 1, id_resp);
             std::thread::sleep(Duration::from_millis(150));
         }
     }
@@ -202,15 +202,15 @@ pub(super) fn bringup_probe(
         // read again once it is switched on (`model_check_due`). Field log
         // 2026-10-01 08:35: a 991A on standby got the baud warning.
         if cat_query(port, "PS;").contains("PS0") {
-            info!("{} ID; unanswered - the radio is on standby; its model is read once it is switched on", prefix);
+            info!("{} ID; unanswered: the radio is on standby; its model is read once it is switched on", prefix);
         } else {
             warn!("{} autodetect: ID; returned no valid response ({:?}); check cable/baud radio-menu vs config; falling back to shared Yaesu parser", prefix, id_resp);
         }
     } else if detected.is_none() {
         // An "unknown" ID that carries several frames is not an unknown radio:
         // it is one query answered with everything that was queued behind it,
-        // which only happens when reads and writes are out of step. PD0PLK got
-        // '007077100;MD04;TX0;AG0041;PC050;PS1;...' and the log called it an
+        // which only happens when reads and writes are out of step. A radio in the
+        // field answered '007077100;MD04;TX0;AG0041;PC050;PS1;...' and the log called it an
         // unknown radio for a whole session.
         let extra_frames = id_code.matches(';').count() as u32;
         let due = sdr_remote_core::cat_health::baud_hint_due(
@@ -221,7 +221,7 @@ pub(super) fn bringup_probe(
         );
         if due {
             warn!(
-                "{} the radio answered one query with {} frames at once ('{}') - reads and writes are out of step; check baud radio-menu vs config",
+                "{} the radio answered one query with {} frames at once ('{}'): reads and writes are out of step; check baud radio-menu vs config",
                 prefix,
                 extra_frames + 1,
                 id_code
@@ -234,7 +234,7 @@ pub(super) fn bringup_probe(
         // off during startup detection, or a COM/USB enumeration swap. Loud,
         // because the audio-device assignment cannot be corrected from here.
         warn!(
-            "{} model mismatch: assumed={:?}, radio reports {:?} (ID answer '{}'); adopting the radio's own dialect - if the audio sounds wrong, check the slot assignment",
+            "{} model mismatch: assumed={:?}, radio reports {:?} (ID answer '{}'); adopting the radio's own dialect; if the audio sounds wrong, check the slot assignment",
             prefix, model, detected.unwrap(), id_resp.trim()
         );
     }

@@ -91,11 +91,10 @@ impl Default for TunerConfig {
     }
 }
 
-/// Per-slot rotor configuration (PATCH-yaesu-rotor-mcp2221 phase 1).
+/// Per-slot rotor configuration.
 /// One entry per physical MCP2221A-board that drives a Yaesu G-1000DXC
-/// directly. Phase 1 only fills `enabled` + `mcp_serial` + `name`;
-/// calibration fields (v_at_0deg / v_at_max_deg / max_deg) and
-/// default_speed are added in later phases.
+/// directly: the board binding (`enabled`, `mcp_serial`, `name`), the
+/// calibration (v_at_0deg / v_at_max_deg / max_deg) and the speed ramp.
 #[derive(Clone, Debug)]
 pub struct RotorConfig {
     /// Enable this rotor slot at server start.
@@ -107,17 +106,17 @@ pub struct RotorConfig {
     /// (`rot_<name>` prefix per ThetisLink convention). Empty = not
     /// bound.
     pub mcp_serial: String,
-    /// Calibration (phase 4): Yaesu pin-4 voltage at 0 deg (CCW end-park).
+    /// Calibration: Yaesu pin-4 voltage at 0 deg (CCW end-park).
     /// Default 0.0 = not calibrated. Operator sets this via "Park CCW".
     pub v_at_0deg: f32,
-    /// Calibration (phase 4): Yaesu pin-4 voltage at `max_deg`
+    /// Calibration: Yaesu pin-4 voltage at `max_deg`
     /// (CW end-park). Default 4.5 V (typical G-1000DXC). Operator sets
     /// this via "Park CW".
     pub v_at_max_deg: f32,
     /// Maximum rotation in degrees (default 450 for G-1000DXC).
     pub max_deg: u16,
-    /// Soft-start/stop speed ramp in percent per second
-    /// (PATCH phase 6). Default 50%/sec = full ramp 0->max in 2 s.
+    /// Soft-start/stop speed ramp in percent per second.
+    /// Default 50%/sec = full ramp 0->max in 2 s.
     /// Lower value for heavy antennas (5-10%/sec); higher value
     /// (75-100%/sec) for light antennas. Used both for the
     /// soft-start (gate-on -> max DAC) and for the soft-stop at
@@ -173,8 +172,7 @@ pub struct ServerConfig {
     pub yaesu_audio_device: Option<String>,
     /// Yaesu USB audio OUTPUT (TX) device name pattern. `None`/empty -> use the input
     /// pattern for output too (legacy). Set it when capture/render endpoints have
-    /// different names, so TX audio can't fall back onto the wrong codec
-    /// (PATCH-yaesu-output-device).
+    /// different names, so TX audio can't fall back onto the wrong codec.
     pub yaesu_audio_output_device: Option<String>,
     /// SSB/AM USB TX routing per PTT (default false): off = enable 991A routing
     /// while a client is present, then restore ~2 s after disconnect/shutdown.
@@ -197,7 +195,7 @@ pub struct ServerConfig {
     /// the tones stored in THAT radio, so granting it for one must not grant it
     /// for the other.
     pub yaesu2_memory_write_ack: bool,
-    // -- Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) --
+    // -- Dual-radio slot 1 --
     // Second independent radio (e.g. FTX-1). The existing `yaesu_*`-keys
     // above = slot 0 (back-compat); these `yaesu2_*`-keys = slot 1. Both
     // share the common Yaesu-CAT dialect; `RadioModel` carries the differences.
@@ -208,8 +206,7 @@ pub struct ServerConfig {
     /// Slot-1 USB audio input device name pattern. Separate choice because two
     /// radios may identify identically as "USB Audio CODEC" (edge-case 6).
     pub yaesu2_audio_device: Option<String>,
-    /// Slot-1 USB audio OUTPUT (TX) device pattern. `None`/empty -> input pattern
-    /// (PATCH-yaesu-output-device).
+    /// Slot-1 USB audio OUTPUT (TX) device pattern. `None`/empty -> input pattern.
     pub yaesu2_audio_output_device: Option<String>,
     /// Which channel of the FTX-1's stereo USB capture endpoint to take:
     /// 0 = L, 1 = R, 2 = mix (the AVERAGE of both, so a silent R costs 6 dB).
@@ -228,13 +225,13 @@ pub struct ServerConfig {
     /// is an operator measurement, not a documented fact.
     ///
     /// `2` is the default because it cannot lose a receiver: whatever is on,
-    /// you hear it. With one receiver active both channels carry the same thing
-    /// and mix sounds like that receiver - measured that way on the radio.
+    /// you hear it. With one receiver active mix sounds like that receiver.
     ///
-    /// (An earlier note here claimed mix would then be 6 dB down, since mixing
-    /// is an average. That only holds if the other channel is SILENT, and this
-    /// radio appears to duplicate instead. Not measured either way - do not
-    /// rely on it.)
+    /// But it is 6 dB quieter. Measured 2026-11-02 with a steady tone on the
+    /// main receiver: mix 6.2 dB below that receiver's own channel, so the
+    /// other channel was silent rather than a copy (mixing is an average). An
+    /// earlier note here guessed the radio duplicated; it does not. Tuned
+    /// levels (`yaesu_rx_levels_tuned`) therefore take one receiver's channel.
     pub yaesu_audio_channel: u8,
     /// The radio model last detected on this slot's port, remembered so the
     /// settings screen knows which model-specific controls to offer without
@@ -248,6 +245,13 @@ pub struct ServerConfig {
     pub yaesu2_model_last: Option<u8>,
     /// Same choice for slot 1. Two FTX-1s can reasonably want different channels.
     pub yaesu2_audio_channel: u8,
+    /// The operator has set the radios' USB receive levels by the installation
+    /// guide (FT-991A: OUT LEVEL 100 per mode and Windows at 0 dB; FTX-1: Windows
+    /// at its top and one receiver's channel). Clients then use the small
+    /// receive correction meant for those levels; off, the one for factory
+    /// settings. Sent to every client in the presence packet; off by default,
+    /// because a radio left at its factory levels would otherwise play quietly.
+    pub yaesu_rx_levels_tuned: bool,
     /// Amplitec 6/2 serial port (e.g. "COM3")
     pub amplitec_port: Option<String>,
     pub amplitec_enabled: bool,
@@ -287,18 +291,17 @@ pub struct ServerConfig {
     pub tuners: Vec<TunerConfig>,
     /// Show tuner control window on start.
     pub show_tuner_window: bool,
-    /// Per-slot Yaesu-rotor configuration (PATCH-yaesu-rotor-mcp2221).
+    /// Per-slot Yaesu-rotor configuration.
     /// One entry per MCP2221A-board with `rot_` USB-serial prefix; up to
-    /// `MAX_ROTORS`. Runtime-binding (rotor-backend `Mcp2221Yaesu`)
-    /// lands in phase 3 of the brief; phase 1 fills the schema and the
-    /// wizard-claim.
+    /// `MAX_ROTORS`. Claimed by the setup wizard; driven at runtime by
+    /// `mcp2221_yaesu_rotor`.
     pub rotors: Vec<RotorConfig>,
     /// SPE Expert 1.3K-FA serial port (e.g. "COM6")
     pub spe_port: Option<String>,
     pub spe_enabled: bool,
     /// Show SPE Expert control window on start.
     pub show_spe_window: bool,
-    /// RF2K-S Raspberry Pi address (e.g. "192.168.1.50:8080")
+    /// RF2K-S Raspberry Pi address (e.g. "192.168.1.3:8080")
     pub rf2k_addr: Option<String>,
     pub rf2k_enabled: bool,
     /// Show RF2K-S control window on start.
@@ -310,7 +313,7 @@ pub struct ServerConfig {
     pub ultrabeam_enabled: bool,
     /// Show UltraBeam control window on start.
     pub show_ultrabeam_window: bool,
-    /// EA7HG Visual Rotor UDP address (e.g. "192.168.1.60:3010")
+    /// EA7HG Visual Rotor UDP address (e.g. "192.168.1.4:3010")
     pub rotor_addr: Option<String>,
     pub rotor_enabled: bool,
     /// Show Rotor control window on start.
@@ -422,11 +425,11 @@ pub struct ServerConfig {
     pub totp_secret: Option<String>,
     /// TOTP 2FA enabled
     pub totp_enabled: bool,
-    /// PATCH-3: human-readable name advertised via mDNS so clients can
+    /// Human-readable name advertised via mDNS so clients can
     /// distinguish multiple ThetisLink servers on the same LAN
     /// (e.g. "Shack PC"). `None` falls back to the OS hostname.
     pub friendly_name: Option<String>,
-    /// Optional outbound relay monitor (Phase A only; does not route TL frames yet).
+    /// Optional outbound relay monitor (status only).
     pub relay_enabled: bool,
     pub relay_url: String,
     pub relay_station: String,
@@ -476,6 +479,7 @@ impl Default for ServerConfig {
             yaesu_model_last: None,
             yaesu2_model_last: None,
             yaesu2_audio_channel: 2,
+            yaesu_rx_levels_tuned: false,
             amplitec_port: None,
             amplitec_enabled: true,
             amplitec_labels: default_labels("Ant"),
@@ -795,7 +799,7 @@ fn classify_read(read: &Result<String, io::Error>) -> ConfigSource {
 /// one failed read during normal use - the rotor storing its park position, an
 /// Active tick - would replace ports, tuners, password and relay token with a
 /// bare config. On Windows a sharing violation on a file next to the exe is the
-/// realistic trigger. Found in review, 2026-08-20; the path predates this
+/// realistic trigger. Found 2026-08-20; the path predates this
 /// release, but this release is the one that made the fallback emptier.
 fn load_unlocked() -> (ServerConfig, bool) {
     let path = config_path();
@@ -809,11 +813,11 @@ fn load_unlocked() -> (ServerConfig, bool) {
     LOAD_FAILED.store(source == ConfigSource::Unreadable, Ordering::Relaxed);
     match &source {
         ConfigSource::FirstRun => log::info!(
-            "No {} yet - first run: UI language from the OS, all optional devices off",
+            "No {} yet: first run: UI language from the OS, all optional devices off",
             path.display()
         ),
         ConfigSource::Unreadable => log::error!(
-            "Cannot read {} ({}). The file is still there, so its settings are NOT lost -              but this run will not write to it, to avoid replacing them with defaults.              Close whatever is holding the file and restart.",
+            "Cannot read {} ({}). The file is still there, so its settings are NOT lost;              but this run will not write to it, to avoid replacing them with defaults.              Close whatever is holding the file and restart.",
             path.display(),
             read.as_ref()
                 .err()
@@ -830,8 +834,7 @@ fn load_unlocked() -> (ServerConfig, bool) {
 /// Split from the reading and the logging because this mapping is what actually
 /// broke: the defect was never in telling absent from unreadable, it was in
 /// giving an unreadable file the bare first-run values AND permission to
-/// overwrite. A test on the classifier alone stayed green through exactly that
-/// (review finding, 2026-08-20).
+/// overwrite. A test on the classifier alone stayed green through exactly that.
 fn config_from_source(source: ConfigSource, text: Option<&str>) -> (ServerConfig, bool) {
     match source {
         ConfigSource::File => (parse_conf(text.unwrap_or("")), true),
@@ -883,6 +886,10 @@ fn parse_conf(contents: &str) -> ServerConfig {
                 "rx2_present" => {
                     // Default true; only an explicit "false" disables RX2.
                     config.rx2_present = value.trim() != "false";
+                }
+                "yaesu_rx_levels_tuned" => {
+                    // Default false; only an explicit "true" switches it on.
+                    config.yaesu_rx_levels_tuned = value.trim() == "true";
                 }
                 "thetis_path" => {
                     let v = value.trim().to_string();
@@ -1061,7 +1068,6 @@ fn parse_conf(contents: &str) -> ServerConfig {
                     }
                 }
                 // Per-slot rotor-keys: `rotor<N>_FIELD=value` with N=1..MAX_ROTORS.
-                // PATCH-yaesu-rotor-mcp2221 phase 1.
                 k if parse_rotor_slot_prefix(k).is_some() => {
                     if let Some((slot0_idx, sub)) = parse_rotor_slot_prefix(k) {
                         ensure_rotor_slot(&mut config.rotors, slot0_idx);
@@ -1537,7 +1543,7 @@ pub fn save_mcp2221_section_expanded(value: bool) {
 /// The return value exists because the refusal below is otherwise invisible: an
 /// operator whose config file was locked at startup would fill in a whole
 /// settings screen, press Save & Start, watch the server run correctly for that
-/// session, and find nothing saved - with not a word on screen (review finding,
+/// session, and find nothing saved - with not a word on screen (found
 /// 2026-08-20).
 pub fn save(config: &ServerConfig) -> bool {
     let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1605,7 +1611,7 @@ fn render_conf(config: &ServerConfig) -> String {
         config.rotor_enabled,
         config.show_rotor_window,
     );
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1). Blocked separately so the
+    // Dual-radio slot 1. Blocked separately so the
     // existing config-format stays unchanged on upgrade (old files
     // without these keys simply load the defaults: slot 1 disabled).
     contents.push_str(&format!("rx2_present={}\n", config.rx2_present));
@@ -1624,6 +1630,7 @@ fn render_conf(config: &ServerConfig) -> String {
     contents.push_str(&format!("chat_answers_seen={}
 ", config.chat_answers_seen));
     contents.push_str(&format!("yaesu2_audio_channel={}\n", config.yaesu2_audio_channel));
+    contents.push_str(&format!("yaesu_rx_levels_tuned={}\n", config.yaesu_rx_levels_tuned));
     contents.push_str(&format!("yaesu2_ssb_switch_on_ptt={}\n", config.yaesu2_ssb_switch_on_ptt));
     contents.push_str(&format!("yaesu2_memory_write_ack={}\n", config.yaesu2_memory_write_ack));
     // Rotor backend choice + PstRotator-fields. Blocked separately so the
@@ -1661,9 +1668,8 @@ fn render_conf(config: &ServerConfig) -> String {
         contents.push_str(&format!("{}_threshold_v={}\n", prefix, t.threshold_v));
         contents.push_str(&format!("{}_hysteresis_v={}\n", prefix, t.hysteresis_v));
     }
-    // Per-rotor slots (PATCH-yaesu-rotor-mcp2221 phase 1) - rotor1_* / rotor2_*
-    // keys. Phase 1 writes only enabled / name / mcp_serial; later phases
-    // extend it with calibration + speed-fields.
+    // Per-rotor slots - rotor1_* / rotor2_*
+    // keys: enabled / name / mcp_serial, then calibration + speed fields.
     for (i, r) in config.rotors.iter().enumerate() {
         let prefix = format!("rotor{}", i + 1);
         contents.push_str(&format!("{}_enabled={}\n", prefix, r.enabled));
@@ -1821,7 +1827,7 @@ const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
     ("Connection and security", &[
         "tci", "password", "totp_", "friendly_name", "relay_", "thetis_path", "autostart",
     ]),
-    ("Receivers", &["rx2_present"]),
+    ("Receivers", &["rx2_present", "yaesu_rx_levels_tuned"]),
     // Each radio's settings under its own slot, including the three that only
     // MEAN anything on one model: the value is a choice about that radio, and
     // two radios of the same type can be attached.
@@ -1861,12 +1867,12 @@ pub fn labels_string(config: &ServerConfig) -> String {
 /// The shortest 2FA key that counts: the length of the one the settings
 /// screen generates (20 random bytes, 32 base32 characters). A key typed by hand
 /// as "A" - or none at all - is no second factor: with an empty key the code
-/// can be worked out by anyone who has the password (review 128, measured).
+/// can be worked out by anyone who has the password (measured).
 pub const MIN_TOTP_SECRET_LEN: usize = 32;
 
 /// Why a server may not start. The kind, so the settings screen picks its own
-/// translated line from it instead of asking the rule again by hand (review
-/// 129: a second reading of the rule would leave the button off without a word
+/// translated line from it instead of asking the rule again by hand (a
+/// second reading of the rule would leave the button off without a word
 /// the day the rule gains a condition); `Display` is the log's wording.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartRefusal {
@@ -1887,11 +1893,11 @@ impl std::fmt::Display for StartRefusal {
             StartRefusal::WeakPassword(why) => write!(f, "the password is too weak ({why})"),
             StartRefusal::TotpKeyMissing => write!(
                 f,
-                "2FA is switched on but its key is missing or shorter than {MIN_TOTP_SECRET_LEN} characters - generate one in the settings screen"
+                "2FA is switched on but its key is missing or shorter than {MIN_TOTP_SECRET_LEN} characters: generate one in the settings screen"
             ),
             StartRefusal::TotpKeyInvalid => write!(
                 f,
-                "2FA is switched on but its key is not a valid key - generate a new one in the settings screen"
+                "2FA is switched on but its key is not a valid key: generate a new one in the settings screen"
             ),
         }
     }
@@ -1901,7 +1907,7 @@ impl std::fmt::Display for StartRefusal {
 /// password, and the 2FA key when 2FA is on. The one rule for every way a
 /// server starts - the settings screen's button and its autostart, the command
 /// line, and `run_server_async` itself, where both meet (builds 128-130,
-/// owner's decisions 2026-10-07: the same strength everywhere, and a 2FA key of
+/// 2026-10-07: the same strength everywhere, and a 2FA key of
 /// full length). `Err` says why, as a kind.
 pub fn start_credentials(
     password: Option<&str>,
@@ -1928,22 +1934,22 @@ pub fn start_credentials(
 }
 
 /// The password - and the 2FA key, when 2FA is on - a server started from the
-/// command line runs with: those of the saved settings (owner's decision
+/// command line runs with: those of the saved settings (since
 /// 2026-10-07), judged by [`start_credentials`]. The rest of a command-line
 /// start still comes from the defaults and the options. `readable` is whether
 /// the saved settings could be read (`may_write`): a file that exists but could
 /// not be read is said as such - it does hold a password, and the screen cannot
-/// save over it either (review 128).
+/// save over it either.
 pub fn cli_credentials(saved: &ServerConfig, readable: bool) -> Result<(String, Option<String>), String> {
     if !readable {
         return Err(format!(
-            "{} exists but could not be read - close whatever holds it open and try again",
+            "{} exists but could not be read: close whatever holds it open and try again",
             config_path().display()
         ));
     }
     start_credentials(saved.password.as_deref(), saved.totp_enabled, saved.totp_secret.as_deref()).map_err(|why| {
         format!(
-            "{why} in {} - start the server once without options, set it in the settings screen, and save",
+            "{why} in {}: start the server once without options, set it in the settings screen, and save",
             config_path().display()
         )
     })
@@ -1990,7 +1996,7 @@ mod direct_connections_tests {
 
     /// On by default, and a file from before the key reads as on; only a
     /// written "false" turns it off - read back from the file, the one way the
-    /// operator's choice travels (review 135: the default alone is `true`, so
+    /// operator's choice travels (the default alone is `true`, so
     /// a test of the default could not see the key being ignored).
     #[test]
     fn direct_connections_are_allowed_unless_switched_off() {
@@ -2042,7 +2048,7 @@ mod cli_credentials_tests {
     }
 
     /// A settings file that exists but could not be read is said as such - not
-    /// as "no password", which it does hold (review 128).
+    /// as "no password", which it does hold.
     #[test]
     fn an_unreadable_file_is_named_as_unreadable() {
         let why = cli_credentials(&saved(Some("secret99"), false, None), false).unwrap_err();
@@ -2070,7 +2076,7 @@ mod cli_credentials_tests {
 
     /// The kind of each refusal - what the settings screen picks its line from
     /// - and a key of full length that is no base32 refused too: it would start
-    /// a server nobody can log in to (review 129).
+    /// a server nobody can log in to.
     #[test]
     fn each_refusal_says_its_kind() {
         assert_eq!(start_credentials(None, false, None), Err(StartRefusal::NoPassword));
@@ -2213,6 +2219,7 @@ yaesu2_audio_channel=1
         let mut c = ServerConfig::default();
         c.yaesu_audio_channel = 0;
         c.yaesu2_audio_channel = 1;
+        c.yaesu_rx_levels_tuned = true;
         c.yaesu_memory_write_ack = true;
         c.yaesu2_memory_write_ack = false;
         c.yaesu_ssb_switch_on_ptt = true;
@@ -2220,6 +2227,9 @@ yaesu2_audio_channel=1
         let back = parse_conf(&render_conf(&c));
         assert_eq!(back.yaesu_audio_channel, 0);
         assert_eq!(back.yaesu2_audio_channel, 1);
+        assert!(back.yaesu_rx_levels_tuned, "the receive-levels box was not saved or not read back");
+        // And off stays off: a box that reads back as on would switch itself on at every start.
+        assert!(!parse_conf(&render_conf(&ServerConfig::default())).yaesu_rx_levels_tuned);
         assert!(back.yaesu_memory_write_ack);
         assert!(!back.yaesu2_memory_write_ack);
         assert!(back.yaesu_ssb_switch_on_ptt);
@@ -2288,7 +2298,7 @@ yaesu2_audio_channel=1
         assert_eq!(line_of("yaesu2_memory_write_ack"), "yaesu2_memory_write_ack=false");
     }
 
-    /// The lead is no setting since build 294 (owner, 2026-10-23): a conf
+    /// The lead is no setting since build 294: a conf
     /// that still names it reads, and the keys go at the next save.
     #[test]
     fn a_conf_with_the_old_lead_keys_reads_and_drops_them() {
@@ -2297,7 +2307,7 @@ yaesu2_audio_channel=1
         assert!(!render_conf(&c).contains("tx_lead"));
     }
 
-    /// Both states (working rule 13): the measurement runs only with the box
+    /// Both states: the measurement runs only with the box
     /// ticked and the developer mode on; the mode comes back from the file.
     #[test]
     fn the_measurement_needs_the_developer_mode() {

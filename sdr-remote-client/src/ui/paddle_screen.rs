@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The Morse paddle on the desktop: the per-frame event pump and its settings
-//! section. Step 2 of `DESIGN-remote-cw.md`: read the paddle, run the keyer,
-//! and write every key edge to the log. Nothing is transmitted yet - the
-//! sidetone is step 3, the packet to the server step 4.
+//! section: read the paddle, run the keyer, and write every key edge to the log.
 //!
 //! The transport is `crate::paddle`; the rule is `sdr_remote_logic::cw_keyer`.
 //! This file only joins the two to the screen and the log.
@@ -19,7 +17,7 @@ impl SdrRemoteApp {
 
     /// The transmitter the key goes to right now: the setting, unless the
     /// server does not have that radio - then the first one it does have.
-    /// The same rule as the Bluetooth button (design section 5.2a).
+    /// The same rule as the Bluetooth button.
     fn cw_effective_target(&self) -> u8 {
         sdr_remote_logic::ble_ptt::effective_target(self.cw_configured(), self.cw_target, self.radios_known)
     }
@@ -60,7 +58,7 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetCwHang(self.cw_hang_ms));
             self.cw_hang_sent = Some(self.cw_hang_ms);
         }
-        // Measurement 4 of the design: how long after the edge the tone was
+        // The sidetone delay: how long after the edge the tone was
         // first rendered, and into how big a buffer. Every onset for the first
         // twenty, then one in a hundred, so the log shows the number without
         // drowning in it.
@@ -99,16 +97,16 @@ impl SdrRemoteApp {
                 }
                 PaddleEvent::Lost(why) => {
                     self.paddle.set_status(PaddleStatus::Looking);
-                    log::warn!("CW paddle: no board ({}) - looking again every {} s", why, crate::paddle::RECONNECT_DELAY.as_secs());
+                    log::warn!("CW paddle: no board ({}); looking again every {} s", why, crate::paddle::RECONNECT_DELAY.as_secs());
                     self.paddle_key_down = false;
                 }
                 PaddleEvent::Edge { edge, seen_at_ms } => {
                     let since = crate::paddle::gap_since(self.paddle_last_edge_ms, edge.at_ms);
-                    // The log line of working rule 11 for this step: one per edge,
+                    // The log line for this step: one per edge,
                     // with the planned time, the length of the state it ends,
                     // and how far behind its planned time the reader saw it -
                     // the number that catches a reader that stretches elements,
-                    // which the planned times alone cannot (review finding).
+                    // which the planned times alone cannot.
                     log::info!(
                         "CW key {} at {} ms{} late {} ms",
                         if edge.down { "down" } else { "up" },
@@ -201,7 +199,7 @@ impl SdrRemoteApp {
             ui.label(rust_i18n::t!("screen_cw_speed").to_string());
             ui.add(egui::DragValue::new(&mut self.keyer_settings.wpm).speed(0.2).range(4..=60).suffix(" wpm"))
                 .on_hover_text(rust_i18n::t!("screen_cw_speed_tooltip").to_string());
-            egui::ComboBox::from_id_source("cw_paddle_mode")
+            egui::ComboBox::from_id_salt("cw_paddle_mode")
                 .selected_text(match self.keyer_settings.mode {
                     PaddleMode::IambicA => "Iambic A",
                     PaddleMode::IambicB => "Iambic B",

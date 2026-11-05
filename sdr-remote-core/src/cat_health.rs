@@ -6,7 +6,7 @@
 //! the right thing: *check baud radio-menu vs config*. It fires when the radio
 //! has said nothing for five seconds.
 //!
-//! PD0PLK's report 68 is the case it misses. His radio answered — it just
+//! A case seen in the field is the one it misses. The radio answered - it just
 //! answered badly, because the server was on 4800 and the set was not. Writes
 //! to the port did not drain, one query came back carrying ten replies at once,
 //! and an `IF;` answer arrived twelve bytes long where the 991A defines
@@ -57,7 +57,7 @@ mod tests {
         assert!(!baud_hint_due(CatTrouble { silent_secs: 4, ..Default::default() }));
     }
 
-    /// PD0PLK, report 68. One query, ten answers:
+    /// As seen in the field. One query, ten answers:
     ///
     /// ```text
     /// unknown ID code '007077100;MD04;TX0;AG0041;PC050;PS1;?;?;RG0251;...'
@@ -69,7 +69,7 @@ mod tests {
         assert!(baud_hint_due(CatTrouble { frames_run_together: 1, ..Default::default() }));
     }
 
-    /// Also his, and the one that drove the reconnect every thirty seconds:
+    /// Also from the field, and the one that drove the reconnect every thirty seconds:
     ///
     /// ```text
     /// S-meter poll failed: failed to write whole buffer

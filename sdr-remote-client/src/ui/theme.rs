@@ -20,7 +20,7 @@ pub(crate) use sdr_remote_theme::{apply_visuals, colour_button, Palette, ThemeVa
 // ── Toggle / selection colors ──────────────────────────────────────────────
 
 /// The only selected/toggled-ON fill. Blue is exclusively for toggled-ON state
-/// (`feedback_ui_button_color_convention`). Momentary action buttons get NO
+/// Momentary action buttons get NO
 /// fill (default `egui::Button`).
 pub(crate) const TL_SELECTED_FILL: Color32 = Color32::from_rgb(100, 160, 230);
 
@@ -49,7 +49,7 @@ pub(crate) const TL_CHANNEL_HEADER_FONT: f32 = 13.0;
 /// Shared toggle/selected button. Enforces the house rules:
 /// - blue `TL_SELECTED_FILL` ONLY when `selected` (toggled-ON);
 /// - OFF-state = default `egui::Button` (no custom fill / no "disabled" gray);
-/// - hover text is MANDATORY (`feedback_ui_hover_always`).
+/// - hover text is MANDATORY.
 ///
 /// Use this instead of inline `Button::new(...).fill(...)` so all windows get
 /// the same toggle style and hover. Returns the `Response` so the
@@ -76,7 +76,7 @@ pub(crate) fn tl_toggle_button(
 
 /// Momentary action button (no toggle): default styling, NO fill, with
 /// mandatory hover. For buttons like "Copy VFO", "Refresh", A<>B swap
-/// (`feedback_ui_button_color_convention`: no blue for momentary actions).
+/// (no blue for momentary actions).
 pub(crate) fn tl_action_button(
     ui: &mut egui::Ui,
     label: &str,

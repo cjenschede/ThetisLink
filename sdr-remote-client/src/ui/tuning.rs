@@ -67,7 +67,14 @@ impl SdrRemoteApp {
     /// full-band span when there is one, the DDC rate otherwise - and with no
     /// width at all this returns the VFO, which is the right answer when there
     /// is no pan and the only sensible one when there is.
-    pub(super) fn spectrum_target_center_hz(vfo_hz: u64, full_span_hz: u32, pan: f32) -> f64 {
+    ///
+    /// The pan is the one the server receives (`spectrum_pan_on_the_wire`, the
+    /// fine one where the server takes it), so the view is the window the
+    /// server cuts. With the pan as the slider holds it, a pan below what
+    /// reached the server left a strip without fine bins at one edge - at 1024x
+    /// half the screen (2026-11-03).
+    pub(super) fn spectrum_target_center_hz(vfo_hz: u64, full_span_hz: u32, pan: f32, fine: bool) -> f64 {
+        let pan = sdr_remote_core::protocol::spectrum_pan_on_the_wire(pan, fine);
         vfo_hz as f64 + pan as f64 * full_span_hz as f64
     }
 
@@ -80,7 +87,7 @@ impl SdrRemoteApp {
     /// cleared when the option is switched off, and it outlives the stream that
     /// set it.
     ///
-    /// It was the other way round until the review pointed at it (2026-08-15).
+    /// It was the other way round until 2026-08-15.
     /// Switch the full band on at 384 kHz, off again, then change the DDC rate
     /// to 192: the client would go on scaling the pan by 384 while the server
     /// used 192. That is the same class of fault as the one this file just
@@ -218,7 +225,7 @@ impl SdrRemoteApp {
             (true, _, _) => "the DDC rate",
             (false, true, true) => "the full-band row, which is on",
             (false, false, true) => "a full-band row that arrived earlier (option now off)",
-            (false, _, false) => "nowhere - no width known yet",
+            (false, _, false) => "nowhere: no width known yet",
         }
     }
 
@@ -285,7 +292,7 @@ impl SdrRemoteApp {
 
     pub(super) fn set_pending_freq_a(&mut self, freq: u64) {
         let target_center =
-            Self::spectrum_target_center_hz(freq, self.rx1_full_span_hz(), self.spectrum_pan);
+            Self::spectrum_target_center_hz(freq, self.rx1_full_span_hz(), self.spectrum_pan, self.server_fine_spectrum_view);
         self.frequency_hz = freq;
         self.pending_freq = Some(freq);
         self.pending_freq_at = Some(Instant::now());
@@ -298,7 +305,7 @@ impl SdrRemoteApp {
 
     pub(super) fn set_pending_freq_b(&mut self, freq: u64) {
         let target_center =
-            Self::spectrum_target_center_hz(freq, self.rx2_full_span_hz(), self.rx2_spectrum_pan);
+            Self::spectrum_target_center_hz(freq, self.rx2_full_span_hz(), self.rx2_spectrum_pan, self.server_fine_spectrum_view);
         self.rx2_frequency_hz = freq;
         self.rx2_pending_freq = Some(freq);
         self.rx2_pending_freq_at = Some(Instant::now());
@@ -347,7 +354,7 @@ impl SdrRemoteApp {
 /// sends it on a 50 ms tick, so 2 s is many packets missed.
 const ROW_FRESH: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Whether a receiver's full-band row is of now (build 234, review of 233).
+/// Whether a receiver's full-band row is of now.
 /// Switched on is not enough: the server sends a receiver's row only while
 /// that receiver's spectrum or VRX window is open as well, and the client
 /// keeps the last row it got. A row that no longer comes kept its old centre,
@@ -372,8 +379,8 @@ mod row_live_tests {
     use super::RowLive;
     use std::time::Duration;
 
-    /// A row counts while it comes and is switched on (build 234, the probe
-    /// of the review of 233: the RX2 row stopped when its windows closed).
+    /// A row counts while it comes and is switched on (build 234; in build
+    /// 233 the RX2 row stopped when its windows closed).
     #[test]
     fn a_row_counts_only_while_it_still_comes() {
         let l = |switched_on, age: Option<u64>| RowLive { switched_on, age: age.map(Duration::from_millis) }.live();
@@ -391,13 +398,13 @@ mod row_live_tests {
         let reset = &reset[..reset.find("\n    }\n").unwrap()];
         assert!(reset.contains("self.full_row_at = None;"));
         assert!(reset.contains("self.rx2_full_row_at = None;"));
-        // The spectrum's fallback while tuning asks it too (review of 233).
+        // The spectrum's fallback while tuning asks it too.
         let rx1 = include_str!("spectrum_content.rs");
         let rx2 = include_str!("rx_controls.rs");
         assert_eq!(rx1.matches("if !rx1_tuning_active || !self.full_row_live(self.full_row_at) {").count(), 1);
         assert_eq!(rx2.matches("if !rx2_tuning_active || !self.full_row_live(self.rx2_full_row_at) {").count(), 1);
         // And the VRX waterfall's backdrop, each with its own receiver (build
-        // 235, review of 234); the switch alone no longer decides it.
+        // 235); the switch alone no longer decides it.
         let sync = &src[..src.find("#[cfg(test)]").unwrap()];
         let at = |needle: &str| sync.find(needle).unwrap_or_else(|| panic!("{needle}"));
         assert_eq!(sync.matches("if self.full_row_live(self.full_row_at) {").count(), 1);
@@ -425,9 +432,18 @@ mod pan_range_tests {
     fn the_centre_is_the_vfo_shifted_by_the_pan() {
         let vfo = 14_200_000u64;
         let width = 384_000u32;
-        assert_eq!(
-            SdrRemoteApp::spectrum_target_center_hz(vfo, width, 0.25),
-            vfo as f64 + 0.25 * width as f64
+        for fine in [true, false] {
+            let on_the_wire = sdr_remote_core::protocol::spectrum_pan_on_the_wire(0.25, fine);
+            assert_eq!(
+                SdrRemoteApp::spectrum_target_center_hz(vfo, width, 0.25, fine),
+                vfo as f64 + on_the_wire as f64 * width as f64
+            );
+        }
+        // A server without the fine view gets the coarse pan, and the view is
+        // drawn where that one cuts.
+        assert_ne!(
+            SdrRemoteApp::spectrum_target_center_hz(vfo, width, 0.00009, true),
+            SdrRemoteApp::spectrum_target_center_hz(vfo, width, 0.00009, false)
         );
     }
 
@@ -436,7 +452,7 @@ mod pan_range_tests {
     #[test]
     fn without_pan_the_centre_is_the_vfo() {
         let vfo = 7_100_000u64;
-        assert_eq!(SdrRemoteApp::spectrum_target_center_hz(vfo, 384_000, 0.0), vfo as f64);
+        assert_eq!(SdrRemoteApp::spectrum_target_center_hz(vfo, 384_000, 0.0, true), vfo as f64);
     }
 
     /// The pan moves it by its share of the receiver, both ways and evenly.
@@ -444,10 +460,13 @@ mod pan_range_tests {
     fn the_pan_moves_the_centre_both_ways() {
         let vfo = 7_100_000u64;
         let width = 192_000u32;
-        let right = SdrRemoteApp::spectrum_target_center_hz(vfo, width, 0.1);
-        let left = SdrRemoteApp::spectrum_target_center_hz(vfo, width, -0.1);
-        assert!((right - vfo as f64 - 19_200.0).abs() < 1.0, "right: {right}");
-        assert!((left - vfo as f64 + 19_200.0).abs() < 1.0, "left: {left}");
+        let right = SdrRemoteApp::spectrum_target_center_hz(vfo, width, 0.1, true);
+        let left = SdrRemoteApp::spectrum_target_center_hz(vfo, width, -0.1, true);
+        // Within one step of the fine pan on the wire (3 Hz at 192 kHz).
+        let step = width as f64 / 65534.0;
+        assert!((right - vfo as f64 - 19_200.0).abs() <= step, "right: {right}");
+        assert!((left - vfo as f64 + 19_200.0).abs() <= step, "left: {left}");
+        assert_eq!(right - vfo as f64, vfo as f64 - left, "evenly");
     }
 
     /// No width known yet - before the first packet of a session - must still
@@ -456,7 +475,7 @@ mod pan_range_tests {
     #[test]
     fn with_no_width_the_centre_falls_back_to_the_vfo() {
         let vfo = 3_694_000u64;
-        assert_eq!(SdrRemoteApp::spectrum_target_center_hz(vfo, 0, 0.3), vfo as f64);
+        assert_eq!(SdrRemoteApp::spectrum_target_center_hz(vfo, 0, 0.3, true), vfo as f64);
     }
 
 
@@ -539,7 +558,7 @@ mod pan_range_tests {
     fn with_no_width_at_all_the_line_says_so() {
         assert_eq!(
             SdrRemoteApp::full_span_source(0, 0, false),
-            "nowhere - no width known yet"
+            "nowhere: no width known yet"
         );
     }
 

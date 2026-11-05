@@ -62,7 +62,7 @@ pub struct Rf2kStatus {
     pub max_power_w: u16,
     // Device
     pub device_name: String,
-    // Debug (Phase D)
+    // Debug
     pub debug_available: bool,
     pub bias_pct_x10: u16,
     pub psu_source: u8,
@@ -79,7 +79,7 @@ pub struct Rf2kStatus {
     pub tuner_6m: bool,
     pub band_gap_allowed: bool,
     pub controller_version: u16,
-    // Drive config (Phase D): SSB, AM, CONT (`sdr_remote_core::rf2k_drive`).
+    // Drive config: SSB, AM, CONT (`sdr_remote_core::rf2k_drive`).
     pub drive_config: sdr_remote_core::rf2k_drive::DriveTable,
 }
 
@@ -141,7 +141,7 @@ pub enum Rf2kCmd {
     SetAntenna { antenna_type: u8, number: u8 }, // type 0=Internal, 1=External
     ErrorReset,
     Close,                      // FW Close (shutdown Pi)
-    // Tuner controls (Phase B)
+    // Tuner controls
     TunerMode(u8),              // 0=MANUAL, 1=AUTO
     TunerBypass(bool),          // true=bypass on, false=bypass off
     TunerReset,
@@ -151,10 +151,10 @@ pub enum Rf2kCmd {
     TunerCUp,
     TunerCDown,
     TunerK,                     // Cycle K coefficient (CL->LC->BYPASS)
-    // Drive controls (Phase C)
+    // Drive controls
     DriveUp,
     DriveDown,
-    // Debug controls (Phase D)
+    // Debug controls
     SetHighPower(bool),
     SetTuner6m(bool),
     SetBandGap(bool),
@@ -268,7 +268,7 @@ struct ErrorHistoryEntry {
 }
 
 /// The Pi's drive table, read and written back with the same field names
-/// (build 206; review of 205: the write was a hand-written `json!` that a swap
+/// (build 206: the write was a hand-written `json!` that a swap
 /// of `ssb` and `am` left green, and every save would have swapped both rows on
 /// the Pi).
 #[derive(Deserialize, Serialize)]
@@ -290,10 +290,10 @@ impl DriveConfigResponse {
     }
 
     /// One changed cell into the Pi's table, before the save writes it back
-    /// (review of 206: this was two lines in `execute_command`, where a swap
+    /// (this was two lines in `execute_command`, where a swap
     /// of row and band stayed green). A band outside the Pi's row is left
     /// alone, and so is a row outside the shared order - `row_mut` would put
-    /// that one in CONT (review of 207). The save then writes the table as it
+    /// that one in CONT. The save then writes the table as it
     /// was, and the screen follows it back.
     fn apply(&mut self, change: sdr_remote_core::rf2k_drive::DriveChange) {
         if change.category as usize >= sdr_remote_core::rf2k_drive::ROWS {
@@ -525,7 +525,7 @@ fn rf2k_thread(
                     status.lock().unwrap().connected = false;
                     // The Pi may come back restarted, or changed through its
                     // own web page: read its drive table again then, not keep
-                    // the one from before (owner, 2026-10-15).
+                    // the one from before.
                     drive_config_fetched = false;
                 }
                 // Safety: if we lost connection during tune, turn off carrier
@@ -567,7 +567,7 @@ fn get_json<T: serde::de::DeserializeOwned>(client: &reqwest::blocking::Client, 
         return Err(format!("{} returned {} - {}", url, status, body));
     }
     let body = resp.text().map_err(|e| format!("{} read: {}", url, e))?;
-    serde_json::from_str(&body).map_err(|e| format!("{} parse: {} - body: {}", url, e, &body[..body.len().min(200)]))
+    serde_json::from_str(&body).map_err(|e| format!("{} parse: {}; body: {}", url, e, &body[..body.len().min(200)]))
 }
 
 fn poll_status(client: &reqwest::blocking::Client, base_url: &str) -> Result<Rf2kStatus, String> {
@@ -1015,7 +1015,7 @@ fn apply_drive_config(s: &mut Rf2kStatus, dc: &mut DriveConfigResponse) {
         let from_pi = dc.row_mut(category as u8);
         // A shorter row leaves the last cells as they were, and a save into
         // one of them is dropped by `SetDriveConfig` - both silent. Not seen
-        // from a real Pi; said aloud if it ever is (review of 204).
+        // from a real Pi; said aloud if it ever is.
         if from_pi.len() != BANDS {
             warn!(
                 "RF2K-S drive config: {} has {} bands, expected {}",
@@ -1084,7 +1084,7 @@ pub fn debug_labels_string(status: &Rf2kStatus) -> String {
         .collect::<Vec<_>>()
         .join(";");
     // Fields 44-46 in row order, as one piece, so the rows cannot change
-    // places here (review of 204).
+    // places here.
     let drive_rows = sdr_remote_core::rf2k_drive::to_wire(&status.drive_config).join(",");
     format!(
         ",{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
@@ -1127,14 +1127,13 @@ pub fn tuner_mode_name(mode: u8) -> &'static str {
 }
 
 // ============================================================================
-// Drive-restore observability (Phase B - passive observer)
+// Drive-restore observability (passive observer)
 // ----------------------------------------------------------------------------
 // Watches RF2K-S operate-mode transitions against the Thetis-side ZZPC drive
 // percentage (shared via `Arc<AtomicU8>`). Purely observational - emits
 // transition-only log lines. A `RESTORE FAILED` WARN line is the key signal:
 // it means the external restore flow (RF2K-S firmware <-> Thetis CAT) did NOT
 // bring the drive back to its pre-operate value within the timeout window.
-// See the internal design notes for the drive-restore reliability rationale.
 // ============================================================================
 
 /// Observer timeout: how long after an operate-mode transition we wait for
@@ -1302,7 +1301,7 @@ pub(crate) fn next_drive_state(
                 (
                     Standby,
                     Some(DriveObserverLog::Info(format!(
-                        "RF2K drive: restore OK \u{2014} Thetis ZZPC={}% matches saved {}% (\u{0394}={}ms)",
+                        "RF2K drive: restore OK, Thetis ZZPC={}% matches saved {}% (\u{0394}={}ms)",
                         value, saved, delta_ms
                     ))),
                 )
@@ -1323,7 +1322,7 @@ pub(crate) fn next_drive_state(
                         None => (
                             Standby,
                             Some(DriveObserverLog::Warn(
-                                "RF2K drive: no saved pre-Operate snapshot, cannot restore - skipping".to_string()
+                                "RF2K drive: no saved pre-Operate snapshot, cannot restore; skipping".to_string()
                             )),
                         ),
                     };
@@ -1476,7 +1475,7 @@ impl DriveObserverState {
 }
 
 // ============================================================================
-// Tests (Phase B acceptance §1.4 - pure state machine only)
+// Tests (pure state machine only)
 // ============================================================================
 
 #[cfg(test)]
@@ -1484,7 +1483,7 @@ mod tests {
     use super::*;
 
     /// The Pi names its rows; the row order is `rf2k_drive`'s. `row_mut` is
-    /// where they meet, and this ties it to `CATEGORY_NAMES` (review of 204).
+    /// where they meet, and this ties it to `CATEGORY_NAMES`.
     #[test]
     fn the_pis_row_names_follow_the_shared_order() {
         use sdr_remote_core::rf2k_drive::{CATEGORY_NAMES, ROWS};
@@ -1499,7 +1498,7 @@ mod tests {
             assert_eq!(dc.row_mut(category)[0], (category + 1) * 10, "row {category} is not {}", CATEGORY_NAMES[category as usize]);
         }
         // And back: what "Save to Pi" puts carries each row under its own
-        // name (review of 205).
+        // name.
         for category in 0..ROWS as u8 {
             dc.row_mut(category)[0] = 100 + category;
         }
@@ -1510,7 +1509,7 @@ mod tests {
     }
 
     /// A change from a screen lands in its own row and band of what the save
-    /// writes to the Pi, and nowhere else (review of 206).
+    /// writes to the Pi, and nowhere else.
     #[test]
     fn a_change_lands_in_its_own_cell_of_the_save() {
         use sdr_remote_core::rf2k_drive::{DriveChange, BANDS, CATEGORY_NAMES, ROWS};
@@ -1535,7 +1534,7 @@ mod tests {
             }
         }
         // A band the Pi's row does not have changes nothing, and neither does
-        // a row outside the shared order (review of 207).
+        // a row outside the shared order.
         for change in [
             DriveChange { category: 0, band: BANDS as u8, value: 77 },
             DriveChange { category: ROWS as u8, band: 0, value: 77 },
@@ -1575,7 +1574,6 @@ mod tests {
         DriveObserverCtx::new(Duration::from_secs(2))
     }
 
-    // §1.4 test #1
     #[test]
     fn standby_to_standby_no_event() {
         let (s, log) = next_drive_state(
@@ -1587,7 +1585,6 @@ mod tests {
         assert!(log.is_none());
     }
 
-    // §1.4 test #2
     #[test]
     fn standby_enters_pre_operate_on_rf2k_operate() {
         let (s, log) = next_drive_state(
@@ -1609,7 +1606,6 @@ mod tests {
         }
     }
 
-    // §1.4 test #3
     #[test]
     fn operate_transition_observed_zzpc_drop() {
         let ctx = ctx_with(Some(100), 100, Some(Instant::now()));
@@ -1629,7 +1625,6 @@ mod tests {
         }
     }
 
-    // §1.4 test #4
     #[test]
     fn operate_transition_no_zzpc_change_times_out() {
         let start = Instant::now() - Duration::from_millis(2_500);
@@ -1646,7 +1641,6 @@ mod tests {
         }
     }
 
-    // §1.4 test #5
     #[test]
     fn operate_to_standby_triggers_restore_watch() {
         let ctx = ctx_with(Some(100), 10, None);
@@ -1669,7 +1663,6 @@ mod tests {
         }
     }
 
-    // §1.4 test #6
     #[test]
     fn restore_success_on_zzpc_match() {
         let ctx = ctx_with(Some(100), 10, Some(Instant::now()));
@@ -1688,7 +1681,7 @@ mod tests {
         }
     }
 
-    // §1.4 test #7 - the critical edge-case capture
+    // The critical edge-case capture.
     #[test]
     fn restore_failure_on_timeout() {
         let start = Instant::now() - Duration::from_millis(2_500);
@@ -1707,7 +1700,6 @@ mod tests {
         }
     }
 
-    // §1.4 test #8
     #[test]
     fn restore_partial_wrong_value_stays_in_watch() {
         let ctx = ctx_with(Some(100), 50, Some(Instant::now()));
@@ -1720,7 +1712,7 @@ mod tests {
         assert!(log.is_none());
     }
 
-    // §1.4 test #9 - end-to-end rapid cycle via DriveObserverState
+    // End-to-end rapid cycle via DriveObserverState.
     #[test]
     fn rapid_operate_standby_cycle_preserves_saved_drive() {
         let mut obs = DriveObserverState::new();
@@ -1743,7 +1735,6 @@ mod tests {
         assert_eq!(obs.state, Rf2kDriveState::Standby);
     }
 
-    // §1.4 test #10
     #[test]
     fn multiple_zzpc_observations_during_operate_are_silent() {
         let ctx = ctx_with(Some(100), 12, None);
@@ -1758,7 +1749,7 @@ mod tests {
         }
     }
 
-    // §1.4 test #11 - caller-side ctx update for last_known_zzpc in Standby
+    // Caller-side ctx update for last_known_zzpc in Standby.
     #[test]
     fn saved_drive_updates_on_standby_zzpc_via_caller() {
         let mut obs = DriveObserverState::new();

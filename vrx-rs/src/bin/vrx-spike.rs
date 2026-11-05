@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// VRX-channelizer spike — proves the FFT-channelizer pipeline end-to-end
+// VRX-channelizer spike: proves the FFT-channelizer pipeline end-to-end
 // with a synthetic test signal. Generates a complex test tone, runs it
 // through window+FFT, bin-select, iFFT, overlap-add, USB demod, AGC,
 // and writes the result as a mono 8 kHz WAV to `target/release/vrx-spike-out.wav`.
@@ -9,7 +9,7 @@
 // audio at +5 kHz carrier offset, tuned in by selecting bins
 // [+5 kHz, +8 kHz] from the 384 kHz wideband, demodulated as SSB-USB).
 //
-// Parameters per M1 design (see brief):
+// Parameters per the M1 design:
 //   input rate   = 384 kHz complex I/Q
 //   FFT size N   = 6144  (bin width 62.5 Hz; mixed-radix)
 //   FFT window   = Hann
@@ -35,7 +35,7 @@ const VRX_BW_BINS: usize = 48; // 3 kHz at 62.5 Hz/bin
 const VRX_CARRIER_OFFSET_HZ: f32 = 5000.0;
 
 fn main() {
-    // ---- 0. Args parsing (minimal — no clap dep) ----
+    // ---- 0. Args parsing (minimal; no clap dep) ----
     // Usage:
     //   vrx-spike                                    → synthetic test
     //   vrx-spike --input <path>                     → load IQ from file
@@ -67,7 +67,7 @@ fn main() {
                 i += 2;
             }
             "--help" | "-h" => {
-                println!("vrx-spike — FFT-channelizer test tool");
+                println!("vrx-spike: FFT-channelizer test tool");
                 println!("  (no args)              synthetic 1 kHz tone via +5 kHz USB carrier");
                 println!("  --input <path>         read IQ from VRX_DUMP file");
                 println!("  --offset <hz>          carrier offset from VFO (default +5000)");
@@ -143,7 +143,7 @@ fn main() {
     // so the first samples don't hit max_gain and overshoot.
     let mut agc_envelope = 0.05_f32;
 
-    // ---- 4. Main loop — slide a 6144-sample window with 3072 hop ----
+    // ---- 4. Main loop; slide a 6144-sample window with 3072 hop ----
     let mut audio_out: Vec<f32> = Vec::new();
     let mut raw_pre_agc_peak: f32 = 0.0; // diagnostic
     let mut cursor: usize = 0;

@@ -38,7 +38,7 @@ import uniffi.sdr_remote.logLine
  * A Bluetooth PTT button, from scan to transmitter.
  *
  * Two rules are kept out of this file on purpose, and both were written here
- * first and taken back out after review. The transmit decision lives in
+ * first and later moved out. The transmit decision lives in
  * [BlePttGate], and so does the question of whether a dropped link should be
  * waited for ([bleDropPolicy]). Both are tested in sdr-remote-logic without a
  * phone and without a button; this file reports what happened and carries out
@@ -56,7 +56,7 @@ import uniffi.sdr_remote.logLine
  * not a PTT source.
  *
  * Android 12 and up. On 11 and older a BLE scan needs the location permission,
- * which is a large ask for a transmit button; see the patch brief.
+ * which is a large ask for a transmit button.
  */
 class BlePttController(
     private val context: Context,
@@ -69,12 +69,12 @@ class BlePttController(
      * things: in toggle mode a release means nothing at all, and a link loss
      * must still stop the transmitter. That distinction used to be made inside
      * this file, by keeping a flag of whether it was toggled on - a flag no
-     * exit could reach (owner, build 59).
+     * exit could reach.
      */
     private val onGone: () -> Unit,
 ) {
     companion object {
-        /** The button's notify service. Measured, see the patch brief. */
+        /** The button's notify service, as measured on the button. */
         val SERVICE_UUID: UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
 
         /** Client Characteristic Configuration - the standard notify switch. */
@@ -154,7 +154,7 @@ class BlePttController(
      * opening the picker spends another. Seen going 2 -> 5 for one
      * re-selection, which is exactly right and looks wrong.
      * Without this a slow callback from a replaced client could still set a
-     * status or key the transmitter, which is what a review blocked phase 2 on.
+     * status or key the transmitter, which must never happen.
      */
     private var generation = 0
 
@@ -175,7 +175,7 @@ class BlePttController(
      * tears the stack down underneath us: the connection callback may never
      * come, so nothing let go of the button, nothing stopped the transmitter,
      * and the status went on saying "connected" about a link that no longer
-     * existed. The owner found that by switching Bluetooth off and on: the
+     * existed. Switching Bluetooth off and on showed it: the
      * button never came back, and picking it from the list again was the only
      * cure (2026-09-04).
      *
@@ -213,7 +213,7 @@ class BlePttController(
         // reports the release. Closing the client below does not silence it:
         // a callback already in flight arrives afterwards, and with the old
         // generation still current it would be treated as live - a press from a
-        // client that no longer exists (review finding).
+        // client that no longer exists.
         val gen = ++generation
         act(gate.begin(gen.toULong()), 0u, "bluetooth switched off")
         // The client cannot survive the adapter going away, so there is nothing
@@ -227,7 +227,7 @@ class BlePttController(
         returning = false
         scanning = false
         _status.value = if (wanted) Status.Waiting else Status.Off
-        say("bluetooth switched off - let go of the button")
+        say("bluetooth switched off: let go of the button")
     }
 
     private fun adapterOn() {
@@ -236,7 +236,7 @@ class BlePttController(
             say("bluetooth back on")
             return
         }
-        say("bluetooth back on - reconnecting to $address")
+        say("bluetooth back on: reconnecting to $address")
         connect(address)
     }
 
@@ -265,8 +265,8 @@ class BlePttController(
             // Named for the path, not just the cause. Both refusals used to
             // write the same line, so a log could not say which of the two had
             // spoken - and a message that cannot name its own path is evidence
-            // for neither (review finding, round 4).
-            note("Bluetooth is off - not scanning")
+            // for neither.
+            note("Bluetooth is off: not scanning")
             return
         }
         if (scanning) return
@@ -278,9 +278,9 @@ class BlePttController(
         //
         // Between them that covers every state the controller can be in after
         // the first successful connect, which is why the button was never in
-        // the list a second time (owner, build 9).
+        // the list a second time.
         if (gatt != null || wanted) {
-            say("letting go before scanning - a connected button does not advertise")
+            say("letting go before scanning: a connected button does not advertise")
             disconnect()
         }
         _found.value = emptyList()
@@ -334,7 +334,7 @@ class BlePttController(
                 // reset never ran, and the cleanup on leaving the picker found
                 // a status that was not Off and skipped the reconnect. The
                 // button had already been let go of to scan at all, so it just
-                // stayed that way (review finding, round 4).
+                // stayed that way.
                 if (_status.value == Status.Scanning) _status.value = Status.Off
                 note("scan failed ($errorCode)")
             }
@@ -353,9 +353,9 @@ class BlePttController(
             // GATT attempt that cannot succeed. Reached by opening the picker
             // with Bluetooth off and then closing the settings dialog - the
             // scan returns early, so the restore path reads a status set by a
-            // path that never ran (review finding, round 4).
+            // path that never ran.
             adapter?.takeIf { it.isEnabled }?.getRemoteDevice(address)
-                ?: run { note("Bluetooth is off - not connecting"); return }
+                ?: run { note("Bluetooth is off: not connecting"); return }
         } catch (e: IllegalArgumentException) {
             note("bad address: $address")
             return
@@ -444,7 +444,7 @@ class BlePttController(
             main.launch { onByte(gen, b.toUByte()) }
         }
 
-        // Android 12 does not call the overload above. The owner's phone runs
+        // Android 12 does not call the overload above. The test phone runs
         // 13, so this path has never executed anywhere - it is the whole data
         // path on an older phone, and nobody has ever run it.
         @Deprecated("Kept for Android 12, which does not call the value overload")
@@ -480,7 +480,7 @@ class BlePttController(
                 // transmitter. Measured at 2 to 4 seconds out of range, which
                 // fits the 4000 ms supervision timeout.
                 //
-                // The status code is deliberately not read. On the owner's
+                // The status code is deliberately not read. On the test
                 // phone an established link that falls away and a local
                 // teardown both report 0, so it cannot tell them apart.
                 val policy = bleDropPolicy(wanted)
@@ -546,7 +546,7 @@ class BlePttController(
         } else {
             // Without a CCCD notifications cannot be switched on at all, and
             // the button would sit there looking connected and doing nothing.
-            note("no notify descriptor - the button will stay silent")
+            note("no notify descriptor: the button will stay silent")
         }
         val wasReturning = returning
         returning = false
@@ -572,7 +572,7 @@ class BlePttController(
             // over the uniffi boundary into the Rust logger, which takes a lock
             // and writes to a file - real I/O, in front of the transmit command,
             // on a path this project puts before everything else. Introduced in
-            // build 7 and caught in review the same day.
+            // build 7 and removed the same day.
             BlePttAction.KEY_DOWN -> {
                 onKey(true)
                 say("key down ($why)")
@@ -601,7 +601,7 @@ class BlePttController(
     /**
      * One line, into the system log **and** into ThetisLink's own log file.
      *
-     * All of this used to go to logcat alone, which meant the owner could never
+     * All of this used to go to logcat alone, which meant the operator could never
      * see any of it and a diagnosis needed a cable - and a cable suppresses the
      * very power saving the overnight test is about. The Rust logger writes to
      * both, so one call across the bridge closes it.

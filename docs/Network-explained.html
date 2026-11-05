@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>From server to client — how ThetisLink gets everything across the network</title>
+<title>From server to client: how ThetisLink gets everything across the network</title>
 <style>
   :root{
     --bg:#0f1320; --panel:#171c2e; --ink:#e8ecf6; --muted:#9aa6c4;
@@ -56,7 +56,7 @@
 <header>
   <h1>From server to client</h1>
   <p>How the demodulated audio, the spectrum, the S-meter and all the controls travel back and forth
-  between the ThetisLink server and your client — explained in plain language. With pictures.</p>
+  between the ThetisLink server and your client: explained in plain language. With pictures.</p>
   <p style="margin-top:10px;font-size:14px"><a href="Netwerk-uitleg.html">Nederlands</a> &nbsp;·&nbsp; <b>English</b></p>
 </header>
 
@@ -70,18 +70,18 @@
 <section id="intro">
   <h2>The big idea</h2>
   <p class="lead">The <b>server</b> sits at home, right next to the radio and Thetis. The <b>client</b> (on your
-  laptop, PC or Android phone) can be anywhere — in the living room, at the office, on the other side
+  laptop, PC or Android phone) can be anywhere: in the living room, at the office, on the other side
   of the world. Between those two runs a single thin network connection. <b>Everything</b> has to go
   over it: the audio from the receiver, the spectrum and waterfall display, the signal strength, and
   every control you press.</p>
 
   <p>The big challenge is <b>delay</b> (latency). When you press the transmit key or turn the
-  tuning knob, it has to happen <i>now</i> — not half a second later. That's why the whole of
+  tuning knob, it has to happen <i>now</i>: not half a second later. That's why the whole of
   ThetisLink is built around one principle:</p>
 
   <div class="tl"><b>Design priority.</b> <b>Latency &gt; bandwidth &gt; features.</b> As little
   delay as possible in the audio and the transmit key comes first. Anything that adds unnecessary delay
-  — extra buffers, queues, acknowledgements back and forth — is avoided.</p>
+  (extra buffers, queues, acknowledgements back and forth) is avoided.</p>
 
   <div class="fig">
     <svg viewBox="0 0 840 180" role="img" aria-label="Server to client overview">
@@ -96,9 +96,9 @@
         <ellipse cx="470" cy="83" rx="62" ry="34" fill="#15233f" stroke="#294067"/>
         <text x="470" y="80">network</text><text x="470" y="96" class="mut">UDP · port 4580</text>
         <rect x="582" y="40" width="118" height="40" rx="7" fill="#1c3a2a" stroke="#2e6a48"/>
-        <text x="641" y="64">client — laptop/PC</text>
+        <text x="641" y="64">client: laptop/PC</text>
         <rect x="582" y="92" width="118" height="40" rx="7" fill="#1c3a2a" stroke="#2e6a48"/>
-        <text x="641" y="116">client — Android</text>
+        <text x="641" y="116">client: Android</text>
         <rect x="722" y="58" width="104" height="50" rx="7" fill="#23314f" stroke="#3a4a73"/>
         <text x="774" y="79">you</text><text x="774" y="95" class="mut">headphones</text>
       </g>
@@ -109,7 +109,7 @@
       <defs><marker id="an" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
         <path d="M0,0 L7,3 L0,6 Z" fill="#4ea1ff"/></marker></defs>
     </svg>
-    <div class="cap">Figure 1 — The chain. The radio and Thetis produce the audio and the spectrum; the
+    <div class="cap">Figure 1: The chain. The radio and Thetis produce the audio and the spectrum; the
     TL2 server packs it up and sends it over the network; the client plays it back and sends your
     controls back.</div>
   </div>
@@ -135,7 +135,7 @@
     <a href="#ptt">11. The transmit key (PTT)</a>
     <a href="#auth">12. Connecting and securing</a>
     <a href="#latency">13. The latency budget</a>
-    <a href="#slot">In closing — everything together</a>
+    <a href="#slot">In closing: everything together</a>
   </nav>
 </section>
 
@@ -143,10 +143,10 @@
   <h2>1. Two kinds of traffic</h2>
   <p>Everything that goes over the line falls into two groups, and they have very different requirements:</p>
   <ul>
-    <li><b>Continuous streams</b> — the audio, the spectrum, the S-meter. These arrive dozens of times
+    <li><b>Continuous streams</b>: the audio, the spectrum, the S-meter. These arrive dozens of times
     per second, endlessly. Here what counts is: <b>on time</b> and <b>smooth</b>. A packet that arrives
     too late is worthless: you no longer want to hear the audio from 100 ms ago, you'd rather move on.</li>
-    <li><b>One-off commands</b> — setting a frequency, choosing a mode, sliding the volume, the
+    <li><b>One-off commands</b>: setting a frequency, choosing a mode, sliding the volume, the
     transmit key. These only arrive when you do something. Here what counts is: reacting <b>right
     away</b>.</li>
   </ul>
@@ -160,13 +160,13 @@
   <ul>
     <li><b>TCP</b> is like <b>registered mail</b>: every packet is acknowledged, and if one gets lost,
     it is sent again and <i>everything behind it</i> waits until it has arrived. Guaranteed
-    complete — but a single hiccup brings the whole stream to a standstill.</li>
+    complete, but a single hiccup brings the whole stream to a standstill.</li>
     <li><b>UDP</b> is like <b>ordinary postcards</b>: you drop them in the mailbox and they (usually)
-    arrive, but there is no acknowledgement and no resending. If one gets lost, it's simply gone — the
+    arrive, but there is no acknowledgement and no resending. If one gets lost, it's simply gone: the
     rest travels on unhindered.</li>
   </ul>
   <p>For live audio, that second one is exactly what you want. A lost 20 ms packet is, at most, a tiny
-  click you might hear; waiting for it would be far worse. <b>That's why ThetisLink uses UDP</b> — for
+  click you might hear; waiting for it would be far worse. <b>That's why ThetisLink uses UDP</b>: for
   all traffic, audio as well as commands.</p>
 
   <div class="q"><b>But surely commands mustn't get lost?</b> Correct. There's a different trick for
@@ -185,10 +185,10 @@
   two ways:</p>
   <ul>
     <li><b>Automatically (mDNS).</b> The server calls out on the local network: &ldquo;here I am, I'm
-    a ThetisLink server.&rdquo; The client listens and shows it in a list — you don't need to know any
+    a ThetisLink server.&rdquo; The client listens and shows it in a list; you don't need to know any
     IP address. The same mechanism your phone uses to find a printer or Chromecast.</li>
     <li><b>Manually.</b> If the client is on a different network (over VPN, or across the internet), that
-    broadcasting doesn't work — there you just type in the IP address and the port yourself.</li>
+    broadcasting doesn't work: there you just type in the IP address and the port yourself.</li>
   </ul>
   <div class="tl"><b>In ThetisLink.</b> Auto-discovery uses standard <code>mDNS</code>
   (service type <code>_thetislink._udp</code>); the server puts its version and a friendly name in
@@ -199,7 +199,7 @@
   <h2>4. One packet, one envelope</h2>
   <p>Because everything travels over the same socket, the receiver of each packet must be able to see
   immediately <i>what</i> it is. That's why every packet starts with a short, fixed <b>header</b> of 4
-  bytes — like the address on an envelope:</p>
+  bytes, like the address on an envelope:</p>
 
   <div class="fig">
     <svg viewBox="0 0 760 150" role="img" aria-label="Packet header">
@@ -215,10 +215,10 @@
         <rect x="574" y="50" width="146" height="46" rx="6" fill="#1c3a2a" stroke="#2e6a48"/>
         <text x="647" y="70">payload</text><text x="647" y="86" class="mut">the rest of the packet</text>
       </g>
-      <text x="226" y="34" text-anchor="middle" class="mut">— 4-byte header —</text>
+      <text x="226" y="34" text-anchor="middle" class="mut"> (4-byte header) </text>
       <line x1="40" y1="40" x2="568" y2="40" stroke="#566187" stroke-dasharray="4 3"/>
     </svg>
-    <div class="cap">Figure 2 — Every envelope opens with a marker, the protocol number, the
+    <div class="cap">Figure 2: Every envelope opens with a marker, the protocol number, the
     <b>type</b> (audio, spectrum, frequency, S-meter, …) and a few individual flags. After that follows the
     payload that belongs to that type.</div>
   </div>
@@ -236,15 +236,15 @@
   <h2>5. Audio: Opus over UDP</h2>
   <p>The demodulated audio (from the VRX chain, or directly from Thetis or a Yaesu) is a stream of
   audio samples. Sending those uncompressed would cost unnecessarily much bandwidth. That's why it is
-  first compressed with the <b>Opus</b> codec — a modern, highly efficient audio compression that is
+  first compressed with the <b>Opus</b> codec: a modern, highly efficient audio compression that is
   especially good at <b>low latency</b>.</p>
 
   <p>The audio is cut into chunks of <b>20 ms</b>; each chunk is coded separately as an Opus block and
   put into one UDP packet. Besides the Opus bytes themselves, that packet contains two important
   numbers:</p>
   <ul>
-    <li>a <b>sequence number</b> — packet 1, 2, 3, … so the client knows the correct order;</li>
-    <li>a <b>timestamp</b> — when this chunk is supposed to play.</li>
+    <li>a <b>sequence number</b>: packet 1, 2, 3, … so the client knows the correct order;</li>
+    <li>a <b>timestamp</b>: when this chunk is supposed to play.</li>
   </ul>
 
   <div class="fig">
@@ -262,25 +262,25 @@
         <text x="603" y="66">Opus-compressed audio</text><text x="603" y="82" class="mut">~20 ms audio</text>
       </g>
     </svg>
-    <div class="cap">Figure 3 — An audio packet: the standard header, a sequence number, a timestamp, the
+    <div class="cap">Figure 3: An audio packet: the standard header, a sequence number, a timestamp, the
     length, and then the Opus block with about 20 ms of audio. (For a VRX channel there is also a
     small channel number included, so VRX1 and VRX2 can be told apart.)</div>
   </div>
 
-  <h3>Narrow or wide — the same choice as in the VRX chain</h3>
+  <h3>Narrow or wide: the same choice as in the VRX chain</h3>
   <p>Just as with the iFFT choice (see the VRX document), the audio can be <b>narrowband</b> or <b>wideband</b>:</p>
   <ul>
-    <li><b>Narrowband:</b> 8 kHz audio, ~12.8 kbit/s — fine for speech, very little data.</li>
-    <li><b>Wideband:</b> 16 kHz audio, ~20–24 kbit/s (depending on the stream) — distinctly
+    <li><b>Narrowband:</b> 8 kHz audio, ~12.8 kbit/s: fine for speech, very little data.</li>
+    <li><b>Wideband:</b> 16 kHz audio, ~20–24 kbit/s (depending on the stream): distinctly
     clearer, roughly double the data.</li>
   </ul>
   <p>Which of the two is decided by the client with a single switch; the server codes accordingly. (On the TX
-  side — when you transmit yourself — wideband is always used for the best microphone quality.)</p>
+  side, when you transmit yourself, wideband is always used for the best microphone quality.)</p>
 
   <div class="tl"><b>In ThetisLink.</b> Opus, 20 ms frames. For the regular Thetis RX the codec is tuned
   for <b>speech</b> (with error correction/FEC and silence suppression/DTX, so that a lost packet is
   partly recoverable and silence costs almost no data). For the <b>VRX channels</b>, on the contrary, the
-  silence suppression is <b>off</b> (and no FEC) — that's continuous reception, not a phone call,
+  silence suppression is <b>off</b> (and no FEC): that's continuous reception, not a phone call,
   and you also want to hear the noise in between. The <b>Yaesu audio</b> has its own setting per narrow-
   or wideband.</div>
 </section>
@@ -326,12 +326,12 @@
       <defs><marker id="an2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
         <path d="M0,0 L6,3 L0,6 Z" fill="#566187"/></marker></defs>
     </svg>
-    <div class="cap">Figure 4 — All audio channels go through the same socket and are pulled apart again
+    <div class="cap">Figure 4: All audio channels go through the same socket and are pulled apart again
     on the receiving side by their type label, each to its own playback buffer.</div>
   </div>
 
   <p>In addition, there is a &ldquo;bundled&rdquo; variant that puts several channels into one packet
-  with the same sequence number and timestamp — handy when channels must run <b>exactly in step</b>
+  with the same sequence number and timestamp: handy when channels must run <b>exactly in step</b>
   (for example a stereo left/right image).</p>
 </section>
 
@@ -348,7 +348,7 @@
 
   <div class="fig">
     <svg viewBox="0 0 760 200" role="img" aria-label="Jitter buffer">
-      <text x="160" y="22" text-anchor="middle" class="mut">arrival — irregular, sometimes swapped</text>
+      <text x="160" y="22" text-anchor="middle" class="mut">arrival: irregular, sometimes swapped</text>
       <g font-size="12" text-anchor="middle">
         <rect x="40"  y="34" width="30" height="26" rx="4" fill="#1f3a5a" stroke="#4ea1ff"/><text x="55" y="52">1</text>
         <rect x="92"  y="34" width="30" height="26" rx="4" fill="#1f3a5a" stroke="#4ea1ff"/><text x="107" y="52">2</text>
@@ -358,12 +358,12 @@
       </g>
       <!-- buffer -->
       <rect x="40" y="86" width="300" height="40" rx="8" fill="#15233f" stroke="#294067"/>
-      <text x="190" y="110" text-anchor="middle">jitter buffer — sorts by sequence number</text>
+      <text x="190" y="110" text-anchor="middle">jitter buffer: sorts by sequence number</text>
       <g stroke="#566187" stroke-width="1.5" fill="none" marker-end="url(#aj)">
         <path d="M55 60 V86"/><path d="M107 60 V86"/><path d="M191 60 V86"/><path d="M229 60 V86"/>
       </g>
       <!-- steady playout -->
-      <text x="560" y="22" text-anchor="middle" class="mut">playback — even, in order</text>
+      <text x="560" y="22" text-anchor="middle" class="mut">playback: even, in order</text>
       <g font-size="12" text-anchor="middle">
         <rect x="430" y="34" width="30" height="26" rx="4" fill="#1c3a2a" stroke="#2e6a48"/><text x="445" y="52">1</text>
         <rect x="468" y="34" width="30" height="26" rx="4" fill="#1c3a2a" stroke="#2e6a48"/><text x="483" y="52">2</text>
@@ -374,13 +374,13 @@
       <path d="M340 106 C400 106 410 47 430 47" stroke="#3ddc97" stroke-width="2" fill="none" marker-end="url(#aj2)"/>
       <text x="597" y="80" text-anchor="middle" class="mut" font-size="11">5 missing → briefly</text>
       <text x="597" y="94" text-anchor="middle" class="mut" font-size="11">filled in</text>
-      <text x="190" y="160" text-anchor="middle" class="mut">kept as small as possible — every extra slot is extra delay</text>
+      <text x="190" y="160" text-anchor="middle" class="mut">kept as small as possible: every extra slot is extra delay</text>
       <defs>
         <marker id="aj" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#566187"/></marker>
         <marker id="aj2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3ddc97"/></marker>
       </defs>
     </svg>
-    <div class="cap">Figure 5 — Packets arrive unevenly and sometimes swapped (4 before 3). The
+    <div class="cap">Figure 5: Packets arrive unevenly and sometimes swapped (4 before 3). The
     buffer sorts them by sequence number and passes them on evenly. If one is missing, the codec briefly
     fills that gap instead of stopping.</div>
   </div>
@@ -393,7 +393,7 @@
 
   <div class="tl"><b>In ThetisLink.</b> The buffer measures the jitter continuously (a moving
   average, with a fast reaction to peaks) and aims for the smallest depth that still plays
-  smoothly — usually just a few frames, so several tens of milliseconds. A lost packet is
+  smoothly: usually just a few frames, so several tens of milliseconds. A lost packet is
   briefly filled in by Opus by bridging the gap (PLC); on the speech RX, where FEC is on, part of it
   can even be truly recovered. If the buffer does run empty, playback is paused for just a moment and
   refilled instead of starting to stutter.</div>
@@ -402,12 +402,12 @@
 <section id="spectrum">
   <h2>8. The spectrum across the line</h2>
   <p>The spectrum and waterfall display is a row of <b>bins</b> (see the VRX document): per bin a
-  value that says how much energy is there. Such a row can be large — thousands to tens of thousands of
+  value that says how much energy is there. Such a row can be large: thousands to tens of thousands of
   bins. Sending all of it fully and at full precision every time would cost a lot of bandwidth, so here
   the second priority comes into play: <b>bandwidth</b>.</p>
   <p>Two knobs keep that in check:</p>
   <ul>
-    <li><b>How many bytes per bin.</b> The current server sends <b>1 byte</b> per bin (256 levels) —
+    <li><b>How many bytes per bin.</b> The current server sends <b>1 byte</b> per bin (256 levels):
     plenty for a smooth picture. The protocol can also describe 2 bytes per bin for more
     dynamic range, but that is reserved for the future.</li>
     <li><b>How many times per second.</b> The picture is refreshed by default about <b>15 times per second</b>;
@@ -415,7 +415,7 @@
   </ul>
   <p>Each spectrum packet contains, besides the bins, also the <b>center frequency</b>, the <b>width</b>
   (span) and a reference level, so the client can draw the picture at the right place and scale.
-  And just as with audio, every source — RX1, RX2, VRX1, VRX2 — has its own packet type.</p>
+  And just as with audio, every source (RX1, RX2, VRX1, VRX2) has its own packet type.</p>
 
   <div class="tl"><b>In ThetisLink.</b> The zooming and panning happens largely <b>on the server</b>:
   the client asks &ldquo;I want this little piece, at this resolution&rdquo;, and the server sends only that
@@ -427,8 +427,8 @@
   <h2>9. The S-meter</h2>
   <p>The signal strength comes in along <b>three</b> different routes, depending on the source:</p>
   <ul>
-    <li><b>Main receiver (RX1/RX2):</b> the server sends a ready-made value — the power in
-    <b>dBm</b> — in a compact packet of a few bytes. Depending on the chosen meter source, that
+    <li><b>Main receiver (RX1/RX2):</b> the server sends a ready-made value (the power in
+    <b>dBm</b>) in a compact packet of a few bytes. Depending on the chosen meter source, that
     is an average or peak from Thetis, or a value derived from the spectrum bins.</li>
     <li><b>VRX channels:</b> for these the server sends <i>no</i> separate S-meter. The <b>client</b>
     computes the strength itself from the received spectrum: it sums the power of the bins within
@@ -440,7 +440,7 @@
   <p>The <b>scale</b> (the familiar S-units: S9 = −73 dBm, each S-unit 6 dB) is always drawn in the
   <b>client</b>. The server delivers the raw number; the client makes the needle out of it.</p>
   <div class="tl"><b>In ThetisLink.</b> So who computes the value differs per source, but the
-  <i>drawing</i> of the S-meter is the same everywhere in the client — that way every meter looks the same.</div>
+  <i>drawing</i> of the S-meter is the same everywhere in the client: that way every meter looks the same.</div>
 </section>
 
 <section id="knoppen">
@@ -448,7 +448,7 @@
   <p>When you turn the tuning knob or choose a mode, the client sends a small
   <b>command packet</b>: usually no more than an <b>identifier</b> (&ldquo;this is the
   volume&rdquo;, &ldquo;this is the mode&rdquo;, &ldquo;this is the filter width&rdquo;) plus a
-  <b>value</b>. Frequency and mode even have their own packet type. That's all — a few bytes,
+  <b>value</b>. Frequency and mode even have their own packet type. That's all: a few bytes,
   sent right away.</p>
   <p>As already showed in chapter 2: no separate acknowledgement comes back. Instead, the
   <b>server continuously reports back the current state</b>. That reported-back value is your
@@ -467,39 +467,39 @@
 
 <section id="ptt">
   <h2>11. The transmit key (PTT)</h2>
-  <p>The transmit key is the most time-critical signal of all — here every millisecond counts. That's why
+  <p>The transmit key is the most time-critical signal of all: here every millisecond counts. That's why
   there is no separate, slow button message. Instead, the client sets a <b>flag</b> in the
   TX audio packets: as soon as you press the key, your outgoing audio packets carry the PTT flag,
   and the server switches the radio to transmit. The press and your speech thus travel along in <b>one and
-  the same stream</b> — nothing that has to wait on anything else.</p>
+  the same stream</b>: nothing that has to wait on anything else.</p>
   <p>Because several clients can be connected at the same time, the server makes sure that only <b>one
   at a time</b> transmits. If a second client wants to transmit while the first is already busy, it gets a
   short &ldquo;denied&rdquo; message back instead of them talking over each other.</p>
 
   <h3>Safety: the transmitter cannot stay keyed by accident</h3>
   <p>For <b>remote</b> operation this is crucial: a transmitter that accidentally gets
-  &ldquo;stuck&rdquo; (keeps transmitting) is dangerous — for your equipment, for the band, and for
+  &ldquo;stuck&rdquo; (keeps transmitting) is dangerous, for your equipment, for the band, and for
   your licence. That is why the transmit key is deliberately <b>not an on/off latch</b>, but a flag
   that the client re-sends and re-confirms about <b>50 times per second</b>. The transmitter therefore
   stays keyed <i>only</i> as long as that stream of &ldquo;PTT-on&rdquo; packets keeps arriving.</p>
-  <p>If the connection drops while you are transmitting — Wi-Fi hiccups, the laptop goes to sleep, the
-  app crashes — that stream stops by itself, and two independent safety nets take over:</p>
+  <p>If the connection drops while you are transmitting (Wi-Fi hiccups, the laptop goes to sleep, the
+  app crashes) that stream stops by itself, and two independent safety nets take over:</p>
   <ul>
-    <li><b>Packet timeout (~0.5 s):</b> if no packets arrive for half a second, the server releases the
+    <li><b>Packet timeout (~2 s):</b> if no packets arrive for two seconds, the server releases the
     transmitter automatically.</li>
     <li><b>Heartbeat timeout (~2 s):</b> if the &ldquo;heartbeat&rdquo; that keeps the connection alive
-    is also absent for more than two seconds, the server treats the connection as lost — PTT released,
+    is also absent for more than two seconds, the server treats the connection as lost: PTT released,
     plus an alarm.</li>
   </ul>
   <p>So the worst a network failure can do is return your transmitter to receive within a fraction of a
-  second up to at most two seconds — never let it transmit endlessly. This is the classic
+  second up to at most two seconds: never let it transmit endlessly. This is the classic
   <b>dead-man's switch</b> principle.</p>
 
   <div class="tl"><b>In ThetisLink.</b> For the <b>Thetis</b> transmitter, PTT is a flag in the
   TX audio packets, not a separate handshake. The server arranges the exclusivity (one transmitter at a time) and
   reports a collision with a PTT-denied message; during transmit the S-meter also switches from
   reception strength (dBm) to output power (watts). Two safety timers catch a dropped connection: after
-  ~500 ms without packets, or ~2 s without a heartbeat, TX falls back to RX automatically (with an
+  ~2 s without packets, or ~2 s without a heartbeat, TX falls back to RX automatically (with an
   alarm). For a connected <b>Yaesu</b> radio the transmit key does not run via the audio flag but as a
   separate command, which the server sends to the set as a CAT command.</div>
 </section>
@@ -509,7 +509,7 @@
   <p>When connecting, client and server first briefly exchange <b>what they can both do</b>. The
   client tells which capabilities it supports (wideband audio, spectrum, a second
   receiver…), the server answers with the <b>intersection</b>: only what they can both handle is
-  used. That way a newer side automatically turns off its extras toward an older one — <i>within the same
+  used. That way a newer side automatically turns off its extras toward an older one: <i>within the same
   protocol version</i>. A completely different protocol version is rejected; server and clients must then
   be updated together.</p>
   <p>The server always asks for a <b>password</b>; without one it does not start. The password
@@ -544,9 +544,9 @@
       <defs><marker id="al" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
         <path d="M0,0 L7,3 L0,6 Z" fill="#4ea1ff"/></marker></defs>
     </svg>
-    <div class="cap">Figure 6 — The fixed chunks (one Opus frame, the jitter buffer, the playback) are
+    <div class="cap">Figure 6: The fixed chunks (one Opus frame, the jitter buffer, the playback) are
     each only a few tens of milliseconds. The network journey itself is the only part that ThetisLink
-    does not control — that's why all the rest is kept as tight as possible.</div>
+    does not control: that's why all the rest is kept as tight as possible.</div>
   </div>
   <p>This is the <b>network and codec budget</b>, from the moment the audio is ready to be
   sent. For VRX audio there is, before the Opus coding, also the <b>channelizer block delay</b>
@@ -558,7 +558,7 @@
 </section>
 
 <section id="slot">
-  <h2>In closing — everything together</h2>
+  <h2>In closing: everything together</h2>
   <p>The server packs the audio (compressed with Opus, in chunks of 20 ms), the spectrum (bins,
   compactly coded) and the S-meter into numbered packets, and sends them over one UDP connection on
   port 4580 to the client. Your controls travel back as small command packets; the server
@@ -567,13 +567,13 @@
   delay as possible.</p>
   <p class="lead">Together with the sister document <a href="VRX-explained.html">&ldquo;How a VRX
   works&rdquo;</a> you've then got the whole chain covered: from radio wave, via demodulation, to the
-  audio and picture on your screen — wherever you are.</p>
+  audio and picture on your screen, wherever you are.</p>
 </section>
 
 </main>
 
 <footer>
-  ThetisLink — network explained · educational version. Made by <b>Chiron van der Burgt (PA3GHM)</b>.
+  ThetisLink: network explained · educational version. Made by <b>Chiron van der Burgt (PA3GHM)</b>.
   See also the <a href="VRX-explained.html">VRX document</a> for the signal processing.<br>
   ThetisLink on GitHub: <a href="https://github.com/cjenschede/ThetisLink">github.com/cjenschede/ThetisLink</a><br>
   Last updated: 25 October 2026 (the note at the top and the password).

@@ -27,6 +27,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -40,9 +41,28 @@ private const val TAG = "SdrViewModel"
 /** ControlId::PowerOnOff in protocol.rs - value 1 = power on / launch Thetis. */
 private const val CONTROL_POWER = 0x02
 
+/** That a preset was loaded for a radio - by a headset change, a radio change,
+ *  the start, or the operator's choice. A signal and not the values: the Yaesu
+ *  screen reads the stored settings when it sees one, so a load older than a slider
+ *  move cannot put that move back. `seq` makes a second load of the same preset a
+ *  new event. Until build 38 the screen learned this by polling the preferences every
+ *  500 ms from an effect that kept the radio it was first composed with, so after
+ *  a radio switch it filled the other radio's sliders, and that radio's stored bands. */
+data class YaesuTxLoad(
+    val radio: Int,
+    val preset: String,
+    val seq: Long,
+)
+
 class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private var bridge: SdrBridge? = null
+
+    // Declared before anything that can run the preset loader: the poll starts in
+    // init on another thread, and a property further down would still be unset.
+    private val _yaesuTxLoad = MutableStateFlow<YaesuTxLoad?>(null)
+    val yaesuTxLoad: StateFlow<YaesuTxLoad?> = _yaesuTxLoad.asStateFlow()
+    private val yaesuTxLoadSeq = java.util.concurrent.atomic.AtomicLong()
     /** Tells the bridge when the phone has a network again; see [watchNetwork]. */
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     /** The default network the callback reported last (build 186). */
@@ -130,8 +150,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      *  from every preference this app has and are filtered afterwards.
      *  Normally that is a few kilobytes; structurally it is unbounded, and
      *  the preview has to stay something a phone can lay out - it is the
-     *  same string that gets sent, which is the guarantee (raised in review,
-     *  2026-08-18). Shortening is said out loud, so a short report is never
+     *  same string that gets sent, which is the guarantee. Shortening is said out loud, so a short report is never
      *  mistaken for a complete one. */
     private val ATTACHMENT_MAX = 150_000
 
@@ -164,14 +183,14 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     // believing. The subscriptions are asked for again on the next poll
     // (wasConnected), so the ViewModel's bookkeeping agrees with the server
     // again; a held PTT is let go, as the engine let go of its flags
-    // (PTT-NOOIT-HANGEN 2). Until build 62 only the dying link did all of this
-    // (reviews 61 and 62). No condition on the resets: a condition is a way for
-    // this exit to go quiet with its guard still green (review 62).
+    // Until build 62 only the dying link did all of this.
+    // No condition on the resets: a condition is a way for
+    // this exit to go quiet with its guard still green.
     private fun sessionGone(why: String) {
         subbed0 = false
         subbed1 = false
         if (ptt.asking() != null) {
-            Log.i(TAG, "$why while transmitting - releasing PTT")
+            Log.i(TAG, "$why while transmitting: releasing PTT")
             ptt.disconnected()
             pttEnded()
         }
@@ -220,10 +239,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         try {
-            // Phase C: relay transport (for mobile behind CGNAT / without port forwarding).
+            // Relay transport (for mobile behind CGNAT / without port forwarding).
             // The choice is made when the bridge is created; changing it needs a restart.
             val prefs = getApplication<Application>()
-                .getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+                .getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE)
             val relayEnabled = prefs.getBoolean("relay_enabled", false)
             val relayUrl = prefs.getString("relay_url", "") ?: ""
             val relayStation = prefs.getString("relay_station", "") ?: ""
@@ -252,7 +271,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             // Since build 133 the connection is always QUIC: straight to the
             // address typed, or through the relay when it is set up. The old
             // switches (quic_enabled, relay_quic, relay_udp_enabled) are no longer read.
-            // By name: five strings in a row go by position otherwise (review of 211).
+            // By name: five strings in a row go by position otherwise.
             bridge = SdrBridge(
                 relayEnabled = relayEnabled,
                 relayUrl = relayUrl,
@@ -286,7 +305,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             // startup block, before startPolling(), so an exception here would have
             // taken the whole app down instead of one setting - a preference read
             // back as the wrong type is enough (getFloat on a key stored as
-            // something else throws). A review caught it before it shipped. A beep
+            // something else throws). A beep
             // that fails to be restored is a beep; an app that will not start is
             // not.
             try {
@@ -341,7 +360,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             cm.registerDefaultNetworkCallback(callback)
             networkCallback = callback
         } catch (e: Exception) {
-            Log.w(TAG, "Network events not available - reconnecting after a switch uses the retry ladder only", e)
+            Log.w(TAG, "Network events not available: reconnecting after a switch uses the retry ladder only", e)
         }
     }
 
@@ -502,7 +521,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         val bothLogs = trimmed + "\n---- kept log ----\n" + kept
 
         val prefs = getApplication<Application>()
-            .getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+            .getSharedPreferences(LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
         // The same key=value shape the desktop's settings file has, so the one
         // allowlist on the Rust side can judge both.
         val settings = prefs.all.entries
@@ -531,7 +550,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         val b = bridge ?: return
         b.chatDismissAnswer(id)
         getApplication<Application>()
-            .getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+            .getSharedPreferences(LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
             .edit()
             .putString("chat_answers_seen", b.chatSeenIds().joinToString(","))
             .apply()
@@ -571,7 +590,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                     // believing we are. The red on this button is local and
                     // optimistic - deliberately, so a press needs no round trip
                     // - and until now nothing took it back when the server said
-                    // no. The owner had to click a second time to clear it.
+                    // no. It took a second click to clear it.
                     if (s.pttDenied && ptt.asking() != null) {
                         // Which exit depends on WHO let go.
                         //
@@ -582,10 +601,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         // straight back into it.
                         val target = ptt.asking()
                         if (s.pttReleasedByServer && target != null) {
-                            Log.i(TAG, "Server released the PTT (radio stopped) - releasing $target")
+                            Log.i(TAG, "Server released the PTT (radio stopped): releasing $target")
                             ptt.radioLeftTx(target)
                         } else {
-                            Log.i(TAG, "PTT refused by the server - releasing")
+                            Log.i(TAG, "PTT refused by the server: releasing")
                             ptt.refused()
                         }
                         pttEnded()
@@ -598,7 +617,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                     // avoids it. The server decides now, because it knows the
                     // time-out from the EX menu, and says so through pttDenied with
                     // pttReleasedByServer set. Handled above.
-                    _state.value = SdrUiState(
+                    // Through update, not a plain write: selectRadio runs on the main
+                    // thread, and a choice made between this poll's read of
+                    // selectedRadio and its write was put back (seen 2026-11-01).
+                    _state.update { cur -> SdrUiState(
                         connected = s.connected,
                         route = s.route,
                         sessionGeneration = s.sessionGeneration,
@@ -620,7 +642,8 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         relayOnly = s.relayOnly,
                         forceTcp = s.forceTcp,
                         viaRelay = s.viaRelay,
-                        pathShort = s.pathShort,
+                        pathShortPlain = s.pathShortPlain,
+                        pathShortRed = s.pathShortRed,
                         pathName = s.pathName,
                         pathHint = s.pathHint,
                         pathCoupling = s.pathCoupling,
@@ -649,6 +672,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         yaesu2Label = s.yaesu2Label,
                         captureLevel = s.captureLevel,
                         yaesuMicLevel = s.yaesuMicLevel,
+                        micInputClip = s.micInputClip,
                         playbackLevel = s.playbackLevel,
                         frequencyHz = s.frequencyHz.toLong(),
                         frequencyRx2Hz = s.frequencyRx2Hz.toLong(),
@@ -807,7 +831,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         yaesu2FeatureFreqs = s.yaesu2FeatureFreqs.map { it.toInt() },
                         // Keep the chosen radio; fall back if it is not (yet) connected.
                         selectedRadio = run {
-                            val sel = _state.value.selectedRadio
+                            val sel = cur.selectedRadio
                             when {
                                 sel == 1 && !s.yaesu2Connected && s.yaesuConnected -> 0
                                 sel == 0 && !s.yaesuConnected && s.yaesu2Connected -> 1
@@ -841,7 +865,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                                 expirySeconds = spot.expirySeconds.toInt(),
                             )
                         },
-                    )
+                    ) }
                     // Auto-switch TX profile + Yaesu EQ on headset connect/disconnect
                     checkMicProfileSwitch()
                     checkYaesuEqAutoSwitch()
@@ -890,7 +914,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // Not the master, whatever the key is called. setLocalVolume routes this to
         // the VFO volumes; the engine's own master is left at its neutral 1.0 on
         // purpose, because since v2.7.0 it multiplies the Yaesu path too. Calling
-        // it "master" in the log was wrong and a reviewer said so.
+        // it "master" in the log was wrong.
         val local = LocalAudioPrefs.localVolume(prefs)
         val tx = LocalAudioPrefs.txGain(prefs)
         val agc = LocalAudioPrefs.agcEnabled(prefs)
@@ -898,7 +922,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         setLocalVolume(local)
         setTxGain(tx)
         setAgcEnabled(agc)
-        // Named in advance (working rule 11): there is no Kotlin test that can watch
+        // There is no Kotlin test that can watch
         // this, so the proof that the saved settings reached the engine at startup -
         // and not at the first connect - is this line, before any "Connected".
         Log.i(
@@ -933,7 +957,14 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         if (radio == lastTxChainRadio) return
         lastTxChainRadio = radio
         val prefs = getApplication<Application>()
-            .getSharedPreferences("thetislink_eq", Context.MODE_PRIVATE)
+            .getSharedPreferences(YaesuTxPrefs.STORE, Context.MODE_PRIVATE)
+        sendTxChain(radio, prefs)
+    }
+
+    /** The stored TX chain of `radio` to the engine: the one place that sends it, for a
+     *  radio switch, a preset load and a choice. The senders route on sel(); every
+     *  caller passes the selected radio. */
+    private fun sendTxChain(radio: Int, prefs: android.content.SharedPreferences) {
         val micGain = YaesuTxPrefs.micGain(prefs, radio)
         val comp = YaesuTxPrefs.compressor(prefs, radio)
         // The AGC belongs in this chain and was left behind in the screen: its
@@ -956,7 +987,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun syncThetisAutostart() {
         val on = getApplication<Application>()
-            .getSharedPreferences("thetislink", Context.MODE_PRIVATE)
+            .getSharedPreferences(LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
             .getBoolean("thetis_autostart", false)
         val b = bridge ?: return
         if (thetisAutostartSent != on) {
@@ -968,16 +999,16 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     private var lastHeadsetActive: Boolean? = null
 
     /** Track headset state for PTT-time TX profile switch.
-     *  Does NOT send profile change — that happens only in setPtt(). */
+     *  Does NOT send profile change: that happens only in setPtt(). */
     fun checkMicProfileSwitch() {
         lastHeadsetActive = audioRouting.headsetActive
     }
 
     private var lastHeadsetForEq: Boolean? = null
 
-    /** Loads the EQ that belongs to the SELECTED radio and the current audio route,
-     *  sends it to the engine, and signals the UI (sliders) through
-     *  eq_preset_pending.
+    /** Loads the preset that belongs to the SELECTED radio and the current audio
+     *  route - its bands and, since build 38, its TX chain - stores and sends it,
+     *  and tells the screen through [yaesuTxLoad].
      *
      *  Called on a headset change, on a presence auto-switch, and when the
      *  operator picks a radio - and, through the null starting value of
@@ -992,27 +1023,17 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // mute, and an operator transmitting with it off still wants his radio's own
         // EQ rather than whatever was last set.
         if (!yaesuIsTheOperatingRadio()) return
-        val prefs = getApplication<Application>().getSharedPreferences("thetislink_eq", android.content.Context.MODE_PRIVATE)
+        val prefs = getApplication<Application>().getSharedPreferences(YaesuTxPrefs.STORE, android.content.Context.MODE_PRIVATE)
         val headsetNow = audioRouting.headsetActive
+        val radio = sel()
         // Preset assigned per radio (slot-specific key): each radio its own choice.
-        val presetName = YaesuTxPrefs.assignedPreset(prefs, sel(), headsetNow)
-        // A preset only writes the stored bands; it does not send them. The
+        val presetName = YaesuTxPrefs.assignedPreset(prefs, radio, headsetNow)
+        // A preset only writes the stored settings; it does not send them. The
         // sending happens in ONE place below, so the engine can never be told the
         // EQ is on without being told which curve.
-        if (presetName.isNotBlank()) {
-            try {
-                val json = org.json.JSONObject(prefs.getString("eq_presets", "{}") ?: "{}")
-                if (json.has(presetName)) {
-                    val arr = json.getJSONArray(presetName)
-                    val gains = FloatArray(5) { i -> arr.getDouble(i).toFloat() }
-                    // One commit, and the "eq_preset_pending" nudge that tells the
-                    // sliders to reload rides along with it.
-                    YaesuTxPrefs.setBands(prefs, sel(), gains, alsoPending = presetName)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to load EQ preset '$presetName'", e)
-            }
-        }
+        val preset = if (presetName.isNotBlank()) YaesuTxPrefs.preset(prefs, presetName) else null
+        if (presetName.isNotBlank() && preset == null) Log.w(TAG, "EQ preset '$presetName' not found or unreadable")
+        if (preset != null) YaesuTxPrefs.applyPreset(prefs, radio, preset)
         // Enable EQ when headset is active OR when a preset is assigned for this radio.
         val enableEq = headsetNow || presetName.isNotBlank()
         // The bands, ALWAYS, and before the switch.
@@ -1039,19 +1060,21 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // Reading straight after the apply() above is safe: SharedPreferences
         // updates its in-memory map synchronously and only the disk write is
         // deferred, so a preset written a few lines up is already visible here.
-        val bands = YaesuTxPrefs.bands(prefs, sel())
+        val bands = YaesuTxPrefs.bands(prefs, radio)
         if (enableEq) {
             for (i in 0..4) yaesuEqBandSel(i, bands[i])
         }
         yaesuEqEnabledSel(enableEq)
-        YaesuTxPrefs.setEqEnabled(prefs, sel(), enableEq)
-        // Named in advance (working rule 11): there is no Kotlin test harness, so
+        YaesuTxPrefs.setEqEnabled(prefs, radio, enableEq)
+        if (preset?.chain != null) sendTxChain(radio, prefs)
+        // There is no Kotlin test harness, so
         // the proof that the right curve left the app is this line in a field log.
         // The bands are in it for that reason - "EQ on" without them says nothing
         // about what was actually sent.
         Log.i(
             TAG,
-            "Yaesu EQ loaded (radio=${sel()}, headset=$headsetNow, preset=$presetName, on=$enableEq, " +
+            "Yaesu EQ loaded (radio=$radio, headset=$headsetNow, preset=$presetName, on=$enableEq, " +
+                "chain=${preset?.chain ?: "kept"}, " +
                 if (enableEq) {
                     // Locale.ROOT and a separator that is not a decimal comma.
                     // The first field log of this line read
@@ -1061,9 +1084,33 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                     // are in the line is to be able to read them.
                     "bands sent=${bands.joinToString(" ") { String.format(java.util.Locale.ROOT, "%.1f", it) }} dB)"
                 } else {
-                    "bands not sent - EQ off)"
+                    "bands not sent: EQ off)"
                 }
         )
+        publishYaesuTxLoad(radio, presetName)
+    }
+
+    /** Tells the screen a preset was loaded for `radio`. */
+    private fun publishYaesuTxLoad(radio: Int, preset: String) {
+        _yaesuTxLoad.value = YaesuTxLoad(radio = radio, preset = preset, seq = yaesuTxLoadSeq.incrementAndGet())
+    }
+
+    /** The operator picks a preset on the Yaesu screen: its bands and, when it has
+     *  one, its TX chain go to the selected radio, stored and sent, the same way a
+     *  headset change does it. The EQ switch stays as it is. */
+    fun chooseYaesuPreset(name: String) {
+        val prefs = getApplication<Application>().getSharedPreferences(YaesuTxPrefs.STORE, android.content.Context.MODE_PRIVATE)
+        val radio = sel()
+        val preset = YaesuTxPrefs.preset(prefs, name)
+        if (preset == null) {
+            Log.w(TAG, "Yaesu preset chosen (radio=$radio, preset=$name): not found or unreadable, nothing changed")
+            return
+        }
+        YaesuTxPrefs.applyPreset(prefs, radio, preset)
+        for (i in 0..4) yaesuEqBandSel(i, preset.bands[i])
+        if (preset.chain != null) sendTxChain(radio, prefs)
+        Log.i(TAG, "Yaesu preset chosen (radio=$radio, preset=$name, chain=${preset.chain ?: "kept"})")
+        publishYaesuTxLoad(radio, name)
     }
 
     /** Auto-load the Yaesu EQ when the audio route (BT headset <-> phone mic)
@@ -1080,7 +1127,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Measurement mode (open point 34): every audio arrival and round trip to a
+     * Measurement mode: every audio arrival and round trip to a
      * file. A new file each time it is switched on, in the app's own folder on
      * shared storage (Android/data/com.sdrremote/files/meting), so it can be
      * fetched without root - the log in filesDir cannot.
@@ -1119,7 +1166,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun disconnect() {
         // First, because everything below makes transmitting meaningless and a
         // press held over a disconnect is a press nobody can release: the
-        // button only ever reports changes. Review finding - this function was
+        // button only ever reports changes. Before this, the function was
         // no safety net for PTT at all.
         blePtt?.releaseHeld("server disconnect")
         bridge?.disconnect()
@@ -1130,7 +1177,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     // Yaesu FT-991A
     fun yaesuEnable(on: Boolean) {
         _yaesuMode.value = on
-        val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+        val prefs = getApplication<Application>().getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE)
         viewModelScope.launch(Dispatchers.IO) {
             if (on) {
                 // First enable Yaesu stream, then mute local Thetis audio (not server-wide)
@@ -1159,7 +1206,6 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun yaesuFreq(hz: Long) { bridge?.yaesuFreq(hz.toULong()) }
     fun yaesuMode(mode: Int) { bridge?.yaesuMode(mode.toUByte()) }
     fun yaesuButton(id: Int) { bridge?.yaesuButton(id.toUShort()) }
-    fun yaesuTxGain(gain: Float) { bridge?.yaesuTxGain(gain) }
     // The EQ routes to the selected radio (it was always radio 1, so the EQ did
     // nothing on the FTX-1 / radio 2). The engine keeps a separate EQ per radio
     // (yaesu_eq / yaesu2_eq).
@@ -1207,7 +1253,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         updateYaesuSubscriptions()
     }
 
-    /** One stream (data saving, PATCH-android-yaesu-presence-datasaver): subscribe
+    /** One stream (data saving): subscribe
      *  ONLY the selected radio, and only when it is present (presence arrives
      *  separately through YaesuPresence, not through the stream) and the window is
      *  open or that radio is actually being listened to. The selector leans on
@@ -1272,7 +1318,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // data while the label beside the switch said "Thetis off".
         bridge?.setYaesuIsListeningRadio(on)
         updateYaesuSubscriptions() // the active radio stays subscribed even when the window closes
-        val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+        val prefs = getApplication<Application>().getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE)
         viewModelScope.launch(Dispatchers.IO) {
             if (on) {
                 applyYaesuAudio()
@@ -1301,7 +1347,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // worked. Same rule in two places, one of them missed: the third time
         // this shape has cost something today.
         if (st.transmitting) {
-            Log.i(TAG, "Radio switch ignored - this client is transmitting")
+            Log.i(TAG, "Radio switch ignored: this client is transmitting")
             return
         }
         if (st.selectedRadio == slot) return
@@ -1319,7 +1365,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun yaesuPttSel(on: Boolean) {
         // The press names its radio; the release does not, so that it lets go of what
         // is actually keyed. Recomputing it here had the same shape as the default
-        // that two reviewers just found: change the selected radio between the press
+        // of `pttUp` below: change the selected radio between the press
         // and the release and the wrong one is released, leaving the other one
         // transmitting.
         if (on) pttDown(PttSource.SCREEN, selectedYaesuPttTarget())
@@ -1334,7 +1380,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun yaesuPowerOnOffSel(on: Boolean) { if (sel() == 0) bridge?.yaesuPowerOnOff(on) else bridge?.yaesu2PowerOnOff(on) }
     fun yaesuSelectVfoSel(vfo: Int) { if (sel() == 0) bridge?.yaesuSelectVfo(vfo.toUByte()) else bridge?.yaesu2SelectVfo(vfo.toUByte()) }
     fun yaesuRecallMemorySel(ch: Int) { if (sel() == 0) bridge?.yaesuRecallMemory(ch.toUShort()) else bridge?.yaesu2RecallMemory(ch.toUShort()) }
-    /** Typed DSP/function control for the selected radio (phase 2/3). */
+    /** Typed DSP/function control for the selected radio. */
     fun yaesuControlSel(control: Int, value: Int) { bridge?.yaesuControl(sel().toUByte(), control.toUByte(), value.toUShort()) }
     /** ControlId channel (squelch/rfgain/power/read) for the selected radio: +0x60 for radio 2. */
     fun yaesuSetControlSel(controlId: Int, value: Int) {
@@ -1351,7 +1397,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         if (sel() == 1) PttTarget.YAESU1 else PttTarget.YAESU0
 
     private fun currentMicGateDelayMs(target: PttTarget): Int {
-        val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+        val prefs = getApplication<Application>().getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE)
         val key = when {
             audioRouting.headsetActive -> "mic_gate_delay_ms_android_bt"
             target == PttTarget.THETIS -> "mic_gate_delay_ms_thetis_android_mic"
@@ -1366,7 +1412,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun applyPttStartSideEffects() {
-        val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+        val prefs = getApplication<Application>().getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE)
         val key = if (audioRouting.headsetActive) "mic_profile_android_bt" else "mic_profile_android_mic"
         val profileName = prefs.getString(key, "") ?: ""
         if (profileName.isNotEmpty()) {
@@ -1429,7 +1475,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      * Only the controls that die with it. The Bluetooth button keeps working
      * and so keeps transmitting: it is in your hand and you can let it go. The
      * on-screen button is not, and a transmitter left on behind a locked screen
-     * can only be stopped after typing a password (owner, 2026-09-04).
+     * can only be stopped after typing a password.
      */
     fun screenGone() {
         val before = ptt.asking()
@@ -1459,7 +1505,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
       * `sdr-remote-logic`, not here and not by the button. The button used to
       * decide it, and kept its own `pressed` and `toggled` to remember what it
       * had decided; no exit could reach those, so the transmitter stopped while
-      * the button stayed red (owner, build 58).
+      * the button stayed red.
       */
     fun pttDown(source: PttSource, target: PttTarget = currentPttTarget()) {
         val before = ptt.asking()
@@ -1475,7 +1521,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      * press and the release and the model lets go of a transmitter that was never
      * held: `asking()` stays on the old one, `reconcilePtt` sees no change and
      * returns, and the "off" is never sent. **The radio keeps transmitting until the
-     * next press.** Two reviewers found it independently.
+     * next press.**
      *
      * It was always reachable through the audio switch, and this patch added a second
      * way in: `thetisConfigured` now feeds the destination, and it arrives from the
@@ -1504,7 +1550,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
       * toggle, tap PTT, open the settings dialog (no onStop, so no screenGone),
       * switch to momentary: intents cleared, button grey, transmitter on the
       * air. The Rust test stayed green because it tests the model, not the
-      * wiring (review finding).
+      * wiring.
       */
     fun setPttToggleMode(toggle: Boolean) {
         val before = ptt.asking()
@@ -1546,10 +1592,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      * Two ways to be true. The operator switched to it, or there is no Thetis to
      * switch away to, in which case the switch is only a mute.
      *
-     * One function rather than the same condition written out at each site: this
-     * project has spent four review rounds on one fact living in several places, and
-     * the second reader of that condition (the EQ) was already out of step with the
-     * first within an hour of the first being written.
+     * One function rather than the same condition written out at each site: one
+     * fact living in several places drifts apart, and the second reader of that
+     * condition (the EQ) was already out of step with the first within an hour of
+     * the first being written.
      */
     /** Public because the screen decides the same thing for the volume slider, and
      *  a fourth copy of this condition is how the third one came to be wrong. */
@@ -1652,7 +1698,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     /// nothing called it there; it was the radio switch or nothing.
     private fun sendSavedRogerBeep() {
         val p = getApplication<Application>()
-            .getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+            .getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE)
         setRogerBeep(
             p.getFloat("roger_freq_hz", 1000f),
             p.getFloat("roger_volume", 0.25f),
@@ -1672,8 +1718,8 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // that is right for Thetis then leaves a Yaesu far too quiet while its own
         // slider reads full open. The master stays at its neutral 1.0.
         thetisVol = volume
-        // The third reader of the same switch, and both reviewers refused to let it
-        // stay behind. It read `!_yaesuMode.value` while the transmitter and the EQ
+        // The third reader of the same switch, and it cannot be left
+        // behind. It read `!_yaesuMode.value` while the transmitter and the EQ
         // had moved to `yaesuIsTheOperatingRadio()`, so without a Thetis this slider
         // went on driving Thetis volumes that nobody can hear, in a configuration
         // where the other two had already agreed the Yaesu is the radio being
@@ -1695,7 +1741,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
      *  restores the saved FPS (as when leaving Yaesu mode). */
     fun setSpectrumActive(enabled: Boolean) {
         if (enabled) {
-            val prefs = getApplication<Application>().getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE)
+            val prefs = getApplication<Application>().getSharedPreferences(LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE)
             bridge?.enableSpectrum(true)
             bridge?.setSpectrumFps(prefs.getInt("spectrum_fps", 15).toUByte())
             bridge?.setSpectrumMaxBins(2048u) // otherwise the default (high) bin count → a high data rate
@@ -1762,7 +1808,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
         // Before the bridge goes, so no network event reaches a bridge that is shutting down.
         stopWatchingNetwork()
         // The same for the measurement's readings (build 181), for good: a poll
-        // round still running may post a start after this (review of 182).
+        // round still running may post a start after this.
         networkMeter.close()
         bridge?.shutdown()
         super.onCleared()

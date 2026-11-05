@@ -12,7 +12,7 @@
 //!
 //! One module rather than one per test file: the trait has two dozen methods,
 //! and a second hand-written copy is a second thing to keep in step
-//! (working rule 15). Tests script what the port answers and read back what
+//!. Tests script what the port answers and read back what
 //! was written to it.
 
 #![cfg(test)]
@@ -247,7 +247,7 @@ impl SerialPort for FakeSerial {
 /// The fake's own tests. It had none, and seven tests in two other files lean
 /// on it - so whatever it does wrong, they inherit.
 ///
-/// A reviewer found the hole that made this worth writing: with
+/// The hole that made this worth writing: with
 /// `if true || b.ends_with(b";")` in the write path, every one of the 382 tests
 /// in this workspace stayed green. The OFF state of `reply_to_any_write` was
 /// observable by nothing at all, which means nothing was holding the semicolon
@@ -366,7 +366,7 @@ mod tests {
     ///
     /// Four tests in three files judge `written`, and all four write exactly
     /// once, so keeping everything and keeping only the last write looked the
-    /// same to them. A reviewer made the fake overwrite instead of append and all
+    /// same to them. With the fake made to overwrite instead of append, all
     /// 436 tests stayed green (2026-09-25). It matters the day a sequence is
     /// tested - and the first one is already on the list: amplitec's session
     /// loop sends a scan and then a switch command.

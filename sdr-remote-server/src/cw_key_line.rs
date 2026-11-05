@@ -3,7 +3,7 @@
 //! The key line of a Yaesu: RTS on the radio's second USB COM port, which
 //! the radio reads as its CW key when menu PC KEYING is set to RTS.
 //!
-//! Step 6 of `docs/internal/DESIGN-remote-cw.md`. Measurement 3 (2026-09-18):
+//! Measured 2026-09-18:
 //! the FT-991A keys on RTS of the port next to its CAT port, not on the CAT
 //! port itself. That has to be so: the CAT port is opened with
 //! `FlowControl::Hardware`, which in serialport 4.9 on Windows holds RTS on
@@ -70,7 +70,7 @@ pub trait KeyOut {
     /// Put the line down and say whether that reached the port. `Drop` lowers
     /// too, but it throws its result away and it fires while the handle may
     /// already be broken - so every caller that needs to *know* the line is
-    /// down asks here (review 2120A1: the exit line said "lowered" from inside
+    /// down asks here (the exit line said "lowered" from inside
     /// the `if let`, one statement before the drop that does the writing).
     fn lower_now(&mut self) -> anyhow::Result<()>;
 }
@@ -97,7 +97,7 @@ impl KeyLine {
     /// A line over a port the caller supplies. Only for tests: this module's
     /// four surviving mutants all lived here, in the thinnest code of the
     /// whole chain, because nothing could reach `set` without a real radio
-    /// (review 2120A1 - among them "write `!down`", which keys in the
+    /// (among them "write `!down`", which keys in the
     /// gaps and leaves RTS high after the last key-up).
     #[cfg(test)]
     pub fn over(name: &str, port: Box<dyn SerialPort>) -> Self {
@@ -160,7 +160,7 @@ mod tests {
 
     /// The whole point of this module, and until build 152 no test could see
     /// it: key down puts RTS HIGH and key up puts it LOW. A mutant writing
-    /// `!down` survived 340 tests (review 2120A1) - it keys in the gaps
+    /// `!down` survived 340 tests - it keys in the gaps
     /// and, worse, leaves the line high after the last key-up, which on a
     /// Yaesu is a radio that keeps transmitting.
     #[test]
@@ -171,7 +171,7 @@ mod tests {
         line.set(false).unwrap();
         line.set(true).unwrap();
         assert_eq!(fake.log().rts, [true, false, true]);
-        assert!(fake.log().dtr.is_empty(), "keying is RTS alone - DTR is not a key");
+        assert!(fake.log().dtr.is_empty(), "keying is RTS alone: DTR is not a key");
     }
 
     /// Dropping the line leaves nothing keyed, whatever it was doing.
@@ -201,7 +201,7 @@ mod tests {
         let mut line = KeyLine::over("FAKE", gone.boxed());
         line.set(true).unwrap();
         assert!(line.lower_now().is_err(), "a lower that did not reach the port is not a lower");
-        assert_eq!(gone.log().rts, [true], "and the line is still high - that is the radio transmitting");
+        assert_eq!(gone.log().rts, [true], "and the line is still high: that is the radio transmitting");
     }
 
     fn usb(name: &str, vid: u16, pid: u16, serial: Option<&str>) -> PortDesc {
@@ -221,13 +221,13 @@ mod tests {
         assert_eq!(sibling_port(&ports, "COM12").as_deref(), Some("COM13"));
     }
 
-    /// The owner's server PC, 2026-09-18 (`yaesu-key-test list`): the
+    /// A real server PC, 2026-09-18 (`yaesu-key-test list`): the
     /// FT-991A on COM13 (Enhanced, CAT) and COM12 (Standard), a second CP2105
     /// radio on COM25/COM27, and a pair of MCP2221A boards that report the
     /// same serial number - which is why the serial alone is not trusted to
     /// mean "same device" across vendors.
     #[test]
-    fn the_owners_server_pc() {
+    fn a_real_server_pc() {
         let ports = vec![
             usb("COM7", 0x0403, 0x6010, Some("7")),
             PortDesc { name: "COM29".into(), usb: None },

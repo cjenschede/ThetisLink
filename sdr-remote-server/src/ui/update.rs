@@ -210,7 +210,7 @@ impl eframe::App for ServerApp {
                             });
                     });
                     // TX/output device: separately selectable so the transmit audio always
-                    // goes to the right codec (PATCH-yaesu-output-device). Empty = same as
+                    // goes to the right codec. Empty = same as
                     // the input; choose this when the capture/render endpoints have different names.
                     ui.horizontal(|ui| {
                         ui.label(rust_i18n::t!("srv_audio_out_tx").to_string());
@@ -299,6 +299,9 @@ impl eframe::App for ServerApp {
                     });
                     self.render_radio_model_settings(ui, 1);
                     ui.label(egui::RichText::new(rust_i18n::t!("srv_radio2_note").to_string()).size(10.0).color(Color32::GRAY));
+                    // One box for both radios: which receive correction the clients use.
+                    ui.checkbox(&mut self.yaesu_rx_levels_tuned, rust_i18n::t!("srv_yaesu_rx_levels_tuned").to_string())
+                        .on_hover_text(rust_i18n::t!("srv_yaesu_rx_levels_tuned_hover").to_string());
 
                     ui.add_space(8.0);
 
@@ -566,7 +569,7 @@ impl eframe::App for ServerApp {
                     ui.add_enabled_ui(relay_set_up, |ui| {
                         // Two texts, one per state: egui shows `on_hover_text` only on
                         // an enabled widget, so the grey one needs its own call
-                        // (review 135: the reason it is grey never showed).
+                        // (the reason it is grey never showed).
                         ui.checkbox(&mut self.allow_direct, rust_i18n::t!("srv_allow_direct").to_string())
                             .on_hover_text(rust_i18n::t!("srv_allow_direct_hover").to_string())
                             .on_disabled_hover_text(rust_i18n::t!("srv_allow_direct_no_relay_hover").to_string());
@@ -595,7 +598,7 @@ impl eframe::App for ServerApp {
                         );
                     }
                     // Why the button is off, from the rule's own answer - not a
-                    // second reading of the rule (review 129).
+                    // second reading of the rule.
                     let refusal = crate::config::start_credentials(
                         Some(&self.password),
                         self.totp_enabled,
@@ -611,7 +614,7 @@ impl eframe::App for ServerApp {
                         }
                         // Said in the 2FA block below. Every kind is named, no
                         // catch-all: a new kind does not compile until this
-                        // screen says it (review 130).
+                        // screen says it.
                         Some(crate::config::StartRefusal::TotpKeyMissing)
                         | Some(crate::config::StartRefusal::TotpKeyInvalid)
                         | None => {}
@@ -700,7 +703,7 @@ impl eframe::App for ServerApp {
                     // The server thread ended while this screen says Running - a
                     // panic, or an error out of run_server_async. Stopping takes the
                     // handle away (stop_server_and_wait), so a finished one here was
-                    // not asked for (review 46). Say so, and what helps.
+                    // not asked for. Say so, and what helps.
                     if self.server_thread.as_ref().map_or(false, |h| h.is_finished()) {
                         ui.colored_label(egui::Color32::RED, rust_i18n::t!("srv_server_stopped").to_string());
                     }
@@ -716,7 +719,7 @@ impl eframe::App for ServerApp {
                         ui.label(egui::RichText::new(rust_i18n::t!("srv_ui_scale_hint").to_string())
                             .size(11.0).color(egui::Color32::GRAY));
                     });
-                    // PATCH-2: Status / Logs tabs + "Schik" button (arrange windows).
+                    // Status / Logs tabs + "Schik" button (arrange windows).
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut self.status_view, StatusView::Status, rust_i18n::t!("srv_status").to_string());
                         ui.selectable_value(&mut self.status_view, StatusView::Logs, rust_i18n::t!("srv_logs").to_string());
@@ -737,8 +740,7 @@ impl eframe::App for ServerApp {
                     // `rule` and the Settings button since the Exit button went
                     // (2026-09-19) - so a long status/scan list doesn't push it out
                     // of view. Still sized for two buttons and two lines of 6 px:
-                    // more than one `rule` (13.5 px) and one button need (review of
-                    // 208), and left as it was rather than tuned unseen. Previously
+                    // more than one `rule` (13.5 px) and one button need, and left as it was rather than tuned unseen. Previously
                     // there was a fixed 30px here - too little for two buttons, so
                     // after an Adafruit scan the Settings button became unreachable
                     // (the panel itself doesn't scroll, only the ScrollArea).
@@ -798,7 +800,7 @@ impl eframe::App for ServerApp {
                         }
                     }
 
-                    // No Exit button (owner's decision, 2026-09-19): closing the
+                    // No Exit button: closing the
                     // window is the way out, and it does all the button did - see
                     // `Drop for ServerApp`.
                     sdr_remote_theme::rule(ui);
@@ -1355,9 +1357,9 @@ impl eframe::App for ServerApp {
 
                 let rotor_sz = self.rotor_window_size.unwrap_or([340.0, 320.0]);
                 let backend_title = match self.rotor_backend.as_str() {
-                    "pstrotator" => "Rotor - PstRotator",
-                    "mcp2221_yaesu" => "Rotor - Adafruit MCP2221A -> Yaesu G-1000DXC",
-                    _ => "Rotor - EA7HG Visual Rotor",
+                    "pstrotator" => "Rotor: PstRotator",
+                    "mcp2221_yaesu" => "Rotor: Adafruit MCP2221A -> Yaesu G-1000DXC",
+                    _ => "Rotor: EA7HG Visual Rotor",
                 };
                 let mut rotor_vb = ViewportBuilder::default()
                     .with_title(backend_title)
@@ -1432,17 +1434,17 @@ impl eframe::App for ServerApp {
                         ui.add_space(8.0);
                         sdr_remote_theme::rule(ui);
                         ui.label(RichText::new("Author").size(13.0).strong());
-                        ui.label("Chiron van der Burgt - PA3GHM");
+                        ui.label("Chiron van der Burgt, PA3GHM");
                         ui.add_space(6.0);
                         ui.label(RichText::new("Special Thanks").size(13.0).strong());
-                        ui.label("Richie (ramdor) - Thetis SDR development, TCI protocol extensions");
+                        ui.label("Richie (ramdor): Thetis SDR development, TCI protocol extensions");
                         ui.add_space(6.0);
                         ui.label(RichText::new("Protocols & External Services").size(13.0).strong());
-                        ui.label("TCI - Expert Electronics / Thetis");
-                        ui.label("DX Spider - DX cluster telnet protocol");
-                        ui.label("HPSDR / OpenHPSDR Protocol 2");
-                        ui.label("WebSDR (PA3FWM) / KiwiSDR - CatSync targets");
-                        ui.label("ThetisLink Relay - self-hosted WebSocket + UDP relay (internet remote)");
+                        ui.label("TCI: Expert Electronics / Thetis");
+                        ui.label("DX Spider: DX cluster telnet protocol");
+                        ui.label("WebSDR (PA3FWM) / KiwiSDR: CatSync targets");
+                        ui.label("ThetisLink Relay: self-hosted WebSocket + UDP relay (internet remote)");
+                        ui.label("ThetisLink Chat: optional service beside a relay (chat + problem reports)");
                         ui.add_space(6.0);
                         ui.label(RichText::new("Hardware Support").size(13.0).strong());
                         egui::Grid::new("hw_grid_srv").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
@@ -1475,7 +1477,7 @@ impl eframe::App for ServerApp {
                             ui.label("Source:");
                             ui.hyperlink("https://github.com/cjenschede/ThetisLink");
                         });
-                        ui.label("Based on the Thetis SDR lineage - see ATTRIBUTION.md");
+                        ui.label("Based on the Thetis SDR lineage (see ATTRIBUTION.md)");
                         ui.label("Third-party licenses & SBOM: see NOTICE.md, THIRD-PARTY-LICENSES.html");
                         ui.add_space(12.0);
                         ui.vertical_centered(|ui| {
@@ -1756,7 +1758,7 @@ impl ServerApp {
             // off would otherwise take its own settings off the screen.
             if model.is_none() && self.probe_model[s].is_some() {
                 self.probe_silent[s] = true;
-                log::info!("[radio{}] settings probe: no answer on {} - keeping the model from last time", slot, port);
+                log::info!("[radio{}] settings probe: no answer on {}; keeping the model from last time", slot, port);
                 continue;
             }
             // A different radio in this slot does not inherit the previous
@@ -1767,7 +1769,7 @@ impl ServerApp {
                 if was != now && self.memory_write_ack[s] {
                     self.memory_write_ack[s] = false;
                     log::info!(
-                        "[radio{}] {} replaced {} - the memory-write permission is withdrawn, it was given to the other radio",
+                        "[radio{}] {} replaced {}: the memory-write permission is withdrawn, it was given to the other radio",
                         slot,
                         sdr_remote_core::protocol::radio_model_name(now),
                         sdr_remote_core::protocol::radio_model_name(was)
@@ -1785,7 +1787,7 @@ impl ServerApp {
                 ),
                 // With the reason when the port did not open (build 271).
                 None => match crate::yaesu::port_trouble_log_text(trouble) {
-                    Some(why) => log::info!("[radio{}] settings probe: {} could not be opened - {}", slot, port, why),
+                    Some(why) => log::info!("[radio{}] settings probe: {} could not be opened; {}", slot, port, why),
                     None => log::info!("[radio{}] settings probe: nothing answered on {}", slot, port),
                 },
             }

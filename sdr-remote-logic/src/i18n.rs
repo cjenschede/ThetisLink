@@ -88,7 +88,7 @@ impl Lang {
 /// platform-specific UI elements (e.g. the desktop has a "Thetis" tab
 /// with a Start button; the Android app puts the Power button on the
 /// main Radio screen). Defaulting to `Desktop` matches the original
-/// PATCH-1 wording.
+/// wording.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
     Desktop,
@@ -492,7 +492,7 @@ mod tests {
     /// The list cannot enumerate itself, so a new `ConnectError` variant used to
     /// slip in with no coverage and nothing to complain about. This match has no
     /// catch-all arm: add a variant and it stops compiling, which is the only
-    /// reminder that actually arrives (review finding, 2026-08-20).
+    /// reminder that actually arrives.
     #[allow(dead_code)]
     fn every_error_is_listed(e: &ConnectError) {
         match e {
@@ -529,11 +529,11 @@ mod tests {
                 message: "lookup failed".to_string(),
             },
             ConnectError::NoUdpResponse {
-                addr: "192.168.1.79:4580".to_string(),
+                addr: "192.168.1.20:4580".to_string(),
                 timeout_secs: 5,
             },
             ConnectError::MalformedResponse {
-                addr: "192.168.1.79:4580".to_string(),
+                addr: "192.168.1.20:4580".to_string(),
                 detail: "unknown packet type 0x42".to_string(),
             },
             ConnectError::WrongPassword,
@@ -549,7 +549,7 @@ mod tests {
                 client_version: 3,
             },
             ConnectError::TciUnreachable {
-                server_addr: "192.168.1.79:4580".to_string(),
+                server_addr: "192.168.1.20:4580".to_string(),
                 server_reported_detail: None,
                 thetis_process_running: None,
             },
@@ -672,7 +672,7 @@ mod tests {
         // hint is the one string here that is built per platform, so a
         // translation that drops the distinction is the likely mistake.
         let err = ConnectError::TciUnreachable {
-            server_addr: "192.168.1.79:4580".to_string(),
+            server_addr: "192.168.1.20:4580".to_string(),
             server_reported_detail: None,
             thetis_process_running: Some(false),
         };
@@ -713,7 +713,7 @@ mod tests {
         // as "my Yaesu is down" - the headline says Thetis, and it says which
         // of the two failure modes applies.
         let mk = |running: Option<bool>| ConnectError::TciUnreachable {
-            server_addr: "192.168.1.79:4580".to_string(),
+            server_addr: "192.168.1.20:4580".to_string(),
             server_reported_detail: None,
             thetis_process_running: running,
         };

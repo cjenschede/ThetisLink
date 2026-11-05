@@ -155,7 +155,7 @@ pub(super) fn read_all_memories(
             // had been assumed rather than measured). This names the channel that
             // stayed silent, and how long it waited, so the next short read says WHICH
             // one went missing instead of only that the total was one too low.
-            warn!("Yaesu: channel {} gave no answer after {} ms - skipped (list will be short)",
+            warn!("Yaesu: channel {} gave no answer after {} ms; skipped (list will be short)",
                   ch, t0.elapsed().as_millis());
             skipped += 1;
             continue;
@@ -163,7 +163,7 @@ pub(super) fn read_all_memories(
         consec_timeouts = 0;
 
         if response.trim().is_empty() {
-            warn!("Yaesu: channel {} answered nothing (in {} ms, no timeout) - skipped",
+            warn!("Yaesu: channel {} answered nothing (in {} ms, no timeout); skipped",
                   ch, t0.elapsed().as_millis());
             skipped += 1;
             continue;
@@ -176,14 +176,14 @@ pub(super) fn read_all_memories(
             // Answered, but not with an MT frame. Measured, not repaired: this is
             // one of three ways a channel could vanish without a trace, which is
             // why a short list showed no warning at all.
-            warn!("Yaesu: channel {} answered without an MT frame: [{}] - skipped",
+            warn!("Yaesu: channel {} answered without an MT frame: [{}]; skipped",
                   ch, response.escape_debug());
             skipped += 1;
             continue;
         };
         {
             let Some(end) = response[start..].find(';') else {
-                warn!("Yaesu: channel {} answer has no terminator: [{}] - skipped",
+                warn!("Yaesu: channel {} answer has no terminator: [{}]; skipped",
                       ch, response.escape_debug());
             skipped += 1;
                 continue;
@@ -194,7 +194,7 @@ pub(super) fn read_all_memories(
 
                 // MT response: P1(3)+P2(9)+P3(5)+P4(1)+P5(1)+P6(1)+P7(1)+P8(1)+P9(2)+P10(1)+P11(1)+P12(12) = 38
                 if d.len() < 26 {
-                    warn!("Yaesu: channel {} answer too short ({} chars, need 26): [{}] - skipped",
+                    warn!("Yaesu: channel {} answer too short ({} chars, need 26): [{}]; skipped",
                           ch, d.len(), response.escape_debug());
             skipped += 1;
                     continue;
@@ -223,7 +223,7 @@ pub(super) fn read_all_memories(
                 // without measuring P1 again first.
                 let freq_hz: u64 = d[3..12].parse().unwrap_or(0); // P2: 9-digit freq
                 if freq_hz == 0 {
-                    warn!("Yaesu: channel {} has an unreadable frequency [{}] - skipped",
+                    warn!("Yaesu: channel {} has an unreadable frequency [{}]; skipped",
                           ch, &d[3..12]);
             skipped += 1;
                     continue;
@@ -322,7 +322,7 @@ pub(super) fn read_all_memories(
     // reason when there is one.
     if skipped > 0 {
         warn!(
-            "Yaesu: {} channel(s) skipped - the radio answered something other than the memory frame that was asked for{}",
+            "Yaesu: {} channel(s) skipped; the radio answered something other than the memory frame that was asked for{}",
             skipped,
             super::two_slot_hint()
         );
@@ -692,7 +692,7 @@ fn ftx1_write_tones_via_vfo<P: CatPort + ?Sized>(
                   other, after_trip.trim().escape_debug());
         }
         if tag_resp.contains("?;") {
-            warn!("FTX-1 channel {}: the name was refused after storing - sent [{}]",
+            warn!("FTX-1 channel {}: the name was refused after storing; sent [{}]",
                   ch, mt_cmd.escape_debug());
         }
 
@@ -731,7 +731,7 @@ fn ftx1_write_tones_via_vfo<P: CatPort + ?Sized>(
                         break;
                     }
                     None => {
-                        warn!("FTX-1 channel {}: could not read the tone back [{}] - stopping the tone pass",
+                        warn!("FTX-1 channel {}: could not read the tone back [{}]; stopping the tone pass",
                               ch, tone_back.escape_debug());
                         break;
                     }
@@ -743,7 +743,7 @@ fn ftx1_write_tones_via_vfo<P: CatPort + ?Sized>(
                 break;
             }
             None => {
-                warn!("FTX-1 channel {}: could not read the channel back [{}] - stopping the tone pass",
+                warn!("FTX-1 channel {}: could not read the channel back [{}]; stopping the tone pass",
                       ch, back.escape_debug());
                 break;
             }
@@ -857,7 +857,7 @@ fn write_memory_tones<P: CatPort + ?Sized>(
             match got_freq {
                 Some(f) if f == expect_freq => {}
                 Some(f) => warn!(
-                    "MW{:05}: channel frequency changed by the tone store - expected {}, radio holds {}",
+                    "MW{:05}: channel frequency changed by the tone store; expected {}, radio holds {}",
                     ch, expect_freq, f
                 ),
                 None => warn!("MW{:05}: no MR read-back after the tone store", ch),
@@ -887,7 +887,7 @@ fn write_memory_tones<P: CatPort + ?Sized>(
     // when it happens. Left as it stands rather than changed alongside the read
     // path: the two get their side back by different routes, and altering an
     // untested one on the strength of a fault found in the other is how this
-    // project spent a day last week. Flagged in the brief instead.
+    // project spent a day once. Left open on purpose.
     if ret.vfo_select == 1 && ret.memory_channel >= 1 {
         let _ = port.query(&recall(ret.memory_channel));
     } else if ret.vfo_a_freq > 0 {
@@ -1331,10 +1331,9 @@ pub(super) fn write_all_memories<P: CatPort + ?Sized>(
         // compatibility), NOT a storage transform. Earlier code force-
         // mapped all FM variants to 'A' here, which left every memory
         // channel permanently in DATA-FM after a Write-radio cycle and
-        // disabled local FM-mic on those channels. Operator-feedback
-        // 2026-06-07.
+        // disabled local FM-mic on those channels.
         // Mode codes must round-trip correctly with the read parser
-        // above (line ~1003-1007): '4'->FM, 'B'->FM-N, '5'->AM,
+        // above: '4'->FM, 'B'->FM-N, '5'->AM,
         // 'D'->AM-N, 'A'->DATA-FM, 'E'->C4FM, etc. Earlier code mapped
         // AM-N->'5' (= AM) and C4FM->'A' (= DATA-FM), which broke the read-after-write
         // integrity.
@@ -1510,7 +1509,7 @@ pub(super) fn read_all_memories_ftx1(
         // discards slow or in-flight answers and broke BOTH radios' memory reads.
         // The echo validation is not protected BY a flush, it is what stands in
         // PLACE of one - a lagged answer is caught on the retry rather than
-        // thrown away. Found by a reviewer, 2026-09-25.
+        // thrown away. Found 2026-09-25.
         // 800ms timeout (instead of the 300ms default): the FTX-1 answers the first
         // time after connect/idle slowly (cold). With 300ms the query timed out, and the
         // buffer flush of the retry threw away the just-arriving slow response
@@ -1618,7 +1617,7 @@ pub(super) fn read_all_memories_ftx1(
     if !channels.is_empty() && unanswered == 0 { break; }
     if !channels.is_empty() && scan_attempt + 1 < 3 {
         log::info!(
-            "FTX-1: memory scan attempt {}/3 got {} channel(s) but {} did not answer - retrying after settle",
+            "FTX-1: memory scan attempt {}/3 got {} channel(s) but {} did not answer; retrying after settle",
             scan_attempt + 1, channels.len(), unanswered
         );
     }
@@ -1629,7 +1628,7 @@ pub(super) fn read_all_memories_ftx1(
         if scan_attempt + 1 >= 3 {
             warn!("FTX-1: memory scan returned 0 channels after 3 attempts");
         } else {
-            info!("FTX-1: memory scan attempt {}/3 returned 0 channels - retrying after settle", scan_attempt + 1);
+            info!("FTX-1: memory scan attempt {}/3 returned 0 channels; retrying after settle", scan_attempt + 1);
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -1722,7 +1721,7 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
             // The command itself, so a refusal can be read instead of guessed at.
             // The radio says only "?;" - which field it objected to is in what we
             // sent, not in the answer.
-            warn!("MW{:05} rejected - sent [{}]", ch, mw_cmd);
+            warn!("MW{:05} rejected; sent [{}]", ch, mw_cmd);
             std::thread::sleep(Duration::from_millis(50));
             continue;
         }
@@ -1739,7 +1738,7 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
         log::debug!("MT write {:05}: [{}] ({}B)", ch, mt_cmd, mt_cmd.len());
         let mt_resp = port.query(&mt_cmd);
         if mt_resp.contains("?;") {
-            warn!("MT{:05} (tag) rejected - sent [{}]", ch, mt_cmd.escape_debug());
+            warn!("MT{:05} (tag) rejected; sent [{}]", ch, mt_cmd.escape_debug());
         }
         count += 1;
         // Channels with an active tone mode get their tone via CN below; the
@@ -1786,7 +1785,7 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
     // The second is what an older note in this file suspected: this radio treats a CN
     // change as memory-tune. The manual's own store commands carry no tone field
     // (MW has "P9 00: Fixed") and do not pick up the current one, so there is no route
-    // left in the documentation. See docs/internal/OPEN-ftx1-memory-tone-write.md.
+    // left in the documentation.
     //
     // Frequency, mode and name ARE written (the MW pass above). Only the tone is left
     // alone, and it is said out loud rather than silently skipped.
@@ -1794,13 +1793,13 @@ pub(super) fn write_all_memories_ftx1<P: CatPort + ?Sized>(
         // Off by default; the probe mode is the only way it runs, so a measurement
         // costs one env var and touches one channel.
         if std::env::var("THETISLINK_FTX1_TONE_PROBE").is_ok() {
-            info!("FTX-1: PROBE run - the tone pass is off by default, measuring only");
+            info!("FTX-1: PROBE run; the tone pass is off by default, measuring only");
             let _ = ftx1_write_tones_via_vfo(port, &tone_rows, is_tx);
         } else {
             warn!(
                 concat!(
                     "FTX-1: {} channel(s) carry a tone, but this radio cannot STORE a tone in a ",
-                    "memory channel over CAT - frequency, mode and name were written, and MW has ",
+                    "memory channel over CAT: frequency, mode and name were written, and MW has ",
                     "reset the tone of those channels to 100.0 Hz in the radio itself. The list ",
                     "keeps the real tones and the server re-applies them on every channel change, ",
                     "so transmitting through ThetisLink is unaffected",
@@ -1874,7 +1873,7 @@ pub(super) enum Ftx1ExRead {
 
 /// How long one attempt of an EX read waits for its answer. One attempt, not
 /// the read: a read is up to three of them, ~2.2 s on an address that does not
-/// answer (review of build 283).
+/// answer.
 pub(super) const FTX1_EX_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(700);
 
 /// `stop` is asked before the second and third attempt: a command that waits
@@ -1967,7 +1966,7 @@ pub(super) enum ExFrame {
 /// replies to the polls, which the scan runs between since build 141 - goes
 /// to `spill`, the poll loop's own buffer, so it is parsed as usual. Build 142
 /// threw them away, and the FTX-1's frequency and mode could go unfollowed
-/// while the menus loaded (review 318).
+/// while the menus loaded.
 pub(super) fn ex_frame(resp: &str, prefix: &str, spill: &mut String) -> Option<ExFrame> {
     let mut got = None;
     for frame in resp.split_inclusive(';') {
@@ -1995,7 +1994,7 @@ const FTX1_MENU_MAX_CONSECUTIVE_NO_RESPONSE: u8 = 15; // ~33 s of uninterrupted 
 /// It reads the addresses of the chart (`sdr_remote_core::ftx1_ex_chart`), in
 /// its order - since build 147. Until then it searched blind, subgroup by
 /// subgroup until two "no such address", and asked 364 addresses per pass that
-/// do not exist; the owner's radio answered all 405 of its addresses from the
+/// do not exist; a real FTX-1 answered all 405 of its addresses from the
 /// chart and none outside it (field log 2026-09-19 23:09, build 146). A chart
 /// address the radio lacks (an option it does not have) costs one question per
 /// pass. What this cannot find: an address a later firmware adds and the chart
@@ -2011,7 +2010,7 @@ const FTX1_MENU_MAX_CONSECUTIVE_NO_RESPONSE: u8 = 15; // ~33 s of uninterrupted 
 /// counter, and so does the start of a pass. That last one because from pass
 /// two on only the addresses not yet found are read, and those are the ones
 /// that answer "?;" or nothing: without it fifteen scattered time-outs over a
-/// whole pass would end a scan that is doing its work (review 319).
+/// whole pass would end a scan that is doing its work.
 pub(super) struct Ftx1MenuScan {
     addresses: Vec<(u8, u8, u8)>,
     found: std::collections::BTreeMap<String, String>,
@@ -2057,7 +2056,7 @@ impl Ftx1MenuScan {
     /// The operator wrote this address while the scan runs: that value is the
     /// one the scan ends with, whatever it read before, and the address is not
     /// asked again. Without this the scan's older value overwrote the server's
-    /// copy at its end, and the menu window jumped back (review 318).
+    /// copy at its end, and the menu window jumped back.
     pub(super) fn note_written(&mut self, key: &str, value: &str) {
         self.found.insert(key.to_string(), value.to_string());
     }
@@ -2196,7 +2195,7 @@ mod ftx1_menu_scan_tests {
         }
     }
 
-    /// The owner's radio: every chart address but the 39 it answered
+    /// A real FTX-1: every chart address but the 39 it answered
     /// no-such-address to (field log 2026-09-19 23:09).
     #[test]
     fn a_radio_with_the_chart_less_39_gives_405() {
@@ -2249,7 +2248,7 @@ mod ftx1_menu_scan_tests {
     }
 
     /// The order of the reads decides which partial set an aborted scan
-    /// leaves: the chart's order (review 318 - a golden row, not a
+    /// leaves: the chart's order (a golden row, not a
     /// second copy of the algorithm).
     #[test]
     fn the_scan_reads_in_the_charts_order() {
@@ -2270,7 +2269,7 @@ mod ftx1_menu_scan_tests {
     }
 
     /// Both ways the counter goes back to nought - an answer with a value and
-    /// a "no such address" - and the start of a pass (review 319: the two
+    /// a "no such address" - and the start of a pass (the two
     /// resets were untested; the pass).
     #[test]
     fn an_answer_of_any_kind_keeps_the_scan_going() {
@@ -2297,7 +2296,7 @@ mod ftx1_menu_scan_tests {
     /// above cannot see, because every address it does not name answers
     /// "no such address" and that resets the counter too. So the run above
     /// never gets near fifteen within one pass and passes with or without the
-    /// per-pass reset (review 2120A2: a test that cannot fail).
+    /// per-pass reset (a test that cannot fail).
     ///
     /// This one puts the last ten addresses of the chart on permanent silence.
     /// Pass 1 therefore ENDS on ten in a row with nothing after them to reset
@@ -2344,7 +2343,7 @@ mod ftx1_menu_scan_tests {
         assert_eq!(reads.len(), 15, "aborted after 15 reads without an answer");
     }
 
-    /// Review 318 (point E): the operator sets a menu item the scan has
+    /// The operator sets a menu item the scan has
     /// already read. At its end the scan's own, older value overwrote the
     /// server's copy, and the menu window jumped back.
     #[test]
@@ -2376,7 +2375,7 @@ mod ftx1_menu_scan_tests {
         assert_eq!(super::ex_write("FA014200000;"), None);
     }
 
-    /// Review 318 (point E, on 142): what waits on the port while the scan
+    /// What waits on the port while the scan
     /// takes its turn is mostly the polls' replies. Thrown away, the FTX-1's
     /// frequency and mode went unfollowed while the menus loaded; now they go
     /// to the poll's parser, and only this address's frame is the answer.
@@ -2390,7 +2389,7 @@ mod ftx1_menu_scan_tests {
         assert_eq!(super::ex_frame("?;", "EX010101", &mut spill), Some(super::ExFrame::Rejected));
         assert_eq!(super::ex_frame("IF00014200000;", "EX010101", &mut spill), None);
         assert_eq!(spill, "IF00014200000;");
-        // Review 318 round 2: a frame cut off at the end of the read is
+        // A frame cut off at the end of the read is
         // not an answer - not even when it carries this address - and goes on
         // whole to the polls, where the rest of it follows.
         let mut spill = String::new();
@@ -2422,8 +2421,8 @@ pub(super) enum TotAfterWrite {
 
 /// The menu window takes free text. Adopting the typed value made "45" or
 /// "1O" read as 0 - no time-out - while the radio kept its own; on a 991A that
-/// time-out is the only thing that lets ThetisLink release the PTT (review
-/// 318 round 2). Only two digits, 00-30, the form both models answer
+/// time-out is the only thing that lets ThetisLink release the PTT. Only two
+/// digits, 00-30, the form both models answer
 /// with and take.
 pub(super) fn tot_after_menu_write(model: RadioModel, key: &str, value: &str) -> TotAfterWrite {
     if key.trim() != tot_menu_key(model) {
@@ -2469,7 +2468,7 @@ mod tot_tests {
         assert_eq!(tot_after_menu_write(m, "036", "00"), Set(0), "off, written as the radio writes it");
         assert_eq!(tot_after_menu_write(m, "036", "30"), Set(30));
         assert_eq!(tot_after_menu_write(m, "036", "5"), NotTaken, "one digit: the radio may refuse it");
-        assert_eq!(tot_after_menu_write(m, "036", "45"), NotTaken, "out of range - not 'no time-out'");
+        assert_eq!(tot_after_menu_write(m, "036", "45"), NotTaken, "out of range: not 'no time-out'");
         assert_eq!(tot_after_menu_write(m, "036", "1O"), NotTaken, "a letter O");
         assert_eq!(tot_after_menu_write(m, "037", "05"), Untouched);
         assert_eq!(tot_after_menu_write(RadioModel::Ftx1, "030112", "10"), Set(10));
@@ -2613,7 +2612,7 @@ mod tone_write_tests {
     ///
     /// Do not re-enable on reasoning. The probe mode is the way back in: it touches
     /// one channel, dumps both neighbours, and answers in one run what six sequences
-    /// could not. See docs/internal/OPEN-ftx1-memory-tone-write.md.
+    /// could not.
     #[test]
     fn ftx1_tone_writing_is_off_and_says_so() {
         let src = include_str!("memory.rs");
@@ -2712,7 +2711,7 @@ pub(super) fn").unwrap_or(ftx1_fn.len())];
         assert_eq!(
             port.sent(),
             vec!["MC;", "MC003;"],
-            "asks where it is, then only restores - no channel is recalled"
+            "asks where it is, then only restores: no channel is recalled"
         );
     }
 
@@ -2935,8 +2934,8 @@ mod tone_merge_tests {
 }
 
 /// The port end of the EX scan, which had no tests at all: the code path stops
-/// at a `SerialPort` and there was no way to be one. Two mutants lived here
-/// (review 2120A2), and the worst is one word - `NoResponse` written as
+/// at a `SerialPort` and there was no way to be one. Two mutants lived here,
+/// and the worst is one word - `NoResponse` written as
 /// `Missing` - which quietly takes both the abort guard and the retry out of
 /// the scan while all eight scan tests stay green.
 #[cfg(test)]

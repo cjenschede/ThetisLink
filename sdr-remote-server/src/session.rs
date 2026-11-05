@@ -22,7 +22,7 @@ const SESSION_TIMEOUT_SECS: u64 = 15;
 /// the operator types (the engine holds them until the code is in) and cannot
 /// refresh its session before it is authenticated, so a listener's fifteen
 /// seconds reaped it mid-typing - after which its code got, since build 68, no
-/// answer at all, and the client waited at the code field for ever (review 70).
+/// answer at all, and the client waited at the code field for ever.
 /// Two minutes is four TOTP periods.
 const TOTP_ENTRY_TIMEOUT_SECS: u64 = 120;
 
@@ -32,7 +32,7 @@ const TOTP_ENTRY_TIMEOUT_SECS: u64 = 120;
 /// password, so on a slow line the client's next heartbeat (half a second after
 /// the one that started the handshake) lands on its own fresh code step and, in
 /// build 73, replaced it: a second challenge, the new key thrown away, and a
-/// code typed in that window answering nothing (review 73, measured at 600 ms
+/// code typed in that window answering nothing (measured at 600 ms
 /// of flight). Two seconds is above one heartbeat interval on any line and far
 /// under the time it takes to type a code; a restart or a relay reconnect is
 /// seconds later.
@@ -51,7 +51,7 @@ const TOTP_KNOCK_GRACE_SECS: u64 = 2;
 /// command and not a stream, so there is nothing here that arrives every 20 ms.
 /// Equal to the CW playout's WATCHDOG by coincidence, not by design: which of the
 /// two lifts the key of a client that died is then a race, and both outcomes are
-/// right (step-4 brief, the time-out row in section 2.6). The safety order is
+/// right. The safety order is
 /// pinned in ptt.rs: `mox_drops_before_the_transmitter_is_given_away_or_the_key_lifted`.
 /// Since build 265 a keyed radio lets a silent holder go at 2 s
 /// (`release_silent_radio`), and Thetis since 251; this is what is left for a
@@ -84,9 +84,9 @@ const MAX_AUTH_FAILURES: u32 = 5;
 /// Block duration after too many failures
 const AUTH_BLOCK_SECS: u64 = 60;
 
-/// PATCH-2: ringbuffer-capacity for recent connect attempts shown in the
+/// Ringbuffer-capacity for recent connect attempts shown in the
 /// server Status panel. 10 entries balances "recent context for support"
-/// against memory under brute-force traffic - see decision-log §6.
+/// against memory under brute-force traffic.
 pub const CONNECT_HISTORY_CAPACITY: usize = 10;
 
 /// Outcome of a single connect attempt - shown in the Status panel so the
@@ -140,7 +140,7 @@ impl ConnectOutcome {
 
 /// A single connect attempt record kept in the SessionManager ringbuffer.
 /// Carries both `Instant` (cheap relative-time calc) and a wall-clock
-/// timestamp (for "17:42:11" UI display) - operator-feedback / review request.
+/// timestamp (for "17:42:11" UI display), which operators asked for.
 #[derive(Debug, Clone)]
 pub struct ConnectAttempt {
     pub instant: Instant,
@@ -179,8 +179,7 @@ pub struct AuthVerdict {
 /// pending for its address (the challenge expired, the entry was reaped, the
 /// client is past this step). Nothing goes back - a REJECTED read as "wrong
 /// password" on the client's screen, and with a slow answer that was a loop -
-/// and the next packet from the address gets a fresh challenge the usual way
-/// (review 67).
+/// and the next packet from the address gets a fresh challenge the usual way.
 pub const AUTH_NOT_ANSWERED: u8 = 0xff;
 
 /// Authentication state for a client
@@ -253,18 +252,19 @@ fn bound() -> AuthChannel {
 pub struct ClientSession {
     pub addr: SocketAddr,
     pub last_seen: Instant,
-    /// PATCH-2: timestamp when this `ClientSession` was first inserted
+    /// Timestamp when this `ClientSession` was first inserted
     /// (matches the first packet observed from this address). Drives the
     /// "connected for Xm Ys" column in the Status panel.
     pub connected_since: Instant,
     pub auth_state: AuthState,
     /// The key of this session, derived at the password step with a client that
-    /// sent its nonce (phase 2 of the direct connection); `None` for an older
-    /// client. Nothing reads it before phase 5. Server-owned: it IS the session,
+    /// sent its nonce (mutual authentication); `None` for an older client.
+    /// Nothing reads it yet (it is meant for per-packet encryption).
+    /// Server-owned: it IS the session,
     /// and a new session gets a new one.
     pub session_key: Option<[u8; 32]>,
-    /// Which numbered controls this session applied, per control (phase 2b,
-    /// `control_ack`). Server-owned: a new session starts empty, and a client
+    /// Which numbered controls this session applied, per control
+    /// (`control_ack`). Server-owned: a new session starts empty, and a client
     /// that restarted behind the same address is reset with it.
     pub controls: sdr_remote_core::control_ack::ControlReceiver,
     pub last_heartbeat_seq: u32,
@@ -282,6 +282,9 @@ pub struct ClientSession {
     pub spectrum_fps: u8,
     pub spectrum_zoom: f32,
     pub spectrum_pan: f32,
+    /// The client sends the fine pan (`SpectrumPanFine`): from then on the
+    /// coarse one beside it is ignored, so a late coarse packet cannot move it.
+    pub fine_pan: bool,
     pub spectrum_max_bins: u16,
     /// RX1 audio subscription. Default ON, so old clients (that never
     /// send `Rx1Enable`) keep receiving RX1 audio. A VRX-only client sets
@@ -293,7 +296,6 @@ pub struct ClientSession {
     pub rx2_spectrum_zoom: f32,
     pub rx2_spectrum_pan: f32,
     pub rx2_spectrum_max_bins: u16,
-    pub vfo_sync: bool,
     pub yaesu_enabled: bool,
     /// Yaesu STATE subscription (freq/s-meter/CAT/feature/memory), SEPARATE from audio.
     /// Set via `YaesuStateEnable` when the control window is open. State goes
@@ -301,8 +303,7 @@ pub struct ClientSession {
     /// muted client (audio off, window open) still keeps live state.
     pub yaesu_state_enabled: bool,
     pub yaesu2_state_enabled: bool,
-    /// Dual-radio slot 1 subscription-gate (PATCH-dual-radio-991a-ftx1, Option
-    /// B-prime). Default false -> old clients (that never send `Yaesu2Enable`)
+    /// Dual-radio slot 1 subscription-gate. Default false -> old clients (that never send `Yaesu2Enable`)
     /// never get slot-1 state/audio/memory. This is the real back-compat guard.
     pub yaesu2_enabled: bool,
     /// VRX per-client subscription-gates (hardening fix v2.2.0). Default
@@ -376,7 +377,7 @@ pub struct AcquireRefusal {
 /// to be told. `tell` is every active client, holder or not, taken under the
 /// same lock as the close and handed out only by the close - so a client can
 /// only be told AFTER the server is closed, and the list cannot be fetched
-/// from anywhere else (review 61: the loop that told everyone could be moved
+/// from anywhere else (the loop that told everyone could be moved
 /// before the close, or run over an empty list, with every check green).
 pub struct TxClosed {
     pub held: Vec<(TxTarget, SocketAddr)>,
@@ -458,7 +459,7 @@ pub struct SessionManager {
     password: Option<String>,
     /// TOTP secret (None = 2FA disabled)
     totp_secret: Option<String>,
-    /// PATCH-2: ringbuffer of recent connect attempts for the Status panel.
+    /// Ringbuffer of recent connect attempts for the Status panel.
     /// Bounded at CONNECT_HISTORY_CAPACITY entries; oldest evicted on overflow.
     connect_history: VecDeque<ConnectAttempt>,
     /// Bumped every time a client joins. The push loops keep tick-lists of who
@@ -474,13 +475,13 @@ pub struct SessionManager {
 }
 
 /// Who must know when a client is admitted and when its session ends. Over
-/// QUIC that is its permit to punch a hole (phase 3c): granted at admission,
+/// QUIC that is its permit to punch a hole: granted at admission,
 /// taken back when the session goes - the session layer knows both moments,
-/// so it is the one source (build 127, review 126: the permit used to be
+/// so it is the one source (build 127; up to build 126 the permit was
 /// granted at three places in the network layer and outlived the session).
 ///
 /// Called with the session lock held: an implementation must not block and
-/// must not call back into the session manager (review 127).
+/// must not call back into the session manager.
 pub trait AdmissionWatch: Send + Sync {
     fn admitted(&self, addr: SocketAddr);
     fn gone(&self, addr: SocketAddr);
@@ -517,7 +518,7 @@ impl SessionManager {
         if password.is_some() {
             info!("Authentication enabled (password configured)");
         } else {
-            warn!("No password configured - every client that reaches the port is admitted without one");
+            warn!("No password configured: every client that reaches the port is admitted without one");
         }
         if totp_secret.is_some() {
             info!("2FA enabled (TOTP configured)");
@@ -538,7 +539,7 @@ impl SessionManager {
         }
     }
 
-    /// PATCH-2: append a connect-attempt to the bounded ringbuffer.
+    /// Append a connect-attempt to the bounded ringbuffer.
     /// Oldest entry is evicted at CONNECT_HISTORY_CAPACITY so the buffer
     /// stays bounded even under sustained brute-force traffic.
     pub fn record_connect_attempt(&mut self, addr: SocketAddr, outcome: ConnectOutcome) {
@@ -553,14 +554,14 @@ impl SessionManager {
         });
     }
 
-    /// PATCH-2: snapshot-clone of the connect-attempt ringbuffer for the
+    /// Snapshot-clone of the connect-attempt ringbuffer for the
     /// Status panel. UI doesn't hold the lock during render - it takes
     /// the clone and releases the lock immediately.
     pub fn recent_connect_attempts(&self) -> Vec<ConnectAttempt> {
         self.connect_history.iter().cloned().collect()
     }
 
-    /// PATCH-2: snapshot-clone of active client list for the Status panel.
+    /// Snapshot-clone of active client list for the Status panel.
     /// Each entry is a `(addr, connected_since, last_seen, rtt_ms, loss_pct, jitter_ms)`
     /// tuple - UI-friendly, no SessionManager-internal refs leaked.
     pub fn active_clients_snapshot(&self) -> Vec<ClientSnapshot> {
@@ -595,7 +596,7 @@ impl SessionManager {
         self.auth_failures.is_blocked(&addr)
     }
 
-    /// Step 4 (build 256, a development build only): the trial client is let in
+    /// The trial (build 256, a development build only): the trial client is let in
     /// as authenticated, without a password - its packets come from the server
     /// itself (`trial.rs`), never from the network. It asks for no receive audio.
     /// `true` when it was let in now, `false` when it already was.
@@ -633,14 +634,14 @@ impl SessionManager {
     /// heartbeats while the operator types, so a heartbeat from its address is a
     /// new client - a restart, or over the relay the same fixed address - and
     /// keeping the old attempt locked that address out for the whole code-step
-    /// deadline, two minutes since build 71 (review 71). But it does send what
+    /// deadline, two minutes since build 71. But it does send what
     /// the operator touches meanwhile - a control, the VFO - and in build 72 one
-    /// of those counted as a knock and wiped the attempt (review 72, measured);
+    /// of those counted as a knock and wiped the attempt (measured);
     /// and its own last heartbeat, sent before it heard of the code step, did
-    /// the same in build 73 on a slow line (review 73, measured). The packet
+    /// the same in build 73 on a slow line (measured). The packet
     /// itself is judged here, not a flag the caller derives: a flag let the
-    /// wiring in `network.rs` say `true` or `false` with every test green
-    /// (review 73). The `NoAuth` arm is defensive: the caller asks only when a
+    /// wiring in `network.rs` say `true` or `false` with every test green.
+    /// The `NoAuth` arm is defensive: the caller asks only when a
     /// password is set, and `NoAuth` exists only without one.
     ///
     /// A `Disconnect` never does: somebody leaving is not somebody arriving. A
@@ -667,11 +668,11 @@ impl SessionManager {
     /// Create a pending challenge for a new client. Returns the nonce.
     pub fn create_challenge(&mut self, addr: SocketAddr) -> [u8; 16] {
         if matches!(self.get_auth_state(addr), Some(AuthState::PendingTotp)) {
-            info!("Client {} knocked again at the code step - the old attempt is replaced by a new challenge", addr);
+            info!("Client {} knocked again at the code step: the old attempt is replaced by a new challenge", addr);
         }
         // A session this replaces ends the one way a session ends, so its
         // watch hears it - true by itself, not by the gate two layers up that
-        // only lets unadmitted clients get here (review 127).
+        // only lets unadmitted clients get here.
         if self.clients.contains_key(&addr) {
             self.forget_client(addr);
         }
@@ -693,14 +694,14 @@ impl SessionManager {
             client_build: sdr_remote_core::protocol::PeerBuild::Unknown,
             spectrum_enabled: false,
             spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
-            spectrum_zoom: 1.0, spectrum_pan: 0.0,
+            spectrum_zoom: 1.0, spectrum_pan: 0.0, fine_pan: false,
             spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
             rx1_enabled: true, // default ON (back-compat old clients)
             rx2_enabled: false, rx2_spectrum_enabled: false,
             rx2_spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
             rx2_spectrum_zoom: 1.0, rx2_spectrum_pan: 0.0,
             rx2_spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
-            vfo_sync: false, yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false, audio_mode: 255,
+            yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false, audio_mode: 255,
             dx_spots_enabled: true,
             full_spectrum_enabled: true,
             allow_zoom_below_2x: false,
@@ -719,7 +720,7 @@ impl SessionManager {
     /// - 1 = accepted (fully authenticated)
     /// - 2 = HMAC ok, TOTP required (pending 2FA)
     ///
-    /// With a `client_nonce` (phase 2) the accepted and TOTP-required answers
+    /// With a `client_nonce` the accepted and TOTP-required answers
     /// carry the proof that this server knows the password, and the session
     /// gets its key; without one it is the answer from before.
     ///
@@ -754,9 +755,9 @@ impl SessionManager {
                 if age >= CHALLENGE_TTL_SECS {
                     // A slow answer is not a wrong one: nothing counted, the
                     // entry goes, and the next packet from this address gets a
-                    // fresh challenge the usual way. Until phase 2 a challenge
-                    // never expired at all.
-                    info!("Auth challenge for {} expired after {}s - a new one follows", addr, age);
+                    // fresh challenge the usual way. Before mutual
+                    // authentication a challenge never expired at all.
+                    info!("Auth challenge for {} expired after {}s: a new one follows", addr, age);
                     self.forget_client(addr);
                     return not_answered;
                 }
@@ -775,7 +776,7 @@ impl SessionManager {
                     };
                     if self.totp_secret.is_some() {
                         session.auth_state = AuthState::PendingTotp;
-                        info!("Client {} password OK, awaiting TOTP - {}", addr, key_line);
+                        info!("Client {} password OK, awaiting TOTP: {}", addr, key_line);
                         return AuthVerdict { code: AUTH_TOTP_REQUIRED, proof };
                     }
                     session.auth_state = AuthState::Authenticated;
@@ -784,7 +785,7 @@ impl SessionManager {
                     session.last_seen = Instant::now();
                     self.mark_admitted(addr);
                     self.auth_failures.clear(&throttle);
-                    info!("Client {} authenticated - {}", addr, key_line);
+                    info!("Client {} authenticated: {}", addr, key_line);
                     return AuthVerdict { code: AUTH_ACCEPTED, proof };
                 }
             }
@@ -794,10 +795,10 @@ impl SessionManager {
         // client already past this step, or a packet that answers nothing -
         // cannot be a password guess, so it is not counted: counting it let five
         // forged responses with a victim's source address block that victim for
-        // a minute, and made every slow answer a failure (review 66). The next
+        // a minute, and made every slow answer a failure. The next
         // packet from the address gets a fresh challenge the usual way.
         if !matches!(self.get_auth_state(addr), Some(AuthState::PendingChallenge { .. })) {
-            log::debug!("Auth response from {} answers no pending challenge - ignored", addr);
+            log::debug!("Auth response from {} answers no pending challenge: ignored", addr);
             return not_answered;
         }
         self.auth_failures.record_failure(throttle);
@@ -806,7 +807,7 @@ impl SessionManager {
         // refusal and comes back only with a Connect. Its entry would hold the
         // address at PendingChallenge for the listener's fifteen seconds, and
         // the corrected password then got no challenge and "server
-        // unreachable" (review 76, measured). Gone, the next packet gets a
+        // unreachable" (measured). Gone, the next packet gets a
         // fresh challenge. An older client keeps heartbeating through a
         // refusal and answers every challenge with the same wrong password:
         // for it the entry stays, or five of those in three seconds would
@@ -836,8 +837,8 @@ impl SessionManager {
                     // before admission refreshes it), and the listener's fifteen
                     // seconds are counted from it: a client that took twenty
                     // seconds to type its code was admitted and reaped within the
-                    // next tick, and sent back to the code field (review 74,
-                    // measured). Admission is the last we heard from it.
+                    // next tick, and sent back to the code field (measured). Admission
+                    // is the last we heard from it.
                     session.last_seen = Instant::now();
                     self.mark_admitted(addr);
                     self.auth_failures.clear(&throttle);
@@ -851,7 +852,7 @@ impl SessionManager {
         // 71 - gets no answer here; its engine lets go after five seconds and the
         // next knock gets a fresh challenge.)
         if !matches!(self.get_auth_state(addr), Some(AuthState::PendingTotp)) {
-            log::debug!("TOTP response from {} answers no pending challenge - ignored", addr);
+            log::debug!("TOTP response from {} answers no pending challenge: ignored", addr);
             return None;
         }
         self.auth_failures.record_failure(throttle);
@@ -891,6 +892,7 @@ impl SessionManager {
                 spectrum_fps: sdr_remote_core::DEFAULT_SPECTRUM_FPS,
                 spectrum_zoom: 1.0,
                 spectrum_pan: 0.0,
+                fine_pan: false,
                 spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
                 rx1_enabled: true, // default ON (back-compat old clients)
                 rx2_enabled: false,
@@ -899,7 +901,6 @@ impl SessionManager {
                 rx2_spectrum_zoom: 1.0,
                 rx2_spectrum_pan: 0.0,
                 rx2_spectrum_max_bins: SERVER_DEFAULT_MAX_BINS,
-                vfo_sync: false,
                 yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false,
                 audio_mode: 255, // default: CH0 only until client sends AudioMode
                 dx_spots_enabled: true,
@@ -936,7 +937,7 @@ impl SessionManager {
             .get(&addr)
             .is_some_and(|c| c.last_heartbeat_seq.saturating_sub(seq) > Self::HEARTBEAT_RESTART_GAP);
         if restarted {
-            info!("Client {} restarted without disconnecting - serving it as new", addr);
+            info!("Client {} restarted without disconnecting: serving it as new", addr);
             self.mark_admitted(addr);
         }
         if let Some(session) = self.clients.get_mut(&addr) {
@@ -990,7 +991,7 @@ impl SessionManager {
         }
     }
 
-    /// Judge a numbered control from `addr` (phase 2b): apply, a repeat, or older
+    /// Judge a numbered control from `addr`: apply, a repeat, or older
     /// than what was applied for the same control. `None` for an address with no
     /// session - nothing to judge against.
     pub fn judge_control(
@@ -1086,7 +1087,7 @@ impl SessionManager {
             // the long one) it went.
             let silent_ms = self.clients.get(&addr).map(|s| s.last_seen.elapsed().as_millis()).unwrap_or(0);
             if self.clients.get(&addr).map_or(false, |s| matches!(s.auth_state, AuthState::PendingTotp)) {
-                warn!("Client {} timed out at the code step ({} ms silent) - the code never came", addr, silent_ms);
+                warn!("Client {} timed out at the code step ({} ms silent): the code never came", addr, silent_ms);
             } else {
                 warn!("Client {} timed out ({} ms silent)", addr, silent_ms);
             }
@@ -1105,7 +1106,7 @@ impl SessionManager {
         // The byte counters of clients that are gone go with them, here and not
         // only when the status panel draws: a server without a screen would
         // keep one counter per address for ever - and over QUIC every new
-        // connection is a new address (review 109).
+        // connection is a new address.
         if !timed_out.is_empty() {
             let left: Vec<SocketAddr> = self.clients.keys().copied().collect();
             crate::tracked_socket::bw_retain(&left);
@@ -1183,7 +1184,7 @@ impl SessionManager {
     /// ownership stayed until a release frame played (build 250) or the time-out
     /// of a silent holder - and when the release packets were lost while the
     /// heartbeat came back, until the client's next press; a second client was
-    /// refused all that while (rounds 249 and 250). Thetis only: the safety is
+    /// refused all that while. Thetis only: the safety is
     /// Thetis's, a Yaesu has its own.
     pub fn release_after_safety(&mut self) -> Option<SocketAddr> {
         let holder = self.tx_holder(TxTarget::Thetis)?;
@@ -1191,7 +1192,7 @@ impl SessionManager {
         Some(holder)
     }
 
-    /// The 2 s clock of a radio (build 265; owner's decision 2026-10-20): its
+    /// The 2 s clock of a radio: its
     /// holder has not been heard on that radio (`heard_on`; since build 282,
     /// until then any packet of the client) for longer than the packet window
     /// of the Thetis safety (`ptt::silence_ended_the_over`, the same `>`). The
@@ -1257,7 +1258,7 @@ impl SessionManager {
     /// client held it already (its microphone on that radio, or its own run),
     /// which is what `give_back_attempt` needs to know.
     ///
-    /// One pair for both kinds of transmitter. Review 316 found the rule in two
+    /// One pair for both kinds of transmitter. The rule used to have two
     /// spellings: the Yaesu gate asked "did I hold it before", the Thetis gate
     /// "does a run of mine play" - and the second let a failed CW attempt take
     /// away a lock this client held for its microphone.
@@ -1288,7 +1289,7 @@ impl SessionManager {
     /// The named decision. It is small on purpose: what matters is that every
     /// audio path asks *this*, so the refusal is covered by the same test as
     /// the table. It had no name at all on the Yaesu side, which is why nothing
-    /// could reach it (review finding, part A).
+    /// could reach it (part A).
     pub fn accepts(&self, target: TxTarget, addr: SocketAddr) -> bool {
         self.tx_holders.get(&target).copied() == Some(addr)
     }
@@ -1315,7 +1316,7 @@ impl SessionManager {
     /// on connect, and if they arrive a moment early the server keeps its own
     /// defaults while the client draws to its own (2026-08-14).
     ///
-    /// Build 84 gave that warning to the zoom alone, and the review found the
+    /// Build 84 gave that warning to the zoom alone, and that was the
     /// shape of it: five setters that can fall silently, one of them told to
     /// speak up. Zoom and pan go out in the same breath, so if one is dropped
     /// the other is too - and the client's mismatch check compares the *span*,
@@ -1326,7 +1327,7 @@ impl SessionManager {
     fn view_session_mut(&mut self, addr: SocketAddr, what: &str) -> Option<&mut ClientSession> {
         let session = self.clients.get_mut(&addr);
         if session.is_none() {
-            warn!("{} from {} arrived before its session - ignored", what, addr);
+            warn!("{} from {} arrived before its session: ignored", what, addr);
         }
         session
     }
@@ -1338,10 +1339,41 @@ impl SessionManager {
         }
     }
 
+    /// A spectrum pan control of either receiver, coarse or fine: decoded,
+    /// and handed to the pan and the flag it belongs to, in one place the
+    /// receive loop only passes it on to. Gives the receiver (1 or 2), the pan
+    /// as decoded and whether it was the fine one; `None` for any other control.
+    pub fn spectrum_pan_control(
+        &mut self,
+        addr: SocketAddr,
+        id: sdr_remote_core::protocol::ControlId,
+        value: u16,
+    ) -> Option<(u8, f32, bool)> {
+        use sdr_remote_core::protocol::{unpack_spectrum_pan, unpack_spectrum_pan_fine, ControlId};
+        let (rx, pan, fine) = match id {
+            ControlId::SpectrumPan => (1, unpack_spectrum_pan(value), false),
+            ControlId::Rx2SpectrumPan => (2, unpack_spectrum_pan(value), false),
+            ControlId::SpectrumPanFine => (1, unpack_spectrum_pan_fine(value), true),
+            ControlId::Rx2SpectrumPanFine => (2, unpack_spectrum_pan_fine(value), true),
+            _ => return None,
+        };
+        if rx == 1 {
+            self.set_spectrum_pan(addr, pan, fine);
+        } else {
+            self.set_rx2_spectrum_pan(addr, pan, fine);
+        }
+        Some((rx, pan, fine))
+    }
+
     /// Set spectrum pan for a client
-    pub fn set_spectrum_pan(&mut self, addr: SocketAddr, pan: f32) {
+    /// `fine`: from `SpectrumPanFine`; the coarse one is ignored once a fine
+    /// one came in this session.
+    pub fn set_spectrum_pan(&mut self, addr: SocketAddr, pan: f32, fine: bool) {
         if let Some(session) = self.view_session_mut(addr, "RX1 spectrum pan") {
-            session.spectrum_pan = pan.clamp(-0.5, 0.5);
+            if fine || !session.fine_pan {
+                session.spectrum_pan = pan.clamp(-0.5, 0.5);
+            }
+            session.fine_pan |= fine;
         }
     }
 
@@ -1452,7 +1484,7 @@ impl SessionManager {
             .collect()
     }
 
-    /// VRX per-client SAM auto-tune subscription (PATCH-vrx-wide-sam-ux).
+    /// VRX per-client SAM auto-tune subscription.
     /// ch 0 = VRX1, otherwise VRX2.
     pub fn set_vrx_autotune(&mut self, addr: SocketAddr, ch: u8, on: bool) {
         if let Some(s) = self.clients.get_mut(&addr) {
@@ -1654,28 +1686,19 @@ impl SessionManager {
     }
 
     /// Set RX2 spectrum pan for a client
-    pub fn set_rx2_spectrum_pan(&mut self, addr: SocketAddr, pan: f32) {
+    /// The same for RX2, on the same flag: a client sends both fine or neither.
+    pub fn set_rx2_spectrum_pan(&mut self, addr: SocketAddr, pan: f32, fine: bool) {
         if let Some(session) = self.view_session_mut(addr, "RX2 spectrum pan") {
-            session.rx2_spectrum_pan = pan.clamp(-0.5, 0.5);
+            if fine || !session.fine_pan {
+                session.rx2_spectrum_pan = pan.clamp(-0.5, 0.5);
+            }
+            session.fine_pan |= fine;
         }
-    }
-
-    /// Set VFO sync for a client
-    pub fn set_vfo_sync(&mut self, addr: SocketAddr, enabled: bool) {
-        if let Some(session) = self.clients.get_mut(&addr) {
-            session.vfo_sync = enabled;
-        }
-    }
-
-    /// Check if any active client has VFO sync enabled
-    pub fn any_vfo_sync(&self) -> bool {
-        self.clients.values()
-            .any(|s| s.vfo_sync && Self::is_active_authed(s))
     }
 
     /// Get RX2 spectrum clients: (addr, zoom, pan, max_bins). Spectrum subscription
-    /// is SEPARATE from the RX2 audio subscription (`rx2_enabled`) — a client may want the
-    /// RX2 spectrum without RX2 audio (save bandwidth). Phase 3b.
+    /// is SEPARATE from the RX2 audio subscription (`rx2_enabled`); a client may want the
+    /// RX2 spectrum without RX2 audio (save bandwidth).
     pub fn rx2_spectrum_clients(&self) -> Vec<(SocketAddr, f32, f32, u16)> {
         self.clients.values()
             .filter(|s| s.rx2_spectrum_enabled && Self::is_active_authed(s))
@@ -1692,7 +1715,7 @@ impl SessionManager {
     }
 
     /// Get addresses of RX2 clients with spectrum enabled (for S-meter gating).
-    /// Separate from `rx2_enabled` (audio) — see `rx2_spectrum_clients`. Phase 3b.
+    /// Separate from `rx2_enabled` (audio): see `rx2_spectrum_clients`.
     pub fn rx2_spectrum_addrs(&self) -> Vec<SocketAddr> {
         self.clients.values()
             .filter(|s| s.rx2_spectrum_enabled && Self::is_active_authed(s))
@@ -1805,8 +1828,8 @@ impl SessionManager {
 /// empties the buffer when the owner changes, in the same task as playout. So
 /// a client that left with its tail in the buffer cannot key the next owner's
 /// transmission - as long as that coupling holds. Comparing identity here
-/// keeps the guarantee even when it stops holding, for one comparison (review
-/// finding on build 81). `accepts` is the same question asked of an incoming
+/// keeps the guarantee even when it stops holding, for one comparison
+/// (build 81). `accepts` is the same question asked of an incoming
 /// packet.
 pub fn playout_keys(frame_ptt: bool, owner: Option<SocketAddr>, audio_from: Option<SocketAddr>) -> bool {
     frame_ptt && owner.is_some() && owner == audio_from
@@ -1817,7 +1840,7 @@ pub fn playout_keys(frame_ptt: bool, owner: Option<SocketAddr>, audio_from: Opti
 /// (`force_release` sets the PTT to `Rx`, nothing more), the operator let go in
 /// it, and the release frame found no transmission to end - the branch that
 /// hands the ownership back runs only while transmitting, so the client kept
-/// Thetis and a second client was refused (round 249). Only the client the
+/// Thetis and a second client was refused. Only the client the
 /// session still holds, whose audio it is: the other side of `playout_keys`.
 pub fn playout_hands_back(frame_ptt: bool, owner: Option<SocketAddr>, audio_from: Option<SocketAddr>) -> bool {
     !frame_ptt && owner.is_some() && owner == audio_from
@@ -1839,11 +1862,11 @@ pub fn holder_outlived(remembered: Option<SocketAddr>, holder_now: Option<Socket
 mod tests {
     use super::*;
 
-    // ---- Step 0 of part A: recording what the TX slot does today.
+    // ---- Recording what the TX slot does.
     //
-    // try_acquire_tx and release_tx had no tests at all, while the plan claimed with
-    // a tick that it works for Thetis. Both reviewers asked for this before anything
-    // changes: starting a refactor on untested behaviour is how a repair quietly
+    // try_acquire_tx and release_tx had no tests at all, while they were taken to
+    // work for Thetis. These came first, before anything
+    // changed: starting a refactor on untested behaviour is how a repair quietly
     // breaks something else.
     //
     // These are characterisation tests. They pass straight away, and that is the
@@ -1878,7 +1901,7 @@ mod tests {
         assert_eq!(m.remove(a(3)), vec![], "held nothing");
         // The client is in the table too, and remove() takes it out: the half
         // a surviving mutant showed the first version of this test could not
-        // see, because the table was empty (review finding on build 82).
+        // see, because the table was empty (build 82).
         m.clients.insert(a(1), mk_session("127.0.0.1:1", true, 8.0, 4.0, true, true));
         assert!(m.clients.contains_key(&a(1)));
         let released = m.remove(a(1));
@@ -1904,7 +1927,7 @@ mod tests {
 
     /// A release frame played while nothing is transmitted hands Thetis back -
     /// the safety let the transmitter go in a silence, and the operator let go
-    /// in it (build 250; round 249). Only the client the session still holds,
+    /// in it. Only the client the session still holds,
     /// whose audio it is, and only a frame without PTT.
     #[test]
     fn a_release_played_while_nothing_transmits_hands_thetis_back() {
@@ -1995,7 +2018,7 @@ mod tests {
     // ---- Part A: a table per transmitter, and a decision with a name.
 
     /// The heart of part A: two transmitters are independent. Client B may hold the
-    /// 991A while A holds Thetis - that is what the owner described and what can
+    /// 991A while A holds Thetis - that is a real use case and what can
     /// already happen today.
     #[test]
     fn two_transmitters_are_held_independently() {
@@ -2089,6 +2112,7 @@ mod tests {
             spectrum_fps: 30,
             spectrum_zoom: rx1_zoom,
             spectrum_pan: 0.0,
+            fine_pan: false,
             spectrum_max_bins: 256,
             rx1_enabled: true,
             rx2_enabled: rx2_en, rx2_spectrum_enabled: rx2_en,
@@ -2096,7 +2120,7 @@ mod tests {
             rx2_spectrum_zoom: rx2_zoom,
             rx2_spectrum_pan: 0.0,
             rx2_spectrum_max_bins: 256,
-            vfo_sync: false, yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false, audio_mode: 255,
+            yaesu_enabled: false, yaesu_state_enabled: false, yaesu2_state_enabled: false, yaesu2_enabled: false, audio_mode: 255,
             dx_spots_enabled: true,
             full_spectrum_enabled: true,
             allow_zoom_below_2x: allow,
@@ -2105,6 +2129,58 @@ mod tests {
             vrx1_audio_enabled: false, vrx2_audio_enabled: false,
             vrx1_spectrum_enabled: false, vrx2_spectrum_enabled: false,
                 vrx1_autotune_enabled: false, vrx2_autotune_enabled: false,
+        }
+    }
+
+    /// The fine pan (build 75): taken, and from then on the coarse one of that
+    /// session is ignored, so a coarse packet that arrives late cannot move it
+    /// back; a client that only sends the coarse one keeps working.
+    #[test]
+    fn a_late_coarse_pan_does_not_undo_the_fine_one() {
+        use sdr_remote_core::protocol::{pack_spectrum_pan, pack_spectrum_pan_fine, unpack_spectrum_pan, unpack_spectrum_pan_fine, ControlId as C};
+        let a: SocketAddr = "127.0.0.1:5001".parse().unwrap();
+        let mut mgr = SessionManager::new(None, None);
+        mgr.clients.insert(a, mk_session("127.0.0.1:5001", true, 8.0, 4.0, true, true));
+        // Each control to its own receiver, decoded on its own scale.
+        let fine1 = pack_spectrum_pan_fine(-0.0005);
+        let fine2 = pack_spectrum_pan_fine(0.25);
+        assert_eq!(mgr.spectrum_pan_control(a, C::SpectrumPanFine, fine1), Some((1, unpack_spectrum_pan_fine(fine1), true)));
+        let s = &mgr.clients[&a];
+        assert_eq!((s.spectrum_pan, s.rx2_spectrum_pan, s.fine_pan), (unpack_spectrum_pan_fine(fine1), 0.0, true));
+        assert_eq!(mgr.spectrum_pan_control(a, C::Rx2SpectrumPanFine, fine2), Some((2, unpack_spectrum_pan_fine(fine2), true)));
+        assert_eq!(mgr.spectrum_pan_control(a, C::SpectrumPan, pack_spectrum_pan(0.0)), Some((1, unpack_spectrum_pan(5000), false)));
+        assert!(mgr.spectrum_pan_control(a, C::Rx2SpectrumPan, pack_spectrum_pan(0.2)).is_some());
+        let s = &mgr.clients[&a];
+        assert_eq!(
+            (s.spectrum_pan, s.rx2_spectrum_pan, s.fine_pan),
+            (unpack_spectrum_pan_fine(fine1), unpack_spectrum_pan_fine(fine2), true),
+            "a late coarse pan does not move it back"
+        );
+        assert_eq!(mgr.spectrum_pan_control(a, C::SpectrumZoom, 100), None, "not a pan");
+        // An older client: only the coarse one, and it moves the pan.
+        let b: SocketAddr = "127.0.0.1:5002".parse().unwrap();
+        mgr.clients.insert(b, mk_session("127.0.0.1:5002", true, 8.0, 4.0, true, true));
+        mgr.spectrum_pan_control(b, C::SpectrumPan, pack_spectrum_pan(0.1));
+        mgr.spectrum_pan_control(b, C::Rx2SpectrumPan, pack_spectrum_pan(-0.1));
+        let s = &mgr.clients[&b];
+        assert_eq!(
+            (s.spectrum_pan, s.rx2_spectrum_pan, s.fine_pan),
+            (unpack_spectrum_pan(pack_spectrum_pan(0.1)), unpack_spectrum_pan(pack_spectrum_pan(-0.1)), false)
+        );
+    }
+
+    /// The server says it takes the fine view, and its receive loop hands
+    /// every pan and VRX width control to the one function that decodes it
+    /// (build 76): the loop itself runs in no test.
+    #[test]
+    fn the_server_offers_the_fine_view_and_hands_it_on() {
+        let net = include_str!("network.rs");
+        let net = &net[..net.find("#[cfg(test)]").unwrap_or(net.len())];
+        assert_eq!(net.matches(".with(Capabilities::FINE_SPECTRUM_VIEW)").count(), 1, "in the HeartbeatAck");
+        assert_eq!(net.matches(".spectrum_pan_control(addr, ctrl.control_id, ctrl.value)").count(), 1);
+        assert_eq!(net.matches(".span_control(addr, ctrl.control_id, ctrl.value)").count(), 1);
+        for name in ["await.set_spectrum_pan(", "set_rx2_spectrum_pan(", "request_span(", "unpack_spectrum_pan", "unpack_vrx_span_fine"] {
+            assert!(!net.contains(name), "decoded or applied in the loop: {name}");
         }
     }
 
@@ -2190,10 +2266,10 @@ mod tests {
 /// says yes - a rejoin inside the session timeout keeps the address and the
 /// client count, so nothing else can see it.
 ///
-/// One type for one rule (working rule 15): it was written out by hand four
+/// One type for one rule: it was written out by hand four
 /// times, and the fifth loop that needed it - the equipment status, whose
 /// panels a client clears with its session since build 83 - had none, so the
-/// panels stood empty for up to ten seconds after a rejoin (review 84). Each
+/// panels stood empty for up to ten seconds after a rejoin. Each
 /// loop owns its own: the edge is consumed, and two loops on one value would
 /// let the first one swallow it.
 pub struct GenerationWatch {
@@ -2231,7 +2307,7 @@ mod connect_generation_tests {
         assert!(watch.changed(m.connect_generation()), "an admission is an edge");
         assert!(!watch.changed(m.connect_generation()), "and the edge is used up");
         // A rejoin on the same address: the count and the address stay the same,
-        // and this is the only thing that sees it (review 83).
+        // and this is the only thing that sees it.
         m.remove(a);
         m.touch(a);
         assert!(watch.changed(m.connect_generation()), "a rejoin is an edge too");
@@ -2280,7 +2356,7 @@ mod connect_generation_tests {
 
     /// A restarted client numbers its controls from 1 again. Without the reset
     /// its first controls would read as older than what the previous process
-    /// had applied, and none of them would be applied (phase 2b).
+    /// had applied, and none of them would be applied.
     #[test]
     fn a_silent_restart_starts_the_control_numbers_over() {
         use sdr_remote_core::control_ack::{ControlKey, Verdict};
@@ -2390,9 +2466,8 @@ mod holder_timeout_tests {
     // ---- and now check_timeout() itself ----
     //
     // The three tests below exercise the function that USES the deadline, not only
-    // the one that computes it. That distinction is the finding: a test that fills in
-    // its own booleans can never see that the caller passes the wrong ones (review
-    // finding, round 2).
+    // the one that computes it. That distinction is the point: a test that fills in
+    // its own booleans can never see that the caller passes the wrong ones.
 
     fn a(port: u16) -> SocketAddr {
         format!("127.0.0.1:{port}").parse().unwrap()
@@ -2432,7 +2507,7 @@ mod holder_timeout_tests {
         assert_eq!(m.tx_holder(TxTarget::Yaesu1), None, "and the transmitter is free");
     }
 
-    /// Step 4's trial client (build 256): let in as authenticated once, asking
+    /// The trial client (build 256): let in as authenticated once, asking
     /// for no receive audio, and a client like any other after that.
     #[test]
     fn the_trial_client_is_let_in_once_and_asks_for_no_audio() {
@@ -2448,7 +2523,7 @@ mod holder_timeout_tests {
 
     /// The safety released the transmitter: whoever held Thetis lets go of it
     /// in the same breath, not at the time-out a second later or at a release
-    /// frame that may never come (build 251; rounds 249 and 250). Thetis only -
+    /// frame that may never come. Thetis only -
     /// the safety is Thetis's - and once: a second call finds nobody.
     #[test]
     fn the_safety_takes_thetis_from_its_holder() {
@@ -2551,7 +2626,7 @@ mod holder_timeout_tests {
         let at = engine.find(line).expect("the client's window") + line.len();
         let client: u64 = engine[at..at + engine[at..].find(';').unwrap()].replace('_', "").parse().unwrap();
         let server = crate::ptt::PTT_PACKET_TIMEOUT_MS;
-        assert_eq!((server, client), (2_000, 3_000), "owner's decision 2026-10-20");
+        assert_eq!((server, client), (2_000, 3_000), "the chosen windows: 2 s on the server, 3 s on the client");
         assert!(client > server, "the server lets go first");
     }
 
@@ -2657,8 +2732,8 @@ mod holder_timeout_tests {
 
     /// The deadline is the number of seconds it names. It used to be one more:
     /// `elapsed().as_secs() > 3` rounds down, so it only held from 4.000 s on,
-    /// and the comment on TX_HOLDER_TIMEOUT_SECS promised three (found in the
-    /// review of the CW playout, 2026-09-18). The same rounding sat in the
+    /// and the comment on TX_HOLDER_TIMEOUT_SECS promised three (found while
+    /// working on the CW playout, 2026-09-18). The same rounding sat in the
     /// check for an active session, against SESSION_TIMEOUT_SECS.
     #[test]
     fn the_deadline_is_the_number_of_seconds_it_names() {
@@ -2679,16 +2754,16 @@ mod holder_timeout_tests {
         silent_for_ms(&mut m, a(3), 3500);
         assert!(!m.active_addrs().contains(&a(2)), "fifteen and a half seconds silent is not active");
         // A listener three and a half seconds quiet is active: its deadline is
-        // the listener's, not the holder's (review 314 found nothing pinned it).
+        // the listener's, not the holder's (in build 314 nothing pinned it).
         assert!(m.active_addrs().contains(&a(3)), "a quiet listener is still active");
         let mut gone = m.check_timeout();
         gone.sort();
-        assert_eq!(gone, vec![a(1), a(2)], "three and a half seconds is past three - for the holder");
+        assert_eq!(gone, vec![a(1), a(2)], "three and a half seconds is past three: for the holder");
     }
 
     /// A client at the code step is given time to type: four TOTP periods, not
     /// the fifteen seconds of a listener - which reaped it mid-typing, after
-    /// which its code got no answer and the client waited for ever (review 70).
+    /// which its code got no answer and the client waited for ever.
     #[test]
     fn a_client_at_the_code_step_gets_time_to_type() {
         let ms = |m: u64| std::time::Duration::from_millis(m);
@@ -2729,6 +2804,7 @@ mod session_scope_tests {
         ("spectrum_fps", ControlId::SpectrumFps),
         ("spectrum_zoom", ControlId::SpectrumZoom),
         ("spectrum_pan", ControlId::SpectrumPan),
+        ("fine_pan", ControlId::SpectrumPanFine),
         ("spectrum_max_bins", ControlId::SpectrumMaxBins),
         ("rx1_enabled", ControlId::Rx1Enable),
         ("rx2_enabled", ControlId::Rx2Enable),
@@ -2736,8 +2812,12 @@ mod session_scope_tests {
         ("rx2_spectrum_fps", ControlId::Rx2SpectrumFps),
         ("rx2_spectrum_zoom", ControlId::Rx2SpectrumZoom),
         ("rx2_spectrum_pan", ControlId::Rx2SpectrumPan),
+        // The fine pans restore the same two fields, and after them the coarse
+        // ones of that session are ignored: replayed in the order of
+        // SESSION_SCOPED_CONTROLS, coarse first, so the fine one wins.
+        ("spectrum_pan", ControlId::SpectrumPanFine),
+        ("rx2_spectrum_pan", ControlId::Rx2SpectrumPanFine),
         ("rx2_spectrum_max_bins", ControlId::Rx2SpectrumMaxBins),
-        ("vfo_sync", ControlId::VfoSync),
         ("yaesu_enabled", ControlId::YaesuEnable),
         ("yaesu_state_enabled", ControlId::YaesuStateEnable),
         ("yaesu2_enabled", ControlId::Yaesu2Enable),
@@ -2774,7 +2854,7 @@ mod session_scope_tests {
         "client_build",
         // It IS the session: derived at the password step, gone with it.
         "session_key",
-        // Bookkeeping of which numbered controls were applied (phase 2b).
+        // Bookkeeping of which numbered controls were applied.
         "controls",
     ];
 
@@ -2848,6 +2928,18 @@ mod session_scope_tests {
             );
         }
     }
+
+    /// A setting of Thetis or of a receiver, for every client, is not replayed:
+    /// one client's last choice would undo what another or the operator in
+    /// Thetis set since. No session keeps VFO sync.
+    #[test]
+    fn a_setting_for_every_client_is_not_replayed() {
+        for ctrl in [ControlId::VfoSync, ControlId::SpectrumFftSize, ControlId::Rx2SpectrumFftSize] {
+            assert!(!SESSION_SCOPED_CONTROLS.contains(&ctrl), "{ctrl:?}");
+        }
+        // Split, so this line does not count itself.
+        assert_eq!(include_str!("session.rs").matches(concat!("vfo", "_sync")).count(), 0, "no session keeps it");
+    }
 }
 
 #[cfg(test)]
@@ -2900,7 +2992,7 @@ mod mutual_auth_tests {
     }
 
     /// Over QUIC the answer, the key and the proof all cover the connection's
-    /// binding (review 108, point 4): an answer made on another TLS session (a
+    /// binding: an answer made on another TLS session (a
     /// party in the middle) or without the binding is refused, and the proof
     /// the server gives back only verifies with the same binding.
     #[test]
@@ -2928,7 +3020,7 @@ mod mutual_auth_tests {
     }
 
     /// The byte counters of timed-out clients are dropped where the sessions
-    /// are reaped, not only when the status panel draws (review 109: a server
+    /// are reaped, not only when the status panel draws (a server
     /// without a screen kept them for ever). A text pin: the counters are a
     /// process-wide table no test owns.
     #[test]
@@ -2942,7 +3034,7 @@ mod mutual_auth_tests {
     }
 
     /// Over QUIC the brake counts the real peer, not the sentinel: wrong answers
-    /// from five connections - five sentinels - block that peer (review 109).
+    /// from five connections - five sentinels - block that peer.
     #[test]
     fn the_brake_counts_the_peer_behind_new_quic_connections() {
         let peer: SocketAddr = "198.18.1.2:40000".parse().unwrap();
@@ -2994,8 +3086,8 @@ mod mutual_auth_tests {
     }
 
     /// The property the whole patch rests on: the server proves itself only to
-    /// a client that has already proven itself. Written after a reviewer moved
-    /// the proof above the HMAC check and nothing failed (review 66).
+    /// a client that has already proven itself. Written after moving
+    /// the proof above the HMAC check made nothing fail.
     #[test]
     fn a_wrong_password_gets_no_proof_and_no_key() {
         let a = addr();
@@ -3017,7 +3109,7 @@ mod mutual_auth_tests {
     /// comes back with a Connect (v2.13+, it sent a nonce): the next packet
     /// gets a fresh challenge instead of fifteen seconds of nothing. An older
     /// client keeps heartbeating through the refusal and would answer every
-    /// challenge with the same wrong password: its entry stays (review 76).
+    /// challenge with the same wrong password: its entry stays.
     #[test]
     fn a_refused_password_frees_the_address_of_a_new_client_only() {
         let a = addr();
@@ -3035,7 +3127,7 @@ mod mutual_auth_tests {
     }
 
     /// A response that answers nothing is not a wrong password: five forged ones
-    /// used to block the address they named for a minute (review 66).
+    /// used to block the address they named for a minute.
     #[test]
     fn an_answer_without_a_pending_challenge_counts_no_failure() {
         let a = addr();
@@ -3060,7 +3152,7 @@ mod mutual_auth_tests {
 
     /// A knock at the code step is a new client, not the one typing: it gets a
     /// fresh challenge. Until build 72 the address stayed locked for the whole
-    /// code-step deadline (review 71).
+    /// code-step deadline.
     #[test]
     fn a_knock_at_the_code_step_gets_a_new_challenge() {
         let a = addr();
@@ -3077,10 +3169,10 @@ mod mutual_auth_tests {
         assert!(m.clients.get(&a).unwrap().session_key.is_some());
         assert!(
             !m.wants_challenge(a, &heartbeat()),
-            "a heartbeat on a FRESH code step is the client's own, still in flight - it cost the attempt in build 73"
+            "a heartbeat on a FRESH code step is the client's own, still in flight: it cost the attempt in build 73"
         );
         // The grace in absolute numbers too, or a constant measured against
-        // itself could grow to a minute with every test green (review 74).
+        // itself could grow to a minute with every test green.
         m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(1);
         assert!(!m.wants_challenge(a, &heartbeat()), "one second: the client's own heartbeat may still be in flight");
         m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(3);
@@ -3088,7 +3180,7 @@ mod mutual_auth_tests {
         m.clients.get_mut(&a).unwrap().last_seen = Instant::now() - Duration::from_secs(TOTP_KNOCK_GRACE_SECS + 1);
         assert!(
             !m.wants_challenge(a, &control()),
-            "a control from the client that is typing is not a knock - it cost the attempt in build 72"
+            "a control from the client that is typing is not a knock: it cost the attempt in build 72"
         );
         assert!(m.wants_challenge(a, &heartbeat()), "at a code step older than the grace, a heartbeat is a new client");
         let nonce = m.create_challenge(a);
@@ -3100,7 +3192,7 @@ mod mutual_auth_tests {
     }
 
     /// The deadline through the reaper, not only through `timeout_secs`: the
-    /// code step's two minutes reach `check_timeout` (review 71: that wire was
+    /// code step's two minutes reach `check_timeout` (that wire was
     /// held by nothing - the flag could be `false` and everything stayed green).
     #[test]
     fn the_reaper_gives_the_code_step_its_time() {
@@ -3125,7 +3217,7 @@ mod mutual_auth_tests {
 
     /// Admission restarts the listener's clock. Until build 75 a client that
     /// took twenty seconds to type its code was admitted and reaped within the
-    /// next tick, because `last_seen` still said twenty seconds (review 74).
+    /// next tick, because `last_seen` still said twenty seconds.
     #[test]
     fn admission_after_a_long_code_step_is_not_reaped() {
         let a = addr();
@@ -3150,7 +3242,7 @@ mod mutual_auth_tests {
 
     /// The relation build 67 repaired, held by a test instead of a comment: a
     /// challenge must be able to expire before the reaper removes the client,
-    /// or the expiry is dead code (review 67: 30 back in and all green).
+    /// or the expiry is dead code (30 back in and all green).
     #[test]
     fn a_challenge_expires_before_the_reaper_removes_the_client() {
         assert!(
@@ -3175,7 +3267,7 @@ mod mutual_auth_tests {
     }
 }
 
-/// The permit to punch follows the session (build 127, review 126): the watch
+/// The permit to punch follows the session: the watch
 /// hears every admission - password, code, a server without a password - and
 /// every session that ends - a goodbye, a time-out. Both states of each.
 #[cfg(test)]
@@ -3264,8 +3356,7 @@ mod admission_watch_tests {
 
     /// A knock again at the code step replaces the waiting session: the one it
     /// replaces ends the one way a session ends, and the watch hears it - by
-    /// itself, not by the gate that only lets unadmitted clients get there
-    /// (review 127).
+    /// itself, not by the gate that only lets unadmitted clients get there.
     #[test]
     fn a_new_challenge_ends_the_session_it_replaces() {
         let secret = sdr_remote_core::auth::generate_totp_secret();

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Simple WAV file writer — no external dependencies.
+//! Simple WAV file writer: no external dependencies.
 //! Writes 16-bit mono PCM at the sample rate given to `new()`.
 
 use std::fs::File;
@@ -17,18 +17,18 @@ pub struct WavWriter {
 
 impl WavWriter {
     /// Create a new WAV file at the given path (16-bit, mono). The sample rate
-    /// is determined dynamically by the first `write_samples` call — not
+    /// is determined dynamically by the first `write_samples` call; not
     /// fixed up front, so a future rate change scales along automatically.
     pub fn new(path: &Path) -> io::Result<Self> {
         let mut file = File::create(path)?;
-        // Placeholder header (rate 8000) — rewritten with the real rate at finalize.
+        // Placeholder header (rate 8000): rewritten with the real rate at finalize.
         let header = wav_header(0, 8000);
         file.write_all(&header)?;
         Ok(Self { file, data_bytes: 0, sample_rate: 0 })
     }
 
     /// Write decoded i16 PCM samples at `sample_rate` Hz. The rate of the first
-    /// write determines the WAV header — the caller passes the rate of the
+    /// write determines the WAV header; the caller passes the rate of the
     /// decoder in use, so the recording is correct regardless of NB/WB or future rates.
     /// Append samples, converting if the source rate has changed mid-file.
     ///

@@ -47,7 +47,7 @@ private val SliderNestedScrollConnection = object : NestedScrollConnection {
 }
 
 /**
- * Volume sliders only — put in separate LazyColumn item to avoid 30fps recomposition.
+ * Volume sliders only: put in separate LazyColumn item to avoid 30fps recomposition.
  */
 @Composable
 fun VolumeControls(
@@ -58,7 +58,8 @@ fun VolumeControls(
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         VolumeSlider(label = stringResource(R.string.stats_rx_volume), initial = rxVolume, onChange = onRxVolumeChange)
-        VolumeSlider(label = stringResource(R.string.stats_tx_gain), initial = txGain, maxValue = 3f, onChange = onTxGainChange)
+        GainSliderDb(label = stringResource(R.string.stats_tx_gain), initialDb = uniffi.sdr_remote.txGainDb(txGain),
+            onChange = { onTxGainChange(uniffi.sdr_remote.txGainFactor(it)) })
     }
 }
 
@@ -68,6 +69,9 @@ fun VolumeControls(
 @Composable
 fun AudioStats(
     captureLevel: Float,
+    // The microphone reached full scale before any processing: it clips before
+    // ThetisLink. The same signal as the desktop's CLIP next to its mic bar.
+    micInputClip: Boolean = false,
     playbackLevel: Float,
     serverBuildDiffers: Boolean,
     serverBuild: String,
@@ -95,7 +99,7 @@ fun AudioStats(
     yaesu2Visible: Boolean,
     vrx1Visible: Boolean = false,
     vrx2Visible: Boolean = false,
-    // Measurement mode (open point 34): the file being written, and the switch.
+    // Measurement mode: the file being written, and the switch.
     measurementFile: String? = null,
     onMeasurement: ((Boolean) -> Unit)? = null,
     // "Relay only" (build 137): grey unless the connection runs through the relay.
@@ -108,7 +112,9 @@ fun AudioStats(
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.stats_audio_levels), fontSize = 14.sp)
-        LevelMeter(label = "MIC", level = captureLevel)
+        // CLIP on the meter's own row, as next to the desktop's bar: on a row of
+        // its own it pushed the RX meter down and back for 1.5 s.
+        LevelMeter(label = "MIC", level = captureLevel, clip = micInputClip)
         LevelMeter(label = "RX", level = playbackLevel)
 
         Spacer(Modifier.height(8.dp))
@@ -189,6 +195,51 @@ fun AudioStats(
     }
 }
 
+/** The text beside a TX gain slider: whole dB, rounded (a dB worked out from a
+ *  factor can sit a float step under its whole number), or "off" at the bottom.
+ *  The Thetis slider and the Yaesu mic slider both use it. */
+@Composable
+fun gainDbText(db: Float): String = gainDbLabel(db) ?: stringResource(R.string.gain_off)
+
+/** The dB part of [gainDbText], or null at the bottom (off). Not composable, so a
+ *  log line can say the same as the label. */
+fun gainDbLabel(db: Float): String? {
+    if (db < uniffi.sdr_remote.txGainDbMin()) return null
+    val whole = kotlin.math.round(db).toInt()
+    return "${if (whole >= 0) "+" else ""}$whole dB"
+}
+
+/**
+ * The TX gain slider of Thetis and the Yaesu radios, in dB like the desktop's:
+ * the range and the conversions come from the Rust core, all the way down is off.
+ */
+@Composable
+fun GainSliderDb(label: String, initialDb: Float, onChange: (Float) -> Unit) {
+    val offDb = uniffi.sdr_remote.txGainOffDb()
+    val maxDb = uniffi.sdr_remote.txGainDbMax()
+    var db by remember(initialDb) { mutableFloatStateOf(kotlin.math.round(initialDb)) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .nestedScroll(SliderNestedScrollConnection),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = "$label:", modifier = Modifier.weight(0.25f), fontSize = 14.sp)
+        Slider(
+            value = db,
+            onValueChange = { db = kotlin.math.round(it) },
+            onValueChangeFinished = { onChange(db) },
+            valueRange = offDb..maxDb,
+            modifier = Modifier.weight(0.55f),
+        )
+        Text(
+            text = gainDbText(db),
+            modifier = Modifier.weight(0.2f),
+            fontSize = 12.sp,
+        )
+    }
+}
+
 @Composable
 private fun VolumeSlider(label: String, initial: Float, maxValue: Float = 1f, logarithmic: Boolean = false, onChange: (Float) -> Unit) {
     // For logarithmic sliders: map between linear slider position (0..1) and log value (0.001..max)
@@ -231,7 +282,7 @@ private fun VolumeSlider(label: String, initial: Float, maxValue: Float = 1f, lo
 }
 
 @Composable
-private fun LevelMeter(label: String, level: Float) {
+private fun LevelMeter(label: String, level: Float, clip: Boolean = false) {
     // Peak-hold: hold the recent maximum ~1.5 s, then snap down. Mirrors the desktop
     // level bar - a white tick marks the held peak and the dB text follows it.
     var peak by remember { mutableFloatStateOf(0f) }
@@ -290,10 +341,13 @@ private fun LevelMeter(label: String, level: Float) {
         } else {
             -80
         }
+        // A clipping microphone takes the dB text's place, in red.
         Text(
-            text = "$db dB",
+            text = if (clip) "CLIP" else "$db dB",
             modifier = Modifier.weight(0.2f),
             fontSize = 11.sp,
+            color = if (clip) Color(0xFFC80000) else Color.Unspecified,
+            fontWeight = if (clip) androidx.compose.ui.text.font.FontWeight.Bold else null,
         )
     }
 }

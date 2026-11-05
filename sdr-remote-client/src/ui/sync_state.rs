@@ -25,7 +25,7 @@ fn blob_hash(text: &str) -> u64 {
 /// It used to call `radio_left_tx()` for all three. That was harmless while the
 /// exits only cleared latches; it stopped being harmless the moment one of them
 /// grew a rule of its own - a refusal would then have demanded a fresh press,
-/// which is exactly the behaviour the owner approved the other way round.
+/// which is exactly the behaviour that was chosen the other way round.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PttRelease {
     /// The server refused. A held key may keep asking - see `PttIntent::want_tx`.
@@ -96,13 +96,13 @@ impl SdrRemoteApp {
     /// straight away so the label flips at once, and the block below then reads
     /// `was_connected` - already false - so the release never ran. Disconnecting
     /// while transmitting left the latches standing, and the next connect keyed
-    /// the radio on its own (review finding, round 2).
+    /// the radio on its own.
     pub(super) fn release_all_ptt(&mut self) {
         // The link is gone, so there is nobody to tell. Marking it as sent is
         // right here and only here: a reconnect starts a fresh session in which
         // this client holds nothing. All three transmitters through the one
         // exit - until build 77 Thetis was three booleans here, and the
-        // Bluetooth button's was missing (review finding, 2026-09-17).
+        // Bluetooth button's was missing.
         for tx in 0..3 {
             self.release_tx_latch(tx, PttRelease::LinkGone, false);
         }
@@ -143,7 +143,7 @@ impl SdrRemoteApp {
     /// change, and send nothing - so this client's button went grey while the
     /// server still had it down as the holder of that transmitter. Every other
     /// client then saw "TX in use" for good, and it only cleared when this one
-    /// did a real press and released it (owner, 2026-09-04, measured on a 991A
+    /// did a real press and released it (2026-09-04, measured on a 991A
     /// running into its time-out timer).
     ///
     /// Leaving `last_sent` alone lets the ordinary path notice the change and
@@ -152,8 +152,7 @@ impl SdrRemoteApp {
     /// `mixed` only reaches the log line, and it has to: on a jump the exit is
     /// chosen conservatively, so the line named a cause that was not
     /// necessarily the one that happened. This log is the only thing anyone has
-    /// to judge the behaviour by, and a proof that cannot fail is not a proof
-    /// (review finding).
+    /// to judge the behaviour by, and a proof that cannot fail is not a proof.
     fn release_ptt_latch(&mut self, slot: u8, why: PttRelease, mixed: bool) {
         self.release_tx_latch(slot as usize + 1, why, mixed);
     }
@@ -182,7 +181,7 @@ impl SdrRemoteApp {
         // Every latch, not just the mouse: they are OR-ed into one request now,
         // so one left standing keys the radio again on the next frame.
         // An exit of the shared type, and then one assignment. Not eight lines with one
-        // that can be forgotten - which is exactly the fault a reviewer found here and
+        // that can be forgotten - which is exactly the fault that was found here and
         // that no test saw.
         let resampled = if tx == 0 {
             self.thetis_resampled_sources()
@@ -253,7 +252,14 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetYaesuTxGain(self.yaesu_mic_gain));
             // Sync client-side TX chain (compressor + AGC) radio 1.
             let _ = self.cmd_tx.send(Command::SetYaesuCompressor(self.yaesu_compressor));
+            let _ = self.cmd_tx.send(Command::SetYaesuCompTiming(self.yaesu_comp_attack_ms, self.yaesu_comp_release_ms));
             let _ = self.cmd_tx.send(Command::SetYaesuTxAgc(self.yaesu_tx_agc));
+            // Once per session: the engine logs only a change, and these are
+            // the same values again after a network switch.
+            log::info!("Yaesu TX chain: EQ {}, comp {}, attack {:.3} ms, release {:.1} ms, AGC {}",
+                if !self.yaesu_eq_enabled { "off" } else if self.yaesu_eq_advanced { "advanced" } else { "standard" },
+                self.yaesu_compressor, self.yaesu_comp_attack_ms, self.yaesu_comp_release_ms,
+                if self.yaesu_tx_agc { "on" } else { "off" });
             self.yaesu_enable_sent = true;
         }
         // 991A memory auto-read on radio DETECTION (yaesu_connected rising edge),
@@ -270,7 +276,7 @@ impl SdrRemoteApp {
             // and forces a real read. An older server ignores the value and reads the
             // radio, which is simply today's behaviour.
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::YaesuReadMemories, 1));
-            log::info!("[radio0] 991A detected (yaesu_connected rising) - asked the server for its memory list");
+            log::info!("[radio0] 991A detected (yaesu_connected rising): asked the server for its memory list");
         }
         // Dual-radio slot 1: the same Yaesu-enable also switches on the 2nd radio.
         // The client is dual-radio-aware -> sends Yaesu2Enable=1 (arrives on
@@ -283,7 +289,12 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetYaesu2TxGain(self.yaesu2_mic_gain));
             // Sync client-side TX chain (compressor + AGC) radio 2 (FTX-1).
             let _ = self.cmd_tx.send(Command::SetYaesu2Compressor(self.yaesu2_compressor));
+            let _ = self.cmd_tx.send(Command::SetYaesu2CompTiming(self.yaesu2_comp_attack_ms, self.yaesu2_comp_release_ms));
             let _ = self.cmd_tx.send(Command::SetYaesu2TxAgc(self.yaesu2_tx_agc));
+            log::info!("Yaesu2 TX chain: EQ {}, comp {}, attack {:.3} ms, release {:.1} ms, AGC {}",
+                if !self.yaesu2_eq_enabled { "off" } else if self.yaesu2_eq_advanced { "advanced" } else { "standard" },
+                self.yaesu2_compressor, self.yaesu2_comp_attack_ms, self.yaesu2_comp_release_ms,
+                if self.yaesu2_tx_agc { "on" } else { "off" });
             // FT0 = MAIN as active RX/TX -> audio follows A/MAIN (doesn't jump to SUB).
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2Button, 11));
             self.yaesu2_enable_sent = true;
@@ -301,7 +312,7 @@ impl SdrRemoteApp {
             // windows closed). The server does a whole-scan retry for the cold radio.
             self.yaesu2_mem_radio_received = false;
             let _ = self.cmd_tx.send(Command::SetControl(ControlId::Yaesu2ReadMemories, 1));
-            log::info!("[radio1] FTX-1 detected (yaesu2_connected rising) - asked the server for its memory list");
+            log::info!("[radio1] FTX-1 detected (yaesu2_connected rising): asked the server for its memory list");
         }
         // A new session, counted rather than sensed. Everything that has to be
         // asked for again hangs off this one line now.
@@ -313,7 +324,7 @@ impl SdrRemoteApp {
         // here - so VRX and both Yaesu slots were never asked for again, while
         // the engine's own restore (which reads its own variable and cannot
         // miss anything) brought RX1 and RX2 back. That is precisely the
-        // "only RX comes back, VRX stays silent" the owner reported, and it
+        // "only RX comes back, VRX stays silent" that was reported, and it
         // got worse rather than better when the engine side was fixed first
         // (2026-08-16).
         // A new session: the server authenticated us again. That happens on a
@@ -334,7 +345,7 @@ impl SdrRemoteApp {
             // switch). The engine let go of its transmit flags there
             // (session_lost!() on AUTH_ACCEPTED, build 60) - and without this
             // the latch here stayed shut with the finger still on the key, so
-            // the button was red and the engine asked for nothing (review 60).
+            // the button was red and the engine asked for nothing.
             // The one exit for every PTT; a no-op on a first connect.
             self.release_all_ptt();
             self.vrx_state_sync_pending = true;
@@ -344,7 +355,7 @@ impl SdrRemoteApp {
             self.yaesu_state_sent = None;
             self.yaesu2_state_sent = None;
             log::info!(
-                "new session {} - asking for VRX and Yaesu again",
+                "new session {}: asking for VRX and Yaesu again",
                 state.session_generation
             );
         }
@@ -417,24 +428,22 @@ impl SdrRemoteApp {
             let _ = self.cmd_tx.send(Command::SetVrx2Enabled(self.vrx2_enabled));
             let _ = self.cmd_tx.send(Command::SetVrxFilter(0, self.vrx1_filter_low_hz, self.vrx1_filter_high_hz));
             let _ = self.cmd_tx.send(Command::SetVrxFilter(1, self.vrx2_filter_low_hz, self.vrx2_filter_high_hz));
-            // VRX rate-mode + SAM auto-tune (PATCH-vrx-wide-sam-ux) - resync.
+            // VRX rate-mode + SAM auto-tune - resync.
             let _ = self.cmd_tx.send(Command::SetVrxRateMode(self.vrx_rate_mode));
             let _ = self.cmd_tx.send(Command::SetVrxRateMode2(self.vrx_rate_mode2));
             let _ = self.cmd_tx.send(Command::SetVrxAutoTune(0, self.vrx1_auto_tune));
             let _ = self.cmd_tx.send(Command::SetVrxAutoTune(1, self.vrx2_auto_tune));
-            // Re-send high-res spectrum subscription on (re)connect — SEPARATE from the
+            // Re-send high-res spectrum subscription on (re)connect; SEPARATE from the
             // VRX audio checkbox (checkbox model): gated on high_res, not on vrx_enabled.
             if self.vrx1_high_res_spectrum {
-                let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx1) as f32 / self.vrx1_spectrum_zoom.max(1.0)) as u32;
-                let span_khz = ((span_hz / 1000).max(1)) as u16;
-                self.vrx1_high_res_last_span_khz = span_khz;
-                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, span_khz));
+                let span_hz = self.vrx_requested_span_hz(VrxChannel::Vrx1);
+                self.vrx1_high_res_last_span_hz = span_hz;
+                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, span_hz));
             }
             if self.vrx2_high_res_spectrum {
-                let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx2) as f32 / self.vrx2_spectrum_zoom.max(1.0)) as u32;
-                let span_khz = ((span_hz / 1000).max(1)) as u16;
-                self.vrx2_high_res_last_span_khz = span_khz;
-                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, span_khz));
+                let span_hz = self.vrx_requested_span_hz(VrxChannel::Vrx2);
+                self.vrx2_high_res_last_span_hz = span_hz;
+                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, span_hz));
             }
             self.vrx_state_sync_pending = false;
         }
@@ -518,7 +527,7 @@ impl SdrRemoteApp {
             // Letting go of everything was the first answer and it was too
             // broad: a held Thetis being refused produces refusals at audio
             // rate, so two in a frame is ordinary, and it dragged both radios
-            // along every time (review finding).
+            // along every time.
             //
             // The counter is what makes any of this visible. Reading the flag,
             // such a frame looked exactly like a frame with one refusal in it.
@@ -553,8 +562,8 @@ impl SdrRemoteApp {
                 self.release_ptt_latch(0, why, mixed);
                 // And the sign on that radio's own button, as a refusal by this
                 // client itself already set it. Without this a server refusal
-                // of a Yaesu - a PTT, or since CW step 6 a key sent to it - was
-                // only seen in the general label beside Thetis's PTT (review 316).
+                // of a Yaesu - a PTT, or since build 124 a CW key sent to it - was
+                // only seen in the general label beside Thetis's PTT.
                 self.yaesu_refused_at[0] = Some(std::time::Instant::now());
             }
             if state.ptt_denial.releases(missed, 2) {
@@ -574,6 +583,7 @@ impl SdrRemoteApp {
         // now", which is exactly what a level means.
         self.ptt_denied = state.ptt_denial.active();
         self.server_build = state.server_build.clone();
+        self.server_fine_spectrum_view = state.server_fine_spectrum_view;
         self.measurement_file = state.measurement_file.clone();
         self.rtt_ms = state.rtt_ms;
         self.jitter_ms = state.jitter_ms;
@@ -604,6 +614,7 @@ impl SdrRemoteApp {
         self.playback_level_vrx1 = state.playback_level_vrx1;
         self.playback_level_vrx2 = state.playback_level_vrx2;
         self.yaesu_mic_level = state.yaesu_mic_level;
+        self.mic_input_clip = state.mic_input_clip;
         // Clear pending freq: must be at least 200ms old AND (exact match or >1s stale)
         if let Some(pf) = self.pending_freq {
             let age_ms = self.pending_freq_at.map_or(u128::MAX, |t| t.elapsed().as_millis());
@@ -657,8 +668,7 @@ impl SdrRemoteApp {
         // here: AllowZoomBelow2x and the S-meter source are in
         // SESSION_SCOPED_CONTROLS and the engine replays them itself at the
         // authentication (session_intent), and SetMultiTx never leaves the
-        // engine. Two reviews in a row read this edge as a gap; it is not
-        // (review 62).
+        // engine. This edge is easily read as a gap; it is not.
         let reconnected = state.connected && !was_connected;
         if reconnected {
             // The engine starts off and remembers nothing across a session, so this choice
@@ -914,7 +924,7 @@ impl SdrRemoteApp {
                 ) {
                     self.view_mismatch_at = Some(Instant::now());
                     log::warn!(
-                        "RX1 view disagrees: asked for {:.0} Hz at {:.1}x, receiving {} Hz - sending zoom and pan again",
+                        "RX1 view disagrees: asked for {:.0} Hz at {:.1}x, receiving {} Hz; sending zoom and pan again",
                         expected, self.spectrum_zoom, self.spectrum_span_hz
                     );
                     let _ = self.cmd_tx.send(Command::SetSpectrumZoom(self.spectrum_zoom));
@@ -949,8 +959,8 @@ impl SdrRemoteApp {
         // for twice. Set before ingest, so the row that arrives in this frame is
         // the one laid under this frame's view.
         //
-        // Only a row of now, per receiver (`RowLive`, build 235, review of
-        // 234): the engine keeps a row that stopped coming (a window closed),
+        // Only a row of now, per receiver (`RowLive`, build 235): the
+        // engine keeps a row that stopped coming (a window closed),
         // and the RX2 row also over a lost session, so on reopening the old
         // band lay under the waterfall.
         if self.full_row_live(self.full_row_at) {
@@ -1049,7 +1059,6 @@ impl SdrRemoteApp {
         ] {
             let hz = sdr_remote_core::protocol::ddc_centre_from_khz(sent_khz);
             if *held == 0 && hz > 0 {
-                // Named in advance (`logregels-build231.md`).
                 log::info!("DDC centre from the server: RX{} {} kHz", rx, sent_khz);
             }
             *held = hz;
@@ -1069,7 +1078,7 @@ impl SdrRemoteApp {
             }
         }
 
-        // Per-VRX auto-ref from the channel's OWN bins (§6.1 #3), not from RX.
+        // Per-VRX auto-ref from the channel's OWN bins, not from RX.
         if let Some(ref_db) =
             self.vrx1_spectrum
                 .update_auto_ref(self.vrx1_auto_ref && !self.auto_ref_paused, self.vrx1_freq_hz, -3_000, 3_000, self.vrx1_range_db)
@@ -1083,10 +1092,10 @@ impl SdrRemoteApp {
             self.vrx2_ref_db = ref_db;
         }
 
-        // Per-VRX S-meter from the channel's OWN spectrum bins (§6.1 #2). The s-meter belongs to
+        // Per-VRX S-meter from the channel's OWN spectrum bins. The s-meter belongs to
         // the SPECTRUM, not to the audio checkbox: it is active as soon as the spectrum is on
         // (bins flowing), even with VRX audio off. Cal-offset VRX1=4 (it was 10;
-        // the owner measured VRX1 ~5-6 dB above RX1 with noise and with a sine,
+        // VRX1 measured ~5-6 dB above RX1 with noise and with a sine,
         // build 244 - for now, until the meter is computed on the server), VRX2=5
         // (not measured yet).
         self.vrx1_spectrum.update_smeter(
@@ -1107,24 +1116,26 @@ impl SdrRemoteApp {
         // the span to the server whenever the visible window changes
         // (driven by zoom). VRX Enable=OFF kills the high-res stream so
         // a disabled VRX channel costs zero bandwidth.
-        // Reference width is the RX-independent DDC span (§6.2, #6): no
+        // Reference width is the RX-independent DDC span: no
         // longer gated on `full_spectrum_span_hz > 0`, so zoom works even with the
         // RX spectrum off. Only send when connected.
         // Spectrum-zoom resend SEPARATE from the VRX audio checkbox (gated on high_res).
+        // Compared on the value the server receives, so a zoom step that does
+        // not change it sends nothing.
+        let fine_view = self.server_fine_spectrum_view;
+        let on_the_wire = move |hz| sdr_remote_core::protocol::vrx_span_on_the_wire(hz, fine_view);
         if self.connected && self.vrx1_high_res_spectrum {
-            let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx1) as f32 / self.vrx1_spectrum_zoom.max(1.0)) as u32;
-            let span_khz = ((span_hz / 1000).max(1)) as u16;
-            if span_khz != self.vrx1_high_res_last_span_khz {
-                self.vrx1_high_res_last_span_khz = span_khz;
-                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, span_khz));
+            let span_hz = self.vrx_requested_span_hz(VrxChannel::Vrx1);
+            if on_the_wire(span_hz) != on_the_wire(self.vrx1_high_res_last_span_hz) {
+                self.vrx1_high_res_last_span_hz = span_hz;
+                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, span_hz));
             }
         }
         if self.connected && self.vrx2_high_res_spectrum {
-            let span_hz = (self.vrx_ddc_span_hz(VrxChannel::Vrx2) as f32 / self.vrx2_spectrum_zoom.max(1.0)) as u32;
-            let span_khz = ((span_hz / 1000).max(1)) as u16;
-            if span_khz != self.vrx2_high_res_last_span_khz {
-                self.vrx2_high_res_last_span_khz = span_khz;
-                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, span_khz));
+            let span_hz = self.vrx_requested_span_hz(VrxChannel::Vrx2);
+            if on_the_wire(span_hz) != on_the_wire(self.vrx2_high_res_last_span_hz) {
+                self.vrx2_high_res_last_span_hz = span_hz;
+                let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, span_hz));
             }
         }
         // Where each VRX window should sit. Sent whenever it moves by more
@@ -1132,13 +1143,11 @@ impl SdrRemoteApp {
         // operator is looking - without this the client can only pan inside the
         // one screen it was already sent, and barely moves.
         if self.connected {
-            let step = sdr_remote_core::protocol::VRX_PAN_STEP_HZ;
-            let want1 =
-                (self.vrx1_pan as f64 * self.vrx_ddc_span_hz(VrxChannel::Vrx1) as f64) as i32;
-            let want2 =
-                (self.vrx2_pan as f64 * self.vrx_ddc_span_hz(VrxChannel::Vrx2) as f64) as i32;
-            let moved = (want1 - self.vrx1_last_sent_pan_hz).abs() >= step
-                || (want2 - self.vrx2_last_sent_pan_hz).abs() >= step;
+            // The value the server receives and the drawing uses (`vrx_pan_hz`):
+            // every change of it is sent, so the two never lie apart.
+            let want1 = self.vrx_pan_hz(VrxChannel::Vrx1);
+            let want2 = self.vrx_pan_hz(VrxChannel::Vrx2);
+            let moved = want1 != self.vrx1_last_sent_pan_hz || want2 != self.vrx2_last_sent_pan_hz;
             if moved && self.vrx_pan_changed_at.is_none() {
                 self.vrx_pan_changed_at = Some(Instant::now());
             }
@@ -1150,11 +1159,11 @@ impl SdrRemoteApp {
             if let Some(at) = self.vrx_pan_changed_at {
                 if at.elapsed().as_millis() >= 100 {
                     self.vrx_pan_changed_at = None;
-                    if (want1 - self.vrx1_last_sent_pan_hz).abs() >= step {
+                    if want1 != self.vrx1_last_sent_pan_hz {
                         self.vrx1_last_sent_pan_hz = want1;
                         let _ = self.cmd_tx.send(Command::SetVrxSpectrumPan(0, want1));
                     }
-                    if (want2 - self.vrx2_last_sent_pan_hz).abs() >= step {
+                    if want2 != self.vrx2_last_sent_pan_hz {
                         self.vrx2_last_sent_pan_hz = want2;
                         let _ = self.cmd_tx.send(Command::SetVrxSpectrumPan(1, want2));
                     }
@@ -1311,7 +1320,7 @@ impl SdrRemoteApp {
         self.rf2k_device_name = state.rf2k_device_name.clone();
         self.rf2k_available = state.rf2k_available;
         self.rf2k_active = state.rf2k_active;
-        // Debug (Phase D)
+        // Debug
         self.rf2k_debug_available = state.rf2k_debug_available;
         self.rf2k_bias_pct_x10 = state.rf2k_bias_pct_x10;
         self.rf2k_psu_source = state.rf2k_psu_source;
@@ -1438,7 +1447,7 @@ impl SdrRemoteApp {
         self.yaesu2_tuner_state = state.yaesu2_tuner_state;
         self.yaesu2_hi_swr = state.yaesu2_hi_swr;
         self.yaesu2_feature_levels = state.yaesu2_feature_levels;
-        self.yaesu2_clar_offset = state.yaesu2_feature_freqs[3] as i16; // clarifier-offset (§15)
+        self.yaesu2_clar_offset = state.yaesu2_feature_freqs[3] as i16; // clarifier-offset
         // yaesu2_feature_toggles is synced behind the debounce (optimistic toggles).
         self.yaesu2_vfo_select = state.yaesu2_vfo_select;
         self.yaesu2_memory_channel = state.yaesu2_memory_channel;
@@ -1497,7 +1506,7 @@ impl SdrRemoteApp {
         self.yaesu_hi_swr = state.yaesu_hi_swr;
         self.pa_drive_warning = state.pa_drive_warning;
         self.yaesu_feature_levels = state.yaesu_feature_levels;
-        self.yaesu_clar_offset = state.yaesu_feature_freqs[3] as i16; // clarifier-offset (§15)
+        self.yaesu_clar_offset = state.yaesu_feature_freqs[3] as i16; // clarifier-offset
         // yaesu_feature_toggles is synced behind the debounce (optimistic toggles).
         self.yaesu_in_memory_mode = state.yaesu_vfo_select == 1 || state.yaesu_vfo_select == 2; // 1=Memory, 2=MemTune (not 3=VFO B)
         // Find the current memory channel in our loaded list
@@ -1529,8 +1538,8 @@ impl SdrRemoteApp {
         // tone into the table. Applying it then throws that away, and the value that
         // gets written to the radio a moment later is the old one. The hash is
         // deliberately NOT updated, so the next push after the edit is saved or
-        // written does land. (Design note §2.4: a push must not overwrite unsaved
-        // work in the client.)
+        // written does land. A push must not overwrite unsaved work in the
+        // client.
         if let Some(ref text) = state.yaesu_memory_data {
             // Held back while there are UNSAVED EDITS, and only then.
             //
@@ -1600,7 +1609,7 @@ impl SdrRemoteApp {
         let blob1 = state.yaesu2_menu_data.clone();
         self.absorb_menu_blob(1, blob1.as_deref());
 
-        // Slot-1 (FTX-1) memory dump -> yaesu2_mem_channels (Phase B). Same rule as
+        // Slot-1 (FTX-1) memory dump -> yaesu2_mem_channels. Same rule as
         // slot 0: unsaved edits win over an incoming push, and nothing else does.
         // This is the radio the rule mattered most for: its tones live in the
         // server's list, so a client that refuses updates while the table is
@@ -1629,7 +1638,7 @@ impl SdrRemoteApp {
                             // A failed / empty radio read must NEVER wipe a good list
                             // (the FTX-1 sometimes answers nothing on the first read,
                             // then the full list on a retry). Keep what we had.
-                            log::info!("[radio1] memory read returned 0 channels - keeping existing {}", existing.len());
+                            log::info!("[radio1] memory read returned 0 channels: keeping existing {}", existing.len());
                             self.yaesu2_mem_channels = existing;
                         } else {
                             for rch in &mut radio_channels {
@@ -1863,7 +1872,7 @@ impl AmplitecMove {
 mod amplitec_move_tests {
     use super::AmplitecMove;
 
-    /// A network switch is no Amplitec switch (build 233, review of 232):
+    /// A network switch is no Amplitec switch:
     /// the positions go to 0 with a lost session and come back from 0.
     #[test]
     fn a_position_coming_back_after_a_session_is_no_switch() {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 //! Challenge-response authentication using HMAC-SHA256 with a pre-shared key (PSK),
-//! mutual since phase 2 of the direct connection.
+//! mutual: the server proves it knows the PSK as well.
 //!
 //! Flow:
 //! 1. Client sends Heartbeat → Server sends AuthChallenge(nonce_s)
@@ -11,26 +11,26 @@
 //! 4. Client derives the same K and verifies the proof. A server that cannot
 //!    prove it knows the PSK is not connected to.
 //!
-//! A peer from before phase 2 sends and reads both packets without the tails
-//! (`nonce_c`, `proof`). An older client is still admitted by the server, without
-//! a key; an older server gives no proof, and the client refuses it (owner's
-//! decision F, 2026-10-02).
+//! A peer without mutual authentication sends and reads both packets without
+//! the tails (`nonce_c`, `proof`). An older client is still admitted by the
+//! server, without a key; an older server gives no proof, and the client refuses it
+//! (by design).
 //!
-//! Over QUIC (phase 3) every step also covers the connection's channel binding:
+//! Over QUIC every step also covers the connection's channel binding:
 //! 32 bytes both ends export from the TLS session. The client's HMAC, the session
 //! key and the server's proof all take it, so a party in the middle - who holds
 //! two TLS sessions and therefore two bindings - has a proof that fits neither
 //! end. Without a binding (UDP, the relay) every value is what it was before.
 //!
 //! After authentication, all packets from the client's IP:port are accepted -
-//! still: the key is not used before phase 5 (per-packet encryption).
+//! still: the key is not used for per-packet encryption.
 //! The PSK never travels over the network.
 //!
 //! K is one HKDF pass over the PSK, with no work factor: it makes the password
 //! no harder to guess offline than the client's HMAC already did - one hash
 //! pair per guess, from one overheard authentication. What would is a PAKE or
-//! a stretched derivation, to be decided before phase 5, when the derivation
-//! becomes part of the wire format (design §5.5; review 66).
+//! a stretched derivation, to be decided before the key encrypts packets, when
+//! the derivation becomes part of the wire format.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -51,7 +51,7 @@ pub const BINDING_SIZE: usize = 32;
 const BINDING_LABEL: &[u8] = b"ThetisLink channel binding v1";
 
 /// Feed `binding` into `mac` - the one place that decides how. Nothing at all
-/// without one, so every value without a binding is what it was before phase 3.
+/// without one, so every value without a binding is what it was before QUIC.
 fn mac_binding(mac: &mut HmacSha256, binding: Option<&[u8; BINDING_SIZE]>) {
     if let Some(b) = binding {
         mac.update(BINDING_LABEL);
@@ -106,7 +106,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-// --- The session key and the server's proof (phase 2 of the direct connection) ---
+// --- The session key and the server's proof ---
 
 /// Size of the nonce the client adds to its `AuthResponse`.
 pub const CLIENT_NONCE_SIZE: usize = 16;
@@ -117,7 +117,7 @@ pub const PROOF_SIZE: usize = 32;
 /// How long a challenge stays answerable. A slower answer gets a new challenge,
 /// not a failure. Under the server's session time-out (15 s): a client that has
 /// not authenticated never refreshes its session, so a longer TTL could never
-/// fire - the reaper was always first (review 66, both reviewers).
+/// fire - the reaper was always first.
 pub const CHALLENGE_TTL_SECS: u64 = 10;
 
 const SESSION_KEY_INFO: &[u8] = b"ThetisLink session key v1";
@@ -205,7 +205,7 @@ pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
 }
 
 /// Obfuscate a password for storage in config files.
-/// Not true encryption — prevents casual reading of the password. The key is in
+/// Not true encryption: prevents casual reading of the password. The key is in
 /// this file, so anyone with the source can reverse it: treat an obfuscated
 /// value as readable, never as protected.
 /// Uses XOR with a fixed key, hex-encoded.
@@ -247,7 +247,7 @@ const TOTP_PERIOD: u64 = 30; // seconds
 const TOTP_DIGITS: u32 = 6;
 
 /// The alphabet of every 2FA key: the one place that says it, for the key that
-/// is made and every place that reads one (review 130: it was written out four
+/// is made and every place that reads one (it was written out four
 /// times, and one word changed in one of them let a key through that no code
 /// could be made from, with the suite green).
 fn totp_alphabet() -> base32::Alphabet {
@@ -255,7 +255,7 @@ fn totp_alphabet() -> base32::Alphabet {
 }
 
 /// The bytes of a 2FA key, or `None` when it is no key: it does not decode, or
-/// it is empty - an empty key makes codes anyone can work out (review 128). The
+/// it is empty - an empty key makes codes anyone can work out. The
 /// one answer to "is this a usable key", for the start gate and the verifier
 /// alike.
 fn totp_key_bytes(secret_base32: &str) -> Option<Vec<u8>> {
@@ -271,8 +271,8 @@ pub fn generate_totp_secret() -> String {
 }
 
 /// Whether `secret_base32` is a 2FA key that codes can be made from at all. One
-/// that is not starts a server that accepts no code - nobody gets in, the owner
-/// neither, and nothing says why (review 129).
+/// that is not starts a server that accepts no code - nobody gets in, not even
+/// the operator, and nothing says why.
 pub fn totp_secret_decodes(secret_base32: &str) -> bool {
     totp_key_bytes(secret_base32).is_some()
 }
@@ -290,7 +290,7 @@ pub fn totp_uri(secret_base32: &str) -> String {
 ///
 /// The counterpart to `verify_totp`, and the reason it exists is testing: without a
 /// generator nothing could exercise the accepted-code path, and a missing step there
-/// went unnoticed until a reviewer read it. Returns an empty string for a secret that
+/// went unnoticed until the code was read closely. Returns an empty string for a secret that
 /// does not decode, which `verify_totp` rejects.
 pub fn generate_totp(secret_base32: &str) -> String {
     let Some(secret_bytes) = totp_key_bytes(secret_base32) else {
@@ -307,7 +307,7 @@ pub fn generate_totp(secret_base32: &str) -> String {
 pub fn verify_totp(secret_base32: &str, code: &str) -> bool {
     if code.len() != TOTP_DIGITS as usize { return false; }
     // An empty key is refused here too, not only at the start gate: the
-    // verifier protects itself (review 130).
+    // verifier protects itself.
     let Some(secret_bytes) = totp_key_bytes(secret_base32) else {
         return false;
     };
@@ -333,7 +333,7 @@ pub fn verify_totp(secret_base32: &str, code: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Without a binding every value is what it was before phase 3 - pinned
+    /// Without a binding every value is what it was before QUIC - pinned
     /// against a second, independent computation, not against itself.
     #[test]
     fn without_a_binding_nothing_changes() {
@@ -352,7 +352,7 @@ mod tests {
     }
 
     /// A binding enters all three values, and only the same binding verifies:
-    /// a party in the middle holds another one (phase 3, review 108 point 4).
+    /// a party in the middle holds another one.
     #[test]
     fn a_binding_enters_every_value_and_only_the_same_one_verifies() {
         let (nonce, nc) = ([3u8; NONCE_SIZE], [5u8; CLIENT_NONCE_SIZE]);
@@ -378,7 +378,7 @@ mod tests {
     /// The wire format, pinned against values computed by a separate
     /// implementation (Python's hmac and a hand-written HKDF), not by this code:
     /// label, order and the shape of the salt. A server of one build and a client
-    /// of another must agree on these bytes (review 109).
+    /// of another must agree on these bytes.
     #[test]
     fn the_derivations_match_known_answers() {
         fn hex(b: &[u8]) -> String {
@@ -472,13 +472,14 @@ mod tests {
             assert_eq!(deobfuscate_password(typed), None, "{typed:?}");
         }
         // Hex that does not decode to text is not a stored value either - the
-        // last of the three checks, which no input above reached (review 137).
+        // last of the three checks, which no input above reached.
         assert_eq!(deobfuscate_password("cafe1234"), None, "hex that is no text");
         // The case that remains, kept in sight: a typed value that is hex AND
         // decodes to text reads as stored. Nothing in the file tells them apart.
         assert_eq!(deobfuscate_password("1234").as_deref(), Some("F\\"));
         // And what this file writes still reads back, whatever it holds.
-        for stored in ["MySecretHamKey!123", "caf\u{e9} \u{2014} ok", "x"] {
+        let wide = format!("caf\u{e9} {} ok", char::from_u32(0x2014).unwrap());
+        for stored in ["MySecretHamKey!123", wide.as_str(), "x"] {
             assert_eq!(deobfuscate_password(&obfuscate_password(stored)).as_deref(), Some(stored));
         }
     }
@@ -532,7 +533,7 @@ mod session_key_tests {
 }
 
 /// The start gate's answer and the verifier's agree, for every kind of key an
-/// operator can have (review 130: the two were apart, and the suite was green).
+/// operator can have (the two were apart, and the suite was green).
 #[cfg(test)]
 mod totp_key_tests {
     use super::{generate_totp, generate_totp_secret, totp_secret_decodes, verify_totp};
@@ -555,7 +556,7 @@ mod totp_key_tests {
         }
         assert!(totp_secret_decodes(&generated), "a generated key is usable");
         // The alphabet itself, which the app shares with the authenticator app
-        // through `otpauth://`: base32 without padding (review 131 - the rows
+        // through `otpauth://`: base32 without padding (the rows
         // above only hold that the gate and the verifier agree).
         assert!(!generated.contains('='), "a generated key carries no padding");
         assert!(!totp_secret_decodes("ABCDEFGHIJKLMNOPQRSTUVWXYZ23456="), "a padded key is refused");

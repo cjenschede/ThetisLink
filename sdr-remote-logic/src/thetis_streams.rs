@@ -2,7 +2,7 @@
 
 //! When the operator listens to a Yaesu, the Thetis streams should stop.
 //!
-//! Asked for by the owner months ago and restated on 2026-09-13: switching to a
+//! A long-standing requirement, restated on 2026-09-13: switching to a
 //! Yaesu may leave the Thetis audio and spectrum running for ten to twenty
 //! seconds - so switching straight back costs nothing - and after that they
 //! should stop, because on a phone you are paying for a stream you cannot hear.
@@ -28,7 +28,7 @@
 use std::time::Duration;
 
 /// How long the Thetis streams keep running after the operator switches to a
-/// Yaesu. The owner asked for "ten to twenty seconds"; the upper end is chosen
+/// Yaesu. The requirement is "ten to twenty seconds"; the upper end is chosen
 /// because the cost of being wrong is asymmetric - twenty seconds of audio is a
 /// few tens of kilobytes, while a switch-back that has to re-subscribe is a gap
 /// the operator hears.
@@ -77,8 +77,8 @@ pub fn thetis_stream_action(
 /// two sends in the engine's restore block after a new session. The restore block
 /// sent the operator's wish unconditionally and ran AFTER the replay, so every
 /// reconnect switched the saved stream back on and left it on - the exact failure
-/// the grace period exists to prevent, reintroduced one layer down. Found while
-/// writing the patch brief, by trying to state the doubt honestly.
+/// the grace period exists to prevent, reintroduced one layer down. Found by
+/// trying to state the remaining doubt honestly.
 pub fn stream_value(operator_wants: bool, thetis_streams_stopped: bool) -> bool {
     operator_wants && !thetis_streams_stopped
 }
@@ -173,29 +173,48 @@ mod tests {
     /// green while two call sites bypassed it with the bare wish. The defect was
     /// a COUNT, not an absence.
     ///
-    /// Seven, and all seven are decisions: two in the tick, two in the restore
-    /// after a new session, two in the command handlers, and one in the loss
-    /// window - that last one added after a review found that the client charged
+    /// Eight, and all eight are decisions: two in the tick, two in the restore
+    /// after a new session, two in the command handlers, one in the loss
+    /// window, and one for the FFT size, which goes to the server only from a
+    /// client whose spectrum the server feeds. The loss-window one added after it turned out that the client charged
     /// a hundred percent loss for a stream it had itself asked to stop, which the
     /// server then turned into maximum protection for every other listener.
     /// The log line used to call it
     /// as well, which put two NON-decisions into a count meant to count
     /// decisions - so tidying the log would have turned this red and adding a
-    /// log line could have masked a decision being removed. A reviewer named
-    /// that compensating pair; the tick now computes the two values once and the
+    /// log line could have masked a decision being removed. To
+    /// remove that compensating pair, the tick now computes the two values once and the
     /// log reuses them.
     #[test]
     fn every_place_that_decides_a_thetis_stream_value_uses_this_function() {
         let src = include_str!("engine.rs");
         let uses = src.matches("stream_value(").count();
         assert_eq!(
-            uses, 7,
-            "engine.rs uses stream_value {uses} times, expected 7. Fewer means a place decides a Thetis stream value on its own, which is how the saving was silently defeated once already. More means a new decision point nobody has classified. Look first, then move this number deliberately."
+            uses, 8,
+            "engine.rs uses stream_value {uses} times, expected 8. Fewer means a place decides a Thetis stream value on its own, which is how the saving was silently defeated once already. More means a new decision point nobody has classified. Look first, then move this number deliberately."
         );
     }
 
+    /// The FFT size goes with the stream the saving leaves on the wire: one
+    /// the saving opens again gets the size its rows show, as one the operator
+    /// opens (a size chosen while it was stopped did not go live), and an open
+    /// while it is stopped sends none (nobody looks).
     #[test]
-    fn the_grace_is_the_number_the_owner_asked_for() {
+    fn the_fft_size_follows_the_saving() {
+        let src = include_str!("engine.rs");
+        let src = &src[..src.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let tick = &src[src.find("let sp_ok = send_control!(ControlId::SpectrumEnable, spec_wire as u16").unwrap()..];
+        let tick = &tick[..tick.find("} else {").unwrap()];
+        assert!(tick.contains("if rx_ok && sp_ok {\n                                    thetis_streams_stopped = !want;\n"));
+        assert!(tick.contains("if spec_wire && spectrum_fft_size_k != 0 {\n                                        let _ = send_control!(ControlId::SpectrumFftSize, spectrum_fft_size_k, addr.as_str());"));
+        let open = &src[src.find("Command::EnableSpectrum(enabled) => {").unwrap()..];
+        let open = &open[..open.find("Command::SetSpectrumFps").unwrap()];
+        assert!(open.contains("let on = crate::thetis_streams::stream_value(\n                                    enabled, thetis_streams_stopped);"));
+        assert!(open.contains("if on && !was_open && spectrum_fft_size_k != 0 {"));
+    }
+
+    #[test]
+    fn the_grace_stays_between_ten_and_twenty_seconds() {
         // Pinned deliberately: the request was "ten to twenty seconds", and a
         // constant that drifts out of that range without anyone deciding is the
         // kind of change this project has been caught by before.

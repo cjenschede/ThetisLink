@@ -127,7 +127,7 @@ impl StreamDecoder {
     ///
     /// The one place that decides this (build 155). It sits here, below the
     /// client's playback resamplers, so the server can use the same decision
-    /// on the transmit path when that comes (review of build 154). Until build
+    /// on the transmit path when that comes. Until build
     /// 154 only the Thetis stream on the client rebuilt; the radios and VRX
     /// always concealed.
     pub fn recover_or_conceal(&mut self, next: Option<(&[u8], bool)>) -> Option<Filled> {
@@ -147,7 +147,7 @@ impl StreamDecoder {
 
     /// A gap filled in, with the format it is in: the one the stream was last
     /// carrying, read before the decoder runs. The one place that says so
-    /// (build 156; review of 155: two places worked it out, and a wrong flag
+    /// (build 156: two places worked it out, and a wrong flag
     /// here sends every concealed wideband frame through the narrowband
     /// resampler with no test noticing).
     pub fn conceal_filled(&mut self) -> Option<Filled> {
@@ -188,7 +188,7 @@ impl StreamDecoder {
     /// switching between narrowband and wideband starts the other one from
     /// nothing.
     ///
-    /// Measured by the operator on 2026-08-19, one variable at a time:
+    /// Measured on 2026-08-19, one variable at a time:
     ///
     /// | after                        | a two-second gap sounds like |
     /// |------------------------------|------------------------------|
@@ -241,7 +241,7 @@ impl StreamDecoder {
         }
         self.said_silent = true;
         log::warn!(
-            "concealment produced silence on a stream that has carried audio (wideband={}) - the decoder that conceals is not the one holding the history",
+            "concealment produced silence on a stream that has carried audio (wideband={}): the decoder that conceals is not the one holding the history",
             self.last_wb
         );
     }
@@ -431,7 +431,7 @@ mod tests {
     ///
     /// It also drives `conceal()` rather than calling the check directly, which
     /// is the difference between testing the branch that runs and the branch you
-    /// just wrote - a distinction review caught twice in three days.
+    /// just wrote - a distinction that has been missed more than once.
     #[test]
     fn a_decoder_without_history_conceals_exact_silence() {
         let mut s = StreamDecoder::new().unwrap();
@@ -443,7 +443,7 @@ mod tests {
         let level = rms_of(&hidden);
         assert_eq!(
             level, 0.0,
-            "PLC on a decoder with no history returned {level:.3}, not exact zero -              the invariant below tests `level > 0.0` and can therefore never fire"
+            "PLC on a decoder with no history returned {level:.3}, not exact zero;              the invariant below tests `level > 0.0` and can therefore never fire"
         );
         assert!(s.said_silent, "the invariant did not report it");
     }

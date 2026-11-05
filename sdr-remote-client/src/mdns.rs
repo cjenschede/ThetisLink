@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! mDNS service-browse for local-network ThetisLink server discovery
-//! (PATCH-3). Runs in a background thread, publishes results via a
+//! mDNS service-browse for local-network ThetisLink server discovery.
+//! Runs in a background thread, publishes results via a
 //! `Mutex<Vec<DiscoveredServer>>` that the egui thread reads each frame.
 //!
 //! Failure is silent: if mDNS doesn't work (no multicast, firewall,

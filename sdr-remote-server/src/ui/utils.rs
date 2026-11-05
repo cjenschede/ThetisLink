@@ -22,7 +22,7 @@ static AUTO_RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// as soon as it detects the flag, so it can run Drop handlers
 /// correctly before it calls `process::exit`.
 pub(crate) fn request_auto_restart() {
-    log::info!("Auto-restart requested - cleanup in event-loop");
+    log::info!("Auto-restart requested: cleanup in event-loop");
     AUTO_RESTART_REQUESTED.store(true, Ordering::Relaxed);
 }
 

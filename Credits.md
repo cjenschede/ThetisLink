@@ -4,7 +4,7 @@
 
 ThetisLink is licensed under **GPL-2.0-or-later**. See `LICENSE` for the full text and `NOTICE.md` for the licensing summary.
 
-Copyright © 2025-2026 Chiron van der Burgt — PA3GHM.
+Copyright © 2025-2026 Chiron van der Burgt (PA3GHM).
 
 Source: https://github.com/cjenschede/ThetisLink
 
@@ -12,11 +12,11 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 
 ## Author
 
-**Chiron van der Burgt — PA3GHM**
+**Chiron van der Burgt (PA3GHM)**
 
 ## Special Thanks
 
-- **Richie (ramdor)** — Thetis SDR development, TCI protocol extensions, and ongoing support
+- **Richie (ramdor)**: Thetis SDR development, TCI protocol extensions, and ongoing support
 
 ## Open Source Libraries
 
@@ -27,12 +27,14 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 | tokio | Async runtime | MIT |
 | eframe / egui | Desktop GUI framework | MIT / Apache-2.0 |
 | cpal | Cross-platform audio I/O | Apache-2.0 |
-| audiopus | Opus audio codec bindings | MIT |
+| audiopus | Opus audio codec bindings, with libopus built in (BSD-3-Clause, see `NOTICE.md`) | ISC |
 | rubato | Sample rate conversion | MIT |
 | rustfft | FFT spectrum processing | MIT / Apache-2.0 |
 | ringbuf | Lock-free ring buffers | MIT / Apache-2.0 |
-| tokio-tungstenite | TCI WebSocket client | MIT |
-| serialport | Serial port (Yaesu CAT) | MIT |
+| tokio-tungstenite | TCI WebSocket client, relay sign-in (wss) | MIT |
+| quinn | QUIC: the one encrypted connection between the programs | MIT / Apache-2.0 |
+| rustls | TLS 1.3 under QUIC and for wss to the relay | Apache-2.0 / ISC / MIT |
+| serialport | Serial port (Yaesu CAT) | MPL-2.0 |
 | midir | MIDI controller support | MIT |
 | num_enum | Enum ↔ integer derive | MIT / Apache-2.0 |
 | anyhow | Error handling | MIT / Apache-2.0 |
@@ -40,7 +42,7 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 | bytemuck | Safe transmute for audio buffers | MIT / Apache-2.0 / Zlib |
 | hmac / sha2 / rand | Authentication (HMAC-SHA256) | MIT / Apache-2.0 |
 | wry | WebView (embedded WebSDR) | MIT / Apache-2.0 |
-| mcp2221-hal | Adafruit MCP2221A USB-HID bridge (StockCorner JC-4s / JC-3s tuners, G-1000DXC rotor, Morse paddle) — vendored, used under MIT terms | MIT / Apache-2.0 |
+| mcp2221-hal | Adafruit MCP2221A USB-HID bridge (StockCorner JC-4s / JC-3s tuners, G-1000DXC rotor, Morse paddle): vendored, used under MIT terms | MIT / Apache-2.0 |
 
 ### Android (Kotlin)
 
@@ -53,16 +55,17 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 
 ## Protocols & External Services
 
-- **TCI** (Transceiver Control Interface) — Expert Electronics / Thetis
-- **DX Spider** — DX cluster telnet protocol
-- **HPSDR / OpenHPSDR Protocol 2** — SDR hardware communication
-- **WebSDR** (PA3FWM) / **KiwiSDR** — CatSync frequency synchronization targets
+- **TCI** (Transceiver Control Interface): Expert Electronics / Thetis
+- **DX Spider**: DX cluster telnet protocol
+- **WebSDR** (PA3FWM) / **KiwiSDR**: CatSync frequency synchronization targets
+- **ThetisLink Relay**: self-hosted relay, sign-in over wss and the connection over UDP (internet remote)
+- **ThetisLink Chat**: optional service beside a relay (chat + problem reports)
 
 ## Hardware Support
 
 | Device | Interface |
 |--------|-----------|
-| Any radio Thetis drives - Apache Labs ANAN, Hermes-Lite 2, Red Pitaya | TCI (via Thetis) |
+| Any radio Thetis drives: Apache Labs ANAN, Hermes-Lite 2, Red Pitaya | TCI (via Thetis) |
 | Yaesu FT-991A | Serial CAT + USB Audio |
 | Yaesu FTX-1 | Serial CAT + USB Audio |
 | RF2K-S Power Amplifier | HTTP API |

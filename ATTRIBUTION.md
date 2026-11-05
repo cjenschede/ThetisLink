@@ -6,13 +6,13 @@ FlexRadio's PowerSDR.
 
 ## Upstream lineage
 
-- **FlexRadio PowerSDR** (2004–2009) — original open-source SDR application;
+- **FlexRadio PowerSDR** (2004–2009): original open-source SDR application;
   © FlexRadio Systems, licensed under GPL
-- **OpenHPSDR Thetis** (2010–present) — PowerSDR continuation for OpenHPSDR
+- **OpenHPSDR Thetis** (2010–present): PowerSDR continuation for OpenHPSDR
   hardware; originally maintained by Doug Wigley (W5WC) from 2010 through
   approximately 2020, continued by Richard Samphire (MW0LGE) from 2019 to
   the present
-- **`ramdor/Thetis`** — the upstream repository that this project's
+- **`ramdor/Thetis`**: the upstream repository that this project's
   Thetis fork (`cjenschede/Thetis`, branch `thetislink-tl2`)
   derives from
 
@@ -86,10 +86,18 @@ over contributions by Richard Samphire or any other upstream contributor.
 
 ## Third-party dependency licenses
 
-Runtime dependencies are inventoried in `compliance/sbom.spdx.json`
+The Rust dependencies are inventoried in `compliance/sbom.spdx.json`
 (SPDX 2.3 SBOM) and their license texts bundled in
-`compliance/THIRD-PARTY-LICENSES.html`. All runtime dependencies are
-licensed under terms compatible with GPL-2.0-or-later.
+`compliance/THIRD-PARTY-LICENSES.html`. All Rust dependencies are
+licensed under terms compatible with GPL-2.0-or-later. What is built in
+that cargo does not see is not in those two files: the Microsoft C runtime,
+the Rust standard library and the C++ runtime of the Android NDK (from the
+toolchains), and libopus, the fonts of egui, the WebView2 loader, HIDAPI, Oboe
+and libffi inside JNA (from libraries). `NOTICE.md` names each of them. The
+licence texts of libopus, the fonts and the WebView2 loader travel in the
+release package from `compliance/licenses/`; the standard library's are in
+`THIRD-PARTY-LICENSES.html`; HIDAPI, used under its original licence, needs
+none.
 
 One dependency, `epaint_default_fonts`, ships Ubuntu Font-Family assets
 under the **Ubuntu Font License 1.0 (UFL-1.0)**. UFL-1.0 is a Canonical
@@ -97,16 +105,45 @@ FOSS font licence compatible with GPL. Because UFL has no standard SPDX
 identifier, its text is not automatically included in the generated
 THIRD-PARTY-LICENSES bundle; we therefore ship the licence text
 separately as `compliance/licenses/UFL-1.0.txt` (sourced verbatim from
-the upstream crate's `fonts/UFL.txt`). This licence applies solely to
-the bundled Ubuntu font files.
+the upstream crate's `fonts/UFL.txt`), in the release package and in the
+source. This licence applies solely to the bundled Ubuntu font files.
+
+The PDF manuals in the release package embed subsets of two fonts that come
+with the documentation tool `mdbook`: **Open Sans** (Apache-2.0; digitized data
+© 2010-2011 Google Corporation) for the text and the diagrams, and **Source Code
+Pro** (SIL Open Font License 1.1; © 2010, 2012 Adobe Systems Incorporated,
+Reserved Font Name 'Source') for code. No other font is embedded, and no outline
+drawn from another font; the release build checks this. Their licence texts,
+verbatim from `mdbook`'s font directory, travel in the release package as
+`Apache-2.0.txt` and `OFL-1.1-Source-Code-Pro.txt`, and in the source
+as `compliance/licenses/`.
+
+The Android app (the APK) contains, besides its own Rust library, the Java and
+Kotlin libraries it is built on: AndroidX and Jetpack Compose (© The Android Open
+Source Project), the Kotlin standard library and kotlinx.coroutines (© JetBrains
+s.r.o. and Kotlin Programming Language contributors), the JetBrains annotations,
+Guava's `listenablefuture` (© The Guava Authors) and JNA (Java Native Access).
+All are under the **Apache License 2.0**, whose text travels in the release
+package as `Apache-2.0.txt`. JNA is offered under Apache-2.0 or LGPL-2.1-or-later
+at the recipient's choice; this project uses it under **Apache-2.0**. None of them
+ships a NOTICE file. The exact list, with versions and where each comes from, is
+`compliance/android-dependencies.tsv`, and the same libraries are in
+`compliance/sbom.spdx.json`; the build stops when the APK holds a library that the
+list does not.
+
+The source tree contains one file that is not source:
+`sdr-remote-android/android/gradle/wrapper/gradle-wrapper.jar`, the Gradle Wrapper
+of **Gradle 8.6** (© Gradle Inc.), unchanged (its SHA-256 equals the checksum Gradle
+publishes for 8.6), under the **Apache License 2.0**; its licence text is inside the
+jar as `META-INF/LICENSE`. It only downloads and starts Gradle to build the app and
+is not part of any program. The public sync refuses a binary file that this
+document does not name by its path.
 
 ## Third-party protocol and specification references
 
-- **HPSDR / OpenHPSDR Protocol 2** — public protocol specification
-  maintained by TAPR / OpenHPSDR; implemented here from public documentation
-- **TCI (Transceiver Control Interface)** — public protocol specification
+- **TCI (Transceiver Control Interface)**: public protocol specification
   maintained by Expert Electronics
-- **Kenwood TS-2000 CAT** — base CAT protocol defined by Kenwood for the
+- **Kenwood TS-2000 CAT**: base CAT protocol defined by Kenwood for the
   TS-2000 transceiver family. The `ZZ…` extended command set used by this
   project is a PowerSDR / Thetis-specific extension layered on top of the
   Kenwood base protocol, publicly documented in the PowerSDR user manual

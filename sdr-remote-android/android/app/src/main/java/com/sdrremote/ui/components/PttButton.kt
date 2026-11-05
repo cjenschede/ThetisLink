@@ -92,7 +92,7 @@ fun PttButton(
                 // handler that no longer existed. The button then sat red with
                 // nothing transmitting until it was pressed once more. About one
                 // run in three, because it depends on where the finger is at the
-                // instant the other station releases (owner, build 33).
+                // instant the other station releases.
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         awaitFirstDown(requireUnconsumed = false)

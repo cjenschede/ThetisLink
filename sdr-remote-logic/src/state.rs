@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-/// Sentinel for "no S-meter sample yet" — well below S0 (-127 dBm) so the
+/// Sentinel for "no S-meter sample yet"; well below S0 (-127 dBm) so the
 /// widget clamps the needle to the bottom of the arc without ever looking
 /// like a real reading.
 pub const SMETER_NO_DATA_DBM: f32 = -200.0;
 
 /// A spectrum's range when nobody has set one, on every spectrum screen of
-/// both clients, and whether its reference follows the noise floor (owner,
-/// 2026-10-11: "default auto ref aan ... default range op 70 dB"; build 171).
+/// both clients, and whether its reference follows the noise floor (build
+/// 171, 2026-10-11: auto reference on, range 70 dB).
 /// The phone's own copies in `MainScreen.kt` are held to these by a test.
 pub const SPECTRUM_RANGE_DEFAULT_DB: f32 = 70.0;
 pub const SPECTRUM_AUTO_REF_DEFAULT: bool = true;
@@ -25,7 +25,7 @@ pub const SMETER_PEAK_HOLD_S: f32 = 2.0;
 /// hold time starts again. It follows only a signal (dBm). While the meter
 /// carries watts (`in_tx`: `smeter_tx` or `other_tx`) the needle is cleared:
 /// a held 50 W was drawn as +50 dBm and stood at the end of the scale for two
-/// seconds after every release (owner, 2026-10-11; build 170). The phone's
+/// seconds after every release. The phone's
 /// `SmeterBar` has the same rule in Kotlin - two languages, so two places;
 /// this one is tested.
 pub fn smeter_peak_step(peak: f32, held_s: f32, value: f32, in_tx: bool) -> (f32, bool) {
@@ -75,7 +75,7 @@ pub enum ConnectStatus {
     /// Connection attempt in progress (sent first heartbeat, awaiting auth challenge or response).
     Connecting,
     /// Server has sent `AUTH_TOTP_REQUIRED`; client is awaiting user TOTP code.
-    /// This is NOT an error — it is an expected step in the 2FA flow.
+    /// This is NOT an error: it is an expected step in the 2FA flow.
     AwaitingTotp,
     /// Fully connected and authenticated; receiving heartbeat acks and state pushes.
     Connected,
@@ -119,11 +119,11 @@ pub enum ConnectError {
     WrongTotp,
     /// The server's proof that it knows the password did not verify: this is
     /// not the server the password belongs to, or something sits in between.
-    /// The client does not connect (phase 2 of the direct connection).
+    /// The client does not connect.
     ServerUnverified,
     /// The server accepted us without any proof that it knows the password: a
-    /// server from before the mutual check. The client does not connect to one
-    /// (owner's decision F, 2026-10-02); the cure is to update the server.
+    /// server from before the mutual check. The client does not connect to one;
+    /// the cure is to update the server.
     ServerProvesNothing,
     /// Server protocol VERSION does not match client VERSION. The UI
     /// chooses the wording (client-too-old vs server-too-old) based on
@@ -181,7 +181,7 @@ pub struct RadioState {
     /// The transport this engine runs on - chosen at its start, for its life
     /// (UDP, the relay, or QUIC). On the connect screens, so a switch that was
     /// set but not yet applied (it needs a restart) cannot pass for the route
-    /// in use (review 110; it happened in the field).
+    /// in use (it happened in the field).
     pub route: crate::measure::Route,
     /// The last refusal from the server, and what is still standing because
     /// of it. Two loose booleans before; see `ptt_denial` for why one of them
@@ -222,7 +222,7 @@ pub struct RadioState {
     /// Outgoing UDP bandwidth over the last ~500 ms window (Kbit/s).
     /// Counts all bytes sent (audio TX + control + heartbeat).
     pub up_kbps: u32,
-    /// Per-`PacketType` byte-counter — kbps over the last ~5 s window,
+    /// Per-`PacketType` byte-counter: kbps over the last ~5 s window,
     /// sorted by decreasing value. Filled by the engine, read
     /// by the Server-tab UI as expand-detail under Down. Empty vec =
     /// no data available yet.
@@ -238,11 +238,15 @@ pub struct RadioState {
     pub playback_level_vrx1: f32,
     pub playback_level_vrx2: f32,
     pub yaesu_mic_level: f32,
+    /// The microphone reached full scale before any processing, in the last
+    /// 1.5 s of transmitting: it clips before ThetisLink (the level set in the
+    /// operating system is too high). Thetis and both Yaesu radios.
+    pub mic_input_clip: bool,
 
     // Radio
     pub frequency_hz: u64,
     pub mode: u8,
-    /// RX1 S-meter — dBm during RX, watts during TX (disambiguated by
+    /// RX1 S-meter: dBm during RX, watts during TX (disambiguated by
     /// `other_tx` plus client-local PTT). `SMETER_NO_DATA_DBM` (-200.0) when
     /// no sample has arrived yet, which the widget clamps to S0.
     pub smeter: f32,
@@ -267,8 +271,13 @@ pub struct RadioState {
     /// answer: a rule written in `client/src/ui/` is a rule Android does not
     /// have. It carries no instruction - nothing refuses to work over it.
     pub server_build: sdr_remote_core::protocol::PeerBuild,
+    /// The server takes the fine spectrum view
+    /// (`Capabilities::FINE_SPECTRUM_VIEW`, build 76): the engine sends the fine
+    /// pan and VRX width only then, and the screens draw with the pan as this
+    /// server receives it. False until its first ack says so.
+    pub server_fine_spectrum_view: bool,
     /// The measurement file being written, when measurement mode is on
-    /// (`crate::measure`, open point 34). Not a session matter: measuring goes
+    /// (`crate::measure`). Not a session matter: measuring goes
     /// on across sessions, so `forget_session` leaves it alone.
     pub measurement_file: Option<String>,
     /// "Relay only" as last switched (build 137, `Command::SetRelayOnly`). Not
@@ -294,7 +303,7 @@ pub struct RadioState {
     /// `pub(crate)`, like `engine_dead`: only the `station_notice` block makes a
     /// screen rule of them (the engine reads one back before setting it). A
     /// screen cannot build its own rule on them - that is a compile error, not a
-    /// count (review 63; build 59 had four such rules).
+    /// count (build 59 had four such rules).
     pub(crate) server_tx_closed: bool,
     /// The server says: the Amplitec position is receive-only and Thetis cannot
     /// refuse transmitting by itself (`ServerStateFlags::RX_ONLY_UNGUARDED`,
@@ -342,6 +351,12 @@ pub struct RadioState {
     /// so a server without that radio does not inherit it from the previous one.
     pub yaesu_configured: bool,
     pub yaesu2_configured: bool,
+    /// The server's operator has set the radios' USB receive levels by the
+    /// installation guide: the receive correction is then the small one
+    /// (`yaesu_rx_correction` in the engine). From the `YaesuPresence` packet;
+    /// an old server says nothing and reads as not tuned. Cleared with the link,
+    /// like `yaesu_configured`: it is a fact about that server.
+    pub yaesu_rx_levels_tuned: bool,
     /// The server's list of radios is known for this session: set by the
     /// presence packet, cleared with the link. Until then a transmit choice is
     /// not redirected to another radio (`ble_ptt::effective_target`).
@@ -360,7 +375,7 @@ pub struct RadioState {
     pub mon_on: bool,
     pub tx_profile_names: Vec<String>,
 
-    // DX-cluster spot stream — toggle for metered-link data-saving
+    // DX-cluster spot stream: toggle for metered-link data-saving
     pub dx_spots_enabled: bool,
     /// Whether the server has a DX cluster at all (callsign set and switched
     /// on). `true` until a server says otherwise, which is also what an older
@@ -395,12 +410,12 @@ pub struct RadioState {
 
     // RX2 / VFO-B
     pub rx2_enabled: bool,
-    /// RX2 spectrum subscription, SEPARATE from `rx2_enabled` (audio). Phase 3b/4.
+    /// RX2 spectrum subscription, SEPARATE from `rx2_enabled` (audio).
     pub rx2_spectrum_enabled: bool,
     pub vfo_sync: bool,
     pub frequency_rx2_hz: u64,
     pub mode_rx2: u8,
-    /// RX2 S-meter, dBm (RX-only — RX2 never transmits).
+    /// RX2 S-meter, dBm (RX-only: RX2 never transmits).
     pub smeter_rx2: f32,
     /// RX2 Sig source (SmeterSources bit 4), dBm.
     pub smeter_rx2_sig: f32,
@@ -440,7 +455,7 @@ pub struct RadioState {
     pub spectrum_db_per_unit: u8,
     pub spectrum_sequence: u16,
 
-    // Full DDC spectrum (for waterfall history — covers entire DDC bandwidth)
+    // Full DDC spectrum (for waterfall history; covers entire DDC bandwidth)
     pub full_spectrum_bins: Vec<u16>,
     pub full_spectrum_center_hz: u32,
     pub full_spectrum_span_hz: u32,
@@ -458,13 +473,13 @@ pub struct RadioState {
     pub vrx2_extracted_span_hz: u32,
     pub vrx2_extracted_sequence: u16,
 
-    // SAM auto-tune follow frequency (PATCH-vrx-wide-sam-ux). Latest carrier
+    // SAM auto-tune follow frequency. Latest carrier
     // frequency the server is following while auto-tune is on; 0 = no update.
     // The UI applies it to the VRX VFO display when it changes.
     pub vrx1_autotune_freq_hz: u64,
     pub vrx2_autotune_freq_hz: u64,
 
-    // TX modulation filter band (PATCH-tx-modulation-bandwidth). Pushed by the
+    // TX modulation filter band. Pushed by the
     // server when Thetis reports it; `tx_filter_supported` gates the client UI.
     pub tx_filter_low_hz: i32,
     pub tx_filter_high_hz: i32,
@@ -541,7 +556,7 @@ pub struct RadioState {
     pub rf2k_device_name: String,
     pub rf2k_available: bool,
     pub rf2k_active: bool,      // true if RF2K is the active PA for drive control
-    // RF2K-S debug (Phase D)
+    // RF2K-S debug
     pub rf2k_debug_available: bool,
     pub rf2k_bias_pct_x10: u16,
     pub rf2k_psu_source: u8,
@@ -596,7 +611,7 @@ pub struct RadioState {
     pub yaesu_power_on: bool,
     pub yaesu_af_gain: u8,
     pub yaesu_tx_power: u8,
-    /// Max TX power (watts) for the current band (PATCH-yaesu-power-scaling).
+    /// Max TX power (watts) for the current band.
     /// 0 = old server/unknown -> client falls back to 100 for the slider range.
     pub yaesu_tx_power_max: u8,
     /// What the server is still reading from this radio (`YAESU_LOADING_*`).
@@ -606,17 +621,17 @@ pub struct RadioState {
     pub yaesu_mic_gain: u8,
     pub yaesu_split: bool,
     pub yaesu_scan: bool,
-    /// Internal ATU state (PATCH-yaesu-internal-atu): 0=off, 1=on, 2=tuning-in-progress.
+    /// Internal ATU state: 0=off, 1=on, 2=tuning-in-progress.
     pub yaesu_tuner_state: u8,
     /// Radio reports a high SWR while transmitting. Self-clearing: the radio
     /// drops the flag as soon as the match is good again.
     pub yaesu_hi_swr: bool,
-    /// Yaesu DSP/function toggles bitfield (PATCH-yaesu-extra-controls): bit N =
+    /// Yaesu DSP/function toggles bitfield: bit N =
     /// `YaesuCtrl` N on/off. Fed by YaesuFeaturePacket. Phase A1: RfAtt(0), BreakIn(1).
     pub yaesu_feature_toggles: u32,
-    /// Yaesu multi-state/level values, indexed by `YaesuCtrl`. Phase B: Agc(6), PreAmp(7).
+    /// Yaesu multi-state/level values, indexed by `YaesuCtrl`: Agc(6), PreAmp(7).
     pub yaesu_feature_levels: [u8; 16],
-    /// Phase D frequency values: [0]=Contour, [1]=APF, [2]=Notch.
+    /// Frequency values: [0]=Contour, [1]=APF, [2]=Notch.
     pub yaesu_feature_freqs: [u16; 4],
     pub yaesu_vfo_select: u8,  // 0=VFO, 1=Memory, 2=MemTune
     pub yaesu_memory_channel: u16,
@@ -634,7 +649,7 @@ pub struct RadioState {
     /// arrived and the parts expected. Shown to the operator rather than
     /// swallowed - a report missing its middle must not be attachable.
     pub server_report_failed: Option<(u16, u16)>,
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1) — mirror of the slot-0
+    // Dual-radio slot 1: mirror of the slot-0
     // Yaesu fields above. `*_model` = wire-code from RadioInfo (0=991A,
     // 1=FTX1) for panel naming. yaesu2_connected becomes true once a
     // YaesuState2 packet arrives → the UI then shows the 2nd panel.
@@ -675,7 +690,7 @@ pub struct RadioState {
     pub yaesu2_feature_freqs: [u16; 4],
     pub yaesu2_vfo_select: u8,
     pub yaesu2_memory_channel: u16,
-    pub yaesu2_memory_data: Option<String>, // tab-separated memory-dump radio 2 (Phase B)
+    pub yaesu2_memory_data: Option<String>, // tab-separated memory-dump radio 2
     pub yaesu2_menu_data: Option<String>,   // EX/menu values radio 2, own field (see slot 0)
     // New TCI controls (v2.10.3.13)
     pub agc_mode: u8,       // 0=off, 1=long, 2=slow, 3=med, 4=fast, 5=custom
@@ -759,6 +774,7 @@ impl Default for RadioState {
             playback_level_vrx1: 0.0,
             playback_level_vrx2: 0.0,
             yaesu_mic_level: 0.0,
+            mic_input_clip: false,
             frequency_hz: 0,
             mode: 0,
             smeter: SMETER_NO_DATA_DBM,
@@ -772,6 +788,7 @@ impl Default for RadioState {
             rx_af_gain: 0,
             agc_enabled: false,
             server_build: sdr_remote_core::protocol::PeerBuild::Unknown,
+            server_fine_spectrum_view: false,
             measurement_file: None,
             relay_only: false,
             force_tcp: false,
@@ -794,6 +811,7 @@ impl Default for RadioState {
             thetis_configured: true,
             yaesu_configured: false,
             yaesu2_configured: false,
+            yaesu_rx_levels_tuned: false,
             radios_known: false,
             rx2_present: true,
             thetis_starting: false,
@@ -1056,12 +1074,19 @@ impl Default for RadioState {
 }
 
 impl RadioState {
+    /// Whether this server takes `id`: everything, except the fine spectrum
+    /// view from a server that has not said it takes it. The engine's one
+    /// gate and the replay ask here, so the two cannot disagree.
+    pub fn server_takes(&self, id: sdr_remote_core::protocol::ControlId) -> bool {
+        self.server_fine_spectrum_view || !sdr_remote_core::protocol::needs_fine_spectrum_view(id)
+    }
+
     /// What a lost session must not leave behind.
     ///
     /// **The rule is not "everything a server told us".** That selects 304 of
     /// this struct's 313 fields, and blanking the frequency and the mode would
     /// only make the screen flicker for nothing. The rule is narrower, and it
-    /// is the one worth writing down (review 2120A4):
+    /// is the one worth writing down:
     ///
     /// > it came from the server, it is not refreshed within a second or two of
     /// > reconnecting, **and standing there stale it makes the screen lie or a
@@ -1105,6 +1130,7 @@ impl RadioState {
         self.pa_drive_alarm = false;
         self.yaesu_configured = false;
         self.yaesu2_configured = false;
+        self.yaesu_rx_levels_tuned = false;
         self.radios_known = false;
         self.yaesu_loading = 0;
         self.yaesu2_loading = 0;
@@ -1120,30 +1146,31 @@ impl RadioState {
         self.ddc_centre_rx2_khz = 0;
         // The code step belongs to the session that is gone: without this a
         // Disconnect mid-typing left the flag standing, and the next Connect
-        // sent no heartbeats for five seconds (review 71, measured).
+        // sent no heartbeats for five seconds (measured).
         self.totp_required = false;
-        // The way of a session is gone with it (review 139): the engine's tick
+        // The way of a session is gone with it: the engine's tick
         // would clear it 20 ms later, but a dead engine has no tick, and two
         // screens kept naming the last way for good.
         self.path = None;
         // The next server may not be the one that just went away, and until it
         // has said so we know nothing about it. Re-learned on its first ack.
         self.server_build = sdr_remote_core::protocol::PeerBuild::Unknown;
+        self.server_fine_spectrum_view = false;
         // Two more things the server says about itself, with an inverted
         // default (absent = it has one): a server that said "single receiver"
         // or "no cluster" left a false behind that only a server reporting
         // state flags could undo - a next one that does not never enters that
-        // branch, and RX2 or the spots stayed hidden for the rest of the run
-        // (review 79, both). Back to the default, like `radios_known` above.
+        // branch, and RX2 or the spots stayed hidden for the rest of the run.
+        // Back to the default, like `radios_known` above.
         self.rx2_present = true;
         self.dx_cluster_available = true;
         // The mirror of those two: what the server HAS. Each of these latches
         // on the first status packet of its device and nothing ever cleared
         // it, so after a station with a rotor the rotor panel stood against a
-        // station without one - absence sends no packet (review 80). Back to
+        // station without one - absence sends no packet. Back to
         // absent; the next station's first status packet sets it again. The
         // price is a blink of those panels after every session loss, the
-        // same blink `radios_known` has (owner decision, 2026-10-03).
+        // same blink `radios_known` has.
         self.amplitec_available = false;
         self.tuner_available = false;
         self.spe_available = false;
@@ -1155,15 +1182,15 @@ impl RadioState {
         // the server's equipment status, so they too stood for a station that
         // is gone - and the phone hangs the Amplitec and tuner panels on
         // these two, not on `*_available`, which its bridge does not carry
-        // (review 82, measured). `yaesu_connected` stays out, and NOT because its
+        // (measured). `yaesu_connected` stays out, and NOT because its
         // readers are gated on something else - readers on the phone take it
         // directly (the Yaesu tab, the ATU button, the subscription). The reason
         // is the desktop: it reads the radio's memories on the rising edge of
         // that flag, so clearing it per session would read them again after
-        // every reconnect (owner decision, round 82). The price: those readers
+        // every reconnect. The price: those readers
         // hold the old station's radio until the new presence arrives - at
         // once for a new session, the server clears its tick-list on the
-        // connect generation (review 83).
+        // connect generation.
         self.amplitec_connected = false;
         // The phone also shows the Amplitec panel on a known switch position
         // (`amplitecConnected || amplitecSwitchA > 0`); 0 is "unknown".
@@ -1180,9 +1207,9 @@ impl RadioState {
     /// The engine thread is gone: the screen shows what a lost session shows,
     /// and no connection. Nothing wrote the state after a panic in that thread,
     /// so it froze on the last one - connected, and transmitting if it was, on
-    /// both clients (reviewers, round 45). `EngineStopReporter` calls this.
+    /// both clients. `EngineStopReporter` calls this.
     /// Kept BELOW `forget_session`, whose doc block is the field list's own
-    /// instructions and must stay attached to it (reviewers, round 46).
+    /// instructions and must stay attached to it.
     pub fn engine_stopped(&mut self) {
         let forgotten = self.forget_session();
         self.link_down(forgotten);
@@ -1193,7 +1220,7 @@ impl RadioState {
     /// The link is down: the one place that takes `connected` away, and it
     /// can only be called by someone who has forgotten the session first.
     /// Four rounds in a row a link-down path could lose its `forget_session`
-    /// with every test green (reviews 78-81); now that is a compile error.
+    /// with every test green; now that is a compile error.
     /// What this holds is that the call HAPPENED, not when - both live in the
     /// same block, so the order is the caller's.
     pub fn link_down(&mut self, _forgotten: SessionForgotten) {
@@ -1239,7 +1266,7 @@ mod forget_session_tests {
 
     /// A dead engine thread leaves the screen as a lost session does, and not
     /// connected: nothing wrote the state after a panic, so it froze on the last
-    /// one - connected, and transmitting if it was (reviewers, round 45).
+    /// one - connected, and transmitting if it was.
     #[test]
     fn a_stopped_engine_leaves_no_session_and_no_connection() {
         let mut s = RadioState::default();
@@ -1256,9 +1283,9 @@ mod forget_session_tests {
         assert!(!s.connected, "a dead engine still showed a connection");
         assert_eq!(s.connect_status, super::ConnectStatus::Disconnected);
         assert!(!s.server_tx && !s.other_tx, "a dead engine still showed a transmitter");
-        assert!(!s.smeter_tx, "a dead engine still drew watts (review of 169)");
+        assert!(!s.smeter_tx, "a dead engine still drew watts");
         assert!(!s.tx_window_open, "a dead engine still held the mode buttons");
-        assert_eq!(s.path, None, "a dead engine still named a way (review 139)");
+        assert_eq!(s.path, None, "a dead engine still named a way");
     }
 
     /// Every field a server owns is back to what a client without a server
@@ -1275,6 +1302,7 @@ mod forget_session_tests {
         s.pa_drive_alarm = true;
         s.yaesu_configured = true;
         s.yaesu2_configured = true;
+        s.yaesu_rx_levels_tuned = true;
         s.radios_known = true;
         s.yaesu_loading = sdr_remote_core::protocol::YAESU_LOADING_MEMORIES;
         s.yaesu2_loading = sdr_remote_core::protocol::YAESU_LOADING_TONES;
@@ -1309,9 +1337,9 @@ mod forget_session_tests {
 
         assert!(
             s.rx2_present && s.dx_cluster_available,
-            "what the last server lacked is not what the next one lacks - RX2 and the spots stayed hidden (review 79)"
+            "what the last server lacked is not what the next one lacks: RX2 and the spots stayed hidden"
         );
-        // One line per field, so a field that leaks says which one (review 82).
+        // One line per field, so a field that leaks says which one.
         for (name, still_set) in [
             ("amplitec_available", s.amplitec_available),
             ("tuner_available", s.tuner_available),
@@ -1332,17 +1360,18 @@ mod forget_session_tests {
         ] {
             assert!(
                 !still_set,
-                "{name} outlived the session - a panel stayed up for a device of a station that is gone (reviews 80, 82)"
+                "{name} outlived the session: a panel stayed up for a device of a station that is gone"
             );
         }
 
-        assert!(!s.server_tx_closed, "a restarted server is open again - the screen would keep saying it is closed");
+        assert!(!s.server_tx_closed, "a restarted server is open again: the screen would keep saying it is closed");
         assert!(!s.rx_only_unguarded, "the next server may guard its RX-only positions");
-        assert!(!s.totp_required, "a code step does not outlive its session - the next connect would send no heartbeats");
+        assert!(!s.totp_required, "a code step does not outlive its session: the next connect would send no heartbeats");
         assert!(!s.server_tx);
         assert!(!s.yaesu_tx_active && !s.yaesu2_tx_active);
         assert!(!s.pa_drive_warning && !s.pa_drive_alarm);
         assert!(!s.yaesu_configured && !s.yaesu2_configured);
+        assert!(!s.yaesu_rx_levels_tuned, "the next server may not have tuned its radios: they would play far too quietly");
         assert!(!s.radios_known);
         assert_eq!(
             (s.yaesu_loading, s.yaesu2_loading),
@@ -1352,12 +1381,11 @@ mod forget_session_tests {
         );
         assert!(
             !s.yaesu_held_by_other && !s.yaesu2_held_by_other && !s.other_tx,
-            "another station cannot still be holding a radio we no longer hear -              popouts.rs passes this straight to add_enabled, so it leaves the              button orange AND dead"
+            "another station cannot still be holding a radio we no longer hear;              popouts.rs passes this straight to add_enabled, so it leaves the              button orange AND dead"
         );
-        // Named on its own line because leaving it out survived both the suite
-        // and fitness.ps1: the test listed every other field and not this one,
-        // and the ratchet counts the link-down sites, never the fields (review
-        // 2120A4).
+        // Named on its own line because leaving it out once went unnoticed:
+        // the test listed every other field and not this one, and nothing else
+        // counts the fields.
         assert!(!s.ptt_denial.active(), "and a refusal by a server that is gone is not a refusal");
         assert_eq!(
             s.server_build,

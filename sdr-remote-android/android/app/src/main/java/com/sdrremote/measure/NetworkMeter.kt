@@ -63,7 +63,7 @@ class NetworkMeter(private val context: Context) {
     /**
      * Set by `close` when the app goes; main thread. A poll round that was
      * already running can still post a start after that, and that start must
-     * not happen (review of 182).
+     * not happen.
      */
     private var closed = false
     private var located = false
@@ -81,7 +81,7 @@ class NetworkMeter(private val context: Context) {
      * Runs while the engine writes a measurement file, and only then (build 182):
      * the file's name in the state is the one truth. A measurement the engine
      * ends by itself - it could not start, or a write failed - stops the
-     * readings too, and with them the GPS (review of 181). Called from the
+     * readings too, and with them the GPS. Called from the
      * poll, on any thread; the work happens on the main thread.
      */
     fun follow(measuring: Boolean, bridge: SdrBridge) {
@@ -99,7 +99,7 @@ class NetworkMeter(private val context: Context) {
         stop()
     }
 
-    /** Starts reading; a second start begins clean (working rule 9). */
+    /** Starts reading; a second start begins clean. */
     private fun start(bridge: SdrBridge) {
         stop(quiet = true)
         sink = bridge
@@ -108,15 +108,14 @@ class NetworkMeter(private val context: Context) {
         if (located) startGps(bridge)
         // The Android version says which unit LTE's SINR column has (tenths of
         // a dB on Android 10, dB from 11), and location switched off in the
-        // quick settings gives no cell and GPS rows although permitted (review
-        // of 181). Named in advance (working rule 11, builds 181 and 182).
+        // quick settings gives no cell and GPS rows although permitted.
         val android = "Android ${Build.VERSION.SDK_INT}"
         val servicesOff = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
             context.getSystemService(LocationManager::class.java)?.isLocationEnabled == false
         note(
             if (located && servicesOff) "Measurement: cell and GPS on, but location is switched off ($android)"
             else if (located) "Measurement: cell and GPS on ($android)"
-            else "Measurement: no precise location permission - measuring without cell and GPS ($android)"
+            else "Measurement: no precise location permission; measuring without cell and GPS ($android)"
         )
         handler.post(tick)
     }
@@ -178,7 +177,7 @@ class NetworkMeter(private val context: Context) {
     /**
      * Every signal the phone reports, the 5G of a 4G anchor included. From
      * Android 10: `getCellSignalStrengths` does not exist on 9, and calling it
-     * there threw before the cells were read (review of 181).
+     * there threw before the cells were read.
      */
     private fun signal(bridge: SdrBridge, tm: TelephonyManager) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return

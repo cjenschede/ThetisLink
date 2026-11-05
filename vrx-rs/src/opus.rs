@@ -6,7 +6,7 @@
 //! preserved (no silence-frame holes during quiet passages).
 //!
 //! Duplicated from `sdr-remote-core::codec::OpusEncoder` so this
-//! crate stays standalone — no internal dependency on a ThetisLink
+//! crate stays standalone, no internal dependency on a ThetisLink
 //! crate. The duplication is ~50 lines of config-only code (no DSP).
 
 use anyhow::{Context, Result};

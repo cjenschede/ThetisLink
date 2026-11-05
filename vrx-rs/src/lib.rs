@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! `vrx-rs` — standalone FFT-channelizer + Opus encode pipeline for
+//! `vrx-rs`: standalone FFT-channelizer + Opus encode pipeline for
 //! Virtual RX (VRX) channels in software-defined radio applications.
 //!
 //! ## What it does
@@ -9,7 +9,7 @@
 //! standalone HPSDR, etc.) the crate carves out a narrowband channel
 //! at a tunable carrier offset, demodulates as SSB (USB / LSB), and
 //! emits 20 ms Opus-encoded audio frames at 8 kHz mono. The DSP cost
-//! is amortised across the input batch — adding more VRX channels
+//! is amortised across the input batch; adding more VRX channels
 //! adds only per-channel iFFTs + Opus encodes, not whole-spectrum
 //! FFTs. (See WebSDR / OpenWebRX for the same architectural pattern
 //! at a larger scale.)
@@ -35,6 +35,7 @@
 //!     filter_low_hz: 0,
 //!     filter_high_hz: 3000,
 //!     sam_auto_tune: false,
+//!     agc: vrx_rs::VrxAgcSettings::default(),
 //! }));
 //! let mut runtime = VrxRuntime::new(VrxRuntimeOptions::default(), control);
 //! let mut sink = MySink;
@@ -53,17 +54,19 @@
 //!   are short (read a few fields, no `.await` held); `std::sync::Mutex`
 //!   is the right primitive.
 //! - **No network / no protocol.** Output is via the `VrxAudioCallback`
-//!   trait — the host decides how to ship the Opus frames (UDP, local
+//!   trait, the host decides how to ship the Opus frames (UDP, local
 //!   playback, file, etc.).
 //! - **Rate-adaptive.** `feed()` accepts any input sample rate; the
 //!   channelizer rebuilds with matching FFT size automatically.
 
+pub mod agc;
 pub mod channelizer;
 pub mod config;
 pub mod opus;
 pub mod runtime;
 pub mod wav;
 
+pub use agc::{VrxAgcMode, VrxAgcSettings};
 pub use channelizer::{
     fft_n_for_rate, VrxChannelizer, DEFAULT_FFT_N, DEFAULT_INPUT_HOP, IFFT_N,
     OUTPUT_HOP, OUTPUT_RATE_HZ,

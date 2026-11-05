@@ -123,7 +123,7 @@ pub(crate) fn seed_profile_config_if_absent() {
     let src = exe.with_file_name(CONFIG_FILE);
     if !src.exists() {
         log::info!(
-            "Profile {:?}: no default config to seed from - starting from defaults",
+            "Profile {:?}: no default config to seed from; starting from defaults",
             profile()
         );
         return;
@@ -232,6 +232,7 @@ pub(crate) struct ClientConfig {
     pub(crate) rx2_spectrum_range_db: f32,
     pub(crate) rx2_auto_ref_enabled: bool,
     pub(crate) rx2_waterfall_contrast: f32,
+    pub(crate) spectrum_fill_percent: u8,
     pub(crate) rx1_enabled: bool,
     pub(crate) rx2_enabled: bool,
     pub(crate) rx2_spectrum_enabled: bool,
@@ -281,10 +282,9 @@ pub(crate) struct ClientConfig {
     pub(crate) rx2_present_last: bool,
     /// Ids of administrator answers the reader folded away, comma-separated.
     pub(crate) chat_answers_seen: String,
-    // Tuple: (name, enabled, eq-gains, mic_gain)
-    pub(crate) yaesu_eq_profiles: Vec<(String, bool, [f32; 5], f32)>,
+    pub(crate) yaesu_eq_profiles: Vec<EqProfile>,
     pub(crate) yaesu_eq_active: String,
-    pub(crate) yaesu2_eq_profiles: Vec<(String, bool, [f32; 5], f32)>,
+    pub(crate) yaesu2_eq_profiles: Vec<EqProfile>,
     pub(crate) yaesu2_eq_active: String,
     pub(crate) yaesu_mem_file: String,
     pub(crate) band_mem: HashMap<String, BandMemory>,
@@ -306,11 +306,11 @@ pub(crate) struct ClientConfig {
     pub(crate) ble_ptt_target: u8,
     pub(crate) ble_ptt_toggle: bool,
     // The Morse paddle on an MCP2221A (ui/paddle_screen.rs). The switch and
-    // the sidetone; the keyer's own settings come with step 7 of the CW design.
+    // the sidetone; the keyer's own settings are in `cw_keyer` below.
     pub(crate) cw_paddle_enabled: bool,
     pub(crate) cw_sidetone: sdr_remote_logic::sidetone::SidetoneSettings,
     /// Speed, paddle mode, reversed paddles, straight key: the keyer's own
-    /// settings (step 7 of the CW design). Speed is local for now; mirroring
+    /// settings. Speed is local for now; mirroring
     /// the radio's speed is a later step.
     pub(crate) cw_keyer: sdr_remote_logic::cw_keyer::KeyerSettings,
     /// Which transmitter the key goes to: 0 Thetis, 1 Yaesu slot 0, 2 slot 1.
@@ -328,6 +328,10 @@ pub(crate) struct ClientConfig {
     /// Client-side TX compressor (0-100) and AGC toggle per radio, persistent.
     pub(crate) yaesu_compressor: u8,
     pub(crate) yaesu2_compressor: u8,
+    pub(crate) yaesu_comp_attack_ms: f32,
+    pub(crate) yaesu_comp_release_ms: f32,
+    pub(crate) yaesu2_comp_attack_ms: f32,
+    pub(crate) yaesu2_comp_release_ms: f32,
     pub(crate) yaesu_tx_agc: bool,
     pub(crate) yaesu2_tx_agc: bool,
     /// FTX-1 (radio 2) popout window open/closed state, persistent.
@@ -354,7 +358,7 @@ pub(crate) struct ClientConfig {
     /// True -> zoom-min 1x allowed, smear when tuning <1.2× zoom.
     /// Server enforces strictest over all clients (as long as one client false -> server clamps to 2x).
     pub(crate) allow_zoom_below_2x: bool,
-    /// The developer mode (build 295; owner decision 2026-10-23): opened with
+    /// The developer mode: opened with
     /// the code on the server screen, kept until it is closed there. What the
     /// mode is lives in `sdr_remote_core::dev_mode`.
     pub(crate) developer_mode: bool,
@@ -368,7 +372,7 @@ pub(crate) struct ClientConfig {
     pub(crate) mic_gate_delay_thetis_ms: u32,
     pub(crate) mic_gate_delay_yaesu_ms: u32,
 
-    /// Phase A relay monitor settings (status only; direct transport remains default).
+    /// Relay monitor settings (status only; direct transport remains default).
     pub(crate) relay_enabled: bool,
     pub(crate) relay_url: String,
     pub(crate) relay_station: String,
@@ -386,7 +390,7 @@ pub(crate) struct ClientConfig {
     /// own choice in Settings and is never overwritten.
     pub(crate) language: String,
 
-    /// PATCH-4: count of successful connects to a real server. Used to
+    /// Count of successful connects to a real server. Used to
     /// detect "first-run" without relying on file-absence (more robust
     /// for fresh installs that already touched the config). Wizard
     /// shows on `0`; bumped to `1` (and persisted) on the first
@@ -466,6 +470,7 @@ impl Default for ClientConfig {
             rx2_spectrum_range_db: sdr_remote_logic::state::SPECTRUM_RANGE_DEFAULT_DB,
             rx2_auto_ref_enabled: sdr_remote_logic::state::SPECTRUM_AUTO_REF_DEFAULT,
             rx2_waterfall_contrast: 1.2,
+            spectrum_fill_percent: super::spectrum::SPECTRUM_FILL_DEFAULT,
             rx1_enabled: true, // default ON
             rx2_enabled: false,
             rx2_spectrum_enabled: false,
@@ -517,6 +522,10 @@ impl Default for ClientConfig {
             yaesu2_mic_gain: 0.2,
             yaesu_compressor: 0,
             yaesu2_compressor: 0,
+            yaesu_comp_attack_ms: sdr_remote_logic::commands::COMP_ATTACK_DEFAULT_MS,
+            yaesu_comp_release_ms: sdr_remote_logic::commands::COMP_RELEASE_DEFAULT_MS,
+            yaesu2_comp_attack_ms: sdr_remote_logic::commands::COMP_ATTACK_DEFAULT_MS,
+            yaesu2_comp_release_ms: sdr_remote_logic::commands::COMP_RELEASE_DEFAULT_MS,
             yaesu_tx_agc: false,
             yaesu2_tx_agc: false,
             yaesu2_popout: false,
@@ -579,7 +588,7 @@ fn first_run() -> ClientConfig {
         // The extra full-band spectrum row costs bandwidth per receiver chain,
         // and a waterfall works without it - it is then built from its own view.
         // On by default is a thing switched on for you; a fresh install starts
-        // without it and the checkbox is right there (owner, 2026-08-20).
+        // without it and the checkbox is right there.
         full_spectrum_enabled: false,
         ..ClientConfig::default()
     }
@@ -611,8 +620,7 @@ pub(crate) fn load_window_pos() -> Option<[f32; 2]> {
 /// Guards the writes: a read that fails is not a client that has never been set
 /// up, and treating it as one would put the bare first-run values on screen and
 /// then in the file. The server has the same guard for the same reason - there
-/// it is worse, because its saves are load-mutate-save over the whole file
-/// (review finding, 2026-08-20).
+/// it is worse, because its saves are load-mutate-save over the whole file.
 static LOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// May this process write the config file?
@@ -628,8 +636,7 @@ pub(crate) fn may_write_config() -> bool {
 /// what got written was a config with only that one line in it. Server address,
 /// password, memories, TX profiles, theme: gone. And the writer that runs on
 /// every successful connect (`mark_successful_connect`) is one of them, so the
-/// common path was the destructive one while the guard sat on the rare one
-/// (review finding, 2026-08-20).
+/// common path was the destructive one while the guard sat on the rare one.
 ///
 /// An absent file yields `Some("")`: there is nothing to preserve and the writer
 /// should create it.
@@ -732,8 +739,8 @@ pub(crate) fn load_config() -> ClientConfig {
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("tx_gain=") {
-            if let Ok(v) = val.trim().parse::<f32>() {
-                config.tx_gain = v.clamp(0.0, 3.0);
+            if let Some(v) = parse_finite(val) {
+                config.tx_gain = sdr_remote_logic::commands::clamp_tx_gain(v);
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("input_device=") {
@@ -779,12 +786,12 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("spectrum_ref_db=") {
             if let Ok(v) = val.trim().parse::<f32>() {
-                config.spectrum_ref_db = v.clamp(-80.0, 0.0);
+                config.spectrum_ref_db = v.clamp(*crate::ui::spectrum::REF_DB_RANGE.start(), *crate::ui::spectrum::REF_DB_RANGE.end());
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("spectrum_range_db=") {
             if let Ok(v) = val.trim().parse::<f32>() {
-                config.spectrum_range_db = v.clamp(20.0, 130.0);
+                config.spectrum_range_db = v.clamp(*crate::ui::spectrum::RANGE_DB_RANGE.start(), *crate::ui::spectrum::RANGE_DB_RANGE.end());
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("spectrum_max_bins=") {
@@ -794,12 +801,12 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("rx2_spectrum_fft_size_k=") {
             if let Ok(v) = val.trim().parse::<u16>() {
-                config.rx2_spectrum_fft_size_k = v;
+                config.rx2_spectrum_fft_size_k = v.min(sdr_remote_core::MAX_FFT_SIZE_K);
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("spectrum_fft_size_k=") {
             if let Ok(v) = val.trim().parse::<u16>() {
-                config.spectrum_fft_size_k = v;
+                config.spectrum_fft_size_k = v.min(sdr_remote_core::MAX_FFT_SIZE_K);
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("spectrum_total_h=") {
@@ -912,7 +919,7 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("waterfall_contrast=") {
             if let Ok(v) = val.trim().parse::<f32>() {
-                config.waterfall_contrast = v.clamp(0.3, 3.0);
+                config.waterfall_contrast = v.clamp(*crate::ui::spectrum::WF_CONTRAST_RANGE.start(), *crate::ui::spectrum::WF_CONTRAST_RANGE.end());
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("wf_contrast_per_band=") {
@@ -920,19 +927,19 @@ pub(crate) fn load_config() -> ClientConfig {
                 let entry = entry.trim();
                 if let Some((band, contrast_str)) = entry.split_once(':') {
                     if let Ok(c) = contrast_str.trim().parse::<f32>() {
-                        config.wf_contrast_per_band.insert(band.trim().to_string(), c.clamp(0.3, 3.0));
+                        config.wf_contrast_per_band.insert(band.trim().to_string(), c.clamp(*crate::ui::spectrum::WF_CONTRAST_RANGE.start(), *crate::ui::spectrum::WF_CONTRAST_RANGE.end()));
                     }
                 }
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("rx2_spectrum_ref_db=") {
             if let Ok(v) = val.trim().parse::<f32>() {
-                config.rx2_spectrum_ref_db = v.clamp(-80.0, 0.0);
+                config.rx2_spectrum_ref_db = v.clamp(*crate::ui::spectrum::REF_DB_RANGE.start(), *crate::ui::spectrum::REF_DB_RANGE.end());
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("rx2_spectrum_range_db=") {
             if let Ok(v) = val.trim().parse::<f32>() {
-                config.rx2_spectrum_range_db = v.clamp(20.0, 130.0);
+                config.rx2_spectrum_range_db = v.clamp(*crate::ui::spectrum::RANGE_DB_RANGE.start(), *crate::ui::spectrum::RANGE_DB_RANGE.end());
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("rx2_auto_ref_enabled=") {
@@ -940,7 +947,12 @@ pub(crate) fn load_config() -> ClientConfig {
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("rx2_waterfall_contrast=") {
             if let Ok(v) = val.trim().parse::<f32>() {
-                config.rx2_waterfall_contrast = v.clamp(0.3, 3.0);
+                config.rx2_waterfall_contrast = v.clamp(*crate::ui::spectrum::WF_CONTRAST_RANGE.start(), *crate::ui::spectrum::WF_CONTRAST_RANGE.end());
+            }
+            has_keys = true;
+        } else if let Some(val) = line.strip_prefix("spectrum_fill_percent=") {
+            if let Ok(v) = val.trim().parse::<u8>() {
+                config.spectrum_fill_percent = v.min(100);
             }
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("window_w=") {
@@ -989,45 +1001,19 @@ pub(crate) fn load_config() -> ClientConfig {
         } else if let Some(val) = line.strip_prefix("yaesu_eq_active=") {
             config.yaesu_eq_active = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("yaesu_eq_profile=") {
-            // Format: name|enabled|g0,g1,g2,g3,g4[|mic_gain]
-            // mic_gain (4th field) is optional - old profiles without
-            // mic_gain fall back to internal default 0.2 so upgrades don't
-            // break.
-            let parts: Vec<&str> = val.trim().splitn(4, '|').collect();
-            if parts.len() >= 3 {
-                let name = parts[0].to_string();
-                let enabled = parts[1] == "1";
-                let gains: Vec<f32> = parts[2].split(',')
-                    .filter_map(|s| s.trim().parse().ok()).collect();
-                if gains.len() == 5 {
-                    let mic_gain = parts.get(3)
-                        .and_then(|s| s.trim().parse::<f32>().ok())
-                        .unwrap_or(0.2)
-                        .clamp(0.02, 0.4);
-                    config.yaesu_eq_profiles.push((name, enabled,
-                        [gains[0], gains[1], gains[2], gains[3], gains[4]],
-                        mic_gain));
-                }
-            }
+            if let Some(p) = parse_eq_profile(val) { config.yaesu_eq_profiles.push(p); }
+        } else if let Some(val) = line.strip_prefix("yaesu_eq_profile_advanced=") {
+            parse_eq_profile_advanced(val, &mut config.yaesu_eq_profiles);
+        } else if let Some(val) = line.strip_prefix("yaesu_eq_profile_chain=") {
+            parse_eq_profile_chain(val, &mut config.yaesu_eq_profiles);
         } else if let Some(val) = line.strip_prefix("yaesu2_eq_active=") {
             config.yaesu2_eq_active = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("yaesu2_eq_profile=") {
-            let parts: Vec<&str> = val.trim().splitn(4, '|').collect();
-            if parts.len() >= 3 {
-                let name = parts[0].to_string();
-                let enabled = parts[1] == "1";
-                let gains: Vec<f32> = parts[2].split(',')
-                    .filter_map(|s| s.trim().parse().ok()).collect();
-                if gains.len() == 5 {
-                    let mic_gain = parts.get(3)
-                        .and_then(|s| s.trim().parse::<f32>().ok())
-                        .unwrap_or(0.2)
-                        .clamp(0.02, 0.4);
-                    config.yaesu2_eq_profiles.push((name, enabled,
-                        [gains[0], gains[1], gains[2], gains[3], gains[4]],
-                        mic_gain));
-                }
-            }
+            if let Some(p) = parse_eq_profile(val) { config.yaesu2_eq_profiles.push(p); }
+        } else if let Some(val) = line.strip_prefix("yaesu2_eq_profile_advanced=") {
+            parse_eq_profile_advanced(val, &mut config.yaesu2_eq_profiles);
+        } else if let Some(val) = line.strip_prefix("yaesu2_eq_profile_chain=") {
+            parse_eq_profile_chain(val, &mut config.yaesu2_eq_profiles);
         } else if let Some(val) = line.strip_prefix("yaesu_mem_file=") {
             config.yaesu_mem_file = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("rx1_enabled=") {
@@ -1209,13 +1195,21 @@ pub(crate) fn load_config() -> ClientConfig {
         } else if let Some(val) = line.strip_prefix("yaesu2_ptt_toggle=") {
             config.yaesu2_ptt_toggle = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu_mic_gain=") {
-            if let Ok(v) = val.trim().parse::<f32>() { config.yaesu_mic_gain = v.clamp(0.02, 0.4); }
+            if let Some(v) = parse_finite(val) { config.yaesu_mic_gain = sdr_remote_logic::commands::clamp_yaesu_mic_gain(v); }
         } else if let Some(val) = line.strip_prefix("yaesu2_mic_gain=") {
-            if let Ok(v) = val.trim().parse::<f32>() { config.yaesu2_mic_gain = v.clamp(0.02, 0.4); }
+            if let Some(v) = parse_finite(val) { config.yaesu2_mic_gain = sdr_remote_logic::commands::clamp_yaesu_mic_gain(v); }
         } else if let Some(val) = line.strip_prefix("yaesu_compressor=") {
             if let Ok(v) = val.trim().parse::<u8>() { config.yaesu_compressor = v.min(100); }
         } else if let Some(val) = line.strip_prefix("yaesu2_compressor=") {
             if let Ok(v) = val.trim().parse::<u8>() { config.yaesu2_compressor = v.min(100); }
+        } else if let Some(val) = line.strip_prefix("yaesu_comp_attack=") {
+            if let Some(v) = parse_finite(val) { config.yaesu_comp_attack_ms = v.clamp(*sdr_remote_logic::commands::COMP_ATTACK_RANGE_MS.start(), *sdr_remote_logic::commands::COMP_ATTACK_RANGE_MS.end()); }
+        } else if let Some(val) = line.strip_prefix("yaesu_comp_release=") {
+            if let Some(v) = parse_finite(val) { config.yaesu_comp_release_ms = v.clamp(*sdr_remote_logic::commands::COMP_RELEASE_RANGE_MS.start(), *sdr_remote_logic::commands::COMP_RELEASE_RANGE_MS.end()); }
+        } else if let Some(val) = line.strip_prefix("yaesu2_comp_attack=") {
+            if let Some(v) = parse_finite(val) { config.yaesu2_comp_attack_ms = v.clamp(*sdr_remote_logic::commands::COMP_ATTACK_RANGE_MS.start(), *sdr_remote_logic::commands::COMP_ATTACK_RANGE_MS.end()); }
+        } else if let Some(val) = line.strip_prefix("yaesu2_comp_release=") {
+            if let Some(v) = parse_finite(val) { config.yaesu2_comp_release_ms = v.clamp(*sdr_remote_logic::commands::COMP_RELEASE_RANGE_MS.start(), *sdr_remote_logic::commands::COMP_RELEASE_RANGE_MS.end()); }
         } else if let Some(val) = line.strip_prefix("yaesu_tx_agc=") {
             config.yaesu_tx_agc = val.trim() == "true";
         } else if let Some(val) = line.strip_prefix("yaesu2_tx_agc=") {
@@ -1276,7 +1270,7 @@ pub(crate) fn load_config() -> ClientConfig {
             };
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("successful_connects=") {
-            // PATCH-4: parse as u32 with default 0 on malformed input.
+            // Parse as u32 with default 0 on malformed input.
             config.successful_connects = val.trim().parse::<u32>().unwrap_or(0);
             has_keys = true;
         } else if let Some(val) = line.strip_prefix("catsync_enabled=") {
@@ -1328,7 +1322,16 @@ pub(crate) fn load_config() -> ClientConfig {
     }
     // Ensure a stable per-install relay id exists (generate + persist on first run)
     // so a reconnecting client reclaims its own relay slot instead of piling up.
-    if config.relay_instance_id.trim().is_empty() {
+    // A named profile also gets its own when it still carries the default
+    // profile's id from the copy it was seeded with (build 15).
+    let default_conf = match (profile(), std::env::current_exe()) {
+        (Some(_), Ok(exe)) => std::fs::read_to_string(exe.with_file_name(CONFIG_FILE)).ok(),
+        _ => None,
+    };
+    if needs_own_relay_id(&config.relay_instance_id, default_conf.as_deref()) {
+        if !config.relay_instance_id.trim().is_empty() {
+            log::info!("Profile {:?}: relay id was the default profile's; giving it its own", profile());
+        }
         config.relay_instance_id = generate_instance_id();
         save_relay_instance_id(&config.relay_instance_id);
     }
@@ -1337,10 +1340,18 @@ pub(crate) fn load_config() -> ClientConfig {
         config.relay_device_name = generate_device_name();
         save_relay_device_name(&config.relay_device_name);
     }
+    // A named profile that still shows the default profile's name gets its own
+    // name behind it, so the relay's admin page tells the rows apart (build 16).
+    if let Some(p) = profile() {
+        if let Some(named) = profile_device_name(&config.relay_device_name, default_conf.as_deref(), p) {
+            log::info!("Profile {:?}: device name was the default profile's; now {:?}", profile(), named);
+            config.relay_device_name = named;
+            save_relay_device_name(&config.relay_device_name);
+        }
+    }
     if spectrum_defaults < SPECTRUM_DEFAULTS_VERSION {
         let changed = adopt_new_spectrum_defaults(&mut config);
         if changed > 0 {
-            // Named in advance (working rule 11, build 171).
             log::info!(
                 "Spectrum defaults: {} value(s) still at the old default set to the new one (auto ref on, range {} dB)",
                 changed,
@@ -1358,8 +1369,8 @@ const SPECTRUM_DEFAULTS_VERSION: u32 = 2;
 
 /// Once, for a file from before build 171: a spectrum value still exactly at
 /// the old default was never changed - every save writes every value, so
-/// that is the only way to tell - and gets the new one (owner, 2026-10-11:
-/// "alleen nieuwe nog niet aangepaste range waarde"). Returns how many
+/// that is the only way to tell - and gets the new one (2026-10-11:
+/// only a range value nobody changed). Returns how many
 /// changed.
 fn adopt_new_spectrum_defaults(config: &mut ClientConfig) -> usize {
     use sdr_remote_logic::state::{SPECTRUM_AUTO_REF_DEFAULT, SPECTRUM_RANGE_DEFAULT_DB};
@@ -1439,6 +1450,36 @@ fn generate_instance_id() -> String {
     format!("d{nanos:x}{:x}", std::process::id())
 }
 
+/// Whether a config needs a relay id of its own. Empty: first run. The same id
+/// as `default_conf`, the default profile's config: a named profile is seeded
+/// as a byte copy of that file and so started out with its id, and two clients
+/// with one id evict each other at the relay every five seconds - the ghost of
+/// the FT-991A on the client side. `default_conf` is
+/// `None` for the default profile itself.
+fn needs_own_relay_id(id: &str, default_conf: Option<&str>) -> bool {
+    let id = id.trim();
+    if id.is_empty() {
+        return true;
+    }
+    default_conf
+        .and_then(|text| text.lines().find_map(|l| l.strip_prefix("relay_instance_id=")))
+        .is_some_and(|default_id| default_id.trim() == id)
+}
+
+/// The device name a named profile shows at the relay when it still carries the
+/// default profile's: the same name with the profile behind it, so the admin
+/// page tells the rows apart. `None` when the name is the
+/// profile's own - set by hand, or already given. Only the label: the relay
+/// keys the slot on the install id.
+fn profile_device_name(name: &str, default_conf: Option<&str>, profile: &str) -> Option<String> {
+    let name = name.trim();
+    let default_name = default_conf?
+        .lines()
+        .find_map(|l| l.strip_prefix("relay_device_name="))?
+        .trim();
+    (!name.is_empty() && name == default_name).then(|| format!("{name} ({profile})"))
+}
+
 /// Persist the per-install relay id (read-modify-write on its single key).
 fn save_relay_instance_id(id: &str) {
     let exe = match std::env::current_exe() {
@@ -1497,10 +1538,14 @@ pub(crate) fn survives_full_save(line: &str) -> bool {
         || line.starts_with("yaesu2_enabled=")
         || line.starts_with("yaesu2_ptt_toggle=")
         || line.starts_with("yaesu2_popout=")
+        || line.starts_with("chat_open=")
+        || line.starts_with("multi_tx=")
         || line.starts_with("yaesu_mic_gain=")
         || line.starts_with("yaesu2_mic_gain=")
         || line.starts_with("yaesu_compressor=")
         || line.starts_with("yaesu2_compressor=")
+        || line.starts_with("yaesu_comp_")
+        || line.starts_with("yaesu2_comp_")
         || line.starts_with("yaesu_tx_agc=")
         || line.starts_with("yaesu2_tx_agc=")
         // The roger beep. Written one key at a time like the rest
@@ -1514,7 +1559,7 @@ pub(crate) fn survives_full_save(line: &str) -> bool {
         // prefix here for the same reason as `roger_`.
         || line.starts_with("ble_ptt_")
         // The Morse paddle, written by save_cw_paddle_enabled; one prefix for
-        // the keys step 7 of the CW design will add next to it.
+        // the keyer's keys next to it as well.
         || line.starts_with("cw_")
         // Every remembered chevron, written one key at a time by
         // `FoldsOpen::toggle`. Its own list, so a new fold is kept without
@@ -1529,7 +1574,7 @@ pub(crate) fn survives_full_save(line: &str) -> bool {
         || line.starts_with("relay_")
         // as the roger keys above: written one key at a time, so
         // invisible to this rewrite unless it is named, and the
-        // answers came back on every restart (owner, 2026-08-21).
+        // answers came back on every restart.
 }
 
 pub(crate) fn save_config(
@@ -1596,6 +1641,7 @@ pub(crate) fn save_config(
     rx2_spectrum_range_db: f32,
     rx2_auto_ref_enabled: bool,
     rx2_waterfall_contrast: f32,
+    spectrum_fill_percent: u8,
     rx1_enabled: bool,
     rx2_enabled: bool,
     rx2_spectrum_enabled: bool,
@@ -1616,9 +1662,9 @@ pub(crate) fn save_config(
     yaesu2_volume: f32,
     yaesu_popout: bool,
     yaesu_eq_active: &str,
-    yaesu_eq_profiles: &[(String, bool, [f32; 5], f32)],
+    yaesu_eq_profiles: &[EqProfile],
     yaesu2_eq_active: &str,
-    yaesu2_eq_profiles: &[(String, bool, [f32; 5], f32)],
+    yaesu2_eq_profiles: &[EqProfile],
     yaesu_mem_file: &str,
     band_mem: &HashMap<String, BandMemory>,
     window_w: f32,
@@ -1794,6 +1840,7 @@ pub(crate) fn save_config(
         content.push_str(&format!("rx2_spectrum_range_db={:.0}\n", rx2_spectrum_range_db));
         content.push_str(&format!("rx2_auto_ref_enabled={}\n", rx2_auto_ref_enabled));
         content.push_str(&format!("rx2_waterfall_contrast={:.2}\n", rx2_waterfall_contrast));
+        content.push_str(&format!("spectrum_fill_percent={}\n", spectrum_fill_percent));
         content.push_str(&format!("rx1_enabled={}\n", rx1_enabled));
         content.push_str(&format!("rx2_enabled={}\n", rx2_enabled));
         content.push_str(&format!("rx2_spectrum_enabled={}\n", rx2_spectrum_enabled));
@@ -1827,16 +1874,12 @@ pub(crate) fn save_config(
         content.push_str(&format!("thetis_configured_last={}\n", thetis_configured_last));
         content.push_str(&format!("rx2_present_last={}\n", rx2_present_last));
         content.push_str(&format!("yaesu_eq_active={}\n", yaesu_eq_active));
-        for (name, enabled, gains, mic_gain) in yaesu_eq_profiles {
-            content.push_str(&format!("yaesu_eq_profile={}|{}|{:.1},{:.1},{:.1},{:.1},{:.1}|{:.3}\n",
-                name, if *enabled { "1" } else { "0" },
-                gains[0], gains[1], gains[2], gains[3], gains[4], mic_gain));
+        for p in yaesu_eq_profiles {
+            content.push_str(&eq_profile_lines("yaesu", p));
         }
         content.push_str(&format!("yaesu2_eq_active={}\n", yaesu2_eq_active));
-        for (name, enabled, gains, mic_gain) in yaesu2_eq_profiles {
-            content.push_str(&format!("yaesu2_eq_profile={}|{}|{:.1},{:.1},{:.1},{:.1},{:.1}|{:.3}\n",
-                name, if *enabled { "1" } else { "0" },
-                gains[0], gains[1], gains[2], gains[3], gains[4], mic_gain));
+        for p in yaesu2_eq_profiles {
+            content.push_str(&eq_profile_lines("yaesu2", p));
         }
         for (mic, profile) in mic_profile_map {
             content.push_str(&format!("mic_profile={}|{}\n", mic, profile));
@@ -1900,8 +1943,14 @@ pub(crate) fn save_config(
                 }
             }
         }
-        let _ = std::fs::write(path, sdr_remote_core::conf_layout::group(&content, SECTIONS, UNSORTED));
+        let _ = std::fs::write(path, grouped(&content));
     }
+}
+
+/// The settings file as it is written: grouped under its section headings.
+/// Both writers use it (`save_ptt_config` too), so neither undoes the other.
+pub(crate) fn grouped(content: &str) -> String {
+    sdr_remote_core::conf_layout::group(content, SECTIONS, UNSORTED)
 }
 
 /// The trailing heading for keys this table has no home for. A key landing
@@ -1922,7 +1971,7 @@ const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
         "rx2_volume", "input_device", "output_device", "agc_enabled", "thetis_wideband_audio",
         "mic_profile", "mic_gate_delay_", "spike_protection", "roger_",
     ]),
-    ("PTT", &["ptt_toggle", "midi_ptt_toggle", "yaesu_ptt_toggle", "yaesu2_ptt_toggle", "ble_ptt_"]),
+    ("PTT", &["ptt_toggle", "midi_ptt_toggle", "yaesu_ptt_toggle", "yaesu2_ptt_toggle", "ble_ptt_", "multi_tx"]),
     ("RX1 spectrum and waterfall", &[
         "spectrum_", "rx1_", "waterfall_contrast", "wf_contrast_per_band", "auto_ref_enabled",
         "full_spectrum_enabled", "allow_zoom_below_2x",
@@ -1944,13 +1993,13 @@ const SECTIONS: &[sdr_remote_core::conf_layout::Section] = &[
     ("Window visibility", &[
         "spectrum_popout", "yaesu_popout", "yaesu2_popout", "popout_joined", "collapse_",
         "device_tab", "meter_analog", "bw_breakdown_expanded", "amplitec_power_show",
-        "ub_show_menu", "group_",
+        "ub_show_menu", "group_", "chat_open",
     ]),
     ("Appearance", &["theme", "language", "ui_zoom", "layout_grids"]),
     ("Development", &["developer_mode"]),
 ];
 
-/// Phase A relay monitor: persist relay settings without touching the large
+/// Relay monitor: persist relay settings without touching the large
 /// direct-connection config rewrite path.
 pub(crate) fn save_relay_config(
     enabled: bool,
@@ -2323,7 +2372,7 @@ pub(crate) fn save_developer_mode(on: bool) {
     save_single_key("developer_mode", if on { "true" } else { "false" });
 }
 
-/// PATCH-4: detect first-run for the connection wizard. Returns true when:
+/// Detect first-run for the connection wizard. Returns true when:
 ///  - the config file is absent, OR
 ///  - it exists but `successful_connects == 0` (default for fresh installs
 ///    *and* for legacy configs upgrading to this version).
@@ -2334,7 +2383,7 @@ pub(crate) fn is_first_run() -> bool {
     config.successful_connects == 0
 }
 
-/// PATCH-4: bump `successful_connects` to (at least) 1 on the first
+/// Bump `successful_connects` to (at least) 1 on the first
 /// `ConnectStatus::Connected` transition. Read-modify-write so other
 /// fields are not touched. No-op if the value is already > 0 - keeps
 /// the wizard from re-arming if the user clears their server field
@@ -2402,7 +2451,7 @@ mod spectrum_defaults_tests {
         assert_eq!(c.vrx1_range_db, Some(70.0));
         assert_eq!(c.vrx2_range_db, None);
         assert_eq!((c.vrx1_auto_ref, c.vrx2_auto_ref), (Some(true), Some(true)));
-        // A range chosen above the old default stays (review of 171, W9).
+        // A range chosen above the old default stays.
         let mut chosen = ClientConfig::default();
         chosen.spectrum_range_db = 120.0;
         assert_eq!(adopt_new_spectrum_defaults(&mut chosen), 0);
@@ -2419,8 +2468,31 @@ mod spectrum_defaults_tests {
         assert_eq!(code.matches("content.push_str(&format!(\"spectrum_defaults={}\\n\", SPECTRUM_DEFAULTS_VERSION));").count(), 1);
         assert_eq!(code.matches("if spectrum_defaults < SPECTRUM_DEFAULTS_VERSION {").count(), 1);
         // And every load reads the mark - without it every start would take
-        // a 100 chosen later for an old default (review of 171, Z7/W12).
+        // a 100 chosen later for an old default.
         assert_eq!(code.matches("if let Some(val) = line.strip_prefix(\"spectrum_defaults=\") {\n            spectrum_defaults = val.trim().parse().unwrap_or(0);").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod spectrum_fill_conf_tests {
+    /// The Fill value is written by the full save, read back by the load, put
+    /// on the screen at start and handed to the save (build 71). There is no
+    /// save at exit, so each of these missing sets the value back to 15 after
+    /// a restart without a word.
+    #[test]
+    fn the_fill_value_is_written_read_and_kept() {
+        let cut = |s: &'static str| &s[..s.find("#[cfg(test)]").unwrap_or(s.len())];
+        let conf = cut(include_str!("config.rs"));
+        assert_eq!(conf.matches("content.push_str(&format!(\"spectrum_fill_percent={}\\n\", spectrum_fill_percent));").count(), 1);
+        assert_eq!(conf.matches("strip_prefix(\"spectrum_fill_percent=\")").count(), 1);
+        assert_eq!(conf.matches("config.spectrum_fill_percent = v.min(100);").count(), 1);
+        assert_eq!(cut(include_str!("app_state.rs")).matches("spectrum_fill_percent: config.spectrum_fill_percent,").count(), 1);
+        // At its place in `save_config`, between the two keys either side of it:
+        // swapped with another u8 it would still compile.
+        assert_eq!(cut(include_str!("persistence.rs")).replace("\r\n", "\n").matches(
+            "self.rx2_waterfall_contrast,\n            self.spectrum_fill_percent,\n            self.rx1_enabled,").count(), 1);
+        assert_eq!(conf.replace("\r\n", "\n").matches(
+            "rx2_waterfall_contrast: f32,\n    spectrum_fill_percent: u8,\n    rx1_enabled: bool,").count(), 1, "the parameter of save_config, matching the argument");
     }
 }
 
@@ -2540,7 +2612,7 @@ mod fold_tests {
         assert_eq!(config.matches("save_single_key(fold.key(), if open {").count(), 1);
         assert_eq!(include_str!("app_state.rs").matches("folds_open: config.folds_open,").count(), 1);
         // The Ultrabeam asks for its elements on the frame its menu opens, not
-        // on every frame it is open (review of 199): an `if` without
+        // on every frame it is open: an `if` without
         // `!was_open` floods the server and looks normal on the screen.
         assert_eq!(
             include_str!("devices.rs").matches("if !was_open && self.folds_open.is_open(menu) {").count(),
@@ -2581,8 +2653,7 @@ mod full_save_tests {
     /// Every setting written ONE KEY AT A TIME has to survive the full save,
     /// and the list of them is read out of this file rather than typed here.
     ///
-    /// A hand-written list is what a reviewer rejected twice in the rounds
-    /// before this one, and rightly: it covers the keys that were forgotten,
+    /// A hand-written list falls short: it covers the keys that were forgotten,
     /// not the one that will be. So the test scans its own source for every
     /// `save_single_key("...")` literal and demands each survives. Add a writer
     /// tomorrow and this test covers it without anyone remembering to.
@@ -2662,7 +2733,7 @@ mod full_save_tests {
         // this is a tripwire on the number, not a census.
         assert_eq!(
             calls, 9,
-            "the number of read_for_update sites changed. If a writer was added:              move it onto save_single_key so the scanning test covers it, or add              its keys to the list below - and update this count."
+            "the number of read_for_update sites changed. If a writer was added:              move it onto save_single_key so the scanning test covers it, or add              its keys to the list below; and update this count."
         );
     }
 
@@ -2688,23 +2759,510 @@ mod full_save_tests {
         }
     }
 
-    /// And the list is a prefix match, so it must not keep something merely
-    /// because it starts the same way - that would resurrect a renamed key.
-    /// The Bluetooth button's keys are written by `save_ptt_config` in
-    /// persistence.rs, outside this file, so the scanning test above cannot
-    /// see them. Named here instead.
+    /// The keys `save_ptt_config` writes (persistence.rs, outside this file, so
+    /// the scan above cannot see them), read out of its format string rather
+    /// than typed here. Each has to survive the full save, be read back, and be
+    /// filtered out before it is written again (or every save adds a line).
+    ///
+    /// This was a typed list until build 31, and it missed two of its
+    /// twenty-three keys: `chat_open` and `multi_tx` (the "transmit on both"
+    /// button) were dropped by every full save, and moving the window is one.
     #[test]
-    fn the_bluetooth_button_keys_survive_a_full_save() {
+    fn every_key_save_ptt_config_writes_survives_a_full_save() {
         let source = include_str!("config.rs");
-        for key in ["ble_ptt_enabled", "ble_ptt_address", "ble_ptt_name", "ble_ptt_target", "ble_ptt_toggle"] {
+        let writer = include_str!("persistence.rs");
+        let body = &writer[writer.find("fn save_ptt_config").expect("save_ptt_config")..];
+        let body = &body[..body.find("\n    pub(super) fn ").expect("the end of save_ptt_config")];
+        // One format string: a second one would hold keys this scan never sees.
+        assert_eq!(body.matches("push_str(&format!(").count(), 1, "save_ptt_config writes in more than one place");
+        let format = &body[body.find("push_str(&format!(").expect("the written lines")..];
+        let format = &format[format.find('"').expect("the format string") + 1..];
+        let format = &format[..format.find('"').expect("the end of the format string")];
+        let filter = &body[..body.find("push_str(&format!(").unwrap()];
+        let keys: Vec<&str> = format.split("\\n").filter_map(|l| l.split_once('=').map(|(k, _)| k)).collect();
+        // Twenty-three today. A scan that finds fewer has stopped reading.
+        assert!(keys.len() >= 23, "the scan found only {} keys in save_ptt_config: {keys:?}", keys.len());
+        for key in keys {
             assert!(survives_full_save(&format!("{key}=whatever")), "{key} is thrown away by a full save");
+            assert!(!super::grouped(&format!("{key}=x\n")).contains(super::UNSORTED), "{key} has no section");
             assert!(source.contains(&format!("strip_prefix(\"{key}=\"")), "{key} is never read back");
+            let filtered = filter.match_indices("starts_with(\"").any(|(i, _)| {
+                let rest = &filter[i + "starts_with(\"".len()..];
+                rest.find('"').is_some_and(|end| key.starts_with(&rest[..end]) || format!("{key}=") == rest[..end])
+            });
+            assert!(filtered, "{key} is not filtered out before save_ptt_config writes it again");
         }
     }
 
+    /// The furthest a save sits from its place today is 14 lines
+    /// (`set_ble_enabled`); the median is 2.
+    const SAVE_WITHIN_LINES: usize = 20;
+
+    /// A full save keeps these keys as they stand in the file, so wherever the
+    /// screen changes one, `save_ptt_config` has to follow. Build 31 missed it
+    /// for the chat window's cross, build 32 for a chosen profile's mic gain and
+    /// for a layout that opens the FTX-1 window.
+    ///
+    /// The fields are read out of `save_ptt_config`'s own arguments and every
+    /// file in `ui/` is read, so a new key or a new screen is in at once. Each
+    /// place is followed by `save_ptt_config()` within `SAVE_WITHIN_LINES` lines
+    /// and in the same function: a call earlier on, or one for another key
+    /// further down a long screen, does not count (build 33 let the chat button
+    /// go back to `save_full_config` because a box below it saved). That does
+    /// not prove the call runs on that path (it may sit behind a flag), so the
+    /// panel's profile choice has its own pin.
+    #[test]
+    fn a_ptt_config_key_changed_on_screen_is_written_by_save_ptt_config() {
+        let writer = include_str!("persistence.rs");
+        let body = &writer[writer.find("fn save_ptt_config").expect("save_ptt_config")..];
+        let body = &body[..body.find("\n    pub(super) fn ").expect("the end of save_ptt_config")];
+        let args = &body[body.find("push_str(&format!(").expect("the format")..];
+        let args = &args[args.find("\",").expect("the end of the format string")..];
+        let fields: Vec<&str> = args.split("self.").skip(1)
+            .map(|rest| rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap())
+            .collect();
+        assert!(fields.len() >= 23, "{fields:?}");
+
+        // Set from the settings file at start, or the writer itself: not a screen.
+        let not_screens = ["config.rs", "persistence.rs", "app_state.rs"];
+        // Set every frame, so saving there would write the file every frame:
+        // the slot-2 window is closed while radio 2 is not shown, and what the
+        // file says comes back only when it is.
+        let every_frame = [("yaesu_panel.rs", "render_device_yaesu", "yaesu2_popout")];
+        let mut every_frame_seen = 0;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("ui");
+        let mut files = Vec::new();
+        let mut todo = vec![dir];
+        while let Some(d) = todo.pop() {
+            for e in std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().path()) {
+                if e.is_dir() { todo.push(e); } else if e.extension().is_some_and(|x| x == "rs") { files.push(e); }
+            }
+        }
+        let mut found = 0;
+        let mut missing = Vec::new();
+        for path in files {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if not_screens.contains(&name.as_str()) { continue; }
+            let src = std::fs::read_to_string(&path).unwrap();
+            let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            for field in &fields {
+                // `.field = `, `.field=`, `.field ^= ` and the like; not `==`.
+                let dotted = format!(".{field}");
+                let mut places: Vec<usize> = src.match_indices(&dotted).map(|(at, _)| at).filter(|at| {
+                    let after = &src[at + dotted.len()..];
+                    if after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') { return false; }
+                    let after = after.trim_start_matches([' ', '\t']);
+                    let after = after.strip_prefix(['^', '|', '&', '+', '-']).unwrap_or(after);
+                    after.starts_with('=') && !after.starts_with("==")
+                }).collect();
+                let borrow = format!("&mut self.{field}");
+                places.extend(src.match_indices(&borrow).map(|(at, _)| at)
+                    .filter(|at| !src[at + borrow.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')));
+                for at in places {
+                    found += 1;
+                    let (fn_name, rest) = enclosing_fn(src, at);
+                    if every_frame.contains(&(name.as_str(), fn_name.as_str(), *field))
+                        && src[..src[..at].rfind('\n').unwrap_or(0)].trim_end().ends_with("} else {")
+                    {
+                        every_frame_seen += 1;
+                    } else if !rest.lines().take(SAVE_WITHIN_LINES).any(|l| l.contains("save_ptt_config()")) {
+                        missing.push(format!("{name}: {fn_name} sets {field} and does not save it after"));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "set without save_ptt_config after it:\n{}", missing.join("\n"));
+        assert_eq!(every_frame_seen, every_frame.len(), "an exception that is no longer there");
+        // Forty places on 2026-10-31.
+        assert!(found >= 40, "the scan found {found} places");
+    }
+
+    /// The function around byte `at`: its name, and its body from `at` to its
+    /// closing brace.
+    fn enclosing_fn(src: &str, at: usize) -> (String, &str) {
+        let head = src[..at].rmatch_indices("fn ").find(|(i, _)| {
+            let line_start = src[..*i].rfind('\n').map_or(0, |n| n + 1);
+            let lead = src[line_start..*i].trim_start();
+            ["", "pub ", "pub(super) ", "pub(crate) "].contains(&lead)
+        }).map(|(i, _)| i).expect("a function");
+        let name: String = src[head + 3..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        let open = head + src[head..].find('{').unwrap();
+        let mut depth = 0;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => { depth -= 1; if depth == 0 { return (name, &src[at..open + i]); } }
+                _ => {}
+            }
+        }
+        (name, &src[at..])
+    }
+
+    /// And the list is a prefix match, so it must not keep something merely
+    /// because it starts the same way - that would resurrect a renamed key.
     #[test]
     fn an_unrelated_line_is_not_kept() {
         assert!(!survives_full_save("something_else=1"));
         assert!(!survives_full_save(""));
+    }
+}
+
+#[cfg(test)]
+mod relay_id_tests {
+    use super::{needs_own_relay_id, profile_device_name};
+
+    #[test]
+    fn a_profile_with_the_default_device_name_gets_its_profile_behind_it() {
+        let default_conf = "relay_device_name=SHACK-PC
+relay_instance_id=d18c5ee1
+";
+        assert_eq!(profile_device_name("SHACK-PC", Some(default_conf), "B").as_deref(), Some("SHACK-PC (B)"));
+        // Twice round: the second start finds its own name and leaves it.
+        assert_eq!(profile_device_name("SHACK-PC (B)", Some(default_conf), "B"), None);
+    }
+
+    #[test]
+    fn a_device_name_set_by_hand_or_without_a_default_is_kept() {
+        let default_conf = "relay_device_name=SHACK-PC
+";
+        assert_eq!(profile_device_name("Laptop", Some(default_conf), "B"), None, "set by hand");
+        assert_eq!(profile_device_name("SHACK-PC", None, "B"), None, "no default config beside it");
+        assert_eq!(profile_device_name("SHACK-PC", Some("server=1.2.3.4
+"), "B"), None, "a default without a name");
+    }
+
+    #[test]
+    fn a_profile_with_the_default_profiles_relay_id_gets_its_own() {
+        let default_conf = "server=1.2.3.4
+relay_instance_id=d18c5ee1
+relay_enabled=true
+";
+        assert!(needs_own_relay_id("d18c5ee1", Some(default_conf)), "a copied id must be replaced");
+        assert!(needs_own_relay_id(" d18c5ee1 ", Some(default_conf)), "whitespace does not make it another id");
+    }
+
+    #[test]
+    fn an_own_relay_id_is_kept() {
+        let default_conf = "relay_instance_id=d18c5ee1
+";
+        assert!(!needs_own_relay_id("d19aa000", Some(default_conf)), "a profile's own id stays");
+        assert!(!needs_own_relay_id("d18c5ee1", None), "the default profile keeps its id");
+        assert!(!needs_own_relay_id("d19aa000", Some("server=1.2.3.4
+")), "a default without an id changes nothing");
+    }
+
+    #[test]
+    fn an_empty_relay_id_is_always_made() {
+        assert!(needs_own_relay_id("", None));
+        assert!(needs_own_relay_id("  ", Some("relay_instance_id=
+")), "two empty ids are not a shared id to keep");
+    }
+}
+
+/// A number from the settings file, or nothing for `nan` and `inf`: `nan`
+/// parses and passes `clamp`, and a NaN in the TX chain silences it.
+fn parse_finite(s: &str) -> Option<f32> {
+    s.trim().parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
+/// One Yaesu TX EQ profile: the standard EQ (five gains on the fixed bands,
+/// as on the phone), the advanced one (twenty channels, desktop only), which
+/// of the two sounds, the mic gain, and the TX chain after the EQ.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EqProfile {
+    pub(crate) name: String,
+    pub(crate) enabled: bool,
+    pub(crate) advanced: bool,
+    pub(crate) gains: [f32; 5],
+    pub(crate) bands: sdr_remote_logic::eq::EqBands,
+    /// `None` for a profile saved before the mic gain was part of it: choosing
+    /// it leaves the mic gain as it is, as the chain below.
+    pub(crate) mic_gain: Option<f32>,
+    /// `None` for a profile saved before build 33: choosing it leaves the
+    /// compressor and the AGC as they are.
+    pub(crate) chain: Option<TxChain>,
+}
+
+/// The client-side TX chain of a profile: compressor, its timing, and the AGC.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TxChain {
+    pub(crate) comp: u8,
+    pub(crate) attack_ms: f32,
+    pub(crate) release_ms: f32,
+    pub(crate) agc: bool,
+}
+
+impl EqProfile {
+    /// The channels the engine runs for this profile.
+    pub(crate) fn active_bands(&self) -> sdr_remote_logic::eq::EqBands {
+        active_eq_bands(self.advanced, &self.gains, &self.bands)
+    }
+}
+
+/// The channels the engine runs: the advanced twenty, or the standard five.
+pub(crate) fn active_eq_bands(advanced: bool, gains: &[f32; 5], bands: &sdr_remote_logic::eq::EqBands)
+    -> sdr_remote_logic::eq::EqBands
+{
+    if advanced { *bands } else { sdr_remote_logic::eq::bands_from_legacy_gains(gains) }
+}
+
+/// A name for a new profile, as it will read back from the file: trimmed, not
+/// empty, without the `|` that separates the fields of a profile line, and
+/// without a line break (pasting puts one in a single-line field).
+pub(crate) fn profile_name(input: &str) -> Option<String> {
+    let name = input.trim();
+    (!name.is_empty() && !name.contains('|') && !name.chars().any(char::is_control)).then(|| name.to_string())
+}
+
+/// A profile in the settings file, two or three lines:
+///
+/// `<radio>_eq_profile=name|enabled|g0,g1,g2,g3,g4|mic_gain` - the standard EQ,
+/// in the form every earlier version reads;
+/// `<radio>_eq_profile_advanced=name|advanced|kind:freq:q:gain;...` - the
+/// twenty channels and whether they sound;
+/// `<radio>_eq_profile_chain=name|comp|attack_ms|release_ms|agc` - the TX
+/// chain, when the profile has one. An earlier version skips the last two.
+fn eq_profile_lines(radio: &str, p: &EqProfile) -> String {
+    let g = &p.gains;
+    let mic_gain = p.mic_gain.map(|m| format!("|{m:.3}")).unwrap_or_default();
+    let mut lines = format!("{radio}_eq_profile={}|{}|{:.1},{:.1},{:.1},{:.1},{:.1}{mic_gain}\n{radio}_eq_profile_advanced={}|{}|{}\n",
+        p.name, if p.enabled { "1" } else { "0" }, g[0], g[1], g[2], g[3], g[4],
+        p.name, if p.advanced { "1" } else { "0" }, sdr_remote_logic::eq::bands_to_field(&p.bands));
+    if let Some(c) = p.chain {
+        lines.push_str(&format!("{radio}_eq_profile_chain={}|{}|{:.3}|{:.1}|{}\n",
+            p.name, c.comp, c.attack_ms, c.release_ms, if c.agc { "1" } else { "0" }));
+    }
+    lines
+}
+
+/// The first line of a profile. Its third field is the five gains, or (builds
+/// 29 and 30) the twenty channels: those that are only the five bands become
+/// the standard EQ, the rest the advanced one. The mic gain is optional: a
+/// profile without one (or with one that does not read) has none, and choosing
+/// it leaves the mic gain as it is.
+fn parse_eq_profile(val: &str) -> Option<EqProfile> {
+    use sdr_remote_logic::eq;
+    let parts: Vec<&str> = val.trim().splitn(4, '|').collect();
+    if parts.len() < 3 { return None; }
+    let read = eq::bands_from_field(parts[2])?;
+    let (advanced, gains, bands) = match eq::legacy_gains(&read) {
+        Some(gains) => (false, gains, eq::default_bands()),
+        None => {
+            let max = eq::STANDARD_GAIN_MAX_DB;
+            (true, std::array::from_fn(|i| read[i].gain_db.clamp(-max, max)), read)
+        }
+    };
+    let mic_gain = parts.get(3)
+        .and_then(|s| parse_finite(s))
+        .map(sdr_remote_logic::commands::clamp_yaesu_mic_gain);
+    // Trimmed as `yaesu_eq_active` is, or a name with a space at its end
+    // (possible up to build 31) is never found at start.
+    Some(EqProfile { name: parts[0].trim().to_string(), enabled: parts[1] == "1", advanced, gains, bands, mic_gain, chain: None })
+}
+
+/// The second line of a profile, onto the profile of that name read before it.
+fn parse_eq_profile_advanced(val: &str, profiles: &mut [EqProfile]) {
+    let parts: Vec<&str> = val.trim().splitn(3, '|').collect();
+    let [name, advanced, bands] = parts[..] else { return };
+    let (Some(p), Some(bands)) = (profiles.iter_mut().rev().find(|p| p.name == name.trim()),
+                                   sdr_remote_logic::eq::bands_from_field(bands)) else { return };
+    p.advanced = advanced == "1";
+    p.bands = bands;
+}
+
+/// The third line of a profile, its TX chain, onto the profile of that name
+/// read before it. A line that does not read leaves the profile without one.
+fn parse_eq_profile_chain(val: &str, profiles: &mut [EqProfile]) {
+    use sdr_remote_logic::commands::{COMP_ATTACK_RANGE_MS, COMP_RELEASE_RANGE_MS};
+    let parts: Vec<&str> = val.trim().split('|').collect();
+    let [name, comp, attack, release, agc] = parts[..] else { return };
+    let (Ok(comp), Some(attack), Some(release)) = (comp.trim().parse::<u32>(), parse_finite(attack), parse_finite(release))
+        else { return };
+    let Some(p) = profiles.iter_mut().rev().find(|p| p.name == name.trim()) else { return };
+    p.chain = Some(TxChain {
+        comp: comp.min(100) as u8,
+        attack_ms: attack.clamp(*COMP_ATTACK_RANGE_MS.start(), *COMP_ATTACK_RANGE_MS.end()),
+        release_ms: release.clamp(*COMP_RELEASE_RANGE_MS.start(), *COMP_RELEASE_RANGE_MS.end()),
+        agc: agc.trim() == "1",
+    });
+}
+
+#[cfg(test)]
+mod eq_profile_tests {
+    use super::{active_eq_bands, eq_profile_lines, parse_eq_profile, parse_eq_profile_advanced, parse_eq_profile_chain,
+                parse_finite, profile_name, EqProfile, TxChain};
+    use sdr_remote_logic::eq;
+
+    fn read_back(text: &str) -> Vec<EqProfile> {
+        let mut profiles = Vec::new();
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("yaesu_eq_profile=") {
+                profiles.extend(parse_eq_profile(v));
+            } else if let Some(v) = line.strip_prefix("yaesu_eq_profile_advanced=") {
+                parse_eq_profile_advanced(v, &mut profiles);
+            } else if let Some(v) = line.strip_prefix("yaesu_eq_profile_chain=") {
+                parse_eq_profile_chain(v, &mut profiles);
+            }
+        }
+        profiles
+    }
+
+    /// Both EQs of a profile and which one sounds survive the file, in both
+    /// positions of the checkbox.
+    #[test]
+    fn a_profile_keeps_both_eqs_and_its_checkbox() {
+        let mut bands = eq::default_bands();
+        bands[9] = eq::EqBand { kind: eq::FilterKind::HighShelf, freq_hz: 2500.0, q: 0.9, gain_db: -3.5 };
+        for advanced in [false, true] {
+            let p = EqProfile { name: "rag chew".into(), enabled: true, advanced,
+                gains: [3.0, -2.0, 0.0, 6.5, -12.0], bands, mic_gain: Some(0.25), chain: None };
+            assert_eq!(read_back(&eq_profile_lines("yaesu", &p)), vec![p]);
+        }
+    }
+
+    /// A name with a `|` shifted the fields of its line and the whole profile
+    /// was gone at the next start; a name of spaces came back empty.
+    #[test]
+    fn a_profile_name_is_one_that_comes_back() {
+        assert_eq!(profile_name("  rag chew "), Some("rag chew".to_string()));
+        assert_eq!(profile_name("low|high"), None);
+        assert_eq!(profile_name("   "), None);
+        assert_eq!(profile_name("rag\nchew"), None, "a pasted line break");
+        let p = EqProfile { name: profile_name(" dx ").unwrap(), enabled: true, advanced: false,
+            gains: [0.0; 5], bands: eq::default_bands(), mic_gain: Some(0.2), chain: None };
+        assert_eq!(read_back(&eq_profile_lines("yaesu", &p)), vec![p]);
+    }
+
+    /// A profile from an earlier version has no mic gain (v2.13.0 wrote none), and
+    /// it reads back as none and is written back without one, so choosing it
+    /// later still leaves the mic gain alone.
+    #[test]
+    fn a_profile_without_a_mic_gain_keeps_none() {
+        let p = parse_eq_profile("dx|1|1.0,2.0,0.0,-1.0,0.5").unwrap();
+        assert_eq!(p.mic_gain, None);
+        assert_eq!(read_back(&eq_profile_lines("yaesu", &p)), vec![p.clone()]);
+        assert!(eq_profile_lines("yaesu", &p).starts_with("yaesu_eq_profile=dx|1|1.0,2.0,0.0,-1.0,0.5\n"));
+    }
+
+    /// The TX chain travels with the profile; a profile saved before it
+    /// existed has none, and a third line that does not read gives none.
+    #[test]
+    fn a_profile_keeps_its_tx_chain() {
+        let chain = TxChain { comp: 65, attack_ms: 0.175, release_ms: 3.1, agc: true };
+        for chain in [Some(chain), None] {
+            let p = EqProfile { name: "dx".into(), enabled: true, advanced: false,
+                gains: [0.0; 5], bands: eq::default_bands(), mic_gain: Some(0.2), chain };
+            assert_eq!(read_back(&eq_profile_lines("yaesu", &p)), vec![p]);
+        }
+        let first = "yaesu_eq_profile=dx|1|0.0,0.0,0.0,0.0,0.0|0.200\n";
+        let read = read_back(&format!("{first}yaesu_eq_profile_chain=dx|250|nan|3.1|1\n"));
+        assert_eq!(read[0].chain, None, "a chain that does not read");
+        let read = read_back(&format!("{first}yaesu_eq_profile_chain=dx|300|0.01|5000|0\n"));
+        assert_eq!(read[0].chain, Some(TxChain { comp: 100, attack_ms: 0.1, release_ms: 1000.0, agc: false }));
+    }
+
+    /// A name with a space at its edge (possible up to build 31) reads back
+    /// trimmed, as `yaesu_eq_active` does, with its other lines attached.
+    #[test]
+    fn an_old_name_with_a_space_at_its_edge_is_found() {
+        let text = "yaesu_eq_profile=dx |1|1.0,0.0,0.0,0.0,0.0|0.200\n\
+                    yaesu_eq_profile_advanced=dx |1|peak:100:1.4:1\n\
+                    yaesu_eq_profile_chain=dx |10|0.5|20.0|0\n";
+        let read = read_back(text);
+        assert_eq!((read[0].name.as_str(), read[0].advanced, read[0].chain.map(|c| c.comp)), ("dx", true, Some(10)));
+    }
+
+    /// The engine runs the advanced twenty with the box on, and the five
+    /// standard gains with it off - never the other set.
+    #[test]
+    fn the_checkbox_picks_the_eq_that_sounds() {
+        let gains = [4.0, -3.0, 0.0, 2.0, -6.0];
+        let mut bands = eq::default_bands();
+        bands[7] = eq::EqBand { kind: eq::FilterKind::HighPass, freq_hz: 150.0, q: 0.71, gain_db: 0.0 };
+        assert_eq!(active_eq_bands(true, &gains, &bands), bands);
+        assert_eq!(active_eq_bands(false, &gains, &bands), eq::bands_from_legacy_gains(&gains));
+    }
+
+    /// The second line finds its profile by name and by order. Through the
+    /// real grouping of a saved file, every profile still gets its own.
+    #[test]
+    fn the_saved_file_keeps_each_second_line_with_its_profile() {
+        let mut low = eq::default_bands();
+        low[5] = eq::EqBand { kind: eq::FilterKind::HighPass, freq_hz: 120.0, q: 0.71, gain_db: 0.0 };
+        let mut high = eq::default_bands();
+        high[19] = eq::EqBand { kind: eq::FilterKind::LowPass, freq_hz: 3000.0, q: 0.71, gain_db: 0.0 };
+        let a = EqProfile { name: "a".into(), enabled: true, advanced: true,
+            gains: [1.0, 0.0, 0.0, 0.0, 0.0], bands: low, mic_gain: Some(0.2),
+            chain: Some(TxChain { comp: 40, attack_ms: 0.5, release_ms: 120.0, agc: true }) };
+        let b = EqProfile { name: "b".into(), enabled: true, advanced: false,
+            gains: [0.0, 0.0, 2.0, 0.0, 0.0], bands: high, mic_gain: Some(0.3), chain: None };
+        let text = format!("yaesu_eq_active=a\n{}{}rx_volume=0.5\n", eq_profile_lines("yaesu", &a), eq_profile_lines("yaesu", &b));
+        let grouped = sdr_remote_core::conf_layout::group(&text, super::SECTIONS, super::UNSORTED);
+        assert_eq!(read_back(&grouped), vec![a, b]);
+    }
+
+    /// The edges of the first line: a build-30 gain beyond the standard
+    /// sliders is clamped onto them, and a line with too few fields is no profile.
+    #[test]
+    fn a_first_line_out_of_range_or_short_is_handled() {
+        let mut more = eq::bands_from_legacy_gains(&[14.0, 0.0, 0.0, 0.0, 0.0]);
+        more[5].kind = eq::FilterKind::HighPass;
+        let p = parse_eq_profile(&format!("p|1|{}|0.200", eq::bands_to_field(&more))).unwrap();
+        assert_eq!((p.advanced, p.gains[0]), (true, 12.0));
+        assert!(parse_eq_profile("p|1").is_none());
+    }
+
+    /// The first line is the form every earlier version reads: the five gains.
+    #[test]
+    fn the_first_line_is_the_old_form() {
+        let p = EqProfile { name: "p".into(), enabled: false, advanced: true,
+            gains: [1.0, 2.0, 3.0, 4.0, 5.0], bands: eq::default_bands(), mic_gain: Some(0.2), chain: None };
+        let text = eq_profile_lines("yaesu2", &p);
+        assert_eq!(text.lines().next(), Some("yaesu2_eq_profile=p|0|1.0,2.0,3.0,4.0,5.0|0.200"));
+    }
+
+    /// A profile from build 29 or 30 holds twenty channels on its first line.
+    /// The five bands alone become the standard EQ; anything more the advanced
+    /// one, with the checkbox on.
+    #[test]
+    fn a_profile_from_build_30_lands_on_the_right_side() {
+        let five = eq::bands_from_legacy_gains(&[2.0, 0.0, -1.0, 0.0, 3.0]);
+        let p = parse_eq_profile(&format!("p|1|{}|0.300", eq::bands_to_field(&five))).unwrap();
+        assert_eq!((p.advanced, p.gains), (false, [2.0, 0.0, -1.0, 0.0, 3.0]));
+        let mut more = five;
+        more[6] = eq::EqBand { kind: eq::FilterKind::HighPass, freq_hz: 120.0, q: 0.71, gain_db: 0.0 };
+        let p = parse_eq_profile(&format!("p|1|{}|0.300", eq::bands_to_field(&more))).unwrap();
+        assert_eq!((p.advanced, p.bands, p.gains), (true, more, [2.0, 0.0, -1.0, 0.0, 3.0]));
+    }
+
+    #[test]
+    fn a_nan_in_a_profile_is_not_read() {
+        assert_eq!(parse_finite(" 5.5 "), Some(5.5));
+        assert_eq!(parse_finite("nan"), None);
+        assert_eq!(parse_finite("inf"), None);
+        let p = parse_eq_profile("p|1|0,0,0,0,0|nan").unwrap();
+        assert_eq!(p.mic_gain, None, "no mic gain, not NaN: choosing it keeps the current one");
+        assert!(parse_eq_profile("p|1|peak:1000:nan:3").is_none());
+        // The mic gain keeps the new range (the old one stopped at 0.4), and off stays off.
+        assert_eq!(parse_eq_profile("p|1|0,0,0,0,0|5.0").unwrap().mic_gain, Some(5.0));
+        assert_eq!(parse_eq_profile("p|1|0,0,0,0,0|0.000").unwrap().mic_gain, Some(0.0));
+        // Above the range it is clamped to the top (+30 dB), not taken as it is.
+        let top = sdr_remote_logic::commands::clamp_yaesu_mic_gain(f32::MAX);
+        assert_eq!(parse_eq_profile("p|1|0,0,0,0,0|40.0").unwrap().mic_gain, Some(top));
+        assert!(top < 40.0);
+    }
+
+    /// The transmit gains and the compressor times are read through
+    /// `parse_finite`: a `nan` in a gain silences the transmitter (`clamp`
+    /// lets it through), and in a time it rides along into the next save.
+    #[test]
+    fn the_gains_and_the_times_are_read_through_parse_finite() {
+        let source = include_str!("config.rs");
+        for key in ["tx_gain", "yaesu_mic_gain", "yaesu2_mic_gain",
+                    "yaesu_comp_attack", "yaesu_comp_release", "yaesu2_comp_attack", "yaesu2_comp_release"] {
+            let at = source.find(&format!("strip_prefix(\"{key}=\")")).unwrap_or_else(|| panic!("{key} is not read"));
+            let branch = &source[at..at + source[at..].find("} else if").expect("the next branch")];
+            assert!(branch.contains("parse_finite(") && !branch.contains("parse::<f32>"), "{key}: {branch}");
+        }
     }
 }

@@ -50,7 +50,7 @@
 //! - **XML mode** (PstRotator "Output" forwarding):
 //!   `<PST><AZIMUTH>nnn.n</AZIMUTH></PST>`.
 //!
-//! `EL:...` / `<ELEVATION>` is not implemented in phase 1 -
+//! `EL:...` / `<ELEVATION>` is not implemented -
 //! ThetisLink's Rotor facade has no elevation axis. They are silently
 //! ignored via `debug!`.
 //!
@@ -172,7 +172,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
     let mut last_dispatch_at: Option<Instant> = None;
     let mut packet_count: u64 = 0;
     let mut parse_fail_count: u64 = 0;
-    // Operator finding 2026-06-05: PstRotator broadcasts its own
+    // Observed 2026-06-05: PstRotator broadcasts its own
     // simulator position as `AZ:nnn` in parallel with the real `AG<nnn>`
     // goto stream. Without distinction, every AZ overwrote the goto and
     // the needle wobbled step by step. Track when the last real
@@ -242,7 +242,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                 v
             }
             Packet::GoToAz(v) => {
-                // Operator finding 2026-06-05: PstRotator's simulator
+                // Observed 2026-06-05: PstRotator's simulator
                 // broadcasts `AZ:nnn` in parallel with the goto stream.
                 // Within the feedback window after a real AG: drop
                 // it as simulator noise. Outside it: treat as a goto
@@ -252,7 +252,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                     .unwrap_or(false);
                 if within_window {
                     debug!(
-                        "PstRotator listen: AZ:{:.1}° from {} dropped - simulator broadcast within {}s of AG-goto",
+                        "PstRotator listen: AZ:{:.1}° from {} dropped; simulator broadcast within {}s of AG-goto",
                         v, peer, AZ_FEEDBACK_AFTER_AG.as_secs()
                     );
                     continue;
@@ -307,7 +307,7 @@ fn run_udp(sock: UdpSocket, rotor: Rotor, shutdown: Arc<AtomicBool>, port: u16) 
                 continue;
             }
             Packet::ManualRotate => {
-                info!("PstRotator listen: manual rotate R/L from {} (ignored - no continuous-rotate API)", peer);
+                info!("PstRotator listen: manual rotate R/L from {} (ignored; no continuous-rotate API)", peer);
                 continue;
             }
             Packet::Elevation => {
@@ -792,7 +792,7 @@ fn parse_packet(text: &str) -> Packet {
             if !digits.is_empty() {
                 if let Ok(n) = digits.parse::<u16>() {
                     if n == 999 {
-                        // Operator finding (2026-06-05): in EA7HG-UDP mode
+                        // Observed (2026-06-05): in EA7HG-UDP mode
                         // PstRotator sends `AG999` as a STOP signal, not
                         // as "park to 999°". Classify as Stop.
                         return Packet::Stop;
@@ -984,7 +984,7 @@ mod tests {
     #[test]
     fn ignores_prosistel_non_goto() {
         // AG999/AAG999 is classified as STOP (Packet::Stop)
-        // - operator finding 2026-06-05. parse_azimuth returns None
+        // - observed 2026-06-05. parse_azimuth returns None
         // because it is not a GoTo, regardless of whether it is Stop or Park.
         assert_eq!(parse_azimuth("AAG999"), None);
         // Stop and query are skipped.
@@ -1052,7 +1052,7 @@ mod tests {
 
     #[test]
     fn classifies_other_packet_kinds() {
-        // Operator finding 2026-06-05: AG999 = STOP signal in PstRotator
+        // Observed 2026-06-05: AG999 = STOP signal in PstRotator
         // EA7HG-UDP, not "park to 999°".
         assert_eq!(parse_packet("AAG999"), Packet::Stop);
         assert_eq!(parse_packet("\u{0002}AG999\r"), Packet::Stop);

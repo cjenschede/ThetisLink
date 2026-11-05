@@ -2,6 +2,42 @@
 
 use super::*;
 
+/// The TX gain slider of Thetis and both Yaesu radios: in dB, from -24 to +30,
+/// with one more position at the bottom that is off (a gain of zero). Takes and
+/// gives the factor; returns (changed, done), done being the moment to save.
+pub(crate) fn tx_gain_slider(ui: &mut egui::Ui, factor: &mut f32) -> (bool, bool) {
+    use sdr_remote_logic::commands::{tx_gain_db, tx_gain_factor, TX_GAIN_DB_MAX, TX_GAIN_DB_MIN, TX_GAIN_OFF_DB};
+    // Whole dB going in: egui rounds a stepped slider's value every frame and
+    // reports that as a change, and on six positions the dB of a factor is a
+    // float step off its whole number - a command to the engine every frame.
+    let mut db = tx_gain_db(*factor).round();
+    let off = rust_i18n::t!("dev_gain_off").to_string();
+    let slider = egui::Slider::new(&mut db, TX_GAIN_OFF_DB..=TX_GAIN_DB_MAX)
+        .step_by(1.0)
+        .custom_formatter(move |v, _| if (v as f32) < TX_GAIN_DB_MIN { off.clone() } else { format!("{:+.0} dB", v) });
+    let resp = ui.add_sized([140.0, 16.0], slider)
+        .on_hover_text(rust_i18n::t!("dev_gain_hover").to_string());
+    let scrolled = slider_wheel(ui, &resp, &mut db, TX_GAIN_OFF_DB..=TX_GAIN_DB_MAX, 1.0);
+    let changed = resp.changed() || scrolled;
+    if changed {
+        *factor = tx_gain_factor(db);
+    }
+    (changed, resp.drag_stopped() || scrolled)
+}
+
+/// The mic gain slider of a Yaesu radio: the same dB slider, on the factor that
+/// reaches the chain, while the stored value stays a quarter of it (see
+/// `YAESU_MIC_GAIN_SCALE`). One place for that scale on the desktop.
+pub(crate) fn yaesu_mic_gain_slider(ui: &mut egui::Ui, stored: &mut f32) -> (bool, bool) {
+    let scale = sdr_remote_logic::commands::YAESU_MIC_GAIN_SCALE;
+    let mut factor = *stored * scale;
+    let (changed, done) = tx_gain_slider(ui, &mut factor);
+    if changed {
+        *stored = factor / scale;
+    }
+    (changed, done)
+}
+
 /// Mouse-wheel support for a slider. Call this right AFTER `ui.add(slider)`
 /// with the slider's Response and the same value/range: while the pointer is
 /// over the slider, one wheel notch moves the value by `step` (clamped to
@@ -16,6 +52,29 @@ pub(crate) fn slider_wheel<N: egui::emath::Numeric>(
     range: std::ops::RangeInclusive<N>,
     step: f64,
 ) -> bool {
+    wheel_to(ui, resp, value, range, by_step(step))
+}
+
+/// The same for a logarithmic slider: one notch multiplies the value by
+/// `ratio`, the other way divides it, so a notch up and a notch down come back
+/// where they started (a step of a tenth of the value came back at 99%).
+pub(crate) fn slider_wheel_ratio<N: egui::emath::Numeric>(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    value: &mut N,
+    range: std::ops::RangeInclusive<N>,
+    ratio: f64,
+) -> bool {
+    wheel_to(ui, resp, value, range, by_ratio(ratio))
+}
+
+fn wheel_to<N: egui::emath::Numeric>(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    value: &mut N,
+    range: std::ops::RangeInclusive<N>,
+    next: impl Fn(f64, f64) -> f64,
+) -> bool {
     // Never scroll a disabled slider (display-only readouts stay put).
     if !resp.enabled() || !resp.hovered() {
         return false;
@@ -25,16 +84,28 @@ pub(crate) fn slider_wheel<N: egui::emath::Numeric>(
         return false;
     }
     let dir = if scroll > 0.0 { 1.0 } else { -1.0 };
-    let cur = value.to_f64();
-    let lo = range.start().to_f64();
-    let hi = range.end().to_f64();
-    let nv = (cur + dir * step).clamp(lo, hi);
-    if (nv - cur).abs() > f64::EPSILON {
-        *value = N::from_f64(nv);
-        true
-    } else {
-        false
+    match wheel_notch(value.to_f64(), dir, range.start().to_f64(), range.end().to_f64(), next) {
+        Some(nv) => {
+            *value = N::from_f64(nv);
+            true
+        }
+        None => false,
     }
+}
+
+fn by_step(step: f64) -> impl Fn(f64, f64) -> f64 {
+    move |cur, dir| cur + dir * step
+}
+
+fn by_ratio(ratio: f64) -> impl Fn(f64, f64) -> f64 {
+    move |cur, dir| if dir > 0.0 { cur * ratio } else { cur / ratio }
+}
+
+/// One notch from `cur` (`dir` is +1 or -1), clamped to `lo..=hi`; `None` when
+/// it does not move, at an edge, so nothing is sent or saved.
+fn wheel_notch(cur: f64, dir: f64, lo: f64, hi: f64, next: impl Fn(f64, f64) -> f64) -> Option<f64> {
+    let nv = next(cur, dir).clamp(lo, hi);
+    ((nv - cur).abs() > f64::EPSILON).then_some(nv)
 }
 
 /// Collapsible-section header with a manually drawn filled
@@ -101,12 +172,12 @@ pub(super) fn chevron_label(
 }
 
 /// A group of settings behind a chevron - so what belongs together is seen to
-/// belong together on a tab that keeps growing (owner, 2026-09-17).
+/// belong together on a tab that keeps growing.
 ///
 /// Every group has exactly one line above it and exactly one below, open or
 /// closed, and the one below is always under the last thing that belongs to
-/// it: under the chevron when closed, under the last row when open (owner,
-/// 2026-09-18). This draws the one below. The one above is the caller's
+/// it: under the chevron when closed, under the last row when open
+/// (2026-09-18). This draws the one below. The one above is the caller's
 /// (`rule` in front of the call) - unless another group comes directly
 /// before, whose line below is then this group's line above, so two groups
 /// in a row share one line instead of showing two.
@@ -303,13 +374,19 @@ pub(crate) fn vrx_mode_label(mode: u8) -> &'static str {
 pub(crate) fn vrx_mode_default_filter(old_mode: u8, new_mode: u8, current_bw: i32) -> (i32, i32) {
     let ssb = |m: u8| m == 0 || m == 1;
     let bw = if current_bw > 0 && ssb(old_mode) && ssb(new_mode) { current_bw } else { 3000 };
-    match new_mode {
+    on_vrx_raster(match new_mode {
         0 => (0, bw),                // USB
         1 => (-bw, 0),               // LSB
         2 | 3 => (-3000, 3000),      // AM/SAM: 6 kHz symmetric
         4 => (-4000, 4000),          // FM: ±4 kHz (max channelizer can pass)
         _ => (0, bw),
-    }
+    })
+}
+
+/// Both edges on the server's VRX raster, so the passband drawn is the one
+/// heard (a 2400 Hz preset was drawn at 2400 and heard at 2375).
+fn on_vrx_raster((lo, hi): (i32, i32)) -> (i32, i32) {
+    (super::spectrum::snap_vrx_filter_hz(lo as f64), super::spectrum::snap_vrx_filter_hz(hi as f64))
 }
 
 /// Filter presets to show in VRX BW dropdown (mode-dependent).
@@ -330,12 +407,25 @@ const VRX_FM_PRESETS: &[i32] = &[5000, 10000];
 /// for a given VRX mode. SSB modes use one side; AM-family + FM are
 /// symmetric around carrier.
 pub(crate) fn vrx_filter_from_preset(mode: u8, preset_bw: i32) -> (i32, i32) {
-    match mode {
+    on_vrx_raster(match mode {
         0 => (0, preset_bw),                          // USB
         1 => (-preset_bw, 0),                         // LSB
         2 | 3 | 4 => (-preset_bw / 2, preset_bw / 2), // AM/SAM/FM symmetric
         _ => (0, preset_bw),
-    }
+    })
+}
+
+/// The preset whose edges, on the raster, give this width: what the BW row
+/// shows as chosen. A width of its own (a dragged edge) shows none.
+pub(crate) fn vrx_preset_of_width(mode: u8, width_hz: i32) -> i32 {
+    vrx_filter_presets(mode)
+        .iter()
+        .copied()
+        .find(|&p| {
+            let (lo, hi) = vrx_filter_from_preset(mode, p);
+            hi - lo == width_hz
+        })
+        .unwrap_or(width_hz)
 }
 
 pub(crate) fn format_bandwidth(hz: i32, cw: bool) -> String {
@@ -589,12 +679,56 @@ pub(crate) fn rf2k_band_name(band: u8) -> &'static str {
     sdr_remote_core::rf2k_drive::BAND_NAMES.get(band as usize).copied().unwrap_or("?")
 }
 
+/// The "Fill" field at the end of the Ref/Range row of every spectrum panel,
+/// a small space right of Range: the opacity of the fill under the curve,
+/// 0-100. One value for all panels, so changing it in one changes them all.
+/// Returns true when it changed (time to save).
+pub(crate) fn spectrum_fill_field(ui: &mut egui::Ui, percent: &mut u8) -> bool {
+    ui.add_space(8.0);
+    ui.label(rust_i18n::t!("main_fill_label").to_string());
+    let resp = ui.add(egui::DragValue::new(percent).range(0..=100).suffix("%"))
+        .on_hover_text(rust_i18n::t!("main_hover_fill").to_string());
+    let scrolled = slider_wheel(ui, &resp, percent, 0..=100, 5.0);
+    resp.changed() || scrolled
+}
+
 #[cfg(test)]
 mod mode_filter_tests {
-    use super::vrx_mode_default_filter;
+    use super::{vrx_filter_from_preset, vrx_filter_presets, vrx_mode_default_filter, vrx_preset_of_width};
+
+    /// Every VRX filter the client sends lies on the server's raster of
+    /// 62.5 Hz (`vrx-rs`'s `AUDIO_BIN_HZ`): a preset, a mode's default and a
+    /// dragged edge alike, so the passband drawn is the one heard (until build 81:
+    /// 2400 drawn, 2375 heard). The BW row still shows the preset as chosen.
+    #[test]
+    fn every_vrx_filter_lies_on_the_server_raster() {
+        let vrx_rs = include_str!("../../../vrx-rs/src/config.rs");
+        assert!(vrx_rs.contains(&format!("pub const AUDIO_BIN_HZ: f32 = {};", super::super::spectrum::VRX_FILTER_STEP_HZ)), "one raster, client and server");
+        // On the raster: a whole number of steps (a half hertz is lost to the i32).
+        let on = |hz: i32| super::super::spectrum::snap_vrx_filter_hz(hz as f64) == hz;
+        for mode in 0..=4u8 {
+            for &p in vrx_filter_presets(mode) {
+                let (lo, hi) = vrx_filter_from_preset(mode, p);
+                assert!(on(lo) && on(hi), "mode {mode} preset {p}: {lo}..{hi}");
+                assert_eq!(vrx_preset_of_width(mode, hi - lo), p, "mode {mode}: shown as chosen");
+            }
+            for old in 0..=4u8 {
+                let (lo, hi) = vrx_mode_default_filter(old, mode, 2_400);
+                assert!(on(lo) && on(hi), "{old} to {mode}: {lo}..{hi}");
+            }
+        }
+        assert_eq!(vrx_filter_from_preset(0, 2_400), (0, 2_375));
+        assert_eq!(vrx_preset_of_width(0, 1_234), 1_234, "a width of its own shows none");
+        // A filter saved before the raster lands on it when it is loaded.
+        let load = include_str!("app_state.rs");
+        for key in ["vrx1_filter_low_hz", "vrx1_filter_high_hz", "vrx2_filter_low_hz", "vrx2_filter_high_hz"] {
+            let at = format!("{key}: crate::ui::spectrum::snap_vrx_filter_hz(config.{key}.unwrap_or_else(|| {{");
+            assert_eq!(load.matches(&at).count(), 1, "{key}");
+        }
+    }
 
     /// The VRX keeps its width only from SSB to SSB, and a band memory keeps and
-    /// restores only edges that fit its mode (build 243; owner, 2026-10-17: SAM
+    /// restores only edges that fit its mode (build 243; seen 2026-10-17: SAM
     /// at +/-5 kHz to LSB gave a 10 kHz LSB, and 60 m and 160 m came back as LSB
     /// with a USB and an AM filter).
     #[test]
@@ -603,8 +737,8 @@ mod mode_filter_tests {
         assert_eq!(vrx_mode_default_filter(3, 1, 10_000), (-3000, 0), "SAM to LSB");
         assert_eq!(vrx_mode_default_filter(2, 0, 6_000), (0, 3000), "AM to USB");
         assert_eq!(vrx_mode_default_filter(4, 1, 8_000), (-3000, 0), "FM to LSB");
-        assert_eq!(vrx_mode_default_filter(0, 1, 2_400), (-2400, 0), "USB to LSB keeps 2.4 kHz");
-        assert_eq!(vrx_mode_default_filter(1, 0, 2_700), (0, 2700), "and back");
+        assert_eq!(vrx_mode_default_filter(0, 1, 2_375), (-2375, 0), "USB to LSB keeps 2.4 kHz (2375 on the raster)");
+        assert_eq!(vrx_mode_default_filter(1, 0, 2_687), (0, 2687), "and back");
         assert_eq!(vrx_mode_default_filter(1, 3, 2_700), (-3000, 3000), "LSB to SAM: its own default");
 
         let src = include_str!("persistence.rs");
@@ -613,14 +747,14 @@ mod mode_filter_tests {
         let restore = &body[body.find("fn restore_band").unwrap()..];
         let fit = "sdr_remote_logic::filter_width::edges_fit_mode(";
         assert_eq!(save.matches(fit).count(), 1, "kept only if it fits");
-        assert!(save.contains("- not kept\""), "named in advance");
+        assert!(save.contains(": not kept\""), "the log line for a filter not kept");
         assert_eq!(restore.matches(fit).count(), 1, "restored only if it fits");
         assert!(restore.contains("let kept_mode = if mem.mode != cur_mode && block_mode { cur_mode } else { mem.mode };"),
-            "the mode Thetis keeps (review of 243)");
+            "the mode Thetis keeps");
         assert!(restore.contains("edges_fit_mode(kept_mode,"), "checked against it");
         let vrx = include_str!("vrx.rs");
         assert_eq!(vrx.matches("vrx_mode_default_filter(mode, mode_val, cur_bw)").count(), 1, "old mode, new mode");
-        assert!(restore.contains("- not restored\""), "named in advance");
+        assert!(restore.contains(": not restored\""), "the log line for a filter not restored");
         let send = restore.find("Command::SetControl(flo_id").unwrap();
         assert!(restore[..send].contains("if fits {"), "the filter is sent only when it fits");
     }
@@ -702,7 +836,7 @@ mod popout_tests {
     /// Every pop-out paints its ground before its panels (build 203): the one
     /// lifecycle all of them go through calls it right before the content.
     /// Counted over every source file of the client, so a window opened
-    /// somewhere else is seen too (review of 203).
+    /// somewhere else is seen too.
     #[test]
     fn every_popout_paints_its_ground_first() {
         fn walk(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
@@ -729,5 +863,78 @@ mod popout_tests {
                 content(self, ctx);").count(),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::{by_ratio, by_step, wheel_notch};
+
+    /// A notch up and a notch down come back where they started, also twenty
+    /// times over, and an edge does not move.
+    #[test]
+    fn a_notch_up_and_down_comes_back_and_an_edge_stays() {
+        let mut v = 0.175;
+        for _ in 0..20 {
+            v = wheel_notch(v, 1.0, 0.1, 50.0, by_ratio(1.1)).unwrap();
+            v = wheel_notch(v, -1.0, 0.1, 50.0, by_ratio(1.1)).unwrap();
+        }
+        assert!((v - 0.175).abs() < 1e-12, "{v}");
+        assert_eq!(wheel_notch(0.1, -1.0, 0.1, 50.0, by_ratio(1.1)), None);
+        assert_eq!(wheel_notch(50.0, 1.0, 0.1, 50.0, by_ratio(1.1)), None);
+        assert_eq!(wheel_notch(49.0, 1.0, 0.1, 50.0, by_ratio(1.1)), Some(50.0));
+        assert_eq!(wheel_notch(0.0, 1.0, -12.0, 12.0, by_step(0.5)), Some(0.5));
+        assert_eq!(wheel_notch(0.5, -1.0, -12.0, 12.0, by_step(0.5)), Some(0.0));
+        assert_eq!(wheel_notch(-12.0, -1.0, -12.0, 12.0, by_step(0.5)), None);
+    }
+}
+
+#[cfg(test)]
+mod gain_slider_tests {
+    /// The desktop takes the gain scale from the core, like the phone: the
+    /// Thetis slider and both Yaesu sliders through the dB helpers, the Yaesu
+    /// mic gain stored as a quarter of the factor, the MIDI knob over the same
+    /// range. Without this, storing the factor itself would send every profile
+    /// out 12 dB louder and nothing would notice.
+    #[test]
+    fn the_desktop_gain_sliders_use_the_core_scale() {
+        let cut = |s: &'static str| &s[..s.find("#[cfg(test)]").unwrap_or(s.len())];
+        let helpers = cut(include_str!("helpers.rs"));
+        assert!(helpers.contains("let mut db = tx_gain_db(*factor).round();"));
+        assert!(helpers.contains("*factor = tx_gain_factor(db);"));
+        assert!(helpers.contains("let mut factor = *stored * scale;"));
+        assert!(helpers.contains("*stored = factor / scale;"));
+        let uses = helpers.lines().filter(|l| l.contains("YAESU_MIC_GAIN_SCALE") && !l.trim_start().starts_with("//")).count();
+        assert_eq!(uses, 1, "the scale in one place");
+        let thetis = cut(include_str!("thetis_screen.rs"));
+        assert!(thetis.contains("super::helpers::tx_gain_slider(ui, &mut self.tx_gain);"));
+        let yaesu = cut(include_str!("yaesu_panel.rs"));
+        for radio in ["yaesu_mic_gain", "yaesu2_mic_gain"] {
+            assert_eq!(yaesu.matches(&format!("super::helpers::yaesu_mic_gain_slider(ui, &mut self.{radio});")).count(), 1, "{radio}");
+        }
+        assert!(!yaesu.contains("YAESU_MIC_GAIN_SCALE"), "no scale of its own");
+        let midi = cut(include_str!("midi_screen.rs"));
+        assert!(midi.contains("self.tx_gain = sdr_remote_logic::commands::tx_gain_from_fraction(frac);"));
+    }
+
+    /// Every place that reads a stored gain clamps it with the core's range:
+    /// the conf (Thetis and both Yaesu radios) and the engine's commands. A call
+    /// site put back on the old range would take the new values away.
+    #[test]
+    fn every_stored_gain_is_clamped_with_the_core_range() {
+        let cut = |s: &'static str| &s[..s.find("#[cfg(test)]").unwrap_or(s.len())];
+        let config = cut(include_str!("config.rs"));
+        assert!(config.contains("config.tx_gain = sdr_remote_logic::commands::clamp_tx_gain(v);"));
+        for radio in ["yaesu_mic_gain", "yaesu2_mic_gain"] {
+            assert!(config.contains(&format!("config.{radio} = sdr_remote_logic::commands::clamp_yaesu_mic_gain(v);")), "{radio}");
+        }
+        let engine = include_str!("../../../sdr-remote-logic/src/engine.rs");
+        let engine = &engine[..engine.find("#[cfg(test)]\nmod tests {").unwrap()];
+        assert!(engine.contains("tx_gain = crate::commands::clamp_tx_gain(v);"));
+        for radio in ["yaesu_local_mic_gain", "yaesu2_local_mic_gain"] {
+            assert!(engine.contains(&format!("{radio} = crate::commands::clamp_yaesu_mic_gain(v);")), "{radio}");
+        }
+        assert!(!config.contains("clamp(0.02, 0.4)") && !engine.contains("clamp(0.02, 0.4)"), "the old range");
+        assert!(!config.contains("clamp(0.0, 3.0)") && !engine.contains("clamp(0.0, 3.0)"), "the old range");
     }
 }

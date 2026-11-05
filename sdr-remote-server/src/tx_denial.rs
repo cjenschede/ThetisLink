@@ -22,7 +22,7 @@ pub const RESEND_MS: u64 = 1000;
 /// The bookkeeping is cleared when a client stops asking, is granted the
 /// transmitter, or says goodbye - and a client that simply falls silent does
 /// none of those. Its entry then stays, and the next refusal to that address is
-/// throttled against an attempt from another session (review finding, round 2).
+/// throttled against an attempt from another session.
 ///
 /// Well past the session timeout, so this never expires an attempt that is
 /// still running; it only stops the bookkeeping from outliving the client.
@@ -51,7 +51,7 @@ pub fn denial_due(since_last_ms: Option<u64>) -> bool {
 /// This lived as a bare `HashMap` inside the packet loop, and then only the
 /// interval could be tested: `denial_due` was green while the bookkeeping around
 /// it leaked an entry for every client that fell silent. A test that fills in
-/// its own numbers cannot see that (review finding, round 2).
+/// its own numbers cannot see that.
 ///
 /// So the map and its exits live together, and the exits have names. There are
 /// four: the client is granted the transmitter, it stops asking, it says

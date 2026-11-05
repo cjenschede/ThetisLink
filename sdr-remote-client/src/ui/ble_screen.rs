@@ -4,9 +4,9 @@
 //!
 //! The button is one more latching control, next to MIDI. Which transmitter it
 //! keys is a setting of the control - the same three choices a MIDI button has
-//! (`Ptt`, `YaesuPtt`, `Radio2Ptt`) - decided with the owner on 2026-09-17: the
+//! (`Ptt`, `YaesuPtt`, `Radio2Ptt`) - by design (2026-09-17): the
 //! desktop picks the radio per control, not per client, and the CW key will do
-//! the same (`DESIGN-remote-cw.md` §5.2a).
+//! the same.
 //!
 //! The rule for what a press, a release and a lost link mean is
 //! `sdr_remote_logic::ble_ptt`, shared with the phone. The transport is
@@ -30,7 +30,7 @@ impl SdrRemoteApp {
         {
             self.ble.scan_stop();
             self.ble_found.clear();
-            self.ble_note = "scan stopped after a minute - choose again to look once more".into();
+            self.ble_note = "scan stopped after a minute: choose again to look once more".into();
             log::info!("BLE PTT: scan stopped after {} s without a choice", crate::ble::SCAN_TIMEOUT.as_secs());
         }
         while let Ok(ev) = self.ble.event_rx.try_recv() {
@@ -64,10 +64,10 @@ impl SdrRemoteApp {
                     let was_held = self.ble_state.held();
                     if let Some(action) = self.ble_state.apply(generation, event) {
                         if event == BleButtonEvent::Disconnected {
-                            // The line the Android brief demands of every drop: the last
+                            // The line every drop logs, as on Android: the last
                             // known state of the button, with a time on it. It is the
                             // only record the out-of-range case ever gets.
-                            log::warn!("BLE PTT: link lost - button was {} (attempt {})",
+                            log::warn!("BLE PTT: link lost; button was {} (attempt {})",
                                 if was_held { "HELD" } else { "not held" }, generation);
                             if self.ble_enabled {
                                 self.ble.set_status(BleStatus::Waiting);
@@ -86,7 +86,7 @@ impl SdrRemoteApp {
             BlePttAction::KeyUp => self.ble_press(false),
             BlePttAction::Gone => self.ble_release_all(),
             BlePttAction::Unrecognised(b) => {
-                log::warn!("BLE PTT: unknown byte 0x{:02X} from the button - ignored", b);
+                log::warn!("BLE PTT: unknown byte 0x{:02X} from the button; ignored", b);
             }
         }
     }

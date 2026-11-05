@@ -1,10 +1,10 @@
-﻿# ThetisLink v2.13.0 - Installatiehandleiding
+﻿# ThetisLink v2.13.1: Installatiehandleiding
 
-ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket. Welke radio Thetis bedient, is de radio die je bedient - zie de compatibiliteit hieronder.
+ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket. Welke radio Thetis bedient, is de radio die je bedient: zie de compatibiliteit hieronder.
 
-**Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt — zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A / FTX-1 als tweede radio (via COM-poort).
+**Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt: zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A / FTX-1 als tweede radio (via COM-poort).
 
-**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.13.0 werkt prima met stock Thetis v2.10.3.15 via TCI alleen — er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-extensiegedrag van stock v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (zie de release-notes van de fork) (let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata). Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
+**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.13.1 werkt prima met stock Thetis v2.10.3.15 via TCI alleen: er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-gedrag van stock v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (zie de release-notes van de fork). Let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata. Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
 
 **Disclaimer:** Deze software bestuurt radiozenders. Gebruik op eigen risico. De auteur is niet verantwoordelijk voor schade aan apparatuur, storing of overtredingen van regelgeving als gevolg van het gebruik van deze software. Controleer alle veiligheidsfuncties (PTT timeout, vermogensgrenzen) voor het zenden.
 
@@ -14,30 +14,35 @@ ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledig
 
 | Bestand | Beschrijving |
 |---------|-------------|
-| ThetisLink-Server.exe | ThetisLink Server - draait op de PC naast Thetis |
-| ThetisLink-Client.exe | ThetisLink Desktop Client - Windows |
-| ThetisLink-2.13.0.apk | ThetisLink Android Client - telefoon/tablet |
-| Installatie.md | Deze handleiding (Nederlands) |
-| User-Manual.md | Gebruikershandleiding (Nederlands) |
-| Technische-Referentie.md | Technische referentie (Nederlands) |
-| Installation.md | Installation guide (English) |
-| User-Manual-EN.md | User manual (English) |
-| Technical-Reference.md | Technical reference (English) |
+| ThetisLink-Server.exe | ThetisLink Server: draait op de PC naast Thetis |
+| ThetisLink-Client.exe | ThetisLink Desktop Client: Windows |
+| ThetisLink-2.13.1.apk | ThetisLink Android Client: telefoon/tablet |
+| Installatie.md, Installatie.pdf | Deze handleiding (Nederlands) |
+| User-Manual.md, User-Manual.pdf | Gebruikershandleiding (Nederlands) |
+| Technische-Referentie.md, Technische-Referentie.pdf | Technische referentie (Nederlands) |
+| Installation.md, Installation.pdf | Installation guide (English) |
+| User-Manual-EN.md, User-Manual-EN.pdf | User manual (English) |
+| Technical-Reference.md, Technical-Reference.pdf | Technical reference (English) |
 | CHANGELOG.md | Wat er per versie is veranderd |
 | LICENSE | Licentie |
+| Apache-2.0.txt, OFL-1.1-Source-Code-Pro.txt | Licenties van de twee lettertypen in de PDF's en van de bibliotheken in de APK |
+| libopus-BSD-3-Clause.txt | Licentie van de Opus-codec (libopus) die in alle drie de programma's zit |
+| UFL-1.0.txt, Hack-Regular.txt, emoji-icon-font-MIT.txt | Licenties van de lettertypen in de server en de desktopclient |
+| WebView2-SDK.txt | Licentie van de WebView2-loader in de desktopclient |
+| sbom.spdx.json, THIRD-PARTY-LICENSES.html | De onderdelen van de programma's (SBOM) en de licentieteksten van de Rust-bibliotheken |
 | NOTICE.md, ATTRIBUTION.md | Licentie- en bronvermeldingen |
 | thetislink-relay-source.tar.gz | Broncode van de relay-server |
 | SHA256SUMS.txt | Checksums ter verificatie |
 
-> **Configuratiebestanden:** `thetislink-server.conf` en `thetislink-client.conf` zijn **niet bijgesloten**. Ze worden aangemaakt zodra je in de server op **Save & Start** klikt, en in de client zodra je instellingen opslaat (in dezelfde map als de exe). Tot dat moment is er geen bestand, en dat is precies wat de kale eerste start mogelijk maakt. Dit is consistent met v2.0.2 — bestaande gebruikers houden hun eigen instellingen.
+> **Configuratiebestanden:** `thetislink-server.conf` en `thetislink-client.conf` zijn **niet bijgesloten**. Ze worden aangemaakt zodra je in de server op **Save & Start** klikt, en in de client zodra je instellingen opslaat (in dezelfde map als de exe). Tot dat moment is er geen bestand, en dat is precies wat de kale eerste start mogelijk maakt. Dit is consistent met v2.0.2: bestaande gebruikers houden hun eigen instellingen.
 
 ---
 
 ## Overzicht
 
-Thetis praat met de ThetisLink Server via één TCI WebSocket-verbinding; de client(s) verbinden vervolgens met die server. Voor die verbinding tussen client en server zijn er **twee methodes** — kies degene die bij jouw netwerk past. Via de relay zoekt de verbinding daarna zelf een kortere weg (methode 2b), en op een netwerk zonder UDP neemt ze een noodroute.
+Thetis praat met de ThetisLink Server via één TCI WebSocket-verbinding; de client(s) verbinden vervolgens met die server. Voor die verbinding tussen client en server zijn er **twee methodes**: kies degene die bij jouw netwerk past. Via de relay zoekt de verbinding daarna zelf een kortere weg (methode 2b), en op een netwerk zonder UDP neemt ze een noodroute.
 
-### Methode 1 — directe verbinding
+### Methode 1: directe verbinding
 
 ```mermaid
 flowchart LR
@@ -48,7 +53,7 @@ flowchart LR
 
 De client bereikt de server **rechtstreeks** over UDP-poort 4580, met een versleutelde QUIC-verbinding. Op je eigen netwerk (LAN/WiFi) werkt dit meteen. Van buiten je netwerk kan het ook direct, mits je **port forwarding** instelt (de router stuurt UDP 4580 door naar de Server-PC) en een eigen publiek IP-adres hebt.
 
-### Methode 2 — via een relay (v2.4.0)
+### Methode 2: via een relay (v2.4.0)
 
 ```mermaid
 flowchart LR
@@ -58,9 +63,9 @@ flowchart LR
     Android[ThetisLink Android Client] -->|"uitgaand TCP + UDP :443"| Relay
 ```
 
-Is een directe verbinding **geen optie** — bijvoorbeeld achter **CGNAT** (je krijgt geen eigen publiek IP-adres) of zonder toegang tot de router — dan verbinden de server én de client allebei *uitgaand* met een **relay op een externe server (VPS)**; er is dan geen port forward nodig. Deze methode heeft dus wél een **afhankelijkheid van die externe relay-server**. De relay kun je zelf hosten, of PA3GHM voegt je op verzoek tijdelijk toe (beperkt aantal plekken).
+Is een directe verbinding **geen optie** (bijvoorbeeld achter **CGNAT** (je krijgt geen eigen publiek IP-adres) of zonder toegang tot de router) dan verbinden de server én de client allebei *uitgaand* met een **relay op een externe server (VPS)**; er is dan geen port forward nodig. Deze methode heeft dus wél een **afhankelijkheid van die externe relay-server**. De relay kun je zelf hosten, of PA3GHM voegt je op verzoek tijdelijk toe (beperkt aantal plekken); PA3GHM mag een verzoek weigeren of ermee stoppen.
 
-### Methode 2b — via de relay gevonden, daarna rechtstreeks (v2.13.0)
+### Methode 2b: via de relay gevonden, daarna rechtstreeks (v2.13.0)
 
 ```mermaid
 flowchart LR
@@ -74,10 +79,10 @@ Met de relay ingesteld verbindt de client eerst via de relay (**R**). Nadat het 
 probeert hij met hulp van de relay een rechtstreekse weg naar de server: door beide routers heen (**D+R**), of over je
 eigen netwerk als client en server achter dezelfde router zitten (**L+R**). Lukt dat, dan loopt dezelfde verbinding
 rechtstreeks verder, zonder onderbreking; de relay blijft regelaar en vangnet. Je hoeft daarvoor geen poort door te
-zetten. Lukt het niet - niet elk netwerk laat het toe - dan blijft de verbinding gewoon via de relay lopen. Staat op de
+zetten. Lukt het niet (niet elk netwerk laat het toe) dan blijft de verbinding gewoon via de relay lopen. Staat op de
 server **Rechtstreeks verbinden toestaan** uit, dan wordt het niet geprobeerd.
 
-### Noodroute — via de relay over TCP (v2.13.0)
+### Noodroute: via de relay over TCP (v2.13.0)
 
 ```mermaid
 flowchart LR
@@ -100,7 +105,7 @@ kost wat vertraging, en af en toe kun je een hik horen.
 - Audio (RX en TX streams), spectrum/waterfall (IQ data), besturing (frequentie, mode, controls)
 
 **ThetisLink Server -> ThetisLink Clients**:
-- Alles: audio, spectrum, besturing, apparaatstatus - in één verbinding per ThetisLink Client (één versleutelde QUIC-verbinding: rechtstreeks via UDP 4580, of door de relay)
+- Alles (audio, spectrum, besturing, apparaatstatus) in één verbinding per ThetisLink Client (één versleutelde QUIC-verbinding: rechtstreeks via UDP 4580, of door de relay)
 
 ---
 
@@ -115,7 +120,7 @@ kost wat vertraging, en af en toe kun je een hik horen.
 | **ThetisLink Android Client** | Android 8.0 (Oreo) of hoger, arm64 |
 | **Netwerk** | WiFi of LAN, UDP poort 4580 beschikbaar |
 
-Geen administrator-rechten nodig voor de ThetisLink Server of ThetisLink Clients. ADB is optioneel (alleen nodig voor APK installatie via command line).
+Geen administrator-rechten nodig voor de ThetisLink Server of ThetisLink Clients, en geen Microsoft Visual C++ Redistributable: sinds v2.13.1 dragen beide Windows-programma's hun eigen C-runtime mee. ADB is optioneel (alleen nodig voor APK installatie via command line).
 
 ---
 
@@ -123,14 +128,14 @@ Geen administrator-rechten nodig voor de ThetisLink Server of ThetisLink Clients
 
 ### 1.0 PA3GHM Thetis fork installeren (aanbevolen)
 
-De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.13.0 werkt het best met Thetis-fork build PA3GHM TL2-18**, die tegelijk met deze release uitkomt. Eerdere fork-builds werken ook, met minder fork-only features; stock Thetis v2.10.3.15 blijft de fallback. Installatie:
+De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.13.1 werkt het best met Thetis-fork build PA3GHM TL2-18**, die tegelijk met ThetisLink v2.13.0 uitkwam. Eerdere fork-builds werken ook, met minder fork-only features; stock Thetis v2.10.3.15 blijft de fallback. Installatie:
 
 1. Installeer eerst de officiele **Thetis v2.10.3.15** via de standaard installer (als je dat nog niet hebt)
-2. Download `Thetis.exe` en `ChannelMaster.dll` van de PA3GHM fork — **release `TL2-18`** op [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
+2. Download `Thetis.exe` en `ChannelMaster.dll` van de PA3GHM fork: **release `TL2-18`** op [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
 3. Maak een **backup** van de originele `Thetis.exe` en `ChannelMaster.dll` in de Thetis installatiemap (bijv. hernoem naar `Thetis-original.exe` en `ChannelMaster-original.dll`)
 4. Kopieer de PA3GHM `Thetis.exe` en `ChannelMaster.dll` naar de Thetis installatiemap (overschrijf de originele). Kopieer ze **samen**: een oudere `ChannelMaster.dll` naast de nieuwe `Thetis.exe` start wel, maar mist een deel van de fork
 5. Kopieer `ReleaseNotes.txt` naar dezelfde map (overschrijf de bestaande)
-6. Start Thetis - in de titelbalk verschijnt "PA3GHM TL2-18" achter het versienummer
+6. Start Thetis: in de titelbalk verschijnt "PA3GHM TL2-18" achter het versienummer
 
 > De fork wijzigt `Thetis.exe` en `ChannelMaster.dll`. Alle andere bestanden (database, instellingen) blijven ongewijzigd. Je kunt altijd terug naar de originele versie door beide backups terug te zetten. Gebruik je de knop **TL Lean**, zet hem dan uit vóórdat je Thetis afsluit, als je daarna een andere Thetis op dezelfde instellingen start.
 
@@ -141,7 +146,7 @@ Setup -> Serial/Network/Midi CAT -> Network -> groep **TCI Server**:
 1. Zet het **Bind IP:Port** veld op **`0.0.0.0:40001`**
    - `0.0.0.0` = luister op alle netwerk-interfaces (loopback + LAN)
    - `40001` = de poort die de ThetisLink Server standaard verwacht
-   - **Let op:** Thetis ships standaard met `127.0.0.1:50001`. Beide waarden moeten dus actief gewijzigd worden.
+   - **Let op:** Thetis staat standaard op `127.0.0.1:50001`. Beide waarden moeten dus actief gewijzigd worden.
 2. Vink **TCI Server Running** aan
 
 > **Waarom `0.0.0.0` en niet `127.0.0.1`?** Met `0.0.0.0` is de Thetis TCI-server bereikbaar voor:
@@ -149,14 +154,14 @@ Setup -> Serial/Network/Midi CAT -> Network -> groep **TCI Server**:
 > - **netwerk-apparaten** die rechtstreeks met Thetis praten (bijv. een **RF2K-S PA** op een ander IP in het LAN)
 > - **remote toegang via router/internet** (port-forwarding op poort 40001)
 >
-> Met alleen `127.0.0.1` werkt enkel het lokale ThetisLink Server-pad — netwerk-apparaten en remote toegang vallen weg.
+> Met alleen `127.0.0.1` werkt enkel het lokale ThetisLink Server-pad: netwerk-apparaten en remote toegang vallen weg.
 >
 > Wil je niet wijd-open binden, klik dan op **IPv4** (knop naast het Bind-veld); Thetis vult dan je lokale LAN-IP in. Dat beperkt bereikbaarheid tot het LAN.
 
 Bij de PA3GHM Thetis fork, op dezelfde tab:
 1. Vink **ThetisLink extensions** aan
 
-> ThetisLink gebruikt uitsluitend TCI voor radio-besturing. De TCP/IP CAT-server in Thetis hoeft niet aan te staan voor ThetisLink — die is alleen nodig als je een apart loggings-programma of derde-partij CAT-client direct aan Thetis wilt koppelen.
+> ThetisLink gebruikt uitsluitend TCI voor radio-besturing. De TCP/IP CAT-server in Thetis hoeft niet aan te staan voor ThetisLink, die is alleen nodig als je een apart loggings-programma of derde-partij CAT-client direct aan Thetis wilt koppelen.
 
 ---
 
@@ -164,11 +169,13 @@ Bij de PA3GHM Thetis fork, op dezelfde tab:
 
 ### 2.1 ThetisLink Server starten
 
-Kopieer `ThetisLink-Server.exe` naar een map op de Thetis-PC. Dubbelklik om te starten - geen installatie of administrator-rechten nodig.
+Kopieer `ThetisLink-Server.exe` naar een map op de Thetis-PC. Dubbelklik om te starten: geen installatie of administrator-rechten nodig.
 
-De ThetisLink Server opent een GUI-venster waarin je alles configureert. Zolang er nog geen `thetislink-server.conf` is, start hij **kaal**: alle apparaten (Amplitec, tuners, SPE, RF2K-S, UltraBeam, rotor, DX-cluster), de tweede ontvanger en alle "venster openen bij starten"-vinkjes staan uit. Je hoeft dus niets uit te zetten — je zet alleen aan wat je daadwerkelijk hebt aangesloten. De **taal** volgt bij die eerste start de weergavetaal van Windows als ThetisLink die heeft (NL/DE/FR), en anders Engels.
+De ThetisLink Server opent een GUI-venster waarin je alles configureert. Zolang er nog geen `thetislink-server.conf` is, start hij **kaal**: alle apparaten (Amplitec, tuners, SPE, RF2K-S, UltraBeam, rotor, DX-cluster), de tweede ontvanger en alle "venster openen bij starten"-vinkjes staan uit. Je hoeft dus niets uit te zetten: je zet alleen aan wat je daadwerkelijk hebt aangesloten. De **taal** volgt bij die eerste start de weergavetaal van Windows als ThetisLink die heeft (NL/DE/FR), en anders Engels.
 
-Er wordt bij het opstarten nog niets weggeschreven: het conf-bestand verschijnt pas als je op **Save & Start** klikt. Eén ding is daarbij verplicht — zonder **wachtwoord** start de server vanuit de GUI niet. (Een server die met opdrachtregelargumenten wordt gestart, kan zonder wachtwoord draaien en laat dan iedereen toe; dat wordt in een volgende versie dichtgezet.) Dat is de enige instelling die je moet invullen om te kunnen verbinden; zie 2.6.
+Er wordt bij het opstarten nog niets weggeschreven: het conf-bestand verschijnt pas als je op **Save & Start** klikt. Eén ding is daarbij verplicht: zonder **wachtwoord** start de server vanuit de GUI niet. (Een server die met opdrachtregelargumenten wordt gestart, heeft er ook een nodig: hij leest het wachtwoord uit de bewaarde instellingen en start niet zonder.) Dat is de enige instelling die je moet invullen om te kunnen verbinden; zie 2.6.
+
+Eén server per pc: start je een tweede ThetisLink Server op dezelfde pc, dan zegt die dat er al een geopend is, en stopt (v2.13.1).
 
 ### 2.2 Verbinding met Thetis configureren
 
@@ -182,32 +189,32 @@ Als Thetis op dezelfde PC draait (aanbevolen), zijn de standaardwaarden al corre
 
 ### 2.3 Externe apparaten (optioneel)
 
-In de ThetisLink Server GUI kun je externe apparaten aansluiten. Elk apparaat heeft een enable/disable vinkje - uitgeschakelde apparaten behouden hun configuratie maar worden niet opgestart.
+In de ThetisLink Server GUI kun je externe apparaten aansluiten. Elk apparaat heeft een enable/disable vinkje: uitgeschakelde apparaten behouden hun configuratie maar worden niet opgestart.
 
 | Apparaat | Verbinding | Instelling |
 |----------|-----------|-----------|
 | Amplitec 6/2 antenneswitch | Serieel (USB) | COM poort, 19200 baud |
 | JC-4s / JC-3s antennetuner (*) | USB-HID | Adafruit MCP2221A breakout (zie hieronder) |
 | SPE Expert 1.3K-FA PA | Serieel (USB) | COM poort, 115200 baud |
-| RF2K-S PA | HTTP REST | IP:poort (bijv. `192.168.1.50:8080`) |
+| RF2K-S PA | HTTP REST | IP:poort (bijv. `192.168.1.3:8080`) |
 | UltraBeam RCU-06 antennecontroller | Serieel (USB) | COM poort |
-| EA7HG Visual Rotor | UDP | IP:poort (bijv. `192.168.1.66:2570`) |
-| PstRotator (uitgaand) | UDP/XML | host:poort van de PstRotator-PC (bijv. `192.168.1.70:12000`) + lokale feedback-poort `12001`; werkt voor elk rotormodel dat PstRotator zelf ondersteunt |
+| EA7HG Visual Rotor | UDP | IP:poort (bijv. `192.168.1.4:3010`) |
+| PstRotator (uitgaand) | UDP/XML | host:poort van de PstRotator-PC (bijv. `192.168.1.5:12000`) + lokale feedback-poort `12001`; werkt voor elk rotormodel dat PstRotator zelf ondersteunt |
 | Yaesu G-1000DXC rotor (**) | USB-HID | Adafruit MCP2221A breakout in 5 V-mode, BST82 gate-switches op pin 1/2 + DAC op pin 3 + ADC via 1,8 k + 2,2 k deler op pin 4 |
 | Yaesu FT-991A / FTX-1 | Serieel (USB) | COM poort (zie hieronder) |
 
-> (*) De StockCorner JC-4s en JC-3s tuners hebben geen standaard seriele interface. Vanaf v2.0.3 wordt elke tuner aangestuurd via een **Adafruit MCP2221A USB-naar-HID breakout** met een transistor-trapje op de grey "start"-draad en een 1 MΩ + 1 MΩ spanningsdeler op de yellow "tune-status"-draad. Tot twee tuners parallel worden ondersteund; elk bord krijgt een uniek USB-serienummer dat je vanuit het server status-paneel kunt programmeren. De volledige wiring + UI-flow staat in de Gebruikershandleiding (`User-Manual.md`). Dit is geen kant-en-klaar product — neem contact op voor details.
+> (*) De StockCorner JC-4s en JC-3s tuners hebben geen standaard seriele interface. Vanaf v2.0.3 wordt elke tuner aangestuurd via een **Adafruit MCP2221A USB-naar-HID breakout** met een transistor-trapje op de grey "start"-draad en een 1 MΩ + 1 MΩ spanningsdeler op de yellow "tune-status"-draad. Tot zes tuners worden parallel ondersteund; elk bord krijgt een uniek USB-serienummer dat je vanuit het server status-paneel kunt programmeren. De volledige wiring + UI-flow staat in de Gebruikershandleiding (`User-Manual.md`). Dit is geen kant-en-klaar product: neem contact op voor details.
 
-> (**) Vanaf v2.1.0 kan de **Yaesu G-1000DXC** ook direct vanuit de ThetisLink-server aangestuurd worden via een **Adafruit MCP2221A breakout in 5 V-mode**, zonder tussenkomst van EA7HG of een ander controller-programma. Op de breakout zitten twee BST82 low-side switches (CW/CCW) plus een 5-bit DAC voor de snelheidsregeling en een ADC voor positie-terugkoppeling via een 1,8 kΩ + 2,2 kΩ spanningsdeler (ratio 1,818) — sommige G-1000DXC units halen ~7,3 V op pin 4 bij 450°, dus de eerder gebruikelijke 1,8 kΩ + 10 kΩ-deler clipt bij hoge graden. De rotor-backend ondersteunt soft-start/soft-stop ramp, adaptive ADC-poll (30 Hz tijdens beweging / 1 Hz bij stilstand met mediaanfilter tegen netvoeding-ripple), een kortste-route-optie voor rotors met overlap-zone (`max_deg > 360°`) en een Park CCW / Park CW kalibratie-wizard. De volledige hardware-specs en wiring staan in de Gebruikershandleiding (`User-Manual.md`, sectie "Yaesu G-1000DXC via Adafruit MCP2221A"). Ook dit is geen kant-en-klaar product — neem contact op voor details.
+> (**) Vanaf v2.1.0 kan de **Yaesu G-1000DXC** ook direct vanuit de ThetisLink-server aangestuurd worden via een **Adafruit MCP2221A breakout in 5 V-mode**, zonder tussenkomst van EA7HG of een ander controller-programma. Op de breakout zitten twee BST82 low-side switches (CW/CCW) plus een 5-bit DAC voor de snelheidsregeling en een ADC voor positie-terugkoppeling via een 1,8 kΩ + 2,2 kΩ spanningsdeler (ratio 1,818): sommige G-1000DXC units halen ~7,3 V op pin 4 bij 450°, dus de eerder gebruikelijke 1,8 kΩ + 10 kΩ-deler clipt bij hoge graden. De rotor-backend ondersteunt soft-start/soft-stop ramp, adaptive ADC-poll (30 Hz tijdens beweging / 1 Hz bij stilstand met mediaanfilter tegen netvoeding-ripple), een kortste-route-optie voor rotors met overlap-zone (`max_deg > 360°`) en een Park CCW / Park CW kalibratie-wizard. De volledige hardware-specs en wiring staan in de Gebruikershandleiding (`User-Manual.md`, sectie "Yaesu G-1000DXC via Adafruit MCP2221A"). Ook dit is geen kant-en-klaar product: neem contact op voor details.
 
 > **De morsepeddel is de uitzondering: die hangt aan de CLIENT.** Vanaf v2.12.0
 > lees je een peddel of rechte sleutel van een **Adafruit MCP2221A**-breakout op
-> de PC waar de desktopclient draait - niet op de server. Hij staat daarom niet in
+> de PC waar de desktopclient draait: niet op de server. Hij staat daarom niet in
 > de tabel hierboven en niet in de Server GUI. De pinindeling, de verplichte
 > weerstand en de waarschuwing over meerdere MCP2221A-borden in een PC staan in de
 > Gebruikershandleiding, sectie "Morsesleutel: peddel op een MCP2221A".
 
-> **Rotor-backend keuze**: in de Server GUI onder *Rotor → backend* kies je tussen **EA7HG Visual Rotor**, **PstRotator (XML/UDP)** of **Yaesu G-1000DXC (MCP2221A)**. Eén tegelijk actief; van het client-paneel uit (kompas, GoTo, Stop) is geen verschil zichtbaar — de keuze bepaalt alleen hoe de server met de rotorhardware praat. Voor PstRotator-setup zie de Gebruikershandleiding, sectie "Rotor backends → PstRotator (XML/UDP)".
+> **Rotor-backend keuze**: in de Server GUI onder *Rotor → backend* kies je tussen **EA7HG Visual Rotor**, **PstRotator (XML/UDP)** of **Yaesu G-1000DXC (MCP2221A)**. Eén tegelijk actief; van het client-paneel uit (kompas, GoTo, Stop) is geen verschil zichtbaar: de keuze bepaalt alleen hoe de server met de rotorhardware praat. Voor PstRotator-setup zie de Gebruikershandleiding, sectie "Rotor backends → PstRotator (XML/UDP)".
 
 #### Yaesu FT-991A / FTX-1 USB driver
 
@@ -215,11 +222,11 @@ De Yaesu FT-991A en FTX-1 gebruiken een **Silicon Labs CP210x** USB-naar-serieel
 
 https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers
 
-Na installatie van de driver en het aansluiten van de Yaesu via USB verschijnen er **twee COM-poorten** in Apparaatbeheer (bijv. COM5 en COM6). Selecteer de **laagste** van de twee - dit is de CAT/serieel poort. De andere poort is voor USB audio.
+Na installatie van de driver en het aansluiten van de Yaesu via USB verschijnen er **twee COM-poorten** in Apparaatbeheer (bijv. COM5 en COM6). Selecteer de **laagste** van de twee: dit is de CAT/serieel poort. De andere poort is voor USB audio.
 
-Voor Yaesu audio: selecteer in de ThetisLink Server GUI bij het Yaesu apparaat **USB Audio CODEC** als audioapparaat. De ThetisLink Server stuurt dit audiokanaal door naar alle verbonden ThetisLink Clients. Een tweede radio (bijv. FTX-1) meldt zich mogelijk als **USB Audio Device** — kies per radio het juiste apparaat.
+Voor Yaesu audio: selecteer in de ThetisLink Server GUI bij het Yaesu apparaat **USB Audio CODEC** als audioapparaat. De ThetisLink Server stuurt dit audiokanaal door naar alle verbonden ThetisLink Clients. Een tweede radio (bijv. FTX-1) meldt zich mogelijk als **USB Audio Device**: kies per radio het juiste apparaat.
 
-> **Belangrijk — schakel Windows audio-verbeteringen uit.** Windows past op opname-apparaten standaard "audio-verbeteringen" (ruisonderdrukking / AGC) toe. Op het USB-audioapparaat van de radio zorgt dit ervoor dat constante bandruis na enkele seconden wegzakt met compressie-artifacten — alsof er een adaptief filter overheen ligt. Schakel dit uit op de server-PC:
+> **Belangrijk: schakel Windows audio-verbeteringen uit.** Windows past op opname-apparaten standaard "audio-verbeteringen" (ruisonderdrukking / AGC) toe. Op het USB-audioapparaat van de radio zorgt dit ervoor dat constante bandruis na enkele seconden wegzakt met compressie-artifacten, alsof er een adaptief filter overheen ligt. Schakel dit uit op de server-PC:
 >
 > 1. Windows-toets → typ `mmsys.cpl` → Enter.
 > 2. Tabblad **Opname** → selecteer het USB-audioapparaat van de radio (bijv. *Microfoon (USB Audio CODEC)* voor de FT-991A) → **Eigenschappen**.
@@ -228,7 +235,15 @@ Voor Yaesu audio: selecteer in de ThetisLink Server GUI bij het Yaesu apparaat *
 >
 > Zonder deze stap blijft de audio helder, maar verdwijnt de ruis onnatuurlijk. Dit wordt door Windows veroorzaakt, niet door ThetisLink.
 
-> **Twee identiek benoemde audio-apparaten.** Twee gelijke radio's (bijv. 2× FT-991A) melden hun USB-audio met **dezelfde** naam ("USB Audio CODEC"). Voeg dan een **`#N`-achtervoegsel** toe aan de audio-naam om het N-de (1-based) apparaat te kiezen: `yaesu_audio=USB Audio CODEC#1` voor radio 1, `yaesu2_audio=USB Audio CODEC#2` voor radio 2. Zonder `#N` = het eerste apparaat (ongewijzigd gedrag). Krijgt Windows ze al onderscheidende namen (vaak een prefix als "2- USB Audio CODEC"), gebruik dan gewoon die naam zonder `#`. De server-startup-log toont onder `Beschikbare audio-input devices [...]` hoe de apparaten heten.
+> **Ontvangstniveau van de radio's (aanbevolen).** De USB-geluidskaart van een radio levert veel minder dan Thetis, en bij de fabrieksniveaus vullen de clients dat aan met een grote correctie, die ook de eigen ruis van de geluidskaart ophaalt. Ingesteld zoals hieronder werkt elke radio zijn geluidskaart rond het beste niveau en hebben de clients maar een kleine stap nodig. **Doe deze drie stappen pas als de server en elke client 2.13.1 zijn**: een 2.13.0-client, of een 2.13.1-client op een 2.13.0-server, houdt de grote correctie en speelt radio's die zo zijn ingesteld veel te hard (een FTX-1 ongeveer 22 dB).
+>
+> 1. **FT-991A**: zet in het menu van de radio **107 SSB OUT LEVEL** op **100**, en hetzelfde voor de andere modes die je gebruikt (**046** AM, **075** FM, **073** DATA, **054** CW, **099** RTTY). Zet in Windows het opnameniveau van *USB Audio CODEC* op het punt waar Windows niets versterkt en niets verzwakt (0 dB). Windows toont dat punt niet; op de pc waarop dit is gemeten was het 54 van 100.
+> 2. **FTX-1**: zet in Windows het opnameniveau van *USB Audio Device* op het **maximum**. Zet in de serverinstellingen **FTX-1-audio** op de ontvanger waar je naar luistert (*Ontvanger 1 (links)* of *Ontvanger 2 (rechts)*) in plaats van *Beide gemengd*: met de andere ontvanger stil kost mengen 6 dB. (De eigen *USB OUT LEVEL* van de radio had op de radio waarop dit is gemeten geen effect.)
+> 3. Vink in de serverinstellingen **Yaesu-ontvangstniveaus ingesteld volgens de installatiegids** aan en start de server opnieuw.
+>
+> Zonder het vinkje gebruiken de clients de correctie voor radio's op hun fabrieksniveaus, zoals voorheen. Met het vinkje aan en de radio's op fabrieksniveau klinken de radio's veel te zacht: het vinkje en de instellingen horen bij elkaar.
+
+> **Twee identiek benoemde audio-apparaten.** Twee gelijke radio's (bijv. 2× FT-991A) melden hun USB-audio met **dezelfde** naam ("USB Audio CODEC"). Voeg dan een **`#N`-achtervoegsel** toe aan de audio-naam om het N-de (1-based) apparaat te kiezen: `yaesu_audio=USB Audio CODEC#1` voor radio 1, `yaesu2_audio=USB Audio CODEC#2` voor radio 2. Zonder `#N` = het eerste apparaat (ongewijzigd gedrag). Krijgt Windows ze al onderscheidende namen (vaak een prefix als "2- USB Audio CODEC"), gebruik dan gewoon die naam zonder `#`. De server-startup-log toont onder `Available audio input devices (N): [...]` hoe de apparaten heten.
 
 ### 2.4 Firewall
 
@@ -251,7 +266,7 @@ Windows Defender scant `ThetisLink-Server.exe` continu omdat het een onbekend pr
 
 ### 2.6 Wachtwoord en 2FA
 
-Een wachtwoord is **verplicht**. De ThetisLink Server GUI start niet zonder een geldig wachtwoord (minimaal 8 tekens, letters en cijfers); alleen een server die met opdrachtregelargumenten wordt gestart, kan er zonder draaien en laat dan iedereen toe. Stel het wachtwoord in via de ThetisLink Server GUI onder **Security**. ThetisLink Clients moeten hetzelfde wachtwoord invoeren om te verbinden.
+Een wachtwoord is **verplicht**. De ThetisLink Server start niet zonder een geldig wachtwoord (minimaal 8 tekens, letters en cijfers), ook niet met opdrachtregelargumenten. Stel het wachtwoord in via de ThetisLink Server GUI onder **Security**. ThetisLink Clients moeten hetzelfde wachtwoord invoeren om te verbinden.
 
 De authenticatie gebruikt HMAC-SHA256 challenge-response: het wachtwoord wordt nooit over het netwerk verstuurd. Brute-force bescherming is ingebouwd per ThetisLink Client.
 
@@ -272,7 +287,7 @@ Dit is de stap die de server daadwerkelijk aanzet, en tot hier is er nog niets w
 1. Vul bij **2.6** een wachtwoord in. Zonder wachtwoord start de server niet en weigert hij elke client.
 2. Klik op **Save & Start**.
 
-Nu pas verschijnt `thetislink-server.conf` naast de exe, en pas nu accepteert de server verbindingen. Heb je alleen op het exe-bestand gedubbelklikt, dan staat de server klaar maar draait hij niet - ga dus niet naar stap 3 voor je dit gedaan hebt.
+Nu pas verschijnt `thetislink-server.conf` naast de exe, en pas nu accepteert de server verbindingen. Heb je alleen op het exe-bestand gedubbelklikt, dan staat de server klaar maar draait hij niet: ga dus niet naar stap 3 voor je dit gedaan hebt.
 
 Latere wijzigingen in de serverinstellingen bewaar je met opnieuw **Save & Start**.
 
@@ -284,20 +299,20 @@ Latere wijzigingen in de serverinstellingen bewaar je met opnieuw **Save & Start
 
 Kopieer `ThetisLink-Client.exe` naar een map op de Desktop Client-PC. Geen installatie nodig.
 
-### 3.2 Eerste keer starten — begeleide setup-wizard
+### 3.2 Eerste keer starten: begeleide setup-wizard
 
 Bij de allereerste start toont ThetisLink een 4-stappen **setup-wizard**. Volgende starts skippen de wizard automatisch en komen direct in de normale UI.
 
-1. **Vind de server.** Servers op dezelfde WiFi/LAN verschijnen automatisch in een "Found"-dropdown (mDNS / Bonjour). Kies de jouwe of typ het adres handmatig als `<server-IP>:4580` (bijv. `192.168.1.79:4580`).
+1. **Vind de server.** Servers op dezelfde WiFi/LAN verschijnen automatisch in een "Found"-dropdown (mDNS / Bonjour). Kies de jouwe of typ het adres handmatig als `<server-IP>:4580` (bijv. `192.168.1.2:4580`).
 2. **Vul het wachtwoord in** (zie stap 2.6). Een "Show"-vinkje toont het wachtwoord in klare tekst.
-3. **2FA-code** — alleen wanneer de server het vraagt. Vul de 6-cijferige code uit je authenticator-app in.
+3. **2FA-code**: alleen wanneer de server het vraagt. Vul de 6-cijferige code uit je authenticator-app in.
 4. **Verbonden.** Klik *Done* om naar de normale UI te gaan.
 
 Bij een fout toont ThetisLink een specifieke melding (bv. "Wrong password", "Server name not found", "Thetis is not running on the server PC") en stuurt je terug naar de juiste stap. Rechtsboven kun je **Skip wizard** klikken om direct naar het handmatige connect-formulier te gaan.
 
 Als ThetisLink Server en Desktop Client op dezelfde PC draaien: gebruik `127.0.0.1:4580`.
 
-> Bij de eerste verbinding kan het aan beide zijden even duren voordat alles is opgestart — de Server moet de TCI-verbinding met Thetis opbouwen en alle externe apparaten initialiseren. Dit is eenmalig; bij volgende verbindingen gaat het direct.
+> Bij de eerste verbinding kan het aan beide zijden even duren voordat alles is opgestart: de Server moet de TCI-verbinding met Thetis opbouwen en alle externe apparaten initialiseren. Dit is eenmalig; bij volgende verbindingen gaat het direct.
 
 De wizard kun je altijd opnieuw starten via de **Wizard**-knop op de Server-tab.
 
@@ -309,14 +324,14 @@ Instellingen worden automatisch opgeslagen in `thetislink-client.conf` naast de 
 - Band memories
 - TX profielen
 - MIDI mappings
-- `language=en` of `language=nl` — UI-tekst voor connect-status en connect-fouten (default: en)
-- `successful_connects=N` — first-run wizard teller. De wizard verschijnt zodra dit `0` is of ontbreekt. Verwijder deze regel (of zet hem op `0`) om de wizard bij de volgende start te forceren.
+- `language=en`, `nl`, `de` of `fr`: de taal van de hele gebruikersinterface (een eerste start neemt de taal van het systeem als het een van deze is, anders en)
+- `successful_connects=N`: first-run wizard teller. De wizard verschijnt zodra dit `0` is of ontbreekt. Verwijder deze regel (of zet hem op `0`) om de wizard bij de volgende start te forceren.
 
-### 3.4 Server-tab — serverstatus in één oogopslag
+### 3.4 Server-tab: serverstatus in één oogopslag
 
 De Server-tab in de client toont live verbindingsstatus, audio-niveau-balken per kanaal, en een **Wizard**-knop (klein, rechtsboven in de Server-adres rij) om de setup-wizard opnieuw te starten zonder config te wissen.
 
-Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Status** (compact server-state paneel: bind-adres, Thetis TCI-link, actieve clients met RTT/loss/jitter, audio-routing chips, recente connect-pogingen, geconfigureerde apparaten) en **Logs**. Het Status-paneel is de snelste manier om support-vragen te beantwoorden zoals *"luistert de server?"* of *"is mijn connect-poging aangekomen?"* — een screenshot ervan dekt meestal 80% van de diagnose.
+Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Status** (compact server-state paneel: bind-adres, Thetis TCI-link, actieve clients met RTT/loss/jitter, audio-routing chips, recente connect-pogingen, geconfigureerde apparaten) en **Logs**. Het Status-paneel is de snelste manier om support-vragen te beantwoorden zoals *"luistert de server?"* of *"is mijn connect-poging aangekomen?"*: een screenshot ervan dekt meestal 80% van de diagnose.
 
 ---
 
@@ -332,19 +347,19 @@ Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Statu
 > Instellingen bij de processor- of systeeminformatie.
 
 **Via bestandsbeheer:**
-1. Kopieer `ThetisLink-2.13.0.apk` naar je telefoon (USB, e-mail, of cloud)
+1. Kopieer `ThetisLink-2.13.1.apk` naar je telefoon (USB, e-mail, of cloud)
 2. Open het APK-bestand op de telefoon
 3. Sta "Installeren van onbekende bronnen" toe als gevraagd
 4. Installeer
 
 **Via ADB** (met USB-debugging ingeschakeld):
 ```
-adb install ThetisLink-2.13.0.apk
+adb install ThetisLink-2.13.1.apk
 ```
 
-### 4.2 Verbinden — begeleide setup-wizard
+### 4.2 Verbinden: begeleide setup-wizard
 
-De Android-app toont bij de eerste start dezelfde 4-stappen **setup-wizard** (Vind server → Wachtwoord → 2FA → Verbonden). Op hetzelfde WiFi-netwerk wordt de Server automatisch gevonden via mDNS (Bonjour) en verschijnt in een *Choose discovered server*-dropdown — geen IP-typewerk nodig. De system back-button gaat naar de vorige wizard-stap; op stap 1 vraagt hij of je naar het handmatige formulier wilt overslaan.
+De Android-app toont bij de eerste start dezelfde 4-stappen **setup-wizard** (Vind server → Wachtwoord → 2FA → Verbonden). Op hetzelfde WiFi-netwerk wordt de Server automatisch gevonden via mDNS (Bonjour) en verschijnt in een *Choose discovered server*-dropdown: geen IP-typewerk nodig. De system back-button gaat naar de vorige wizard-stap; op stap 1 vraagt hij of je naar het handmatige formulier wilt overslaan.
 
 Volgende starts gaan direct naar de normale UI. Om de wizard later opnieuw te starten: tik op de **Wizard**-knop op het Radio-scherm (naast *Settings / MIDI / About*).
 
@@ -358,9 +373,9 @@ De ThetisLink Android Client detecteert automatisch aangesloten Bluetooth headse
 
 Er zijn twee soorten, en ze worden verschillend ingesteld.
 
-**Een BLE-zendknop (YPC21 / PTT-Z01 en dezelfde klasse), aanbevolen.** Koppel deze **niet** in de Bluetooth-instellingen van Android - ThetisLink maakt de verbinding zelf. Open in de app **Instellingen > BT-zendknop**, tik op **Knop kiezen**, en druk de knop een keer in om hem wakker te maken zodat hij in de lijst verschijnt. Daarna verbindt de app uit zichzelf opnieuw, ook nadat de knop buiten bereik is geweest of de Bluetooth van de telefoon uit heeft gestaan. Omdat ThetisLink de verbinding zelf vasthoudt en niet het aanraaksysteem, werkt de knop ook met het scherm op slot, en raakt hij buiten bereik dan wordt de zender losgelaten in plaats van aan gelaten. Vereist Android 12 of nieuwer.
+**Een BLE-zendknop (YPC21 / PTT-Z01 en dezelfde klasse), aanbevolen.** Koppel deze **niet** in de Bluetooth-instellingen van Android: ThetisLink maakt de verbinding zelf. Open in de app **Instellingen > BT-zendknop**, tik op **Knop kiezen**, en druk de knop een keer in om hem wakker te maken zodat hij in de lijst verschijnt. Daarna verbindt de app uit zichzelf opnieuw, ook nadat de knop buiten bereik is geweest of de Bluetooth van de telefoon uit heeft gestaan. Omdat ThetisLink de verbinding zelf vasthoudt en niet het aanraaksysteem, werkt de knop ook met het scherm op slot, en raakt hij buiten bereik dan wordt de zender losgelaten in plaats van aan gelaten. Vereist Android 12 of nieuwer.
 
-**Een shutter-knop (bijv. ZL-01).** Die meldt zich bij Android als een externe een-knops aanraakapparaat. Koppel hem in de Bluetooth-instellingen van Android; ThetisLink herkent de druk dan als PTT. Deze soort werkt alleen met een wakker scherm - Android levert aanraak-events alleen af aan een scherm dat aan staat.
+**Een shutter-knop (bijv. ZL-01).** Die meldt zich bij Android als een externe een-knops aanraakapparaat. Koppel hem in de Bluetooth-instellingen van Android; ThetisLink herkent de druk dan als PTT. Deze soort werkt alleen met een wakker scherm: Android levert aanraak-events alleen af aan een scherm dat aan staat.
 
 ---
 
@@ -382,7 +397,7 @@ Na een succesvolle verbinding is ThetisLink klaar voor gebruik. Zie de **Gebruik
 ### Discovery binnen lokaal netwerk (mDNS)
 
 Clients op dezelfde WiFi/LAN vinden de server automatisch via mDNS
-(Bonjour / Avahi) — geen IP-adres intypen nodig. De "Found:"-dropdown
+(Bonjour / Avahi): geen IP-adres intypen nodig. De "Found:"-dropdown
 in de desktop-client en de "Choose discovered server"-lijst in de
 Android-app vullen zichzelf binnen ~1 seconde na het openen van het
 connect-scherm.
@@ -401,7 +416,7 @@ internet-scenario's waar mDNS niet doorheen komt.
 
 De Android-app heeft de permissie `CHANGE_WIFI_MULTICAST_STATE` nodig
 voor mDNS-scanning. Dit is een *normal* Android-permissie die
-automatisch bij installatie wordt verleend — geen runtime-prompt.
+automatisch bij installatie wordt verleend: geen runtime-prompt.
 
 ### Bandbreedte
 
@@ -412,7 +427,7 @@ automatisch bij installatie wordt verleend — geen runtime-prompt.
 
 ### Latency
 
-Hoe lager de netwerklatency, hoe beter de ervaring - met name voor PTT en audio.
+Hoe lager de netwerklatency, hoe beter de ervaring: met name voor PTT en audio.
 
 | Netwerk | Verwachting |
 |---------|------------|
@@ -432,7 +447,7 @@ Om ThetisLink van buitenshuis te gebruiken moet je router het verkeer doorsturen
    - **Protocol:** UDP
    - **Externe poort:** 4580
    - **Interne poort:** 4580
-   - **Intern IP-adres:** het IP van de ThetisLink Server PC (bijv. `192.168.1.79`)
+   - **Intern IP-adres:** het IP van de ThetisLink Server PC (bijv. `192.168.1.2`)
 4. Sla op en herstart de router indien nodig
 
 In de ThetisLink Client gebruik je dan je **publieke IP-adres** als ThetisLink Server-adres. Je publieke IP vind je op bijv. whatismyip.com. Bij een wisselend IP-adres kun je een DynDNS dienst gebruiken (bijv. No-IP, DuckDNS) zodat je altijd via dezelfde naam verbindt.
@@ -441,17 +456,17 @@ In de ThetisLink Client gebruik je dan je **publieke IP-adres** als ThetisLink S
 
 ### Gebruik via internet met de relay (v2.4.0, aanbevolen bij CGNAT / geen port-forward)
 
-Port forwarding werkt alleen als je een eigen publiek IP-adres hebt en je router kunt aanpassen. Heb je **CGNAT** (veel glasvezel- en 4G/5G-providers geven geen publiek IP) of geen toegang tot de router, gebruik dan de **relay**. Zowel de server (station) als de client verbinden dan **uitgaand** met een relay-server op een VPS — er hoeft niets ingekomen doorgestuurd te worden. Zie de gebruikershandleiding, sectie [Internet-remote via relay], voor de werking; hieronder de setup-stappen.
+Port forwarding werkt alleen als je een eigen publiek IP-adres hebt en je router kunt aanpassen. Heb je **CGNAT** (veel glasvezel- en 4G/5G-providers geven geen publiek IP) of geen toegang tot de router, gebruik dan de **relay**. Zowel de server (station) als de client verbinden dan **uitgaand** met een relay-server op een VPS: er hoeft niets ingekomen doorgestuurd te worden. Zie de gebruikershandleiding, sectie [Internet-remote via relay], voor de werking; hieronder de setup-stappen.
 
-> **De relay proberen zonder zelf te hosten?** Voor de eerste gebruikers die de relay willen uitproberen kan PA3GHM je — op verzoek en zolang er plek is — tijdelijk toevoegen aan een testrelay. Let op: dit is een **tijdelijke server met een beperkt aantal plekken**, dus zonder garantie op beschikbaarheid of continuïteit. Vraag het aan PA3GHM via **pa3ghm@gmail.com** of [QRZ.com](https://www.qrz.com/db/PA3GHM) — een nee is een geldig antwoord, en PA3GHM mag ook besluiten ermee te stoppen. Wil je hem zelf hosten, volg dan de stappen hieronder.
+> **De relay proberen zonder zelf te hosten?** Voor de eerste gebruikers die de relay willen uitproberen kan PA3GHM je (op verzoek en zolang er plek is) tijdelijk toevoegen aan een testrelay. Let op: dit is een **tijdelijke server met een beperkt aantal plekken**, dus zonder garantie op beschikbaarheid of continuïteit. Vraag het aan PA3GHM via **pa3ghm@gmail.com** of [QRZ.com](https://www.qrz.com/db/PA3GHM): een nee is een geldig antwoord, en PA3GHM mag ook besluiten ermee te stoppen. Wil je hem zelf hosten, volg dan de stappen hieronder.
 
 **A. Relay hosten (eenmalig, op een VPS)**
 
 De relay is geen kant-en-klare download maar broncode + Docker. Op een Linux-VPS met Docker:
 
 1. Zet de relay-bron op de VPS (clone de repo of pak de `thetislink-relay-source.tar.gz` uit).
-2. Kopieer `.env.example` naar `.env` en vul in: een **stationsleutel** (de token die het station en de client delen), een **beheerderswachtwoord** voor het dashboard, en je **domeinnaam** voor Caddy/TLS.
-3. Start: `docker compose up -d --build`. Caddy regelt automatisch een TLS-certificaat voor je domein.
+2. Kopieer `.env.example` naar `.env` en vul in: een **stationsleutel** (de token die het station en de client delen) en je **domeinnaam** voor Caddy/TLS.
+3. Start: `docker compose up -d --build`. Dat start de relay en Caddy; Caddy regelt automatisch een TLS-certificaat voor je domein. Het beheerderswachtwoord voor het dashboard zet je één keer in de container (`set-admin-password`, zie `DEPLOY-wss.md`).
 4. De relay luistert dan op **poort 443**: TCP voor wss (aanmelden, chat, en de noodroute als UDP geblokkeerd is) en UDP voor de QUIC-verbinding zelf.
 
 > Het volledige VPS-recept (domein, Caddy, poorten, updaten) staat in `thetislink-relay/DEPLOY-wss.md`. Het `.env`-bestand bevat geheimen en mag **nooit** publiek of in een repository komen.
@@ -464,7 +479,15 @@ geen chatknop en werkt al het andere gewoon. De bron staat in `thetislink-chat/`
 en hij hoort in dezelfde `docker-compose.yml` als de relay, zodat een chat-update
 de relay niet raakt.
 
-Wil je hem niet draaien, sla dit dan over — er hoeft niets uitgezet te worden.
+Om hem te draaien: kloon de repository (het bronpakket van de relay heeft de chat niet), haal in `.env` het
+hekje weg voor `COMPOSE_PROFILES=chat` en zet `THETISLINK_CHAT_KEYS` op een lange willekeurige sleutel; daarna
+`docker compose up -d --build`. Omdat de relay dan ook de chatsleutel krijgt, maakt compose de relaycontainer één
+keer opnieuw: stations en clients vallen een paar seconden weg en verbinden vanzelf opnieuw. Wil je hem niet
+draaien, sla dit dan over: zonder het profiel start de chat niet.
+
+De chat later weer uitzetten: `docker compose stop thetislink-chat` en `docker compose rm -f thetislink-chat`, haal
+`COMPOSE_PROFILES=chat` en `THETISLINK_CHAT_KEYS` weer uit `.env` (met de sleutel erin blijft de relay een chat
+aanbieden) en draai `docker compose up -d`; ook dan start de relay één keer opnieuw.
 
 
 **B. Station (ThetisLink Server) op de relay zetten**
@@ -472,8 +495,8 @@ Wil je hem niet draaien, sla dit dan over — er hoeft niets uitgezet te worden.
 In de server-settings-GUI, blok **"Relay"**:
 
 1. Vink **"Enable outbound relay monitor"** aan.
-2. **Relay URL:** het adres van je relay (bijv. `wss://relay.jouwdomein.nl` via Caddy, of `ws://<vps-ip>:18080` rechtstreeks zonder TLS).
-3. **Station name:** een naam voor dit station (bijv. `thuis-anan`) — client en station moeten exact dezelfde naam gebruiken.
+2. **Relay URL:** het adres van je relay (bijv. `wss://relay.jouwdomein.nl`, via Caddy).
+3. **Station name:** een naam voor dit station (bijv. `thuis-anan`): client en station moeten exact dezelfde naam gebruiken.
 4. **Relay token:** de stationsleutel uit de relay-`.env`.
 5. Herstart de server; het **"Relay:"**-veld in het status-paneel toont de verbindingsstatus.
 6. Optioneel: zet **"Rechtstreeks verbinden toestaan"** uit als iedereen via de relay moet binnenkomen (je thuisadres blijft dan buiten zicht van gasten).
@@ -488,11 +511,11 @@ In de desktop-client, Server-tab, uitklapblok **"Relay connection"**:
 4. **Token:** dezelfde stationsleutel.
 5. Herstart de client. Op Android staan dezelfde velden in de instellingen.
 
-Zolang station en client met dezelfde naam en token bij de relay ingelogd zijn, bedien je alles als bij een directe verbinding. De app toont welke weg de verbinding neemt (R, D+R, L+R, ...). Laat je netwerk geen UDP door, dan gaat de verbinding vanzelf over een noodroute via TCP (R (TCP)) — zie de gebruikershandleiding.
+Zolang station en client met dezelfde naam en token bij de relay ingelogd zijn, bedien je alles als bij een directe verbinding. De app toont welke weg de verbinding neemt (R, D+R, L+R, ...). Laat je netwerk geen UDP door, dan gaat de verbinding vanzelf over een noodroute via TCP (R (TCP)): zie de gebruikershandleiding.
 
 **D. Relay-dashboard (beheer)**
 
-Het beheerderswachtwoord uit de `.env` geeft toegang tot het web-dashboard van de relay (achter TLS): apparaat-/stationbeheer met verbruik/quota per device, en een **"Backup DB"**-knop om een consistente database-kopie te downloaden.
+Het beheerderswachtwoord (gezet met `set-admin-password`, zie A) geeft toegang tot het web-dashboard van de relay (achter TLS): apparaat-/stationbeheer met verbruik/quota per device, en een **"Backup DB"**-knop om een consistente database-kopie te downloaden.
 
 ---
 
@@ -502,7 +525,7 @@ Het beheerderswachtwoord uit de `.env` geeft toegang tot het web-dashboard van d
 |----------|-----------|
 | Geen audio na connect | Controleer of de Thetis TCI Server actief is (Setup -> Serial/Network/Midi CAT -> Network) en het Bind IP:Port veld op `0.0.0.0:40001` of `127.0.0.1:40001` staat |
 | Frequentie verandert niet | Controleer of de Thetis TCI Server aan staat (Setup -> Serial/Network/Midi CAT -> Network, poort 40001) en dat het adres in de ThetisLink Server GUI overeenkomt (default `ws://127.0.0.1:40001`) |
-| ThetisLink Client kan niet verbinden | Firewall blokkeert UDP 4580 - controleer firewall-regels op de ThetisLink Server PC. Draaien server en client dezelfde versie? Een programma van vóór 2.13 verbindt niet met 2.13 en meldt alleen "Server niet bereikbaar" |
+| ThetisLink Client kan niet verbinden | Firewall blokkeert UDP 4580: controleer firewall-regels op de ThetisLink Server PC. Draaien server en client dezelfde versie? Een programma van vóór 2.13 verbindt niet met 2.13 en meldt alleen "Server niet bereikbaar" |
 | Disconnect na paar seconden | Instabiel WiFi of firewall blokkade. Check loss% onderaan de ThetisLink Client |
 | Spectrum toont niets | Thetis TCI Server moet actief zijn. Controleer ook de TCI-poort in de ThetisLink Server GUI |
 | Externe apparaten reageren niet | Check COM-poort instelling in de ThetisLink Server GUI en of het apparaat aan staat |
@@ -529,7 +552,7 @@ Voor een onbemande Thetis + ThetisLink Server PC die op afstand beheerd wordt vi
    ```
 2. Run `netplwiz` (Win+R -> `netplwiz`)
 3. Vink **"Users must enter a user name and password to use this computer"** UIT -> OK
-4. Voer je **account wachtwoord** in (twee keer) - **niet** je PIN!
+4. Voer je **account wachtwoord** in (twee keer): **niet** je PIN!
    - Bij een Microsoft account: je Microsoft wachtwoord
    - Bij een domeinaccount: je domein wachtwoord
    - De Windows Hello PIN werkt hier niet
@@ -545,13 +568,13 @@ Win+R -> shell:startup -> plak snelkoppeling
 
 ### Remote reboot en shutdown via ThetisLink
 
-In de Server-tab van de client zit de knop **Remote Reboot / Shutdown**. Beide keuzes werken op de **Windows-PC waarop de ThetisLink Server draait** - niet op de ThetisLink Server zelf en niet op Thetis. De machine gaat echt uit of opnieuw aan, en de verbinding valt weg.
+In de Server-tab van de client zit de knop **Remote Reboot / Shutdown**. Beide keuzes werken op de **Windows-PC waarop de ThetisLink Server draait**: niet op de ThetisLink Server zelf en niet op Thetis. De machine gaat echt uit of opnieuw aan, en de verbinding valt weg.
 
 **Afsluiten werkt meteen, herstarten vraagt eenmalig voorbereiding.** Afsluiten voert de server rechtstreeks uit. Herstarten loopt via een Windows-taak die je zelf moet aanmaken. Bestaat die taak niet, dan gebeurt er bij een druk op **herstart** *niets zichtbaars*: er komt geen foutmelding en de client blijft gewoon verbonden.
 
 #### De taak eenmalig aanmaken
 
-Open PowerShell **als Administrator** - zonder verhoogde rechten mislukt `/ru SYSTEM` met "Access is denied":
+Open PowerShell **als Administrator**: zonder verhoogde rechten mislukt `/ru SYSTEM` met "Access is denied":
 
 ```powershell
 schtasks /create /tn "ThetisLinkReboot" /tr "shutdown /r /t 5 /f" /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f
@@ -561,7 +584,7 @@ schtasks /create /tn "ThetisLinkReboot" /tr "shutdown /r /t 5 /f" /sc once /st 0
 |------|-----------|
 | `/tn "ThetisLinkReboot"` | De naam waarop de server zoekt. Exact zo schrijven, anders vindt hij de taak niet. |
 | `/tr "shutdown /r /t 5 /f"` | Wat de taak doet: herstarten, na 5 seconden, geforceerd. |
-| `/sc once /st 00:00` | Eenmalig schema. De taak loopt nooit uit zichzelf - hij wordt alleen door de server gestart. |
+| `/sc once /st 00:00` | Eenmalig schema. De taak loopt nooit uit zichzelf: hij wordt alleen door de server gestart. |
 | `/ru SYSTEM` | Draait als SYSTEM, dus ook wanneer er niemand is ingelogd. |
 | `/rl HIGHEST` | Hoogste rechten; nodig om te mogen herstarten. |
 | `/f` | Overschrijft een bestaande taak met dezelfde naam zonder te vragen. |
@@ -574,7 +597,7 @@ schtasks /query /tn "ThetisLinkReboot"
 
 Krijg je hier `ERROR: The system cannot find the file specified`, dan bestaat de taak niet en doet de herstart-knop niets.
 
-Testen zonder de client - let op, hierna start de PC over 5 seconden werkelijk opnieuw op:
+Testen zonder de client: let op, hierna start de PC over 5 seconden werkelijk opnieuw op:
 
 ```powershell
 schtasks /run /tn "ThetisLinkReboot"
@@ -627,10 +650,12 @@ sha256sum -c SHA256SUMS.txt
 **PowerShell (Windows):**
 ```powershell
 Get-Content SHA256SUMS.txt | ForEach-Object {
-    $parts = $_ -split '  '
-    $expected = $parts[0]; $file = $parts[1]
-    $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
-    if ($actual -eq $expected) { "$file OK" } else { "$file FAILED" }
+    if ($_ -match '^([0-9a-f]{64}) +\*?(.+)$') {
+        $expected = $Matches[1]; $file = $Matches[2]
+        if (-not (Test-Path -LiteralPath $file)) { "$file MISSING"; return }
+        $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower()
+        if ($actual -eq $expected) { "$file OK" } else { "$file FAILED" }
+    }
 }
 ```
 

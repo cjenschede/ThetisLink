@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Frequency render-helpers (sub-step 2c + 2d).
+//! Frequency render-helpers.
 //!
 //! Contains two independent helpers:
 //!
-//! - `render_freq_step_controls` (sub-step 2c): `−` + step-size + `+` row.
+//! - `render_freq_step_controls`: `−` + step-size + `+` row.
 //!   Migrates 3 render paths (RX1 popout, RX2 popout, Tab::Radio). `−`/`+`
 //!   buttons are `add_enabled`-guarded; step-size selector is by-design
 //!   offline (`guarded=false` in coverage).
 //!
-//! - `render_frequency_display` (sub-step 2d): inline freq-label/edit state
+//! - `render_frequency_display`: inline freq-label/edit state
 //!   machine + scroll-wheel tuning. Migrates RX1 popout + Tab::Radio (RX2
 //!   popout scope-trim - original had no inline-edit). Addresses
 //!   scroll-tuning + inline-edit connected-guard gaps.

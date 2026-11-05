@@ -5,8 +5,8 @@
 //! The point of it is what it lets the two processes *avoid*: they never talk to
 //! each other. The relay signs a small statement about who is connecting; the
 //! chat checks the signature and believes it. So the chat can admit someone
-//! while the relay is unreachable, and — far more important — the relay never
-//! waits on the chat for anything (design §2.2, §2.3).
+//! while the relay is unreachable, and (far more important) the relay never
+//! waits on the chat for anything.
 //!
 //! The alternative, letting the chat read the relay's `stations.db`, looks free
 //! and is not: two processes that update independently would share one database
@@ -44,7 +44,7 @@ impl Ticket {
 pub enum TicketError {
     /// Not two hex parts separated by a dot, or not valid hex/JSON.
     Malformed,
-    /// The signature does not match — wrong key, or tampering.
+    /// The signature does not match: wrong key, or tampering.
     BadSignature,
     /// Correctly signed, but past `expires_at`.
     Expired,
@@ -55,9 +55,9 @@ pub enum TicketError {
 
 impl std::fmt::Display for TicketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // These strings end up in the log, and the design (§8) asks for the
-        // distinction between "a clock is wrong" and "somebody is trying
-        // something" to survive into it.
+        // These strings end up in the log, and the distinction between "a
+        // clock is wrong" and "somebody is trying something" has to survive
+        // into it.
         let s = match self {
             TicketError::Malformed => "malformed ticket",
             TicketError::BadSignature => "bad signature",
@@ -76,16 +76,16 @@ const FUTURE_TOLERANCE_SECS: u64 = 300;
 
 /// Verify a ticket against one or more accepted keys.
 ///
-/// Several keys because rotation must not require restarting the relay (design
-/// §3.3): during a change-over both the old and the new key are accepted, and
-/// only then is the old one dropped.
+/// Several keys because rotation must not require restarting the relay: during
+/// a change-over both the old and the new key are accepted, and only then is the
+/// old one dropped.
 pub fn verify(token: &str, keys: &[Vec<u8>], now: u64) -> Result<Ticket, TicketError> {
     let (payload_hex, sig_hex) = token.split_once('.').ok_or(TicketError::Malformed)?;
     let payload = from_hex(payload_hex).ok_or(TicketError::Malformed)?;
     let sig = from_hex(sig_hex).ok_or(TicketError::Malformed)?;
 
     // Signature first, always. Nothing inside an unverified payload may steer a
-    // decision — not even which error to report.
+    // decision, not even which error to report.
     let mut ok = false;
     for key in keys {
         let mut mac = match HmacSha256::new_from_slice(key) {

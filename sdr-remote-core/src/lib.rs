@@ -28,7 +28,7 @@ pub mod stream;
 pub use log as __log;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.13.0";
+pub const VERSION: &str = "2.13.1";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).
@@ -76,10 +76,10 @@ pub const DEVICE_FRAME_SAMPLES: usize = (DEVICE_SAMPLE_RATE * FRAME_DURATION_MS 
 /// Copy a frame that came over QUIC into a receive
 /// buffer, or say it does not fit: too large is dropped whole, never cut off
 /// into a packet that parses as something else. One rule for the server and the
-/// client (review 109, review 110).
+/// client.
 pub fn take_frame(data: &[u8], buf: &mut [u8]) -> Option<usize> {
     if data.len() > buf.len() {
-        log::debug!("a {} B tunnel frame does not fit the {} B receive buffer - dropped", data.len(), buf.len());
+        log::debug!("a {} B tunnel frame does not fit the {} B receive buffer: dropped", data.len(), buf.len());
         return None;
     }
     buf[..data.len()].copy_from_slice(data);
@@ -126,8 +126,9 @@ pub const MAX_SPECTRUM_SEND_BINS: usize = 32_768;
 /// Default spectrum bins for new clients (backward compatible)
 pub const DEFAULT_SPECTRUM_BINS: usize = 8192;
 
-/// FFT size for DDC I/Q spectrum processing (262144 = Thetis-quality resolution at 1536 kHz)
-pub const DDC_FFT_SIZE: usize = 262_144;
+/// The largest FFT size the server runs, in K (a power of two). The server
+/// clamps a requested size to it and a client offers nothing above it.
+pub const MAX_FFT_SIZE_K: u16 = 512;
 
 /// Compute FFT size for a given DDC sample rate, targeting ~25 FPS with 87.5% overlap.
 /// Returns a power-of-two FFT size (minimum 4096).

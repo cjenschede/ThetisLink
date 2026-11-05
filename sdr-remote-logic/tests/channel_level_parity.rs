@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Lane 3, phase 0: pin the audio measurement points before anything is
-// refactored.
+// Pin the audio measurement points before anything is refactored.
 //
-// Why this exists. The brief asks whoever unifies the channel blocks to prove
+// Why this exists. Whoever unifies the channel blocks has to prove
 // that behaviour did not change, and for the audio path that proof did not
 // exist - it would have been "I read the diff and it looks the same". Three
 // times this week that reasoning was wrong and only a measurement settled it.
@@ -71,12 +70,6 @@ impl AudioBackend for RecordingAudio {
         self.rec.playback.lock().unwrap().extend_from_slice(buf);
         buf.len()
     }
-    fn capture_level(&self) -> f32 {
-        0.0
-    }
-    fn playback_level(&self) -> f32 {
-        0.0
-    }
     fn has_error(&self) -> bool {
         false
     }
@@ -97,8 +90,8 @@ fn spawn_engine(rec: Recorded) -> (
     spawn_engine_with_mic(rec, 0.0)
 }
 
-/// The engine and its scripted server: QUIC (phase 3d, step 1 - these tests ran
-/// over plain UDP until the plain path was to go). `connect()` names the
+/// The engine and its scripted server: QUIC (these tests ran over plain UDP
+/// until the plain path was to go). `connect()` names the
 /// server's address, port and all.
 fn spawn_engine_with_mic(rec: Recorded, capture_amplitude: f32) -> (
     watch::Receiver<RadioState>,
@@ -127,8 +120,8 @@ fn build_auth_challenge() -> Vec<u8> {
 /// NOTE since build 2: this builds `HeartbeatAck::SIZE`, which carries no
 /// version tag, so the client under test judges this server `PeerBuild::Older`
 /// and writes a warning line. Deliberate - it keeps the old-reader path
-/// exercised - and written down here because it was not anywhere
-/// (raised in review). These tests are about audio channels; the
+/// exercised - and written down here because it was not anywhere.
+/// These tests are about audio channels; the
 /// build judgement is covered in `connect_state_machine.rs`.
 fn build_heartbeat_ack() -> Vec<u8> {
     let ack = HeartbeatAck {
@@ -206,8 +199,9 @@ fn build_yaesu_audio(slot1: bool, sequence: u32, opus: Vec<u8>) -> Vec<u8> {
 
 /// Tell the client which radio sits in each slot. The receive meters calibrate
 /// per model (build 75/76: the two CODECs differ by about 14 dB), so a test
-/// about that calibration has to set the models first.
-fn build_yaesu_presence(slot0_model: u8, slot1_model: u8) -> Vec<u8> {
+/// about that calibration has to set the models first - and, since build 62,
+/// which of the two tables the server chose.
+fn build_yaesu_presence(slot0_model: u8, slot1_model: u8, rx_levels_tuned: bool) -> Vec<u8> {
     let pkt = YaesuPresencePacket {
         slot0_present: true,
         slot0_model,
@@ -217,6 +211,7 @@ fn build_yaesu_presence(slot0_model: u8, slot1_model: u8) -> Vec<u8> {
         slot1_trouble: 0,
         slot0_configured: true,
         slot1_configured: true,
+        rx_levels_tuned,
     };
     let mut buf = [0u8; YaesuPresencePacket::SIZE];
     pkt.serialize(&mut buf);
@@ -252,10 +247,10 @@ async fn connect(
     server.send_to(&build_heartbeat_ack(), client).await.unwrap();
 
     // The flag follows the status by one ack; the deadline is the one number
-    // both harnesses use (review 78: two copies, 3 s and 5 s). This loop acks
+    // both harnesses use (two copies, 3 s and 5 s). This loop acks
     // ONCE and does not pump: that single ack is also the only thing in either
     // harness that catches a flag which comes late - a flag needing a second
-    // ack never comes here (review 79, measured at 900 ms and 2 s late). A
+    // ack never comes here (measured at 900 ms and 2 s late). A
     // pump in this loop would take that cover away with nothing going red.
     let start = Instant::now();
     while !state_rx.borrow().connected {
@@ -288,6 +283,35 @@ async fn wait_for_level(
             "level stayed at zero"
         );
         // Drain and answer whatever the engine sent, without blocking.
+        if tokio::time::timeout(Duration::from_millis(10), server.recv_from(&mut buf))
+            .await
+            .is_ok()
+        {
+            let _ = server.send_to(&build_heartbeat_ack(), client).await;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Two channels' levels from the same state, the first time both are above zero.
+async fn both_levels(
+    state_rx: &watch::Receiver<RadioState>,
+    server: &FakeServer,
+    client: std::net::SocketAddr,
+    a: impl Fn(&RadioState) -> f32,
+    b: impl Fn(&RadioState) -> f32,
+) -> (f32, f32) {
+    let start = Instant::now();
+    let mut buf = [0u8; 2048];
+    loop {
+        let (la, lb) = {
+            let s = state_rx.borrow();
+            (a(&s), b(&s))
+        };
+        if la > 0.0 && lb > 0.0 {
+            return (la, lb);
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "a level stayed at zero");
         if tokio::time::timeout(Duration::from_millis(10), server.recv_from(&mut buf))
             .await
             .is_ok()
@@ -397,8 +421,11 @@ async fn both_vrx_channels_report_the_same_level_for_the_same_audio() {
             .await;
     }
 
-    let l1 = wait_for_level(&state_rx, &server, client, |s| s.playback_level_vrx1).await;
-    let l2 = wait_for_level(&state_rx, &server, client, |s| s.playback_level_vrx2).await;
+    // Both from the same state: read one after the other, each at its own first
+    // value above zero, the two could come from passes far apart under load
+    // (once a ratio of 2.2).
+    let (l1, l2) = both_levels(&state_rx, &server, client,
+        |s| s.playback_level_vrx1, |s| s.playback_level_vrx2).await;
     let _ = shutdown_tx.send(true);
 
     let ratio = l2 / l1;
@@ -424,7 +451,7 @@ async fn the_two_yaesu_radios_are_calibrated_apart_on_purpose() {
     let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
     // Slot 0 = FT-991A (model 0), slot 1 = FTX-1 (model 1).
-    let _ = server.send_to(&build_yaesu_presence(0, 1), client).await;
+    let _ = server.send_to(&build_yaesu_presence(0, 1, false), client).await;
     for cmd in [Command::SetYaesuVolume(1.0), Command::SetYaesu2Volume(1.0)] {
         cmd_tx.send(cmd).unwrap();
     }
@@ -437,8 +464,9 @@ async fn the_two_yaesu_radios_are_calibrated_apart_on_purpose() {
             .await;
     }
 
-    let l1 = wait_for_level(&state_rx, &server, client, |s| s.playback_level_yaesu).await;
-    let l2 = wait_for_level(&state_rx, &server, client, |s| s.playback_level_yaesu2).await;
+    // From the same state, as in the VRX test above.
+    let (l1, l2) = both_levels(&state_rx, &server, client,
+        |s| s.playback_level_yaesu, |s| s.playback_level_yaesu2).await;
     let _ = shutdown_tx.send(true);
 
     // Documented constants: +10 dB for the 991A, +24.5 dB for the FTX-1.
@@ -449,6 +477,47 @@ async fn the_two_yaesu_radios_are_calibrated_apart_on_purpose() {
         "the FTX-1 meter is calibrated {expected:.2}x above the 991A on identical \
          audio: 991A {l1:.4}, FTX-1 {l2:.4} (ratio {ratio:.2}). A ratio near 1.0 \
          means the per-model calibration was collapsed into one constant again"
+    );
+}
+
+/// The second table (build 62): with the radios set by the installation guide
+/// the server says so, and the meters use the small correction. Identical
+/// audio then reads the other way round: the FTX-1 a little BELOW the 991A
+/// (+2.0 dB against +6.0 dB), where with factory levels it reads far above.
+#[tokio::test]
+async fn tuned_receive_levels_use_the_small_correction() {
+    let mut enc = OpusEncoder::new().unwrap();
+    let frames: Vec<Vec<u8>> = (0..25).map(|_| opus_frame(&mut enc, 0.5)).collect();
+
+    let rec = Recorded::default();
+    let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec);
+    let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
+
+    let _ = server.send_to(&build_yaesu_presence(0, 1, true), client).await;
+    for cmd in [Command::SetYaesuVolume(1.0), Command::SetYaesu2Volume(1.0)] {
+        cmd_tx.send(cmd).unwrap();
+    }
+    for (i, f) in frames.iter().enumerate() {
+        let _ = server
+            .send_to(&build_yaesu_audio(false, i as u32, f.clone()), client)
+            .await;
+        let _ = server
+            .send_to(&build_yaesu_audio(true, i as u32, f.clone()), client)
+            .await;
+    }
+
+    let (l1, l2) = both_levels(&state_rx, &server, client,
+        |s| s.playback_level_yaesu, |s| s.playback_level_yaesu2).await;
+    let _ = shutdown_tx.send(true);
+
+    // Documented constants: +6.0 dB for the 991A, +2.0 dB for the FTX-1.
+    let expected = 1.26_f32 / 2.0;
+    let ratio = l2 / l1;
+    assert!(
+        (ratio / expected).abs() > 0.7 && (ratio / expected).abs() < 1.4,
+        "with tuned levels the FTX-1 reads {expected:.2}x the 991A on identical \
+         audio: 991A {l1:.4}, FTX-1 {l2:.4} (ratio {ratio:.2}). A ratio near 5 \
+         means the server's choice did not reach the correction"
     );
 }
 
@@ -514,7 +583,7 @@ async fn a_channel_that_stops_feeding_returns_to_zero() {
             "VRX2" => cmd_tx.send(Command::SetVrx2Enabled(true)).unwrap(),
             _ => {
                 // Slot 0 = FT-991A, slot 1 = FTX-1; the meter calibrates per model.
-                let _ = server.send_to(&build_yaesu_presence(0, 1), client).await;
+                let _ = server.send_to(&build_yaesu_presence(0, 1, false), client).await;
                 cmd_tx.send(Command::SetYaesuVolume(1.0)).unwrap();
                 cmd_tx.send(Command::SetYaesu2Volume(1.0)).unwrap();
             }
@@ -572,49 +641,190 @@ async fn the_yaesu_playback_gain_follows_the_same_per_model_calibration_as_the_m
     let mut enc = OpusEncoder::new().unwrap();
     let frames: Vec<Vec<u8>> = (0..25).map(|_| opus_frame(&mut enc, 0.5)).collect();
 
-    let mut rms = Vec::new();
-    for slot1 in [false, true] {
-        let rec = Recorded::default();
-        let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec.clone());
-        let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
+    // Both tables (build 62): the playback gain and the meter read one value in each.
+    for tuned in [false, true] {
+        let mut rms = Vec::new();
+        for slot1 in [false, true] {
+            let rec = Recorded::default();
+            let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec.clone());
+            let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
 
-        // Slot 0 = FT-991A (model 0), slot 1 = FTX-1 (model 1).
-        let _ = server.send_to(&build_yaesu_presence(0, 1), client).await;
-        // Low volume on purpose: at full volume the FTX-1 gain (16.8) drives the
-        // 0.5-amplitude tone far past full scale, both radios clip, and the ratio
-        // collapses to ~1 - which would make this test pass on saturation instead
-        // of on calibration.
-        cmd_tx.send(Command::SetYaesuVolume(0.03)).unwrap();
-        cmd_tx.send(Command::SetYaesu2Volume(0.03)).unwrap();
-        for (i, f) in frames.iter().enumerate() {
-            let _ = server
-                .send_to(&build_yaesu_audio(slot1, i as u32, f.clone()), client)
-                .await;
+            // Slot 0 = FT-991A (model 0), slot 1 = FTX-1 (model 1).
+            let _ = server.send_to(&build_yaesu_presence(0, 1, tuned), client).await;
+            // Low volume on purpose: at full volume the FTX-1 gain (16.8) drives the
+            // 0.5-amplitude tone far past full scale, both radios clip, and the ratio
+            // collapses to ~1 - which would make this test pass on saturation instead
+            // of on calibration.
+            cmd_tx.send(Command::SetYaesuVolume(0.03)).unwrap();
+            cmd_tx.send(Command::SetYaesu2Volume(0.03)).unwrap();
+            for (i, f) in frames.iter().enumerate() {
+                let _ = server
+                    .send_to(&build_yaesu_audio(slot1, i as u32, f.clone()), client)
+                    .await;
+            }
+            let pick = |s: &RadioState| if slot1 { s.playback_level_yaesu2 } else { s.playback_level_yaesu };
+            let _ = wait_for_level(&state_rx, &server, client, pick).await;
+
+            let played = rec.playback.lock().unwrap().clone();
+            // The peak, not the mean: the mean divides by the length of the
+            // recording, and that is "when the test happened to look" - a run
+            // recorded twice as long reads 1.41 times quieter, which is exactly
+            // the 7.52-against-5.32 this test failed with once under a loaded
+            // suite. A test that measures may not divide by
+            // something that depends on the moment you look.
+            rms.push(played.iter().fold(0.0f32, |m, s| m.max(s.abs())));
+            let _ = shutdown_tx.send(true);
         }
-        let pick = |s: &RadioState| if slot1 { s.playback_level_yaesu2 } else { s.playback_level_yaesu };
-        let _ = wait_for_level(&state_rx, &server, client, pick).await;
 
-        let played = rec.playback.lock().unwrap().clone();
-        // The peak, not the mean: the mean divides by the length of the
-        // recording, and that is "when the test happened to look" - a run
-        // recorded twice as long reads 1.41 times quieter, which is exactly
-        // the 7.52-against-5.32 this test failed with once under a loaded
-        // suite (review 319). A test that measures may not divide by
-        // something that depends on the moment you look.
-        rms.push(played.iter().fold(0.0f32, |m, s| m.max(s.abs())));
-        let _ = shutdown_tx.send(true);
+        let (a991, ftx1) = (rms[0], rms[1]);
+        assert!(a991 > 0.0 && ftx1 > 0.0, "both radios must have produced audio");
+        let expected = if tuned { 1.26_f32 / 2.0 } else { 16.8_f32 / 3.16 };
+        let ratio = ftx1 / a991;
+        // Tighter now that the measure does not move with the recording length:
+        // a real calibration error of 25% used to disappear into the old window.
+        assert!(
+            ratio / expected > 0.9 && ratio / expected < 1.12,
+            "playback gain must use the per-model calibration, like the meter (tuned={tuned}): \
+             991A {a991:.4}, FTX-1 {ftx1:.4} (ratio {ratio:.2}, expected {expected:.2}). \
+             A ratio near 1.0 means one flat constant is back on the audio path"
+        );
     }
+}
 
-    let (a991, ftx1) = (rms[0], rms[1]);
-    assert!(a991 > 0.0 && ftx1 > 0.0, "both radios must have produced audio");
-    let expected = 16.8_f32 / 3.16;
-    let ratio = ftx1 / a991;
-    // Tighter now that the measure does not move with the recording length:
-    // a real calibration error of 25% used to disappear into the old window.
+/// Wait until the presence packet has been applied, so the audio after it is
+/// corrected by the table the server chose and not by the one for "not known yet".
+async fn wait_for_presence(
+    state_rx: &watch::Receiver<RadioState>,
+    server: &FakeServer,
+    client: std::net::SocketAddr,
+    tuned: bool,
+) {
+    let start = Instant::now();
+    let mut buf = [0u8; 2048];
+    while !(state_rx.borrow().radios_known && state_rx.borrow().yaesu_rx_levels_tuned == tuned) {
+        assert!(start.elapsed() < Duration::from_secs(5), "the presence packet was never applied");
+        if tokio::time::timeout(Duration::from_millis(10), server.recv_from(&mut buf))
+            .await
+            .is_ok()
+        {
+            let _ = server.send_to(&build_heartbeat_ack(), client).await;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// The recording of a Yaesu carries the same receive correction as the bar
+/// (build 62). Before that it carried none: 10 to 25 dB under what was heard.
+/// Its RMS level must therefore be the tone times that correction, in both
+/// tables; one radio, the FT-991A, where the two tables differ most clearly from 1.
+#[tokio::test]
+async fn a_yaesu_recording_carries_its_receive_correction() {
+    for tuned in [false, true] {
+        let mut enc = OpusEncoder::new().unwrap();
+        // 0.1: the factory correction of 3.16 keeps it below full scale.
+        let frames: Vec<Vec<u8>> = (0..40).map(|_| opus_frame(&mut enc, 0.1)).collect();
+
+        let rec = Recorded::default();
+        let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec);
+        let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
+        let _ = server.send_to(&build_yaesu_presence(0, 1, tuned), client).await;
+        wait_for_presence(&state_rx, &server, client, tuned).await;
+
+        let dir = std::env::temp_dir().join(format!("tl-rec-test-{}-{}", std::process::id(), tuned));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        cmd_tx.send(Command::StartRecording {
+            rx1: false, rx2: false, yaesu: true, yaesu2: false, vrx1: false, vrx2: false,
+            path: dir.to_string_lossy().to_string(),
+        }).unwrap();
+        let start = Instant::now();
+        while !state_rx.borrow().recording {
+            assert!(start.elapsed() < Duration::from_secs(5), "the recording never started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        for (i, f) in frames.iter().enumerate() {
+            let _ = server.send_to(&build_yaesu_audio(false, i as u32, f.clone()), client).await;
+        }
+        // The audio arrives, then the jitter buffer plays out what it holds.
+        let _ = wait_for_level(&state_rx, &server, client, |s| s.playback_level_yaesu).await;
+        let _ = wait_for_zero(&state_rx, &server, client, |s| s.playback_level_yaesu).await;
+        cmd_tx.send(Command::StopRecording).unwrap();
+        let start = Instant::now();
+        while state_rx.borrow().recording {
+            assert!(start.elapsed() < Duration::from_secs(5), "the recording never stopped");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let _ = shutdown_tx.send(true);
+
+        let wav = std::fs::read_dir(&dir).unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.path().extension().map(|x| x == "wav").unwrap_or(false))
+            .expect("no recording written")
+            .path();
+        let bytes = std::fs::read(&wav).unwrap();
+        let samples: Vec<f32> = bytes[44..].chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        // The tone's own level times the correction; the opening frames are the
+        // codec settling and stay out.
+        let steady = &samples[samples.len() / 4..samples.len() * 3 / 4];
+        let rms = (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
+        let gain = if tuned { 2.0_f32 } else { 3.16 };
+        let tone = 0.1_f32 / 2.0_f32.sqrt();
+        let ratio = rms / (tone * gain);
+        assert!(
+            ratio > 0.75 && ratio < 1.3,
+            "a 991A recording (tuned={tuned}) holds the tone times its correction \
+             ({:.4} expected, {rms:.4} recorded, ratio {ratio:.2}). Near {:.2} means the \
+             recording missed the correction again",
+            tone * gain, 1.0 / gain
+        );
+    }
+}
+
+/// A new session, and the server has not said yet which table it uses: the
+/// radio's audio may already be there. It must then
+/// never play louder than it did with the table the server chose last session.
+#[tokio::test]
+async fn a_new_session_never_plays_a_tuned_radio_louder_before_the_server_speaks() {
+    let mut enc = OpusEncoder::new().unwrap();
+    let frames: Vec<Vec<u8>> = (0..25).map(|_| opus_frame(&mut enc, 0.1)).collect();
+
+    let rec = Recorded::default();
+    let (mut state_rx, cmd_tx, shutdown_tx, server) = spawn_engine(rec);
+    let (server, client) = connect(server, &cmd_tx, &mut state_rx).await;
+    let _ = server.send_to(&build_yaesu_presence(0, 1, true), client).await;
+    wait_for_presence(&state_rx, &server, client, true).await;
+    for (i, f) in frames.iter().enumerate() {
+        let _ = server.send_to(&build_yaesu_audio(true, i as u32, f.clone()), client).await;
+    }
+    let first = wait_for_level(&state_rx, &server, client, |s| s.playback_level_yaesu2).await;
+    assert!(wait_for_zero(&state_rx, &server, client, |s| s.playback_level_yaesu2).await);
+
+    // A second session in the same client, no restart; no presence this time.
+    cmd_tx.send(Command::Disconnect).unwrap();
+    let start = Instant::now();
+    while state_rx.borrow().connected {
+        assert!(start.elapsed() < Duration::from_secs(5), "never disconnected");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // What the first connection sent is still queued on the server side; the
+    // script would answer that address and wait for ever. Drain it first.
+    let mut buf = [0u8; 2048];
+    while tokio::time::timeout(Duration::from_millis(300), server.recv_from(&mut buf)).await.is_ok() {}
+    let (server, client) = tokio::time::timeout(Duration::from_secs(10), connect(server, &cmd_tx, &mut state_rx))
+        .await
+        .expect("the second connection never came up");
+    assert!(!state_rx.borrow().radios_known, "the test needs a session the server has not spoken in");
+    for (i, f) in frames.iter().enumerate() {
+        let _ = server.send_to(&build_yaesu_audio(true, i as u32, f.clone()), client).await;
+    }
+    let second = wait_for_level(&state_rx, &server, client, |s| s.playback_level_yaesu2).await;
+    let _ = shutdown_tx.send(true);
     assert!(
-        ratio / expected > 0.9 && ratio / expected < 1.12,
-        "playback gain must use the per-model calibration, like the meter: \
-         991A {a991:.4}, FTX-1 {ftx1:.4} (ratio {ratio:.2}, expected {expected:.2}). \
-         A ratio near 1.0 means one flat constant is back on the audio path"
+        second < first * 1.25,
+        "before the server spoke, the FTX-1 read {second:.4} against {first:.4} last session: \
+         the factory table was used for a tuned radio (16.8 against 1.26, +22 dB)"
     );
 }

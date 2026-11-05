@@ -130,13 +130,13 @@ async fn cluster_task(
             Ok(Err(e)) => {
                 consecutive_failures += 1;
                 if consecutive_failures == 1 {
-                    warn!("DX Cluster: connect failed: {} - retrying in background", e);
+                    warn!("DX Cluster: connect failed: {}; retrying in background", e);
                 }
             }
             Err(_) => {
                 consecutive_failures += 1;
                 if consecutive_failures == 1 {
-                    warn!("DX Cluster: connect timeout - retrying in background");
+                    warn!("DX Cluster: connect timeout; retrying in background");
                 }
             }
         }

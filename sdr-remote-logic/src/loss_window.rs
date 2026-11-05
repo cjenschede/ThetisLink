@@ -34,16 +34,16 @@
 //! silent while the others flow is not the link (the server stopped sending),
 //! whereas every stream silent at once is.
 //!
-//! The owner asked the question that produced this - "all the audio goes down
-//! one connection, so does it matter which channel you measure?" - after two
-//! rounds of review had read the per-stream design without anyone asking it. It
-//! did not matter. The aggregation did.
+//! The question that produced this: "all the audio goes down one connection, so
+//! does it matter which channel you measure?" The per-stream design had been read
+//! more than once without anyone asking it. It did not matter. The aggregation
+//! did.
 //!
 //! The second job of this module is the false peak. A reconnect kept the
 //! previous session's sequence bookkeeping, so the first windows of the new
 //! session were charged for the gap the reconnect itself caused - seventy
 //! percent two seconds after connecting, and error correction that then had no
-//! reason to release. That is [`LossMeter::reset`], and it is open point 15.
+//! reason to release. That is what [`LossMeter::reset`] is for.
 
 /// One stream's rolling window: fed per packet, closed per heartbeat.
 ///
@@ -67,13 +67,12 @@ pub struct StreamLoss {
     /// Without this the meter counted ARRIVALS where the ratio needs DISTINCT
     /// arrivals, and it is fed before the jitter buffer, so a duplicate could
     /// stand in for a packet that never came: 25 expected, 20 distinct, 5
-    /// duplicates reads as a clean link while a fifth is missing (review
-    /// 2120A4). Both the relay and plain UDP can duplicate.
+    /// duplicates reads as a clean link while a fifth is missing. Both the relay
+    /// and plain UDP can duplicate.
     ///
     /// A fixed bitmap, not a set: no allocation, no growth, a handful of integer
     /// operations per packet against an Opus decode of microseconds on the same
-    /// path. (I first called this a latency trade-off when the owner asked; it
-    /// is not one, and saying so without weighing it was the mistake.)
+    /// path. This is not a latency trade-off.
     seen: [u64; SEEN_WORDS],
     /// The sequence the bitmap's bit 0 stands for - the first one this window.
     seen_base: Option<u32>,
@@ -97,8 +96,8 @@ const RESUME_GRACE_WINDOWS: u32 = 1;
 /// Named rather than written into the expression, because it is the number that
 /// decides how long the server's error correction STAYS on: the release counter
 /// only starts once the client reports a clean zero, and how many clean windows
-/// that takes follows from this constant alone. A reviewer showed that pinning
-/// the window COUNT is not enough - a band wide enough to be stable is also wide
+/// that takes follows from this constant alone. Pinning the window COUNT is not
+/// enough - a band wide enough to be stable is also wide
 /// enough to absorb a move from 0.3 to 0.25 without going red.
 pub const EMA_NEW: f32 = 0.3;
 
@@ -113,7 +112,7 @@ pub const EMA_NEW: f32 = 0.3;
 ///
 /// **Not related to [`crate::thetis_streams::THETIS_STREAM_GRACE`], which is
 /// also twenty seconds.** That one is how long the Thetis streams keep running
-/// after a switch, and the owner asked for it; this one is how long a figure may
+/// after a switch, and it was chosen for that; this one is how long a figure may
 /// go unrefreshed before the log says so, and it was chosen here. They arrived
 /// at the same number from different directions, and a reader who merges them
 /// into one constant will make one of the two wrong the next time either moves.
@@ -264,7 +263,7 @@ impl Stream {
 ///
 /// Built by [`Expecting::from_client`] and never by hand at the call site: a
 /// literal lets a field be nailed to `false` with every test still green, which
-/// is the defect of builds 33 to 36 in a form only a reviewer can catch.
+/// is the defect of builds 33 to 36 in a form only a reader can catch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Expecting {
     pub thetis: bool,
@@ -362,7 +361,7 @@ impl LossMeter {
         // its USB audio, or Thetis stopping, read as link loss. One of five is
         // already tens of percent, and that figure drives four error-correction
         // decisions, four spectrum gates and the fault report the operator
-        // reads (review 2120A4).
+        // reads.
         //
         // It cannot be told apart from the link really dropping that one
         // stream - not from here - and that is exactly why it must not be
@@ -435,7 +434,7 @@ impl LossMeter {
     /// measurement" on a session that has never measured anything - a client
     /// that connects and subscribes to nothing, say. Zero is then a starting
     /// value, not a finding, and calling it a measurement is the same class of
-    /// mistake as reading silence as a clean link. A reviewer caught it.
+    /// mistake as reading silence as a clean link.
     pub fn has_measured(&self) -> bool {
         self.ever_measured
     }
@@ -524,7 +523,7 @@ mod tests {
         }
     }
 
-    /// The case the test review wrote out in review 2120A4: 25 expected, 20 distinct, 5
+    /// The case: 25 expected, 20 distinct, 5
     /// duplicates. It read as a clean link while a fifth of the window was
     /// missing, because the meter counted arrivals and is fed before the jitter
     /// buffer. Both the relay and plain UDP can duplicate.
@@ -546,7 +545,7 @@ mod tests {
         }
         let (expected, received) = s.step(true).expect("the window carried traffic");
         assert_eq!(expected, 25, "sequence 1 to 25 were expected");
-        assert_eq!(received, 20, "and twenty distinct ones arrived - not twenty-five");
+        assert_eq!(received, 20, "and twenty distinct ones arrived: not twenty-five");
     }
 
     /// And the ordinary window is unchanged: no duplicates, nothing lost.
@@ -630,7 +629,7 @@ mod tests {
         assert_eq!(s.step(false), None);
     }
 
-    /// The blind spot a reviewer found, which my own test had pinned as correct.
+    /// A blind spot that an earlier version of this test had pinned as correct.
     ///
     /// After a wind-down the stream said nothing forever - including when we
     /// asked for it again and it did not come back. That is a resume which never
@@ -653,8 +652,8 @@ mod tests {
 
     /// More arriving than the sequence predicted.
     ///
-    /// Duplicates and reordering both do this. Ungated until a reviewer worked
-    /// through the mutations: `received.min(expected_n)` had no test on its own
+    /// Duplicates and reordering both do this. Ungated until the mutations were
+    /// worked through: `received.min(expected_n)` had no test on its own
     /// reason, and without it the meter subtracts a bigger number from a smaller
     /// one - which on a u32 is not a small error but a panic in a debug build.
     #[test]
@@ -724,7 +723,7 @@ mod tests {
     /// silent while the others flow is the SERVER having stopped it, and every
     /// stream silent at once is the link. Until build 161 the code did not make
     /// that distinction - a wanted stream that stopped handed its whole last
-    /// window in as missing (review 2120A4).
+    /// window in as missing.
     #[test]
     fn a_stream_that_stops_while_the_others_flow_is_not_the_link() {
         let mut m = LossMeter::new();
@@ -767,7 +766,7 @@ mod tests {
 
     #[test]
     fn a_vrx_only_client_is_measured_too() {
-        // The reviewer's finding. A client with the Thetis audio off and no
+        // A client with the Thetis audio off and no
         // Yaesu had NOTHING feeding the meter, while that same figure gated its
         // VRX audio protection and its VRX spectrum.
         let mut m = LossMeter::new();
@@ -790,7 +789,7 @@ mod tests {
         assert_eq!(m.step(YAESU_ONLY), 0, "a clean radio link with Thetis stopped is clean");
     }
 
-    /// The owner's question, as an assertion.
+    /// The question "does it matter which channel you measure?", as an assertion.
     ///
     /// Every stream shares one socket to one address, so three streams each
     /// losing one percent is a link losing one percent - not a link losing the
@@ -854,7 +853,7 @@ mod tests {
         assert_eq!(
             m.stopped(),
             None,
-            "and with nothing arriving anywhere, no stream is excused as one that stopped -              that excuse only applies while the others are still flowing"
+            "and with nothing arriving anywhere, no stream is excused as one that stopped;              that excuse only applies while the others are still flowing"
         );
     }
 
@@ -888,7 +887,7 @@ mod tests {
         assert_eq!(m.step(NOTHING), after_loss, "a silent window must not be read as a clean one");
     }
 
-    // ---- open point 18: a figure that stops being refreshed ----
+    // ---- a figure that stops being refreshed ----
 
     #[test]
     fn a_measured_window_is_never_stale() {
@@ -901,7 +900,7 @@ mod tests {
         assert_eq!(m.stale_windows(), 0);
     }
 
-    /// The sequence a reviewer built out of six ordinary actions.
+    /// A sequence built out of six ordinary actions.
     ///
     /// Thetis only, the link drops to forty percent, the operator moves to a
     /// Yaesu, the grace runs out, the radio has not arrived yet, VRX is off. All
@@ -916,7 +915,7 @@ mod tests {
     /// the test says "when everything is silent it goes stale", and that is not
     /// true: it goes stale when everything is silent AND nothing is owed.
     ///
-    /// The practical consequence, which a reviewer drew out: in the field this
+    /// The practical consequence: in the field this
     /// is visible on the FIRST excursion to a radio and not on the second.
     #[test]
     fn a_figure_nobody_refreshes_is_counted_and_eventually_called_stale() {
@@ -1009,9 +1008,9 @@ mod tests {
         // moved when nothing moved at all.
         //
         // And MULTIPLIED, not divided. Integer division hid a whole window:
-        // 41 * 500 / 1000 is also 20, so a threshold of 41 passed. A reviewer
-        // found that one by mutating the constant, which is the only way it was
-        // ever going to turn up.
+        // 41 * 500 / 1000 is also 20, so a threshold of 41 passed. Mutating the
+        // constant found that one, which is the only way it was ever going to
+        // turn up.
         assert_eq!(
             STALE_AFTER_WINDOWS as u64 * crate::engine::HEARTBEAT_INTERVAL_MS,
             20_000,
@@ -1020,7 +1019,7 @@ mod tests {
         );
     }
 
-    // ---- open point 15: the peak, and the climb back down ----
+    // ---- the false peak after a reconnect, and the climb back down ----
 
     #[test]
     fn without_a_reset_a_reconnect_charges_for_its_own_gap() {
@@ -1037,9 +1036,9 @@ mod tests {
         assert!(peak >= 60, "expected the historical false peak, got {peak}");
     }
 
-    /// **The number that governs open point 15.**
+    /// **The number that governs the false peak.**
     ///
-    /// A reviewer put it plainly: the climb is not the interesting half. The
+    /// The climb is not the interesting half. The
     /// server latches at two percent, so the very first empty window already
     /// switches error correction on - pinning how fast it reaches seventy proves
     /// nothing. What decides how long the protection STAYS on is how long the
@@ -1051,7 +1050,7 @@ mod tests {
     /// never let go at all.
     ///
     /// Pinned, not changed: the EMA is a number with a purpose, and moving it
-    /// without measuring is what working rule 4 forbids.
+    /// without measuring it first would be guessing.
     #[test]
     fn the_climb_back_down_is_what_keeps_the_protection_on() {
         let mut m = LossMeter::new();
@@ -1081,7 +1080,7 @@ mod tests {
         // The first simulates the decay instead of solving it in closed form.
         // A closed form starting from the ROUNDED figure answers a slightly
         // different question than the implementation, which decays the
-        // unrounded one - a reviewer pointed out the ceil can then land a window
+        // unrounded one - the ceil can then land a window
         // either side. This walks the same recursion the engine walks, so it
         // pins the SHAPE of the rule: change the update from an EMA to
         // something else and it goes red.
@@ -1089,9 +1088,8 @@ mod tests {
         // The second pins the CHOICE of constant, and it is the reason this test
         // is worth having at all. Both `windows` and any derivation of it are
         // computed from EMA_OLD, so moving EMA_NEW from 0.3 to 0.25 slides both
-        // sides together and stays green - a reviewer caught that the band of
-        // the previous round let 0.3 -> 0.25 through, and that my replacement
-        // let EVERY value through. A derivation guards the rule; only an
+        // sides together and stays green - an earlier band let 0.3 -> 0.25
+        // through, and its first replacement let EVERY value through. A derivation guards the rule; only an
         // equality guards the number.
         let mut sim = peak_smoothed;
         let mut simulated_windows = 0;
@@ -1105,7 +1103,7 @@ mod tests {
         );
         assert_eq!(
             EMA_NEW, 0.3,
-            "EMA_NEW decides how long the server keeps error correction on after a burst: about {windows} windows from a peak of {peak}, and only then does its counter of a thousand clean ticks start. Moving it is a decision - the simulation above follows any value, so this line is what notices."
+            "EMA_NEW decides how long the server keeps error correction on after a burst: about {windows} windows from a peak of {peak}, and only then does its counter of a thousand clean ticks start. Moving it is a decision: the simulation above follows any value, so this line is what notices."
         );
         assert!(peak > LATCH_AT);
     }
@@ -1151,8 +1149,8 @@ mod tests {
     ///
     /// The tests above prove the module. They stay green while the engine feeds
     /// it nothing, and in build 36 they would have stayed green while a call
-    /// site nailed `radio1: false` into a struct literal - a reviewer had to
-    /// spot that, which is what a test is for. So this one reads engine.rs, and
+    /// site nailed `radio1: false` into a struct literal - it had to be spotted
+    /// by reading, which is what a test is for. So this one reads engine.rs, and
     /// it forbids the literal.
     #[test]
     fn the_engine_feeds_every_stream_and_derives_what_it_expects() {
@@ -1170,21 +1168,21 @@ mod tests {
             ("yaesu_audio_in!(pkt, \"Radio 2\", yaesu2_jitter_buf, st_yaesu2, yaesu2_logged_first, radio2,", "same for radio 2"),
             ("audio_arrived!(vrx1,", "a VRX-only client would have nothing feeding its meter"),
             ("audio_arrived!(vrx2,", "same for VRX2"),
-            ("loss_meter.reset()", "a reconnect would be charged for its own gap again - open point 15"),
+            ("loss_meter.reset()", "a reconnect would be charged for its own gap again"),
             ("loss_meter.$meter.reset()", "a radio's stream that starts over would read as total loss"),
             ("loss_meter.vrx1.reset()", "same for VRX1"),
             ("loss_meter.vrx2.reset()", "same for VRX2"),
             ("Expecting::from_client(", "the engine would state the subscriptions in its own words"),
-            ("loss_meter.stale_windows()", "a figure that stopped being refreshed would go back to being invisible - open point 18"),
+            ("loss_meter.stale_windows()", "a figure that stopped being refreshed would go back to being invisible"),
             ("loss_meter.has_measured()", "the log would call a starting value of zero a measurement"),
             ("STALE_AFTER_WINDOWS", "the threshold would be spelled out in the engine instead of taken from here"),
         ] {
-            assert!(src.contains(needle), "engine.rs no longer contains `{needle}` - {why}");
+            assert!(src.contains(needle), "engine.rs no longer contains `{needle}`: {why}");
         }
         // Every mention of the type must be the constructor. Spelling out one
         // form, `loss_window::Expecting {`, missed `Expecting {`, `Expecting{`
-        // and a brace on the next line - a reviewer pointed out that a gate
-        // written as one literal string only forbids that literal string.
+        // and a brace on the next line - a gate written as one literal string
+        // only forbids that literal string.
         for (i, _) in src.match_indices("Expecting") {
             assert!(
                 src[i..].starts_with("Expecting::from_client("),

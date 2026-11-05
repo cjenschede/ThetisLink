@@ -38,9 +38,21 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import uniffi.sdr_remote.sMeterText
 
+/** The decimals of a frequency in MHz that show a step of [stepHz]: none for 1 MHz, one more per
+ *  decade below it, six (1 Hz) at most. The desktop has the same rule (`mhz_decimals`). */
+internal fun mhzDecimals(stepHz: Double): Int {
+    var d = 0
+    var unit = 1_000_000.0
+    while (d < 6 && stepHz < unit * 0.999) {
+        unit /= 10.0
+        d++
+    }
+    return d
+}
+
 // Server spectrum encoding constants
-private const val SERVER_FLOOR_DB = -150f
-private const val SERVER_RANGE_DB = 120f // bins span -150 to -30 dB
+internal const val SERVER_FLOOR_DB = -150f
+internal const val SERVER_RANGE_DB = 120f // bins span -150 to -30 dB
 
 /**
  * Spectrum plot: line graph of power vs frequency.
@@ -52,7 +64,7 @@ fun SpectrumPlot(
     bins: List<UByte>,
     centerFreqHz: Long,       // bins center (DDC center at zoom=1)
     spanHz: Long,             // bins span
-    displayCenterHz: Long,    // display center (VFO frequency — like waterfall)
+    displayCenterHz: Long,    // display center (VFO frequency; like waterfall)
     vfoHz: Long,              // VFO marker position (pinned during pending freq change)
     filterLowHz: Int,
     filterHighHz: Int,
@@ -180,7 +192,7 @@ fun SpectrumPlot(
                 val x = frac * w
                 vfoX = x
                 val vfoMhz = vfoHz.toDouble() / 1_000_000.0
-                val vfoText = "%.3f".format(vfoMhz)
+                val vfoText = "%.${maxOf(3, mhzDecimals(tickSpacingHz))}f".format(vfoMhz)
                 val vfoPaint = Paint().apply {
                     color = android.graphics.Color.rgb(255, 120, 120)
                     textSize = 28f
@@ -268,13 +280,7 @@ fun SpectrumPlot(
             if (frac < 0.02f || frac > 0.98f) continue
             val x = frac * w
             val freqMhz = freq / 1_000_000.0
-            val label = when {
-                tickSpacingHz >= 1_000_000.0 -> "%.0f".format(freqMhz)
-                tickSpacingHz >= 100_000.0 -> "%.1f".format(freqMhz)
-                tickSpacingHz >= 10_000.0 -> "%.2f".format(freqMhz)
-                tickSpacingHz >= 1_000.0 -> "%.3f".format(freqMhz)
-                else -> "%.4f".format(freqMhz)
-            }
+            val label = "%.${mhzDecimals(tickSpacingHz)}f".format(freqMhz)
             drawContext.canvas.nativeCanvas.drawText(label, x, plotH + labelStripHeight - 3f, freqLabelPaint)
         }
 
@@ -328,7 +334,7 @@ fun SpectrumPlot(
             }
         }
 
-        // ── S-meter overlay (top-right) — `smeter` is dBm in RX, watts in TX
+        // ── S-meter overlay (top-right): `smeter` is dBm in RX, watts in TX
         val meterText = if (otherTx) {
             "TX: ${smeter.toInt()}W"
         } else if (transmitting) {

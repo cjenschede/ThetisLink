@@ -32,7 +32,7 @@ pub(crate) fn next_intent_id() -> IntentId {
 }
 
 /// Increment the frame-id. Called once per render-frame by the
-/// render-orchestrator (step 2).
+/// render-orchestrator.
 pub(crate) fn begin_frame() -> u64 {
     CURRENT_FRAME.fetch_add(1, Ordering::Relaxed) + 1
 }
@@ -108,7 +108,7 @@ pub(crate) enum UiEvent {
     /// per-site tracker. Plan:
     /// move to an app-level `ConnectionStateChanged` emit when
     /// `self.connected` actually changes value. Variant stays
-    /// for forward-compat; no emitter in this phase.
+    /// for forward-compat; nothing emits it yet.
     GuardTransition {
         control_id: &'static str,
         channel: RxChannel,

@@ -17,7 +17,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "2.13.0"
+version = "2.13.1"
 edition = "2021"
 license = "GPL-2.0-or-later"
 
@@ -46,7 +46,7 @@ opt-level = 2
 # NOTE: the published binaries must not carry the build machine's home
 # directory. The obvious knob for that, `[profile.release] trim-paths`, is NOT
 # stabilised in this Cargo (1.93.1) and fails the build outright, so the release
-# script does it with --remap-path-prefix instead. See build-release.ps1.
+# script does it with --remap-path-prefix instead.
 
 # Local fork of mcp2221-hal: adds `connect_with_serial` and `list_devices` so
 # we can drive two MCP2221A boards (one per StockCorner tuner) from the same

@@ -7,11 +7,12 @@
 //! method callable from the parent module tree.
 
 use super::*;
+use sdr_remote_logic::eq;
 
 impl SdrRemoteApp {
     /// Shared DSP/function control block for a Yaesu radio slot (used by both slot 0
     /// and slot 1 so styling stays identical - single shared renderer, no per-window drift).
-    /// PATCH-yaesu-extra-controls Phase A1: RF-ATT + Break-in toggles, driven by the
+    /// RF-ATT + Break-in toggles, driven by the
     /// feature-state bitfield (bit N = YaesuCtrl N). Blue fill = on.
     /// Optimistic toggle update: flip the local feature bit immediately on click + set the
     /// debounce, so the button responds instantly; the poll confirms/corrects (~0.5s, safety net).
@@ -78,7 +79,7 @@ impl SdrRemoteApp {
                 self.yaesu_toggle_flip(slot, 3);
             }
             // AGC cycle (multi-state) - YaesuCtrl::Agc index 6. No blue: there is always
-            // one setting active; the label shows the setting. Hardware-verified (§13):
+            // one setting active; the label shows the setting. Hardware-verified:
             // 1=FAST/2=MID/3=SLOW/4=AUTO on both radios (AUTO reads back as 4/5/6,
             // normalized to 4 by the server). OFF (0) deliberately omitted (remote risky).
             let agc = levels[6];
@@ -99,7 +100,7 @@ impl SdrRemoteApp {
         });
     }
 
-    /// Collapsible level-slider block (Phase C): NB/DNR/Processor/AMC as sliders,
+    /// Collapsible level-slider block: NB/DNR/Processor/AMC as sliders,
     /// per radio slot. Debounced via yaesu(2)_control_changed_at so a drag isn't
     /// reset every frame by the radio readback. Shared for slot 0/1.
     pub(super) fn render_yaesu_levels_block(&mut self, ui: &mut egui::Ui, slot: u8) {
@@ -112,7 +113,7 @@ impl SdrRemoteApp {
         // NB/DNR/Contour/Notch are not usable in FM (mode 5) -> grey out.
         let is_fm = matches!(if slot == 0 { self.yaesu_mode } else { self.yaesu2_mode }, 5 | 12);
         let toggles = if slot == 0 { self.yaesu_feature_toggles } else { self.yaesu2_feature_toggles };
-        // A group like every other fold (owner, 2026-10-15: lines above and
+        // A group like every other fold (2026-10-15: lines above and
         // below); the body indented as egui's collapsing header did.
         let levels = if slot == 0 { super::config::Fold::YaesuLevels } else { super::config::Fold::Yaesu2Levels };
         super::helpers::rule(ui);
@@ -175,7 +176,7 @@ impl SdrRemoteApp {
                         });
                         });
                     }
-                    // Phase D: Contour / APF / Manual-Notch - on/off button + frequency slider.
+                    // Contour / APF / Manual-Notch - on/off button + frequency slider.
                     let dspecs: [(usize, &str, u8, u8, i32, i32); 3] = [
                         (0, "Contour", 15, 18, 10, 3200),
                         (1, "APF", 16, 19, 0, 50),
@@ -222,7 +223,7 @@ impl SdrRemoteApp {
         );
     }
 
-    /// Clarifier block (§15): RIT/XIT on/off (blue=on, optimistic), offset display
+    /// Clarifier block: RIT/XIT on/off (blue=on, optimistic), offset display
     /// (freqs[3] as i16) + step buttons (±10/±100 Hz) and Clear. Shared for slot 0/1.
     /// Per-model difference is server-side (991A relative RU/RD, FTX-1 absolute CF).
     pub(super) fn render_yaesu_clarifier_block(&mut self, ui: &mut egui::Ui, slot: u8) {
@@ -322,7 +323,7 @@ impl SdrRemoteApp {
             ui.label(RichText::new(label).size(14.0).strong().color(c));
         }
 
-        // Frequency display with scroll/tap-to-tune + touch-friendly stepper (§16)
+        // Frequency display with scroll/tap-to-tune + touch-friendly stepper
         ui.horizontal(|ui| {
             ui.label(RichText::new("A:  ").size(16.0).strong());
             if let Some(delta) = render_freq_scroll(ui, self.yaesu_freq_a) {
@@ -407,7 +408,7 @@ impl SdrRemoteApp {
                         if self.yaesu_scan_active { 1 } else { 2 }));
                 }
                 // Internal ATU: momentary Tune (band-gated: HF+6m, <54 MHz) + on/off toggle
-                // that shows the real radio state (via AC; poll). PATCH-yaesu-internal-atu.
+                // that shows the real radio state (via AC; poll).
                 // ATU: HF+6m (<54 MHz) and not in FM (mode 5).
                 let atu_avail = self.yaesu_freq_a >= 1 && self.yaesu_freq_a < 54_000_000 && !matches!(self.yaesu_mode, 5 | 12);
                 let can_tune = self.yaesu_connected && atu_avail;
@@ -430,7 +431,7 @@ impl SdrRemoteApp {
                         if atu_on { 4 } else { 15 })); // toggle: off (AC000) / on (AC001)
                 }
             });
-            // DSP/function controls (PATCH-yaesu-extra-controls) - radio 1.
+            // DSP/function controls - radio 1.
             let dsp0 = self.yaesu_feature_toggles;
             let lvl0 = self.yaesu_feature_levels;
             self.render_yaesu_dsp_block(ui, 0, dsp0, lvl0);
@@ -545,21 +546,14 @@ impl SdrRemoteApp {
 
         super::helpers::rule(ui);
 
-        // Mic gain slider for Yaesu USB TX audio. Display 0.5 maps
-        // to the empirically matched internal gain 0.2.
+        // Mic gain for Yaesu USB TX audio, at the front of the chain.
         ui.horizontal(|ui| {
             ui.label(rust_i18n::t!("dev_mic_gain").to_string());
-            let mut mic_gain_display = super::yaesu_mic_gain_to_display(self.yaesu_mic_gain);
-            let slider = egui::Slider::new(&mut mic_gain_display, 0.05..=1.0)
-                .logarithmic(true)
-                .custom_formatter(|v, _| format!("{:.2}x", v));
-            let resp = ui.add_sized([140.0, 16.0], slider);
-            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut mic_gain_display, 0.05..=1.0, 0.02);
-            if resp.changed() || scrolled {
-                self.yaesu_mic_gain = super::yaesu_mic_gain_from_display(mic_gain_display);
+            let (changed, done) = super::helpers::yaesu_mic_gain_slider(ui, &mut self.yaesu_mic_gain);
+            if changed {
                 let _ = self.cmd_tx.send(Command::SetYaesuTxGain(self.yaesu_mic_gain));
             }
-            if resp.drag_stopped() || scrolled {
+            if done {
                 self.save_ptt_config();
             }
         });
@@ -574,7 +568,7 @@ impl SdrRemoteApp {
         // Memory channels - visible body height is user-resizable so it
         // doesn't push the Radio Settings header off the bottom of the window.
         // Groups like every other fold: the rule above is the one after the
-        // equalizer, and each draws its own line below (owner, 2026-10-15).
+        // equalizer, and each draws its own line below.
         self.folds_open = super::helpers::settings_group(
             ui,
             self.folds_open,
@@ -596,11 +590,11 @@ impl SdrRemoteApp {
         );
     }
 
-    /// Panel/window name for a radio slot (PATCH-dual-radio-991a-ftx1).
-    /// Window title per radio slot: "ThetisLink - Yaesu {N}: {type}" — consistent
+    /// Panel/window name for a radio slot.
+    /// Window title per radio slot: "ThetisLink - Yaesu {N}: {type}"; consistent
     /// with the server tab and the detail tab (via yaesu_slot_label). Type from RadioInfo.
     pub(super) fn yaesu_window_title(&self, slot: u8) -> String {
-        format!("ThetisLink - {}", self.yaesu_slot_label(slot))
+        format!("ThetisLink: {}", self.yaesu_slot_label(slot))
     }
 
     /// Purely the server-reported radio type per slot (the RadioInfo model byte),
@@ -668,9 +662,6 @@ impl SdrRemoteApp {
         }
     }
 
-    /// Focused slot-1 radio panel (dual-radio phase 1): VFO-A freq + tune, mode,
-    /// PTT, S-meter, volume. Memory/EX-menu = phase 2. Reads self.yaesu2_* (synced
-    /// from state) and sends SetYaesu2* commands.
     /// Generic 5-band EQ section (chevron + save/delete profiles +
     /// value per slider), SHARED by both Yaesu windows (slot 0 = 991A window,
     /// slot 1 = FTX-1 window) - parity by construction, not per-window repainting.
@@ -695,7 +686,12 @@ impl SdrRemoteApp {
 
         // Snapshot per-slot state in locals (writeback at the bottom).
         let mut enabled = if slot == 0 { self.yaesu_eq_enabled } else { self.yaesu2_eq_enabled };
-        let mut gains = if slot == 0 { self.yaesu_eq_gains } else { self.yaesu2_eq_gains };
+        // The two EQs of a profile (`config::EqProfile`): the standard five gains,
+        // as on the phone, and the advanced twenty channels. `advanced` picks the
+        // one that sounds and the one on screen.
+        let mut advanced = if slot == 0 { self.yaesu_eq_advanced } else { self.yaesu2_eq_advanced };
+        let mut std_gains = if slot == 0 { self.yaesu_eq_gains } else { self.yaesu2_eq_gains };
+        let mut bands = if slot == 0 { self.yaesu_eq_bands } else { self.yaesu2_eq_bands };
         let mut mic_gain = if slot == 0 { self.yaesu_mic_gain } else { self.yaesu2_mic_gain };
         let mut profiles = if slot == 0 { self.yaesu_eq_profiles.clone() } else { self.yaesu2_eq_profiles.clone() };
         let mut active = if slot == 0 { self.yaesu_eq_active_profile.clone() } else { self.yaesu2_eq_active_profile.clone() };
@@ -703,18 +699,29 @@ impl SdrRemoteApp {
         let tx = self.cmd_tx.clone();
         let mut dirty = false;
         let mk_en = |on: bool| if slot == 0 { Command::SetYaesuEqEnabled(on) } else { Command::SetYaesu2EqEnabled(on) };
-        let mk_band = |b: u8, g: f32| if slot == 0 { Command::SetYaesuEqBand(b, g) } else { Command::SetYaesu2EqBand(b, g) };
+        let mk_band = |b: u8, p: eq::EqBand| if slot == 0 { Command::SetYaesuEqBandParams(b, p) } else { Command::SetYaesu2EqBandParams(b, p) };
+        let send_bands = |b: &eq::EqBands| for (i, p) in b.iter().enumerate() { let _ = tx.send(mk_band(i as u8, *p)); };
         let mk_gain = |g: f32| if slot == 0 { Command::SetYaesuTxGain(g) } else { Command::SetYaesu2TxGain(g) };
         // Client-side TX chain per radio: compressor (0-100) + AGC toggle.
         let mut comp = if slot == 0 { self.yaesu_compressor } else { self.yaesu2_compressor };
         let mut agc = if slot == 0 { self.yaesu_tx_agc } else { self.yaesu2_tx_agc };
         let mut chain_dirty = false;
         let mk_comp = |v: u8| if slot == 0 { Command::SetYaesuCompressor(v) } else { Command::SetYaesu2Compressor(v) };
+        let (mut attack_ms, mut release_ms) = if slot == 0 {
+            (self.yaesu_comp_attack_ms, self.yaesu_comp_release_ms)
+        } else {
+            (self.yaesu2_comp_attack_ms, self.yaesu2_comp_release_ms)
+        };
+        let mk_timing = |a: f32, r: f32| if slot == 0 { Command::SetYaesuCompTiming(a, r) } else { Command::SetYaesu2CompTiming(a, r) };
         let mk_agc = |on: bool| if slot == 0 { Command::SetYaesuTxAgc(on) } else { Command::SetYaesu2TxAgc(on) };
+        // A profile saved now carries the TX chain as it stands.
+        let snapshot = |name: String, enabled: bool, advanced: bool, gains: [f32; 5], bands: eq::EqBands, mic_gain: f32,
+                        chain: super::config::TxChain|
+            super::config::EqProfile { name, enabled, advanced, gains, bands, mic_gain: Some(mic_gain), chain: Some(chain) };
 
         ui.indent(("yaesu_eq_body", slot), |ui| {
             ui.horizontal(|ui| {
-                let names: Vec<String> = profiles.iter().map(|(n, _, _, _)| n.clone()).collect();
+                let names: Vec<String> = profiles.iter().map(|p| p.name.clone()).collect();
                 egui::ComboBox::from_id_salt(("eq_profile", slot))
                     .selected_text(if active.is_empty() { "---" } else { active.as_str() })
                     .width(100.0)
@@ -722,60 +729,163 @@ impl SdrRemoteApp {
                         for name in &names {
                             if ui.selectable_label(&active == name, name).clicked() {
                                 active = name.clone();
-                                if let Some((_, en, g, mg)) = profiles.iter().find(|(n, _, _, _)| n == name) {
-                                    enabled = *en; gains = *g; mic_gain = *mg;
-                                    let _ = tx.send(mk_en(*en));
-                                    for i in 0..5 { let _ = tx.send(mk_band(i as u8, g[i])); }
-                                    let _ = tx.send(mk_gain(*mg));
+                                if let Some(p) = profiles.iter().find(|p| &p.name == name) {
+                                    enabled = p.enabled; advanced = p.advanced;
+                                    std_gains = p.gains; bands = p.bands;
+                                    let _ = tx.send(mk_en(p.enabled));
+                                    send_bands(&p.active_bands());
+                                    // A profile from an earlier version has no mic gain: the current one stays.
+                                    if let Some(g) = p.mic_gain {
+                                        mic_gain = g;
+                                        let _ = tx.send(mk_gain(g));
+                                    }
+                                    // A profile from before build 33 has no chain: the current one stays.
+                                    if let Some(c) = p.chain {
+                                        comp = c.comp; attack_ms = c.attack_ms; release_ms = c.release_ms; agc = c.agc;
+                                        let _ = tx.send(mk_comp(comp));
+                                        let _ = tx.send(mk_timing(attack_ms, release_ms));
+                                        let _ = tx.send(mk_agc(agc));
+                                    }
+                                    log::info!("{} EQ profile {:?}: {}, mic gain {}, TX chain {}", if slot == 0 { "Yaesu" } else { "Yaesu2" },
+                                        p.name, if p.advanced { "advanced" } else { "standard" },
+                                        p.mic_gain.map(|g| format!("{g:.3}")).unwrap_or_else(|| "kept (the profile has none)".to_string()),
+                                        match p.chain {
+                                            Some(c) => format!("comp {}, attack {:.3} ms, release {:.1} ms, AGC {}",
+                                                c.comp, c.attack_ms, c.release_ms, if c.agc { "on" } else { "off" }),
+                                            None => "kept (the profile has none)".to_string(),
+                                        });
                                 }
                                 dirty = true;
+                                // The mic gain and the chain live in the PTT config.
+                                chain_dirty = true;
                             }
                         }
                     });
                 if ui.small_button(rust_i18n::t!("dev_save").to_string()).clicked() && !active.is_empty() {
-                    let name = active.clone();
-                    if let Some(p) = profiles.iter_mut().find(|(n, _, _, _)| *n == name) {
-                        p.1 = enabled; p.2 = gains; p.3 = mic_gain;
+                    let p = snapshot(active.clone(), enabled, advanced, std_gains, bands, mic_gain,
+                        super::config::TxChain { comp, attack_ms, release_ms, agc });
+                    if let Some(slot_p) = profiles.iter_mut().find(|q| q.name == p.name) {
+                        *slot_p = p;
                     } else {
-                        profiles.push((name, enabled, gains, mic_gain));
+                        profiles.push(p);
                     }
                     dirty = true;
                 }
                 if ui.small_button("Del").clicked() && !active.is_empty() {
-                    profiles.retain(|(n, _, _, _)| n != &active);
+                    profiles.retain(|p| p.name != active);
                     active.clear();
                     dirty = true;
+                }
+                // Not saved until Save, like a slider: it belongs to the profile.
+                if ui.checkbox(&mut advanced, rust_i18n::t!("dev_eq_advanced").to_string())
+                    .on_hover_text(rust_i18n::t!("dev_eq_advanced_hover").to_string())
+                    .changed()
+                {
+                    send_bands(&super::config::active_eq_bands(advanced, &std_gains, &bands));
+                    log::info!("{} EQ: {}", if slot == 0 { "Yaesu" } else { "Yaesu2" },
+                        if advanced { "advanced" } else { "standard" });
                 }
             });
             ui.horizontal(|ui| {
                 ui.label(rust_i18n::t!("dev_new").to_string());
                 ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(100.0));
-                if ui.small_button("+").clicked() && !new_name.is_empty() {
-                    let name = new_name.clone();
-                    profiles.push((name.clone(), enabled, gains, mic_gain));
-                    active = name;
-                    new_name.clear();
-                    dirty = true;
+                // A name that would not come back from the file is not taken; one
+                // that exists already is that profile, saved over.
+                let name = super::config::profile_name(&new_name);
+                if ui.add_enabled(name.is_some(), egui::Button::new("+").small())
+                    .on_hover_text(rust_i18n::t!("dev_eq_new_profile_hover").to_string())
+                    .on_disabled_hover_text(rust_i18n::t!("dev_eq_new_profile_hover").to_string())
+                    .clicked()
+                {
+                    if let Some(name) = name {
+                        let p = snapshot(name.clone(), enabled, advanced, std_gains, bands, mic_gain,
+                            super::config::TxChain { comp, attack_ms, release_ms, agc });
+                        if let Some(q) = profiles.iter_mut().find(|q| q.name == name) { *q = p; } else { profiles.push(p); }
+                        active = name;
+                        new_name.clear();
+                        dirty = true;
+                    }
                 }
             });
-            ui.horizontal(|ui| {
-                for i in 0..5 {
-                    ui.vertical(|ui| {
-                        ui.set_width(50.0);
-                        ui.label(RichText::new(sdr_remote_logic::eq::BAND_LABELS[i]).size(10.0));
-                        let mut g = gains[i];
-                        let slider = egui::Slider::new(&mut g, -12.0..=12.0)
-                            .vertical()
-                            .custom_formatter(|v, _| format!("{:+.0}", v));
-                        let resp = ui.add_sized([20.0, 60.0], slider);
-                        let scrolled = super::helpers::slider_wheel(ui, &resp, &mut g, -12.0..=12.0, 0.5);
-                        if resp.changed() || scrolled {
-                            gains[i] = g;
-                            let _ = tx.send(mk_band(i as u8, g));
+            if advanced {
+                eq_response_curve(ui, &bands);
+                egui::Grid::new(("eq_channels", slot)).num_columns(5).spacing([6.0, 2.0]).show(ui, |ui| {
+                    ui.label(RichText::new("#").size(10.0));
+                    ui.label(RichText::new(rust_i18n::t!("dev_eq_filter").to_string()).size(10.0));
+                    ui.label(RichText::new("Hz").size(10.0));
+                    ui.label(RichText::new("Q").size(10.0));
+                    ui.label(RichText::new("dB").size(10.0));
+                    ui.end_row();
+                    for i in 0..eq::NUM_BANDS {
+                        let mut b = bands[i];
+                        let mut changed = false;
+                        ui.label(RichText::new(format!("{}", i + 1)).size(10.0));
+                        egui::ComboBox::from_id_salt(("eq_kind", slot, i))
+                            .selected_text(kind_label(b.kind))
+                            .width(80.0)
+                            .show_ui(ui, |ui| {
+                                for k in eq::FilterKind::ALL {
+                                    if ui.selectable_label(b.kind == k, kind_label(k)).clicked() && b.kind != k {
+                                        b = b.with_kind(k);
+                                        changed = true;
+                                    }
+                                }
+                            });
+                        let on = b.kind != eq::FilterKind::Off;
+                        ui.add_enabled_ui(on, |ui| {
+                            let speed = (b.freq_hz * 0.005).max(0.5) as f64;
+                            changed |= ui.add(egui::DragValue::new(&mut b.freq_hz)
+                                .range(eq::FREQ_MIN..=eq::FREQ_MAX).speed(speed).max_decimals(0))
+                                .on_hover_text(rust_i18n::t!("dev_eq_freq_hover").to_string())
+                                .changed();
+                        });
+                        ui.add_enabled_ui(on, |ui| {
+                            changed |= ui.add(egui::DragValue::new(&mut b.q)
+                                .range(eq::Q_MIN..=eq::Q_MAX).speed(0.01).max_decimals(2))
+                                .on_hover_text(rust_i18n::t!("dev_eq_q_hover").to_string())
+                                .changed();
+                        });
+                        ui.add_enabled_ui(on && b.kind.uses_gain(), |ui| {
+                            let range = -eq::GAIN_MAX_DB..=eq::GAIN_MAX_DB;
+                            let resp = ui.add(egui::Slider::new(&mut b.gain_db, range.clone())
+                                .step_by(0.5)
+                                .custom_formatter(|v, _| format!("{:+.1}", v)));
+                            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut b.gain_db, range, 0.5);
+                            changed |= resp.changed() || scrolled;
+                        });
+                        ui.end_row();
+                        if changed {
+                            bands[i] = b.clamped();
+                            let _ = tx.send(mk_band(i as u8, bands[i]));
                         }
-                    });
+                    }
+                });
+                if ui.small_button(rust_i18n::t!("dev_eq_flat").to_string()).on_hover_text(rust_i18n::t!("dev_eq_flat_hover").to_string()).clicked() {
+                    bands = eq::default_bands();
+                    send_bands(&bands);
                 }
-            });
+            } else {
+                // The standard EQ: the five bands as before build 29, and as on the phone.
+                let max = eq::STANDARD_GAIN_MAX_DB;
+                ui.horizontal(|ui| {
+                    for i in 0..5 {
+                        ui.vertical(|ui| {
+                            ui.set_width(50.0);
+                            ui.label(RichText::new(eq::LEGACY_LABELS[i]).size(10.0));
+                            let mut g = std_gains[i];
+                            let slider = egui::Slider::new(&mut g, -max..=max)
+                                .vertical()
+                                .custom_formatter(|v, _| format!("{:+.0}", v));
+                            let resp = ui.add_sized([20.0, 60.0], slider);
+                            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut g, -max..=max, 0.5);
+                            if resp.changed() || scrolled {
+                                std_gains[i] = g;
+                                let _ = tx.send(mk_band(i as u8, eq::bands_from_legacy_gains(&std_gains)[i]));
+                            }
+                        });
+                    }
+                });
+            }
             // Client-side TX chain (radio processing doesn't work over USB): AGC + compressor.
             ui.horizontal(|ui| {
                 if ui.checkbox(&mut agc, "AGC").changed() {
@@ -793,17 +903,59 @@ impl SdrRemoteApp {
                 }
                 if resp.drag_stopped() || scrolled { chain_dirty = true; }
             });
+            // The timing is in Advanced only; it keeps working when the box is off.
+            if advanced {
+                ui.horizontal(|ui| {
+                    use sdr_remote_logic::commands::{COMP_ATTACK_RANGE_MS, COMP_RELEASE_RANGE_MS, COMP_ATTACK_DEFAULT_MS, COMP_RELEASE_DEFAULT_MS};
+                    let mut timing_changed = false;
+                    let mut timing_done = false;
+                    ui.label(rust_i18n::t!("dev_comp_attack").to_string());
+                    let resp = ui.add(egui::Slider::new(&mut attack_ms, COMP_ATTACK_RANGE_MS)
+                        .logarithmic(true)
+                        .custom_formatter(|v, _| if v < 1.0 { format!("{:.3} ms", v) } else { format!("{:.2} ms", v) }))
+                        .on_hover_text(rust_i18n::t!("dev_comp_attack_hover").to_string());
+                    // A wheel notch is ten percent, as the slider is logarithmic.
+                    let scrolled = super::helpers::slider_wheel_ratio(ui, &resp, &mut attack_ms, COMP_ATTACK_RANGE_MS, 1.1);
+                    timing_changed |= resp.changed() || scrolled;
+                    timing_done |= resp.drag_stopped() || scrolled;
+                    ui.label(rust_i18n::t!("dev_comp_release").to_string());
+                    let resp = ui.add(egui::Slider::new(&mut release_ms, COMP_RELEASE_RANGE_MS)
+                        .logarithmic(true)
+                        .custom_formatter(|v, _| if v < 10.0 { format!("{:.1} ms", v) } else { format!("{:.0} ms", v) }))
+                        .on_hover_text(rust_i18n::t!("dev_comp_release_hover").to_string());
+                    let scrolled = super::helpers::slider_wheel_ratio(ui, &resp, &mut release_ms, COMP_RELEASE_RANGE_MS, 1.1);
+                    timing_changed |= resp.changed() || scrolled;
+                    timing_done |= resp.drag_stopped() || scrolled;
+                    if ui.small_button(rust_i18n::t!("dev_comp_default").to_string()).on_hover_text(rust_i18n::t!("dev_comp_default_hover").to_string()).clicked() {
+                        attack_ms = COMP_ATTACK_DEFAULT_MS;
+                        release_ms = COMP_RELEASE_DEFAULT_MS;
+                        timing_changed = true;
+                        timing_done = true;
+                    }
+                    if timing_changed { let _ = tx.send(mk_timing(attack_ms, release_ms)); }
+                    if timing_done {
+                        chain_dirty = true;
+                        // Logged here and not in the engine: a drag sends every frame.
+                        log::info!("{} compressor timing: attack {:.3} ms, release {:.1} ms",
+                            if slot == 0 { "Yaesu" } else { "Yaesu2" }, attack_ms, release_ms);
+                    }
+                });
+            }
         });
 
         // Writeback to the slot state.
         if slot == 0 {
-            self.yaesu_eq_enabled = enabled; self.yaesu_eq_gains = gains; self.yaesu_mic_gain = mic_gain;
+            self.yaesu_eq_enabled = enabled; self.yaesu_eq_advanced = advanced;
+            self.yaesu_eq_gains = std_gains; self.yaesu_eq_bands = bands; self.yaesu_mic_gain = mic_gain;
             self.yaesu_eq_profiles = profiles; self.yaesu_eq_active_profile = active; self.yaesu_eq_new_name = new_name;
             self.yaesu_compressor = comp; self.yaesu_tx_agc = agc;
+            self.yaesu_comp_attack_ms = attack_ms; self.yaesu_comp_release_ms = release_ms;
         } else {
-            self.yaesu2_eq_enabled = enabled; self.yaesu2_eq_gains = gains; self.yaesu2_mic_gain = mic_gain;
+            self.yaesu2_eq_enabled = enabled; self.yaesu2_eq_advanced = advanced;
+            self.yaesu2_eq_gains = std_gains; self.yaesu2_eq_bands = bands; self.yaesu2_mic_gain = mic_gain;
             self.yaesu2_eq_profiles = profiles; self.yaesu2_eq_active_profile = active; self.yaesu2_eq_new_name = new_name;
             self.yaesu2_compressor = comp; self.yaesu2_tx_agc = agc;
+            self.yaesu2_comp_attack_ms = attack_ms; self.yaesu2_comp_release_ms = release_ms;
         }
         if dirty { self.save_full_config(); }
         if chain_dirty { self.save_ptt_config(); } // comp/AGC follow the mic-gain append pattern
@@ -814,7 +966,7 @@ impl SdrRemoteApp {
     /// and swap back - this keeps the working 991A table unchanged and the UI
     /// shared. The read/write commands follow `yaesu_mem_active_slot`.
     /// The memory list plus the drag-handle underneath it, shared by both Yaesu
-    /// windows (parity by construction, per docs/internal/UI-STYLE-GUIDE.md).
+    /// windows (parity by construction).
     ///
     /// Slot 1 used to bound the list with `ui.available_height()` instead of the
     /// stored height, and had no handle. The list then took everything below it,
@@ -906,6 +1058,9 @@ impl SdrRemoteApp {
         swap_in_out(self);
     }
 
+    /// Focused slot-1 radio panel: VFO-A freq + tune, mode,
+    /// PTT, S-meter, volume. Reads self.yaesu2_* (synced
+    /// from state) and sends SetYaesu2* commands.
     pub(super) fn render_yaesu2_panel(&mut self, ui: &mut egui::Ui) {
         let mode_label = match self.yaesu2_mode {
             0 => "LSB", 1 => "USB", 3 => "CW-L", 4 => "CW-U",
@@ -950,7 +1105,7 @@ impl SdrRemoteApp {
             };
             ui.label(RichText::new(label).size(14.0).strong().color(c));
         }
-        // A: frequency (scroll/tap-to-tune) + touch-friendly stepper (§16), B: below it.
+        // A: frequency (scroll/tap-to-tune) + touch-friendly stepper, B: below it.
         ui.horizontal(|ui| {
             ui.label(RichText::new("A:  ").size(16.0).strong());
             if let Some(delta) = render_freq_scroll(ui, self.yaesu2_freq_a) {
@@ -989,7 +1144,7 @@ impl SdrRemoteApp {
             });
         }
         // Band / A=B / Split / Scan / Tune - mirror of the 991A panel, routed
-        // to slot 1 (Yaesu2Button). Mem± and V/M = phase 2 (memory).
+        // to slot 1 (Yaesu2Button).
         {
             use sdr_remote_core::protocol::ControlId;
             let btn = |text: &str| egui::Button::new(RichText::new(text).size(11.0))
@@ -1055,7 +1210,7 @@ impl SdrRemoteApp {
                         if atu_on { 4 } else { 15 })); // toggle: off (AC000) / on (AC001)
                 }
             });
-            // DSP/function controls (PATCH-yaesu-extra-controls) - radio 2.
+            // DSP/function controls - radio 2.
             let dsp1 = self.yaesu2_feature_toggles;
             let lvl1 = self.yaesu2_feature_levels;
             self.render_yaesu_dsp_block(ui, 1, dsp1, lvl1);
@@ -1174,17 +1329,11 @@ impl SdrRemoteApp {
         super::helpers::rule(ui);
         ui.horizontal(|ui| {
             ui.label(rust_i18n::t!("dev_mic_gain").to_string());
-            let mut mic_gain_display = super::yaesu_mic_gain_to_display(self.yaesu2_mic_gain);
-            let slider = egui::Slider::new(&mut mic_gain_display, 0.05..=1.0)
-                .logarithmic(true)
-                .custom_formatter(|v, _| format!("{:.2}x", v));
-            let resp = ui.add_sized([140.0, 16.0], slider);
-            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut mic_gain_display, 0.05..=1.0, 0.02);
-            if resp.changed() || scrolled {
-                self.yaesu2_mic_gain = super::yaesu_mic_gain_from_display(mic_gain_display);
+            let (changed, done) = super::helpers::yaesu_mic_gain_slider(ui, &mut self.yaesu2_mic_gain);
+            if changed {
                 let _ = self.cmd_tx.send(Command::SetYaesu2TxGain(self.yaesu2_mic_gain));
             }
-            if resp.drag_stopped() || scrolled {
+            if done {
                 self.save_ptt_config();
             }
         });
@@ -1319,8 +1468,8 @@ impl SdrRemoteApp {
                             let mut last_sub = String::new();
                             for (addr, sub, desc, val) in items {
                                 if sub != &last_sub {
-                                    // Subgroup header bold (was .weak() -> nearly unreadable,
-                                    // operator feedback build 120). Bold + full contrast.
+                                    // Subgroup header bold (was .weak() -> nearly unreadable).
+                                    // Bold + full contrast.
                                     ui.label(RichText::new(sub).strong());
                                     last_sub = sub.clone();
                                 }
@@ -2137,5 +2286,142 @@ impl SdrRemoteApp {
         } else {
             self.yaesu2_popout = false;
         }
+    }
+}
+
+fn kind_label(k: eq::FilterKind) -> String {
+    let key = match k {
+        eq::FilterKind::Off => "dev_eq_kind_off",
+        eq::FilterKind::Peak => "dev_eq_kind_peak",
+        eq::FilterKind::LowShelf => "dev_eq_kind_low_shelf",
+        eq::FilterKind::HighShelf => "dev_eq_kind_high_shelf",
+        eq::FilterKind::HighPass => "dev_eq_kind_low_cut",
+        eq::FilterKind::LowPass => "dev_eq_kind_high_cut",
+    };
+    rust_i18n::t!(key).to_string()
+}
+
+/// The total EQ curve, 50 Hz - 8 kHz on a log scale, -18..+18 dB. Drawn at
+/// `eq::EQ_SAMPLE_RATE` (48 kHz); the engine runs at the microphone's rate, so
+/// with a slower microphone the curve holds only in the lower part (see there).
+fn eq_response_curve(ui: &mut egui::Ui, bands: &eq::EqBands) {
+    const F_LO: f32 = 50.0;
+    const F_HI: f32 = 8000.0;
+    const DB: f32 = 18.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().clamp(240.0, 520.0), 120.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    let v = ui.visuals();
+    p.rect_filled(rect, 2.0, v.extreme_bg_color);
+    let grid = egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color);
+    let text = v.weak_text_color();
+    let x_of = |f: f32| rect.left() + rect.width() * ((f / F_LO).ln() / (F_HI / F_LO).ln());
+    let y_of = |db: f32| rect.center().y - rect.height() / 2.0 * (db / DB).clamp(-1.0, 1.0);
+    for (f, label) in [(100.0, "100"), (300.0, "300"), (1000.0, "1k"), (3000.0, "3k")] {
+        let x = x_of(f);
+        p.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], grid);
+        p.text(egui::pos2(x + 2.0, rect.bottom() - 2.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(9.0), text);
+    }
+    for db in [-12.0, -6.0, 6.0, 12.0] {
+        let y = y_of(db);
+        p.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], grid);
+        p.text(egui::pos2(rect.left() + 2.0, y), egui::Align2::LEFT_CENTER, format!("{db:+.0}"), egui::FontId::proportional(9.0), text);
+    }
+    let zero = y_of(0.0);
+    p.line_segment([egui::pos2(rect.left(), zero), egui::pos2(rect.right(), zero)], egui::Stroke::new(1.0, text));
+    let n = 160;
+    let pts: Vec<egui::Pos2> = (0..=n).map(|i| {
+        let f = F_LO * (F_HI / F_LO).powf(i as f32 / n as f32);
+        egui::pos2(x_of(f), y_of(eq::response_db(bands, f, eq::EQ_SAMPLE_RATE)))
+    }).collect();
+    p.add(egui::Shape::line(pts, egui::Stroke::new(2.0, v.selection.bg_fill)));
+}
+
+#[cfg(test)]
+mod eq_panel_tests {
+    fn eq_panel() -> &'static str {
+        let src = include_str!("yaesu_panel.rs");
+        let body = &src[src.find("fn render_yaesu_eq(").expect("the EQ panel")..];
+        &body[..body.find("\n    pub(super) fn ").expect("the next function")]
+    }
+
+    /// A kind chosen in the table goes through `with_kind`, the one line by
+    /// which a cut gets its flat corner.
+    #[test]
+    fn the_kind_is_chosen_through_with_kind() {
+        let panel = eq_panel();
+        assert!(panel.contains("b = b.with_kind(k);"));
+        assert!(!panel.contains("b.kind = k"));
+    }
+
+    /// "+" takes only a name that comes back from the file.
+    #[test]
+    fn a_new_profile_name_goes_through_profile_name() {
+        let panel = eq_panel();
+        assert!(panel.contains("let name = super::config::profile_name(&new_name);"));
+        assert!(panel.contains("ui.add_enabled(name.is_some(), egui::Button::new(\"+\").small())"));
+    }
+
+    /// Choosing a profile sets the mic gain and the TX chain, and both live in
+    /// the PTT config: without `chain_dirty` the next start sent the old ones.
+    #[test]
+    fn choosing_a_profile_saves_its_mic_gain_and_chain() {
+        let panel = eq_panel();
+        let arm = &panel[panel.find("if ui.selectable_label(&active == name, name).clicked() {").expect("the click")..];
+        let arm = &arm[..arm.find("if ui.small_button(rust_i18n::t!(\"dev_save\")").expect("the save button")];
+        assert!(arm.contains("chain_dirty = true;"));
+        assert!(arm.contains("if let Some(c) = p.chain {"));
+        let flat: String = arm.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("if let Some(g) = p.mic_gain { mic_gain = g; let _ = tx.send(mk_gain(g)); }"),
+            "the mic gain is the profile's, and one without keeps the current one");
+        assert_eq!(arm.matches("mk_gain(").count(), 1, "no mic gain sent outside that");
+        // The whole choice as one block, from the click to `chain_dirty`: the
+        // screen takes the profile's EQ as well as the engine (`bands = p.bands;`
+        // went missing once, unseen), and nothing can sit between or after.
+        assert!(flat.contains(concat!(
+            "if ui.selectable_label(&active == name, name).clicked() { ",
+            "active = name.clone(); if let Some(p) = profiles.iter().find(|p| &p.name == name) { ",
+            "enabled = p.enabled; advanced = p.advanced; std_gains = p.gains; bands = p.bands; ",
+            "let _ = tx.send(mk_en(p.enabled)); send_bands(&p.active_bands()); ",
+            "// A profile from an earlier version has no mic gain: the current one stays. ",
+            "if let Some(g) = p.mic_gain { mic_gain = g; let _ = tx.send(mk_gain(g)); } ",
+            "// A profile from before build 33 has no chain: the current one stays. ",
+            "if let Some(c) = p.chain { comp = c.comp; attack_ms = c.attack_ms; release_ms = c.release_ms; agc = c.agc; ",
+            "let _ = tx.send(mk_comp(comp)); let _ = tx.send(mk_timing(attack_ms, release_ms)); let _ = tx.send(mk_agc(agc)); } ",
+            "log::info!(\"{} EQ profile {:?}: {}, mic gain {}, TX chain {}\", if slot == 0 { \"Yaesu\" } else { \"Yaesu2\" }, ",
+            "p.name, if p.advanced { \"advanced\" } else { \"standard\" }, ",
+            "p.mic_gain.map(|g| format!(\"{g:.3}\")).unwrap_or_else(|| \"kept (the profile has none)\".to_string()), ",
+            "match p.chain { Some(c) => format!(\"comp {}, attack {:.3} ms, release {:.1} ms, AGC {}\", ",
+            "c.comp, c.attack_ms, c.release_ms, if c.agc { \"on\" } else { \"off\" }), ",
+            "None => \"kept (the profile has none)\".to_string(), }); } dirty = true; ",
+            "// The mic gain and the chain live in the PTT config. chain_dirty = true; }")),
+            "the choice of a profile, as one block");
+        for send in ["let _ = tx.send(mk_comp(comp));", "let _ = tx.send(mk_timing(attack_ms, release_ms));",
+                     "let _ = tx.send(mk_agc(agc));"] {
+            assert!(arm.contains(send), "the choice does not send {send}");
+        }
+        // Save and "+" put the chain as it stands into the profile.
+        assert_eq!(panel.matches("super::config::TxChain { comp, attack_ms, release_ms, agc });").count(), 2);
+        assert_eq!(panel.matches("enabled, advanced, std_gains, bands, mic_gain,").count(), 2, "and the mic gain");
+        assert!(panel.contains("mic_gain: Some(mic_gain), chain: Some(chain) };"), "a saved profile carries its mic gain");
+        assert!(panel.contains("if chain_dirty { self.save_ptt_config(); }"));
+    }
+
+    /// What reaches the engine is the EQ that sounds: the checkbox and a
+    /// profile send the active set, a standard slider its band of the five.
+    #[test]
+    fn the_engine_gets_the_eq_that_sounds() {
+        let panel = eq_panel();
+        assert!(panel.contains("send_bands(&super::config::active_eq_bands(advanced, &std_gains, &bands));"));
+        assert!(panel.contains("send_bands(&p.active_bands());"));
+        assert!(panel.contains("let _ = tx.send(mk_band(i as u8, eq::bands_from_legacy_gains(&std_gains)[i]));"));
+        // And the start, for both radios.
+        let start = include_str!("app_state.rs");
+        assert!(start.contains("in p.active_bands().iter().enumerate() { let _ = cmd_tx.send(Command::SetYaesuEqBandParams("));
+        assert!(start.contains("in p.active_bands().iter().enumerate() { let _ = cmd_tx.send(Command::SetYaesu2EqBandParams("));
+        assert!(!start.contains("p.bands.iter()"), "the start sends the advanced set whatever the checkbox says");
+        // The mic gain at start is the one the slider shows and connecting sends.
+        assert!(start.contains("Command::SetYaesuTxGain(config.yaesu_mic_gain)"));
+        assert!(start.contains("Command::SetYaesu2TxGain(config.yaesu2_mic_gain)"));
+        assert!(!start.contains("TxGain(p.mic_gain)"));
     }
 }

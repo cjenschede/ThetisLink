@@ -69,7 +69,7 @@ mod tests {
     /// but the server did not key it - so this must never fire. `observe` cannot
     /// tell that from an idle radio (both are `(false, false)`); what keeps the
     /// promise is that only a client's accepted PTT sets the "server keyed it"
-    /// flag, never a poll of the radio. Pinned there (round 101): since build 282
+    /// flag, never a poll of the radio. Pinned there: since build 282
     /// that is `key_radio`, right after it keys, reached from the audio of the
     /// client that holds the radio.
     #[test]

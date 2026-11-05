@@ -5,7 +5,7 @@ import android.content.Context
 import androidx.compose.ui.graphics.Color
 
 /**
- * The developer mode on the phone (build 298; owner decision 2026-10-23): where
+ * The developer mode on the phone: where
  * the app keeps it, and its sign. What the mode is - the code, the rule for the
  * log - is the core's `dev_mode`, reached through `setDeveloperMode` and
  * `developerCodeMatches`. Read at start by MainActivity, before anything can
@@ -22,9 +22,9 @@ object DeveloperMode {
     val COLOUR = Color(0xFFDCA000)
 
     fun saved(context: Context): Boolean =
-        context.getSharedPreferences("thetislink", Context.MODE_PRIVATE).getBoolean(KEY, false)
+        context.getSharedPreferences(LocalAudioPrefs.STORE, Context.MODE_PRIVATE).getBoolean(KEY, false)
 
     fun save(context: Context, on: Boolean) {
-        context.getSharedPreferences("thetislink", Context.MODE_PRIVATE).edit().putBoolean(KEY, on).apply()
+        context.getSharedPreferences(LocalAudioPrefs.STORE, Context.MODE_PRIVATE).edit().putBoolean(KEY, on).apply()
     }
 }

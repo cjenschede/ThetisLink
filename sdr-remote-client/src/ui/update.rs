@@ -7,8 +7,8 @@
 //! calls.
 
 use super::*;
-use sdr_remote_logic::ptt_button::{ptt_button, PttButton};
-use sdr_remote_logic::ptt_intent::{desktop_frame, Latches};
+use sdr_remote_logic::ptt_button::PttButton;
+use sdr_remote_logic::ptt_intent::desktop_frame;
 
 impl SdrRemoteApp {
     /// Decide and send the PTT for both Yaesu slots - the only place that does.
@@ -23,8 +23,8 @@ impl SdrRemoteApp {
     /// Every frame, from the values themselves rather than from the moment they
     /// changed. Writing them in the "it changed" branch meant every other way
     /// out of a transmission - a refusal, a lost connection, a window closing -
-    /// left the lamp on, and only a real press could put it right (owner,
-    /// build 37).
+    /// left the lamp on, and only a real press could put it right
+    /// (build 37).
     /// How long a refusal stays on the button.
     ///
     /// Long enough to read, short enough not to get in the way once the transmitter
@@ -133,10 +133,10 @@ impl SdrRemoteApp {
 
             // One indexing, not two branches that can drift apart.
             //
-            // There were eight assignments here in two mirrored blocks. A reviewer removed
-            // one of them - the midi latch of slot 1 - and the whole workspace stayed green.
+            // There were eight assignments here in two mirrored blocks. Removing
+            // one of them - the midi latch of slot 1 - left the whole workspace green.
             // That is impossible now rather than untested: the latches go in as a whole and
-            // come out as a whole (Lane 6 step 2c).
+            // come out as a whole.
             // A missing microphone refuses the press as a transmitter held by
             // someone else does: no latch stays, nothing is sent (build 188).
             let d = desktop_frame(
@@ -155,7 +155,7 @@ impl SdrRemoteApp {
         // main window is always open; `other_tx` is the server's ownership
         // table, and it is what makes "busy" let go of every latch - including a
         // Bluetooth button in a pocket, which used to come back on by itself when
-        // the other station stopped (review finding, 307 round 2).
+        // the other station stopped (found on build 307).
         let d = desktop_frame(self.thetis_latches, true, self.other_tx || self.mic_missing.is_some(), self.ptt);
         self.thetis_latches = d.latches;
         self.thetis_want = d.want_tx && self.thetis_ptt_allowed;
@@ -167,7 +167,7 @@ impl SdrRemoteApp {
         // There were two - one for Thetis in the top bar and one for the Yaesus here -
         // and the first looked at the Yaesu state of the previous frame. A fresh Thetis
         // want could be refused on stale data and thrown away immediately, while the
-        // Yaesu blocking it let go later in that same frame (review finding).
+        // Yaesu blocking it let go later in that same frame.
         let arb = sdr_remote_logic::ptt_intent::arbitrate(
             [self.thetis_want, wil[0], wil[1]],
             [self.ptt, self.yaesu_ptt_last_sent[0], self.yaesu_ptt_last_sent[1]],
@@ -206,8 +206,8 @@ impl SdrRemoteApp {
             let want = wil[slot];
             // One line per transition, never per frame. Enough to read back
             // afterwards which control caused it and what the arbitration
-            // decided - the owner saw behaviour once that he could not
-            // reproduce, and a story is not evidence (2026-09-04).
+            // decided - behaviour was once seen that could not be
+            // reproduced, and a story is not evidence (2026-09-04).
             let l = self.yaesu_latches[slot];
             log::info!(
                 "PTT yaesu{} -> {} (mouse={} space={} midi={} bluetooth={} wait={} blocked_own={} held_by_other={} multi_tx={} mic_missing={})",
@@ -246,7 +246,7 @@ impl eframe::App for SdrRemoteApp {
     /// The colour the window is wiped with before the panels paint. eframe's
     /// default is near-black. Hypothesis: with the panels' own border lines
     /// off (build 201) it showed as the thin black line in the seam above the
-    /// tab row (owner, 2026-10-15), and the theme's panel colour closes that
+    /// tab row, and the theme's panel colour closes that
     /// seam. Refuted if the line is still there with this in place.
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
         visuals.panel_fill.to_normalized_gamma_f32()
@@ -260,10 +260,10 @@ impl eframe::App for SdrRemoteApp {
         // Clear per-frame flags
         ctx.memory_mut(|mem| mem.data.remove::<bool>(egui::Id::new("freq_scroll_consumed")));
 
-        // Chat (docs/internal/DESIGN-relay-chat.md). Everything it does is a
-        // channel send and a try_recv: no network call, no lock held, nothing
-        // this frame can wait on. That is design §2.4 made structural rather
-        // than remembered - a chat service that is down cannot slow this down,
+        // Chat. Everything it does is a channel send and a try_recv: no network
+        // call, no lock held, nothing this frame can wait on. The chat is kept
+        // apart from the audio and PTT path by construction rather than by care
+        // - a chat service that is down cannot slow this down,
         // because nothing here ever asks it anything.
         {
             let ticket = self
@@ -300,9 +300,9 @@ impl eframe::App for SdrRemoteApp {
             super::config::save_chat_answers_seen(&self.chat.seen_ids());
         }
 
-        // Base egui visuals per selected theme (step 1). Classic reproduces the original
+        // Base egui visuals per selected theme. Classic reproduces the original
         // light-grey scheme; Dark is the tuned dark scheme. Colours that read from
-        // ui.visuals() follow automatically; hard-coded ones are migrated in later steps.
+        // ui.visuals() follow automatically; hard-coded ones only once moved to the palette.
         theme::apply_visuals(ctx, self.theme_variant, &self.theme_custom);
 
         self.sync_state();
@@ -310,7 +310,7 @@ impl eframe::App for SdrRemoteApp {
         self.process_ble_events();
         self.process_paddle_events();
 
-        // PATCH-4: first-run / re-launched wizard owns the viewport
+        // First-run / re-launched wizard owns the viewport
         // while present. Render it edge-to-edge and short-circuit the
         // rest of update() - none of the regular UI panes are valid
         // until the wizard exits.
@@ -351,7 +351,7 @@ impl eframe::App for SdrRemoteApp {
             return;
         }
 
-        // PATCH-4: bump the successful-connect counter the first time the
+        // Bump the successful-connect counter the first time the
         // user reaches Connected (incl. when they skipped the wizard).
         // Idempotent - mark_successful_connect() no-ops past 0.
         if self.connected {
@@ -439,7 +439,7 @@ impl eframe::App for SdrRemoteApp {
 
         // Push new waterfall data (always, before rendering).
         // Tuning-latch on view-data removed (experiment 2026-05-06): the
-        // per-row absolute mapping in render_waterfall (spectrum.rs:646)
+        // per-row absolute mapping in spectrum_waterfall (spectrum.rs)
         // uses each row's own center_hz + span_hz. Late detail-FFT rows
         // are therefore automatically rendered at their real freq position -
         // 1-2 rows briefly at a shifted spot during fast tuning, then self-
@@ -554,7 +554,7 @@ impl eframe::App for SdrRemoteApp {
                 }
 
                 // PTT button: toggle or momentary (push-to-talk) mode. The same
-                // latch type as the Yaesu slots since build 77 (open point 37): a
+                // latch type as the Yaesu slots since build 77: a
                 // latching press switches the transmission, a hold control takes
                 // over on its rising edge (Latches::hold), and every exit goes
                 // through PttIntent instead of through a boolean somebody has to
@@ -589,7 +589,7 @@ impl eframe::App for SdrRemoteApp {
                 // The frame itself falls at the end of the frame, in drive_ptt(), out
                 // of the latches - like the Yaesu slots, whose latches are fed in the
                 // pop-outs and decided there. Deciding here was wrong twice over: the
-                // Yaesu wants of this frame do not exist yet (review finding), and the
+                // Yaesu wants of this frame do not exist yet, and the
                 // Disconnect button sits lower in this same bar, so a want computed
                 // here outlived the release it caused - one frame of "PTT thetis ->
                 // ON" fifteen milliseconds after "link gone" (field test, 2026-09-17
@@ -777,7 +777,7 @@ impl eframe::App for SdrRemoteApp {
             // Row 2: channel chips - RX1 starts left, under VFO A. Yaesu + Connect follow.
             ui.horizontal(|ui| {
                 if self.thetis_configured {
-                    // Uniform capability rows (parity by construction, model §1b):
+                    // Uniform capability rows (parity by construction):
                     // each RX channel = [audio-checkbox] [spectrum-toggle] via the same helper.
                     // RX1: audio = rx1_enabled, spectrum = spectrum_enabled (inline/pop-out).
                     let (rx1_audio_click, rx1_spec_click) = Self::channel_sub_chips(
@@ -820,7 +820,7 @@ impl eframe::App for SdrRemoteApp {
                     } // end rx2_present gate for RX2 (VRX2 follows below)
 
                     // VRX1/VRX2: same uniform [audio][spec] chips as RX1/RX2,
-                    // now also on the main screen — audio checkbox = channel on, spectrum =
+                    // now also on the main screen; audio checkbox = channel on, spectrum =
                     // high-res. This way the VRX state is visible + controllable without
                     // opening the pop-out (previously: audio could play without a visible
                     // state on the main screen). Shared toggle methods.
@@ -888,20 +888,18 @@ impl eframe::App for SdrRemoteApp {
 
             }); // end row 2
 
-            // Row 3 between two lines, as the Chat button on the server screen
-            // (owner, 13-10).
+            // Row 3 between two lines, as the Chat button on the server screen.
             super::helpers::rule(ui);
 
             // A missing microphone on a row of its own, right above the connection
-            // details - behind them it fell off the visible screen (owner, 13-10).
-            // Named in advance (working rule 11, builds 188 and 189).
+            // details - behind them it fell off the visible screen.
             if let Some(name) = &self.mic_missing {
                 ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("main_mic_missing", name = name).to_string());
             }
 
             // Row 3: Connect/Disconnect, the status and the way the connection
             // takes, on a row of their own under the audio and window chips
-            // (owner, 13-10; they ended the chip row and fell out of view).
+            // (they ended the chip row and fell out of view).
             ui.horizontal(|ui| {
                 if self.connected {
                     if ui.button(rust_i18n::t!("main_disconnect").to_string()).clicked() {
@@ -916,21 +914,34 @@ impl eframe::App for SdrRemoteApp {
                     ui.colored_label(Color32::GREEN, rust_i18n::t!("main_connected").to_string());
                     // The connection name (build 139): the way the traffic takes
                     // now, in the plain text colour; only coupling is amber, for
-                    // it is a wait. The hover says what it means.
+                    // it is a wait, and a relay session that is gone has its
+                    // relay word in the red of "disconnected" (2.13.1 build 3).
+                    // The hover says what it means.
                     let path = self.state_rx.borrow().path;
                     if let Some(kind) = path {
                         let lang = sdr_remote_logic::i18n::Lang::from_code(&self.ui_language);
-                        let name = sdr_remote_logic::path_name::long_name(kind, lang);
-                        let text = egui::RichText::new(format!("\u{b7} {name}"));
-                        let text = if kind == sdr_remote_core::path::PathKind::RelayCoupling {
-                            text.color(Color32::from_rgb(200, 160, 40))
+                        let hint = sdr_remote_logic::path_name::hint(kind, lang);
+                        if let Some((lead, relay)) = sdr_remote_logic::path_name::relay_gone_parts(kind, lang) {
+                            ui.scope(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.label(format!("\u{b7} {lead}"));
+                                ui.colored_label(Color32::RED, relay);
+                            })
+                            .response
+                            .on_hover_text(hint);
                         } else {
-                            text
-                        };
-                        ui.label(text).on_hover_text(sdr_remote_logic::path_name::hint(kind, lang));
+                            let name = sdr_remote_logic::path_name::long_name(kind, lang);
+                            let text = egui::RichText::new(format!("\u{b7} {name}"));
+                            let text = if kind == sdr_remote_core::path::PathKind::RelayCoupling {
+                                text.color(Color32::from_rgb(200, 160, 40))
+                            } else {
+                                text
+                            };
+                            ui.label(text).on_hover_text(hint);
+                        }
                     }
                 } else {
-                    // PATCH-1 smoke-test fix (2026-05-12): when we are mid-auth in
+                    // When we are mid-auth in
                     // AwaitingTotp, Connect must not be clickable - the user should
                     // use the Verify-button on the 2FA input. A second Connect-press
                     // would otherwise pull the engine back to "Connecting..." while
@@ -974,7 +985,7 @@ impl eframe::App for SdrRemoteApp {
                     ui.colored_label(Color32::from_rgb(255, 165, 0), rust_i18n::t!("main_audio_error").to_string());
                 }
 
-                // PATCH-1 smoke-test fix (2026-05-13): auto-switch to the
+                // Auto-switch to the
                 // Server tab when connect_status transitions into a state
                 // that demands user attention (AwaitingTotp, Failed). Without
                 // this the user can be on the Radio tab and never see the
@@ -995,7 +1006,7 @@ impl eframe::App for SdrRemoteApp {
                     }
                     self.last_connect_status = current;
                 }
-                // PATCH-1 smoke-test fix (2026-05-12 #2): show connect-status
+                // Show connect-status
                 // error globally in the top bar so users on any tab see it,
                 // not just on the Server tab. Avoids the "press Connect on
                 // Radio tab -> silent failure" UX gap.
@@ -1004,8 +1015,8 @@ impl eframe::App for SdrRemoteApp {
                     use sdr_remote_logic::state::ConnectStatus;
                     let connect_status = self.state_rx.borrow().connect_status.clone();
                     let lang = Lang::from_code(&self.ui_language);
-                    // PATCH-1 smoke-test fix (2026-05-13): top-bar headline 16pt bold
-                    // so it stands out - operator feedback: was smaller than other UI.
+                    // Top-bar headline 16pt bold
+                    // so it stands out: it was smaller than the rest of the UI.
                     match &connect_status {
                         ConnectStatus::Failed(_) => {
                             let (headline, _) = connect_status_text(&connect_status, lang, sdr_remote_logic::i18n::Platform::Desktop);
@@ -1144,7 +1155,7 @@ impl eframe::App for SdrRemoteApp {
                 smeter_bar(ui, self.smeter, self.smeter_peak, self.smeter_tx, self.other_tx, self.thetis_swr_x100);
 
                 // RX1's own volume. The core transceiver has to be complete in the
-                // main window (UI-STYLE-GUIDE §3.5), so it can be set without
+                // main window, so it can be set without
                 // opening the RX1 window - and the master above stays master.
                 ui.horizontal(|ui| {
                     ui.label("VFO A:");
@@ -1189,7 +1200,7 @@ impl eframe::App for SdrRemoteApp {
             }
 
             // RX1 spectrum display. The spectrum TOGGLE (subscription) is now in the
-            // uniform capability row at the top (phase 4b); here only the
+            // uniform capability row at the top; here only the
             // pop-out/pop-in choice (display) + the inline spectrum.
             {
                 if self.spectrum_enabled {
@@ -1201,7 +1212,7 @@ impl eframe::App for SdrRemoteApp {
                             // toggle is lost on restart and RX1 falls back to inline even
                             // though the user last chose popout.
                             self.save_full_config();
-                            // RX2 spectrum has its own toggle + pop-out (phase 4).
+                            // RX2 spectrum has its own toggle + pop-out.
                         }
                     });
                 }
@@ -1215,8 +1226,7 @@ impl eframe::App for SdrRemoteApp {
             // Tab::Radio mode-block previously had `ui.add(btn)` without a
             // connected-guard.
             // Until the transmission is really over - the tail and someone else's
-            // included: the server drops a mode change for as long as it transmits
-            // (owner, 2026-10-11; build 172).
+            // included: the server drops a mode change for as long as it transmits.
             let ptt_active = self.thetis_mode_locked();
             let mode_action = self.with_rx_ctx(
                 controls::RxChannel::Rx1,
@@ -1405,11 +1415,11 @@ impl eframe::App for SdrRemoteApp {
         // geometry from the very first frame - same UX as the Yaesu popout.
         // The popout's content gates internally on bin-availability and
         // shows a "Waiting for ..." placeholder pre-connect.
-        // Model B (Phase 1, RX2): the RX2 window is DERIVED - want (rx2_spectrum_enabled)
+        // RX2: the window is DERIVED - want (rx2_spectrum_enabled)
         // AND can_rx2 (Thetis DDC + a second receiver present). Replaces the imperative
         // toggle sync (was `rx2_popout = rx2_spectrum_enabled`) and the force-close gate.
         self.rx2_popout = self.rx2_spectrum_enabled && self.can_rx2();
-        // Model B (Phase 1, RX1): shown(RX1) = want (spectrum_enabled) && can_rx1
+        // RX1: shown(RX1) = want (spectrum_enabled) && can_rx1
         // (thetis_configured); `spectrum_popout` is the *present* choice (popout vs
         // inline), not the open flag. Gating on can_rx1 also fixes the latent
         // empty-RX1-window case in a Yaesu-only setup.
@@ -1495,7 +1505,7 @@ impl eframe::App for SdrRemoteApp {
         // their own viewport, independently placeable. Closing (X/button/spec-chip-off)
         // resets init_applied so the saved position is re-applied on reopen.
         //
-        // Model B (Phase 1, VRX): the window is DERIVED, not stored - want (the
+        // VRX: the window is DERIVED, not stored - want (the
         // high-res spectrum the user asked for) AND can_vrx (Thetis DDC available).
         // This single line replaces the hardcoded-false init, the imperative toggle
         // sync, and the two `!thetis_configured` force-close branches: the window
@@ -1535,20 +1545,19 @@ impl eframe::App for SdrRemoteApp {
                         super::helpers::rule(ui);
 
                         ui.label(RichText::new(rust_i18n::t!("main_about_author").to_string()).size(13.0).strong());
-                        ui.label("Chiron van der Burgt - PA3GHM");
+                        ui.label("Chiron van der Burgt, PA3GHM");
 
                         ui.add_space(6.0);
                         ui.label(RichText::new(rust_i18n::t!("main_about_special_thanks").to_string()).size(13.0).strong());
-                        ui.label("Richie (ramdor) - Thetis SDR development, TCI protocol extensions");
+                        ui.label("Richie (ramdor): Thetis SDR development, TCI protocol extensions");
 
                         ui.add_space(6.0);
                         ui.label(RichText::new(rust_i18n::t!("main_about_protocols").to_string()).size(13.0).strong());
-                        ui.label("TCI - Expert Electronics / Thetis");
-                        ui.label("DX Spider - DX cluster telnet protocol");
-                        ui.label("HPSDR / OpenHPSDR Protocol 2");
-                        ui.label("WebSDR (PA3FWM) / KiwiSDR - CatSync targets");
-                        ui.label("ThetisLink Relay - self-hosted WebSocket + UDP relay (internet remote)");
-                        ui.label("ThetisLink Chat - optional service beside a relay (chat + problem reports)");
+                        ui.label("TCI: Expert Electronics / Thetis");
+                        ui.label("DX Spider: DX cluster telnet protocol");
+                        ui.label("WebSDR (PA3FWM) / KiwiSDR: CatSync targets");
+                        ui.label("ThetisLink Relay: self-hosted WebSocket + UDP relay (internet remote)");
+                        ui.label("ThetisLink Chat: optional service beside a relay (chat + problem reports)");
 
                         ui.add_space(6.0);
                         ui.label(RichText::new(rust_i18n::t!("main_about_hardware").to_string()).size(13.0).strong());
@@ -1585,10 +1594,11 @@ impl eframe::App for SdrRemoteApp {
                             ("rubato", "Resampling"),
                             ("rustfft", "FFT spectrum"),
                             ("ringbuf", "Lock-free buffers"),
-                            ("tokio-tungstenite", "TCI WebSocket"),
+                            ("tokio-tungstenite", "TCI WebSocket, relay sign-in (wss)"),
                             ("serialport", "Yaesu CAT"),
                             ("mcp2221-hal", "MCP2221A USB-HID (tuners, rotor)"),
-                            ("rustls", "Relay TLS (wss)"),
+                            ("quinn", "QUIC connection"),
+                            ("rustls", "TLS 1.3 under QUIC and for wss"),
                             ("midir", "MIDI controller"),
                             ("wry", "WebView (CatSync)"),
                         ];
@@ -1608,7 +1618,7 @@ impl eframe::App for SdrRemoteApp {
                             ui.label(rust_i18n::t!("main_source_label").to_string());
                             ui.hyperlink("https://github.com/cjenschede/ThetisLink");
                         });
-                        ui.label("Based on the Thetis SDR lineage - see ATTRIBUTION.md");
+                        ui.label("Based on the Thetis SDR lineage (see ATTRIBUTION.md)");
                         ui.label("Third-party licenses & SBOM: see NOTICE.md, THIRD-PARTY-LICENSES.html");
 
                         ui.add_space(12.0);

@@ -2,18 +2,18 @@
 //
 //! Talking to the chat service, off the UI thread.
 //!
-//! Two rules shape this module, and both come from the design rather than from
-//! taste:
+//! Two rules shape this module, and both are deliberate rather than a matter
+//! of taste:
 //!
-//! **Nothing here may ever block anything else** (§2.4). The chat is a
+//! **Nothing here may ever block anything else.** The chat is a
 //! convenience next to audio and PTT, so it lives on its own thread, owns its
 //! own network calls, and the interface to the UI is a pair of channels. A chat
 //! server that is down, slow or missing must be invisible to the rest of
-//! ThetisLink — a window that says "offline" and nothing more.
+//! ThetisLink: a window that says "offline" and nothing more.
 //!
 //! **It polls rather than holding a connection open.** A chat may lag a few
 //! seconds; that is what "less critical" means in practice, and it removes a
-//! whole class of things to get wrong — idle connections, reconnect storms, a
+//! whole class of things to get wrong; idle connections, reconnect storms, a
 //! socket kept alive across a laptop suspend.
 
 use std::sync::mpsc::{Receiver, Sender};
@@ -23,7 +23,7 @@ use std::time::Duration;
 pub const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 /// And how often while it is closed - just enough to keep the unread number on
-/// the Chat button honest (design §1.7). One small request per half minute is
+/// the Chat button honest. One small request per half minute is
 /// the price of a badge that can actually appear; a counter fed only while the
 /// window is open can never be seen. Members only, and never on the audio path.
 pub const POLL_INTERVAL_CLOSED: Duration = Duration::from_secs(30);
@@ -49,9 +49,9 @@ pub enum ChatCommand {
     /// enum crosses from the UI thread to the worker thread, and anything not
     /// carried across in the command itself is a copy the other thread never
     /// sees. It must be the version from the `State` event - what the user was
-    /// actually shown - or the service will refuse the consent (design §6.3).
+    /// actually shown - or the service will refuse the consent.
     Consent { display_name: String, text_version: i64 },
-    /// The two buttons of design §6.4.
+    /// The two ways to leave: keep the messages, or delete them.
     Leave { delete_messages: bool },
     Send {
         body: String,
@@ -70,14 +70,14 @@ pub enum ChatCommand {
     /// One problem report, already cleaned and already seen by the user.
     ///
     /// The redaction happens before this, not here: what leaves the machine has
-    /// to be what was shown on screen, or the preview is theatre (design 1.3).
+    /// to be what was shown on screen, or the preview is theatre.
     SendDiagnosis { report: String },
     /// Put one answer from the administrator aside, on the service.
     ///
     /// Sent alongside the local fold-away rather than instead of it. An older
     /// service has no such endpoint and answers 404; the local list then keeps
     /// doing what it always did, and nothing has to ask beforehand what the
-    /// other end can do. See DESIGN-antwoorden-gezien-op-de-dienst.md phase B.
+    /// other end can do.
     DismissAnswer { id: i64 },
     /// Fetch anything after the last id we hold.
     Poll { since: i64 },
@@ -100,7 +100,7 @@ pub struct ChatMessage {
     pub edited: bool,
 }
 
-/// One answer to one problem report (design section 1.5).
+/// One answer to one problem report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatAnswer {
     pub id: i64,
@@ -146,9 +146,9 @@ pub enum ChatEvent {
     /// handful, one per report, and an answer worth reading twice should not
     /// depend on the window having been open when it arrived.
     Answers(Vec<ChatAnswer>),
-    /// Something did not work, in words a user can act on. The design asks for
-    /// the reason to reach the sender and not only the log (§8), so the service
-    /// sends one and this passes it through unchanged.
+    /// Something did not work, in words a user can act on. The reason has to
+    /// reach the sender and not only the log, so the service sends one and
+    /// this passes it through unchanged.
     Failed(String),
     /// Nothing to apply.
     ///
@@ -164,14 +164,14 @@ pub enum ChatEvent {
     /// "Offline" on its own covers three different situations that need three
     /// different things from the user - no relay configured, a relay that offers
     /// no chat, and a service that is not answering. Collapsing them into one
-    /// word is exactly the fault this project keeps finding in review: a window
+    /// word is exactly the fault to avoid: a window
     /// that says nothing useful sends somebody to the maker's mailbox.
     Offline(OfflineReason),
 }
 
 /// Where the chat lives, given the relay the client is using.
 ///
-/// Same host, same TLS, the path Caddy routes (design §2.1). Derived rather than
+/// Same host, same TLS, the path Caddy routes. Derived rather than
 /// configured so there is no second address to keep in step - and a relay
 /// without a chat behind it simply answers 404, which reads as offline.
 pub fn endpoint_for_relay(relay_url: &str) -> Option<String> {
@@ -242,7 +242,7 @@ fn perform(
                 r#"{{"display_name":{},"text_version":{}}}"#,
                 json_string(display_name),
                 // Sent back so the service can refuse a consent recorded against
-                // a text this build never showed (design §6.3).
+                // a text this build never showed.
                 text_version
             ))
             .send(),
@@ -285,7 +285,7 @@ fn perform(
     };
 
     // One thing may be swallowed for a dismiss, and only one: a service that
-    // has no such endpoint. That is what the phasing promised and it is the
+    // has no such endpoint. That is the one agreed exception, and it is the
     // whole of it.
     //
     // Not a refused ticket - that is worth knowing about, and every other
@@ -443,7 +443,7 @@ mod tests {
     /// A stand-in for the service: one request, one canned answer, and it hands
     /// back what it was sent so a test can say what went over the wire.
     ///
-    /// Proposed in review. Everything past ChatCommand was unguarded - a wrong
+    /// Everything past ChatCommand was unguarded - a wrong
     /// URL, a GET instead of a POST and a misspelled body key all stayed green
     /// - and thirty lines of TcpListener close that without a new dependency.
     fn fake_service(status_line: &str, body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
@@ -472,7 +472,7 @@ mod tests {
         reqwest::blocking::Client::builder()
             .timeout(HTTP_TIMEOUT)
             // Without this, a machine with HTTP_PROXY or ALL_PROXY set sends
-            // even 127.0.0.1 to the proxy, and review showed what that costs:
+            // even 127.0.0.1 to the proxy, and that costs more than it seems:
             // the request test fails while the other two pass without testing
             // anything, because a connection error lands on the same answer
             // they expect. Broken code, green suite, only behind a proxy.
@@ -485,7 +485,7 @@ mod tests {
     }
 
     /// What the live service answers a successful dismiss with. Copied from the
-    /// running phase A service, not invented.
+    /// running service, not invented.
     const DISMISS_OK: &str = r#"{"dismissed":2,"changed":true}"#;
 
     /// The answer to a dismiss is not a state. Read as one it says "no
@@ -495,16 +495,17 @@ mod tests {
         let (base, _rx) = fake_service("200 OK", DISMISS_OK);
         let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
         // Positively, not as a denial. "Not a State" was also satisfied by
-        // Failed, which is the round-one fault in another colour, and by
-        // Answers(vec![]) - which would wipe every answer off the screen.
+        // Failed - the earlier fault, a dismiss shown as a red failure line -
+        // and by Answers(vec![]), which would wipe every answer off the
+        // screen.
         assert!(
             matches!(evt, ChatEvent::NoChange),
             "a dismissed answer changes nothing: {evt:?}"
         );
     }
 
-    /// An older service has no such endpoint. That is the whole reason the
-    /// phasing works, and it must be quiet - not a red line in the window every
+    /// An older service has no such endpoint. That is the whole reason a
+    /// client can ship before the service has it, and it must be quiet - not a red line in the window every
     /// time somebody folds an answer away.
     #[test]
     fn an_older_service_saying_404_is_quiet() {
@@ -518,7 +519,7 @@ mod tests {
 
     /// A ticket that is not accepted is not the same thing as a service that
     /// has no such endpoint. The first is worth knowing about; only the second
-    /// is what the phasing promised to swallow.
+    /// is what the client is meant to swallow.
     #[test]
     fn a_refused_ticket_is_not_swallowed() {
         let (base, _rx) = fake_service("401 Unauthorized", r#"{"error":"no"}"#);
@@ -531,7 +532,7 @@ mod tests {
         );
     }
 
-    /// The brief claimed success, 404 and a dead network were equally invisible.
+    /// Success, 404 and a dead network were once claimed to be equally invisible.
     /// The third had no test, and it should not be invisible at all: the network
     /// being down is true, and every other command says so.
     #[test]
@@ -575,8 +576,6 @@ mod tests {
         // spelling in our own source and got a red that was about the test.
         assert!(sent.to_lowercase().contains("authorization: bearer t"), "ticket: {sent}");
     }
-
-    use super::*;
 
     #[test]
     fn the_chat_lives_on_the_relay_host_over_https() {

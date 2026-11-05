@@ -46,7 +46,7 @@ pub fn detect_ui_language() -> &'static str {
 /// path does NOT go through [`narrow_to_supported`], so testing that function
 /// proved nothing about the machines this actually runs on, and a test that
 /// only asks whether the answer is one of the four would still pass if this
-/// stopped working and always said English (review finding, 2026-08-20).
+/// stopped working and always said English.
 #[cfg(windows)]
 pub fn lang_from_langid(langid: u16) -> &'static str {
     // The low 10 bits of a LANGID are the primary language. The rest is the

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Measurement mode: a raw record of what arrived and when, for comparing the
-// link before and after a change (open point 34).
+// link before and after a change.
 //
 // What the rest of the engine keeps is smoothed - a jitter estimate, a loss
 // figure per ten seconds. To see what a mobile network does to the stream, and
@@ -21,7 +21,6 @@
 // On the phone the cell, signal and GPS readings go into the same file, on the
 // same clock (build 181), instead of a separate meter app's log beside it.
 
-use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -40,12 +39,12 @@ use crate::loss_window::Stream;
 /// working depth.
 pub const RING_CAPACITY: usize = (6 + 3 + 6) * 50 * 20;
 /// How often the writer drains the ring. It waits on a channel, not a sleep, so
-/// stopping wakes it at once (round 90: a plain sleep held the engine's loop up
+/// stopping wakes it at once (build 90: a plain sleep held the engine's loop up
 /// to this long on every Stop).
 const DRAIN_EVERY: Duration = Duration::from_millis(200);
 
 /// Which way the session runs, so two files of the same build over two
-/// transports can be told apart (round 90). Also on screen
+/// transports can be told apart. Also on screen
 /// (`RadioState::route`). The engine's transport says which
 /// (`ClientTransport::route`). Since build 133 there is only QUIC; the words
 /// `relay` and `direct` of older files are no longer written.
@@ -53,7 +52,7 @@ const DRAIN_EVERY: Duration = Duration::from_millis(200);
 pub enum Route {
     #[default]
     Quic,
-    /// QUIC through the relay (phase 3b).
+    /// QUIC through the relay.
     QuicRelay,
 }
 
@@ -68,7 +67,7 @@ impl Route {
 
     /// The word on the connect screens, desktop and phone alike - one source, so
     /// the phone does not keep a table of its own that a rename would leave
-    /// behind (review 111).
+    /// behind.
     pub fn label(self) -> &'static str {
         match self {
             Route::Quic => "QUIC",
@@ -80,7 +79,7 @@ impl Route {
     /// (desktop `main.rs`, the phone's bridge) and for the "in use" line that
     /// compares against it (both connect screens): a relay that is set up means
     /// QUIC through the relay, otherwise QUIC straight to the address typed.
-    /// `relay_configured` is `sdr_remote_relay::is_configured` (review 118).
+    /// `relay_configured` is `sdr_remote_relay::is_configured`.
     pub fn asked_for(relay_configured: bool) -> Route {
         if relay_configured { Route::QuicRelay } else { Route::Quic }
     }
@@ -101,8 +100,9 @@ pub enum Event {
     RelayOnly(bool),
     /// "Force TCP" switched on or off (build 146; detail `on`/`off`).
     ForceTcp(bool),
-    /// The way the traffic takes changed (build 139; detail `L`, `D`, `R`,
-    /// `R-coupling` or `D+R`).
+    /// The way the traffic takes changed (build 139; detail `PathKind::file_word`:
+    /// `L`, `D`, `R`, `R-coupling`, `D+R`, `L+R`, `R-TCP`, and since 2.13.1
+    /// build 3 `D+R-gone`/`L+R-gone`).
     Path(sdr_remote_core::path::PathKind),
 }
 
@@ -152,7 +152,7 @@ pub enum Record {
     /// A frame of this stream was filled in rather than received - what the
     /// operator heard instead of audio.
     Conceal { mono_ms: u64, stream: Stream },
-    /// A control sent again (phase 2b), by its number.
+    /// A control sent again, by its number.
     Repeat { mono_ms: u64, seq: u32 },
     /// A control given up after its repeats.
     GiveUp { mono_ms: u64, key: sdr_remote_core::control_ack::ControlKey },
@@ -160,8 +160,7 @@ pub enum Record {
     /// stream: the jitter buffer's depth and target (frames of 20 ms), the
     /// playout ring (ms) and the jitter estimate (ms). Written as
     /// `buffer,<stream>,<depth>,<target>,<ring_ms>,<jitter_ms>` - the columns
-    /// seq, ts, bytes and rtt_ms carry these four for this kind (2026-10-04,
-    /// `PLAN-meting-buffers-en-omschakeltijd.md`).
+    /// seq, ts, bytes and rtt_ms carry these four for this kind (2026-10-04).
     Buffer { mono_ms: u64, stream: Stream, depth: u16, target: u16, ring_ms: u16, jitter_ms: u16 },
     /// Once a second, what the playout rule did since the last line: the ring at
     /// the START of the latest tick (ms, before anything went in), the lowest
@@ -169,7 +168,7 @@ pub enum Record {
     /// skipped above the bleed-off level or gave their frame back (build 158,
     /// `after_tx::Settle`). Written as
     /// `ring,,<start_ms>,<lowest_ms>,<two_frame_ticks>,<skipped_ticks>` (build
-    /// 157, `ANALYSE-ring-100ms.md`: the `buffer` line reads the ring after the
+    /// 157: the `buffer` line reads the ring after the
     /// write, so it cannot tell the rule's decisions apart).
     Ring { mono_ms: u64, start_ms: u16, lowest_ms: u16, two_frame_ticks: u16, skipped_ticks: u16 },
     /// What the phone says about its network and position (build 181), read
@@ -259,7 +258,7 @@ impl CellLink {
 
 /// One reading of the phone's network or position (build 181). The five
 /// columns after `kind` carry it, as the `buffer` and `ring` lines do, and what
-/// a column holds depends on the technology (review of 181):
+/// a column holds depends on the technology:
 /// - `cell,<tech>,<cell id>,<pci>,<arfcn>,<tac>` - the serving cell; for wcdma
 ///   the PSC and LAC, for gsm the BSIC and LAC in the pci and tac columns;
 /// - `signal,<tech>,<rsrp dBm>,<rsrq dB>,<sinr>,<level 0-4>`; for wcdma, gsm
@@ -415,7 +414,7 @@ impl Running {
     /// Wake the writer, let it drain and close the file, and wait for that. The
     /// wait is the drain itself (a few ms), not a sleep. Returns whether the
     /// writer had given up on a write error - so a caller (and a test) can tell
-    /// a short file from a failed one (round 101).
+    /// a short file from a failed one.
     fn finish(mut self) -> bool {
         let _ = self.wake.send(());
         if let Some(w) = self.writer.take() {
@@ -562,7 +561,7 @@ impl Recorder {
     /// The buffers of one stream, once per `BUFFER_EVERY_MS` - or at every call
     /// while `burst` (around a PTT edge, where the playout ring empties and
     /// refills within a few hundred ms and a line a second sees only the resting
-    /// state; round 100). `last` is the caller's clock of the previous line.
+    /// state). `last` is the caller's clock of the previous line.
     /// Saturating, so a nonsense value still fits its column.
     #[allow(clippy::too_many_arguments)]
     #[inline]
@@ -651,22 +650,22 @@ impl RingTicks {
 /// How often the buffers are written: once a second (2026-10-04).
 pub const BUFFER_EVERY_MS: u64 = 1000;
 
-/// After a PTT edge, the buffers are written at every tick for this long
-/// (round 100): the stretch in which the playout ring refills. Measured
+/// After a PTT edge, the buffers are written at every tick for this long:
+/// the stretch in which the playout ring refills. Measured
 /// 2026-10-04 (tenth measurement): the ring is back at rest within ~120-420 ms
 /// and RX returns after 340-470 ms, so a window under ~500 ms misses it.
 pub const BUFFER_BURST_MS: u64 = 1000;
 
 /// Whether a buffer line is due at `now`, the previous one written at `last`:
 /// always in a burst, otherwise once per `BUFFER_EVERY_MS`. The decision on its
-/// own, so a test can check it without the writer thread (round 101).
+/// own, so a test can check it without the writer thread.
 fn buffer_line_due(now: u64, last: u64, burst: bool) -> bool {
     burst || now.saturating_sub(last) >= BUFFER_EVERY_MS
 }
 
 /// The playout ring's fill in ms. The ring holds items, not frames: the desktop
 /// writes L and R as two items per frame (`write_playback_stereo`), Android one
-/// (mono). `rate` is per channel. Round 99: without the division the desktop read
+/// (mono). `rate` is per channel. Without the division (build 99) the desktop read
 /// twice its real time. The ring is shared by all streams.
 pub fn ring_ms(level_items: usize, rate: u32, stereo: bool) -> u64 {
     let per_frame = if stereo { 2 } else { 1 };
@@ -717,7 +716,7 @@ impl Drop for Recorder {
 
 /// The writer thread. Generic over the sink so a test can hand it one that
 /// fails. A write or flush error is said once in the log, marks the recorder
-/// failed and ends the thread - never silent (round 90).
+/// failed and ends the thread - never silent.
 fn write_loop<W: Write>(
     mut consumer: ringbuf::HeapCons<Record>,
     mut out: W,
@@ -745,7 +744,7 @@ fn write_loop<W: Write>(
         // A drop is a hole in the measurement, not in the link: say so in the file.
         let d = dropped.load(Ordering::Relaxed);
         if d != dropped_written {
-            if let Err(e) = writeln!(out, "# dropped {} records (ring full) - a hole in the measurement, not in the link", d) {
+            if let Err(e) = writeln!(out, "# dropped {} records (ring full): a hole in the measurement, not in the link", d) {
                 return give_up(e);
             }
             dropped_written = d;
@@ -770,7 +769,7 @@ mod tests {
     }
 
     /// The engine hands the stereo flag to `ring_ms` and starts a burst at every
-    /// PTT edge (round 100: C3 - the argument could go to `false` with every test
+    /// PTT edge (the argument once could go to `false` with every test
     /// green). Compared per trimmed line, so a commented-out call does not count.
     #[test]
     fn the_engine_feeds_the_buffer_line_as_built() {
@@ -795,7 +794,7 @@ mod tests {
         assert_eq!(count("let rx1_opus = pkt.channels.iter().find(|(id, _)| *id == 0).map_or(&[][..], |(_, d)| d.as_slice());"), 1);
     }
 
-    /// The rhythm on its own, without the writer thread (round 101: the file
+    /// The rhythm on its own, without the writer thread (the file
     /// test lost its last lines once in ten under load).
     #[test]
     fn a_buffer_line_is_due_once_a_second_or_in_a_burst() {
@@ -804,7 +803,7 @@ mod tests {
         assert!(buffer_line_due(2000, 1000, false));
         assert!(buffer_line_due(2020, 2000, true), "a burst writes at every tick");
         // After a burst the second counts from the burst's last line, not from the
-        // last ordinary one (round 101: F2/M3 stayed green with 3500).
+        // last ordinary one (this test once stayed green with 3500).
         let mut last = 0;
         for (now, burst) in [(3000, false), (3020, true), (3040, true)] {
             if buffer_line_due(now, last, burst) {
@@ -818,7 +817,7 @@ mod tests {
         assert!(BUFFER_BURST_MS >= 500, "the ring refills within ~120-420 ms; RX returns after 340-470 ms");
     }
 
-    /// The ring's items become ms per frame, not per item (round 99).
+    /// The ring's items become ms per frame, not per item.
     #[test]
     fn ring_ms_counts_frames_not_items() {
         assert_eq!(ring_ms(9600, 48_000, true), 100, "desktop: L and R are two items per frame");
@@ -858,8 +857,8 @@ mod tests {
         let writer_failed = r.stop(start);
         let text = std::fs::read_to_string(&path).unwrap();
         // A short file from a writer that gave up is not a rhythm fault: say which
-        // it was (round 101: once in ten, under load, the last two lines were gone).
-        assert!(!writer_failed, "the writer gave up on a write error - the file stops there:\n{text}");
+        // it was (once in ten, under load, the last two lines were gone).
+        assert!(!writer_failed, "the writer gave up on a write error: the file stops there:\n{text}");
         let lines: Vec<&str> = text.lines().filter(|l| l.contains(",buffer,")).collect();
         assert_eq!(lines.len(), 5, "{lines:?}");
         assert!(lines[3].ends_with(",3020,buffer,thetis,0,3,0,1"), "{lines:?}");
@@ -1000,7 +999,7 @@ mod tests {
         let mut r = Recorder::off();
         let a = r.start(&dir, start, "t").unwrap();
         // No pause: the name has milliseconds, and an existing file is never
-        // overwritten (round 90 - this test used to sleep 1.1 s to dodge that).
+        // overwritten (this test used to sleep 1.1 s to dodge that).
         let b = match r.start(&dir, start, "t") {
             Ok(b) => b,
             Err(_) => {
@@ -1016,7 +1015,7 @@ mod tests {
     }
 
     /// Stopping wakes the writer instead of waiting out its pause: the engine's
-    /// loop is held for the drain, not for 200 ms (round 90, measured 151-193 ms).
+    /// loop is held for the drain, not for 200 ms (build 90 measured 151-193 ms).
     #[test]
     fn stopping_does_not_wait_for_the_writers_pause() {
         let dir = tmp_dir("quick");
@@ -1038,14 +1037,14 @@ mod tests {
             Err(std::io::Error::other("disk full"))
         }
         // Flush succeeds: this sink tests the write error alone, so a writer
-        // that ignores it is not rescued by the flush (round 91).
+        // that ignores it is not rescued by the flush.
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
 
     /// Run the writer on a thread and wait at most 3 s: a writer that ignores
-    /// its error and loops on must turn the test red, not hang it (round 91).
+    /// its error and loops on must turn the test red, not hang it.
     fn run_writer_bounded<W: Write + Send + 'static>(consumer: ringbuf::HeapCons<Record>, sink: W) -> bool {
         let failed = Arc::new(AtomicBool::new(false));
         let (wake, woken) = mpsc::channel::<()>();
@@ -1061,7 +1060,7 @@ mod tests {
     }
 
     /// A sink that cannot be written: the writer marks the recorder failed and
-    /// ends, instead of popping records into nowhere (round 90).
+    /// ends, instead of popping records into nowhere.
     #[test]
     fn a_write_error_marks_the_measurement_failed() {
         let (mut producer, consumer) = HeapRb::<Record>::new(8).split();
@@ -1109,7 +1108,7 @@ mod tests {
     /// The engine picks up a write failure and tells the screen. The loop that
     /// does it runs in no test (a failing disk behind the real engine is not
     /// portable to stage), so its presence is pinned - that it is there, not
-    /// that it runs (round 91; the known limit of a text guard).
+    /// that it runs (the known limit of a text guard).
     #[test]
     fn the_engine_picks_up_a_write_failure() {
         let src = include_str!("engine.rs");
@@ -1149,7 +1148,7 @@ mod tests {
         r.record(net(33, NetSample::Signal { tech: Tech::Wifi, rsrp: -61, rsrq: UNAVAILABLE, sinr: UNAVAILABLE, level: UNAVAILABLE }));
         r.record(net(34, NetSample::Gps { lat_e6: 52_000_001, lon_e6: 5_000_002, speed_kmh: 87, accuracy_m: 4 }));
         // A fix without speed or accuracy (standing still, the first fix): the
-        // phone sends "not given" there (review of 181).
+        // phone sends "not given" there.
         r.record(net(35, NetSample::Gps { lat_e6: 52_000_003, lon_e6: 5_000_004, speed_kmh: UNAVAILABLE, accuracy_m: UNAVAILABLE }));
         // A 5G cell beside the 4G one (build 210): no NCI, a PCI and an NR-ARFCN.
         let secondary = CellLink::from_android(2);

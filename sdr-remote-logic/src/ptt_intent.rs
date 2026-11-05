@@ -3,9 +3,8 @@
 //! What this operator is asking of one transmitter, and every way that asking
 //! ends.
 //!
-//! Lane 6, step 1. Nothing calls this yet - on purpose. It is built and proved
-//! before anything is moved onto it, because the thing being replaced is the
-//! hot path.
+//! It was built and proved before anything was moved onto it, because the
+//! thing it replaced is the hot path.
 //!
 //! # Why this exists
 //!
@@ -65,8 +64,8 @@ impl PttSource {
     /// first. Same question, so the same answer.
     ///
     /// MIDI and Bluetooth stay outside it: those stay in your hand. A press on one of
-    /// those may survive a locked screen, because you can still let go of it (owner,
-    /// 2026-09-04 - he found the distinction by putting the phone in his pocket).
+    /// those may survive a locked screen, because you can still let go of it
+    /// (2026-09-04 - the distinction showed up with the phone in a pocket).
     fn dies_with_its_surface(self) -> bool {
         matches!(
             self,
@@ -99,7 +98,7 @@ pub struct PttIntent {
     /// latch is back the next one. With a 991A running into its time-out timer
     /// that produced a loop - key, drop at sixty seconds, key again straight
     /// away - and the operator holding the spacebar saw a transmitter that
-    /// would not stay on (owner, 2026-09-04).
+    /// would not stay on.
     ///
     /// So this outlives the sources. It goes away when everything is released,
     /// which is what "a fresh press" means.
@@ -127,7 +126,7 @@ impl PttIntent {
     /// RX-only antenna position and with no Thetis configured, and drops it when
     /// another client holds the transmitter. Those are the caller's, and an
     /// earlier version of this comment said "must not read anything else", which
-    /// was simply untrue of the loop it describes (review finding).
+    /// was simply untrue of the loop it describes.
     ///
     /// # Two kinds of control, and they are meant to behave differently
     ///
@@ -142,9 +141,9 @@ impl PttIntent {
     /// that is exactly what happens: refused, refused, and then - when the other one
     /// lets go - transmitting.
     ///
-    /// **That is intended behaviour**, after a test by the owner on 2026-09-04:
+    /// **That is intended behaviour**, after a test on 2026-09-04:
     /// Thetis red, hold the spacebar on Yaesu 1, release Thetis, and Yaesu 1 starts.
-    /// His verdict: "seems fine to me, the spacebar really is being held down."
+    /// The verdict: "seems fine to me, the spacebar really is being held down."
     ///
     /// So it is not a missing edge detector but a choice, and it is written here so
     /// that nobody repairs it later as an omission. What must NOT happen, and what
@@ -220,7 +219,7 @@ impl PttIntent {
     //
     // Every one of these ends the asking. They are separate methods rather than
     // one `clear()` because the name is the documentation: a reader looking for
-    // "what happens when the link dies" finds `disconnected`, and a reviewer
+    // "what happens when the link dies" finds `disconnected`, and anyone
     // asking "are all the exits wired" has a list to check against.
 
     /// The server said no.
@@ -250,8 +249,8 @@ impl PttIntent {
         self.clear_all();
     }
 
-    /// The link went while this was asking, on the desktop (build 268; owner's
-    /// decision 2026-10-20). Like `radio_left_tx`: the press ends, and a key
+    /// The link went while this was asking, on the desktop (build 268; by
+    /// design since 2026-10-20). Like `radio_left_tx`: the press ends, and a key
     /// still down has to come up first - with three seconds to the fall
     /// (build 265) the key is usually still down, mid-sentence, and the next
     /// frame put the press straight back on a link that was not there. The
@@ -292,7 +291,7 @@ impl PttIntent {
         // nothing is held - had already ended inside the same frame. Whether it
         // survived depended on the order in which the windows are drawn, which
         // is not a foundation. The transmitter was let go and keyed again two
-        // tenths of a second later (owner, 2026-09-04, twice).
+        // tenths of a second later (2026-09-04, twice).
         //
         // So the sources that report edges are cleared, because a click is a
         // moment and its moment is over. The ones that report themselves again
@@ -329,8 +328,8 @@ impl PttIntent {
     /// Including the wait for a fresh press. An exit that means "this request
     /// has ended" must not leave a wait behind: nothing is held any more, so
     /// nothing will ever come along to release, and the next press would find a
-    /// wait it cannot end. A reviewer walked all five exits and every one of
-    /// them left the next press dead (review finding, 2026-09-05).
+    /// wait it cannot end. Walked one by one, all five exits
+    /// left the next press dead.
     ///
     /// The two exits that DO mean "wait" set the flag after calling this - see
     /// `stop_and_wait_for_release`.
@@ -341,13 +340,12 @@ impl PttIntent {
 }
 
 // ---------------------------------------------------------------------------
-// Lane 6, step 2a: the decision of the desktop loop, exactly as it stands.
+// The decision of the desktop loop, as a function a test can call.
 //
-// This is NOT an improvement and it does not use PttIntent yet. It is the body
-// of drive_yaesu_ptt(), word for word, moved somewhere a test can call it -
-// because without that, "the behaviour is identical" at step 2b is a claim and
-// not a check. Today no client test constructs an SdrRemoteApp, so that loop is
-// unreachable from outside (review finding).
+// The body of drive_yaesu_ptt() was first moved here word for word, before
+// PttIntent took the decision over - because without that, "the behaviour is
+// identical" after the move is a claim and not a check. No client test
+// constructs an SdrRemoteApp, so that loop is unreachable from outside.
 //
 // The order is the order of the original code, including the fact that the two
 // clearing steps come before the sum. That is not incidental: a press made while
@@ -408,15 +406,14 @@ impl Latches {
     /// losing are two different things, and only one of them ends the wait.
     ///
     /// Cost of getting it wrong, measured: the desktop let go of the 991A and
-    /// keyed it again two tenths of a second later, into the same time-out timer
-    /// (owner, 2026-09-04).
+    /// keyed it again two tenths of a second later, into the same time-out timer.
     /// A latching control was pressed: it switches the TRANSMISSION, not itself.
     ///
     /// Whatever started it, this ends it - the rule the phone has obeyed since
     /// 2026-09-04, brought over so the two front ends behave the same. On the
     /// desktop a click used to flip its own latch and nothing else, so clicking
     /// while the spacebar was keying looked like it did nothing and then kept
-    /// the transmitter on after the spacebar came up (owner, 2026-09-04).
+    /// the transmitter on after the spacebar came up.
     pub fn latching_press(self, source: PttSource, resampled: &[PttSource]) -> Self {
         let mut i = self.intent();
         if i.any_held() {
@@ -434,8 +431,7 @@ impl Latches {
     /// leaves the spacebar holding the transmitter and nothing behind it. Let go
     /// and it stops. That is what "overrule" means for a control you hold - the
     /// alternative, treating a press as a stop, would mean not transmitting
-    /// while the key is down, which is the one thing hold-to-talk may not do
-    /// (owner, 2026-09-04).
+    /// while the key is down, which is the one thing hold-to-talk may not do.
     ///
     /// Only latching controls are released, never another hold control. Two
     /// controls that are both re-read every frame would each clear the other on
@@ -483,10 +479,10 @@ pub fn desktop_frame(
     held_by_other: bool,
     last_sent: bool,
 ) -> Decision {
-    // Step 2b: the same decision, now taken by PttIntent.
+    // The same decision, taken by PttIntent.
     //
-    // The clearing steps were written out here by hand one more time - that was step
-    // 2a, the original literally moved. The type does it now, and every way a
+    // The clearing steps were first written out here by hand one more time - the
+    // original loop literally moved. The type does it now, and every way a
     // request can end lives in ONE place.
     //
     // That this changes nothing about the behaviour is not a promise but a test: the
@@ -521,14 +517,14 @@ pub fn desktop_frame(
 /// with multi-TX off to exactly one, and the rest are refused.
 ///
 /// **Who wins: whoever is already transmitting.** Not the newcomer. That is a
-/// choice and it is the owner's choice: a transmission in progress is not
+/// deliberate choice: a transmission in progress is not
 /// interrupted because a button is pressed somewhere else. The second one is
 /// shown a refusal, and that refusal has a reason of its own - not "another
 /// station is transmitting" but "this client allows only one". Two different
 /// things, which should also look different on the screen.
 ///
 /// Without this rule two Yaesus keyed at once while only one got modulation: two
-/// red buttons and a bare carrier, and nothing that said so (owner, 2026-09-03).
+/// red buttons and a bare carrier, and nothing that said so.
 ///
 /// Slot order: 0 = Thetis, 1 = Yaesu slot 0, 2 = Yaesu slot 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -550,7 +546,7 @@ pub fn arbitrate(
     // So it must not win either: if it did, it would hold up our own other radio for
     // a transmission that never starts. And it does not get "blocked by yourself"
     // here - its button says "busy", which is the more specific and the more correct
-    // answer (owner, 2026-09-03).
+    // answer.
     let mut want = want;
     for i in 0..3 {
         if held_by_other[i] {
@@ -624,7 +620,7 @@ impl PttTarget {
 /// says.
 ///
 /// **One transmitter at a time, and here that is a rule and not an order of
-/// steps.** The phone only ever keys one - the owner decided that explicitly. It
+/// steps.** The phone only ever keys one - by design. It
 /// used to be a sequence of steps in the ViewModel (release the previous one
 /// first, then set the new one); a sequence can end up in the wrong order, a rule
 /// cannot.
@@ -633,7 +629,7 @@ impl PttTarget {
 /// when the window around it closes. The phone has that situation too - app to
 /// the background, screen off - and there the transmission is meant to continue:
 /// you put it in your pocket and go on transmitting with the Bluetooth button.
-/// Decided by the owner on 2026-09-04. It is written here so that nobody comes
+/// Decided on 2026-09-04. It is written here so that nobody comes
 /// along later and repairs it as a forgotten exit.
 #[derive(Default, Debug, Clone)]
 pub struct PhonePtt {
@@ -682,7 +678,7 @@ impl PhonePtt {
     /// Compose button's `pressed` and `toggled`, and the volume keys' own
     /// `btToggled`. Those were a third copy of "am I transmitting", and the
     /// exits could not reach them: the transmitter stopped and the button stayed
-    /// red (owner, build 58). Deciding here means an exit is felt everywhere at
+    /// red. Deciding here means an exit is felt everywhere at
     /// once, because there is only one place left to feel it.
     pub fn down(&mut self, target: PttTarget, source: PttSource) {
         // A latching control switches the TRANSMISSION, not its own press.
@@ -692,11 +688,11 @@ impl PhonePtt {
         // that symmetry and it is the simpler rule - it also means there is
         // never a control left holding a press that no longer transmits.
         //
-        // I had built the narrow version first, where a latching control only
+        // The narrow version came first, where a latching control only
         // answered for itself, on the grounds that pressing PTT is a request to
-        // transmit and never a request to stop. That was my reasoning and not a
+        // transmit and never a request to stop. That was an assumption and not a
         // requirement, and it made the three buttons behave differently from
-        // each other for no reason the operator could see (2026-09-04).
+        // each other for no reason a user could see (2026-09-04).
         // On what is being transmitted, not on what this press is aimed at.
         //
         // It read `want_tx(target)`, and for a latching control the press IS the
@@ -706,7 +702,7 @@ impl PhonePtt {
         // and a new one came on, after the action meant to end it. Reachable without
         // the operator doing anything, because the destination is fed by
         // `thetisConfigured` from the server and by the automatic remap when the
-        // selected radio drops out. Two reviewers, second round, and the line above
+        // selected radio drops out. Missed even though the line above
         // already said this is how it works.
         if self.latches(source) {
             if let Some(held) = self.asking() {
@@ -793,8 +789,8 @@ impl PhonePtt {
     ///
     /// **Reachable from the phone, not yet wired, and I should not have said
     /// otherwise.** The commit that introduced this wrote that the phone "now
-    /// has the exit the desktop had"; it has the method and no caller (review
-    /// finding). The signal does exist - `yaesu_tx_active` crosses the
+    /// has the exit the desktop had"; it has the method and no caller.
+    /// The signal does exist - `yaesu_tx_active` crosses the
     /// bridge - but that flag is true for our own transmission as well, so
     /// wiring it means detecting a falling edge on the path that keys radios.
     /// That is its own piece of work with its own hardware test, not a line
@@ -811,8 +807,8 @@ impl PhonePtt {
     /// an external button jams or misbehaves, and that way out is the button on the
     /// screen.
     ///
-    /// The owner first saw the behaviour as a mistake of mine and then judged that it
-    /// is in fact preferable (2026-09-04): "if the button misbehaves for a moment,
+    /// This first looked like a mistake and was then judged to be
+    /// preferable (2026-09-04): "if the button misbehaves for a moment,
     /// you can always use the screen PTT."
     ///
     /// That this works depends on the Bluetooth button reporting CHANGES only. After
@@ -829,7 +825,7 @@ impl PhonePtt {
     /// the radio is on the air, so nothing outside this type can tell whether
     /// there is a latch to release. Releasing nothing costs nothing; not
     /// releasing costs four seconds of unattended carrier, which is the
-    /// supervision timeout of the button the owner uses.
+    /// supervision timeout of the button this was measured with.
     pub fn bluetooth_gone(&mut self) {
         for t in PttTarget::ALL {
             self.intents[t.idx()].release(PttSource::Bluetooth);
@@ -880,8 +876,8 @@ mod phone_tests {
         assert!(p.want_tx(PttTarget::Yaesu0), "the Bluetooth button is still down");
     }
 
-    /// The table the architecture review asks for: from every state, every exit must
-    /// end at idle. That is exactly the check two earlier commits failed.
+    /// The table of states and exits: from every state, every exit must end at
+    /// idle. That is exactly the check two earlier commits failed.
     #[test]
     fn every_exit_ends_at_idle() {
         let sources = [PttSource::Screen, PttSource::Bluetooth];
@@ -922,7 +918,7 @@ mod phone_tests {
 
     /// Screen gone: the Bluetooth button stays, the on-screen button does not.
     ///
-    /// This is the distinction the owner found by putting the phone in his pocket.
+    /// This is the distinction that showed up with the phone in a pocket.
     /// We had first decided that a transmission simply continues when the screen goes
     /// away; that holds for the Bluetooth button, which you can still release. For
     /// the on-screen button it does not: the phone locks and you have to type a
@@ -1006,7 +1002,7 @@ mod phone_tests {
         );
         assert!(
             !p.want_tx(PttTarget::Yaesu0),
-            "and no new one may start - a stop that keys another radio is the fault"
+            "and no new one may start: a stop that keys another radio is the fault"
         );
         assert_eq!(p.asking(), None, "nothing may be left transmitting");
     }
@@ -1029,7 +1025,7 @@ mod phone_tests {
     ///
     /// The second tap is what the phone got wrong: the UI held its own `toggled`
     /// flag, so after an exit had already stopped the transmitter the flag was
-    /// still on and the next tap only turned it off again. The owner had to tap
+    /// still on and the next tap only turned it off again. The operator had to tap
     /// a third time (build 58).
     #[test]
     fn toggle_takes_two_taps_and_no_more() {
@@ -1063,7 +1059,7 @@ mod phone_tests {
 
     /// After an exit has stopped it, one tap starts it again - not two.
     ///
-    /// This is the defect the owner found, stated as a property: no control may
+    /// This is that defect, stated as a property: no control may
     /// remember a state the transmitter no longer has.
     #[test]
     fn an_exit_leaves_no_control_out_of_step() {
@@ -1089,7 +1085,7 @@ mod phone_tests {
 
     /// A press stopped from the screen leaves nothing latched anywhere.
     ///
-    /// This is the defect the owner found in build 59, as a property. The
+    /// This is the defect seen in build 59, as a property. The
     /// Bluetooth gate kept its own idea of being on; stopping from the screen
     /// could not reach it, so the next press turned that idea off and did
     /// nothing, and only the press after keyed the radio. Now there is one
@@ -1281,7 +1277,7 @@ mod tests {
     /// - the case that left a radio keyed until build 29.
     ///
     /// Both window-bound sources on their own, because build 29 was the mouse
-    /// and the spacebar is the one nobody tried (review finding).
+    /// and the spacebar is the one nobody tried.
     #[test]
     fn a_closing_window_ends_a_press_that_only_lived_there() {
         for s in [PttSource::Mouse, PttSource::Space] {
@@ -1328,11 +1324,11 @@ mod tests {
     /// three things the real loop does: the per-frame suppressors, the clearing
     /// of latches inside the tick, and the level-sampled spacebar. A model that
     /// omits exactly the parts where the faults live proves less than it looks
-    /// like it does (review finding, Lane 6 step 1).
+    /// like it does.
     ///
     /// The real thing needs `drive_yaesu_ptt` to be reachable from a test, and
-    /// today no client test constructs an `SdrRemoteApp` at all. That is the
-    /// first move of step 2, not something to fake here.
+    /// no client test constructs an `SdrRemoteApp` at all. That is what moving
+    /// its body into `desktop_frame` is for, not something to fake here.
     struct Driver {
         intent: PttIntent,
         last_sent: bool,
@@ -1466,10 +1462,9 @@ mod arbitrate_tests {
     /// That is 1024: three wants, three last_sent, three held_by_other and the
     /// multi-TX switch. The first version walked sixty-four of them and held
     /// held_by_other at [false;3] - exactly the axis the fault of build 51 lay
-    /// on. A reviewer put that fault back and this loop stayed green; only the
+    /// on. With that fault put back, this loop stayed green; only the
     /// two tests from the repair commit itself fell over. Exhaustive over a
-    /// subspace is not exhaustive, and it read as though it were (review
-    /// finding).
+    /// subspace is not exhaustive, and it read as though it were.
     #[test]
     fn never_two_never_invented_never_silent() {
         for bits in 0u16..1024 {
@@ -1613,8 +1608,9 @@ mod desktop_frame_tests {
     ///
     /// All sixty-four input combinations: three latches, the window, busy, and what
     /// was last sent. This records what the client does at this moment - it does not
-    /// say that that is right. It says step 2b may not change it unnoticed, and that
-    /// is exactly what was asked for before the hottest loop is touched.
+    /// say that that is right. It says the move to PttIntent may not change it
+    /// unnoticed, and that is exactly what was asked for before the hottest loop
+    /// is touched.
     #[test]
     fn the_extraction_matches_the_loop_it_came_from() {
         let mut gecontroleerd = 0;
@@ -1643,7 +1639,7 @@ mod desktop_frame_tests {
         assert_eq!(gecontroleerd, 64, "all rows walked");
     }
 
-    /// Open point 37: the Thetis side, which had been four loose booleans OR-ed
+    /// The Thetis side, which had been four loose booleans OR-ed
     /// into one want, runs through this function since build 77. Over every
     /// combination the want is what the OR was - except when another station
     /// holds the transmitter: the booleans stayed latched there, this lets go.
@@ -1670,10 +1666,9 @@ mod desktop_frame_tests {
         }
     }
 
-    /// The acceptance criterion of open point 37, in the owner's words: busy =
-    /// let go, also for the button in the pocket. Before, the latch stayed and
+    /// Busy = let go, also for the button in the pocket. Before, the latch stayed and
     /// the transmitter came back on by itself the moment the other station
-    /// stopped (review finding, 307 round 2).
+    /// stopped (found on build 307).
     #[test]
     fn busy_lets_go_of_the_button_in_the_pocket() {
         let pressed = Latches { bluetooth: true, ..Default::default() };
@@ -1745,7 +1740,7 @@ mod desktop_frame_tests {
 
     /// A latching press while something else is keying means stop, not "add me".
     ///
-    /// The desktop case the owner found: the spacebar is keying, you click the
+    /// The desktop case: the spacebar is keying, you click the
     /// PTT button, nothing appears to happen - and when you let the spacebar go
     /// the transmitter stays on, because the click had quietly set its own
     /// latch. Now the click ends the transmission, like it does on the phone.
@@ -1829,8 +1824,8 @@ mod desktop_frame_tests {
         }
     }
 
-    /// The link went while a key was held (build 268; owner's decision
-    /// 2026-10-20): the press ends, and a key that is still down does not put
+    /// The link went while a key was held (build 268, by design
+    /// since 2026-10-20): the press ends, and a key that is still down does not put
     /// it straight back - it has to come up first, as when the radio stops.
     /// A click is a moment, and is gone with the link.
     #[test]
@@ -1866,10 +1861,9 @@ mod desktop_frame_tests {
 
     /// Closure: after an exit that ends the asking, one fresh press transmits.
     ///
-    /// The property the nine tests of builds 65-72 did not have. A reviewer
-    /// walked all five exits and found each of them leaving the next press dead,
-    /// because the wait had exactly one way out and it lived in a caller
-    /// (review finding, 2026-09-05).
+    /// The property the nine tests of builds 65-72 did not have. All five exits,
+    /// walked one by one, left the next press dead, because the wait had exactly
+    /// one way out and it lived in a caller.
     ///
     /// `radio_left_tx` is deliberately not in this list: that one MEANS "wait
     /// for a release", and the test above covers it. These four mean the asking
@@ -1909,7 +1903,7 @@ mod desktop_frame_tests {
     /// A held key does not put the transmitter straight back after the radio
     /// dropped out of TX by itself.
     ///
-    /// The case the owner found: a 991A with its time-out timer at a minute,
+    /// The case seen in the field: a 991A with its time-out timer at a minute,
     /// the spacebar held down. Clearing the latch is not enough - the desktop
     /// re-reads the spacebar every frame, so it was back immediately and the
     /// radio was keyed again, into the same time-out. Round and round.

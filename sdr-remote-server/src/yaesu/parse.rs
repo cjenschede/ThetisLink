@@ -58,7 +58,7 @@ pub(super) fn parse_responses(
                     let known = matches!(mode_char,
                         '1'..='9'|'A'|'a'|'B'|'b'|'C'|'c'|'D'|'d'|'E'|'e'|'F'|'f'|'H'|'h'|'I'|'i');
                     if !known && warned_modes.insert(mode_char) {
-                        warn!("{} unknown MD mode code '{}' - falling back to USB; possibly model-specific", prefix, mode_char);
+                        warn!("{} unknown MD mode code '{}': falling back to USB; possibly model-specific", prefix, mode_char);
                     }
                     let mode = yaesu_mode_to_internal(mode_char, model);
                     let mut s = status.lock().unwrap();
@@ -86,7 +86,7 @@ pub(super) fn parse_responses(
                 }
             }
             "RM" => {
-                // 991A RM6 = raw SWR meter (000-255). DIAGNOSTIC ONLY now — the alarm
+                // 991A RM6 = raw SWR meter (000-255). DIAGNOSTIC ONLY now; the alarm
                 // comes from the official RI0 Hi-SWR flag (see the "RI" arm). We keep
                 // the raw value so the RI0 log can show what RM6 read at the same moment
                 // (e.g. to confirm what a dummy load reads on RM6 vs the RI0 flag).
@@ -189,7 +189,7 @@ pub(super) fn parse_responses(
                 }
             }
             "RA" => {
-                // RA0 P2 -> RF-ATT on/off (PATCH-yaesu-extra-controls, YaesuCtrl::RfAtt bit 0).
+                // RA0 P2 -> RF-ATT on/off (`YaesuCtrl::RfAtt`, bit 0).
                 let on = payload.chars().nth(1) == Some('1');
                 let mut s = status.lock().unwrap();
                 let bit = 1u32 << 0;
@@ -218,7 +218,7 @@ pub(super) fn parse_responses(
             }
             "GT" => {
                 // GT0 P2 -> AGC mode (YaesuCtrl::Agc, level index 6).
-                // Hardware-verified (§13, build 32) on 991A and FTX-1: 1=FAST, 2=MID,
+                // Hardware-verified (build 32) on 991A and FTX-1: 1=FAST, 2=MID,
                 // 3=SLOW, and AUTO is reported back as the *resolved* auto speed
                 // 4=auto-fast/5=auto-mid/6=auto-slow. We always set AUTO with 4 and
                 // normalize every readback 4/5/6 -> 4 (AUTO) so readback == set value.
@@ -368,7 +368,7 @@ pub(super) fn parse_responses(
                 } else {
                     // 991A: RI0; -> answer "RI0{P2}" with P2 = 0 Normal / 1 Hi-SWR
                     // (FT-991A CAT OM 1711-D). This is the radio's OWN calibrated Hi-SWR
-                    // trip, asserted only while transmitting into a high SWR — no per-radio
+                    // trip, asserted only while transmitting into a high SWR; no per-radio
                     // threshold guessing (unlike the old RM6 approach that could false-fire
                     // on a matched/dummy load). payload = "0" + P2, so P2 = char at index 1.
                     let hi = payload.chars().nth(1) == Some('1');
@@ -380,7 +380,7 @@ pub(super) fn parse_responses(
                 }
             }
             "IF" => {
-                // IF field layout differs per model (see reference_ftx1_cat_protocol):
+                // IF field layout differs per model:
                 //   991A : channel at [0..3], P7 (VFO/Mem) at [20], payload >=23.
                 //   FTX-1: 5-digit channel [0..5], P7 at [22], payload 27 (same
                 //          layout as MR/MW: P1(5) P2(9:freq) P3(5) P4 P5 P6 P7 ...).
@@ -417,7 +417,7 @@ pub(super) fn parse_responses(
                         // stale poll at the start is normal and must not give a false error.
                         s.vfo_escape_pending -= 1;
                         if s.vfo_escape_pending == 0 {
-                            warn!("{} memory-escape not confirmed after 15 IF-polls - radio stayed Memory (P7='{}'); MA did NOT switch to VFO (or MD/FA rejected)", prefix, p7);
+                            warn!("{} memory-escape not confirmed after 15 IF-polls: radio stayed Memory (P7='{}'); MA did NOT switch to VFO (or MD/FA rejected)", prefix, p7);
                         }
                     } else if new_vfo != s.vfo_select {
                         info!("{} mode: {} (IF P7='{}')",
@@ -447,7 +447,7 @@ pub(super) fn parse_responses(
                     // (no out-of-range/panic), skip parse + one warn. Makes a
                     // shifted FTX-1 field layout visible instead of failing silently.
                     if !*warned_short_if {
-                        warn!("{} IF response {}B ('{}'), 991A expects >=22 - fields possibly shifted, parse skipped",
+                        warn!("{} IF response {}B ('{}'), 991A expects >=22: fields possibly shifted, parse skipped",
                             prefix, payload.len(), payload);
                         *warned_short_if = true;
                     }
@@ -455,7 +455,7 @@ pub(super) fn parse_responses(
                     // exists to reach three, and a warn-once guard can never
                     // get there. It had a test and no caller until now, which
                     // is the shape this project keeps finding - green counting
-                    // for something it does not cover (review finding).
+                    // for something it does not cover.
                     let crossed = {
                         let mut st = status.lock().unwrap();
                         let before = sdr_remote_core::cat_health::baud_hint_due(st.cat_trouble);
@@ -463,7 +463,7 @@ pub(super) fn parse_responses(
                         !before && sdr_remote_core::cat_health::baud_hint_due(st.cat_trouble)
                     };
                     if crossed {
-                        warn!("{} replies keep coming back short - check baud radio-menu vs config", prefix);
+                        warn!("{} replies keep coming back short: check baud radio-menu vs config", prefix);
                     }
                 }
             }

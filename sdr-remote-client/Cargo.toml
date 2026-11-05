@@ -34,7 +34,7 @@ mcp2221-hal = "0.1"
 open = "5"
 chrono = "0.4"
 rust-i18n = "3"
-# PATCH-3: mDNS service browse for local-network server discovery.
+# mDNS service browse for local-network server discovery.
 # Same crate + version as the server side - see server Cargo.toml.
 mdns-sd = "=0.19.1"
 
@@ -69,7 +69,7 @@ windows = { version = "0.58", features = [
     "Storage_Streams",
 ] }
 
-# Chat (docs/internal/DESIGN-relay-chat.md). Blocking, on its own thread: the
+# Chat. Blocking, on its own thread: the
 # chat may never sit on the audio, PTT or connect path. Already used by
 # sdr-remote-server, so no new crate enters the workspace or the SBOM.
 reqwest = { version = "0.12", features = ["blocking"] }

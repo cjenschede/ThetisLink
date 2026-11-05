@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Hole punching (phase 3c, `OPZET-fase3c-gaten-prikken.md` §10): app and server
+//! Hole punching: app and server
 //! find each other through the relay and then carry the same QUIC connection
 //! directly. One topic, one crate: the signals live here, the sockets and the
 //! choice of way in the route layer ([`crate::route`]). The engine and the
@@ -18,10 +18,10 @@
 //!    sends the client back to both ways, and it punches again.
 //!
 //! The server takes an offer only from a connection whose client proved the
-//! password (build 126, review 125): an offer makes the server send to an
+//! password: an offer makes the server send to an
 //! address the client names, so it is for those who may use the station anyway.
 //!
-//! L+R (build 142, `OPZET-L-plus-R.md`): when the relay sees the client at this
+//! L+R (build 142): when the relay sees the client at this
 //! side's own public IP, the two are behind the same router, and a punch fails
 //! there (the router does not send its own public address back in). The server
 //! answers the offer with its local address and own port instead
@@ -66,7 +66,7 @@ pub(crate) const OFFER_EVERY_SLOW: Duration = Duration::from_secs(10);
 /// How long to wait before the next offer, after `offers` of them: once a
 /// second for the first [`MAX_OFFERS`], then every [`OFFER_EVERY_SLOW`] - never
 /// "stop": a client typing its 2FA code for longer than ten seconds still
-/// punches once it is admitted (review 126: giving up after ten went unseen).
+/// punches once it is admitted (giving up after ten went unseen).
 pub(crate) fn offer_interval(offers: u32) -> Duration {
     if offers >= MAX_OFFERS {
         OFFER_EVERY_SLOW
@@ -95,7 +95,7 @@ pub(crate) const RELAY_QUIET: Duration = Duration::from_secs(2);
 const _: () = assert!(RELAY_QUIET.as_millis() > crate::KEEPALIVE.as_millis());
 
 /// Whether `addr` is a place a punch may go to at all: a port, one host - not
-/// "any", not a group, not everyone on a network (review 125). Loopback and
+/// "any", not a group, not everyone on a network. Loopback and
 /// private addresses stay allowed: the tests run on loopback, and a relay in
 /// the server's own network reports a private address in good faith.
 pub(crate) fn usable_target(addr: SocketAddr) -> bool {
@@ -129,15 +129,14 @@ pub(crate) fn intercept(side: &Side, conn: &Connection, d: &[u8]) -> bool {
             // from a socket of its own, straight to the client.
             Some(id) if route.is_relay_only() => {
                 if route.first_relay_only_offer(conn.stable_id()) {
-                    // Named in the brief before it was built (working rule 11, build 135).
-                    info!("QUIC punch: client {id} offered a direct path - not answered, this server takes the relay only");
+                    info!("QUIC punch: client {id} offered a direct path; not answered, this server takes the relay only");
                 }
             }
             Some(id) if !route.is_proven(conn.stable_id()) => {
                 if route.first_unproven_offer(conn.stable_id()) {
-                    info!("QUIC punch: client {id} offered before its password was proven - answered once it is");
+                    info!("QUIC punch: client {id} offered before its password was proven; answered once it is");
                 } else {
-                    debug!("QUIC punch: an offer before the password was proven - not answered");
+                    debug!("QUIC punch: an offer before the password was proven; not answered");
                 }
             }
             Some(id) => match route.punch(id, public, conn.stable_id()) {
@@ -145,12 +144,12 @@ pub(crate) fn intercept(side: &Side, conn: &Connection, d: &[u8]) -> bool {
                 Some(Answer::Local(home)) => signal(conn, PacketType::PunchLocal, home),
                 None => {}
             },
-            None => debug!("QUIC punch: an offer from a client that is not on the relay - nothing to punch"),
+            None => debug!("QUIC punch: an offer from a client that is not on the relay; nothing to punch"),
         },
         (Ok(Packet::PunchReady(from)), Side::Client(socket)) => socket.ready(from),
         (Ok(Packet::PunchLocal(home)), Side::Client(socket)) => socket.ready_local(home),
-        (Ok(_), _) => debug!("QUIC punch: a signal for the other side - dropped"),
-        (Err(e), _) => debug!("QUIC punch: a malformed signal - dropped: {e}"),
+        (Ok(_), _) => debug!("QUIC punch: a signal for the other side; dropped"),
+        (Err(e), _) => debug!("QUIC punch: a malformed signal; dropped: {e}"),
     }
     true
 }

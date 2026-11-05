@@ -2,9 +2,9 @@
 
 //! Outbound relay transport monitor for ThetisLink.
 //!
-//! Phase C-light establishes the WebSocket relay path and exchanges lightweight
-//! peer-status/RTT frames. It still does not route TL audio/control frames, so
-//! the existing direct transport is unaffected.
+//! Establishes the WebSocket relay path and exchanges lightweight
+//! peer-status/RTT frames. The connection itself is QUIC: its packets go over the
+//! relay's UDP data path or, as the TCP fallback route, as TLT1 frames over this line.
 
 use futures_util::{SinkExt, StreamExt};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -20,10 +20,10 @@ use tokio_tungstenite::MaybeTlsStream;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 /// The spread on that wait, either way: after a VPS restart the endpoints do not
-/// all knock in step (relay recovery design, 2026-09-08, section 7).
+/// all knock in step (2026-09-08).
 const RECONNECT_SPREAD: f64 = 0.2;
 /// A session must have stood this long, counted from its first traffic, before
-/// its breaking earns an immediate retry (round 95: a line that passes one frame
+/// its breaking earns an immediate retry (a line that passes one frame
 /// and dies would otherwise reconnect two or three times a second).
 const STOOD_AT_LEAST: Duration = Duration::from_secs(1);
 /// After a working session broke, the next attempts that fail INSIDE this device
@@ -57,7 +57,7 @@ const BINARY_MAGIC: [u8; 4] = *b"TLB1";
 const BINARY_KIND_PING: u8 = 0;
 const BINARY_KIND_PONG: u8 = 1;
 
-// TLT1 = tunneled TL-frame data (Phase C), distinct from the TLB1 probe.
+// TLT1 = tunneled TL-frame data, distinct from the TLB1 probe.
 // Layout: magic(4) | version(1) | client_id(1) | length(2 LE) | payload(TL-bytes).
 // A dedicated magic (rather than a bare prefix) is robust because real TL payloads
 // are binary too; a binary frame with an unknown magic is dropped non-fatally.
@@ -65,14 +65,14 @@ const TLT1_MAGIC: [u8; 4] = *b"TLT1";
 const TLT1_VERSION: u8 = 1;
 const TLT1_HEADER_LEN: usize = 8;
 
-// TLU1 = tunneled audio over the bare-UDP path (PATCH-relay-audio-udp, phase 2).
+// TLU1 = tunneled audio over the bare-UDP path.
 // Layout: magic(4) | version(1) | flags(1) | client_id(1) | seq(4 LE) | token(32 raw) |
 // AudioPacket. Only audio packet types travel over this; everything else stays on TLT1/wss.
 const TLU1_MAGIC: [u8; 4] = *b"TLU1";
 const TLU1_VERSION: u8 = 1;
 const TLU1_TOKEN_LEN: usize = 32;
 /// The TLU1 header in front of every datagram to the relay's UDP port. Public for
-/// the QUIC route layer (`sdr-remote-quic`, phase 3b), which frames its packets with
+/// the QUIC route layer (`sdr-remote-quic`), which frames its packets with
 /// [`encode_tlu1_raw`] - one encoder for both data forms.
 pub const TLU1_HEADER_LEN: usize = 4 + 1 + 1 + 1 + 4 + TLU1_TOKEN_LEN; // = 43
 
@@ -80,7 +80,7 @@ pub const TLU1_HEADER_LEN: usize = 4 + 1 + 1 + 1 + 4 + TLU1_TOKEN_LEN; // = 43
 /// the low-latency UDP path. Everything else (control, spectrum, meters) stays
 /// on wss. The relay stays dependency-light and does NOT link `sdr-remote-core`
 /// (which would pull in audiopus/opus), so this list is a deliberate mirror of
-/// `sdr_remote_core::protocol::AUDIO_PACKET_TYPES` — kept honest by a parity
+/// `sdr_remote_core::protocol::AUDIO_PACKET_TYPES`: kept honest by a parity
 /// test in the server crate (`tracked_socket`/tests), which links both crates
 /// and fails the build if this ever drifts from the authoritative enum.
 pub const AUDIO_TYPE_BYTES: [u8; 7] = [0x01, 0x0E, 0x16, 0x1A, 0x1B, 0x21, 0x25];
@@ -101,7 +101,7 @@ fn hex32(hex: &str) -> [u8; 32] {
 }
 
 /// Build a TLU1 audio datagram. `client_id` is the sender's id (station stamps the
-/// target). `token_hex` is the phase-0 capability from the ready-reply.
+/// target). `token_hex` is the UDP capability token from the ready-reply.
 fn encode_tlu1(client_id: u8, seq: u32, token_hex: &str, payload: &[u8]) -> Vec<u8> {
     encode_tlu1_raw(client_id, seq, &hex32(token_hex), payload)
 }
@@ -120,7 +120,7 @@ pub fn encode_tlu1_raw(client_id: u8, seq: u32, token: &[u8; TLU1_TOKEN_LEN], pa
     f
 }
 
-/// Extract `udp_token=<hex>` from the relay ready-reply (phase 0). The token is the
+/// Extract `udp_token=<hex>` from the relay ready-reply. The token is the
 /// last field, so trimming the remainder is enough.
 /// The chat ticket from a relay line, if one is offered.
 ///
@@ -210,7 +210,7 @@ fn parse_udp_token(ready: &str) -> Option<String> {
         .filter(|t| t.len() == TLU1_TOKEN_LEN * 2)
 }
 
-// --- Phase 3: make-before-break UDP<->wss fallback (relay-only) ---
+// --- Make-before-break UDP<->wss fallback (relay-only) ---
 
 /// Relay-control-frame marker. A client tunnels this over wss (TLT1, so the relay stamps
 /// the sender's client_id); the station intercepts it BEFORE forwarding to the engine and
@@ -266,7 +266,7 @@ const FALLBACK_DOWNLINK_STALL: Duration = Duration::from_millis(2500);
 /// three-way ordering that everything here depends on and BOTH declared their own
 /// copy of this number. Putting the real one to three seconds left them green while
 /// every beacon would then restart the healthy run and recovery would be impossible -
-/// exactly the failure those tests exist to prevent. A review found it; a constant is
+/// exactly the failure those tests exist to prevent. A shared constant is
 /// what makes them able to see it.
 const UDP_BEACON_INTERVAL: Duration = Duration::from_secs(1);
 /// Recovery: while in fallback, UDP audio must flow healthily for this long before we drop
@@ -356,7 +356,7 @@ fn keepalive_datagrams(
 ///
 /// With NONE bound: still exactly one. Until 2026-09-23 this sent nothing at all,
 /// and that is a trap, because the relay binds a token to the source address it
-/// first saw (`main.rs`, S5). A station with no clients stops sending, its NAT
+/// first saw (`main.rs`). A station with no clients stops sending, its NAT
 /// mapping expires, and when the next client arrives the station resumes from a
 /// NEW source port - which no longer matches the binding. Every beacon is then
 /// dropped silently until the token rotates, up to ten minutes later.
@@ -399,7 +399,7 @@ fn downlink_stalled(
         // tunnel client was bound at 17:28:52 and the session authenticated at
         // 17:28:52.115. It was measuring a window in which no peer could have
         // sent anything, and it did that on every fresh connect - which is why
-        // the owner saw the indicator "continuously".
+        // the indicator was seen "continuously".
         //
         // `None` here means there is no peer yet. Then there is nothing to
         // accuse: silence from someone who is not there is not evidence.
@@ -426,7 +426,7 @@ enum AbsenceEvent {
     /// It is over because the PATH broke, and the rescue is taking it from here.
     ///
     /// Its own variant, because the first version had only one ending and wrote
-    /// "UDP audio is back" for both. A review caught it: the path stalling makes the
+    /// "UDP audio is back" for both. But the path stalling makes the
     /// condition false just as surely as audio returning, so the line claiming audio
     /// was back appeared on the very pass where the fallback fires - two adjacent
     /// lines, the first one the exact opposite of the truth, at the one moment
@@ -440,12 +440,12 @@ enum AbsenceEvent {
 /// than the comparison, and nothing could reach the wiring: `run_connection` is
 /// called once, from production, and no test touches it. So a mutation anywhere in
 /// the block this replaces survived the whole suite by construction - which is a
-/// stronger statement than any mutation run, and it came from a review.
+/// stronger statement than any mutation run.
 /// Takes the CLOCKS, not a duration worked out above it, and that is the point.
 ///
 /// The first cut took `without_audio` ready-made, so the projection that produces it -
 /// "no audio at all means measure from the start of the session" - stayed above the
-/// function where no test could reach it. A review demonstrated it: swapping the audio
+/// function where no test could reach it. Demonstrably so: swapping the audio
 /// clock for the downlink clock in that projection turns the reporter into the very
 /// thing it was written to find, a branch that is there and can never be reached, and
 /// every test stayed green. Here the projection is inside, and that case is the first
@@ -620,7 +620,7 @@ fn audio_identity(payload: &[u8]) -> Option<(u16, u32)> {
 pub const PTT_FLAG_BIT: u8 = 0x01;
 
 /// `true` when an audio frame carries an active PTT flag.
-/// Used for TX-always-both (phase 3b section 14.3).
+/// Used for TX-always-both: while PTT is active, audio goes over both paths.
 fn audio_ptt_active(payload: &[u8]) -> bool {
     is_audio_packet(payload) && payload.len() > 3 && (payload[3] & PTT_FLAG_BIT) != 0
 }
@@ -783,7 +783,7 @@ async fn bind_for(addr: SocketAddr) -> std::io::Result<UdpSocket> {
 }
 
 /// An UNconnected socket for the relay's UDP port, for a side that talks to
-/// the relay and, after punching (phase 3c), directly from the same socket -
+/// the relay and, after punching, directly from the same socket -
 /// so the direct packets leave under the very address the relay saw. The first
 /// address in `order` that a socket can be connected to wins: binding alone
 /// never fails for a family the system lacks or a network it cannot reach (the
@@ -801,7 +801,7 @@ pub async fn bind_relay_udp(order: &[SocketAddr]) -> std::io::Result<(UdpSocket,
             Err(e) => {
                 if let Some(next) = order.get(i + 1) {
                     log::warn!(
-                        "Relay UDP: no socket for the {} address ({e}) - trying the {} one",
+                        "Relay UDP: no socket for the {} address ({e}); trying the {} one",
                         family(addr),
                         family(*next)
                     );
@@ -825,7 +825,7 @@ pub async fn connect_relay_udp(
         Ok(sock) => Ok((sock, first)),
         Err(e) => match fallback {
             Some(v4) => {
-                log::warn!("Relay UDP: no socket for the {} address ({e}) - trying its IPv4 address", family(first));
+                log::warn!("Relay UDP: no socket for the {} address ({e}); trying its IPv4 address", family(first));
                 connect_udp(v4).await.map(|sock| (sock, v4))
             }
             None => Err(e),
@@ -842,7 +842,7 @@ pub fn family(addr: SocketAddr) -> &'static str {
     }
 }
 
-/// Open + connect a UDP socket to the relay's UDP data port (phase 2). Best-effort;
+/// Open + connect a UDP socket to the relay's UDP data port. Best-effort;
 /// on any failure the caller falls back to audio-over-wss.
 async fn open_udp(url: &str, port: u16) -> Result<UdpSocket, String> {
     let (first, fallback) = resolve_udp(url, port).await?;
@@ -862,8 +862,8 @@ async fn recv_udp(sock: &Option<UdpSocket>, buf: &mut [u8]) -> Option<usize> {
 
 // Relay sentinel convention for the classic tunnel. The server mirrored it
 // (`tracked_socket::relay_sentinel_for`, with a parity test) until build 133,
-// which removed the classic tunnel from the server; this side goes with the
-// rest of the tunnel code (phase 3d, build 3).
+// which removed the classic tunnel from the server; this side stays as long as
+// the rest of the tunnel code does.
 // Mapping: client_id N <-> 203.0.113.(N+1):1.
 /// Strip the relay address out of a log line, keeping what is diagnostically
 /// useful (the scheme, so ws:// vs wss:// is still visible). The host is private
@@ -922,11 +922,11 @@ pub struct RelayConfig {
     /// the LAST hello field. Metadata only - the relay uses it just for logs. Empty
     /// = omitted.
     pub name: String,
-    /// UDP port of the relay's audio data path (PATCH-relay-audio-udp, phase 2).
+    /// UDP port of the relay's audio data path.
     /// `Some(port)` = route audio over bare UDP to `host(url):port`; `None` = all
     /// traffic over wss as before (additive). Falls back to wss if UDP can't open.
     pub udp_port: Option<u16>,
-    /// QUIC via the relay (phase 3b): this side carries one QUIC connection
+    /// QUIC via the relay: this side carries one QUIC connection
     /// through the relay's UDP path, framed by the QUIC crate's route layer. The
     /// monitor then only signs in (with `proto=quic`), hands the UDP capability on
     /// as a [`UdpGrant`], and keeps the chat ticket: no UDP socket of its own, no
@@ -946,8 +946,8 @@ pub struct UdpGrant {
     /// The relay's first IPv4 address when `relay` is not one: the way back
     /// when no socket can be made for `relay` (see [`connect_relay_udp`]).
     pub fallback: Option<SocketAddr>,
-    /// This side's public UDP address as the relay sees it (`udp-seen`, phase
-    /// 3c): what the other side punches to. `None` until the relay has said it,
+    /// This side's public UDP address as the relay sees it (`udp-seen`): what
+    /// the other side punches to. `None` until the relay has said it,
     /// and from a relay that does not.
     pub public: Option<SocketAddr>,
     pub token: [u8; TLU1_TOKEN_LEN],
@@ -1019,7 +1019,7 @@ pub struct RelayStatus {
     pub peer_rtt_ms: Option<u32>,
     pub binary: Option<BinaryProbeStats>,
     pub generation: u64,
-    /// Phase 3c: true while audio is on the wss TCP-fallback (UDP degraded/blocked); false
+    /// True while audio is on the wss TCP-fallback (UDP degraded/blocked); false
     /// on the normal low-latency UDP path. Drives the client transport indicator.
     pub transport_fallback: bool,
     /// The chat ticket the relay last handed out, if it offers one at all.
@@ -1029,7 +1029,7 @@ pub struct RelayStatus {
     /// lasts and meaningless without it. `None` means a relay with no chat
     /// behind it, which is a normal state and not an error.
     ///
-    /// This client never verifies it - only the chat service does (design §3).
+    /// This client never verifies it - only the chat service does.
     pub chat_ticket: Option<String>,
 }
 
@@ -1088,7 +1088,7 @@ impl RelayStatusHandle {
     }
 }
 
-/// Tunnel coupling for Phase C: carries tunneled TL-frame bytes between this
+/// Tunnel coupling: carries tunneled TL-frame bytes between this
 /// relay peer and the local endpoint (server: `TrackedSocket`; client: engine).
 /// - `inbound_tx`: the monitor pushes decoded incoming `TLT1` payloads here
 ///   as `(sentinel, tl_bytes)`.
@@ -1107,8 +1107,8 @@ pub struct RelayTunnel {
 /// UDP socket does (the TCP fallback route, build 144).
 pub const TCP_LINE_DEPTH: usize = 64;
 
-/// The route layer's end of the TCP line (the TCP fallback route, build 144,
-/// `OPZET-tcp-uitwijkroute.md`): QUIC packets as TLT1 frames on the monitor's
+/// The route layer's end of the TCP line (the TCP fallback route, build 144):
+/// QUIC packets as TLT1 frames on the monitor's
 /// wss connection, for a network that lets no UDP through. The relay on the VPS
 /// forwards TLT1 by client id already (it stamps a client's id on the way to
 /// the station, and sends a station's frame to the client it names), so the
@@ -1120,7 +1120,7 @@ pub struct TcpLine {
     /// What came in as TLT1: the client id and the QUIC packet.
     pub from_relay: mpsc::Receiver<(u8, Vec<u8>)>,
     /// Frames the monitor dropped because one was still on its way out
-    /// (build 146: the count that shows "one at a time" bounds, review 145).
+    /// (build 146: the count that shows "one at a time" bounds).
     pub dropped_out: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -1168,7 +1168,7 @@ async fn recv_tcp_line(line: &mut Option<&mut TcpLineMonitor>) -> Vec<u8> {
 
 // The monitor runs on its own thread, always. A tokio-task variant (`start`,
 // `RelayTask::Tokio`) had no caller, stopped differently (abort in Drop) and did
-// not report a panic; removed (reviewers, rounds 44-45, owner's decision).
+// not report a panic; removed.
 pub struct RelayMonitor {
     status: RelayStatusHandle,
     config_tx: watch::Sender<RelayConfig>,
@@ -1186,18 +1186,18 @@ impl RelayMonitor {
     ///
     /// The classic form, whatever `initial.quic` says: QUIC mode without a grant
     /// receiver would sign in as QUIC and publish nothing, a silent dead end. The
-    /// constructor decides the form, not the caller (review 118).
+    /// constructor decides the form, not the caller.
     pub fn start_threaded(initial: RelayConfig) -> Self {
         Self::start_threaded_inner(RelayConfig { quic: false, ..initial }, None, None, None)
     }
 
-    /// Monitor on its own thread that also tunnels TL frames (Phase C). The
+    /// Monitor on its own thread that also tunnels TL frames. The
     /// classic form, like [`RelayMonitor::start_threaded`].
     pub fn start_threaded_tunnel(initial: RelayConfig, tunnel: RelayTunnel) -> Self {
         Self::start_threaded_inner(RelayConfig { quic: false, ..initial }, Some(tunnel), None, None)
     }
 
-    /// Monitor for QUIC via the relay (phase 3b): signs in with `proto=quic` and
+    /// Monitor for QUIC via the relay: signs in with `proto=quic` and
     /// publishes each session's [`UdpGrant`] on `grants` (`None` between
     /// sessions). The data goes through the QUIC crate's route layer, not here
     /// - over UDP, and over `tcp` on the wss connection when there is one (the
@@ -1226,7 +1226,7 @@ impl RelayMonitor {
         let task_status = status.clone();
         let spawn_status = status.clone();
         // A monitor stopped by a panic is stopped: `is_stopped()` reads this
-        // signal, and a panic never set it (reviewer, round 45).
+        // signal, and a panic never set it.
         let panic_stop = shutdown_tx.clone();
         if let Err(e) = std::thread::Builder::new()
             .name("thetislink-relay-monitor".to_string())
@@ -1413,7 +1413,7 @@ async fn monitor_loop(
         // or disabled one, gets a number of its own. The QUIC route layer tells a
         // new session from a rotation by this number alone - a `None` between two
         // sessions can be swallowed by the watch - so two sessions under one
-        // number would keep it on the dead socket (review 118).
+        // number would keep it on the dead socket.
         generation = generation.wrapping_add(1);
 
         if !config.enabled {
@@ -1467,7 +1467,7 @@ async fn monitor_loop(
         let mut outcome = SessionOutcome::default();
         // The whole session - building it and running it - against a change of
         // network: a build that hangs on a network going away would otherwise
-        // see the change only when it gives up (build 187; review of 186).
+        // see the change only when it gives up.
         let (run_result, switched) = until_network_switch(
             run_connection(
                 &config,
@@ -1523,21 +1523,17 @@ async fn monitor_loop(
 
         let wait = recovery.next_wait(&outcome, ended_on_error, Instant::now(), spread_now());
         if wait.is_zero() && outcome.network_changed {
-            // Named in advance (working rule 11, build 186).
             log::info!("Relay: reconnecting at once on the new network");
         } else if wait.is_zero() {
-            // Named in the plan before it was built (working rule 11).
-            log::info!("Relay: reconnecting at once - the session carried traffic and ended on a transport error");
+            log::info!("Relay: reconnecting at once; the session carried traffic and ended on a transport error");
         } else if wait < RECONNECT_DELAY.mul_f64(1.0 - RECONNECT_SPREAD) {
-            // Named in the brief before it was built (working rule 11).
-            log::info!("Relay: the network is not up yet - trying again in {} ms", wait.as_millis());
+            log::info!("Relay: the network is not up yet; trying again in {} ms", wait.as_millis());
         }
         let waiting_for_the_network = !wait.is_zero() && recovery.waits_for_the_network();
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             _ = network_came_up(&mut network_rx, waiting_for_the_network) => {
-                // Named in the brief before it was built (working rule 11).
-                log::info!("Relay: the network came up - trying now");
+                log::info!("Relay: the network came up; trying now");
             }
             _ = config_rx.changed() => {}
             _ = shutdown_rx.changed() => {}
@@ -1557,8 +1553,7 @@ where
     tokio::select! {
         r = session => (r, false),
         Ok(()) = change_rx.changed() => {
-            // Named in advance (working rule 11, builds 186 and 187).
-            log::info!("Relay: the device's network changed - ending this session to start one on the new network");
+            log::info!("Relay: the device's network changed; ending this session to start one on the new network");
             (Err("the device's network changed".to_string()), true)
         }
     }
@@ -1654,7 +1649,7 @@ fn note_downlink(
 /// apart at the call site would be to compare translated text.
 ///
 /// Rather than retype seventeen exit paths, the session reports alongside its
-/// error. `reconnect_wait` decides on it (step 3 of the design, build 95).
+/// error. `reconnect_wait` decides on it (build 95).
 #[derive(Default, Debug)]
 pub(crate) struct SessionOutcome {
     /// The relay refused us, with the wire code (`ERR device blocked`) and not
@@ -1666,7 +1661,7 @@ pub(crate) struct SessionOutcome {
     /// case - the only case a fast retry is meant for.
     pub carried_traffic: bool,
     /// When the first peer traffic arrived: how long the session stood is
-    /// counted from here (round 95).
+    /// counted from here.
     pub traffic_since: Option<Instant>,
     /// The attempt failed inside this device before reaching the relay: the
     /// relay's name did not resolve, or there was no route (`NetworkUnreachable`
@@ -1738,7 +1733,7 @@ impl Recovery {
     ///   not refused, was not closed by the relay, and ENDED ON AN ERROR - the
     ///   network-switch case (measured 2026-10-03: of 5.4 s silence, 5.0 s was the
     ///   fixed wait). A session that ends without an error (settings saved
-    ///   unchanged) is not that case (round 95).
+    /// unchanged) is not that case.
     /// - After that, attempts that fail locally walk `LOCAL_RETRY_LADDER`, and
     ///   stay on its last step for as long as they fail locally.
     /// - Everything else - a refusal, the relay closing us, a connection that
@@ -1759,7 +1754,7 @@ impl Recovery {
             if outcome.failed_locally {
                 // On the last step it stays while the failure is local - every 2 s,
                 // never slower than the plain wait and still nothing at the relay
-                // (round 96: a net ready between 3.9 and 5 s would otherwise wait
+                // (a net ready between 3.9 and 5 s would otherwise wait
                 // longer than without the ladder).
                 let step = i.min(LOCAL_RETRY_LADDER.len() - 1);
                 self.step = Some(i + 1);
@@ -1864,7 +1859,7 @@ async fn run_connection(
         )
     };
     // QUIC via the relay says so: today's relay ignores the key, a relay for
-    // v2.13 can refuse a hello without it (OPZET-fase3b §2.7).
+    // v2.13 can refuse a hello without it.
     if config.quic {
         hello.push_str(" proto=quic");
     }
@@ -1882,8 +1877,8 @@ async fn run_connection(
 
     // The relay's answer is OK or ERR. A peer's frame can come before it: the
     // relay puts this connection in the room before it sends the OK, and the
-    // other side's status or probe in that moment arrives first (review 124,
-    // measured). That is no answer - and since build 124 a peer cannot pass an
+    // other side's status or probe in that moment arrives first
+    // (measured). That is no answer - and since build 124 a peer cannot pass an
     // OK or ERR through the relay, so waiting for one of those is safe.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let first = loop {
@@ -1894,14 +1889,14 @@ async fn run_connection(
             .map_err(|e| e.to_string())?;
         match &message {
             Message::Text(text) if !text.starts_with(RELAY_OK) && !text.starts_with(RELAY_ERR) => {
-                log::debug!("Relay: a peer frame before the relay's answer - skipped");
+                log::debug!("Relay: a peer frame before the relay's answer; skipped");
             }
             Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => {}
             _ => break message,
         }
     };
 
-    // Phase 2: the ready-reply carries the UDP capability token ("OK relay-ready
+    // The ready-reply carries the UDP capability token ("OK relay-ready
     // udp_token=..."); capture it to open the audio-over-UDP path below. Assigned on
     // the OK arm; the other arms diverge (return), so it is always initialised after.
     // `mut`: the relay rotates this token over wss before its hard TTL; the loop
@@ -1910,7 +1905,7 @@ async fn run_connection(
     match first {
         Message::Text(text) if text.starts_with(RELAY_OK) && text[RELAY_OK.len()..].starts_with(' ') => {
             // A relay with a chat behind it offers a ticket here; one without
-            // simply does not, and that is a normal state (design §2.4 - the
+            // simply does not, and that is a normal state (the
             // chat being absent may never disturb anything else).
             set_chat_ticket(status, parse_chat_ticket(&text));
             udp_token = parse_udp_token(&text);
@@ -1932,7 +1927,7 @@ async fn run_connection(
         other => return Err(format!("unexpected relay hello: {other:?}")),
     }
 
-    // Phase 2: open the bare-UDP audio path when configured and a token was issued.
+    // Open the bare-UDP audio path when configured and a token was issued.
     // Best-effort - on any failure we simply keep audio on wss (additive fallback).
     // QUIC via the relay: the route layer owns the one UDP socket to the relay
     // (the relay binds a token to the first source it sees), so none here.
@@ -1991,8 +1986,8 @@ async fn run_connection(
     let mut pending_binary: Option<(u64, Instant)> = None;
     let mut binary_samples: VecDeque<u32> = VecDeque::new();
 
-    // Phase 3a: make-before-break UDP<->wss fallback (relay-only, additive - inert while the
-    // fallback stays off, so the phase-2 UDP path is byte-identical in the normal case).
+    // Make-before-break UDP<->wss fallback (relay-only, additive - inert while the
+    // fallback stays off, so the bare-UDP path is byte-identical in the normal case).
     // Client side: watch UDP-audio health and request wss fallback if it never arrives.
     let ready_at = Instant::now();
     // Say what we can do as soon as the session stands. The station needs to know from
@@ -2005,9 +2000,9 @@ async fn run_connection(
     // station does instead: `parse_rcf_fallback` returns None, the frame falls through
     // to the tunnel path like any other payload, and the engine rejects it at the magic
     // byte - `RCF1` starts with 0x52 and a TL packet with 0xAA. Harmless, and the same
-    // route the fallback frames themselves already take against a station older than
-    // phase 3a. Not "silently ignored at this layer", which is what the design said and
-    // a review rightly would not accept on trust.
+    // route the fallback frames themselves already take against a station that predates
+    // the fallback. Not "silently ignored at this layer", which is what was assumed at
+    // first and what should not be accepted on trust.
     //
     // Repeated below on the heartbeat, and that is not belt and braces: the station
     // keeps this fact inside the per-client fallback entry, and that entry is dropped a
@@ -2054,7 +2049,7 @@ async fn run_connection(
     let mut last_udp_audio: Option<Instant> = None; // last inbound audio frame over UDP
     // Said once per session in the log; the screen says it on every frame.
     let mut said_form_mismatch = false;
-    // This side's public UDP address, as the relay last said it (phase 3c). Per
+    // This side's public UDP address, as the relay last said it. Per
     // session: a new session brings a new socket, and so a new address.
     let mut public_seen: Option<SocketAddr> = None;
     // A token rotation whose new token the relay has not yet bound (and said).
@@ -2062,7 +2057,7 @@ async fn run_connection(
     // Whether the peer's last frame carried the other form. While it did, nothing
     // else paints the status green: a binary probe answer or bare traffic set
     // "authenticated, no error" over the warning, and the screen flipped between
-    // red and green every few seconds (field test 2026-10-06, review 121).
+    // red and green every few seconds (field test 2026-10-06).
     let mut form_mismatch = false;
     // Last inbound datagram over UDP of ANY kind - audio or a bare beacon. This is
     // what both edges of the fallback read, and the difference from
@@ -2123,8 +2118,8 @@ async fn run_connection(
     let mut station_fallback: HashMap<u8, StationFallback> = HashMap::new();
     let mut udp_audio_while_fallback: u64 = 0;
     // Audio frames sent while the client asking for wss is not known to read a beacon.
-    // That is the failure itself rather than its cost, and it is what stayed silent for
-    // a whole review round: the capability arrived once and was thrown away with the
+    // That is the failure itself rather than its cost, and it is what went unnoticed
+    // for a long time: the capability arrived once and was thrown away with the
     // lease fifteen seconds later.
     let mut fallback_without_beacon_reader: u64 = 0;
     // Beacons the station sends, so the extra traffic this repair adds to an idle line
@@ -2145,11 +2140,11 @@ async fn run_connection(
     // Send one round of keepalives on the token GIVEN, count them, and restart the
     // keepalive clock. The token is an argument and not read from `udp_token`: at a
     // rotation the caller hands over the token it just parsed, so the round cannot go
-    // out on the old one whatever order the lines are in - the reviewers showed that a
-    // read from the local could, and that no test sees it (round 53). The clock is
+    // out on the old one whatever order the lines are in - a read from the local
+    // could, and no test sees it. The clock is
     // restarted here for the same reason: a caller cannot forget it. A macro and not a
     // function because the socket and the counters are locals of this loop; the round
-    // itself is `keepalive_datagrams`. Counted in fitness.ps1 ($KEEPALIVE_ROUND_SITES).
+    // itself is `keepalive_datagrams`.
     macro_rules! send_keepalives {
         ($tok:expr) => {{
             if let Some(sock) = &udp_socket {
@@ -2180,7 +2175,7 @@ async fn run_connection(
     // waited for, so the loop never stands still on writing: "full is gone",
     // and QUIC sends again what it needs. Its push goes on in an arm of its own.
     //
-    // `tcp_frame_out` is what keeps it at one frame (review 145).
+    // `tcp_frame_out` is what keeps it at one frame.
     // `SplitSink::poll_ready` answers "ready" at once while its one slot is
     // empty - without asking the wss side - and `start_send` only fills that
     // slot. Tungstenite under it buffers up to its `write_buffer_size` (128 KiB)
@@ -2230,16 +2225,16 @@ async fn run_connection(
                                 udp_token = Some(t);
                                 // The relay says the address again once the new
                                 // token is bound; that line confirms the rotation
-                                // in the log (review 123).
+                                // in the log.
                                 rotation_unconfirmed = true;
-                                log::info!("Relay UDP token rotated - keepalive sent on the new token");
+                                log::info!("Relay UDP token rotated: keepalive sent on the new token");
                                 if config.quic {
                                     publish_grant(config, &udp_token, public_seen, grants, generation).await;
                                 }
                             }
                             continue;
                         } else if let Some(seen) = text.strip_prefix(RELAY_UDP_SEEN).and_then(|r| r.strip_prefix(' ')) {
-                            // Phase 3c: the relay says where our UDP comes from -
+                            // The relay says where our UDP comes from -
                             // the address the other side punches to. Into the
                             // grant of this session; never into the log (the
                             // family only: on IPv6 it is the device's own).
@@ -2279,7 +2274,7 @@ async fn run_connection(
                                 if !said_form_mismatch {
                                     said_form_mismatch = true;
                                     log::warn!(
-                                        "Relay: the {} uses {}, this side {} - the two run different versions",
+                                        "Relay: the {} uses {}, this side {}; the two run different versions",
                                         frame.role,
                                         form_name(frame.quic),
                                         form_name(config.quic)
@@ -2382,7 +2377,7 @@ async fn run_connection(
                         // can get one when the relay hands it a client id that a
                         // TCP client had a moment ago). Either way it ends here:
                         // further down it would set the status line to "peer
-                        // traffic received", once per packet (review 144).
+                        // traffic received", once per packet.
                         if config.quic {
                             if let Some((cid, payload)) = parse_tlt1(&data) {
                                 if let Some(line) = tcp.as_ref() {
@@ -2408,7 +2403,7 @@ async fn run_connection(
                                     }
                                     last_stream_in.insert(stream, now);
                                 }
-                                // Phase 3a: station intercepts a client's wss-audio fallback
+                                // Station intercepts a client's wss-audio fallback
                                 // request (per-session scope, idempotent) instead of
                                 // forwarding it to the engine.
                                 if config.role == RelayRole::Station {
@@ -2501,7 +2496,7 @@ async fn run_connection(
                                         continue;
                                     }
                                 }
-                                // Phase 3: during path overlap / TX-always-both a frame may
+                                // During path overlap / TX-always-both a frame may
                                 // arrive on BOTH wss and UDP; drop the duplicate before the
                                 // jitter buffer. Applies to both roles (client RX downlink and
                                 // station TX uplink).
@@ -2612,8 +2607,7 @@ async fn run_connection(
                         line.dropped_out.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     if tcp_dropped_said.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
-                        // Named in the brief before it was built (working rule 11, build 145).
-                        log::info!("Relay: {tcp_dropped} QUIC packets for the TCP line dropped - the line to the relay was busy");
+                        log::info!("Relay: {tcp_dropped} QUIC packets for the TCP line dropped; the line to the relay was busy");
                         tcp_dropped = 0;
                         tcp_dropped_said = Some(Instant::now());
                     }
@@ -2633,10 +2627,10 @@ async fn run_connection(
                             RelayRole::Station => client_id_from_sentinel(addr),
                             RelayRole::Client => 0,
                         };
-                        // Phase 3b transport policy (additive; both flags off = phase-2
-                        // behaviour, UDP-only for audio + wss for the rest). Per role:
+                        // Transport policy (additive; both flags off = UDP-only for
+                        // audio + wss for the rest). Per role:
                         //  - Client uplink (TX): UDP unless in fallback; wss when in fallback
-                        //    OR always during PTT (TX-always-both, safety-critical path section 14.3).
+                        //    OR always during PTT (TX-always-both: PTT is the safety-critical path).
                         //  - Station downlink (RX): always UDP (doubles as the recovery probe
                         //    during fallback); wss additionally while this client is in fallback.
                         // The receiving end de-dups, so a frame on both paths plays once.
@@ -2739,7 +2733,7 @@ async fn run_connection(
                 }
             }
             maybe_udp = recv_udp(&udp_socket, &mut udp_buf) => {
-                // Phase 2 downlink: relay delivers [client_id(1)] + AudioPacket over UDP.
+                // Downlink: relay delivers [client_id(1)] + AudioPacket over UDP.
                 if let Some(n) = maybe_udp {
                     // Test hook: pretend the network drops inbound UDP for the first N s.
                     let test_drop = test_drop_udp_secs > 0
@@ -2750,8 +2744,8 @@ async fn run_connection(
                     // and it is deliberately kept out of everything else. It is not
                     // peer liveness (that is the tunnel), it is not traffic for the
                     // retry policy to reason about, and it is certainly nothing for
-                    // the engine or the dedup window (review finding: an empty
-                    // payload must never reach either).
+                    // the engine or the dedup window (an empty payload must never
+                    // reach either).
                     if !test_drop && n >= 1 {
                         let now = Instant::now();
                         downlink_received += 1;
@@ -2774,7 +2768,7 @@ async fn run_connection(
                         last_peer_activity = Instant::now();
                         let cid = udp_buf[0];
                         let payload = &udp_buf[1..n];
-                        // Phase 3: UDP-audio health (client fallback monitor + recovery run).
+                        // UDP-audio health (client fallback monitor + recovery run).
                         // A gap longer than the stall threshold (re)starts the healthy run,
                         // so recovery only fires after continuous UDP audio (hysteresis).
                         if let Some((stream, seq)) = audio_identity(payload) {
@@ -2793,7 +2787,7 @@ async fn run_connection(
                             }
                             last_stream_in.insert(stream, now);
                         }
-                        // Phase 3: drop a frame already delivered over wss during overlap.
+                        // Drop a frame already delivered over wss during overlap.
                         let is_dup = dedup.is_duplicate(cid, payload);
                         if !is_dup {
                             if let Some(inbound) = &tunnel_inbound {
@@ -2831,7 +2825,7 @@ async fn run_connection(
                     );
                 }
 
-                // Phase 3b transport state machine (client, relay-only). Two states:
+                // Transport state machine (client, relay-only). Two states:
                 //  - UDP (fallback off): request wss if nothing arrived down the path within
                 //    the connect window, or the downlink went quiet past
                 //    FALLBACK_DOWNLINK_STALL.
@@ -2844,7 +2838,7 @@ async fn run_connection(
                 // deliberately NOT stamped at the three places that set
                 // `peer_active`: three places that must agree about one fact drift,
                 // and this one only has to be accurate to within a tick while the
-                // window it feeds is two seconds (working rule 15).
+                // window it feeds is two seconds.
                 if peer_active {
                     peer_active_since.get_or_insert_with(Instant::now);
                 } else {
@@ -2874,7 +2868,7 @@ async fn run_connection(
                             // thing of any audio at all. Both were false exactly when
                             // the path had died, which is the moment this exists for -
                             // the branch written for "UDP audio never arrived" could not
-                            // be reached at all. Six review rounds began with that.
+                            // be reached at all.
                             //
                             // Now it asks the only question that has an answer while the
                             // path is broken: has ANYTHING come down it, beacon or audio.
@@ -2884,8 +2878,8 @@ async fn run_connection(
                             // knowledge of channels is needed here.
                             //
                             // A free function, because inline it could be reverted to the
-                            // old shape with every test still green - which a review
-                            // demonstrated rather than suspected.
+                            // old shape with every test still green - which was
+                            // demonstrated, not merely suspected.
                             let stalled = downlink_stalled(
                                 peer_active_since.map(|t| t.elapsed()),
                                 last_udp_downlink,
@@ -3002,7 +2996,7 @@ async fn run_connection(
                             fallback_flips += 1;
                             set_relay_transport(status, false);
                             log::info!(
-                                "Relay fallback OFF (reason=udp-recovered flips={fallback_flips}) - back to UDP"
+                                "Relay fallback OFF (reason=udp-recovered flips={fallback_flips}): back to UDP"
                             );
                         }
                     }
@@ -3052,8 +3046,8 @@ async fn run_connection(
                     // This is the third of the three numbers the design asked for and the
                     // only one that costs nothing to observe: it happens every session,
                     // to every client, without anyone having to provoke a network switch.
-                    // It was not built, and a whole review round is what found instead
-                    // what it would have said out loud.
+                    // It was not built, and what it would have said out loud had to be
+                    // found the slow way instead.
                     station_fallback.retain(|cid, e| {
                         let alive = e.last_seen.elapsed() < FALLBACK_LEASE;
                         if !alive && bound_clients.contains(cid) {
@@ -3169,8 +3163,8 @@ struct PeerFrame {
     kind: String,
     role: String,
     seq: Option<u64>,
-    /// `proto=quic`: the peer carries QUIC via the relay. Absent on a peer of
-    /// before phase 3b, which carries TL frames.
+    /// `proto=quic`: the peer carries QUIC via the relay. Absent on an older
+    /// peer that does not carry QUIC through the relay; such a peer carries TL frames.
     quic: bool,
 }
 
@@ -3214,9 +3208,9 @@ const RELAY_UDP_SEEN: &str = "udp-seen";
 /// form is another version: that is what the user can act on.
 fn form_mismatch_message(own_quic: bool) -> String {
     if own_quic {
-        "The other side runs an older version of ThetisLink (before 2.13) - update it to this version".to_string()
+        "The other side runs an older version of ThetisLink (before 2.13): update it to this version".to_string()
     } else {
-        "The other side runs a newer version of ThetisLink (2.13 or later) - update this side".to_string()
+        "The other side runs a newer version of ThetisLink (2.13 or later): update this side".to_string()
     }
 }
 
@@ -3232,7 +3226,7 @@ async fn publish_grant(
 ) {
     let Some(grants) = grants else { return };
     let Some(tok) = token else {
-        log::warn!("Relay offers no UDP token - QUIC via the relay cannot run on this relay");
+        log::warn!("Relay offers no UDP token: QUIC via the relay cannot run on this relay");
         grants.send_replace(None);
         return;
     };
@@ -3247,7 +3241,7 @@ async fn publish_grant(
             );
         }
         Err(e) => {
-            log::warn!("Relay UDP address not resolved - QUIC via the relay waits: {e}");
+            log::warn!("Relay UDP address not resolved: QUIC via the relay waits: {e}");
             grants.send_replace(None);
         }
     }
@@ -3442,9 +3436,9 @@ fn set_status(
     // at false, so the branch that turns the flag off never ran again, and Android
     // showed "TCP fallback" from 08:36 until the app restarted at 11:36 (field,
     // 2026-09-28). Every call inside a session passes connected=true, every call
-    // outside one false (reviewers, round 43).
+    // outside one false.
     if !connected && std::mem::replace(&mut status.transport_fallback, false) {
-        log::info!("Relay transport: fallback indicator cleared - no relay session now");
+        log::info!("Relay transport: fallback indicator cleared; no relay session now");
     }
 }
 
@@ -3452,7 +3446,7 @@ fn set_status(
 ///
 /// Nothing wrote the status after a panic in the relay thread: it stayed on what
 /// the last session had set - connected, with the fallback on if it was - for good,
-/// on both screens (reviewer, round 44). The two failures before the loop starts
+/// on both screens. The two failures before the loop starts
 /// (no runtime, no thread) already report themselves the same way.
 fn run_reporting_a_panic(handle: &RelayStatusHandle, body: impl FnOnce()) -> bool {
     if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
@@ -3476,7 +3470,7 @@ fn run_reporting_a_panic(handle: &RelayStatusHandle, body: impl FnOnce()) -> boo
     false
 }
 
-/// Phase 3c: update the transport-fallback flag shown by the client indicator. Mutates only
+/// Update the transport-fallback flag shown by the client indicator. Mutates only
 /// that field, so it survives a set_status refresh within a session; `set_status` clears
 /// it when there is no session.
 fn set_relay_transport(handle: &RelayStatusHandle, fallback: bool) {
@@ -3569,12 +3563,12 @@ mod recovery_tests {
         // is long ago too: the stall limit is half a second.
         let now = Instant::now();
         // The fallback checked too: a machine up for less than ten seconds has
-        // no "long ago" to give, and then there is nothing to test (review 83).
+        // no "long ago" to give, and then there is nothing to test.
         let Some(long_ago) = now
             .checked_sub(Duration::from_secs(5760))
             .or_else(|| now.checked_sub(Duration::from_secs(10)))
         else {
-            // Said out loud, so a skip does not read like a pass (review 84).
+            // Said out loud, so a skip does not read like a pass.
             eprintln!("SKIPPED a_dead_udp_path_does_not_read_as_recovered: machine up for under ten seconds");
             return;
         };
@@ -3695,8 +3689,8 @@ mod tests {
 
     /// A session that hangs - building or running - ends on a change of
     /// network; a change from before it started does not end it; a session
-    /// that ends by itself gives its own result (builds 186, 187; review of
-    /// 186: that the change fires was seen by no test).
+    /// that ends by itself gives its own result (builds 186, 187; in
+    /// 186 that the change fires was seen by no test).
     #[tokio::test]
     async fn a_change_of_network_ends_a_session_even_while_it_is_built() {
         let (tx, mut rx) = watch::channel(0_u64);
@@ -3846,26 +3840,26 @@ mod tests").unwrap()];
         assert_eq!(body.matches("outcome.mark_traffic();").count(), 3, "the three receive paths");
         assert!(!body.contains("sleep(RECONNECT_DELAY)"), "no wait outside the decision");
         assert_eq!(body.matches("tokio::time::sleep(wait)").count(), 1, "the loop waits what was decided");
-        // The two log lines named before the build (working rule 11): the field
+        // The two log lines named before the build: the field
         // proof of this patch, so their disappearing should not go unnoticed.
-        assert!(body.contains("Relay: reconnecting at once - the session carried traffic and ended on a transport error"));
-        assert!(body.contains("Relay: the network is not up yet - trying again in {} ms"));
-        assert!(body.contains("Relay: the network came up - trying now"));
+        assert!(body.contains("Relay: reconnecting at once; the session carried traffic and ended on a transport error"));
+        assert!(body.contains("Relay: the network is not up yet; trying again in {} ms"));
+        assert!(body.contains("Relay: the network came up; trying now"));
         // The phone's network signal ends a ladder wait, and is read as seen at
         // the start of every attempt (build 98).
         assert_eq!(body.matches("network_came_up(&mut network_rx, waiting_for_the_network)").count(), 1);
         assert_eq!(body.matches("network_rx.borrow_and_update();").count(), 1);
         // A change of network ends a running session and is read as seen at
         // the start of every attempt (build 186).
-        // Seen before the session, and the session against it (review of 186,
-        // W5b: after the session a change during the wait went unseen).
+        // Seen before the session, and the session against it (in build 186,
+        // after the session a change during the wait went unseen).
         assert_eq!(body.matches("change_rx.borrow_and_update();").count(), 1);
         let order = body.find("change_rx.borrow_and_update();").unwrap();
         assert!(order < body.find("let mut outcome = SessionOutcome::default();").unwrap());
         assert!(order < body.find("let (run_result, switched) = until_network_switch(").unwrap());
         assert_eq!(body.matches("let (run_result, switched) = until_network_switch(").count(), 1);
         assert_eq!(body.matches("outcome.network_changed = switched;").count(), 1);
-        assert!(body.contains("Relay: the device's network changed - ending this session to start one on the new network"));
+        assert!(body.contains("Relay: the device's network changed; ending this session to start one on the new network"));
         assert!(body.contains("Relay: reconnecting at once on the new network"));
     }
 
@@ -3931,7 +3925,7 @@ mod tests").unwrap()];
     /// RTT and the probe beside it - rather than at the start of the next one: in
     /// between, while reconnecting, after the operator's own disconnect, or with the
     /// relay switched off, Android showed "TCP fallback" on a disconnected screen
-    /// (reviewers, round 43). And a test reaches `set_status`; a call inside
+    /// And a test reaches `set_status`; a call inside
     /// `run_connection` it could not.
     #[test]
     fn no_session_means_no_fallback_shown() {
@@ -3944,8 +3938,8 @@ mod tests").unwrap()];
         set_status(&h, RelayPhase::Authenticated, "up".into(), true, true, None, 1);
         assert!(fallback(&h), "a status change inside a session must not clear it");
         // Nor the peer timeout: still connected, the peer gone, audio still on wss.
-        // The RTT beside it clears on `peer_seen` too; this one must not (reviewer,
-        // round 44), so a tidy-up that makes the two conditions alike fails here.
+        // The RTT beside it clears on `peer_seen` too; this one must not, so a
+        // tidy-up that makes the two conditions alike fails here.
         set_status(&h, RelayPhase::WaitingForPeer, "peer gone".into(), true, false, None, 1);
         assert!(fallback(&h), "the peer timeout is inside the session");
         // The session ends: every state without one clears it.
@@ -3963,7 +3957,7 @@ mod tests").unwrap()];
     ///
     /// Nothing wrote the status after one: it stayed on whatever the last session
     /// had set - connected, and the fallback on if it was - for good, on both
-    /// screens (reviewer, round 44).
+    /// screens.
     #[test]
     fn a_panicking_monitor_leaves_no_session_on_screen() {
         let h = RelayStatusHandle {
@@ -3977,7 +3971,7 @@ mod tests").unwrap()];
         assert!(!s.connected, "a dead monitor still showed a connection");
         assert!(!s.transport_fallback, "a dead monitor still showed the fallback");
         assert!(s.message.contains("a fault somewhere in the session"), "{}", s.message);
-        // A formatted panic carries a String, not a &str (reviewer, round 45).
+        // A formatted panic carries a String, not a &str.
         let n = 7;
         assert!(run_reporting_a_panic(&h, || panic!("fault number {n}")));
         assert!(h.snapshot().message.contains("fault number 7"), "{}", h.snapshot().message);
@@ -4035,12 +4029,12 @@ mod tests").unwrap()];
     /// stopping through one reaches the monitor itself.
     ///
     /// Every other test here builds its handles with a struct literal, so none of
-    /// them ever called `stop_handle()` - and a reviewer made it hand out a fresh
-    /// channel instead of a clone with all 1205 tests still green (2026-09-25).
+    /// them ever called `stop_handle()` - and making it hand out a fresh channel
+    /// instead of a clone left all 1205 tests green (2026-09-25).
     /// That one line would undo three builds at once: `clear_slot_if_mine` never
     /// finds its own handle, `is_stopped()` stays false, and worst, the duplicate
     /// guard's `previous.stop()` sends on a dead channel and stops nothing - the
-    /// exact failure that guard exists for. My own mutations were all on the
+    /// exact failure that guard exists for. The mutations here were all on the
     /// condition, none on what the condition compares.
     #[test]
     fn stop_handle_hands_out_the_monitors_own_channel() {
@@ -4077,7 +4071,7 @@ mod tests").unwrap()];
     ///
     /// The bridge never calls `stop()` on its own monitor: it takes it out of
     /// its slot and lets it go out of scope, so `Drop` is the only stop that
-    /// path has. A reviewer took the stop signal out of `Drop` with 47 tests
+    /// path has. Taking the stop signal out of `Drop` left 47 tests
     /// still green (2026-09-25): the monitor thread would then run on after
     /// every disconnect, and `is_stopped()` would tell the next start that a
     /// live monitor is still there.
@@ -4238,7 +4232,7 @@ mod tests").unwrap()];
         // counters, so keyed on the type alone VRX2's frame N looked like VRX1's
         // frame N and was dropped - one channel silently eating the other.
         let mut w = DedupWindow::new();
-        let mut frame = |vrx_id: u8, seq: u32| {
+        let frame = |vrx_id: u8, seq: u32| {
             let mut p = vec![0u8, 0, 0x21, 0];
             p.extend_from_slice(&seq.to_be_bytes());
             p.extend_from_slice(&[0, 0, 0, 0]); // timestamp
@@ -4258,7 +4252,7 @@ mod tests").unwrap()];
         // saw seq=126 after 2568 ms, because 0..125 were dropped as repeats -
         // exactly as long as the previous session had been.
         let mut w = DedupWindow::new();
-        let mut frame = |vrx_id: u8, seq: u32| {
+        let frame = |vrx_id: u8, seq: u32| {
             let mut p = vec![0u8, 0, 0x21, 0];
             p.extend_from_slice(&seq.to_be_bytes());
             p.extend_from_slice(&[0, 0, 0, 0]);
@@ -4372,7 +4366,7 @@ mod tests").unwrap()];
 
     /// Recovery has to be reachable on a path carrying nothing but beacons.
     ///
-    /// This is the shape that a review found in the first repair: move the healthy
+    /// This is the shape of the defect in the first repair: move the healthy
     /// run onto the downlink but leave its restart threshold at the audio value, and
     /// every beacon starts a fresh run - so the run never grows, and a path that is
     /// demonstrably alive never recovers. The numbers here are the real ones.
@@ -4514,7 +4508,7 @@ mod tests").unwrap()];
     /// Everything that ever went wrong here was in the wiring, and no test could
     /// reach it: `run_connection` is called once, from production, and no test calls
     /// it - so a mutation anywhere in that block survived the entire suite by
-    /// construction. A review made that argument and it is stronger than the three
+    /// construction. That argument is stronger than the three
     /// mutation runs offered against it.
     #[test]
     fn an_absence_opens_once_and_closes_once() {
@@ -4586,7 +4580,7 @@ mod tests").unwrap()];
     /// The first version had one ending for both. A stalled path makes the condition
     /// false exactly as audio returning does, so "UDP audio is back" was written on
     /// the very pass where the fallback fires - the two lines land next to each other
-    /// in the log, the first one the opposite of the truth. Found in review.
+    /// in the log, the first one the opposite of the truth.
     #[test]
     fn a_broken_path_does_not_report_audio_returning() {
         let quiet = FALLBACK_DOWNLINK_STALL + Duration::from_millis(1);
@@ -4613,7 +4607,7 @@ mod tests").unwrap()];
 
     /// Two episodes in one session, no restart between them.
     ///
-    /// Working rule 9. The second episode has to behave exactly like the first: open
+    /// The second episode has to behave exactly like the first: open
     /// once, stay quiet, close once.
     #[test]
     fn a_second_absence_behaves_like_the_first() {
@@ -4677,7 +4671,7 @@ mod tests").unwrap()];
     /// The window used to count from the moment the relay tunnel stood, and the
     /// peer handshake lands after that - six seconds after, in the field log of
     /// 2026-09-23. So every fresh connect declared "UDP blocked" two seconds in,
-    /// before anything could have sent, and the owner saw the fallback indicator
+    /// before anything could have sent, and the fallback indicator showed
     /// on every start.
     #[test]
     fn without_a_peer_there_is_nothing_to_accuse() {
@@ -4950,7 +4944,7 @@ mod chat_ticket_tests {
     }
 }
 
-/// QUIC via the relay (phase 3b): what the monitor does in that mode, against a
+/// QUIC via the relay: what the monitor does in that mode, against a
 /// relay played over a real ws connection on loopback.
 #[cfg(test)]
 mod quic_mode {
@@ -5058,7 +5052,7 @@ mod quic_mode {
         // the TLT1 frame after it ended at the line.
         let said = status.state.lock().unwrap().message.clone();
         assert_eq!(said, "Relay peer traffic received: 23 bytes", "a TLT1 frame ends at the line, not in the status");
-        // Twice (rule 9): the second frame goes too once the first has left.
+        // Twice: the second frame goes too once the first has left.
         for word in [&b"up"[..], &b"up again"[..]] {
             line.to_relay.send(tlt1_frame(0, word)).await.unwrap();
             let out = tokio::time::timeout(Duration::from_secs(5), async {
@@ -5078,7 +5072,7 @@ mod quic_mode {
 
     /// A QUIC monitor without a TCP line (a status monitor) drops a TLT1 frame
     /// quietly: the relay can hand it a client id a TCP client had a moment
-    /// before, and each frame used to set the status line (review 144).
+    /// before, and each frame used to set the status line.
     #[tokio::test]
     async fn a_quic_monitor_without_a_line_drops_tlt1_quietly() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5180,7 +5174,7 @@ mod quic_mode {
     /// TCP line's frames are dropped while one is still on its way out, so the
     /// loop goes on reading - here, TLT1 frames keep reaching the line while
     /// the line out is flooded. Before, `write.send(..).await` stood still on a
-    /// full socket, and so did everything else (reviews 144).
+    /// full socket, and so did everything else.
     #[tokio::test]
     async fn a_relay_that_does_not_read_does_not_stop_the_monitor() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5237,7 +5231,7 @@ mod quic_mode {
         }
         flood.abort();
         // And it bounded: frames were dropped rather than piled up in the
-        // wss side's buffer (review 145: without "one at a time" every test
+        // wss side's buffer (without "one at a time" every test
         // stayed green while that buffer grew).
         assert!(line.dropped_out.load(std::sync::atomic::Ordering::Relaxed) > 0, "nothing dropped under the flood");
         let _ = stx.send(true);
@@ -5304,14 +5298,14 @@ mod quic_mode {
         mismatch_is_named("TLR2 kind=hello role=station", true, "runs an older version of ThetisLink").await;
     }
 
-    /// And the other way round: a QUIC peer against this classic side (review
-    /// 118: the check had run in one direction).
+    /// And the other way round: a QUIC peer against this classic side (the
+    /// check had once run in one direction only).
     #[tokio::test]
     async fn a_quic_peer_is_named_on_the_classic_side() {
         mismatch_is_named("TLR2 kind=hello role=station proto=quic", false, "runs a newer version of ThetisLink").await;
     }
 
-    /// The relay's `udp-seen` line (phase 3c) lands in the grant of the session
+    /// The relay's `udp-seen` line lands in the grant of the session
     /// as this side's public address, and it is relay infrastructure: no peer
     /// traffic, so the status does not turn "peer online" on it.
     #[tokio::test]
@@ -5352,7 +5346,7 @@ mod quic_mode {
 
     /// A peer's frame that arrives before the relay's OK is no answer: the
     /// relay puts the connection in the room before it sends the OK, so the
-    /// other side's status or probe can come first (review 124, measured). The
+    /// other side's status or probe can come first (measured). The
     /// sign-in waits for the OK and the session runs - the public address still
     /// reaches the grant - instead of reading the frame as a rejection.
     #[tokio::test]
@@ -5395,7 +5389,7 @@ mod quic_mode {
     /// after its frame of the other form does not paint the status green again
     /// (field test 2026-10-06: it flipped between red and green), and neither
     /// does the answer to this side's binary probe, which goes out once a
-    /// second - so the test watches for longer than that (review 122: the probe
+    /// second - so the test watches for longer than that (the probe
     /// branch was run by no test).
     #[tokio::test]
     async fn the_form_warning_is_not_painted_over() {
@@ -5449,7 +5443,7 @@ mod quic_mode {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert!(seen, "the warning never came");
-        assert!(probes_rx.try_recv().is_ok(), "no probe was answered in the window - the probe branch was not run");
+        assert!(probes_rx.try_recv().is_ok(), "no probe was answered in the window: the probe branch was not run");
         let (phase, error) = {
             let st = status.state.lock().unwrap();
             (st.phase.clone(), st.last_error.clone())
@@ -5493,7 +5487,7 @@ mod quic_mode {
     /// Every relay line this library reads is one the relay refuses to forward
     /// from a peer: the word stands in `thetislink-relay` as a `LINE_` constant,
     /// and that constant is in its `RELAY_LINES`. Two programs, so a test between
-    /// them (working rule 15; review 123).
+    /// them.
     #[test]
     fn the_relay_refuses_every_line_this_library_reads() {
         let relay = include_str!("../../thetislink-relay/src/main.rs");
@@ -5503,7 +5497,7 @@ mod quic_mode {
             .expect("the relay has its RELAY_LINES");
         // The words this library reads, from its own source - every
         // `const RELAY_<...>: &str = "<word>";` - not from a second list that
-        // could leave one out (review 124: such a list kept the suite green with
+        // could leave one out (such a list kept the suite green with
         // udp-seen gone from both sides).
         let words: Vec<&str> = include_str!("lib.rs")
             .lines()
@@ -5524,7 +5518,7 @@ mod quic_mode {
     /// The TLU1 header is defined twice: here (the apps) and in the relay on the
     /// VPS (`thetislink-relay`, its own program). Since build 117 the QUIC
     /// route layer's MTU ceiling counts on its length, so the two are compared:
-    /// the relay's source is read and its constants must be these (review 117).
+    /// the relay's source is read and its constants must be these.
     #[test]
     fn the_tlu1_header_matches_the_relay_on_the_vps() {
         let relay = include_str!("../../thetislink-relay/src/main.rs");
@@ -5566,11 +5560,11 @@ mod quic_mode {
         assert_eq!(first_and_ipv4([v4, v6]), Some((v4, None)), "an IPv4 first needs nothing beside it");
         assert_eq!(first_and_ipv4([v6]), Some((v6, None)), "no IPv4 to fall back to");
         assert_eq!(first_and_ipv4(Vec::new()), None);
-        // Two IPv4 addresses: the second is no fallback for the first (review 120).
+        // Two IPv4 addresses: the second is no fallback for the first.
         let v4b: SocketAddr = "192.0.2.34:443".parse().unwrap();
         assert_eq!(first_and_ipv4([v4, v4b, v6]), Some((v4, None)));
         // The word the log lines carry - the field test reads the hypothesis of
-        // 119 off it, so a wrong one would give a wrong verdict (review 120).
+        // 119 off it, so a wrong one would give a wrong verdict.
         assert_eq!((family(v4), family(v6)), ("IPv4", "IPv6"));
     }
 
@@ -5650,8 +5644,7 @@ mod quic_mode {
     ));
 
     /// The two classic constructors sign in in the classic form, whatever the
-    /// config says: QUIC mode without a grant receiver would publish nothing
-    /// (review 118).
+    /// config says: QUIC mode without a grant receiver would publish nothing.
     #[test]
     fn the_classic_constructors_sign_in_classic() {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

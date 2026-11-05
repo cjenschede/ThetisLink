@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hoe een VRX werkt — van radiogolf tot geluid</title>
+<title>Hoe een VRX werkt: van radiogolf tot geluid</title>
 <style>
   :root{
     --bg:#0f1320; --panel:#171c2e; --ink:#e8ecf6; --muted:#9aa6c4;
@@ -69,7 +69,7 @@
 <body>
 <header>
   <h1>Hoe een VRX werkt</h1>
-  <p>Van een brede &ldquo;foto&rdquo; van de band naar het geluid in je koptelefoon —
+  <p>Van een brede &ldquo;foto&rdquo; van de band naar het geluid in je koptelefoon:
   een uitleg in gewone taal voor wie geen DSP-achtergrond heeft. Met plaatjes.</p>
   <p style="margin-top:10px;font-size:14px"><b>Nederlands</b> &nbsp;·&nbsp; <a href="VRX-explained.html">English</a></p>
 </header>
@@ -81,7 +81,7 @@
   <p class="lead">Een <b>VRX</b> (virtual receiver, &ldquo;virtuele ontvanger&rdquo;) maakt van
   één brede stroom radio-data in principe zoveel onafhankelijke ontvangers als je wilt. De SDR digitaliseert
   in één keer een hele band. De server houdt die brede stroom vast en &ldquo;knipt&rdquo; er voor
-  elke luisteraar een eigen smal stukje uit — ieder op zijn eigen frequentie, mode en bandbreedte.
+  elke luisteraar een eigen smal stukje uit: ieder op zijn eigen frequentie, mode en bandbreedte.
   Niemand zit elkaar in de weg.</p>
 
   <div class="analogy"><b>Analogie.</b> Stel je een satellietfoto van een hele stad voor.
@@ -113,7 +113,7 @@
       <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
         <path d="M0,0 L7,3 L0,6 Z" fill="#4ea1ff"/></marker></defs>
     </svg>
-    <div class="cap">Figuur 1 — De hele keten in één oogopslag. Elk blok wordt hieronder uitgelegd.</div>
+    <div class="cap">Figuur 1: De hele keten in één oogopslag. Elk blok wordt hieronder uitgelegd.</div>
   </div>
 </section>
 
@@ -122,20 +122,20 @@
   <nav class="toc">
     <a href="#iq">1. Van radiogolf naar getallen (IQ)</a>
     <a href="#wide">2. Het brede, ongefilterde signaal</a>
-    <a href="#fft">3. De FFT — tijd wordt frequentie</a>
+    <a href="#fft">3. De FFT: tijd wordt frequentie</a>
     <a href="#bins">4. Het spectrum in kleine stukjes (bins)</a>
-    <a href="#window">5. Windowing — de randen afzwakken</a>
+    <a href="#window">5. Windowing: de randen afzwakken</a>
     <a href="#complex">6. Eén complexe FFT (I én Q)</a>
     <a href="#pick">7. Je wilt maar een klein stukje</a>
-    <a href="#ifft">8. De iFFT — terug naar geluid</a>
+    <a href="#ifft">8. De iFFT: terug naar geluid</a>
     <a href="#practice">9. In de praktijk: vaste rate + nullen = filter</a>
     <a href="#nco">10. Fijntunen onder de bin (NCO)</a>
     <a href="#demod">11. Demodulatie per mode</a>
-    <a href="#agc">12. AGC — automatisch volume</a>
+    <a href="#agc">12. AGC: automatisch volume</a>
     <a href="#rate">13. Smalband vs breedband (8 / 16 kHz)</a>
-    <a href="#ola">14. Overlap-add — naadloos geluid</a>
+    <a href="#ola">14. Overlap-add: naadloos geluid</a>
     <a href="#spectrum">15. Het spectrum-/watervalbeeld</a>
-    <a href="#smeter">16. Signaalsterkte — de S-meter</a>
+    <a href="#smeter">16. Signaalsterkte: de S-meter</a>
     <a href="#why">17. Waarom dit zo krachtig is</a>
     <a href="#filter">18. Filtereigenschappen in detail</a>
   </nav>
@@ -145,7 +145,7 @@
   <h2>1. Van radiogolf naar getallen (IQ)</h2>
   <p>Een moderne SDR (Software Defined Radio) zet een breed stuk van de band rechtstreeks om in
   getallen. Per moment meet hij twee waarden, <b>I</b> en <b>Q</b> genoemd. Samen beschrijven die
-  niet alleen <i>hoe sterk</i> het signaal is, maar ook de <i>fase</i> ervan — en juist die fase
+  niet alleen <i>hoe sterk</i> het signaal is, maar ook de <i>fase</i> ervan, en juist die fase
   hebben we straks nodig om frequenties en modulatie te herkennen.</p>
   <div class="analogy"><b>Analogie.</b> I en Q zijn als de x- en y-positie van een wijzer op een klok.
   Eén getal (alleen sterkte) zegt hoe lang de wijzer is; twee getallen (I én Q) zeggen ook
@@ -154,26 +154,26 @@
 
 <section id="wide">
   <h2>2. Het brede, ongefilterde signaal</h2>
-  <p>Het begint met een <b>ongefilterd tijdsignaal</b>, en dat is <b>breed</b> — in ons geval tot
+  <p>Het begint met een <b>ongefilterd tijdsignaal</b>, en dat is <b>breed</b>: in ons geval tot
   wel <b>1,536 MHz</b> breed. Dat is een snelle stroom I/Q-paren (ruim anderhalf miljoen per
   seconde) waarin álles zit wat er op dat stuk band te horen is: alle stations door elkaar, sterk
   en zwak, naast en boven elkaar. Op dit moment is er nog niets uitgefilterd; het is de complete,
   brede &ldquo;foto&rdquo; van de band.</p>
   <p>Ons doel: hier straks één smal radiokanaal uit halen (bijvoorbeeld een SSB-signaal van 3 kHz),
   netjes gefilterd, klaar om te beluisteren. Daarvoor moeten we eerst weten <i>waar</i> de
-  frequenties zitten — en dat is precies wat de FFT doet.</p>
+  frequenties zitten, en dat is precies wat de FFT doet.</p>
 </section>
 
 <section id="fft">
-  <h2>3. De FFT — tijd wordt frequentie</h2>
+  <h2>3. De FFT: tijd wordt frequentie</h2>
   <p>Het brede signaal is een verloop in de <b>tijd</b>. Maar wij willen weten <i>welke frequenties</i>
-  erin zitten — waar de stations staan. Daarvoor gaat het hele signaal door een <b>FFT</b>, die het
+  erin zitten, waar de stations staan. Daarvoor gaat het hele signaal door een <b>FFT</b>, die het
   tijddomein omzet naar het frequentiedomein (precies het beeld van een spectrumanalyzer).</p>
 
   <p><b>FFT</b> staat voor <b>Fast Fourier Transform</b> (snelle Fourier-transformatie). Fourier is
   een rekenkundige manier om van het tijddomein naar het frequentiedomein om te zetten. Het is een
   <b>omzetting naar een andere presentatie</b>: dezelfde informatie, anders weergegeven. Er gaat
-  niets verloren en er komt niets bij — het signaal &ldquo;in de tijd&rdquo; en hetzelfde signaal
+  niets verloren en er komt niets bij: het signaal &ldquo;in de tijd&rdquo; en hetzelfde signaal
   &ldquo;in frequentie&rdquo; bevatten exact dezelfde informatie.</p>
 
   <p>Omdat dit een wiskundig rekenmodel is, kost de omzetting wat <b>rekentijd</b>, en je hebt eerst
@@ -182,9 +182,9 @@
 
   <div class="analogy"><b>Analogie.</b> Een <b>prisma</b> splitst wit licht in een regenboog van
   kleuren. De FFT is het prisma voor radio: ze splitst het signaal in al zijn frequenties. Het licht
-  vóór en ná het prisma is hetzelfde licht — alleen anders gepresenteerd.</div>
+  vóór en ná het prisma is hetzelfde licht: alleen anders gepresenteerd.</div>
 
-  <h3>Eenzelfde signaal — in de tijd én in frequentie</h3>
+  <h3>Eenzelfde signaal: in de tijd én in frequentie</h3>
   <p>Een paar bekende signalen, links zoals ze er in de tijd uitzien, rechts hoe diezelfde signalen
   er in het frequentiedomein uitzien:</p>
 
@@ -239,7 +239,7 @@
         <rect x="560" y="312" width="10" height="8"/><rect x="590" y="314" width="10" height="6"/></g>
       <text x="540" y="280" text-anchor="middle" class="mut">grondtoon + álle harmonischen</text>
     </svg>
-    <div class="cap">Figuur 2 — Hetzelfde signaal, twee presentaties. Een zuivere sinus is één enkele
+    <div class="cap">Figuur 2: Hetzelfde signaal, twee presentaties. Een zuivere sinus is één enkele
     frequentie; een korte impuls bevat juist álle frequenties tegelijk; blok en zaagtand zijn een
     grondtoon plus een reeks harmonischen. Die korte, krachtige impuls herken je in de praktijk als
     <b>bliksem / atmosferische ontlading</b>: één heel kort signaal dat alle frequenties tegelijk bevat,
@@ -266,19 +266,19 @@
     frequentie <code>k</code> aanwezig is, de <b>hoek</b> is de fase. Bin <code>k</code> hoort bij
     frequentie <code>f<sub>k</sub> = k &middot; F<sub>s</sub> / N</code> (met <code>F<sub>s</sub></code>
     de samplerate); bins boven <code>N/2</code> tellen als negatieve frequenties (§6).</p>
-    <p>De kern is de term <code>e<sup>&minus;j&middot;2&pi;&middot;k&middot;n/N</sup></code> — via Euler
+    <p>De kern is de term <code>e<sup>&minus;j&middot;2&pi;&middot;k&middot;n/N</sup></code>: via Euler
     <code>e<sup>j&theta;</sup> = cos&theta; + j&middot;sin&theta;</code> is dat precies een ronddraaiende
     wijzer met snelheid <code>k</code>. De FFT vergelijkt het signaal in feite met al die
     draaisnelheden tegelijk en telt op waar ze &ldquo;meelopen&rdquo;. De <b>snelle</b> in FFT is een
     slim rekenschema dat dit in <code>N&middot;log N</code> stappen doet in plaats van
-    <code>N&sup2;</code> — het efficiëntst als <code>N</code> een macht van 2 is (§8).</p>
+    <code>N&sup2;</code>: het efficiëntst als <code>N</code> een macht van 2 is (§8).</p>
     <p class="lead">In deze keten draait de heen-FFT op de brede blokgrootte <code>N<sub>fft</sub></code>
     (na vermenigvuldiging met het Hann-venster, §5); na het selecteren/nullen van bins (§7, §9) draait
     de terug-iFFT op de kleinere maat <code>N<sub>ifft</sub></code> (128 of 256).</p>
     <p class="lead">Eén waarschuwing als je dit naast de broncode legt: de textbook-iFFT hierboven
     deelt door <code>N</code>, maar de implementatie schaalt met een vaste factor
     <code>1/N<sub>fft</sub></code> (niet <code>1/N<sub>ifft</sub></code>). Het uiteindelijke niveau
-    wordt toch door de AGC gezet, dus die exacte schaalfactor is niet kritisch — maar reken er niet
+    wordt toch door de AGC gezet, dus die exacte schaalfactor is niet kritisch, maar reken er niet
     klakkeloos <code>1/N</code> voor.</p>
   </details>
 </section>
@@ -300,7 +300,7 @@
     </svg>
   </div>
 
-  <p>Dat is dus een <b>grote</b> FFT. (Bij een smallere band — bijvoorbeeld 384 kHz — is het navenant
+  <p>Dat is dus een <b>grote</b> FFT. (Bij een smallere band (bijvoorbeeld 384 kHz) is het navenant
   kleiner: 384 000 / 62,5 = 6.144 punten.) De bin-grootte blijft bewust altijd 62,5 Hz, ongeacht de
   bandbreedte, zodat de rest van de rekenkunde eenvoudig en consistent blijft.</p>
 
@@ -333,27 +333,27 @@
       <text x="170" y="34" text-anchor="middle" fill="#ffb454">1 bin = 62,5 Hz</text>
       <text x="378" y="135" text-anchor="middle" class="mut">frequentie →</text>
     </svg>
-    <div class="cap">Figuur 3 — Het spectrum opgedeeld in bins van elk 62,5 Hz.</div>
+    <div class="cap">Figuur 3: Het spectrum opgedeeld in bins van elk 62,5 Hz.</div>
   </div>
 </section>
 
 <section id="window">
-  <h2>5. Windowing — de randen afzwakken</h2>
+  <h2>5. Windowing: de randen afzwakken</h2>
   <p>De FFT werkt op een blok samples dat we er hard uitknippen. Daarmee springt het signaal aan het
   <b>begin</b> abrupt van <b>0</b> naar zijn eerste waarde, en aan het <b>einde</b> stopt het net zo
   abrupt weer terug naar 0. Dat zijn twee <b>stappen</b>.</p>
   <p>En je zag in §3 al wat een stap volgens Fourier betekent: een <b>brede waaier aan
-  harmonischen</b> (denk aan de stap en het blok in figuur 2). Precies die kunstmatige harmonischen —
-  veroorzaakt door de abrupte randen, niet door het signaal zelf — smeren energie uit over bins die
+  harmonischen</b> (denk aan de stap en het blok in figuur 2). Precies die kunstmatige harmonischen
+(veroorzaakt door de abrupte randen, niet door het signaal zelf) smeren energie uit over bins die
   er niet horen. Dat is <b>spectrale lekkage</b>. Hoe groter de waarde waar het blok begint of
   eindigt, hoe groter de stap en hoe erger de lekkage.</p>
   <p>De oplossing: vermenigvuldig het blok met een zachte curve die aan béide randen vloeiend
   <b>naar 0</b> loopt (een <b>Hann</b>-venster). Dan is er geen abrupte stap meer aan begin en
   einde → veel minder kunstmatige harmonischen → een veel schoner spectrum. (Helemaal lekvrij wordt
-  het niet — het venster heeft zelf ook een vorm — maar de lekkage zakt drastisch.)</p>
+  het niet (het venster heeft zelf ook een vorm) maar de lekkage zakt drastisch.)</p>
   <div class="fig">
     <svg viewBox="0 0 760 198" role="img" aria-label="Windowing">
-      <text x="190" y="24" text-anchor="middle">harde knip — begint op +1, eindigt op −1</text>
+      <text x="190" y="24" text-anchor="middle">harde knip: begint op +1, eindigt op −1</text>
       <rect x="60" y="40" width="264" height="64" fill="none" stroke="#ff7a7a" stroke-dasharray="4 3"/>
       <!-- 0-niveau buiten het blok -->
       <line x1="40" y1="70" x2="60" y2="70" stroke="#566187" stroke-width="2"/>
@@ -380,22 +380,22 @@
       <text x="190" y="188" text-anchor="middle" class="mut">tijd →</text>
       <text x="570" y="188" text-anchor="middle" class="mut">tijd →</text>
     </svg>
-    <div class="cap">Figuur 4 — Links: 5,5 golven die op +1 beginnen en op −1 eindigen. Het blok start
+    <div class="cap">Figuur 4: Links: 5,5 golven die op +1 beginnen en op −1 eindigen. Het blok start
     dus met een grote stap van 0 naar +1 en stopt met een grote stap van −1 naar 0; grote stappen =
     sterke harmonischen = veel lekkage. Rechts: het Hann-venster zwakt béide randen vloeiend naar 0 af
     → geen abrupte stap, veel minder lekkage.</div>
   </div>
   <div class="tl"><b>In ThetisLink.</b> Zowel de audio-channelizer als het spectrumbeeld gebruiken een
   Hann-venster. De audio-channelizer overlapt opeenvolgende blokken voor 50% (zie §14); het
-  spectrumbeeld overlapt nog sterker — <b>~87,5%</b> (een hop van ⅛ blok) — voor een vloeiender beeld.</div>
+  spectrumbeeld overlapt nog sterker (<b>~87,5%</b> (een hop van ⅛ blok)) voor een vloeiender beeld.</div>
   <details>
     <summary>Voor de liefhebber: waarom het spectrumbeeld zóveel overlapt</summary>
     <p>Het venster zwakt de blokranden naar 0 af, dus een gebeurtenis die nét bij een rand valt, telt in
     dát blok bijna niet mee. Door 8× zo vaak een FFT te maken (a) valt elk stukje signaal in mínstens
-    één blok dicht bij het midden — volle weging, niets gaat structureel verloren — en (b) krijg je veel
+    één blok dicht bij het midden (volle weging, niets gaat structureel verloren) en (b) krijg je veel
     meer watervalregels per seconde: vloeiender beeld én fijnere tijd-resolutie, zodat korte pieken
-    (CW-punten, een bliksem-impuls, een diepe fade) niet gemist worden. Het spectrumbeeld hoeft — anders
-    dan de channelizer — geen audio te reconstrueren, dus die extra overlap mag puur voor het beeld; de
+    (CW-punten, een bliksem-impuls, een diepe fade) niet gemist worden. Het spectrumbeeld hoeft (anders
+    dan de channelizer) geen audio te reconstrueren, dus die extra overlap mag puur voor het beeld; de
     enige prijs is wat meer rekenwerk.</p>
   </details>
 </section>
@@ -404,19 +404,19 @@
   <h2>6. Eén complexe FFT (I én Q)</h2>
   <div class="q"><b>Veelgestelde vraag.</b> Gaat dit allemaal in één FFT?</div>
   <p>Ons tijdsignaal is <b>complex</b>: het bestaat uit I én Q samen (<code>I + jQ</code>, §1).
-  Daarom gebruiken we een <b>complexe FFT</b> — die verwerkt I en Q samen in één bewerking.</p>
-  <p>En of je het nu <i>implementeert</i> als twee gewone (reële) FFT's — één voor I en één voor Q —
+  Daarom gebruiken we een <b>complexe FFT</b>, die verwerkt I en Q samen in één bewerking.</p>
+  <p>En of je het nu <i>implementeert</i> als twee gewone (reële) FFT's (één voor I en één voor Q)
   of als één complexe FFT, maakt voor het eindresultaat <b>niets uit</b>: de uitkomst is exact
   hetzelfde, mits je de twee uitkomsten correct <b>combineert</b> (de I-uitkomst plus j × de
   Q-uitkomst). Alleen de implementatie verschilt; de complexe FFT is simpelweg de natuurlijke,
   compacte vorm voor een complex (I/Q) signaal.</p>
   <p>Waarom we sowieso I én Q nodig hebben: alleen mét beide kan de FFT <b>positieve en negatieve
-  frequenties uit elkaar houden</b> — de frequenties <i>boven</i> en <i>onder</i> het afstempunt
+  frequenties uit elkaar houden</b>; de frequenties <i>boven</i> en <i>onder</i> het afstempunt
   apart zien. Met alleen de sterkte (één reëel getal) wordt het spectrum symmetrisch en kun je links
   en rechts van het midden niet onderscheiden; voor een SDR is dat onbruikbaar, want daar staan
   verschillende stations.</p>
   <div class="analogy"><b>Analogie.</b> Met alleen sterkte weet je hoe hard iemand roept, maar niet
-  of het van links of rechts komt. Met I én Q hoor je het verschil tussen links en rechts — tussen
+  of het van links of rechts komt. Met I én Q hoor je het verschil tussen links en rechts: tussen
   frequenties boven en onder het midden.</div>
 </section>
 
@@ -424,22 +424,22 @@
   <h2>7. Je wilt maar een klein stukje</h2>
   <p>Na de FFT hebben we heel veel kleine stukjes spectrum (bins). Maar je bent maar in een <b>heel
   klein deel</b> geïnteresseerd: één radiokanaal. Een SSB-signaal is bijvoorbeeld zo'n <b>3 kHz</b>
-  breed — dat zijn maar een handvol bins (3000 / 62,5 ≈ 48 bins) uit de vele duizenden.</p>
+  breed, dat zijn maar een handvol bins (3000 / 62,5 ≈ 48 bins) uit de vele duizenden.</p>
   <p>Alle andere bins willen we kwijt. Hoe we van die paar gewenste bins weer hoorbaar geluid maken,
   zien we nu.</p>
 </section>
 
 <section id="ifft">
-  <h2>8. De iFFT — terug naar geluid</h2>
+  <h2>8. De iFFT: terug naar geluid</h2>
   <p>Frequenties kun je niet horen; we moeten terug naar een signaal in de <b>tijd</b>. Dat doet de
   <b>inverse FFT</b> (iFFT): precies de omgekeerde bewerking van de FFT. We nemen alléén de bins die
   we willen horen en stoppen die in een iFFT.</p>
   <p>De iFFT rekent het efficiëntst als je een <b>2-macht</b> aantal punten neemt (32, 64, 128, 256,
   …). Dus: neem het aantal bins dat je wilt horen en rond dat <b>naar boven af naar de
   dichtstbijzijnde 2-macht</b>. Dat is het <i>minimale</i> idee; in de praktijk kiest ThetisLink om
-  praktische redenen een iets ruimere, <b>vaste</b> maat — waarom dat handig is lees je in §9.</p>
+  praktische redenen een iets ruimere, <b>vaste</b> maat: waarom dat handig is lees je in §9.</p>
   <p>Het resultaat is de informatie van uitsluitend dat stukje frequentie, weer omgezet naar een
-  tijdsignaal — het vertrouwde I/Q-signaal. Netjes gefilterd tot ongeveer de band die je wilde horen,
+  tijdsignaal: het vertrouwde I/Q-signaal. Netjes gefilterd tot ongeveer de band die je wilde horen,
   én met een <b>veel lagere sample-rate</b> (want we gingen van miljoenen bins terug naar een paar
   honderd). De FFT + iFFT samen doen dus meteen ook de <b>decimatie</b>: het terugbrengen van de hoge
   IQ-snelheid naar een lage audiosnelheid.</p>
@@ -454,7 +454,7 @@
   <ul>
     <li>We willen een <b>vaste, nette sample-rate</b> die mooi aansluit op de verdere audioverwerking
     in de computer.</li>
-    <li>We willen de <b>bandbreedte snel kunnen variëren</b> — bijvoorbeeld door in het spectrum de
+    <li>We willen de <b>bandbreedte snel kunnen variëren</b>: bijvoorbeeld door in het spectrum de
     filterrand te slepen.</li>
   </ul>
   <p>Daarom nemen we niet exact &ldquo;de bins die we willen horen&rdquo;, maar een vast aantal bins
@@ -463,14 +463,14 @@
   dat is meteen een keurige 2-macht.)</p>
   <p>Vervolgens <b>zetten we in die iFFT nullen</b> op alle frequenties die we niet willen horen. Wat
   overblijft is in de tijd een keurig tot ~3 kHz gefilterd signaal, én tegelijk een constante
-  sample-rate van 8 kS/s. <b>Het op nul zetten ís dus het filter</b> — vlijmscherp, want we knippen
+  sample-rate van 8 kS/s. <b>Het op nul zetten ís dus het filter</b>: vlijmscherp, want we knippen
   exact op bin-grenzen.</p>
   <p>Wil je een <b>breder of smaller</b> stukje horen? Dan vul je simpelweg meer of minder nullen op
   de juiste plek in de iFFT. Méér bins open = bredere doorlaat; meer nullen = smaller. Zo verander je
   je bandbreedte direct, zonder iets aan de sample-rate te veranderen.</p>
   <div class="fig">
     <svg viewBox="0 0 760 204" role="img" aria-label="Vaste iFFT met nullen als filter (USB: doorlaat grenst aan de draaggolf)">
-      <text x="380" y="22" text-anchor="middle" class="mut">de 128-bins iFFT (= 8 kHz, vaste rate) — USB-voorbeeld</text>
+      <text x="380" y="22" text-anchor="middle" class="mut">de 128-bins iFFT (= 8 kHz, vaste rate): USB-voorbeeld</text>
       <line x1="40" y1="125" x2="720" y2="125" stroke="#26304d"/>
       <!-- draaggolf / 0 Hz-marker aan de linkerrand (label in de legenda) -->
       <line x1="44" y1="40" x2="44" y2="128" stroke="#ffb454" stroke-width="1.5"/>
@@ -500,7 +500,7 @@
       <line x1="300" y1="186" x2="300" y2="198" stroke="#ffb454" stroke-width="1.5"/>
       <text x="308" y="196" text-anchor="start" fill="#ffb454" font-size="11">= draaggolf (0 Hz), op index 0 (links)</text>
     </svg>
-    <div class="cap">Figuur 5 — Een vaste iFFT (hier 128 bins = 8 kHz). De doorlaat <b>grenst aan de
+    <div class="cap">Figuur 5: Een vaste iFFT (hier 128 bins = 8 kHz). De doorlaat <b>grenst aan de
     draaggolf</b> (0 Hz, links): bij <b>USB</b> hou je de bins net erboven (de laagste audiofrequenties)
     en nul je de rest. Méér of minder nullen = bredere of smallere bandbreedte. (LSB is het spiegelbeeld
     aan de andere kant; AM houdt beide.)</div>
@@ -513,7 +513,7 @@
 <section id="nco">
   <h2>10. Fijntunen onder de bin (de NCO)</h2>
   <p>Eén probleem: bins liggen op een vast raster van 62,5 Hz. Maar een SSB-station staat bijna nooit
-  precies op zo'n rasterpunt — en 62,5 Hz ernaast klinkt een stem al duidelijk te hoog of te laag. We
+  precies op zo'n rasterpunt, en 62,5 Hz ernaast klinkt een stem al duidelijk te hoog of te laag. We
   moeten dus fijner kunnen afstemmen dan het bin-raster toelaat.</p>
   <div class="analogy"><b>Analogie.</b> De bins brengen je naar het dichtstbijzijnde
   <b>parkeervak</b> (op 62,5 Hz). Maar je wilt voor de déur staan. De <b>NCO</b> is het laatste stukje
@@ -539,30 +539,30 @@
       <defs><marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
         <path d="M0,0 L7,3 L0,6 Z" fill="#3ddc97"/></marker></defs>
     </svg>
-    <div class="cap">Figuur 6 — De bin brengt je vlakbij; de NCO schuift het laatste restje (maximaal een halve bin).</div>
+    <div class="cap">Figuur 6: De bin brengt je vlakbij; de NCO schuift het laatste restje (maximaal een halve bin).</div>
   </div>
   <p>Een NCO (numerically controlled oscillator) is in feite een klein, perfect zuiver toontje dat we
   tegen ons signaal aan vermenigvuldigen. Daardoor verschuift het hele signaal precies zoveel Hz als
-  we willen — vloeiend, zonder klikken, en met willekeurig fijne precisie.</p>
+  we willen: vloeiend, zonder klikken, en met willekeurig fijne precisie.</p>
 </section>
 
 <section id="demod">
-  <h2>11. Demodulatie — geluid uit het signaal halen</h2>
+  <h2>11. Demodulatie: geluid uit het signaal halen</h2>
   <p>We hebben nu een schoon, smal I/Q-signaal op de juiste frequentie. <b>Demodulatie</b> haalt daar
   het hoorbare geluid uit, en dat gaat per mode net even anders, omdat de informatie er anders in
   verstopt zit.</p>
-  <h3>SSB (USB / LSB) — gewoon de echte kant</h3>
+  <h3>SSB (USB / LSB): gewoon de echte kant</h3>
   <p>Bij enkelzijband zit de spraak rechtstreeks in het signaal zodra het naar nul-frequentie is
   geschoven (dat deden de bin-selectie en de NCO al). Het geluid is simpelweg het <b>reële deel</b>
   van het signaal. Bovenste (USB) of onderste (LSB) zijband bepaalde je al door te kiezen wélke bins
   je hield.</p>
-  <h3>AM — de omhullende aflezen</h3>
-  <p>Bij AM zit de informatie in de <b>sterkte</b> (amplitude). We meten de grootte van het signaal —
-  de omhullende — en trekken de constante draaggolf (DC) eraf, zodat alleen de spraak/muziek overblijft.</p>
-  <h3>FM — hoe snel de fase draait</h3>
+  <h3>AM: de omhullende aflezen</h3>
+  <p>Bij AM zit de informatie in de <b>sterkte</b> (amplitude). We meten de grootte van het signaal
+(de omhullende) en trekken de constante draaggolf (DC) eraf, zodat alleen de spraak/muziek overblijft.</p>
+  <h3>FM: hoe snel de fase draait</h3>
   <p>Bij FM zit de informatie in de <b>frequentie</b>: de zender duwt de frequentie heen en weer met
   het geluid mee. Frequentie is &ldquo;hoe snel de fase draait&rdquo;. We meten van sample tot sample
-  hoeveel de fase verdraaide — dat verschil ís het geluid.</p>
+  hoeveel de fase verdraaide, dat verschil ís het geluid.</p>
   <div class="fig">
     <svg viewBox="0 0 760 216" role="img" aria-label="AM en FM demodulatie">
       <text x="190" y="24" text-anchor="middle">AM: lees de omhullende</text>
@@ -574,7 +574,7 @@
       <!-- onderste omhullende: spiegelbeeld, raakt de dalen -->
       <path d="M58 129 C66 133 74 135 82 138 C90 141 98 143 106 145 C114 147 122 148 130 149 C138 150 146 150 154 150 C162 150 170 149 178 147 C186 145 194 144 202 142 C210 139 218 137 226 134 C234 131 242 127 250 124"
         fill="none" stroke="#ffb454" stroke-width="2.2" opacity=".75"/>
-      <text x="190" y="180" text-anchor="middle" class="mut">de oranje omhullende (boven + onder) raakt de pieken — dát is het geluid</text>
+      <text x="190" y="180" text-anchor="middle" class="mut">de oranje omhullende (boven + onder) raakt de pieken: dát is het geluid</text>
       <text x="140" y="206" text-anchor="middle" class="mut">tijd →</text>
       <text x="570" y="24" text-anchor="middle">FM: hoe snel draait de wijzer</text>
       <circle cx="570" cy="105" r="55" fill="none" stroke="#2a3350"/>
@@ -584,47 +584,53 @@
       <defs><marker id="ar4" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
         <path d="M0,0 L7,3 L0,6 Z" fill="#3ddc97"/></marker></defs>
     </svg>
-    <div class="cap">Figuur 7 — AM: het geluid is de omhullende (oranje). FM: het geluid is hoe snel de fase-wijzer ronddraait.</div>
+    <div class="cap">Figuur 7: AM: het geluid is de omhullende (oranje). FM: het geluid is hoe snel de fase-wijzer ronddraait.</div>
   </div>
   <div class="tl"><b>In ThetisLink.</b> Ondersteund: USB, LSB, AM, SAM en FM. SSB = reële deel,
-  AM = grootte, FM = fase-verschil tussen opeenvolgende samples. <b>SAM</b> houdt — net als AM — beide
+  AM = grootte, FM = fase-verschil tussen opeenvolgende samples. <b>SAM</b> houdt (net als AM) beide
   zijbanden, maar leest niet de omhullende af: het neemt het reële deel (een coherente detector) en
   trekt een langzaam meelopende DC-waarde af. Dat geeft minder vervorming dan gewone AM, mits je netjes
-  op de draaggolf staat (deze implementatie heeft nog geen automatische draaggolf-tracking/PLL).</div>
+  op de draaggolf staat. Sinds v2.3.0 vergrendelt een PLL op de draaggolf, zodat SAM ook een paar Hz ernaast schoon blijft.</div>
 </section>
 
 <section id="agc">
-  <h2>12. AGC — automatisch volume</h2>
+  <h2>12. AGC: automatisch volume</h2>
   <p>Het ene station is keihard, het andere fluistert. De <b>AGC</b> (automatic gain control) regelt
   het volume automatisch bij: zwakke signalen worden versterkt, sterke teruggenomen, zodat alles op
   een prettig, gelijkmatig niveau in je koptelefoon komt.</p>
   <div class="analogy"><b>Analogie.</b> Als geluidsman bij een interview: springt iemand hard uit,
   dan draai je snel terug (&ldquo;attack&rdquo;); valt het stil, dan draai je rustig weer op
-  (&ldquo;decay&rdquo;). De AGC doet dat automatisch — hier snel terug (10 ms) en langzaam op
-  (500 ms), zodat een korte piek niet meteen alles dempt.</div>
+  (&ldquo;decay&rdquo;). De AGC doet dat automatisch: hij draait binnen enkele milliseconden terug, en
+  hoe lang hij vasthoudt en hoe snel hij weer opdraait, hangt af van de AGC-stand.</div>
+  <p><b>In ThetisLink.</b> Sinds v2.13.1 volgt de AGC van een VRX de instellingen van zijn ontvanger in
+  Thetis (RX1 voor VRX1, RX2 voor VRX2). <b>AGC-T</b> bepaalt hoeveel hij hooguit versterkt: daaronder
+  klinkt een zwakker station gewoon zachter, zoals op de ontvanger zelf. De <b>stand</b> bepaalt de rest:
+  Long houdt de versterking 2 s vast na een piek en komt in 2 s terug, Slow houdt 1 s vast en komt in
+  0,5 s terug, Med en Fast houden niet vast en komen in 0,25 s en 0,05 s terug. Off is een vaste
+  versterking.</p>
 </section>
 
 <section id="rate">
   <h2>13. Smalband vs breedband (8 of 16 kHz)</h2>
   <p>De iFFT-keuze uit §9 bepaalt meteen de audio-samplesnelheid. Twee standen:</p>
   <ul>
-    <li><b>Smalband — 128 bins = 8 kHz:</b> audio tot ~4 kHz, prima voor spraak (telefoonkwaliteit),
+    <li><b>Smalband (128 bins = 8 kHz):</b> audio tot ~4 kHz, prima voor spraak (telefoonkwaliteit),
     weinig data.</li>
-    <li><b>Breedband — 256 bins = 16 kHz:</b> audio tot ~8 kHz, duidelijk helderder, ~2× zoveel data.</li>
+    <li><b>Breedband (256 bins = 16 kHz):</b> audio tot ~8 kHz, duidelijk helderder, ~2× zoveel data.</li>
   </ul>
   <p>Dezelfde afweging als altijd: kwaliteit tegenover dataverbruik. Op een bekabeld netwerk is
   breedband bijna gratis; op een krappe verbinding kies je smalband.</p>
-  <div class="tl"><b>In ThetisLink.</b> Eén schakelaar in de client zet de RX-audio — de
-  Thetis-ontvangst en de VRX-kanalen — op smal- of breedband (alleen ontvangst; zenden blijft
+  <div class="tl"><b>In ThetisLink.</b> Eén schakelaar in de client zet de RX-audio (de
+  Thetis-ontvangst en de VRX-kanalen) op smal- of breedband (alleen ontvangst; zenden blijft
   breedband). De latency blijft gelijk; alleen de hoeveelheid data verandert.</div>
 </section>
 
 <section id="ola">
-  <h2>14. Overlap-add — naadloos geluid</h2>
+  <h2>14. Overlap-add: naadloos geluid</h2>
   <p>We verwerken het signaal in blokjes. Plak je die zomaar achter elkaar, dan hoor je bij elke naad
-  een klikje — zeker omdat het window de randen al afzwakte (§5). Oplossing: laat elk blok voor de
+  een klikje: zeker omdat het window de randen al afzwakte (§5). Oplossing: laat elk blok voor de
   helft <b>overlappen</b> met het vorige en tel ze op. Waar het ene blok uitdooft, komt het volgende
-  op — samen een gladde, ononderbroken stroom.</p>
+  op: samen een gladde, ononderbroken stroom.</p>
   <div class="fig">
     <svg viewBox="0 0 760 172" role="img" aria-label="Overlap-add in de tijd">
       <!-- som = constante audio -->
@@ -656,27 +662,27 @@
       <line x1="250" y1="143" x2="250" y2="149" stroke="#9aa6c4"/><line x1="390" y1="143" x2="390" y2="149" stroke="#9aa6c4"/>
       <text x="320" y="163" text-anchor="middle" class="mut" font-size="11">1 blok (N samples)</text>
     </svg>
-    <div class="cap">Figuur 8 — Overlap-add gebeurt in de <b>tijd</b>: de horizontale as is tijd, niet
+    <div class="cap">Figuur 8: Overlap-add gebeurt in de <b>tijd</b>: de horizontale as is tijd, niet
     frequentie. Opeenvolgende, afgezwakte audioblokken (elk een Hann-venster, §5) starten telkens na een
     halve bloklengte, overlappen dus 50% en worden opgeteld. Waar het ene blok uitdooft, komt het volgende
-    op — de som is een vlakke, naadloze audiostroom.</div>
+    op: de som is een vlakke, naadloze audiostroom.</div>
   </div>
 </section>
 
 <section id="spectrum">
   <h2>15. Het spectrum- en watervalbeeld</h2>
-  <p>Het mooie plaatje in de client — het <b>spectrum</b> (energie per frequentie) en de <b>waterval</b>
-  (datzelfde, over tijd naar beneden schuivend) — komt uit een <i>aparte</i>, veel hoger-resolutie FFT.
+  <p>Het mooie plaatje in de client, het <b>spectrum</b> (energie per frequentie) en de <b>waterval</b>
+  (datzelfde, over tijd naar beneden schuivend), komt uit een <i>aparte</i>, veel hoger-resolutie FFT.
   De audio heeft kleine, snelle blokjes nodig (lage vertraging); het beeld juist grote blokjes (scherpe
   resolutie). Twee verschillende afwegingen, twee aparte FFT's.</p>
   <ul>
     <li><b>dB-schaal:</b> sterkte logaritmisch, zodat een fluistering én een kanonschot tegelijk
     zichtbaar zijn.</li>
-    <li><b>Peak-hold met verval:</b> pieken springen meteen omhoog en zakken daarna rustig weg —
+    <li><b>Peak-hold met verval:</b> pieken springen meteen omhoog en zakken daarna rustig weg:
     rustiger voor het oog.</li>
     <li><b>Zoom en pan:</b> inzoomen op een stukje band; het beeld centreert rond je afstemfrequentie.</li>
     <li><b>Filterranden slepen:</b> de doorzichtige balk toont je doorlaatband. Sleep de randen en je
-    stelt direct je bandbreedte in — precies de open bins uit §9.</li>
+    stelt direct je bandbreedte in: precies de open bins uit §9.</li>
   </ul>
   <div class="analogy"><b>Analogie.</b> Het spectrum is een momentopname (een staafdiagram van
   &ldquo;hoeveel signaal waar&rdquo;); de waterval is een tijdlijn die naar beneden schuift, zodat je
@@ -684,16 +690,16 @@
 </section>
 
 <section id="smeter">
-  <h2>16. Signaalsterkte — de S-meter</h2>
+  <h2>16. Signaalsterkte: de S-meter</h2>
   <p>Hoe sterk is een signaal? De basis is verrassend eenvoudig: het <b>vermogen</b> (de
-  &ldquo;power&rdquo;) van een complex sample is <code>I² + Q²</code> — de <i>lengte van de wijzer in
+  &ldquo;power&rdquo;) van een complex sample is <code>I² + Q²</code>, de <i>lengte van de wijzer in
   het kwadraat</i> (denk terug aan de klok-analogie uit §1). Hoe langer de wijzer, hoe sterker het
   signaal.</p>
 
   <p>Voor een heel <b>kanaal</b> meet je niet één sample, maar tel je het vermogen van <b>alle bins
-  binnen je doorlaatband</b> op — de fijne spectrum-bins uit §15 (niet de grovere audio-bins van §9).
+  binnen je doorlaatband</b> op: de fijne spectrum-bins uit §15 (niet de grovere audio-bins van §9).
   Die som is de sterkte
-  van precies dat kanaal — signaal én ruis samen, binnen je filter. Dat is meteen mooi: zet je je
+  van precies dat kanaal: signaal én ruis samen, binnen je filter. Dat is meteen mooi: zet je je
   filter smaller, dan meet je minder ruis mee.</p>
 
   <div class="fig">
@@ -738,12 +744,12 @@
       <defs><marker id="ar5" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
         <path d="M0,0 L7,3 L0,6 Z" fill="#4ea1ff"/></marker></defs>
     </svg>
-    <div class="cap">Figuur 9 — De sterkte van een kanaal = het opgetelde vermogen van de bins in de
+    <div class="cap">Figuur 9: De sterkte van een kanaal = het opgetelde vermogen van de bins in de
     doorlaatband, omgezet naar dBm en afgebeeld op de vertrouwde S-schaal.</div>
   </div>
 
   <p>Omdat signalen een <b>enorm</b> bereik beslaan (van een fluistering net boven de ruis tot een
-  oorverdovend station), gebruiken we — net als bij geluid — een <b>logaritmische</b> schaal: dB,
+  oorverdovend station), gebruiken we (net als bij geluid) een <b>logaritmische</b> schaal: dB,
   en in dit geval <b>dBm</b> (vermogen t.o.v. 1 milliwatt). Radioamateurs lezen dat af als
   <b>S-units</b>: op HF is <code>S9 = −73 dBm</code>, en elke S-unit lager is 6 dB zwakker. Boven S9
   telt men verder in dB (&ldquo;S9 + 20 dB&rdquo;).</p>
@@ -752,32 +758,32 @@
   daar een echte <b>dBm</b> van te maken, moet de schaal <b>geijkt</b> worden. Dat gebeurt met een
   vaste <b>kalibratie-offset</b>, zodat de afgelezen waarde overeenkomt met de werkelijke
   signaalsterkte. En om te voorkomen dat de meter nerveus trilt, wordt de waarde <b>gemiddeld</b>
-  (en/of de piek even vastgehouden) — net als het trage mechaniek van een ouderwetse naald-S-meter.</p>
+  (en/of de piek even vastgehouden): net als het trage mechaniek van een ouderwetse naald-S-meter.</p>
 
   <div class="tl"><b>In ThetisLink.</b> Voor de VRX-kanalen rekent de <b>client zelf</b> de S-meter
   uit: hij integreert het vermogen van de ontvangen spectrum-bins binnen de doorlaatband, zet dat met
-  een vaste (empirisch geijkte) offset om naar dBm, en past meterballistiek toe — snelle attack, traag
-  verval, plus een korte piek-hold. De gewone hoofd-RX (RX1/RX2) heeft zijn eigen route: daar levert
+  een vaste (empirisch geijkte) offset om naar dBm, en past meterballistiek toe (snelle attack, traag
+  verval, plus een korte piek-hold). De gewone hoofd-RX (RX1/RX2) heeft zijn eigen route: daar levert
   de server een kant-en-klare waarde.</div>
 </section>
 
 <section id="why">
-  <h2>17. Waarom dit zo krachtig is — één FFT, veel ontvangers</h2>
+  <h2>17. Waarom dit zo krachtig is: één FFT, veel ontvangers</h2>
   <p>Het echte voordeel van deze methode komt naar voren zodra je <b>veel verschillende,
   onafhankelijke signalen tegelijk</b> wilt horen.</p>
 
   <p>De <b>klassieke</b> manier: elke ontvanger krijgt zijn eigen <b>dure high-speed
-  downconverter en filters</b> — fysieke hardware, per ontvanger opnieuw. Tien luisteraars = tien
+  downconverter en filters</b>, fysieke hardware, per ontvanger opnieuw. Tien luisteraars = tien
   keer die dure keten. Dat loopt snel uit de hand en schaalt slecht.</p>
 
   <p>Deze methode draait het om: je rekent de <b>grote FFT maar één keer</b> uit en <b>deelt</b> die.
   Elke luisteraar haalt er met een <b>kleine iFFT</b> zijn eigen smalle stukje uit. En dat stukje
-  eruit halen kost — in verhouding tot die ene grote FFT — <b>heel weinig rekenwerk</b>. Het dure
+  eruit halen kost (in verhouding tot die ene grote FFT) <b>heel weinig rekenwerk</b>. Het dure
   deel doe je dus één keer; elke extra luisteraar daarna is bijna gratis.</p>
 
   <div class="fig">
     <svg viewBox="0 0 760 250" role="img" aria-label="Eén FFT voedt meerdere iFFTs">
-      <text x="380" y="22" text-anchor="middle">één grote FFT — alle bins, gedeeld door iedereen</text>
+      <text x="380" y="22" text-anchor="middle">één grote FFT: alle bins, gedeeld door iedereen</text>
       <!-- full spectrum area -->
       <path d="M40 96
         L60 90 L78 70 L96 92 L116 60 L134 88 L152 84 L172 50 L190 86 L208 80 L228 92
@@ -822,21 +828,21 @@
           <path d="M0,0 L7,0 L3.5,7 Z" fill="#9aa6c4"/></marker>
       </defs>
     </svg>
-    <div class="cap">Figuur 10 — Het principe: één keer de grote FFT rekenen; daarna tapt elke
-    luisteraar met een eigen kleine, goedkope iFFT zijn stukje af — elk op een andere frequentie,
+    <div class="cap">Figuur 10: Het principe: één keer de grote FFT rekenen; daarna tapt elke
+    luisteraar met een eigen kleine, goedkope iFFT zijn stukje af, elk op een andere frequentie,
     mode en bandbreedte.</div>
   </div>
 
   <p>Daarom <b>schaalt</b> deze methode zo goed: al het zware werk zit in die ene grote FFT, en élke
   extra luisteraar daarna is bijna gratis. Wil je honderd mensen tegelijk, elk op hun eigen
-  frequentie, laten meeluisteren? Dan reken je nog steeds maar één grote FFT — niet honderd dure
+  frequentie, laten meeluisteren? Dan reken je nog steeds maar één grote FFT: niet honderd dure
   ontvangstketens. Dáár zit de kracht van deze aanpak.</p>
   <div class="analogy"><b>Terug naar de satellietfoto.</b> Je maakt die ene dure foto één keer.
-  Honderd mensen erop laten inzoomen kost daarna bijna niets — precies zoals één FFT honderd
+  Honderd mensen erop laten inzoomen kost daarna bijna niets: precies zoals één FFT honderd
   goedkope iFFT-uitsnedes voedt.</div>
   <div class="tl"><b>In ThetisLink (TL2).</b> Dit is het <i>principe</i> dat de methode zo krachtig
   maakt bij heel veel gelijktijdige gebruikers. TL2 zelf gebruikt het bescheidener: er is één VRX per
-  ontvanger — VRX1 op VFO-A (RX1) en VRX2 op VFO-B (RX2). Meerdere clients kunnen wél naar dezelfde
+  ontvanger, VRX1 op VFO-A (RX1) en VRX2 op VFO-B (RX2). Meerdere clients kunnen wél naar dezelfde
   VRX meeluisteren, maar delen dan de instellingen van dat kanaal. De schaalbaarheid hierboven is de
   ruimte die deze architectuur biedt, niet een limiet die nu al is opgezocht.</div>
 </section>
@@ -845,7 +851,7 @@
   <h2>18. Filtereigenschappen in detail</h2>
   <p>In §9 zagen we dat &ldquo;bins op nul zetten&rdquo; neerkomt op filteren. Maar wat voor filter
   krijg je dan precies? Hieronder de eigenschappen die je ook in een ontvanger-specificatie
-  tegenkomt — <b>filtervorm</b>, <b>dynamisch bereik</b> en <b>group delay</b> — met de getallen
+  tegenkomt (<b>filtervorm</b>, <b>dynamisch bereik</b> en <b>group delay</b>) met de getallen
   erbij. Dit is verdieping; voor het grote verhaal heb je het niet nodig.</p>
 
   <h3>Filtervorm en steilheid</h3>
@@ -856,14 +862,14 @@
   </div>
   <p>De maskerkeuze zelf is kraakhard, maar de <i>werkelijke</i> overgang wordt mede bepaald door de
   hoofdlob van het Hann-venster (§5): die is ~1–2 bins breed, dus de flank loopt over zo'n 60–125 Hz.
-  (Het is dezelfde venstereigenschap die ook de stopband-bodem zet — zie de volgende paragraaf.) Voor
-  een SSB-filter van 2,4 kHz is dat een overgangsgebied van maar ~3–5% van de doorlaatbreedte — veel
+  (Het is dezelfde venstereigenschap die ook de stopband-bodem zet: zie de volgende paragraaf.) Voor
+  een SSB-filter van 2,4 kHz is dat een overgangsgebied van maar ~3–5% van de doorlaatbreedte, veel
   steiler dan een kristal- of mechanisch filter in een klassieke ontvanger (overgang vaak 10–30%).</p>
   <p>Die overgang is in <b>Hz</b> ongeveer constant (die ~bin), ongeacht hoe breed je filter staat.
   Voor brede filters ligt de <b>shape factor</b> (verhouding van de breedte bij een diep niveau tot
-  die bij &minus;6 dB) daardoor heel dicht bij <b>1</b> — bijna een ideale rechthoek. Voor een heel
+  die bij &minus;6 dB) daardoor heel dicht bij <b>1</b>: bijna een ideale rechthoek. Voor een heel
   <i>smal</i> filter (CW, bijv. 300 Hz) wordt diezelfde vaste ~62,5 Hz-flank een grotere fractie van
-  de doorlaat, en loopt de shape factor als verhouding op — al blijft de flank in Hz even steil.</p>
+  de doorlaat, en loopt de shape factor als verhouding op, al blijft de flank in Hz even steil.</p>
 
   <h3>Dynamisch bereik en ultieme onderdrukking</h3>
   <p>Twee dingen begrenzen het dynamisch bereik (amplitude-bereik):</p>
@@ -875,9 +881,9 @@
     smal kanaal effectief méér door process-gain).</li>
     <li><b>De ultieme onderdrukking buiten de band wordt gezet door het venster, niet door het
     bin-masker.</b> Een sterk signaal nét buiten je doorlaatband lekt via de <i>zijlobben</i> van het
-    Hann-venster (§5) tóch een beetje de doorlaatband in — en wel via de <b>dichtstbijzijnde rand-bin</b>
+    Hann-venster (§5) tóch een beetje de doorlaatband in, en wel via de <b>dichtstbijzijnde rand-bin</b>
     (de laatste meegenomen, niet-genulde bin). Twee dingen om de getallen te lezen: de <b>0 dB-referentie
-    is het doorlaatniveau</b> (vandaar dB<i>c</i>), en de afstand telt <b>vanaf die bandrand</b> — niet
+    is het doorlaatniveau</b> (vandaar dB<i>c</i>), en de afstand telt <b>vanaf die bandrand</b>, niet
     vanaf het bandmidden of 0 Hz (bij SSB ligt de band niet eens symmetrisch rond 0). De eerste zijlob
     ligt op ~<b>&minus;31 dBc</b>, ~1 bin (62,5 Hz) buiten de rand; daarna zakt het ~<b>18 dB per
     octaaf</b>, waarbij "octaaf" = <i>verdubbeling van de afstand tot de rand</i> (≈ &minus;49 dBc op
@@ -886,11 +892,11 @@
   </ul>
   <p>Wil je dieper onderdrukken, dan is dat de klassieke <b>venster-afweging</b>: een Blackman-Harris-
   venster haalt ~&minus;90 dB zijlobben, maar de hoofdlob (en dus het overgangsgebied) wordt ~2× zo
-  breed. Steiler én dieper tegelijk vraagt simpelweg méér rekenlengte — een groter venster, een
+  breed. Steiler én dieper tegelijk vraagt simpelweg méér rekenlengte: een groter venster, een
   grotere FFT, of een lang FIR; gratis gaat het niet (zie de figuur).</p>
 
   <div class="fig">
-    <svg viewBox="0 0 760 380" role="img" aria-label="Filterrespons — LSB-voorbeeld, realistische niveaus">
+    <svg viewBox="0 0 760 380" role="img" aria-label="Filterrespons: LSB-voorbeeld, realistische niveaus">
       <!-- dB-gridlijnen (0..-150, per 30 dB) -->
       <g stroke="#26304d">
         <line x1="70" y1="40" x2="720" y2="40"/><line x1="70" y1="94" x2="720" y2="94"/>
@@ -912,7 +918,7 @@
         <text x="286" y="326">&minus;3</text><text x="358" y="326">&minus;2</text><text x="430" y="326">&minus;1</text>
         <text x="502" y="326">0</text><text x="574" y="326">+1</text><text x="646" y="326">+2</text><text x="718" y="326">+3</text>
       </g>
-      <text x="395" y="343" class="mut" text-anchor="middle">frequentie t.o.v. afstempunt (kHz) &mdash; 1 bin = 62,5 Hz</text>
+      <text x="395" y="343" class="mut" text-anchor="middle">frequentie t.o.v. afstempunt (kHz): 1 bin = 62,5 Hz</text>
       <text x="394" y="33" class="mut" text-anchor="middle">doorlaatband (LSB, 3 kHz: &minus;3&hellip;0 kHz)</text>
       <!-- A: ideaal masker (perfecte rechthoek -3..0 kHz) -->
       <path d="M70 310 L286 310 L286 40 L502 40 L502 310 L718 310"
@@ -920,7 +926,7 @@
       <!-- 32-bit reken-/quantisatieruisvloer ~-145 dBc -->
       <line x1="70" y1="301" x2="720" y2="301" stroke="#9aa6c4" stroke-width="1" stroke-dasharray="2 3" opacity=".55"/>
       <text x="716" y="297" class="mut" text-anchor="end" font-size="10.5">32-bit reken-/quantisatieruis ~&minus;145 dBc</text>
-      <!-- C: resultante — werkelijke -18 dB/oct-cascade vanaf elke rand-bin -->
+      <!-- C: resultante; werkelijke -18 dB/oct-cascade vanaf elke rand-bin -->
       <path d="M70 276 L142 258 L214 225 L250 193 L268 161 L277 128 L281 96 L286 40 L502 40 L507 96 L511 128 L520 161 L538 193 L574 225 L646 258 L718 276"
         fill="none" stroke="#4ea1ff" stroke-width="2.6"/>
       <!-- -31 dBc randpunten (1 bin buiten de rand) -->
@@ -937,12 +943,12 @@
         <text x="324" y="366">resultante</text>
       </g>
     </svg>
-    <div class="cap">Figuur 11 — De filterrespons voor een concreet <b>LSB</b>-kanaal van 3 kHz, met het
+    <div class="cap">Figuur 11: De filterrespons voor een concreet <b>LSB</b>-kanaal van 3 kHz, met het
     afstempunt (de draaggolf) op 0 kHz. LSB ligt <i>onder</i> de draaggolf, dus de doorlaatband loopt van
     &minus;3 tot 0 kHz; voor het gemak valt de bovenste bandrand precies op 0 Hz (links &minus;6 kHz,
     rechts +3 kHz). De <b>resultante</b> (blauw) is vlak op 0 dBc in de band; op elke rand zakt hij de
     werkelijke Hann-cascade af: <b>~&minus;31 dBc op 1 bin</b> (62,5 Hz) buiten de rand, daarna ~18 dB per
-    octaaf — dus &minus;49 op 2 bins, &minus;67 op 4, &minus;85 op 8, &minus;103 op 16… — doorzakkend tot
+    octaaf (dus &minus;49 op 2 bins, &minus;67 op 4, &minus;85 op 8, &minus;103 op 16…) doorzakkend tot
     de <b>32-bit reken-/quantisatieruisvloer (~&minus;145 dBc)</b>, de echte ondergrens (níét de eerder
     voor het gemak getekende &minus;60). De x-as is frequentie t.o.v. het afstempunt; 1 bin = 62,5 Hz, en
     3 kHz = 48 bins. Het <b>ideale masker</b> (grijs) is de perfecte rechthoek.</div>
@@ -950,20 +956,20 @@
 
   <p>De FFT/iFFT-methode geeft dus zeer scherpe filtering, maar met een <b>vaste vorm</b> (rechthoekig
   bin-masker + Hann-skirt). Een aanvullend FIR is alleen zinvol als je juist een <i>andere</i> vorm nodig
-  hebt — bijvoorbeeld een bewuste passband-helling, een matched/raised-cosine-vorm voor datamodes, of een
+  hebt: bijvoorbeeld een bewuste passband-helling, een matched/raised-cosine-vorm voor datamodes, of een
   notch in de band. Steiler maken kan in principe ook, maar alleen met een <b>zeer groot</b> FIR (honderden
   taps), niet met een eenvoudige. Voor luisteren naar SSB, AM en FM is een vlakke, scherpe band precies wat
   je wilt, dus een aanvullend FIR is hier niet nodig.</p>
 
-  <h3>Group delay — vlak, zoals een lineair-fase FIR</h3>
-  <p>Dit is een sterke troef van de methode. Het bin-masker is <b>reëel</b> (een bin telt mee of niet —
+  <h3>Group delay: vlak, zoals een lineair-fase FIR</h3>
+  <p>Dit is een sterke troef van de methode. Het bin-masker is <b>reëel</b> (een bin telt mee of niet:
   een getal zonder fasedraai), het Hann-venster is symmetrisch, en de NCO is een zuivere
   frequentieverschuiving (alleen fase-rotatie, geen amplitude). Samen voegen die geen scheve fase toe:
-  in de doorlaatband is de respons <b>lineair in fase</b> — net als een FIR-filter. Gevolg:</p>
+  in de doorlaatband is de respons <b>lineair in fase</b>, net als een FIR-filter. Gevolg:</p>
   <ul>
     <li>De <b>group delay is vlak</b> over de hele doorlaatband: alle frequenties komen even snel door,
     dus geen fase-vervorming. Een heel steile filterrand geeft nog wél wat na-/voor-rinkeling, maar
-    door de lineaire fase is die <i>symmetrisch</i> — niet de scheve, naar-één-kant uitsmerende
+    door de lineaire fase is die <i>symmetrisch</i>: niet de scheve, naar-één-kant uitsmerende
     vervorming van een analoog of IIR-filter.</li>
     <li>Twee getallen die je niet moet verwarren: de <b>group delay</b> zelf is ongeveer een
     <b>halve bloklengte</b> (~8 ms). De <b>totale</b> algoritmische vertraging is groter, want je moet
@@ -972,7 +978,7 @@
     groter dan bij een analoog filter, maar wél constant.</li>
   </ul>
   <p>Een klassiek ontvangerfilter (kristal, mechanisch, of een IIR-DSP-filter) heeft juist een
-  <b>lage</b> absolute vertraging, maar vertoont een <b>group-delay-piek</b> rond de bandranden — de
+  <b>lage</b> absolute vertraging, maar vertoont een <b>group-delay-piek</b> rond de bandranden: de
   fase loopt daar niet netjes lineair, wat transiënten uitsmeert. De FFT-methode ruilt dat om: een
   iets <b>hogere maar vlakke</b> vertraging, zonder fase-vervorming. Voor luisteren naar SSB, AM en FM
   is die vertraging onhoorbaar; de vlakke fase hoor je juist als een schoon, &ldquo;strak&rdquo;
@@ -985,27 +991,27 @@
   <b>FIR-filter</b> zetten. Dat is relatief goedkoop, want na de iFFT draait alles op de lage
   uitgangsrate (8 of 16 kHz). Zo'n FIR zou kunnen:</p>
   <ul>
-    <li>de flank <b>nóg scherper</b> maken — dichter tegen het ideale rechthoek-masker aan;</li>
+    <li>de flank <b>nóg scherper</b> maken: dichter tegen het ideale rechthoek-masker aan;</li>
     <li>de licht aflopende doorlaatband-rand <b>vlak</b> trekken;</li>
     <li>de stopband ver onder de venster-bodem duwen (echte &minus;60…&minus;80 dB);</li>
     <li>het overgangsgebied precies op maat zetten.</li>
   </ul>
   <p>Maar daar zit een afweging in. Een <b>symmetrische (lineair-fase) FIR</b> houdt de group delay
-  vlak; een scherpere flank kost dan meer taps — dus meer <b>latency</b>. Wil je scherper <i>zonder</i>
+  vlak; een scherpere flank kost dan meer taps, dus meer <b>latency</b>. Wil je scherper <i>zonder</i>
   die extra vertraging, dan moet je de lineaire fase opgeven en krijg je (net als bij een klassiek
   analoog- of kristalfilter) <b>group-delay-vervorming</b> aan de bandranden terug. Kortom: scherpte
-  staat tegenover vlakke fase/latency — een bewuste ontwerpkeuze. Het blijft het bekende recept:
+  staat tegenover vlakke fase/latency, een bewuste ontwerpkeuze. Het blijft het bekende recept:
   <i>grove</i> kanaalselectie + decimatie met de FFT, <i>fijne</i> vormgeving met een FIR.</p>
 
   <div class="tl"><b>In ThetisLink.</b> De huidige keten gebruikt een Hann-analysevenster met 50%
-  overlap-add en het rechthoekige bin-masker — geen extra FIR en geen synthesevenster. Voor
+  overlap-add en het rechthoekige bin-masker: geen extra FIR en geen synthesevenster. Voor
   amateur-SSB/AM/FM is die respons ruim voldoende; de steile flanken (~62,5 Hz overgang) en de vlakke
   group delay komen er gratis bij. Een nabewerkende FIR is de logische knop als ooit een
   textbook-exacte doorlaatvorm of diepere stopband nodig is.</div>
 </section>
 
 <section id="slot">
-  <h2>Tot slot — alles samen</h2>
+  <h2>Tot slot: alles samen</h2>
   <p>Eén breed tijdsignaal (tot 1,536 MHz) gaat door een grote complexe FFT en wordt in bins van
   62,5 Hz uiteengelegd; we houden alleen de bins van het gewenste kanaal en zetten de rest op nul
   (= filteren); een vaste iFFT (128/256 bins) zet dat terug naar een I/Q-tijdsignaal met constante
@@ -1013,13 +1019,13 @@
   het volume; en als compacte, met <b>Opus</b> gecomprimeerde audio gaat het naar de client. Omdat dit per luisteraar een eigen
   uitsnede is, kunnen veel mensen tegelijk en onafhankelijk binnen dezelfde band luisteren.</p>
   <p>En het is helaas niet <b>gratis</b>. De FFT en iFFT kosten rekentijd die met de afmeting
-  meegroeit (ongeveer evenredig — strikt genomen N·log N). Maar de vertraging zit vooral elders: je
+  meegroeit (ongeveer evenredig: strikt genomen N·log N). Maar de vertraging zit vooral elders: je
   moet eerst een heel blok samples verzamelen vóór je kunt rekenen, en <b>hoe fijner je het spectrum
   uitsplitst (smallere bins), hoe langer dat blok moet zijn</b>. Fijn frequentiedetail en lage latency
-  trekken dus aan elkaar — de klassieke <b>tijd-frequentie-afweging</b>. (In deze keten ligt die vast
+  trekken dus aan elkaar: de klassieke <b>tijd-frequentie-afweging</b>. (In deze keten ligt die vast
   op 62,5 Hz per bin ≈ 16 ms blok; een hogere DDC-rate maakt de FFT groter en de blik breder bij
   hetzelfde detail en dezelfde latency, maar kost meer rekenkracht.) Er moet dus altijd een
-  <b>balans</b> worden gevonden tussen <b>vertraging (latency)</b> en <b>spectrumdetail</b> — precies
+  <b>balans</b> worden gevonden tussen <b>vertraging (latency)</b> en <b>spectrumdetail</b>: precies
   de afweging die in dit hele verhaal steeds terugkomt.</p>
   <p class="lead">Dat is, in een notendop, hoe een VRX van radiogolf tot geluid komt. Wil je weten hoe
   dat geluid (plus het spectrum, de S-meter en alle knoppen) vervolgens over het netwerk bij je client
@@ -1029,9 +1035,9 @@
 
 </main>
 <footer>
-  ThetisLink — VRX-uitleg · educatieve versie. Gemaakt door <b>Chiron van der Burgt (PA3GHM)</b>.<br>
+  ThetisLink: VRX-uitleg · educatieve versie. Gemaakt door <b>Chiron van der Burgt (PA3GHM)</b>.<br>
   ThetisLink op GitHub: <a href="https://github.com/cjenschede/ThetisLink">github.com/cjenschede/ThetisLink</a><br>
-  Laatst gewijzigd: 18 juni 2026.
+  Laatst gewijzigd: 5 november 2026.
 </footer>
 </body>
 </html>

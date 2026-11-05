@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // What the two integration harnesses agree on. One number here instead of one
-// in each file: review 78 found the wait for the connected flag written twice,
+// in each file: the wait for the connected flag was once written twice,
 // with a deadline of three seconds in one place and five in the other, so the
 // same regression would have been reported differently depending on which
 // test met it.
@@ -14,9 +14,9 @@
 pub const CONNECTED_FLAG_WAIT_MS: u64 = 1_500;
 
 /// A scripted server over QUIC, with the shape the harnesses used for their
-/// plain UDP socket: `recv_from`, `send_to`, `local_addr` (phase 3d, step 1:
-/// the tests move to QUIC before the plain UDP path goes, so that each one can
-/// be seen to say the same on the new carrier). A client is the sentinel its
+/// plain UDP socket: `recv_from`, `send_to`, `local_addr` (the tests moved to
+/// QUIC before the plain UDP path went, so that each one could be seen to say
+/// the same on the new carrier). A client is the sentinel its
 /// connection has on the server; a connection that closes (an empty frame) is
 /// passed over, as a UDP socket would never see it.
 #[allow(dead_code)]

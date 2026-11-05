@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Acknowledged controls (phase 2b of the direct connection).
+// Acknowledged controls.
 //
 // A control the client sends - a setting, a button, a Yaesu PTT - was one UDP
 // datagram with nothing behind it: lost on the way, nothing happened and
@@ -9,7 +9,7 @@
 // and the client sends it again until it does.
 //
 // The whole rule lives in this file, in two small types a test can drive
-// without opening the engine's loop or the server's (review 86: the loops are
+// without opening the engine's loop or the server's (the loops are
 // where the suite never comes):
 //
 // - `ControlSender` (client): numbers what goes out, keeps what is not yet
@@ -18,7 +18,7 @@
 //   control is new and is to be applied, or a copy, or older than what was
 //   already applied for the same control.
 //
-// The last one is what keeps the transmitter safe (review 86): a repeated
+// The last one is what keeps the transmitter safe: a repeated
 // "Yaesu PTT on" that arrives after "off" must not key the radio again.
 // Removing duplicates by sequence number would not see that - the "on" was
 // never applied under that number. So the server applies a control only if
@@ -26,7 +26,7 @@
 //
 // That rule is for a SETTING, where the last value is the one that counts. A
 // few controls are an ACT - a press, a swap, a read - where every send counts
-// on its own (reviews 87). Those are keyed by their own number: never replaced
+// on its own. Those are keyed by their own number: never replaced
 // by a later one, never too old to apply, and a copy of the same number is
 // still done once. `is_action` says which, and `numbered_control` applies it
 // for the client and the server alike, so the two cannot disagree.
@@ -59,14 +59,14 @@ impl ControlKey {
 }
 
 /// A control where every send is an act of its own, not a setting - a second
-/// one is a second press. The list of phase 2b (2026-10-01), read again
-/// against the protocol in build 88: the swaps, the raw Yaesu buttons, and the
+/// one is a second press. The list as first drawn up (2026-10-01), read again
+/// against the protocol in build 89: the swaps, the raw Yaesu buttons, and the
 /// reads and writes the server starts on request.
 ///
 /// `YaesuSelectVfo` is a setting for 0 (VFO A) and 1 (VFO B), and an act from
 /// 2 up: 2 swaps A and B, 3 is the V/M button on both front ends, which the
 /// server turns into a toggle between VFO and memory (`yaesu/poll.rs`). The
-/// enum's doc names only 0-2; the value 3 was found in the round on build 88,
+/// enum's doc names only 0-2; the value 3 was added in build 89, found
 /// by reading what the front ends send rather than what the protocol says.
 pub fn is_action(id: u8, value: u16) -> bool {
     use crate::protocol::ControlId as C;
@@ -93,7 +93,7 @@ pub fn is_action(id: u8, value: u16) -> bool {
 }
 
 /// The same question for a typed Yaesu control. One today: the clarifier step,
-/// whose value is a step in hertz - twice +10 Hz is +20 Hz (round on build 88).
+/// whose value is a step in hertz - twice +10 Hz is +20 Hz (since build 89).
 /// `ClarClear` sets the offset to zero, and zero twice is zero: a setting.
 pub fn is_yaesu_action(control: u8, _value: u16) -> bool {
     control == crate::protocol::YaesuCtrl::ClarStep as u8
@@ -201,7 +201,7 @@ impl ControlSender {
         bytes.extend_from_slice(&seq.to_be_bytes());
         let Some((key, _)) = crate::protocol::numbered_control(&bytes) else {
             // Not a control: sent as it is, without a number, and nothing to
-            // repeat (round on build 88: it used to keep the number it was given).
+            // repeat (before build 89 it kept the number it was given).
             return packet.to_vec();
         };
         self.next_seq = self.next_seq.wrapping_add(1).max(1);
@@ -220,7 +220,7 @@ impl ControlSender {
     /// from now, so the acknowledgements still on their way are not overtaken
     /// by repeats of the same burst.
     ///
-    /// Only for a number this session sent (reviews 87): an acknowledgement
+    /// Only for a number this session sent: an acknowledgement
     /// still on its way from the previous session must not switch repeating on
     /// for a server that does not acknowledge - to that one a repeat is a
     /// second press.
@@ -274,7 +274,7 @@ impl ControlSender {
     }
 
     /// The session is gone: nothing of it is repeated into the next one, and
-    /// the next server has to show again that it acknowledges (review 86: this
+    /// the next server has to show again that it acknowledges (this
     /// is per-session state in loop locals, which the session proof does not
     /// cover - `session_lost!()` calls this).
     pub fn session_ended(&mut self) {
@@ -537,7 +537,7 @@ mod tests {
 
     /// An acknowledgement of the previous session, still on its way when a new
     /// one began, does not switch repeating on - the new server may be one that
-    /// does not acknowledge, and to it a repeat is a second press (reviews 87).
+    /// does not acknowledge, and to it a repeat is a second press.
     /// Nor does a number this client never sent.
     #[test]
     fn only_an_ack_of_this_session_switches_repeating_on() {
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(r.judge(K, seq_of(&b)), Verdict::Apply);
     }
 
-    /// The case that makes the per-control order necessary (review 86): PTT on
+    /// The case that makes the per-control order necessary: PTT on
     /// is lost, PTT off goes through, then the repeat of "on" arrives.
     #[test]
     fn a_late_repeat_of_ptt_on_does_not_key_the_radio_after_off() {
@@ -615,7 +615,7 @@ mod tests {
         assert!(!is_action(ControlId::CwMacroStop as u8, 0), "stopping twice is stopping once");
     }
 
-    /// Two different presses of a Yaesu button, the first lost (reviews 87):
+    /// Two different presses of a Yaesu button, the first lost:
     /// the second does not push the first out of the queue - both are
     /// repeated, each with its own number.
     #[test]
@@ -637,7 +637,7 @@ mod tests {
         b
     }
 
-    /// Two clarifier steps, the first lost (round on build 88): both stay, and
+    /// Two clarifier steps, the first lost: both stay, and
     /// the first is repeated - +10 and +10 is +20, not +10.
     #[test]
     fn a_second_clarifier_step_does_not_replace_a_lost_first_one() {
@@ -661,7 +661,7 @@ mod tests {
     }
 
     /// A packet that is not a control goes out as it came, without a number
-    /// (round on build 88), and the numbering does not skip.
+    /// and the numbering does not skip.
     #[test]
     fn a_packet_that_is_not_a_control_gets_no_number() {
         let t = Instant::now();

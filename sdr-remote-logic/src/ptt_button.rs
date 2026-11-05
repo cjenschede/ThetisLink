@@ -30,7 +30,7 @@ pub enum PttButton {
     /// different: there the radio is taken by somebody else and waiting is the
     /// answer; here the operator has it himself, one screen over, and letting go
     /// there is the answer. Telling him "in use" would send him looking for a
-    /// stranger (eigenaar, 2026-09-03).
+    /// stranger.
     BlockedByOwnTx,
 }
 
@@ -103,8 +103,8 @@ pub const METER_TX_AFTER_RELEASE_MS: u64 = 2000;
 /// Does the Thetis meter show transmit power (watts) or a signal (dBm)? The
 /// meter packet carries watts for as long as the server still transmits, and
 /// that outlasts this client's own PTT by the tail - drawn on the dBm scale,
-/// 50 W read as +50 dBm and the needle hit the end at every release (owner,
-/// 2026-10-11). So: our own PTT, or the server still transmitting shortly
+/// 50 W read as +50 dBm and the needle hit the end at every release
+/// (2026-10-11). So: our own PTT, or the server still transmitting shortly
 /// after we let go. Not the server's flag alone: it also goes up for a Yaesu
 /// (`RadioState::server_tx`), and then the meter carries dBm (build 169).
 /// One rule for the desktop and the phone.
@@ -117,7 +117,7 @@ pub fn meter_shows_tx(own_ptt: bool, server_tx: bool, since_own_release_ms: Opti
 /// the server has said "transmitting" since then and has stopped saying it
 /// (build 171). Build 170 closed it on the first "not transmitting", and on a
 /// short press that came before the server had even said "transmitting" -
-/// the whole transmission then came in drawn as dBm (review of 170). With no
+/// the whole transmission then came in drawn as dBm. With no
 /// "transmitting" at all (a refused press) it is bounded by
 /// `METER_TX_AFTER_RELEASE_MS`.
 #[derive(Debug, Default)]
@@ -151,7 +151,7 @@ impl MeterWindow {
     /// Is our transmission still going on as far as the screens know: our
     /// own PTT, or the window after it - also in the gap between a short
     /// press and the server's first "transmitting", where the meter still
-    /// shows a signal (build 172; review of 171). What the spectrum and the
+    /// shows a signal. What the spectrum and the
     /// mode buttons wait for.
     pub fn open(&self) -> bool {
         self.open
@@ -162,9 +162,9 @@ impl MeterWindow {
 /// transmission is on - ours (`MeterWindow::open`) or someone else's - and not
 /// for `AUTO_REF_AFTER_TX_MS` after it, when the receive spectrum is only
 /// coming back. During a transmission the receive data is nearly empty (-135
-/// dB, `veldproef-build174.md`); measured on, the reference would sink there.
+/// dB, field test of build 174); measured on, the reference would sink there.
 /// Paused, it keeps its last receive value and carries on from it, instead of
-/// starting over (owner, 2026-10-11, choice A; build 176: the spectrum no
+/// starting over (by design; build 176: the spectrum no
 /// longer switches to transmit settings).
 #[derive(Debug, Default)]
 pub struct AutoRefHold {
@@ -187,9 +187,9 @@ impl AutoRefHold {
 /// What a PTT button shows over its ordinary face, strongest first - one rule
 /// for all three buttons (Thetis in the main window, the two Yaesu windows).
 /// Build 132 exists because a Yaesu face was wrong twice ("TX elsewhere" for a
-/// server refusal, then grey while the 991A keyed); review 317 moved that
-/// decision here, and the Thetis button, which had its own order inline in
-/// the client, followed (owner's decision, 2026-09-19).
+/// server refusal, then grey while the 991A keyed); that decision has since
+/// moved here, and the Thetis button, which had its own order inline in
+/// the client, followed.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PttFace {
     /// There is no such transmitter on this server (Thetis not configured).
@@ -287,7 +287,7 @@ mod ptt_face_tests {
     fn the_yaesu_button_says_the_strongest_thing_first() {
         assert_eq!(face(false, false, true, true, true), PttFace::UsbLost);
         assert_eq!(face(false, false, false, true, true), PttFace::Cw, "keyed after all: the refusal is old news");
-        assert_eq!(face(false, false, false, true, false), PttFace::Cw, "the ordinary case: keying, nothing refused (review 317 r2)");
+        assert_eq!(face(false, false, false, true, false), PttFace::Cw, "the ordinary case: keying, nothing refused");
         assert_eq!(face(false, false, false, false, true), PttFace::Refused);
         assert_eq!(face(false, false, false, false, false), PttFace::Normal);
     }
@@ -325,25 +325,25 @@ mod tests {
 
     /// A short press: released before the server said "transmitting". The
     /// window stays open for the transmission that follows and closes when
-    /// it ends (review of 170: build 170 closed it at once). A press the
+    /// it ends (build 170 closed it at once). A press the
     /// server never answers is bounded by the 2 s (build 171).
     #[test]
     fn a_short_press_keeps_the_window_for_its_own_transmission() {
         let mut w = MeterWindow::default();
         assert!(w.step(true, false, 0), "our press");
-        assert!(!w.step(false, false, 60), "released before the server said anything - no watts yet");
+        assert!(!w.step(false, false, 60), "released before the server said anything: no watts yet");
         assert!(w.step(false, true, 120), "the server's transmission arrives: watts");
         assert!(w.step(false, true, 300), "its tail: still watts");
         assert!(!w.step(false, false, 320), "it stopped: a signal again");
         assert!(!w.step(false, true, 400), "a later rise is someone else's");
-        // The second pass on the same window (working rule 9; review of 171):
+        // The second pass on the same window:
         // an ordinary press, then a short one - the short one's own
         // transmission must still count.
         assert!(w.step(true, true, 1000));
         assert!(w.step(false, true, 1100), "ordinary release: the tail");
         assert!(!w.step(false, false, 1200), "closed");
         assert!(w.step(true, false, 2000), "a short press");
-        assert!(w.open(), "our own press is open (review of 172, Z5)");
+        assert!(w.open(), "our own press is open");
         assert!(!w.step(false, false, 2050), "released before the server said anything");
         assert!(w.open(), "but the window is open for the transmission that follows");
         assert!(w.step(false, true, 2100), "that transmission: watts, not closed by the last one's leftovers");
@@ -368,7 +368,7 @@ mod tests {
 
     /// The automatic reference pauses during a transmission and for
     /// `AUTO_REF_AFTER_TX_MS` after it, and again for a second one on the same
-    /// hold (working rule 9; build 176).
+    /// hold.
     #[test]
     fn the_auto_reference_pauses_through_a_transmission() {
         let mut h = AutoRefHold::default();
@@ -389,15 +389,14 @@ mod tests {
         assert!(meter_shows_tx(true, false, None), "our PTT: at once, before the server says so");
         assert!(meter_shows_tx(false, true, Some(80)), "the tail after our release: still watts");
         assert!(!meter_shows_tx(false, false, Some(80)), "the server stopped: a signal again");
-        assert!(!meter_shows_tx(false, true, None), "a transmitter we never keyed - a Yaesu - is not ours");
+        assert!(!meter_shows_tx(false, true, None), "a transmitter we never keyed (a Yaesu) is not ours");
         assert!(meter_shows_tx(false, true, Some(METER_TX_AFTER_RELEASE_MS)));
         assert!(!meter_shows_tx(false, true, Some(METER_TX_AFTER_RELEASE_MS + 1)), "long after: someone else's");
         assert_eq!(METER_TX_AFTER_RELEASE_MS, 2000);
         // The engine feeds it, from our own release (a text guard: it pins
         // that the calls are there, not that they run).
         let engine = include_str!("engine.rs");
-        // The whole wiring, every tick and not only on the edge (reviews of
-        // 169 and 170).
+        // The whole wiring, every tick and not only on the edge.
         assert_eq!(engine.matches("\
                     yaesu_tx[1].ptt(yaesu2_ptt);
                     state.smeter_tx = meter_window.step(ptt, state.server_tx, start.elapsed().as_millis() as u64);
@@ -414,8 +413,8 @@ mod tests {
             assert_eq!(ui.matches(", self.ptt, self.other_tx").count(), 0, "{name}");
         }
         let content = include_str!("../../sdr-remote-client/src/ui/spectrum_content.rs");
-        assert!(content.contains("self.smeter,
-            self.smeter_tx,"));
+        assert!(content.contains("} else if self.smeter_tx {
+                super::spectrum::SpectrumMeter::Transmitting(self.smeter)"), "the plot's meter on the window's word");
         let main = include_str!("../../sdr-remote-android/android/app/src/main/java/com/sdrremote/ui/screens/MainScreen.kt");
         assert_eq!(main.matches("transmitting = state.transmitting").count(), 1, "only the PA panel");
         assert_eq!(main.matches("transmitting = state.meterTx").count(), 2);
@@ -423,11 +422,11 @@ mod tests {
         // reference pauses on the engine's word (build 176).
         assert_eq!(main.matches("spectrumRangeState.floatValue = 120f").count(), 0, "no transmit settings for the spectrum");
         assert_eq!(main.matches("if (!autoRefEnabled || state.autoRefPaused) return@LaunchedEffect").count(), 1);
-        // And the phone is handed the engine's word (review of 176, H5).
+        // And the phone is handed the engine's word.
         let view_model = include_str!("../../sdr-remote-android/android/app/src/main/java/com/sdrremote/viewmodel/SdrViewModel.kt");
         assert_eq!(view_model.matches("autoRefPaused = s.autoRefPaused,").count(), 1);
         // The desktop's peak needle and spectrum take their cue from the meter
-        // (review of 170: P3-P7).
+        // (P3-P7).
         let sync = include_str!("../../sdr-remote-client/src/ui/sync_state.rs");
         assert!(sync.contains("            state.smeter,\n            state.smeter_tx || state.other_tx,\n        );"), "the peak needle's cue");
         // The desktop no longer switches its spectrum at TX; all four
@@ -441,7 +440,7 @@ mod tests {
         assert_eq!(update_rs.matches("let ptt_active = self.thetis_mode_locked();").count(), 1);
         let rx_controls = include_str!("../../sdr-remote-client/src/ui/rx_controls.rs");
         assert_eq!(rx_controls.matches("let ptt_active = self.thetis_mode_locked();").count(), 1);
-        // And the lock is used, not only computed (review of 172, Z7/Z8).
+        // And the lock is used, not only computed.
         for (name, ui) in [("rx_controls.rs", rx_controls), ("update.rs", update_rs)] {
             assert_eq!(ui.matches("ui.add_enabled_ui(!ptt_active, |ui| controls::render_mode_selector(ui, ctx))").count(), 1, "{name}");
         }
@@ -450,7 +449,7 @@ mod tests {
         let update = include_str!("../../sdr-remote-client/src/ui/update.rs");
         assert_eq!(update.matches("tx_spectrum_saved").count(), 0, "no transmit settings to save any more (build 176)");
         // The phone's copies of the spectrum defaults and the auto-ref wait:
-        // two languages, so held equal here (build 171, working rule 15).
+        // two languages, so held equal here.
         use crate::state::{SPECTRUM_AUTO_REF_DEFAULT, SPECTRUM_RANGE_DEFAULT_DB};
         assert_eq!(main.matches(&format!("prefs.getFloat(\"spectrum_range\", {}f)", SPECTRUM_RANGE_DEFAULT_DB as i32)).count(), 1);
         assert_eq!(main.matches(&format!("prefs.getBoolean(\"auto_ref_enabled\", {})", SPECTRUM_AUTO_REF_DEFAULT)).count(), 1);

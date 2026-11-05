@@ -15,7 +15,7 @@ use tokio::net::TcpStream;
 
 /// Largest request accepted, headers and body together.
 ///
-/// Caddy already caps the body at 8 MB (design §2.2); this is the second bound,
+/// Caddy already caps the body at 8 MB; this is the second bound,
 /// because the machine has no swap and a process that buffers whatever arrives
 /// is one that can get its neighbour killed instead of itself.
 ///
@@ -43,7 +43,7 @@ pub struct Request {
 }
 
 impl Request {
-    /// The bearer token, if one was offered. Absence is not an error here — the
+    /// The bearer token, if one was offered. Absence is not an error here; the
     /// caller decides which paths need one.
     pub fn bearer(&self) -> Option<&str> {
         self.headers
@@ -78,7 +78,7 @@ impl Request {
 
 /// Read one request from the socket.
 ///
-/// Returns `None` for anything that is not a request we can serve — including
+/// Returns `None` for anything that is not a request we can serve; including
 /// things that are not HTTP at all, which is most of what an open port receives.
 pub async fn read_request(stream: &mut TcpStream) -> Option<Request> {
     let mut buf = Vec::with_capacity(2048);

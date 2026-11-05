@@ -2,8 +2,7 @@
 
 //! Band-selector render helper.
 //!
-//! This is the first implemented control helper (sub-step 2a of
-//! PATCH-client-controls-refactor). Replaces the inline band-button blocks in
+//! This is the first implemented control helper. Replaces the inline band-button blocks in
 //! `render_rx1_controls_inner` and `render_rx2_controls_inner`.
 //!
 //! A band switch is conceptually one logical user action (`UiIntent::SelectBand`)

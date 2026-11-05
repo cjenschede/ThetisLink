@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! A relay for tests (phase 3b): it does what `thetislink-relay`'s `serve_udp`
+//! A relay for tests (QUIC through the relay): it does what `thetislink-relay`'s `serve_udp`
 //! does - a token per slot, bound to the first source it is used from; a new
 //! connection for a slot revokes the tokens of the older one
 //! (`revoke_superseded`); the destination is the newest connection's token even
@@ -9,7 +9,7 @@
 //! after a network change. One stand-in for every crate that tests through the
 //! relay (feature `testing`), not one per test file.
 //!
-//! For punching (phase 3c) it also does what the relay's `udp-seen` does - it
+//! For hole punching it also does what the relay's `udp-seen` does - it
 //! tells a side the source it saw ([`FakeRelay::reflect`]) - and it counts what
 //! it forwarded, so a test can see the path leave it.
 //!
@@ -173,8 +173,7 @@ impl FakeRelay {
     /// A model, with the field's outcome and not its mechanism: on the real
     /// relay the old socket's packets come from a new address after the
     /// switch, and the token's binding to its first source refuses them. Either
-    /// way the old socket reaches nobody, which is what the tests need
-    /// (review 118).
+    /// way the old socket reaches nobody, which is what the tests need.
     pub fn kill(&self, src: SocketAddr) {
         self.book.lock().unwrap().dead.insert(src);
     }

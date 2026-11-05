@@ -13,8 +13,8 @@
          unaffected and the setting simply reads as unavailable there. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
-    <!-- PATCH-3: NSD-based mDNS scan needs a multicast lock. Normal
-         permission on Android 6+ — auto-granted at install, no runtime
+    <!-- NSD-based mDNS scan needs a multicast lock. Normal
+         permission on Android 6+; auto-granted at install, no runtime
          prompt. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Measurement mode only (build 181): the serving cell and GPS position in the
@@ -30,9 +30,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SdrRemote">
 
+        <!-- singleTask: one MainActivity, whatever starts it. Each one has its own
+             ViewModel and so its own connection, and a start that did not come
+             from the launcher (a shortcut, adb) put a second one on top of the
+             first, both connected. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:keepScreenOn="true">
             <intent-filter>

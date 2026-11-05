@@ -9,8 +9,8 @@
 //!
 //! # The direction matters
 //!
-//! The dependency points chat → relay and never the other way (design §2.4).
-//! That is the one direction the design permits, and it is the harmless one: a
+//! The dependency points chat → relay and never the other way.
+//! That is the one direction allowed, and it is the harmless one: a
 //! relay that is down means the postbox page cannot be logged into for a while,
 //! while reports keep arriving and the relay keeps carrying audio regardless of
 //! what happens here. The reverse - a relay that needs the chat - is what must

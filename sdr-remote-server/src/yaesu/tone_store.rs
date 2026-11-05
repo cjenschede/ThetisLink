@@ -49,7 +49,7 @@ pub(super) fn save(slot: u8, model: RadioModel, tones: &[Tone], prefix: &str) {
         return;
     }
     let Some(path) = path_for(slot) else { return };
-    let mut out = String::from("# ThetisLink FTX-1 memory tones - the radio cannot store these itself\n");
+    let mut out = String::from("# ThetisLink FTX-1 memory tones: the radio cannot store these itself\n");
     out.push_str(&format!("model\t{}\n", model.label()));
     for (ch, label, is_dcs) in tones {
         out.push_str(&format!(
@@ -105,7 +105,7 @@ pub(super) fn load(slot: u8, model: RadioModel, prefix: &str) -> Vec<Tone> {
     // one's would put a tone on a repeater channel nobody chose it for.
     if file_model.as_deref() != Some(model.label()) {
         warn!(
-            "{} kept tones are for {} and this is {} - not applying them",
+            "{} kept tones are for {} and this is {}: not applying them",
             prefix,
             file_model.as_deref().unwrap_or("an unknown radio"),
             model.label()

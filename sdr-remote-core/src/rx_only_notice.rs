@@ -11,10 +11,10 @@ use crate::oslang::UI_LANGUAGES;
 /// what helps. The array length is that list's length, so a fifth language is a
 /// compile error here.
 pub const TEXT: [&str; UI_LANGUAGES.len()] = [
-    "This antenna position is receive-only, and this Thetis (older than v2.10.3.14, without the ThetisLink extensions) cannot refuse transmitting itself - do not use the footswitch or MOX in Thetis",
-    "Deze antennestand is alleen voor ontvangst, en deze Thetis (ouder dan v2.10.3.14, zonder de ThetisLink-uitbreidingen) kan zenden niet zelf weigeren - gebruik in Thetis geen voetschakelaar of MOX",
-    "Diese Antennenstellung ist nur f\u{fc}r Empfang, und dieses Thetis (\u{e4}lter als v2.10.3.14, ohne die ThetisLink-Erweiterungen) kann Senden nicht selbst verweigern - in Thetis keinen Fu\u{df}schalter und kein MOX benutzen",
-    "Cette position d'antenne est en r\u{e9}ception seule, et ce Thetis (ant\u{e9}rieur \u{e0} v2.10.3.14, sans les extensions ThetisLink) ne peut pas refuser l'\u{e9}mission lui-m\u{ea}me - n'utilisez ni p\u{e9}dale ni MOX dans Thetis",
+    "This antenna position is receive-only, and this Thetis (older than v2.10.3.14, without the ThetisLink extensions) cannot refuse transmitting itself: do not use the footswitch or MOX in Thetis",
+    "Deze antennestand is alleen voor ontvangst, en deze Thetis (ouder dan v2.10.3.14, zonder de ThetisLink-uitbreidingen) kan zenden niet zelf weigeren: gebruik in Thetis geen voetschakelaar of MOX",
+    "Diese Antennenstellung ist nur f\u{fc}r Empfang, und dieses Thetis (\u{e4}lter als v2.10.3.14, ohne die ThetisLink-Erweiterungen) kann Senden nicht selbst verweigern: in Thetis keinen Fu\u{df}schalter und kein MOX benutzen",
+    "Cette position d'antenne est en r\u{e9}ception seule, et ce Thetis (ant\u{e9}rieur \u{e0} v2.10.3.14, sans les extensions ThetisLink) ne peut pas refuser l'\u{e9}mission lui-m\u{ea}me: n'utilisez ni p\u{e9}dale ni MOX dans Thetis",
 ];
 
 /// The line for a language code ("en", "nl", "de", "fr"); anything else is

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! mDNS service-advertise (PATCH-3 local-network discovery).
+//! mDNS service-advertise.
 //!
 //! Publishes `_thetislink._udp.local.` so desktop and Android clients on
 //! the same LAN can find the server without the user having to type an

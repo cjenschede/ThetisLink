@@ -101,7 +101,7 @@ fun RadioControls(
     onRf2kOperate: (Boolean) -> Unit,
     onSpeOperate: () -> Unit,
 ) {
-    // Stable callback for DriveSlider — prevents recomposition during polling
+    // Stable callback for DriveSlider: prevents recomposition during polling
     val onDriveChange: (Int) -> Unit = remember { { onControl(CONTROL_DRIVE, it) } }
 
     // rememberUpdatedState keeps values current inside pointerInput/LaunchedEffect
@@ -123,7 +123,7 @@ fun RadioControls(
             var holdStartMs by remember { mutableLongStateOf(0L) }
 
             // Timer: when holding 2s, trigger shutdown (ZZBY).
-            // Works in both power on and power off state — ZZBY when already off is harmless,
+            // Works in both power on and power off state; ZZBY when already off is harmless,
             // and this prevents long-press on red from accidentally toggling power on.
             LaunchedEffect(holdingPower) {
                 if (holdingPower) {
@@ -235,7 +235,7 @@ fun RadioControls(
         // hands it to the engine, which decides the launch (the same rule as the
         // desktop).
         val context = LocalContext.current
-        val prefs = remember { context.getSharedPreferences("thetislink", Context.MODE_PRIVATE) }
+        val prefs = remember { context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE) }
         var autostart by remember { mutableStateOf(prefs.getBoolean("thetis_autostart", false)) }
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -297,7 +297,7 @@ fun RadioControls(
 
         Spacer(Modifier.height(8.dp))
 
-        // TX Profile dropdown — uses server names (TCI) or manual config (CAT)
+        // TX Profile dropdown: uses server names (TCI) or manual config (CAT)
         val effectiveProfiles = if (serverTxProfileNames.isNotEmpty()) {
             serverTxProfileNames.mapIndexed { i, name -> i to name }
         } else {
@@ -428,7 +428,7 @@ private fun DriveSlider(driveLevel: Int, onDriveChange: (Int) -> Unit) {
 // what the label says - lives in sdr-remote-logic (filter_width) and is shared
 // with the desktop. Compose had its own copy until build 47: it kept the low
 // edge and added the width, showed the nearest step instead of the real width,
-// and that copy is the one report 74 locked up in.
+// and that copy is the one a reported lock-up happened in.
 @Composable
 fun FilterBandwidthControl(
     filterLowHz: Int,

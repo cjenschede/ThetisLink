@@ -24,7 +24,7 @@
 //!   7. PA operate restore.
 //!
 //! Threshold rationale (1 MΩ + 1 MΩ 1:1 divider on the yellow tune-status
-//! wire - see `docs/internal/referentie/MCP2221A-JC4s-wiring.md`):
+//! wire):
 //!   - idle yellow ≈ 4.5 V
 //!   - tune-LED on yellow ≈ 0 V
 //! Operator sets the switch threshold (default 2.25 V) and hysteresis
@@ -382,7 +382,7 @@ fn tuner_thread(
                     };
                     if due {
                         info!(
-                            "{}: bridge disconnected - attempting reconnect",
+                            "{}: bridge disconnected; attempting reconnect",
                             label
                         );
                         bridge.reconnect();
@@ -454,7 +454,7 @@ fn run_tune_sequence(
         }
         if start.elapsed() > Duration::from_secs(ACTIVE_SEARCH_TIMEOUT_SECS) {
             warn!(
-                "{}: ADC never went tune-active while GP2 HIGH for {} s - TIMEOUT",
+                "{}: ADC never went tune-active while GP2 HIGH for {} s; TIMEOUT",
                 label, ACTIVE_SEARCH_TIMEOUT_SECS
             );
             bridge.set_gp2(false);
@@ -500,7 +500,7 @@ fn run_tune_sequence(
         if restore_rf2k { safe_tune_operate_rf2k(rf2k, label); }
         return;
     }
-    info!("{}: tune carrier ON (ZZTU1) - waiting for ADC to return to idle", label);
+    info!("{}: tune carrier ON (ZZTU1); waiting for ADC to return to idle", label);
 
     // Step 5 - wait for tune complete (ADC back above the idle threshold).
     // Same dedup as Step 2: only count a consecutive idle edge when

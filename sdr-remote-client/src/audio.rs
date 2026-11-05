@@ -69,8 +69,8 @@ pub enum Choice {
     /// The only one that differs just in the Windows number.
     Renumbered(usize),
     /// More than one differs just in the Windows number: two of the same
-    /// codec, and the number was what told them apart. None is taken (review
-    /// of 188: the first in the list could be the other codec).
+    /// codec, and the number was what told them apart. None is taken (the first
+    /// in the list could be the other codec).
     Ambiguous(usize),
     Missing,
 }
@@ -119,8 +119,7 @@ pub fn first_open<T>(
             match open(i, o) {
                 Ok(a) => Ok(a),
                 Err(e) if i.is_some() || o.is_some() => {
-                    // Named in advance (working rule 11, build 190).
-                    warn!("Could not open the chosen devices at start ({}) - opening the defaults; the chosen microphone stays refused", e);
+                    warn!("Could not open the chosen devices at start ({}): opening the defaults; the chosen microphone stays refused", e);
                     open(None, None)
                 }
                 Err(e) => Err(e),
@@ -134,7 +133,7 @@ pub fn first_open<T>(
 const MIC_LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Looks for a missing microphone on a thread of its own: counting the devices
-/// takes 130-160 ms (measured, review of 188), and in the engine's playout tick
+/// takes 130-160 ms (measured), and in the engine's playout tick
 /// that was a stall every 2 s. Sets `back` once and stops; stops on `stop`.
 fn watch_for_input(name: String, back: Arc<AtomicBool>, stop: Arc<AtomicBool>) {
     let spawned = std::thread::Builder::new().name("mic-watch".to_string()).spawn(move || {
@@ -162,8 +161,6 @@ pub struct ClientAudio {
     capture_stream: Option<Stream>,
     playback_stream: Option<Stream>,
     running: Arc<AtomicBool>,
-    capture_level: Arc<AtomicU32>,
-    playback_level: Arc<AtomicU32>,
     /// Set by error callbacks when a device error occurs
     audio_error: Arc<AtomicBool>,
     /// Gate: when false, capture callback discards audio (prevents speaker->mic bleed)
@@ -219,8 +216,6 @@ impl ClientAudio {
         let (playback_producer, playback_consumer) = HeapRb::<f32>::new(RING_CAPACITY * 2).split();
 
         let running = Arc::new(AtomicBool::new(false));
-        let capture_level = Arc::new(AtomicU32::new(0));
-        let playback_level = Arc::new(AtomicU32::new(0));
         let audio_error = Arc::new(AtomicBool::new(false));
         let capture_gate = Arc::new(AtomicBool::new(false));
         let playback_mute = Arc::new(AtomicBool::new(false));
@@ -235,8 +230,6 @@ impl ClientAudio {
             capture_stream: None,
             playback_stream: None,
             running,
-            capture_level,
-            playback_level,
             audio_error,
             capture_gate,
             playback_mute,
@@ -278,14 +271,12 @@ impl ClientAudio {
                 }
                 (None, choice) => {
                     if let Choice::Ambiguous(n) = choice {
-                        // Named in advance (working rule 11, build 189).
                         warn!(
-                            "Input device '{}' matches {} devices without the Windows number - no microphone; pick it again in the settings",
+                            "Input device '{}' matches {} devices without the Windows number: no microphone; pick it again in the settings",
                             name, n
                         );
                     } else {
-                        // Named in advance (working rule 11, build 188).
-                        warn!("Input device '{}' not found - no microphone; transmitting is refused until it is back", name);
+                        warn!("Input device '{}' not found: no microphone; transmitting is refused until it is back", name);
                     }
                     self.missing_input = Some(name.to_string());
                     watch_for_input(name.to_string(), self.input_back.clone(), self.input_watch_stop.clone());
@@ -372,7 +363,6 @@ impl ClientAudio {
         let out_stream_config = output_config.config();
 
         // Capture (microphone) - downmix to mono
-        let level = self.capture_level.clone();
         let err_flag = self.audio_error.clone();
         let gate = self.capture_gate.clone();
         let gate_delay_samples = self.capture_gate_delay_samples.clone();
@@ -394,7 +384,6 @@ impl ClientAudio {
                     if !gate.load(Ordering::Relaxed) {
                         was_open = false;
                         gate_delay_remaining = 0;
-                        level.store(0u32, Ordering::Relaxed);
                         return;
                     }
                     // On the open transition, latch the configured discard window.
@@ -412,13 +401,8 @@ impl ClientAudio {
                     gate_delay_remaining -= skip as u32;
                     let out = &mono_scratch[skip..];
                     if out.is_empty() {
-                        level.store(0u32, Ordering::Relaxed);
                         return;
                     }
-
-                    let rms = (out.iter().map(|&s| s * s).sum::<f32>()
-                        / out.len().max(1) as f32).sqrt();
-                    level.store(rms.to_bits(), Ordering::Relaxed);
 
                     capture_producer.push_slice(out);
                 },
@@ -433,7 +417,6 @@ impl ClientAudio {
         };
 
         // Playback (speakers) - mono or stereo (binaural R channel)
-        let level = self.playback_level.clone();
         let err_flag = self.audio_error.clone();
         let mute = self.playback_mute.clone();
         let alarm = self.swr_alarm.clone();
@@ -458,7 +441,7 @@ impl ClientAudio {
                 move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     // What the device itself predicts between this callback and
                     // the speaker: the half of the sidetone's latency that the
-                    // callback cannot measure (CW design, measurement 4).
+                    // callback cannot measure (build 99).
                     // Told on every callback, and told 0 when there is nothing to
                     // tell: the Sidetone outlives a device switch, and the figure
                     // of the previous device must not stand for this one.
@@ -471,9 +454,8 @@ impl ClientAudio {
                     // Two ways to fill the buffer, and ONE place that mixes into it.
                     // The alarms and the sidetone used to be mixed at the end of
                     // each branch; a third branch with an early return would have
-                    // dropped all three without a sound (rule 15). Nothing returns
-                    // from inside a branch any more, and fitness.ps1 counts the
-                    // mixing place: one.
+                    // dropped all three without a sound. Nothing returns from
+                    // inside a branch any more, and there is one mixing place.
                     if mute.load(Ordering::Relaxed) {
                         // Instant mute during TX: output zeros and drain ring buffer.
                         if drain_scratch.len() < data.len() {
@@ -481,7 +463,6 @@ impl ClientAudio {
                         }
                         playback_consumer.pop_slice(&mut drain_scratch[..data.len()]);
                         data.fill(0.0);
-                        level.store(0u32, Ordering::Relaxed);
                     } else {
                         // Read interleaved stereo (L,R,L,R,...) into temp buffer
                         let frames = data.len() / out_channels.max(1);
@@ -506,12 +487,6 @@ impl ClientAudio {
                                 data[base] = (l + r) * 0.5;
                             }
                         }
-
-                        // RMS level from L channel (before anything is mixed in, so
-                        // the meter keeps showing received audio only)
-                        let sum_sq: f32 = (0..read_frames).map(|i| { let s = stereo_buf[i * 2]; s * s }).sum();
-                        let rms = (sum_sq / read_frames.max(1) as f32).sqrt();
-                        level.store(rms.to_bits(), Ordering::Relaxed);
                     }
 
                     // High SWR is a TX condition and the sidetone is keyed during
@@ -587,14 +562,6 @@ impl ClientAudio {
         written
     }
 
-    pub fn capture_level(&self) -> f32 {
-        f32::from_bits(self.capture_level.load(Ordering::Relaxed))
-    }
-
-    pub fn playback_level(&self) -> f32 {
-        f32::from_bits(self.playback_level.load(Ordering::Relaxed))
-    }
-
     /// The chosen microphone that was not found (build 188).
     pub fn missing_input(&self) -> Option<String> {
         self.missing_input.clone()
@@ -625,14 +592,6 @@ impl sdr_remote_logic::audio::AudioBackend for ClientAudio {
 
     fn write_playback_stereo(&mut self, left: &[f32], right: &[f32]) -> usize {
         ClientAudio::write_playback_stereo(self, left, right)
-    }
-
-    fn capture_level(&self) -> f32 {
-        ClientAudio::capture_level(self)
-    }
-
-    fn playback_level(&self) -> f32 {
-        ClientAudio::playback_level(self)
     }
 
     fn missing_input(&self) -> Option<String> {
@@ -711,7 +670,7 @@ mod tests {
         );
         assert_eq!(update.matches("desktop_frame(").count(), 2, "no PTT path around the rule");
         // And every PTT button's face hears of it: Thetis here, both Yaesu
-        // buttons through yaesu_ptt_face (review of 191: dropping either stayed
+        // buttons through yaesu_ptt_face (dropping either stayed
         // green, `..Default::default()` hides it).
         let popouts = include_str!("ui/popouts.rs");
         assert_eq!(
@@ -719,13 +678,13 @@ mod tests {
                 + popouts.matches("mic_missing: self.mic_missing.is_some(),").count(),
             2
         );
-        // The engine's audio opens through first_open (review of 191, N2b).
+        // The engine's audio opens through first_open.
         assert!(include_str!("main.rs").contains("audio::first_open(first, input, output, open)"));
     }
 
     /// The first opening: the chosen devices; if they will not open, the
     /// defaults; with no choice a failure stays a failure; and only the first
-    /// call gets the choice (build 191; review of 190: taking the fallback out
+    /// call gets the choice (build 191: taking the fallback out
     /// stayed green).
     #[test]
     fn the_first_opening_falls_back_to_the_defaults() {
@@ -752,7 +711,7 @@ mod tests {
 
     /// The choice: the name itself first; without the number only when exactly
     /// one fits - two of the same codec are told apart by that number, and the
-    /// first in the list could be the other one (review of 188, M1 and B).
+    /// first in the list could be the other one.
     #[test]
     fn the_chosen_microphone_is_found_or_none_is_taken() {
         let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -766,7 +725,7 @@ mod tests {
     }
 
     /// No other microphone than the chosen one: the default device is opened
-    /// only when nothing is chosen (review of 188, M5: putting the old
+    /// only when nothing is chosen (putting the old
     /// fallback back stayed green).
     #[test]
     fn the_default_microphone_opens_only_without_a_choice() {

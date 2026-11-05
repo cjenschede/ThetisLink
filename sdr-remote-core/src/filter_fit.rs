@@ -25,7 +25,7 @@ pub fn edges_fit_mode(mode: u8, low: i32, high: i32) -> bool {
 mod fit_tests {
     use super::edges_fit_mode;
 
-    /// The two band memories of the owner's drive (2026-10-17) do not fit, the
+    /// The two band memories from a drive on 2026-10-17 do not fit, the
     /// ordinary filters of every mode do (build 243).
     #[test]
     fn edges_fit_their_mode() {

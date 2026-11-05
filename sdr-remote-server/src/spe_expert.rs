@@ -10,8 +10,7 @@ use log::{debug, info, warn};
 /// SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA power amplifier USB serial controller.
 /// Communicates via 115200 baud 8N1, binary command protocol.
 ///
-/// Protocol reference: SPE Application Programmer's Guide Rev. 1.1 (15.10.2015)
-/// - see `docs/referentie/SPE_Application_Programmers_Guide.pdf`.
+/// Protocol reference: SPE Application Programmer's Guide Rev. 1.1 (15.10.2015).
 ///
 ///   Command (host -> PA):  [0x55 0x55 0x55] [CNT] [DATA...] [CHK]
 ///                           CHK = sum(DATA) mod 256
@@ -149,7 +148,7 @@ impl SpeExpert {
 }
 
 // ============================================================================
-// Polling state machine (PATCH-spe-expert-polling-state)
+// Polling state machine
 // ----------------------------------------------------------------------------
 // Replaces the legacy linear `consecutive_failures` counter with explicit
 // connection states so that:
@@ -157,7 +156,6 @@ impl SpeExpert {
 //   - warm-up tolerance prevents false `mark_disconnected` on UART startup
 //   - adaptive polling runs fast (75ms) during TX and slow (1s / 2s) in RX
 //     and offline modes
-// See the internal design notes for the SPE Expert polling-state rationale.
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,7 +289,7 @@ pub(crate) fn next_state(
             IoError => (
                 Offline,
                 Some(TransitionLog::Warn(
-                    "SPE Expert IO error - going offline".to_string(),
+                    "SPE Expert IO error: going offline".to_string(),
                 )),
             ),
             OverflowWithPreamble | OverflowUnknown | ParseError => {
@@ -299,7 +297,7 @@ pub(crate) fn next_state(
                     (
                         Offline,
                         Some(TransitionLog::Warn(
-                            "SPE Expert did not come online - check connection".to_string(),
+                            "SPE Expert did not come online: check connection".to_string(),
                         )),
                     )
                 } else {
@@ -316,7 +314,7 @@ pub(crate) fn next_state(
             IoError => (
                 Offline,
                 Some(TransitionLog::Info(
-                    "SPE Expert offline - polling continues silently".to_string(),
+                    "SPE Expert offline: polling continues silently".to_string(),
                 )),
             ),
             _ => {
@@ -324,7 +322,7 @@ pub(crate) fn next_state(
                     (
                         Offline,
                         Some(TransitionLog::Info(
-                            "SPE Expert offline - polling continues silently".to_string(),
+                            "SPE Expert offline: polling continues silently".to_string(),
                         )),
                     )
                 } else {
@@ -376,7 +374,7 @@ pub(crate) fn next_state(
 }
 
 /// Whether a given failure kind counts toward the threshold-counter in the
-/// given state. Matches the counting-policy table in brief §1.4.
+/// given state.
 ///
 /// - `IoError` and `CatPortMismatch` never count - they trigger immediate
 ///   transitions in `next_state` and do not accumulate.
@@ -669,7 +667,7 @@ fn run_poll_cycle(
             let (new_state, log_line) =
                 next_state(old_state, SpeEvent::PollFail(kind), &ctx);
             // Only increment when we stayed in the same state AND this kind
-            // counts per brief §1.4 counting-policy. Any actual transition resets.
+            // counts per the counting policy (`counts_toward_threshold`). Any actual transition resets.
             if old_state != new_state {
                 *consecutive_fails = 0;
             } else if counts_toward_threshold(old_state, kind) {
@@ -1092,7 +1090,6 @@ pub fn power_level_name(level: u8) -> &'static str {
 
 // ============================================================================
 // Tests - classifier, transition function, adaptive polling, replay sessions.
-// See PATCH-spe-expert-polling-state §1.8 and §1.11.
 // ============================================================================
 
 #[cfg(test)]
@@ -1178,7 +1175,7 @@ mod tests {
         );
     }
 
-    // --- state transitions: minimum 10 cases, one per arrow in §1.2 ----------
+    // --- state transitions: minimum 10 cases, one per arrow of the machine ---
 
     #[test]
     fn unknown_initial_ok_goes_to_warmingup_with_log() {
@@ -1340,7 +1337,7 @@ mod tests {
         );
     }
 
-    // --- replay tests (§1.11 acceptance criteria 3 & 4) ---------------------
+    // --- replay tests: reported log sessions --------------------------------
 
     /// Drives the state machine through an event list, collecting transitions
     /// and log lines for assertion.
@@ -1431,7 +1428,7 @@ mod tests {
     // The pure state-machine adds +1 inside its threshold check, so the caller
     // MUST pass the pre-fail counter and only increment for kinds that count.
     #[test]
-    fn counts_toward_threshold_matches_brief_1_4() {
+    fn counts_toward_threshold_matches_the_counting_policy() {
         use PollFailureKind::*;
         use SpeConnState::*;
 

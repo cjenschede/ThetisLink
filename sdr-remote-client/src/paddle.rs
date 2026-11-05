@@ -3,20 +3,20 @@
 //! keyer fed from every read, and the key edges handed to the UI thread over a
 //! channel.
 //!
-//! Step 2 of `docs/internal/DESIGN-remote-cw.md`. Only the carrying lives here:
+//! Only the carrying lives here:
 //! the rule - what a contact means, when an element starts and how long it is -
 //! is `sdr_remote_logic::cw_keyer`, shared with every front end. The keyer runs
 //! *on the reader thread*, right next to the hardware, so an edge exists the
 //! moment the sample that caused it has been read; the UI thread only ever
 //! reads a channel, and never has a read blocking on it.
 //!
-//! Measured on the owner's board on 2026-09-17 (`mcp2221-test paddle`): one
+//! Measured on a real board on 2026-09-17 (`mcp2221-test paddle`): one
 //! `gpio_read` takes 1.9 ms median, 2.1 ms at the 95th percentile, so the loop
 //! reads without sleeping and the board sets the pace. All four GP pins come
 //! back from one transaction, so the two paddle contacts are read at the same
 //! instant - what an iambic squeeze needs.
 //!
-//! Pins, from the design (section 5.1): GP0 = paddle contact A, GP1 = paddle
+//! Pins: GP0 = paddle contact A, GP1 = paddle
 //! contact B, GP2 = straight key. The board has no pull-ups; the daughter board
 //! holds each pin high and a closed contact pulls it low. A pin the operator
 //! has not wired floats and follows its neighbour (measured), which is why the
@@ -94,8 +94,8 @@ pub struct PaddleManager {
     /// running on a flag that was set again.
     reader: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
     /// Readers that were told to stop and not yet joined. The UI thread never
-    /// joins - a HID call in flight can take longer than a frame (review
-    /// finding on build 89) - the next reader joins them before it opens the
+    /// joins - a HID call in flight can take longer than a frame (found in
+    /// build 89) - the next reader joins them before it opens the
     /// board, which is also what keeps two readers off one board.
     retired: Vec<JoinHandle<()>>,
     status: PaddleStatus,
@@ -199,7 +199,7 @@ pub(crate) fn gap_since(last: Option<u64>, at_ms: u64) -> Option<u64> {
 
 /// The value at quantile `q` of a sorted, non-empty slice, rounding the index
 /// up: on a window of two reads the 95th percentile is the slower one, not
-/// the faster (review finding on build 89).
+/// the faster (found in build 89).
 pub(crate) fn percentile(sorted: &[Duration], q: f64) -> Duration {
     let idx = ((sorted.len() - 1) as f64 * q).ceil() as usize;
     sorted[idx.min(sorted.len() - 1)]
@@ -208,8 +208,8 @@ pub(crate) fn percentile(sorted: &[Duration], q: f64) -> Duration {
 /// A GP pin reading as a contact: closed only when the pin is a GPIO *input*
 /// that reads low. A pin that is not in GPIO mode is `None`, and a pin that is
 /// an output - another process on the same board could have made it one -
-/// reports its own drive level, not a contact; both count as open (review
-/// finding on build 89).
+/// reports its own drive level, not a contact; both count as open (found in
+/// build 89).
 fn closed(pin: Option<(GpioDirection, LogicLevel)>) -> bool {
     matches!(pin, Some((GpioDirection::Input, LogicLevel::Low)))
 }
@@ -428,7 +428,7 @@ mod tests {
     /// tries of 2 s", a Rate line every 10 s), pinned so they cannot drift
     /// without a test saying so - same class as DEBOUNCE_MS in the keyer.
     #[test]
-    fn the_delays_are_what_the_brief_says() {
+    fn the_delays_are_the_chosen_ones() {
         assert_eq!(RECONNECT_DELAY, Duration::from_secs(2));
         assert_eq!(RATE_REPORT_EVERY, Duration::from_secs(10));
     }
@@ -452,7 +452,7 @@ mod tests {
         let took = t.elapsed();
         assert!(took >= Duration::from_millis(150), "returned early: {took:?}");
         // 300, not 400: with 150 ms asked for, 400 let 2.5 extra slices through
-        // (review finding on build 90); the real code takes ~200.
+        // (found in build 90); the real code takes ~200.
         assert!(took < Duration::from_millis(300), "a slice longer than 100 ms: {took:?}");
     }
 

@@ -72,11 +72,11 @@ pub enum PacketType {
     AudioMultiCh = 0x1B,
     /// RX1 S-meter Sig source (server → client, same SmeterPacket format).
     /// Emitted when client subscribes via SmeterSources bit 0. Carries WDSP
-    /// RXA_S_PK (peak-hold with 100ms decay) — Multimeter "Sig" mode.
+    /// RXA_S_PK (peak-hold with 100ms decay): Multimeter "Sig" mode.
     SmeterSig = 0x1C,
     /// RX1 S-meter MaxBin source (server → client, same SmeterPacket format).
     /// Emitted when client subscribes via SmeterSources bit 2. Carries the
-    /// highest single FFT bin in the passband — Multimeter "Max Bin" mode.
+    /// highest single FFT bin in the passband; Multimeter "Max Bin" mode.
     SmeterMaxBin = 0x1D,
     /// RX2 S-meter Sig source (server → client). Bit 4 in SmeterSources.
     SmeterRx2Sig = 0x1E,
@@ -98,7 +98,7 @@ pub enum PacketType {
     TotpChallenge = 0x33,
     /// TOTP response (client → server, 6-digit code as UTF-8 string)
     TotpResponse = 0x34,
-    /// VRX audio (server → client) — Virtual RX audio stream, Opus-encoded
+    /// VRX audio (server → client): Virtual RX audio stream, Opus-encoded
     /// narrowband (8 kHz mono). Carries a `vrx_id` byte so multiple VRX
     /// channels can be multiplexed on the same UDP socket. Currently
     /// experimental (M2b spike), single hardcoded VRX in v2.1.1+.
@@ -115,7 +115,7 @@ pub enum PacketType {
     /// VRX2 high-res extracted spectrum view (server → client).
     SpectrumVrx2 = 0x24,
 
-    // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime) ──
+    // ── Dual-radio slot 1 ──
     // Slot 0 = existing Yaesu packets (0x16-0x19), byte-identical/unchanged.
     // Slot 1 = second radio, own packet variants in the free gap 0x25-0x28.
     // Back-compat by construction: old clients don't know these types, parse
@@ -133,28 +133,28 @@ pub enum PacketType {
     /// Separate packet so the byte-identical slot-0 YaesuState is left untouched
     /// (B-prime); old clients ignore this unknown type.
     RadioInfo = 0x29,
-    /// VRX tracked carrier frequency (server → client) — SAM auto-tune.
+    /// VRX tracked carrier frequency (server → client); SAM auto-tune.
     /// Layout like VrxFrequencyPacket: header(4) + vrx_id(1) + frequency_hz(8)
     /// = 13 bytes. Sent (throttled, ≥~10 Hz delta) when auto-tune is
     /// on and the PLL tracks the carrier, so the client VFO follows along.
     /// Per-client gated on VrxSamAutoTune(2); old clients never subscribe.
     FrequencyVrxActual = 0x2A,
-    /// Current TX modulation filter band (server → client) — PATCH-tx-modulation-
-    /// bandwidth. Layout: header(4) + low_hz(i32) + high_hz(i32) = 12 bytes.
+    /// Current TX modulation filter band (server → client).
+    /// Layout: header(4) + low_hz(i32) + high_hz(i32) = 12 bytes.
     /// Sent as soon as Thetis reports a tx_filter_band_ex; the client shows the
     /// current value and thereby knows that setting it is supported. Old
-    /// clients don't process this type — an unknown packet type is nonfatal
+    /// clients don't process this type; an unknown packet type is nonfatal
     /// (they log it at most as "unknown packet type" and carry on).
     TxFilterBand = 0x2B,
     /// Typed Yaesu DSP/function control (client→server): {slot, control, value}.
-    /// Replaces YaesuButton magic-values (PATCH-yaesu-extra-controls). Additive.
+    /// Replaces YaesuButton magic-values. Additive.
     YaesuControl = 0x2C,
     /// Yaesu feature-state feedback (server→client): per-slot toggles bitfield +
     /// levels. Value-change-only, opt-in send. Additive.
     YaesuFeature = 0x2D,
     /// Yaesu radio presence (server→client, broadcast to all clients): which
     /// slots have a connected radio + their model. Decouples the selector/
-    /// connected-status from the audio+state subscription — dynamic (dropping/
+    /// connected-status from the audio+state subscription; dynamic (dropping/
     /// appearing) instead of sticky. Push-on-change + once on (re)connect.
     /// Old clients ignore this unknown type (back-compat by construction).
     YaesuPresence = 0x2E,
@@ -173,15 +173,15 @@ pub enum PacketType {
     /// truncated log to a report and call it the server's log.
     ServerReportPart = 0x36,
     /// "Got your control number n" (server -> client), `header(4) + seq u32`.
-    /// Phase 2b of the direct connection: a `Control` or `YaesuControl` with a
+    /// A `Control` or `YaesuControl` with a
     /// sequence number in its four-byte tail is acknowledged with this; see
     /// `control_ack`. An older client does not know the type and ignores it.
     ControlAck = 0x37,
-    /// Phase 3c, punching: "this is my public address" (client -> server),
+    /// Punching: "this is my public address" (client -> server),
     /// `header(4) + address`, see [`PunchPacket`]. Only inside the QUIC
     /// connection, which carries it end to end and to this one peer.
     PunchOffer = 0x38,
-    /// Phase 3c: "punched - send to this address" (server -> client), same shape.
+    /// Punching: "punched - send to this address" (server -> client), same shape.
     PunchReady = 0x39,
     /// L+R (build 142): "we are behind the same router - send to my own port
     /// at this local address" (server -> client), same shape. The answer to an
@@ -197,7 +197,7 @@ impl PacketType {
     /// True for every audio-carrying packet type. Transport routing and the
     /// bandwidth classifier key on this: audio takes the low-latency path
     /// (relay UDP), everything else the reliable path (wss). The match is
-    /// EXHAUSTIVE on purpose — adding a new `Audio*` variant forces a
+    /// EXHAUSTIVE on purpose: adding a new `Audio*` variant forces a
     /// compile-time decision here instead of silently mis-routing over the
     /// slow path (the drift that previously lived as literal byte-sets in the
     /// relay and the server classifier).
@@ -312,7 +312,7 @@ pub enum ControlId {
     SpectrumMaxBins = 0x1A,
     /// RX2 spectrum max bins per packet (same encoding as SpectrumMaxBins)
     Rx2SpectrumMaxBins = 0x1B,
-    /// FFT size for spectrum processing (value: size in K, e.g. 32=32768, 65=65536, 131=131072, 262=262144)
+    /// FFT size for spectrum processing (value: size in K, 0 = auto; the server runs the next power of two, at most MAX_FFT_SIZE_K)
     SpectrumFftSize = 0x1C,
     /// RX2 FFT size for spectrum processing (same encoding as SpectrumFftSize)
     Rx2SpectrumFftSize = 0x3F,
@@ -347,7 +347,7 @@ pub enum ControlId {
     YaesuSquelch = 0x29,
     /// Yaesu RF gain (value: 0-255)
     YaesuRfGain = 0x2A,
-    /// Yaesu mic gain (value: 0-100) — radio's own mic gain, not ThetisLink TX gain
+    /// Yaesu mic gain (value: 0-100): radio's own mic gain, not ThetisLink TX gain
     YaesuRadioMicGain = 0x2B,
     /// Yaesu RF power (value: 0-100)
     YaesuRfPower = 0x2C,
@@ -413,10 +413,10 @@ pub enum ControlId {
     AgcAutoRx2 = 0x49,
 
     /// DDC sample rate RX1 (value: rate in kHz, e.g. 384 = 384000 Hz).
-    /// Source: stock TCI `iq_samplerate` (primary) or `if_limits` (fallback) — see
-    /// `PATCH-tl2-server-if-limits` (alpha-3). Both RX1 and RX2 get the same
+    /// Source: stock TCI `iq_samplerate` (primary) or `if_limits` (fallback).
+    /// Both RX1 and RX2 get the same
     /// value in stock mode (TCI exposes one global rate). Per-RX divergence
-    /// returns via TL2-x fork extensions in Phase 3.
+    /// needs a fork extension.
     DdcSampleRateRx1 = 0x3D,
     /// DDC sample rate RX2 (same encoding as DdcSampleRateRx1).
     DdcSampleRateRx2 = 0x3E,
@@ -435,7 +435,7 @@ pub enum ControlId {
     DiversityPhase = 0x45,
     /// Read diversity state from Thetis (value: ignored)
     DiversityRead = 0x46,
-    /// Diversity GainMulti — gates per-RX gain max (value: multi × 100, range 100..1000 = 1.00..10.00).
+    /// Diversity GainMulti: gates per-RX gain max (value: multi × 100, range 100..1000 = 1.00..10.00).
     /// TL2-1 fork-only `diversity_gain_multi_ex` command.
     DiversityGainMulti = 0x47,
 
@@ -483,12 +483,14 @@ pub enum ControlId {
     SmeterSources = 0x64,
     /// DX-spot stream opt-out (value 0=off, 1=on). Default ON. When OFF
     /// the server sends no more `PacketType::Spot` frames to this client
-    /// — bandwidth saving on metered links.
+    /// (a bandwidth saving on metered links).
     DxSpotsEnabled = 0x65,
     /// Thetis wideband-audio opt-in (value 0=narrowband 8 kHz default,
     /// 1=wideband 16 kHz). When 1 the server sends RX1/RX2/BinR via
     /// wideband Opus and accepts TX audio with `Flags::AUDIO_WIDEBAND`.
-    /// Requires `Capabilities::WIDEBAND_AUDIO` on both server and client.
+    /// No capability bit gates it (`Capabilities::WIDEBAND_AUDIO` is set by
+    /// no build): a server that does not know it stays narrowband, and the
+    /// packet flags say which the audio is.
     ThetisWidebandAudio = 0x66,
 
     /// VRX enable (client → server, value 0/1, vrx_id implicit = 0 for single-VRX
@@ -508,7 +510,7 @@ pub enum ControlId {
     VrxEnable2 = 0x6A,
     /// VRX2 mode (client → server, value 0=USB, 1=LSB). Mirrors `VrxMode`.
     VrxMode2 = 0x6B,
-    /// VRX2 volume placeholder — present for protocol symmetry with VRX1.
+    /// VRX2 volume placeholder: present for protocol symmetry with VRX1.
     /// Build 50+: local mix gain on the client; not currently applied
     /// server-side (channel is its own UDP stream).
     VrxVolume2 = 0x6C,
@@ -533,7 +535,7 @@ pub enum ControlId {
     /// VRX2 high-res spectrum span in kHz (client → server).
     VrxSpectrumSpanKhz2 = 0x74,
 
-    // ── Wide / synchronous-AM VRX-UX (PATCH-vrx-wide-sam-ux) ──
+    // ── Wide / synchronous-AM VRX-UX ──
     /// VRX audio-rate mode (client → server, 0=NB/8k, 1=WB/16k, 2=Auto).
     /// One control for VRX1+VRX2. In Auto the server picks the rate per VRX
     /// based on the filter width (≥4 kHz audio-BW → 16k). The client
@@ -545,7 +547,7 @@ pub enum ControlId {
     /// VRX2 SAM auto-tune-to-carrier enable (client → server, 0/1).
     VrxSamAutoTune2 = 0x77,
 
-    // ── TX modulation bandwidth (PATCH-tx-modulation-bandwidth) ──
+    // ── TX modulation bandwidth ──
     /// TX filter low edge (client → server, signed Hz as u16). Server sets it
     /// via tx_filter_band_ex (stock v2.10.3.14+ / fork). Main-radio TX, not VRX.
     TxFilterLow = 0x78,
@@ -554,12 +556,12 @@ pub enum ControlId {
 
     /// VRX2 audio-rate NB/WB/Auto (client → server). Additive to
     /// `VrxAudioRate` (=VRX1) so each per-client independent VRX can set its own
-    /// rate (PATCH-vrx-per-client, Option B). Back-compat: old clients
+    /// rate. Back-compat: old clients
     /// don't send it (VRX1+2 then share `VrxAudioRate`); old servers drop this
     /// unknown control packet nonfatal. Client sends only on-change (no hot-loop spam).
     VrxAudioRate2 = 0x7A,
 
-    // ── Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1, Option B-prime) ──
+    // ── Dual-radio slot 1 ──
     // 1:1 mirror of the slot-0 Yaesu controls (0x20-0x2F) on the free range
     // 0x80-0x8F. NOT 0x30-0x3F (occupied by AGC/RIT/DDC/Rx2 controls).
     // Yaesu2Enable is also the slot-1 subscription gate: a session only gets
@@ -605,7 +607,7 @@ pub enum ControlId {
     /// RX1 audio subscription (value 0/1). Default ON at the server, so old
     /// clients that never send this keep getting RX1 audio. A client that
     /// uses only VRX sets this to 0 to stop the RX1 audio stream
-    /// (save bandwidth). REFACTOR-audio-spectrum-per-channel phase 3.
+    /// (save bandwidth).
     Rx1Enable = 0x91,
     /// Yaesu slot-0 STATE subscription (value 0/1), SEPARATE from the audio. Client sets this
     /// on when the control window is open: then freq/s-meter/CAT/feature keep running
@@ -673,6 +675,20 @@ pub enum ControlId {
     DdcCentreRx1 = 0x9C,
     /// The DDC centre of RX2 (same encoding as `DdcCentreRx1`).
     DdcCentreRx2 = 0x9D,
+    /// RX1 spectrum pan on the whole u16 (`pack_spectrum_pan_fine`): 1/65534 of
+    /// the receiver per step, 6 Hz at 384 kHz, where `SpectrumPan` has 1/10000.
+    /// The client sends both; a server that knows this one takes it and from then
+    /// on ignores the coarse one of that session, so a late coarse packet cannot
+    /// undo it. A server that does not know it ignores it and uses the coarse one.
+    SpectrumPanFine = 0x9E,
+    /// RX2 spectrum pan, the same encoding as `SpectrumPanFine`.
+    Rx2SpectrumPanFine = 0x9F,
+    /// VRX1 high-res spectrum width in steps of `VRX_SPAN_STEP_HZ` (client ->
+    /// server), beside `VrxSpectrumSpanKhz`: in whole kHz the narrowest window
+    /// was 1 kHz, so the VRX stopped zooming at the DDC rate / 1000.
+    VrxSpectrumSpanFine = 0xA0,
+    /// VRX2 high-res spectrum width, the same encoding.
+    VrxSpectrumSpanFine2 = 0xA1,
 }
 
 /// Controls that carry PER-SESSION server state.
@@ -700,6 +716,7 @@ pub const SESSION_SCOPED_CONTROLS: &[ControlId] = &[
     ControlId::SpectrumFps,
     ControlId::SpectrumZoom,
     ControlId::SpectrumPan,
+    ControlId::SpectrumPanFine,
     ControlId::SpectrumMaxBins,
     // RX2 audio and its own spectrum
     ControlId::Rx2Enable,
@@ -707,6 +724,7 @@ pub const SESSION_SCOPED_CONTROLS: &[ControlId] = &[
     ControlId::Rx2SpectrumFps,
     ControlId::Rx2SpectrumZoom,
     ControlId::Rx2SpectrumPan,
+    ControlId::Rx2SpectrumPanFine,
     ControlId::Rx2SpectrumMaxBins,
     // Both Yaesu slots: audio and the separate state subscription. The state one
     // is what makes the screen follow the radio's own VFO knob; losing it looks
@@ -728,7 +746,9 @@ pub const SESSION_SCOPED_CONTROLS: &[ControlId] = &[
     ControlId::DxSpotsEnabled,
     ControlId::FullSpectrumEnabled,
     ControlId::ThetisWidebandAudio,
-    ControlId::VfoSync,
+    // Not here: VfoSync and the FFT sizes. They set Thetis or the receiver for
+    // every client, so a replay of this client's last choice would undo what
+    // another client or the operator in Thetis set since.
     // Not a subscription but per-session all the same, and its loss reaches
     // further than the client that loses it: the server applies the strictest
     // setting across all clients, so one session falling back to the default
@@ -738,6 +758,84 @@ pub const SESSION_SCOPED_CONTROLS: &[ControlId] = &[
 
 /// Hertz per step of [`ControlId::VrxSpectrumPan`].
 pub const VRX_PAN_STEP_HZ: i32 = 10;
+
+/// Hertz per step of [`ControlId::VrxSpectrumSpanFine`]: a u16 then reaches
+/// 1.64 MHz, the widest DDC there is.
+pub const VRX_SPAN_STEP_HZ: u32 = 25;
+
+/// The pan of the RX1/RX2 spectrum in [`ControlId::SpectrumPan`] (the coarse
+/// one, for a server that does not know the fine one).
+pub fn pack_spectrum_pan(pan: f32) -> u16 {
+    ((pan + 0.5) * 10000.0) as u16
+}
+
+/// The coarse pan back from the control value.
+pub fn unpack_spectrum_pan(value: u16) -> f32 {
+    value as f32 / 10000.0 - 0.5
+}
+
+/// The pan in [`ControlId::SpectrumPanFine`]: -0.5..0.5 as 0..65534 around
+/// 32767, so no pan is exactly no pan and the marker stays in the middle.
+pub fn pack_spectrum_pan_fine(pan: f32) -> u16 {
+    ((pan.clamp(-0.5, 0.5) as f64 * 65534.0).round() + 32767.0) as u16
+}
+
+/// The fine pan back from the control value.
+pub fn unpack_spectrum_pan_fine(value: u16) -> f32 {
+    ((value.min(65534) as f64 - 32767.0) / 65534.0) as f32
+}
+
+/// The controls only a server with [`Capabilities::FINE_SPECTRUM_VIEW`] knows.
+pub fn needs_fine_spectrum_view(id: ControlId) -> bool {
+    matches!(
+        id,
+        ControlId::SpectrumPanFine
+            | ControlId::Rx2SpectrumPanFine
+            | ControlId::VrxSpectrumSpanFine
+            | ControlId::VrxSpectrumSpanFine2
+    )
+}
+
+/// The pan as the server receives it: the fine one where the server takes it
+/// (`fine`), else the coarse one. The client draws with this one, so it draws
+/// the window the server cuts and never a strip beside it.
+pub fn spectrum_pan_on_the_wire(pan: f32, fine: bool) -> f32 {
+    if fine {
+        unpack_spectrum_pan_fine(pack_spectrum_pan_fine(pan))
+    } else {
+        unpack_spectrum_pan(pack_spectrum_pan(pan))
+    }
+}
+
+/// A VRX width as the server receives it, in Hz (same reason, same `fine`).
+pub fn vrx_span_on_the_wire(span_hz: u32, fine: bool) -> u32 {
+    if fine {
+        unpack_vrx_span_fine(pack_vrx_span_fine(span_hz))
+    } else {
+        vrx_span_khz(span_hz) as u32 * 1000
+    }
+}
+
+/// A VRX pan offset as the server receives it, in Hz (same reason).
+pub fn vrx_pan_on_the_wire(offset_hz: i32) -> i32 {
+    unpack_vrx_pan(pack_vrx_pan(offset_hz))
+}
+
+/// The VRX spectrum width in [`ControlId::VrxSpectrumSpanFine`], at least one step.
+pub fn pack_vrx_span_fine(span_hz: u32) -> u16 {
+    ((span_hz + VRX_SPAN_STEP_HZ / 2) / VRX_SPAN_STEP_HZ).clamp(1, u16::MAX as u32) as u16
+}
+
+/// The width back in Hz.
+pub fn unpack_vrx_span_fine(value: u16) -> u32 {
+    value.max(1) as u32 * VRX_SPAN_STEP_HZ
+}
+
+/// The same width in [`ControlId::VrxSpectrumSpanKhz`], for a server that does
+/// not know the fine one: whole kHz, as before, at least 1.
+pub fn vrx_span_khz(span_hz: u32) -> u16 {
+    (span_hz / 1000).clamp(1, u16::MAX as u32) as u16
+}
 
 /// The DDC centre in a control value (build 231): whole kHz, rounded, so a
 /// `u16` reaches 65.535 MHz - the whole range of the radio. One place for both
@@ -787,7 +885,7 @@ impl ControlId {
 }
 
 // ControlId::from_u8 and PacketType::from_u8 use num_enum TryFromPrimitive derive.
-// Manual match blocks removed — the #[repr(u8)] values are the single source of truth.
+// Manual match blocks removed: the #[repr(u8)] values are the single source of truth.
 
 /// Capability flags for protocol negotiation (bitfield)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -801,13 +899,18 @@ impl Capabilities {
     pub const SPECTRUM: u32 = 1 << 1;
     /// Support for RX2/VFO-B dual receiver
     pub const RX2: u32 = 1 << 2;
-    /// Server reports runtime state via the `state_flags` field in HeartbeatAck
-    /// (PATCH-1). Client MUST check this bit before trusting `state_flags`;
+    /// Server reports runtime state via the `state_flags` field in HeartbeatAck.
+    /// Client MUST check this bit before trusting `state_flags`;
     /// older servers (v2.0.0 release-tag and earlier) leave `state_flags` at
     /// NONE which would otherwise be misread as "TCI down". When this bit is
     /// clear in the negotiated capabilities, the client treats `state_flags`
     /// as unknown / not-authoritative.
     pub const REPORTS_STATE_FLAGS: u32 = 1 << 3;
+    /// The server takes the fine spectrum view (build 76): the four controls of
+    /// [`needs_fine_spectrum_view`]. A server without it does not know them and
+    /// does not acknowledge them either - it fails to parse them - so the client
+    /// sends them only where this bit stands.
+    pub const FINE_SPECTRUM_VIEW: u32 = 1 << 4;
 
     pub fn has(self, flag: u32) -> bool {
         self.0 & flag != 0
@@ -825,7 +928,7 @@ impl Capabilities {
 
 /// Flags byte
 ///   bit 0 = PTT active
-///   bit 1 = AUDIO_WIDEBAND — Audio/AudioTx/AudioRx2 payload is wideband
+///   bit 1 = AUDIO_WIDEBAND; Audio/AudioTx/AudioRx2 payload is wideband
 ///           Opus (16 kHz), clear = narrowband (8 kHz). Applies only to
 ///           Thetis-audio packets; AudioYaesu is always wideband and ignores
 ///           the flag. Backwards-compat: old implementations (without
@@ -872,7 +975,7 @@ impl Flags {
     pub const NONE: Self = Self(0);
     pub const PTT: Self = Self(0x01);
     pub const AUDIO_WIDEBAND: Self = Self(0x02);
-    /// This transmitter is held by a **different** client (PATCH-tx-eigendom).
+    /// This transmitter is held by a **different** client.
     ///
     /// The Thetis counterpart of `held_by_other` in the Yaesu state packet, and
     /// there for the same reason: `PTT` says "a transmission is happening",
@@ -942,8 +1045,8 @@ impl Flags {
     /// Narrower matters more than it sounds. The client used to infer the
     /// transmitter from what it was ASKING for, and with two radios keyed that
     /// is all of them - so a refusal about one radio released the other as
-    /// well, and no arrangement of the client could tell them apart. Four
-    /// review rounds kept arriving at this bit.
+    /// well, and no arrangement of the client could tell them apart. This bit
+    /// is what tells them apart.
     pub const TX_MASK: Self = Self(0x30);
 
     pub fn denied_target(self) -> DeniedTarget {
@@ -1099,7 +1202,7 @@ pub struct VrxAudioPacket {
     pub opus_data: Vec<u8>,
     /// True if Opus payload is 16 kHz wideband. False = 8 kHz narrowband.
     /// Carried in the header's `Flags::AUDIO_WIDEBAND` bit, not in the
-    /// body — same convention as the main RX1 audio path.
+    /// body, same convention as the main RX1 audio path.
     pub wideband: bool,
 }
 
@@ -1161,7 +1264,7 @@ impl VrxFrequencyPacket {
         self.serialize_with_type(PacketType::FrequencyVrx, buf);
     }
 
-    /// Serialize with an explicit packet type — `FrequencyVrx` (client →
+    /// Serialize with an explicit packet type; `FrequencyVrx` (client →
     /// server tune) or `FrequencyVrxActual` (server → client SAM auto-tune
     /// follow). Identical 13-byte layout.
     pub fn serialize_with_type(&self, packet_type: PacketType, buf: &mut [u8; Self::SIZE]) {
@@ -1355,7 +1458,6 @@ impl VersionTag {
     /// `}` survive, so this belongs in an ARGUMENT and never in the template
     /// position. The three places that show it today all pass it as an argument
     /// (`warn!("{}", line)`, `t!(.., server = ..)`, `stringResource(id, ..)`).
-    /// (raised in review.)
     pub fn text(&self) -> String {
         self.bytes
             .iter()
@@ -1456,8 +1558,7 @@ impl PeerBuild {
             // otherwise claim it does: going from a complaint to "heard nothing
             // yet" is a link that went away, not a peer that upgraded. No path
             // reaches it today - both ends reset to Unknown directly rather
-            // than through here - which is exactly why it is worth closing now
-            // (raised in review).
+            // than through here - which is exactly why it is worth closing now.
             return None;
         }
         match self.log_line(peer) {
@@ -1485,7 +1586,7 @@ impl PeerBuild {
                 crate::version_string()
             )),
             Self::Different(theirs) => Some(format!(
-                "{peer} runs {theirs} and this is {} - they should be the same build.",
+                "{peer} runs {theirs} and this is {}: they should be the same build.",
                 crate::version_string()
             )),
         }
@@ -1586,10 +1687,10 @@ impl Heartbeat {
 }
 
 /// Server-state flags broadcast in HeartbeatAck. Independent from
-/// `Capabilities` (which describes feature negotiation, static); this
+/// `Capabilities` (what a build can do, fixed); this
 /// describes runtime state (dynamic).
 ///
-/// Added in v2.0.0-post (PATCH-1 client-connect-error-feedback) for
+/// Added in v2.0.0-post for
 /// the client to detect "TCI not reachable on server PC" without
 /// inferring from audio absence (false-positives on quiet bands).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1609,7 +1710,7 @@ impl ServerStateFlags {
     /// Server is in the middle of launching Thetis (orange "Start" button).
     /// Set between user pressing Start and TCI connecting (or the 60s
     /// launch timeout firing). Client should NOT show "TCI unreachable"
-    /// while this is set — it's a normal transient launch phase.
+    /// while this is set; it's a normal transient launch phase.
     pub const THETIS_STARTING: u32 = 1 << 2;
     /// The server has a Thetis/TCI radio configured. When this is clear,
     /// clients must not turn a missing TCI connection into a user-facing
@@ -1651,7 +1752,7 @@ impl ServerStateFlags {
 mod server_state_flags_tests {
     use super::ServerStateFlags as F;
 
-    /// Each flag is one bit of its own (review of 215: `RX_ONLY_UNGUARDED` on
+    /// Each flag is one bit of its own (`RX_ONLY_UNGUARDED` on
     /// the bit of `NO_DX_CLUSTER` stayed green, and an RX-only position would
     /// have hidden the DX spots). The list counts the constants in the impl, so
     /// a new one that is not added here is caught too.
@@ -1769,7 +1870,7 @@ impl HeartbeatAck {
     pub const MIN_SIZE: usize = 12;
     /// Size including capabilities (v0.x .. v2.0.0 release)
     pub const SIZE_WITH_CAPS: usize = 16;
-    /// Full size including state_flags (v2.0.0-post PATCH-1)
+    /// Full size including state_flags (after the v2.0.0 release)
     pub const SIZE: usize = 20;
     /// With the subscription mask (build 99). Same forward-compatible shape as
     /// the two growths before it: an older server simply stops at 20 bytes.
@@ -1807,7 +1908,6 @@ impl HeartbeatAck {
     /// deliberately different everywhere else in this file. Every sender today
     /// fills it in; the assert is here so the first one that does not finds out
     /// in a debug build instead of publishing a claim it never made.
-    /// (Both reviewers, review handdruk-versie.)
     pub fn serialize_with_version(&self, buf: &mut [u8; Self::SIZE_WITH_VERSION]) {
         debug_assert!(
             self.subs.is_some(),
@@ -1904,7 +2004,7 @@ impl ControlPacket {
     }
 }
 
-/// The punch messages of phase 3c (and L+R, build 142): `header(4) + family u8 (4 or 6) + the
+/// The punch messages (and L+R, build 142): `header(4) + family u8 (4 or 6) + the
 /// address (4 or 16 bytes) + port u16`. An unknown family or a short packet is
 /// refused, never read as some address.
 pub struct PunchPacket;
@@ -1954,7 +2054,7 @@ impl PunchPacket {
     }
 }
 
-/// "Got control number n": `header(4) + seq u32` (phase 2b).
+/// "Got control number n": `header(4) + seq u32`.
 pub struct ControlAckPacket;
 
 impl ControlAckPacket {
@@ -2424,7 +2524,7 @@ pub const CMD_SERVER_REBOOT: u8 = 0x01;
 pub const CMD_SERVER_SHUTDOWN: u8 = 0x02;
 
 /// Amplitec 6/2 command IDs (client → server via EquipmentCommand).
-/// Switching the switch position has no const — for that there are
+/// Switching the switch position has no const; for that there are
 /// `EquipmentCommandPacket::CMD_SET_SWITCH_A/_B` (pre-existing).
 /// For the power-cap table: 18 bytes data
 /// (6 × { u16 max_w BE, u8 tx_blocked }).
@@ -2457,7 +2557,7 @@ pub const CMD_RF2K_ANT4: u8 = 0x06;
 pub const CMD_RF2K_ANT_EXT: u8 = 0x07;
 pub const CMD_RF2K_ERROR_RESET: u8 = 0x08;
 pub const CMD_RF2K_CLOSE: u8 = 0x09;
-// Tuner controls (Phase B)
+// Tuner controls
 pub const CMD_RF2K_TUNER_MODE: u8 = 0x10;
 pub const CMD_RF2K_TUNER_BYPASS: u8 = 0x11;
 pub const CMD_RF2K_TUNER_RESET: u8 = 0x12;
@@ -2467,10 +2567,10 @@ pub const CMD_RF2K_TUNER_L_DOWN: u8 = 0x15;
 pub const CMD_RF2K_TUNER_C_UP: u8 = 0x16;
 pub const CMD_RF2K_TUNER_C_DOWN: u8 = 0x17;
 pub const CMD_RF2K_TUNER_K: u8 = 0x18;
-// Drive controls (Phase C)
+// Drive controls
 pub const CMD_RF2K_DRIVE_UP: u8 = 0x20;
 pub const CMD_RF2K_DRIVE_DOWN: u8 = 0x21;
-// Debug controls (Phase D)
+// Debug controls
 pub const CMD_RF2K_SET_HIGH_POWER: u8 = 0x30;   // data[0]: 0/1
 pub const CMD_RF2K_SET_TUNER_6M: u8 = 0x31;     // data[0]: 0/1
 pub const CMD_RF2K_SET_BAND_GAP: u8 = 0x32;     // data[0]: 0/1
@@ -2481,7 +2581,7 @@ pub const CMD_RF2K_AUTOTUNE_THRESH_DOWN: u8 = 0x36;
 pub const CMD_RF2K_DAC_ALC_UP: u8 = 0x37;
 pub const CMD_RF2K_DAC_ALC_DOWN: u8 = 0x38;
 pub const CMD_RF2K_ZERO_FRAM: u8 = 0x39;
-// Drive config (Phase D)
+// Drive config
 pub const CMD_RF2K_SET_DRIVE_SSB: u8 = 0x40;    // data[0]=band, data[1]=watts
 pub const CMD_RF2K_SET_DRIVE_AM: u8 = 0x41;
 pub const CMD_RF2K_SET_DRIVE_CONT: u8 = 0x42;
@@ -2677,13 +2777,13 @@ pub struct YaesuStatePacket {
     pub mic_gain: u8,      // 0-100
     pub split: bool,
     pub scan: bool,
-    /// Internal ATU state (PATCH-yaesu-internal-atu): 0=off/bypass, 1=on, 2=tuning-in-progress.
-    /// Additive trailing field — normalised server-side from the `AC;` readback (never raw P3).
+    /// Internal ATU state: 0=off/bypass, 1=on, 2=tuning-in-progress.
+    /// Additive trailing field: normalised server-side from the `AC;` readback (never raw P3).
     pub tuner_state: u8,
-    /// High-SWR alarm (PATCH-swr-alarm): FTX-1 from RI P2 (0/1), 991A from RM6 >=
-    /// threshold. Additive trailing field — false on old servers/packets.
+    /// High-SWR alarm: FTX-1 from RI P2 (0/1), 991A from RM6 >=
+    /// threshold. Additive trailing field; false on old servers/packets.
     pub hi_swr: bool,
-    /// This transmitter is held by a **different** client (PATCH-tx-eigendom).
+    /// This transmitter is held by a **different** client.
     ///
     /// Computed per client from the server's ownership table, not from the
     /// radio: `tx_active` says "this radio is transmitting", which is true for
@@ -2695,7 +2795,7 @@ pub struct YaesuStatePacket {
     /// The holder never receives this set. Additive trailing field - false on
     /// old servers, which is the safe default: no busy shown, exactly as before.
     pub held_by_other: bool,
-    /// Max TX power (watts) for the CURRENT transmit band (PATCH-yaesu-power-scaling).
+    /// Max TX power (watts) for the CURRENT transmit band.
     /// Additive trailing field; **0 = still unknown** (old server / before the first
     /// EX readout), NOT 0 watts. The client scales the slider to `5..=max`.
     pub tx_power_max: u8,
@@ -2719,8 +2819,8 @@ pub const YAESU_LOADING_MENUS: u8 = 4;
 /// memory channels and their tones are read in one go and hold the radio's
 /// serial thread (a PTT-off would wait behind them); the FTX-1's menu items are
 /// read one at a time in the gaps between other traffic, so they do not
-/// (owner, 2026-09-19: "de ptt mag vrijgegeven worden zodra de algemene
-/// parameters zijn geladen"). One rule for the server's refusal and the
+/// (by design: the PTT may be enabled as soon as the general
+/// parameters are loaded). One rule for the server's refusal and the
 /// client's button.
 pub fn yaesu_loading_blocks_tx(loading: u8) -> bool {
     loading & (YAESU_LOADING_MEMORIES | YAESU_LOADING_TONES) != 0
@@ -2855,7 +2955,7 @@ impl TxProfilesPacket {
 }
 
 /// Yaesu DSP/function control id (the `control` field of `YaesuControlPacket` and
-/// the bit index in `YaesuFeaturePacket.toggles`). PATCH-yaesu-extra-controls.
+/// the bit index in `YaesuFeaturePacket.toggles`).
 /// Phase A1 wires RfAtt + BreakIn; the rest are reserved for later phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
 #[repr(u8)]
@@ -2877,7 +2977,7 @@ pub enum YaesuCtrl {
     NbOn = 13,
     /// 991A-only: Noise Reduction on/off (`NR`), separate from the DNR level (`RL`=Dnr).
     NrOn = 14,
-    // Phase D — composite controls: on/off (toggle-bit) + frequency (freqs-array).
+    // Composite controls: on/off (toggle-bit) + frequency (freqs-array).
     ContourOn = 15,
     ApfOn = 16,
     NotchOn = 17,
@@ -2984,7 +3084,7 @@ impl YaesuFeaturePacket {
 /// Canonical short display name for a Yaesu radio model code (the `model` byte
 /// from `RadioInfo`/`YaesuPresence`). **Single source of truth**: this is the only
 /// place where a model code is mapped to a name. Server (log prefixes) and
-/// client (all "Yaesu N: <type>" labels) read here — a new radio type you add
+/// client (all "Yaesu N: <type>" labels) read here; a new radio type you add
 /// here once and the name follows everywhere automatically. 0 = FT-991A, 1 = FTX-1.
 pub fn radio_model_name(code: u8) -> &'static str {
     match code {
@@ -3015,8 +3115,8 @@ pub fn radio_model_known(code: u8) -> bool {
 ///
 /// Here rather than in a front end, because both of them draw this label and one
 /// of them kept its own copy of the rule: the desktop learned to stop guessing a
-/// model name, and the phone went on printing a fixed "Radio 1" / "Radio 2"
-/// (owner, 2026-08-20). `slot` is 0-based; the label counts from one, the way the
+/// model name, and the phone went on printing a fixed "Radio 1" / "Radio 2".
+/// `slot` is 0-based; the label counts from one, the way the
 /// settings do.
 pub fn radio_slot_label(slot: u8, code: u8) -> String {
     if radio_model_known(code) {
@@ -3044,7 +3144,6 @@ pub const PORT_TROUBLE_MISSING: u8 = 2;
 /// there is a connected radio + the model + why its port cannot be opened when
 /// it cannot. Decouples the connected-status/selector from the audio+state
 /// subscription so dropping/appearing is dynamic (not sticky).
-/// PATCH-android-yaesu-presence-datasaver.
 ///
 /// The two trouble bytes are additive: an old client stops reading after the
 /// model bytes, and an old server's shorter packet reads as trouble = none.
@@ -3056,6 +3155,12 @@ pub const PORT_TROUBLE_MISSING: u8 = 2;
 /// could not tell "configured but off" from "not there": the model byte is 0
 /// for a 991A and for an empty slot alike. An old server's shorter packet reads
 /// as configured = present, which is exactly what such a client could see.
+///
+/// The tuned bit (bit 2 of the configured byte, build 62) says the operator has
+/// set the radios' USB receive levels by the installation guide, so a client
+/// uses the small receive correction instead of the one for factory settings
+/// (`yaesu_rx_correction` in the client's engine). An old server's packet reads
+/// as not tuned: the correction a client always used.
 pub struct YaesuPresencePacket {
     pub slot0_present: bool,
     pub slot0_model: u8,
@@ -3065,6 +3170,7 @@ pub struct YaesuPresencePacket {
     pub slot1_trouble: u8,
     pub slot0_configured: bool,
     pub slot1_configured: bool,
+    pub rx_levels_tuned: bool,
 }
 
 impl YaesuPresencePacket {
@@ -3080,7 +3186,9 @@ impl YaesuPresencePacket {
         buf[7] = self.slot1_model;
         buf[8] = self.slot0_trouble;
         buf[9] = self.slot1_trouble;
-        buf[10] = (self.slot0_configured as u8) | ((self.slot1_configured as u8) << 1);
+        buf[10] = (self.slot0_configured as u8)
+            | ((self.slot1_configured as u8) << 1)
+            | ((self.rx_levels_tuned as u8) << 2);
     }
 
     pub fn deserialize(buf: &[u8]) -> Result<Self> {
@@ -3102,6 +3210,7 @@ impl YaesuPresencePacket {
             // connected is all such a client ever saw as "there".
             slot0_configured: buf.get(10).map(|b| b & 1 != 0).unwrap_or(buf[4] != 0),
             slot1_configured: buf.get(10).map(|b| b & 2 != 0).unwrap_or(buf[6] != 0),
+            rx_levels_tuned: buf.get(10).map(|b| b & 4 != 0).unwrap_or(false),
         })
     }
 }
@@ -3295,11 +3404,11 @@ pub enum Packet {
     ServerReportRequest,
     /// (part, parts, bytes) - see `PacketType::ServerReportPart`.
     ServerReportPart(u16, u16, Vec<u8>),
-    /// The server acknowledges a numbered control (phase 2b).
+    /// The server acknowledges a numbered control.
     ControlAck(u32),
-    /// Phase 3c: the client's public address (see `PacketType::PunchOffer`).
+    /// Punching: the client's public address (see `PacketType::PunchOffer`).
     PunchOffer(std::net::SocketAddr),
-    /// Phase 3c: the address the server punched from (see `PacketType::PunchReady`).
+    /// Punching: the address the server punched from (see `PacketType::PunchReady`).
     PunchReady(std::net::SocketAddr),
     /// L+R: the server's own port at its local address (see `PacketType::PunchLocal`).
     PunchLocal(std::net::SocketAddr),
@@ -3312,12 +3421,12 @@ pub enum Packet {
     /// 0 = FT-991A, 1 = FTX-1. For panel naming in the client.
     RadioInfo { slot: u8, model: u8 },
     AuthChallenge([u8; 16]),    // nonce
-    /// The HMAC over the server's nonce, and - since phase 2 of the direct
-    /// connection - the client's own nonce as a tail. A client from before
+    /// The HMAC over the server's nonce, and - since the authentication became
+    /// mutual - the client's own nonce as a tail. A client from before
     /// sends 36 bytes and the tail is `None`; a server from before reads the
     /// first 36 and never sees it.
     AuthResponse { hmac: [u8; 32], client_nonce: Option<[u8; 16]> },
-    /// 0=rejected, 1=accepted, 2=totp_required, and - since phase 2 - the
+    /// 0=rejected, 1=accepted, 2=totp_required, and - since it became mutual - the
     /// server's proof that it knows the password as a tail, for a client that
     /// sent its nonce. Same back-compat as `AuthResponse`.
     AuthResult { code: u8, proof: Option<[u8; 32]> },
@@ -3348,15 +3457,15 @@ pub const AUTH_RESULT_SIZE: usize = Header::SIZE + 1;
 pub const AUTH_RESULT_SIZE_WITH_PROOF: usize = AUTH_RESULT_SIZE + 32;
 
 /// The one place that writes an `AuthChallenge`. The last of the three
-/// authentication packets to get a writer (review 66): the shape is fixed, but
-/// a tail is exactly what phase 5 may want to hang on it.
+/// authentication packets to get a writer: the shape is fixed, but
+/// a tail is exactly what per-packet encryption may want to hang on it.
 pub fn serialize_auth_challenge(buf: &mut [u8; AUTH_CHALLENGE_SIZE], nonce: &[u8; 16]) {
     Header::new(PacketType::AuthChallenge, Flags::NONE).serialize(buf);
     buf[Header::SIZE..AUTH_CHALLENGE_SIZE].copy_from_slice(nonce);
 }
 
 /// The one place that writes an `AuthResponse`; returns the length to send.
-/// Without a nonce it is the 36-byte shape from before phase 2, byte for byte.
+/// Without a nonce it is the older 36-byte shape, byte for byte.
 pub fn serialize_auth_response(
     buf: &mut [u8; AUTH_RESPONSE_SIZE_WITH_NONCE],
     hmac: &[u8; 32],
@@ -3374,7 +3483,7 @@ pub fn serialize_auth_response(
 }
 
 /// The one place that writes an `AuthResult`; returns the length to send.
-/// Without a proof it is the 5-byte shape from before phase 2, byte for byte.
+/// Without a proof it is the older 5-byte shape, byte for byte.
 pub fn serialize_auth_result(
     buf: &mut [u8; AUTH_RESULT_SIZE_WITH_PROOF],
     code: u8,
@@ -3643,6 +3752,7 @@ mod tests {
             // Slot 1 configured but off: the case the byte exists for.
             slot0_configured: true,
             slot1_configured: true,
+            rx_levels_tuned: false,
         };
         let mut buf = [0u8; YaesuPresencePacket::SIZE];
         pkt.serialize(&mut buf);
@@ -3676,6 +3786,7 @@ mod tests {
                 slot1_trouble: PORT_TROUBLE_NONE,
                 slot0_configured: bits & 4 != 0,
                 slot1_configured: bits & 8 != 0,
+                rx_levels_tuned: false,
             };
             let mut buf = [0u8; YaesuPresencePacket::SIZE];
             pkt.serialize(&mut buf);
@@ -3700,6 +3811,7 @@ mod tests {
             slot1_trouble: PORT_TROUBLE_BUSY,
             slot0_configured: false, // must NOT survive either: an old server
             slot1_configured: true,  // says nothing, so configured = present
+            rx_levels_tuned: true,   // nor about the receive levels: not tuned
         };
         let mut buf = [0u8; YaesuPresencePacket::SIZE];
         pkt.serialize(&mut buf);
@@ -3710,9 +3822,36 @@ mod tests {
         assert_eq!(p.slot1_trouble, PORT_TROUBLE_NONE);
         assert!(p.slot0_configured, "present, so an old server has it");
         assert!(!p.slot1_configured, "not present, and an old server cannot say more");
+        assert!(!p.rx_levels_tuned, "an old server's radios are not tuned");
         // The ten-byte form (trouble, no configured byte) reads the same way.
         let p = YaesuPresencePacket::deserialize(&buf[..10]).unwrap();
         assert!(p.slot0_configured && !p.slot1_configured);
+        assert!(!p.rx_levels_tuned);
+    }
+
+    /// The tuned bit shares a byte with the two configured bits: each of the
+    /// eight combinations comes back as it went.
+    #[test]
+    fn yaesu_presence_tuned_bit_is_independent_of_configured() {
+        for bits in 0u8..8 {
+            let pkt = YaesuPresencePacket {
+                slot0_present: true,
+                slot0_model: 0,
+                slot1_present: true,
+                slot1_model: 1,
+                slot0_trouble: PORT_TROUBLE_NONE,
+                slot1_trouble: PORT_TROUBLE_NONE,
+                slot0_configured: bits & 1 != 0,
+                slot1_configured: bits & 2 != 0,
+                rx_levels_tuned: bits & 4 != 0,
+            };
+            let mut buf = [0u8; YaesuPresencePacket::SIZE];
+            pkt.serialize(&mut buf);
+            let p = YaesuPresencePacket::deserialize(&buf).unwrap();
+            assert_eq!(p.slot0_configured, bits & 1 != 0, "row {bits}");
+            assert_eq!(p.slot1_configured, bits & 2 != 0, "row {bits}");
+            assert_eq!(p.rx_levels_tuned, bits & 4 != 0, "row {bits}");
+        }
     }
 
     #[test]
@@ -3804,7 +3943,7 @@ mod tests {
         let mut buf = [0u8; HeartbeatAck::SIZE];
         ack.serialize(&mut buf);
 
-        // SIZE is now 20 bytes (was 16 before state_flags was added in PATCH-1)
+        // SIZE is now 20 bytes (was 16 before state_flags was added after v2.0.0)
         assert_eq!(buf.len(), 20);
         assert_eq!(HeartbeatAck::SIZE, 20);
 
@@ -3834,8 +3973,8 @@ mod tests {
 
     #[test]
     fn heartbeat_ack_intermediate_compat_16_byte() {
-        // Intermediate 16-byte HeartbeatAck (capabilities present, state_flags absent —
-        // this is what a v2.0.0 release-tag server sends, before PATCH-1).
+        // Intermediate 16-byte HeartbeatAck (capabilities present, state_flags absent,
+        // this is what a v2.0.0 release-tag server sends, before state_flags).
         // The decoder must accept it and fill state_flags with NONE.
         let mut buf = [0u8; 16];
         buf[0] = MAGIC;
@@ -3849,7 +3988,7 @@ mod tests {
         assert_eq!(decoded.echo_sequence, 77);
         assert_eq!(decoded.echo_time, 54321);
         assert!(decoded.capabilities.has(Capabilities::WIDEBAND_AUDIO));
-        // Key invariant: when state_flags absent, default to NONE — caller must
+        // Key invariant: when state_flags absent, default to NONE; caller must
         // NOT assume "no TCI_CONNECTED bit = TCI down" (compatibility-regression check).
         assert_eq!(decoded.state_flags, ServerStateFlags::NONE);
     }
@@ -4239,7 +4378,7 @@ mod version_tag_tests {
         assert!(VersionTag::mine().is_mine());
     }
 
-    /// Both states of the same check (working rule 13): a heartbeat that
+    /// Both states of the same check: a heartbeat that
     /// carries the field, and one that stops before it.
     #[test]
     fn a_heartbeat_says_which_build_sent_it() {
@@ -4348,8 +4487,7 @@ mod version_tag_tests {
     /// The send side sanitises too, and nothing reached that arm before.
     ///
     /// The read side had a test and the write side did not, which is the wrong
-    /// half to leave open: what we SEND is what another station's log prints
-    /// (raised in review).
+    /// half to leave open: what we SEND is what another station's log prints.
     #[test]
     fn what_we_send_is_cleaned_as_well_as_what_we_read() {
         let tag = VersionTag::from_text("2.13.0\n\r\t(build 2)");
@@ -4497,7 +4635,7 @@ mod peer_build_tests {
     /// they do it by assignment rather than through here - so this arm is
     /// unreachable today. It is closed anyway, because the day someone routes
     /// that reset through `change_line` the log would announce that a station
-    /// which just disappeared now runs the right build (raised in review).
+    /// which just disappeared now runs the right build.
     #[test]
     fn forgetting_a_peer_is_not_good_news_about_it() {
         let odd = PeerBuild::Different("2.11.0".into());
@@ -4521,7 +4659,7 @@ mod punch_packet_tests {
 
     /// The punch messages carry an address both ways, in both families, and a
     /// packet that is short or names an unknown family is refused rather than
-    /// read as some address (phase 3c).
+    /// read as some address.
     #[test]
     fn punch_messages_carry_an_address() {
         for kind in [PacketType::PunchOffer, PacketType::PunchReady, PacketType::PunchLocal] {
@@ -4627,5 +4765,109 @@ mod auth_packet_tests {
         Header::new(PacketType::AuthResult, Flags::NONE).serialize(&mut old);
         old[4] = AUTH_ACCEPTED;
         assert_eq!(&buf[..n], &old[..]);
+    }
+}
+
+#[cfg(test)]
+mod spectrum_wire_tests {
+    use super::{Packet, SpectrumPacket};
+
+    /// The bins as they travel (build 74): the server sends one byte per bin,
+    /// the top byte of its u16, and the receiver widens it by 257 again.
+    /// Every spectrum and waterfall on desktop and phone goes this way.
+    #[test]
+    fn a_bin_crosses_the_wire_as_its_top_byte() {
+        let sent = SpectrumPacket {
+            sequence: 7,
+            num_bins: 5,
+            center_freq_hz: 7_100_000,
+            span_hz: 384_000,
+            ref_level: -20,
+            db_per_unit: 1,
+            // 0x8000: the top byte is not a division by 257 (that gives 0x7F).
+            bins: vec![0x0000, 0x00FF, 0xABCD, 0xFFFF, 0x8000],
+        };
+        let mut buf = Vec::new();
+        sent.serialize(&mut buf);
+        assert_eq!(buf.len(), SpectrumPacket::HEADER_SIZE + 5, "one byte per bin");
+        assert_eq!(&buf[SpectrumPacket::HEADER_SIZE..], &[0x00, 0x00, 0xAB, 0xFF, 0x80]);
+        let got = match Packet::deserialize(&buf).unwrap() {
+            Packet::Spectrum(p) => p,
+            _ => panic!("not a spectrum packet"),
+        };
+        assert_eq!(got.bins, vec![0x0000, 0x0000, 0xABAB, 0xFFFF, 0x8080]);
+        assert_eq!((got.sequence, got.num_bins, got.center_freq_hz, got.span_hz), (7, 5, 7_100_000, 384_000));
+    }
+}
+
+#[cfg(test)]
+mod spectrum_view_wire_tests {
+    use super::*;
+
+    /// The fine pan (build 75): steps of 1/65534, both ends and the middle
+    /// exact, and the value the client draws with is the one the server reads.
+    #[test]
+    fn the_fine_pan_and_the_pan_the_client_draws() {
+        assert_eq!(pack_spectrum_pan_fine(0.0), 32767);
+        assert_eq!(spectrum_pan_on_the_wire(0.0, true), 0.0, "no pan is exactly no pan");
+        assert_eq!(pack_spectrum_pan_fine(-0.5), 0);
+        assert_eq!(pack_spectrum_pan_fine(0.5), 65534);
+        assert_eq!(pack_spectrum_pan_fine(0.9), 65534, "clamped");
+        assert_eq!(unpack_spectrum_pan_fine(65535), 0.5, "the one value above the range");
+        // The field case of 2026-11-03: -0.0005 of 384 kHz is -192 Hz; the
+        // coarse pan sent it as -0.0005 too but the client never sent it at all.
+        let pan = -0.0005f32;
+        let drawn = spectrum_pan_on_the_wire(pan, true);
+        assert!((drawn - pan).abs() <= 0.5 / 65534.0 + 1e-7, "{drawn}");
+        assert_eq!(unpack_spectrum_pan_fine(pack_spectrum_pan_fine(drawn)), drawn, "stable");
+        assert!((drawn as f64 * 384_000.0 - -192.0).abs() < 6.0, "within a step of 6 Hz at 384 kHz");
+        // The coarse one is what it always was.
+        assert_eq!(pack_spectrum_pan(0.0), 5000);
+        assert!((unpack_spectrum_pan(5000)).abs() < 1e-6);
+    }
+
+    /// A server without the fine view (build 76): the client draws with the
+    /// coarse pan and compares the VRX width on whole kHz, as that server
+    /// receives them; and the four controls it does not know are the fine ones.
+    #[test]
+    fn a_server_without_the_fine_view_gets_the_coarse_one() {
+        // The coarse pan truncates: 0.00009 is 5000.9 steps, sent as 5000.
+        assert_eq!(spectrum_pan_on_the_wire(0.00009, false), unpack_spectrum_pan(5000));
+        assert_eq!(spectrum_pan_on_the_wire(0.25, false), unpack_spectrum_pan(pack_spectrum_pan(0.25)));
+        assert_ne!(spectrum_pan_on_the_wire(0.00009, true), spectrum_pan_on_the_wire(0.00009, false));
+        assert_eq!(vrx_span_on_the_wire(1999, false), 1000);
+        assert_eq!(vrx_span_on_the_wire(375, false), 1000, "at least 1 kHz");
+        assert_eq!(vrx_span_on_the_wire(375, true), 375);
+        assert_eq!(vrx_span_on_the_wire(1920, true), 1925);
+        let fine: Vec<ControlId> = (0..=255u8)
+            .filter_map(|b| ControlId::try_from(b).ok())
+            .filter(|id| needs_fine_spectrum_view(*id))
+            .collect();
+        assert_eq!(
+            fine,
+            vec![
+                ControlId::SpectrumPanFine,
+                ControlId::Rx2SpectrumPanFine,
+                ControlId::VrxSpectrumSpanFine,
+                ControlId::VrxSpectrumSpanFine2
+            ]
+        );
+        for other in [Capabilities::WIDEBAND_AUDIO, Capabilities::SPECTRUM, Capabilities::RX2, Capabilities::REPORTS_STATE_FLAGS] {
+            assert_eq!(other & Capabilities::FINE_SPECTRUM_VIEW, 0, "a bit of its own");
+        }
+    }
+
+    /// The VRX width in steps of 25 Hz (build 75), and the whole kHz beside it
+    /// for an older server; the VRX pan as drawn is the one sent.
+    #[test]
+    fn the_vrx_width_and_pan_as_sent() {
+        assert_eq!(unpack_vrx_span_fine(pack_vrx_span_fine(375)), 375, "1024x at 384 kHz");
+        assert_eq!(unpack_vrx_span_fine(pack_vrx_span_fine(1920)), 1925);
+        assert_eq!(unpack_vrx_span_fine(pack_vrx_span_fine(1_536_000)), 1_536_000);
+        assert_eq!(pack_vrx_span_fine(0), 1, "never nothing");
+        assert_eq!(vrx_span_khz(1920), 1, "as before");
+        assert_eq!(vrx_span_khz(24_000), 24);
+        assert_eq!(vrx_pan_on_the_wire(1234), 1230);
+        assert_eq!(vrx_pan_on_the_wire(-1234), -1230);
     }
 }

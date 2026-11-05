@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Integration tests for the PATCH-1 connect-state-machine.
+// Integration tests for the connect-state-machine.
 //
 // Strategy: spawn the real engine bound to a 127.0.0.1:0 socket, and run
 // a hand-scripted fake-server on another 127.0.0.1:0 socket. Drive the
@@ -8,7 +8,7 @@
 // observe `RadioState.connect_status` via the `watch::Receiver`.
 //
 // Covers the 9 connect-states defined in `sdr-remote-logic::state::ConnectStatus`
-// plus the v2.0.0-server compatibility edge-case (review finding B3).
+// plus the v2.0.0-server compatibility edge-case.
 
 mod common;
 
@@ -35,12 +35,6 @@ impl AudioBackend for MockAudio {
     }
     fn write_playback(&mut self, _buf: &[f32]) -> usize {
         0
-    }
-    fn capture_level(&self) -> f32 {
-        0.0
-    }
-    fn playback_level(&self) -> f32 {
-        0.0
     }
     fn has_error(&self) -> bool {
         false
@@ -71,12 +65,6 @@ impl AudioBackend for ToneCountingAudio {
     }
     fn write_playback(&mut self, _buf: &[f32]) -> usize {
         0
-    }
-    fn capture_level(&self) -> f32 {
-        0.0
-    }
-    fn playback_level(&self) -> f32 {
-        0.0
     }
     fn has_error(&self) -> bool {
         false
@@ -120,7 +108,7 @@ async fn wait_for_path(state_rx: &mut watch::Receiver<RadioState>, want: Option<
 
 /// After a session ends, no name may come back: six engine ticks, then none.
 /// "It was None once" is not enough - a name that a broken check puts back
-/// 20 ms later passed that one time in four (review 140, measured 15 of 20).
+/// 20 ms later passed that one time in four (measured: 15 of 20).
 async fn no_path_stays(state_rx: &watch::Receiver<RadioState>, what: &str) {
     tokio::time::sleep(Duration::from_millis(120)).await;
     assert_eq!(state_rx.borrow().path, None, "{what}: a name came back without a session");
@@ -260,10 +248,10 @@ fn build_heartbeat_ack_full(
 /// `PeerBuild::Older` and writes a warning line. That is deliberate (it keeps
 /// the old-reader path exercised), but it was not written down anywhere, so a
 /// later reader met a client that thinks its server is out of date and no
-/// explanation (raised in review). The `Same` branch is walked end
+/// explanation. The `Same` branch is walked end
 /// to end by the three tests at the bottom of this file.
 
-/// Build an old 16-byte HeartbeatAck (pre-PATCH-1; capabilities-only, no state_flags).
+/// Build an old 16-byte HeartbeatAck (before state_flags; capabilities-only, no state_flags).
 /// This simulates a v2.0.0-release-tag server that doesn't advertise REPORTS_STATE_FLAGS.
 fn build_heartbeat_ack_v2_0_0(echo_seq: u32, echo_time: u32) -> Vec<u8> {
     let mut buf = vec![0u8; 16];
@@ -283,7 +271,7 @@ fn build_heartbeat_ack_v2_0_0(echo_seq: u32, echo_time: u32) -> Vec<u8> {
 async fn dns_resolution_fail_surfaces_specific_error() {
     let (mut state_rx, cmd_tx, shutdown_tx, _handle) = spawn_engine();
 
-    // Bogus hostname — the resolver will fail.
+    // Bogus hostname: the resolver will fail.
     cmd_tx
         .send(Command::Connect(
             "definitely-not-a-real-host.invalid:4580".to_string(),
@@ -459,10 +447,10 @@ async fn wrong_password_before_totp_phase() {
     let _ = shutdown_tx.send(true);
 }
 
-/// Owner's decision F: a server that accepts without proving it knows the
+/// A server that accepts without proving it knows the
 /// password - one from before the mutual check, or a bare ACCEPTED anyone can
-/// send - is refused, and the client stays unconnected. Written after a reviewer
-/// switched decision F off and every test stayed green (review 68).
+/// send - is refused, and the client stays unconnected. Written because switching
+/// this refusal off once left every test green.
 #[tokio::test]
 async fn a_server_that_proves_nothing_is_refused() {
 
@@ -492,7 +480,7 @@ async fn a_server_that_proves_nothing_is_refused() {
                 // told, and then it hears nothing more. Until build 77 the
                 // heartbeats went on and the server kept the session - and
                 // its audio - alive for a client that showed "refused"
-                // (review 76, measured).
+                // (measured).
                 let (seen, quiet) = expect_disconnect_then_silence(&fake_server).await;
                 left.store(seen, std::sync::atomic::Ordering::Relaxed);
                 silent.store(quiet, std::sync::atomic::Ordering::Relaxed);
@@ -533,7 +521,7 @@ async fn a_server_that_proves_nothing_is_refused() {
 /// the password" (field test 2026-10-06 20:15:58, desktop over the relay).
 /// The client must ignore it and connect on the next challenge - through that
 /// new challenge, not through the late answer: the verdict is pinned, not only
-/// the outcome (review 122: with the attempt not forgotten, the late answer
+/// the outcome (with the attempt not forgotten, the late answer
 /// verified and the client came back the wrong way, and this stayed green).
 #[tokio::test]
 async fn a_late_answer_after_the_link_was_lost_is_no_server_without_proof() {
@@ -611,7 +599,7 @@ async fn a_late_answer_after_the_link_was_lost_is_no_server_without_proof() {
     // Every admitted session counts once. The only new one allowed is the one
     // the fresh challenge opens: one that starts before it came from the late
     // answer. (The connected flag cannot tell: it waits for an acked
-    // heartbeat, and the server is silent just then - review 122, mutant B.)
+    // heartbeat, and the server is silent just then.)
     let first_session = state_rx.borrow().session_generation;
     // The link goes down (the flag drops), and comes back: watched without a
     // gap, so a refusal in between cannot slip past.
@@ -627,7 +615,7 @@ async fn a_late_answer_after_the_link_was_lost_is_no_server_without_proof() {
         if !fresh_challenge_sent.load(std::sync::atomic::Ordering::SeqCst) {
             assert_eq!(
                 st.session_generation, first_session,
-                "a new session before the new challenge - the late answer was taken"
+                "a new session before the new challenge: the late answer was taken"
             );
         }
         if !st.connected {
@@ -635,7 +623,7 @@ async fn a_late_answer_after_the_link_was_lost_is_no_server_without_proof() {
         } else if lost && st.connect_status == ConnectStatus::Connected {
             assert!(
                 fresh_challenge_sent.load(std::sync::atomic::Ordering::SeqCst),
-                "back before the new challenge - the late answer was taken"
+                "back before the new challenge: the late answer was taken"
             );
             break;
         }
@@ -648,7 +636,7 @@ async fn a_late_answer_after_the_link_was_lost_is_no_server_without_proof() {
 
 /// A server that proves itself WRONGLY - a proof under another password, or a
 /// forged one - is refused whatever its code says (PROOF_INVALID: the third of
-/// the client's own verdicts, and the last to get a test - eight rounds, review 75).
+/// the client's own verdicts, and the last to get a test - eight rounds).
 #[tokio::test]
 async fn a_server_with_a_wrong_proof_is_refused() {
 
@@ -711,7 +699,7 @@ async fn a_server_with_a_wrong_proof_is_refused() {
 
 /// A duplicate of an earlier refusal, landing after the session was admitted:
 /// ignored. Until build 78 it took the live session down - "wrong password",
-/// the address dropped, the server still holding the client (review 77).
+/// the address dropped, the server still holding the client.
 #[tokio::test]
 async fn a_stray_rejection_after_connecting_is_ignored() {
     a_stray_result_after_connecting_is_ignored(sdr_remote_core::protocol::AUTH_REJECTED).await;
@@ -720,7 +708,7 @@ async fn a_stray_rejection_after_connecting_is_ignored() {
 /// The same with a lone TOTP_REQUIRED and no proof: before build 122 it read as a
 /// server that proves nothing, and one such datagram took a verified client off
 /// its session (on plain UDP and the classic relay; inside QUIC it cannot be
-/// forged). Since 122 it is ignored, as nothing is in flight (review 122).
+/// forged). Since 122 it is ignored, as nothing is in flight.
 #[tokio::test]
 async fn a_stray_code_request_after_connecting_is_ignored() {
     a_stray_result_after_connecting_is_ignored(sdr_remote_core::protocol::AUTH_TOTP_REQUIRED).await;
@@ -792,7 +780,7 @@ async fn a_stray_result_after_connecting_is_ignored(code: u8) {
 /// A server refused on a RE-authentication - connected once, then the server
 /// came back as a build that proves nothing - leaves the client disconnected
 /// in every sense: the flag the controls read, the session's state, and the
-/// address. In build 77 the address went and the rest stayed (review 77).
+/// address. In build 77 the address went and the rest stayed.
 #[tokio::test]
 async fn a_server_refused_on_a_second_session_leaves_nothing_connected() {
 
@@ -851,13 +839,13 @@ async fn a_server_refused_on_a_second_session_leaves_nothing_connected() {
 /// What the server said about itself goes down with a refused re-authentication
 /// too: the link-down block calls `session_lost!()`, and until build 79 that
 /// call was held by a count in fitness and by no behaviour - taking it out of
-/// the block left every test green (review 78). Three fields of that one call
+/// the block left every test green. Three fields of that one call
 /// are read: the server's build, and "single receiver" and "no cluster", all
 /// three learned from the first acks and all three gone after the refusal.
 /// The chain is one a real server can make: a re-authentication whose
 /// password step proves nothing (a server restarted as a build before 66).
 /// What this cannot pin is the CALL as such: a replacement that writes these
-/// three fields by hand stays green (review 80, measured up to four fields).
+/// three fields by hand stays green (measured up to four fields).
 /// The call sites are counted by fitness; the field list is held by the unit
 /// test of `forget_session`; this holds that the block reaches that list.
 #[tokio::test]
@@ -940,7 +928,7 @@ async fn a_refused_re_authentication_forgets_what_the_server_said() {
 
 /// The same on a refused PASSWORD on a re-authentication - the server came
 /// back with another password: the address goes silently, and nothing stays
-/// connected (review 77).
+/// connected.
 #[tokio::test]
 async fn a_refused_password_on_a_second_session_leaves_nothing_connected() {
 
@@ -1002,7 +990,7 @@ async fn a_refused_password_on_a_second_session_leaves_nothing_connected() {
 /// heartbeat - five answers with the same wrong password block the address
 /// for a minute), and the corrected Connect starts from nothing. Measured in
 /// build 76 as "server unreachable, check your firewall" after a corrected
-/// password, against a server that was there (review 76).
+/// password, against a server that was there.
 #[tokio::test]
 async fn a_corrected_password_connects_without_a_wait() {
 
@@ -1135,7 +1123,7 @@ async fn a_refused_password_ends_the_attempt() {
 /// code step open and admits the second code with a bare ACCEPTED, which only
 /// the kept nonces can verify. Until build 76 the refusal cleared them, and the
 /// right code ended in "the server proves nothing" while the server held the
-/// client as admitted (review 75, measured).
+/// client as admitted (measured).
 #[tokio::test]
 async fn a_wrong_code_then_the_right_one_connects() {
 
@@ -1203,7 +1191,7 @@ async fn a_wrong_code_then_the_right_one_connects() {
 /// The 2FA chain to the end: the proof comes with TOTP_REQUIRED, the result after
 /// the code carries none, and the client connects on what it verified at the
 /// password step. Nothing walked this chain before: removing that carry-over
-/// left every test green (review 69) - and no 2FA client could have connected,
+/// left every test green - and no 2FA client could have connected,
 /// with a message pointing at the server.
 #[tokio::test]
 async fn a_2fa_client_connects_on_the_proof_from_the_password_step() {
@@ -1213,7 +1201,7 @@ async fn a_2fa_client_connects_on_the_proof_from_the_password_step() {
     let (mut state_rx, cmd_tx, shutdown_tx, _handle) = spawn_engine();
     // Whether anything reached the server while the operator "typed": the
     // client pauses its heartbeats at the code step, and the server's two
-    // minutes rest on that (review 71: the pause was held by nothing).
+    // minutes rest on that (the pause was held by nothing).
     let heard_at_code_step = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let heard = heard_at_code_step.clone();
 
@@ -1264,8 +1252,8 @@ async fn a_2fa_client_connects_on_the_proof_from_the_password_step() {
                             // Heartbeats only: the admission is followed by a burst of
                             // six packets in 15 ms (one heartbeat, five controls), and a
                             // counter over all of them fires inside that burst, before
-                            // this test has seen Connected - a race, both sides measured
-                            // (review 75). The second heartbeat comes half a second in.
+                            // this test has seen Connected - a race, both sides measured.
+                            // The second heartbeat comes half a second in.
                             if matches!(
                                 sdr_remote_core::protocol::Packet::deserialize(&buf[.._n]),
                                 Ok(sdr_remote_core::protocol::Packet::Heartbeat(_))
@@ -1277,7 +1265,7 @@ async fn a_2fa_client_connects_on_the_proof_from_the_password_step() {
                                 // The ACCEPTED once more, as a UDP duplicate would: a
                                 // repeated result for the verified session is ignored,
                                 // not a server that proves nothing (RESULT_REPEATED -
-                                // reachable by no test until build 75, review 74).
+                                // reachable by no test until build 75).
                                 let _ = fake_server
                                     .send_to(
                                         &build_auth_result(sdr_remote_core::protocol::AUTH_ACCEPTED),
@@ -1317,11 +1305,11 @@ async fn a_2fa_client_connects_on_the_proof_from_the_password_step() {
     assert_eq!(status, ConnectStatus::Connected);
     assert!(
         !heard_at_code_step.load(std::sync::atomic::Ordering::Relaxed),
-        "the client sent something while the operator was typing - the heartbeat pause is gone"
+        "the client sent something while the operator was typing: the heartbeat pause is gone"
     );
     // And it stays connected: the clock on the code is wiped by the answer, and
     // the wait on it looks at the code step only. Either let go, and a healthy
-    // session would be dropped five seconds after it was made (review 71).
+    // session would be dropped five seconds after it was made.
     // Watched every 50 ms, not looked at once at the end: a blink to
     // Connecting is undone by the next ack within half a second.
     let watch_until = Instant::now() + Duration::from_millis(6_500);
@@ -1337,8 +1325,7 @@ async fn a_2fa_client_connects_on_the_proof_from_the_password_step() {
 /// The code went out and the server says nothing - it reaped the attempt while
 /// the operator typed, and it is still there. The client used to wait at the
 /// code field for ever; now it lets go after five seconds, its heartbeats
-/// resume, the server challenges it again, and a fresh code connects it
-/// (review 70, 71).
+/// resume, the server challenges it again, and a fresh code connects it.
 #[tokio::test]
 async fn a_2fa_code_that_gets_no_answer_starts_a_new_attempt() {
 
@@ -1436,7 +1423,7 @@ async fn a_2fa_code_that_gets_no_answer_starts_a_new_attempt() {
     // The wait lets go: Connecting - not Failed, not rejected - then the
     // server challenges the resumed heartbeat and a fresh code field follows.
     // Watched with wait_for_status, not a blind sleep: a Failed in between was
-    // overwritten within a second and a blind look never saw it (review 72).
+    // overwritten within a second and a blind look never saw it.
     let status = wait_for_status(&mut state_rx, 7_000, |s| {
         matches!(s, ConnectStatus::Connecting)
     })
@@ -1468,7 +1455,7 @@ async fn a_2fa_code_that_gets_no_answer_starts_a_new_attempt() {
 /// The same unanswered code against a server that never challenges the
 /// resumed heartbeat either - one from before build 72, which holds the old
 /// attempt for its deadline. The client used to sit at Connecting for ever;
-/// now the no-reply watchdog ends the attempt out loud (review 72).
+/// now the no-reply watchdog ends the attempt out loud.
 #[tokio::test]
 async fn a_server_that_never_challenges_again_ends_in_no_reply() {
 
@@ -1595,7 +1582,7 @@ async fn wrong_totp_after_totp_phase() {
 
     // The operator types again and that code gets no answer: letting go of
     // the attempt also lets go of the rejection, or Connecting would stand
-    // with "wrong code" still in view (review 73).
+    // with "wrong code" still in view.
     cmd_tx
         .send(Command::SendTotpCode("111111".to_string()))
         .unwrap();
@@ -1610,7 +1597,7 @@ async fn wrong_totp_after_totp_phase() {
 
 /// A late REFUSAL of the code: the client already let go, and the refusal
 /// still names the code, not the password - the code step survives the
-/// let-go in the kept attempt (review 74, measured as "wrong password").
+/// let-go in the kept attempt (before the fix it was measured as "wrong password").
 #[tokio::test]
 async fn a_late_refusal_of_the_code_names_the_code() {
 
@@ -1679,7 +1666,7 @@ async fn a_late_refusal_of_the_code_names_the_code() {
 /// The late answer in a SECOND session: the client already holds a session
 /// key, the server challenges again (a restart), the second code is answered
 /// late. In build 73 this sat at Connecting for good - the late answer went to
-/// the duplicate arm (review 73, probe 2; review 74, probe B).
+/// the duplicate arm.
 #[tokio::test]
 async fn a_late_answer_in_a_second_session_still_connects() {
 
@@ -1763,8 +1750,8 @@ async fn a_late_answer_in_a_second_session_still_connects() {
 /// The answer to the code comes late instead of never - a slow relay, a server
 /// that blocked for a moment - after the client already let go of the attempt.
 /// It is a verified answer all the same: the nonces of the let-go attempt are
-/// kept for it. Without them it read as a server that proves nothing (review
-/// 73, measured).
+/// kept for it. Without them it read as a server that proves nothing
+/// (measured).
 #[tokio::test]
 async fn a_late_answer_to_the_code_still_connects() {
 
@@ -1907,8 +1894,8 @@ async fn tci_unreachable_via_state_flags() {
 #[tokio::test]
 async fn a_short_heartbeat_ack_is_no_false_positive_tci_unreachable() {
     // A HeartbeatAck without state_flags - the 16-byte shape, no REPORTS_STATE_FLAGS
-    // cap - is no TCI fault. Written for a v2.0.0 server (review finding B3); since
-    // decision F such a server is refused at the handshake, so the scripted one
+    // cap - is no TCI fault. Written for a v2.0.0 server; since the mutual
+    // password check such a server is refused at the handshake, so the scripted one
     // proves itself and only its acks are old. The client MUST stay Connected and
     // NOT misread the absent flag as "TCI down".
 
@@ -1929,7 +1916,7 @@ async fn a_short_heartbeat_ack_is_no_false_positive_tci_unreachable() {
                         client_addr,
                     )
                     .await;
-                // Reply with 16-byte (pre-PATCH-1) HeartbeatAck for several rounds.
+                // Reply with 16-byte (pre-state_flags) HeartbeatAck for several rounds.
                 let mut seq: u32 = 0;
                 loop {
                     if let Ok((_n, _)) = fake_server.recv_from(&mut buf).await {
@@ -2047,10 +2034,10 @@ async fn tci_recovery_when_flag_returns() {
 async fn retry_after_failed_broadcasts_connecting_immediately() {
     // Regression test for the retry-after-WrongPassword UX: after a Failed
     // state, sending Command::Connect again must flip connect_status to
-    // Connecting immediately (visible via the watch channel) — without
+    // Connecting immediately (visible via the watch channel); without
     // this broadcast the UI keeps the red "Wrong password" banner up
     // for several seconds until the next packet event triggers a state
-    // send. Owner reported this during PATCH-2 smoke-testing.
+    // send. Seen in practice.
 
     // Stage 1: reach Failed(WrongPassword) via a fake server.
     let fake_server = FakeServer::start().await;
@@ -2084,7 +2071,7 @@ async fn retry_after_failed_broadcasts_connecting_immediately() {
     .await;
 
     // Stage 2: retry with a different password. The status MUST transition
-    // to Connecting promptly — checked with a tight deadline (500ms) so a
+    // to Connecting promptly, checked with a tight deadline (500ms) so a
     // regression where the engine only updates state on the next packet
     // event clearly fails the test.
     cmd_tx
@@ -2107,8 +2094,8 @@ async fn retry_same_target_during_awaiting_totp_is_noop() {
     // Regression test for the same-target-during-AwaitingTotp behaviour:
     // a second Command::Connect with identical server+password while the
     // engine is in AwaitingTotp must NOT regress the status to Connecting
-    // — the server's PendingTotp session would not re-issue AuthChallenge
-    // and the user would be stuck.
+    // (the server's PendingTotp session would not re-issue AuthChallenge
+    // and the user would be stuck).
 
     let fake_server = FakeServer::start().await;
     let server_addr = fake_server.local_addr().unwrap();
@@ -2140,7 +2127,7 @@ async fn retry_same_target_during_awaiting_totp_is_noop() {
     })
     .await;
 
-    // Send the same Connect again — should be a no-op.
+    // Send the same Connect again: should be a no-op.
     cmd_tx
         .send(Command::Connect(
             server_addr.to_string(),
@@ -2163,7 +2150,7 @@ async fn retry_same_target_during_awaiting_totp_is_noop() {
 /// A server that restarts and comes back INSIDE the connection timeout must
 /// still get the client's subscriptions back.
 ///
-/// This is the fault the owner found by ear: the noise from the draining
+/// This is a fault that was found by ear: the noise from the draining
 /// jitter buffer is the window in which the client still believes it is
 /// connected. Restart inside it and the client re-authenticates without ever
 /// having considered itself away - and the restore block is gated on exactly
@@ -2275,7 +2262,7 @@ async fn a_second_authentication_restores_the_subscriptions() {
         .unwrap_or(false);
     assert!(
         asked_again,
-        "after a second authentication the client must ask for its subscriptions again -          without it the server keeps the defaults of its fresh session and only RX1 returns"
+        "after a second authentication the client must ask for its subscriptions again;          without it the server keeps the defaults of its fresh session and only RX1 returns"
     );
 
     let _ = shutdown_tx.send(true);
@@ -2387,11 +2374,11 @@ async fn a_press_does_not_run_into_a_new_session() {
     assert_eq!(tones_after, 1, "one tone when the press was let go, and not a second one at the acceptance");
 }
 
-/// A radio's PTT rides on its audio (build 282, open point 39): a press sends
+/// A radio's PTT rides on its audio (build 282): a press sends
 /// packets with the flag - from the next audio tick since build 292, as
 /// Thetis's; until then the first went at once on the button - and a release
 /// sends the burst without it, on the radio's own sequence. No control keys a
-/// Yaesu any more. Twice per radio without a restart (working rule 9), and the
+/// Yaesu any more. Twice per radio without a restart, and the
 /// second radio on a sequence of its own.
 #[tokio::test]
 async fn a_radios_ptt_goes_on_its_audio_packets() {
@@ -2482,7 +2469,7 @@ async fn a_radios_ptt_goes_on_its_audio_packets() {
 // Added because the two integration tests that existed built the SHORT ack, so
 // since build 2 every one of them exercised the `Older` branch and the `Same`
 // branch - the normal case, the one where a false complaint would reach every
-// station - was never walked end to end (raised in review).
+// station - was never walked end to end.
 
 /// An ack that says it comes from `version`, or the older short form when
 /// `None`. Deliberately NOT `serialize_with_version` for the `None` case: that
@@ -2600,7 +2587,7 @@ async fn a_server_of_this_build_reads_as_the_same_build() {
     assert_eq!(build_the_client_sees(ack).await, PeerBuild::Same);
 }
 
-/// And the other state of the same check (working rule 13): a server that names
+/// And the other state of the same check: a server that names
 /// a different build is named back, over the whole path.
 #[tokio::test]
 async fn a_server_of_another_build_is_named_over_the_wire() {
@@ -2621,7 +2608,7 @@ async fn a_server_too_old_to_say_reads_as_older() {
     assert_eq!(build_the_client_sees(ack).await, PeerBuild::Older);
 }
 
-// ---------------------------------------------------------------- phase 2b
+// ------------------------------------------------- acknowledged controls
 
 use sdr_remote_core::control_ack::ControlKey;
 
@@ -2640,7 +2627,7 @@ fn plain(key: ControlKey) -> ControlKey {
 enum AckPolicy {
     /// Acknowledge everything.
     All,
-    /// Acknowledge nothing: a server from before phase 2b.
+    /// Acknowledge nothing: a server that does not acknowledge controls.
     Nothing,
     /// Acknowledge everything except the first `n` copies of `key`.
     DropFirstCopies { key: ControlKey, n: u32 },
@@ -2653,7 +2640,7 @@ enum AckPolicy {
 /// a `ControlPacket` and a `YaesuControlPacket` alike. A control WITHOUT a
 /// number is reported with seq 0 (never a real number): a send that skipped
 /// the numbering would otherwise be invisible here, and its repeat - which
-/// does carry the number - would make the count look right (reviews 87).
+/// does carry the number - would make the count look right.
 async fn ack_server(
     fake_server: FakeServer,
     policy: AckPolicy,
@@ -2756,7 +2743,7 @@ async fn vfo_swap_copies(policy: AckPolicy, window: Duration) -> Vec<u32> {
 }
 
 /// A control the server did not acknowledge is sent again, with the same
-/// number, once this session's server has shown it acknowledges (phase 2b).
+/// number, once this session's server has shown it acknowledges.
 #[tokio::test]
 async fn a_lost_control_is_sent_again_with_the_same_number() {
     let seqs = vfo_swap_copies(AckPolicy::DropFirstCopies { key: VFO_SWAP, n: 1 }, Duration::from_millis(1_500)).await;
@@ -2767,7 +2754,7 @@ async fn a_lost_control_is_sent_again_with_the_same_number() {
 
 /// The same for a typed Yaesu control (`Command::SetYaesuControl`): before
 /// build 87 the one control with no repair at all, and it goes to a radio that
-/// can transmit (reviews 87).
+/// can transmit.
 #[tokio::test]
 async fn a_lost_yaesu_control_is_sent_again_with_the_same_number() {
     let nar = Command::SetYaesuControl(0, 2, 1);
@@ -2779,7 +2766,7 @@ async fn a_lost_yaesu_control_is_sent_again_with_the_same_number() {
 }
 
 /// A control left unacknowledged in the old session is not repeated into the
-/// new one (build 254, rounds 252). The server counts a client as signed in once
+/// new one. The server counts a client as signed in once
 /// the answer to its challenge is in, and its new session applies whatever
 /// numbered control comes next - a repeated `YaesuPtt=1` or `ThetisTune` from
 /// before the switch would key a transmitter. Until 254 the repeats stopped only
@@ -2870,8 +2857,8 @@ async fn an_unacknowledged_control_is_not_repeated_into_a_new_session() {
     assert_eq!(after, 0, "and is not repeated after the answer to the second challenge");
 }
 
-/// Against a server that never acknowledges - one from before phase 2b - a
-/// control goes once, as before: a repeat there could press a button twice.
+/// Against a server that never acknowledges - an older one - a control
+/// goes once, as before: a repeat there could press a button twice.
 #[tokio::test]
 async fn a_server_that_never_acknowledges_gets_each_control_once() {
     let seqs = vfo_swap_copies(AckPolicy::Nothing, Duration::from_millis(1_500)).await;
@@ -2950,7 +2937,7 @@ fn assert_both_presses_arrive(seqs: &[u32]) {
     assert_eq!(seqs[2], seqs[0], "the lost first one is the one repeated: {seqs:?}");
 }
 
-/// Two swaps, the first one lost (reviews 87): the second does not push the
+/// Two swaps, the first one lost: the second does not push the
 /// first out - both arrive, the first by its repeat, each under its own number.
 /// Before build 88 the first was replaced by the second and never repeated.
 #[tokio::test]
@@ -2959,9 +2946,8 @@ async fn a_second_swap_does_not_replace_a_lost_first_one() {
     assert_both_presses_arrive(&two_presses_first_lost(swap, VFO_SWAP).await);
 }
 
-/// The V/M button, value 3 of a VFO select: a toggle, so an act (round on
-/// build 88 - before build 89 it was a setting, and the second press replaced
-/// a lost first one).
+/// The V/M button, value 3 of a VFO select: a toggle, so an act (before
+/// build 89 it was a setting, and the second press replaced a lost first one).
 #[tokio::test]
 async fn a_second_v_m_press_does_not_replace_a_lost_first_one() {
     use sdr_remote_core::protocol::ControlId;
@@ -2970,8 +2956,8 @@ async fn a_second_v_m_press_does_not_replace_a_lost_first_one() {
     assert_both_presses_arrive(&two_presses_first_lost(vm, key).await);
 }
 
-/// Two clarifier steps of +10 Hz, the first lost (round on build 88): +20 Hz,
-/// not +10. A typed Yaesu control, so the other packet type.
+/// Two clarifier steps of +10 Hz, the first lost: +20 Hz, not +10. A typed
+/// Yaesu control, so the other packet type.
 #[tokio::test]
 async fn a_second_clarifier_step_does_not_replace_a_lost_first_one() {
     let step = sdr_remote_core::protocol::YaesuCtrl::ClarStep as u8;
@@ -3087,8 +3073,19 @@ async fn the_controls_of_a_session_and_its_replay_go_over_the_wire_once_in_order
     use sdr_remote_core::protocol::ControlId::*;
     // The hand-written sends after an acceptance, with this client's defaults.
     let c = |id: sdr_remote_core::protocol::ControlId| ControlKey::Control(id as u8);
+    // The spectrum state goes on or off, with its view (build 81): this client
+    // starts with both spectra off.
     let burst: Vec<(ControlKey, u16)> = vec![
+        (c(SpectrumEnable), 0),
+        (c(SpectrumFps), 15),
+        (c(SpectrumZoom), 10),
+        (c(SpectrumPan), 5000),
+        (c(SpectrumMaxBins), 8192),
         (c(Rx1Enable), 1),
+        (c(Rx2SpectrumEnable), 0),
+        (c(Rx2SpectrumMaxBins), 8192),
+        (c(Rx2SpectrumZoom), 10),
+        (c(Rx2SpectrumPan), 5000),
         (c(AudioMode), 0),
         (c(SmeterSources), 0x22),
         (c(DxSpotsEnabled), 1),
@@ -3096,11 +3093,188 @@ async fn the_controls_of_a_session_and_its_replay_go_over_the_wire_once_in_order
     ];
     assert_eq!(first, burst, "the first session");
     // The second session replays what the first one recorded, and THEN sends the
-    // same block by hand - so these five go twice. Deliberate since the replay
+    // same block by hand - so these go twice. Deliberate since the replay
     // was moved first (the hand-written values read the current variables and
     // should land last); pinned here as it is, not as it might be.
-    let replayed_then_sent: Vec<(ControlKey, u16)> = burst.iter().chain(burst.iter()).copied().collect();
+    // The replay goes in the order of `SESSION_SCOPED_CONTROLS`, the hand-written
+    // block in its own.
+    let replayed: Vec<(ControlKey, u16)> = vec![
+        (c(Rx1Enable), 1),
+        (c(SpectrumEnable), 0),
+        (c(SpectrumFps), 15),
+        (c(SpectrumZoom), 10),
+        (c(SpectrumPan), 5000),
+        (c(SpectrumMaxBins), 8192),
+        (c(Rx2SpectrumEnable), 0),
+        (c(Rx2SpectrumZoom), 10),
+        (c(Rx2SpectrumPan), 5000),
+        (c(Rx2SpectrumMaxBins), 8192),
+        (c(AudioMode), 0),
+        (c(SmeterSources), 0x22),
+        (c(DxSpotsEnabled), 1),
+        (c(FullSpectrumEnabled), 1),
+    ];
+    let replayed_then_sent: Vec<(ControlKey, u16)> = replayed.iter().chain(burst.iter()).copied().collect();
     assert_eq!(second, replayed_then_sent, "the second session");
+}
+
+/// The FFT size is the receiver's on the server, for every client: a client
+/// with its spectrum closed does not send it on a new session (the phone asks
+/// for 128K on every connect), and one with it open does. Live during a
+/// session the same: per receiver, only with that receiver's spectrum open.
+/// A spectrum that opens during a session sends the size its rows show, also
+/// one chosen while it was closed.
+#[tokio::test]
+async fn the_fft_size_goes_on_a_new_session_only_with_the_spectrum_open() {
+    use sdr_remote_core::protocol::ControlId;
+    let fake_server = FakeServer::start().await;
+    let server_addr = fake_server.local_addr().unwrap();
+    let (mut state_rx, cmd_tx, shutdown_tx, _handle) = spawn_engine();
+    let (re_tx, re_rx) = mpsc::unbounded_channel();
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    tokio::spawn(recording_server(fake_server, re_rx, seen_tx, true));
+    let pause = || tokio::time::sleep(Duration::from_millis(300));
+    cmd_tx.send(Command::SetSpectrumFftSize(128)).unwrap();
+    cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, 64)).unwrap();
+    cmd_tx
+        .send(Command::Connect(server_addr.to_string(), Some("pw".to_string())))
+        .unwrap();
+    wait_for_status(&mut state_rx, 4_000, |s| matches!(s, ConnectStatus::Connected)).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    // The first session, both closed: asked for live, as a second press of
+    // Connect does, and remembered. Then RX1 opens.
+    cmd_tx.send(Command::SetSpectrumFftSize(48)).unwrap();
+    cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, 24)).unwrap();
+    // Closed again while closed: no open, so no size.
+    cmd_tx.send(Command::EnableSpectrum(false)).unwrap();
+    cmd_tx.send(Command::EnableRx2Spectrum(false)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::EnableSpectrum(true)).unwrap();
+    pause().await;
+    // The second: only RX1 open, as on the phone. Then RX1 closes and RX2 opens.
+    let _ = re_tx.send(());
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    cmd_tx.send(Command::SetSpectrumFftSize(256)).unwrap();
+    cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, 32)).unwrap();
+    // Opened again while open: no new open, so no size again.
+    cmd_tx.send(Command::EnableSpectrum(true)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::EnableSpectrum(false)).unwrap();
+    cmd_tx.send(Command::EnableRx2Spectrum(true)).unwrap();
+    pause().await;
+    // The third: only RX2 open. Then RX1 opens again.
+    let _ = re_tx.send(());
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    cmd_tx.send(Command::SetSpectrumFftSize(512)).unwrap();
+    cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, 16)).unwrap();
+    cmd_tx.send(Command::EnableRx2Spectrum(true)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::EnableSpectrum(true)).unwrap();
+    pause().await;
+    // The fourth: both open.
+    let _ = re_tx.send(());
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let _ = shutdown_tx.send(true);
+
+    let mut sessions: Vec<Vec<(ControlKey, u16)>> = vec![Vec::new()];
+    while let Ok(item) = seen_rx.try_recv() {
+        match item {
+            None => sessions.push(Vec::new()),
+            Some(c) => sessions.last_mut().unwrap().push(c),
+        }
+    }
+    assert_eq!(sessions.len(), 4, "four sessions");
+    let key = |id: ControlId| ControlKey::Control(id as u8);
+    let rx1 = |k: u16| (key(ControlId::SpectrumFftSize), k);
+    let rx2 = |k: u16| (key(ControlId::Rx2SpectrumFftSize), k);
+    let opens = |id: ControlId| (key(id), 1u16);
+    let sizes = |s: &Vec<(ControlKey, u16)>| -> Vec<(ControlKey, u16)> {
+        s.iter().filter(|(k, _)| *k == key(ControlId::SpectrumFftSize) || *k == key(ControlId::Rx2SpectrumFftSize)).cloned().collect()
+    };
+    // Where a size went: after the open of its spectrum, or not at all.
+    let after_open = |s: &Vec<(ControlKey, u16)>, open: ControlId, size: (ControlKey, u16)| {
+        let o = s.iter().position(|c| *c == opens(open));
+        let f = s.iter().position(|c| *c == size);
+        matches!((o, f), (Some(o), Some(f)) if o < f)
+    };
+    let (first, second, third, fourth) = (&sessions[0], &sessions[1], &sessions[2], &sessions[3]);
+    assert_eq!(sizes(first), vec![rx1(48)], "closed: nothing, also not asked for live; RX1 opens with 48, {first:?}");
+    assert!(after_open(first, ControlId::SpectrumEnable, rx1(48)), "{first:?}");
+    assert_eq!(sizes(second), vec![rx1(48), rx1(256), rx2(32)], "RX1 open: its own, live too; RX2 opens with 32, {second:?}");
+    assert!(after_open(second, ControlId::Rx2SpectrumEnable, rx2(32)), "{second:?}");
+    assert_eq!(sizes(third), vec![rx2(32), rx2(16), rx1(512)], "RX2 open: its own, live too; RX1 opens with 512, {third:?}");
+    assert!(after_open(third, ControlId::SpectrumEnable, rx1(512)), "{third:?}");
+    assert!(fourth.contains(&rx1(512)) && fourth.contains(&rx2(16)), "both open: both remembered, {fourth:?}");
+}
+
+/// A VRX spectrum is cut from its receiver's: one that opens sends the size its
+/// receiver's rows show, with the RX spectrum closed too, and again when the
+/// screen subscribes anew in a new session. A close sends none, and neither
+/// does a zoom step, which sends the same command with a new width.
+#[tokio::test]
+async fn a_vrx_spectrum_that_opens_sends_its_receivers_fft_size() {
+    use sdr_remote_core::protocol::ControlId;
+    let fake_server = FakeServer::start().await;
+    let server_addr = fake_server.local_addr().unwrap();
+    let (mut state_rx, cmd_tx, shutdown_tx, _handle) = spawn_engine();
+    let (re_tx, re_rx) = mpsc::unbounded_channel();
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    tokio::spawn(recording_server(fake_server, re_rx, seen_tx, true));
+    let pause = || tokio::time::sleep(Duration::from_millis(300));
+    cmd_tx.send(Command::SetSpectrumFftSize(64)).unwrap();
+    cmd_tx.send(Command::SetControl(ControlId::Rx2SpectrumFftSize, 32)).unwrap();
+    cmd_tx
+        .send(Command::Connect(server_addr.to_string(), Some("pw".to_string())))
+        .unwrap();
+    wait_for_status(&mut state_rx, 4_000, |s| matches!(s, ConnectStatus::Connected)).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    // Both RX spectra closed; VRX1 opens, zooms (the screen sends the same
+    // command with a new width), closes and opens again; then VRX2 opens and
+    // zooms.
+    cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, 48_000)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, 24_000)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::SetVrxHighResSpectrum(0, false, 24_000)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::SetVrxHighResSpectrum(0, true, 24_000)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, 48_000)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, 24_000)).unwrap();
+    pause().await;
+    // A new session: the screen subscribes VRX2 anew, then it zooms.
+    let _ = re_tx.send(());
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, 24_000)).unwrap();
+    pause().await;
+    cmd_tx.send(Command::SetVrxHighResSpectrum(1, true, 12_000)).unwrap();
+    pause().await;
+    let _ = shutdown_tx.send(true);
+
+    let mut sessions: Vec<Vec<(ControlKey, u16)>> = vec![Vec::new()];
+    while let Ok(item) = seen_rx.try_recv() {
+        match item {
+            None => sessions.push(Vec::new()),
+            Some(c) => sessions.last_mut().unwrap().push(c),
+        }
+    }
+    assert_eq!(sessions.len(), 2, "two sessions");
+    let key = |id: ControlId| ControlKey::Control(id as u8);
+    let sizes = |s: &Vec<(ControlKey, u16)>| -> Vec<(ControlKey, u16)> {
+        s.iter().filter(|(k, _)| *k == key(ControlId::SpectrumFftSize) || *k == key(ControlId::Rx2SpectrumFftSize)).cloned().collect()
+    };
+    let after = |s: &Vec<(ControlKey, u16)>, open: ControlId, size: (ControlKey, u16)| {
+        let o = s.iter().position(|c| *c == (key(open), 1));
+        let f = s.iter().position(|c| *c == size);
+        matches!((o, f), (Some(o), Some(f)) if o < f)
+    };
+    let rx1 = (key(ControlId::SpectrumFftSize), 64u16);
+    let rx2 = (key(ControlId::Rx2SpectrumFftSize), 32u16);
+    let (first, second) = (&sessions[0], &sessions[1]);
+    assert_eq!(sizes(first), vec![rx1, rx1, rx2], "VRX1 opens with RX1's, a zoom and the close send none, the open again does, VRX2 with RX2's and its zoom none, {first:?}");
+    assert!(after(first, ControlId::VrxSpectrumEnable, rx1) && after(first, ControlId::VrxSpectrumEnable2, rx2), "{first:?}");
+    assert_eq!(sizes(second), vec![rx2], "subscribed anew: RX2's again, the zoom after it none, {second:?}");
 }
 
 /// The second session goes to a server that does not acknowledge (an older
@@ -3215,7 +3389,7 @@ async fn measurement_mode_writes_the_arrivals_of_a_session() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A measurement that starts in the middle of things (rounds 93, 94): a
+/// A measurement that starts in the middle of things: a
 /// session is running and the transmitter is already keyed. The file still
 /// says where it started - the session and its way right after `start`, and a
 /// key before the release.
@@ -3255,9 +3429,9 @@ async fn a_measurement_started_mid_session_writes_where_things_stand() {
 /// A measurement with no session behind it writes no `session_start`: the file
 /// would say a session ran that never did. Started while a connect is still in
 /// flight, so the engine has an address and is trying - but nobody answers.
-/// Until build 133 this was half of the classic relay's test (review 111 had
-/// found the arm without a test once already; review 133 found it again when
-/// that test went with the relay).
+/// Until build 133 this was half of the classic relay's test (the arm had been
+/// found without a test once before, and again when that test went with the
+/// relay).
 #[tokio::test]
 async fn a_measurement_without_a_session_writes_no_session_start() {
     let dir = std::env::temp_dir().join(format!("tl-measure-no-session-{}", std::process::id()));
@@ -3279,7 +3453,7 @@ async fn a_measurement_without_a_session_writes_no_session_start() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ------------- QUIC (phase 3a, build 110) -------------
+// ------------- QUIC (build 110) -------------
 
 /// A QUIC server scripted like the UDP ones above: it challenges every new
 /// connection, checks the answer against THIS connection's binding (and that the
@@ -3293,7 +3467,7 @@ fn spawn_quic_server(password: &'static str, bind_proof: bool) -> (std::net::Soc
 /// `stale_once`: the first answer is checked and its result made, but not sent:
 /// the server closes that connection instead and hands the result to the
 /// client's NEXT connection, as the first thing on it - a result for a
-/// connection that is gone (requirement 4 of review 108). Not admitted, so the
+/// connection that is gone. Not admitted, so the
 /// counter only counts admissions the client could rightly act on.
 fn spawn_quic_server_with(
     password: &'static str,
@@ -3314,7 +3488,7 @@ fn spawn_quic_server_with(
     tokio::spawn(async move {
         let _server = server;
         // A fresh nonce per challenge, so a second round proves a new
-        // authentication, not a repeat of the first (review 110).
+        // authentication, not a repeat of the first.
         let mut nonce = [7u8; 16];
         // Like the real server: admitted until the client says Disconnect -
         // per connection, as every QUIC connection is its own session.
@@ -3383,7 +3557,7 @@ fn spawn_quic_engine() -> (
 
 /// Over QUIC the client answers bound to its connection and checks the
 /// server's proof over the same binding: it connects - twice, with a
-/// Disconnect between, without a restart (working rule 9). The operator types
+/// Disconnect between, without a restart. The operator types
 /// the server's address with its port; QUIC goes there (build 133) and what
 /// comes back reads as the server the operator named.
 #[tokio::test]
@@ -3411,7 +3585,7 @@ async fn over_quic_the_client_authenticates_bound_to_its_connection() {
 /// A result made for a QUIC connection that has since closed reaches the
 /// client on its next connection. It is ignored - not a refusal, not a
 /// connection - and the client authenticates afresh on the new one
-/// (requirement 4 of review 108; the wiring, review 110). Without the stale
+/// (the wiring). Without the stale
 /// arm the client would verify that result against the binding it answered
 /// with, find it good, and call itself connected on a connection the server
 /// never admitted.
@@ -3445,8 +3619,8 @@ async fn over_quic_a_stopping_engine_gets_its_close_out() {
     let engine_thread = std::thread::spawn(move || {
         // One thread, on purpose: with a second worker the client task could
         // still send the close after `run` returned, and this test went green
-        // with the `stop()` call removed - 2 of 5 runs, and in a full run
-        // (review 112). On one thread only that call can explain the close.
+        // with the `stop()` call removed - 2 of 5 runs, and in a full run.
+        // On one thread only that call can explain the close.
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
             let (engine, _state_rx, cmd_tx) = ClientEngine::new();
@@ -3474,10 +3648,10 @@ async fn over_quic_a_stopping_engine_gets_its_close_out() {
     drop(server);
 }
 
-/// Through the relay (phase 3b): the engine's QUIC connection goes through a
+/// Through the relay: the engine's QUIC connection goes through a
 /// stand-in relay to the server, authenticates bound to that connection - the
 /// relay carries the TLS session, it does not take part - and does so twice
-/// without a restart (working rule 9). The operator connects to a label, as in
+/// without a restart. The operator connects to a label, as in
 /// relay mode; the screen says "QUIC via relay".
 #[tokio::test]
 async fn over_quic_via_the_relay_the_client_authenticates() {
@@ -3502,7 +3676,7 @@ async fn over_quic_via_the_relay_the_client_authenticates() {
         wait_for_path(&mut state_rx, Some(sdr_remote_core::path::PathKind::Relay), &format!("round {round}")).await;
         // And none once the session is gone: with a relay the route layer
         // always names a way, so only the engine's session check takes it
-        // away (review 139, mutant F).
+        // away.
         cmd_tx.send(Command::Disconnect).unwrap();
         wait_for_status(&mut state_rx, 3_000, |s| !matches!(s, ConnectStatus::Connected)).await;
         no_path_stays(&state_rx, &format!("round {round}, after Disconnect")).await;
@@ -3554,11 +3728,11 @@ async fn wait_for_an_ack_with_flags(state_rx: &mut watch::Receiver<RadioState>, 
     }
 }
 
-/// The server's RX_ONLY_UNGUARDED flag reaches the screen (build 216; review
-/// of 215: reading the flag with another constant stayed green). A heartbeat
+/// The server's RX_ONLY_UNGUARDED flag reaches the screen (build 216; in
+/// 215, reading the flag with another constant stayed green). A heartbeat
 /// with the flag gives the warning line; one with every other flag but that
 /// one does not. Both on the same engine, with Disconnect and Connect between
-/// them (review of 216): the second session must not keep the first one's line.
+/// them: the second session must not keep the first one's line.
 #[tokio::test]
 async fn an_unguarded_rx_only_position_from_the_server_stands_on_the_screen() {
     use sdr_remote_logic::i18n::Lang;
@@ -3602,7 +3776,7 @@ async fn an_unguarded_rx_only_position_from_the_server_stands_on_the_screen() {
 }
 
 /// A refusal saying transmitting is closed reaches the screen (build 217;
-/// review of 216: only the rule was tested, not the way from the packet). The
+/// only the rule was tested, not the way from the packet). The
 /// server sends it unasked, as `safety_task_lost` does; the line "safe mode"
 /// stands. A second session on the same engine, with a server that is open,
 /// does not show it.

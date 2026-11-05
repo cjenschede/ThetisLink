@@ -254,7 +254,7 @@ impl ServerApp {
                 // Not on offer yet - that backend is not running. Same rule as the
                 // client: remember the intent, store the geometry so a manual open
                 // lands correctly, and place it when the device appears.
-                log::info!("Arrangement {}: {:?} not available yet - queued until it appears",
+                log::info!("Arrangement {}: {:?} not available yet; queued until it appears",
                            idx + 1, w);
                 self.snap_set_geometry(w, [pos.x, pos.y], [size.x, size.y]);
                 self.layout_pending.retain(|(pw, _, _)| *pw != w);
@@ -295,7 +295,7 @@ impl ServerApp {
             self.snap_open(w);
             self.snap_move_now(ctx, w, pos, size);
             self.snap_set_geometry(w, pos, size);
-            log::info!("Queued arrangement: {:?} appeared - placed at {:.0},{:.0} {:.0}x{:.0}",
+            log::info!("Queued arrangement: {:?} appeared; placed at {:.0},{:.0} {:.0}x{:.0}",
                        w, pos[0], pos[1], size[0], size[1]);
         }
         self.save_window_positions();

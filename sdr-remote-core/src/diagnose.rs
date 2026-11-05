@@ -3,8 +3,7 @@
 //! Building a problem report: the log tail and the settings, cleaned before they
 //! leave the machine.
 //!
-//! Two different mechanisms, and the difference is the whole design (§1.3,
-//! §1.3.1):
+//! Two different mechanisms, and the difference is the whole design:
 //!
 //! - **the log gets a denylist.** Nobody can enumerate what a log line contains,
 //!   so patterns are all there is.
@@ -127,6 +126,57 @@ pub fn build_attachment(
     build_attachment_from_text(&raw, &settings, relay_url)
 }
 
+/// The attachment, with the previous run's log after it when there is one.
+///
+/// The server keeps one run back beside its log; after a restart that is the
+/// run the trouble was in (build 27). Cleaned by the same rules and the same
+/// hosts as the current log. Half the tail, so a client log, a server log and
+/// this one together stay well under what a report may weigh. A previous log
+/// that is not there is no error: a first start has none.
+pub fn build_attachment_with_previous(
+    log_path: &str,
+    previous_log_path: Option<&str>,
+    settings_path: &str,
+    relay_url: &str,
+) -> Result<String, DiagnoseError> {
+    let mut out = build_attachment(log_path, settings_path, relay_url)?;
+    if let Some(previous) = previous_log_path.and_then(read_tail) {
+        let settings = std::fs::read_to_string(settings_path).unwrap_or_default();
+        out.push_str(&previous_section(&previous, &settings, relay_url));
+    }
+    Ok(out)
+}
+
+/// The previous run's log as a section of the attachment, cleaned.
+fn previous_section(raw_previous: &str, raw_settings: &str, relay_url: &str) -> String {
+    let (relay, own) = report_hosts(relay_url, raw_settings);
+    let hosts = hosts_to_hide(&relay, &own);
+    let max = (LOG_TAIL_BYTES / 2) as usize;
+    format!(
+        "\n--- the previous run's log (last {} kB, cleaned) ---\n{}",
+        max / 1024,
+        redact(tail_of(raw_previous, max), &hosts)
+    )
+}
+
+/// The two hosts a report hides: the relay's, and the station's own from the
+/// settings. One place, so the current log and the previous one are cleaned
+/// alike.
+fn report_hosts(relay_url: &str, raw_settings: &str) -> (Option<String>, Option<String>) {
+    (relay_host(relay_url), server_host(raw_settings))
+}
+
+fn hosts_to_hide<'a>(relay: &'a Option<String>, own: &'a Option<String>) -> Vec<(&'a str, &'static str)> {
+    let mut hosts = Vec::new();
+    if let Some(h) = relay.as_deref() {
+        hosts.push((h, "<relay>"));
+    }
+    if let Some(h) = own.as_deref() {
+        hosts.push((h, "<server>"));
+    }
+    hosts
+}
+
 /// The same attachment, for a platform that has neither file to point at.
 ///
 /// Android keeps its log in the system log and its settings in the framework's
@@ -142,24 +192,17 @@ pub fn build_attachment_from_text(
     raw_settings: &str,
     relay_url: &str,
 ) -> Result<String, DiagnoseError> {
-    let host = relay_host(relay_url);
+    // The station's own address comes out of the settings on their way past.
+    // With no settings there is no name to hide - and no `server=` line to
+    // leak either, so the two absences cancel. The log can still mention it,
+    // which is said in the attachment rather than left to be discovered.
+    let (host, own) = report_hosts(relay_url, raw_settings);
     if !relay_url.trim().is_empty() && host.is_none() {
         return Err(DiagnoseError::Unsafe(
             "the relay address could not be read, so it could not be removed".to_string(),
         ));
     }
-    // The station's own address comes out of the settings on their way past.
-    // With no settings there is no name to hide - and no `server=` line to
-    // leak either, so the two absences cancel. The log can still mention it,
-    // which is said in the attachment rather than left to be discovered.
-    let own = server_host(raw_settings);
-    let mut hosts: Vec<(&str, &str)> = Vec::new();
-    if let Some(h) = host.as_deref() {
-        hosts.push((h, "<relay>"));
-    }
-    if let Some(h) = own.as_deref() {
-        hosts.push((h, "<server>"));
-    }
+    let hosts = hosts_to_hide(&host, &own);
     // The tail, and only the tail: the same ceiling a file gets, so a chatty
     // platform cannot turn a report into a transfer.
     let tail = tail_of(raw_log, LOG_TAIL_BYTES as usize);
@@ -196,8 +239,8 @@ fn tail_of(text: &str, max: usize) -> &str {
 /// evidence for a story that has to be told first.
 ///
 /// Kept apart from `build_attachment` on purpose: the attachment is read from
-/// disk once and then shown, and what is sent has to be what was on screen
-/// (design 1.1). Rebuilding it at send time would re-read a log that has moved
+/// disk once and then shown, and what is sent has to be what was on screen.
+/// Rebuilding it at send time would re-read a log that has moved
 /// on since.
 ///
 /// The description is redacted with the same rules as the log. Not to police
@@ -260,14 +303,12 @@ pub fn server_host(settings: &str) -> Option<String> {
 /// impossible - and it moved the forgetting one step along: the desktop writes
 /// `server`, Android writes `server_addr`, and matching one name exactly meant
 /// the phone quietly found nothing. A silent `None` is the same leak as a
-/// forgotten parameter, in the shape the comment above thought it had ruled out
-/// (found in review, 2026-08-18).
+/// forgotten parameter, in the shape the comment above thought it had ruled out.
 ///
 /// This is a hand-kept list and nothing detects a platform that is missing from
 /// it: the test below checks the spellings named here, so a third client with a
 /// third key name is covered only once somebody adds it. Said plainly because
-/// the review asked twice whether this is structure or a convention wearing its
-/// clothes - it is a convention, and a smaller one than before.
+/// it is easy to mistake for structure: it is a convention, and a smaller one than before.
 const SERVER_KEYS: [&str; 2] = ["server", "server_addr"];
 
 /// The host part of a relay address, for removal.
@@ -394,7 +435,7 @@ fn strip_ips(line: &str) -> String {
 
 /// IPv6 addresses. Until build 122 the redaction knew only dotted quads, and
 /// the phone's own public IPv6 address went into a report unchanged (field test
-/// 120, review 121). A run of hex digits, colons and dots that parses as an IPv6
+/// 120). A run of hex digits, colons and dots that parses as an IPv6
 /// address becomes `<ip>`; loopback (`::1`) and the unspecified address (`::`)
 /// stay, as `127.x` does. A time of day (`20:16:30.865`) and a MAC address
 /// (`A4:C1:38:F1:3C:82`) do not parse as one, so they stay too. A run directly
@@ -572,7 +613,7 @@ mod tests {
 
     /// IPv6 addresses leave a report as `<ip>`, in every shape a log writes
     /// them; loopback, the unspecified address, a time of day and a MAC address
-    /// stay (review 121: the redaction knew only dotted quads).
+    /// stay (the redaction knew only dotted quads).
     #[test]
     fn ipv6_addresses_are_removed_and_lookalikes_stay() {
         for (line, want) in [
@@ -610,7 +651,7 @@ mod tests {
     /// writes another. That is not a forgotten parameter, it is a silent
     /// `None`: the same leak in the shape the design thought it had ruled out.
     /// A new platform adds its name to SERVER_KEYS, and this fails until it
-    /// does (found in review, 2026-08-18).
+    /// does.
     #[test]
     fn every_platform_spelling_of_the_server_address_is_found() {
         for key in ["server", "server_addr", "SERVER", "Server_Addr"] {
@@ -643,6 +684,34 @@ language=nl";
     fn an_unreadable_relay_address_stops_the_whole_report() {
         let e = build_attachment("nofile.log", "nofile.conf", "wss://");
         assert!(matches!(e, Err(DiagnoseError::Unsafe(_))), "{e:?}");
+    }
+
+    /// The previous run's log goes along after the current one, cleaned by the
+    /// same rules: the station's own address from the settings and a stranger's
+    /// address both leave it. No previous log, no section, and no error.
+    #[test]
+    fn the_previous_run_goes_along_cleaned() {
+        let dir = std::env::temp_dir();
+        let id = std::process::id();
+        let log = dir.join(format!("tl-diag-now-{id}.log"));
+        let prev = dir.join(format!("tl-diag-prev-{id}.log"));
+        let conf = dir.join(format!("tl-diag-{id}.conf"));
+        std::fs::write(&log, "now: tuner ok\n").unwrap();
+        std::fs::write(&prev, "before: tuner timeout at station.example.net from 77.63.41.34\n").unwrap();
+        std::fs::write(&conf, "server=station.example.net:4580\n").unwrap();
+        let (l, p, c) = (log.to_string_lossy(), prev.to_string_lossy(), conf.to_string_lossy());
+        let with = build_attachment_with_previous(&l, Some(&p), &c, "").unwrap();
+        let _ = std::fs::remove_file(&prev);
+        let without = build_attachment_with_previous(&l, Some(&p), &c, "").unwrap();
+        let none = build_attachment_with_previous(&l, None, &c, "").unwrap();
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&conf);
+        let section = &with[with.find("--- the previous run's log").expect("the section")..];
+        assert!(section.contains("before: tuner timeout at <server> from <ip>"), "{section}");
+        assert!(!with.contains("77.63.41.34") && !with.contains("station.example.net"), "{with}");
+        assert!(with.find("now: tuner ok").unwrap() < with.find("before:").unwrap(), "the current run first");
+        assert_eq!(without, none, "a previous log that is not there adds nothing");
+        assert!(!none.contains("previous run"), "{none}");
     }
 
     #[test]
@@ -796,10 +865,10 @@ no audio after band change"),
     /// the useful half, and the address itself is not.
     #[test]
     fn an_address_in_a_setting_is_scrubbed_not_withheld() {
-        let out = allowed_settings("tci=192.168.1.97:40001
+        let out = allowed_settings("tci=192.168.1.50:40001
 rf2k_addr=10.0.0.5
 ", &[]);
-        assert!(!out.contains("192.168.1.97"), "{out}");
+        assert!(!out.contains("192.168.1.50"), "{out}");
         assert!(!out.contains("10.0.0.5"), "{out}");
         assert!(out.contains("tci=<ip>:40001"), "the port survives: {out}");
         assert!(out.contains("rf2k_addr="), "the key survives: {out}");
@@ -909,9 +978,9 @@ relay_token=abc
     /// number, which is the common case and was never leaking.
     #[test]
     fn a_station_on_a_number_is_handled_as_before() {
-        let settings = "server=192.168.1.79:4580\n";
-        let out = build_attachment_from_text("talking to 192.168.1.79", settings, "").unwrap();
-        assert!(!out.contains("192.168.1.79"), "{out}");
+        let settings = "server=192.168.1.20:4580\n";
+        let out = build_attachment_from_text("talking to 192.168.1.20", settings, "").unwrap();
+        assert!(!out.contains("192.168.1.20"), "{out}");
         assert!(out.contains("<ip>"), "{out}");
         assert!(!out.contains("<server>"), "an IP needs no second label: {out}");
     }
@@ -928,6 +997,6 @@ relay_token=abc
         let settings = "volume=0.2\nlanguage=nl\nserver=box.example.net:4580\n";
         assert_eq!(server_host(settings).as_deref(), Some("box.example.net"));
         assert_eq!(server_host("volume=0.2\n").as_deref(), None);
-        assert_eq!(server_host("server=192.168.1.79:4580\n").as_deref(), None);
+        assert_eq!(server_host("server=192.168.1.20:4580\n").as_deref(), None);
     }
 }

@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! What the screens say about a state of the station that blocks the operator,
-//! and what helps - in one place (working rule 18, owner 2026-10-01).
+//! and what helps - in one place.
 //!
 //! Which notices stand, in which order, in which words in every language, and
 //! whether Connect may be offered: all of it here. Both front ends - the desktop
 //! and, through the bridge, Android - render the result and decide nothing.
 //! Build 59 had the rule in four screens with their own if/else chains; one of
 //! them hid the audio error behind the new text, and one screen (the Android
-//! wizard) did not have the rule at all (review 59).
+//! wizard) did not have the rule at all.
 //!
 //! The kinds (`StationNotice`) and the list of them (`station_notices`) are
 //! crate-private: a screen gets the lines and the one yes/no, nothing it could
 //! build an if/else chain on. A fourth desktop screen matching on the kinds
-//! compiled, with the counts green (review 64); Android never could,
+//! compiled, with the counts green; Android never could,
 //! because the bridge carries strings.
 
 use crate::i18n::Lang;
@@ -30,7 +30,7 @@ pub(crate) enum StationNotice {
     ServerClosed,
     /// This network lets no UDP through to the relay (`RadioState::udp_blocked`,
     /// build 137): signed in, but no connection is possible here. Cure: another
-    /// network. The Dutch is the sentence of the phase 3d design, section 7.
+    /// network.
     UdpBlocked,
     /// The Amplitec position is receive-only and Thetis cannot refuse
     /// transmitting by itself (`RadioState::rx_only_unguarded`, build 215): the
@@ -50,16 +50,16 @@ impl StationNotice {
     pub(crate) fn text(self, lang: Lang) -> String {
         match self {
             StationNotice::EngineStopped => lang.pick(
-                "Connection stopped by an internal error - restart the app",
-                "Verbinding gestopt door een interne fout - start de app opnieuw",
-                "Verbindung durch einen internen Fehler gestoppt - App neu starten",
-                "Connexion arr\u{ea}t\u{e9}e par une erreur interne - red\u{e9}marrez l'application",
+                "Connection stopped by an internal error: restart the app",
+                "Verbinding gestopt door een interne fout: start de app opnieuw",
+                "Verbindung durch einen internen Fehler gestoppt: App neu starten",
+                "Connexion arr\u{ea}t\u{e9}e par une erreur interne : red\u{e9}marrez l'application",
             ),
             StationNotice::ServerClosed => lang.pick(
-                "Server in safe mode - transmitting is off until the server is restarted",
-                "Server in veilige stand - zenden uit tot de server opnieuw is gestart",
-                "Server im sicheren Modus - Senden aus, bis der Server neu gestartet ist",
-                "Serveur en mode s\u{fb}r - \u{e9}mission coup\u{e9}e jusqu'au red\u{e9}marrage du serveur",
+                "Server in safe mode: transmitting is off until the server is restarted",
+                "Server in veilige stand: zenden uit tot de server opnieuw is gestart",
+                "Server im sicheren Modus: Senden aus, bis der Server neu gestartet ist",
+                "Serveur en mode s\u{fb}r : \u{e9}mission coup\u{e9}e jusqu'au red\u{e9}marrage du serveur",
             ),
             // Since build 146 the TCP fallback route carries the connection: a
             // note on the way, no longer an end.
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(station_notices(&s), vec![StationNotice::UdpBlocked, StationNotice::RxOnlyUnguarded]);
         assert_eq!(
             station_notice_lines(&{ let mut s = RadioState::default(); s.rx_only_unguarded = true; s }, Lang::Nl),
-            vec!["Deze antennestand is alleen voor ontvangst, en deze Thetis (ouder dan v2.10.3.14, zonder de ThetisLink-uitbreidingen) kan zenden niet zelf weigeren - gebruik in Thetis geen voetschakelaar of MOX".to_string()]
+            vec!["Deze antennestand is alleen voor ontvangst, en deze Thetis (ouder dan v2.10.3.14, zonder de ThetisLink-uitbreidingen) kan zenden niet zelf weigeren: gebruik in Thetis geen voetschakelaar of MOX".to_string()]
         );
         // Set from the heartbeat, each one: a server that stops saying it clears it.
         let engine = include_str!("engine.rs");
@@ -201,7 +201,7 @@ mod tests {
         }
         assert_eq!(
             station_notice_lines(&{ let mut s = RadioState::default(); s.server_tx_closed = true; s }, Lang::Nl),
-            vec!["Server in veilige stand - zenden uit tot de server opnieuw is gestart".to_string()]
+            vec!["Server in veilige stand: zenden uit tot de server opnieuw is gestart".to_string()]
         );
     }
 }

@@ -74,9 +74,8 @@ impl<'a> ControlContext<'a> {
     ///
     /// `#[must_use]`: callers MUST check the return value before they
     /// mutate local UI-state. If they don't, state-drift can arise
-    /// between client and server - exactly the bug class from
-    /// PATCH-client-band-switch-guard finding #3 that this refactor was meant
-    /// to eliminate. The compiler enforces the contract.
+    /// between client and server - exactly the bug class this refactor was
+    /// meant to eliminate. The compiler enforces the contract.
     #[must_use]
     pub(crate) fn dispatch(&self, intent: UiIntent, command: Command) -> bool {
         let kind = intent.kind();

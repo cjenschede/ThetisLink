@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Lock-free audio-activity counters for the Status panel (PATCH-2).
+//! Lock-free audio-activity counters for the Status panel.
 //!
-//! Per the brief: the audio-callback / encoder loops MUST NEVER block on
+//! By design: the audio-callback / encoder loops MUST NEVER block on
 //! a Mutex or RwLock. Activity is reported via `AtomicU64` + `AtomicI64`
 //! only - `fetch_add(1, Relaxed)` plus `store(now_nanos, Relaxed)` is
 //! branch-free and allocation-free.
@@ -93,7 +93,7 @@ impl AudioActivityStats {
     }
 }
 
-/// PATCH-2: lock-free probe for TCI connection state, shared with the UI
+/// Lock-free probe for TCI connection state, shared with the UI
 /// Status panel. Updated by `TciConnection` on every state-flip.
 #[derive(Debug, Default)]
 pub struct TciStatusProbe {
@@ -129,11 +129,11 @@ pub struct StatusPanelShared {
     /// Status panel can render per-tuner rows (Live yellow voltage,
     /// threshold + hysteresis sliders) without needing a separate channel.
     pub tuners_slot: Arc<std::sync::OnceLock<Arc<crate::tuner::Tuners>>>,
-    /// Live Yaesu-rotor instance (PATCH-yaesu-rotor-mcp2221 phase 3).
+    /// Live Yaesu-rotor instance.
     /// `None` as long as there is no `rot_*` MCP2221A in `config.rotors`,
     /// or as long as server-start has not yet spun up the poll thread.
     pub rotor_slot: Arc<std::sync::OnceLock<Arc<crate::mcp2221_yaesu_rotor::RotorInstance>>>,
-    /// Optional outbound relay monitor status (Phase A: status only, no TL frames routed).
+    /// Optional outbound relay monitor status (status only, no TL frames routed).
     pub relay_status: Arc<std::sync::OnceLock<sdr_remote_relay::RelayStatusHandle>>,
     /// The "RX-only and unguarded" flag of the PttController (build 217),
     /// published once after it is built; the Amplitec window reads it.

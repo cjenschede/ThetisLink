@@ -46,7 +46,7 @@ import com.sdrremote.R
 import com.sdrremote.ui.components.StationNoticeLines
 import com.sdrremote.nsd.MdnsDiscovery
 
-/** PATCH-4: first-run connection wizard for Android. Mirrors the
+/** First-run connection wizard for Android. Mirrors the
  *  desktop's `wizard.rs` flow (Discover → Password → 2FA → Connecting →
  *  Success) but lives natively on Compose so the system back-button,
  *  multicast lock, and SharedPreferences all integrate properly. */
@@ -93,7 +93,7 @@ fun ConnectWizard(
     var skipConfirmOpen by rememberSaveable { mutableStateOf(false) }
 
     // Drive step transitions off the same connect-status fields the
-    // ConnectionPanel uses. Same source-of-truth as PATCH-1.
+    // ConnectionPanel uses, so the two cannot disagree.
     LaunchedEffect(connected, awaitingTotp, connectStatusIsError) {
         when {
             connected && step != WizardStep.Success -> step = WizardStep.Success
@@ -109,7 +109,7 @@ fun ConnectWizard(
         }
     }
 
-    // mDNS browse — same lifecycle pattern as ConnectionPanel: start
+    // mDNS browse, same lifecycle pattern as ConnectionPanel: start
     // while wizard is composed, release multicast lock on dispose.
     val mdns = remember { MdnsDiscovery(context) }
     DisposableEffect(Unit) {
@@ -314,7 +314,7 @@ fun ConnectWizard(
         }
 
         // What blocks the station, from Rust: on every step, as on the desktop,
-        // so a wizard on a dead engine does not spin without a word (review 60).
+        // so a wizard on a dead engine does not spin without a word.
         StationNoticeLines(stationNotices)
 
         // Sticky error footer (same i18n text Rust produces for the panel)
@@ -335,19 +335,18 @@ fun ConnectWizard(
 
 /**
  * SharedPreferences-based first-run gate. `successful_connects` mirrors
- * the desktop `thetislink-client.conf` field — first-run = counter == 0.
+ * the desktop `thetislink-client.conf` field; first-run = counter == 0.
  */
 object WizardPrefs {
-    private const val FILE = "thetislink"
     private const val KEY = "successful_connects"
 
     fun isFirstRun(context: Context): Boolean {
-        val prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
         return prefs.getInt(KEY, 0) == 0
     }
 
     fun markSuccessful(context: Context) {
-        val prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
         if (prefs.getInt(KEY, 0) >= 1) return
         prefs.edit().putInt(KEY, 1).apply()
     }

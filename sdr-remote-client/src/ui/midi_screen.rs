@@ -253,7 +253,8 @@ impl SdrRemoteApp {
                             let _ = self.cmd_tx.send(Command::SetVfoBVolume(self.vfo_b_volume));
                         }
                         MidiAction::TxGain => {
-                            self.tx_gain = frac * 3.0;
+                            // Over the slider's dB range; all the way down is off.
+                            self.tx_gain = sdr_remote_logic::commands::tx_gain_from_fraction(frac);
                             let _ = self.cmd_tx.send(Command::SetTxGain(self.tx_gain));
                         }
                         MidiAction::Drive => {
@@ -262,46 +263,28 @@ impl SdrRemoteApp {
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::DriveLevel, drive as u16));
                         }
                         MidiAction::SpectrumZoom | MidiAction::Rx2SpectrumZoom => {
-                            // Slider: 0=1x, 127=max zoom (logarithmic)
-                            let zoom = 1024.0_f32.powf(frac).max(1.0);
-                            if matches!(action, MidiAction::Rx2SpectrumZoom) {
-                                self.rx2_spectrum_zoom = zoom;
-                                self.rx2_zoom_pan_changed_at = Some(std::time::Instant::now());
-                            } else {
-                                self.spectrum_zoom = zoom;
-                                self.zoom_pan_changed_at = Some(std::time::Instant::now());
-                            }
+                            // Slider: bottom = the lowest zoom the rows allow, top = the
+                            // highest (logarithmic).
+                            let zooms = super::spectrum::zoom_range(self.allow_zoom_below_2x);
+                            let zoom = zooms.start() * (zooms.end() / zooms.start()).powf(frac);
+                            self.midi_set_zoom(matches!(action, MidiAction::Rx2SpectrumZoom), zoom);
                         }
                         MidiAction::SpectrumPan | MidiAction::Rx2SpectrumPan => {
-                            // Slider: 0=full left (-1.0), 64=center (0.0), 127=full right (+1.0)
-                            let pan = (frac * 2.0 - 1.0).clamp(-1.0, 1.0);
-                            if matches!(action, MidiAction::Rx2SpectrumPan) {
-                                self.rx2_spectrum_pan = pan;
-                                self.rx2_zoom_pan_changed_at = Some(std::time::Instant::now());
-                            } else {
-                                self.spectrum_pan = pan;
-                                self.zoom_pan_changed_at = Some(std::time::Instant::now());
-                            }
+                            // Slider: 0 = full left, 64 = centre, 127 = full right, of
+                            // what the zoom allows.
+                            let rx2 = matches!(action, MidiAction::Rx2SpectrumPan);
+                            let zoom = if rx2 { self.rx2_spectrum_zoom } else { self.spectrum_zoom };
+                            self.midi_set_pan(rx2, (frac * 2.0 - 1.0) * super::spectrum::pan_limit(zoom));
                         }
                         MidiAction::RefLevel | MidiAction::Rx2RefLevel => {
-                            // Slider: 0=-140dB, 127=0dB
-                            let ref_db = -140.0 + frac * 140.0;
-                            if matches!(action, MidiAction::Rx2RefLevel) {
-                                self.rx2_spectrum_ref_db = ref_db;
-                                self.rx2_auto_ref_enabled = false;
-                            } else {
-                                self.spectrum_ref_db = ref_db;
-                                self.auto_ref_enabled = false;
-                            }
+                            // Slider: over the rows' range.
+                            let r = super::spectrum::REF_DB_RANGE;
+                            self.midi_set_ref(matches!(action, MidiAction::Rx2RefLevel), r.start() + frac * (r.end() - r.start()));
                         }
                         MidiAction::WaterfallContrast | MidiAction::Rx2WaterfallContrast => {
-                            // Slider: 0=0.3x, 127=3.0x
-                            let contrast = 0.3 + frac * 2.7;
-                            if matches!(action, MidiAction::Rx2WaterfallContrast) {
-                                self.rx2_waterfall_contrast = contrast;
-                            } else {
-                                self.waterfall_contrast = contrast;
-                            }
+                            // Slider: over the rows' range.
+                            let c = super::spectrum::WF_CONTRAST_RANGE;
+                            self.midi_set_contrast(matches!(action, MidiAction::Rx2WaterfallContrast), c.start() + frac * (c.end() - c.start()));
                         }
                         MidiAction::AgcGain => {
                             // Slider: 0=-20, 127=120
@@ -414,41 +397,25 @@ impl SdrRemoteApp {
                             self.set_pending_yaesu_freq(1, new_freq);
                         }
                         MidiAction::SpectrumZoom | MidiAction::Rx2SpectrumZoom => {
-                            let factor = 1.1_f32.powi(delta as i32);
-                            if matches!(action, MidiAction::Rx2SpectrumZoom) {
-                                self.rx2_spectrum_zoom = (self.rx2_spectrum_zoom * factor).clamp(1.0, 1024.0);
-                                self.rx2_zoom_pan_changed_at = Some(std::time::Instant::now());
-                            } else {
-                                self.spectrum_zoom = (self.spectrum_zoom * factor).clamp(1.0, 1024.0);
-                                self.zoom_pan_changed_at = Some(std::time::Instant::now());
-                            }
+                            let rx2 = matches!(action, MidiAction::Rx2SpectrumZoom);
+                            let zoom = if rx2 { self.rx2_spectrum_zoom } else { self.spectrum_zoom };
+                            self.midi_set_zoom(rx2, zoom * 1.1_f32.powi(delta as i32));
                         }
                         MidiAction::SpectrumPan | MidiAction::Rx2SpectrumPan => {
-                            let pan_step = 0.05 * delta as f32;
-                            if matches!(action, MidiAction::Rx2SpectrumPan) {
-                                self.rx2_spectrum_pan = (self.rx2_spectrum_pan + pan_step).clamp(-1.0, 1.0);
-                                self.rx2_zoom_pan_changed_at = Some(std::time::Instant::now());
-                            } else {
-                                self.spectrum_pan = (self.spectrum_pan + pan_step).clamp(-1.0, 1.0);
-                                self.zoom_pan_changed_at = Some(std::time::Instant::now());
-                            }
+                            // A tenth of what the zoom allows per notch, as the rows' wheel.
+                            let rx2 = matches!(action, MidiAction::Rx2SpectrumPan);
+                            let (zoom, pan) = if rx2 { (self.rx2_spectrum_zoom, self.rx2_spectrum_pan) } else { (self.spectrum_zoom, self.spectrum_pan) };
+                            self.midi_set_pan(rx2, pan + 0.1 * super::spectrum::pan_limit(zoom) * delta as f32);
                         }
                         MidiAction::RefLevel | MidiAction::Rx2RefLevel => {
-                            if matches!(action, MidiAction::Rx2RefLevel) {
-                                self.rx2_spectrum_ref_db = (self.rx2_spectrum_ref_db + delta as f32).clamp(-140.0, 0.0);
-                                self.rx2_auto_ref_enabled = false;
-                            } else {
-                                self.spectrum_ref_db = (self.spectrum_ref_db + delta as f32).clamp(-140.0, 0.0);
-                                self.auto_ref_enabled = false;
-                            }
+                            let rx2 = matches!(action, MidiAction::Rx2RefLevel);
+                            let ref_db = if rx2 { self.rx2_spectrum_ref_db } else { self.spectrum_ref_db };
+                            self.midi_set_ref(rx2, ref_db + delta as f32);
                         }
                         MidiAction::WaterfallContrast | MidiAction::Rx2WaterfallContrast => {
-                            let factor = 1.1_f32.powi(delta as i32);
-                            if matches!(action, MidiAction::Rx2WaterfallContrast) {
-                                self.rx2_waterfall_contrast = (self.rx2_waterfall_contrast * factor).clamp(0.3, 3.0);
-                            } else {
-                                self.waterfall_contrast = (self.waterfall_contrast * factor).clamp(0.3, 3.0);
-                            }
+                            let rx2 = matches!(action, MidiAction::Rx2WaterfallContrast);
+                            let c = if rx2 { self.rx2_waterfall_contrast } else { self.waterfall_contrast };
+                            self.midi_set_contrast(rx2, c * 1.1_f32.powi(delta as i32));
                         }
                         MidiAction::NrLevel => {
                             // Encoder: up = increase, down = decrease, clamp 0-4

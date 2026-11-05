@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Compact server-state panel for the GUI (PATCH-2).
+//! Compact server-state panel for the GUI.
 //!
 //! Renders six elements in one screenful so the operator can answer
 //! support questions ("is the server listening?", "what does it see?")
@@ -242,19 +242,34 @@ pub fn render_status_panel(
                         } else {
                             normal_color
                         };
+                        // One cell style; a cell of several colours goes through
+                        // `job_cell` with the same font and size.
+                        let job_cell = |ui: &mut egui::Ui, job: egui::text::LayoutJob, width: f32| {
+                            ui.add_sized([width, 16.0], egui::Label::new(job));
+                        };
+                        let font = egui::FontId::monospace(11.0);
                         let cell = |ui: &mut egui::Ui, text: String, width: f32| {
-                            ui.add_sized(
-                                [width, 16.0],
-                                egui::Label::new(RichText::new(text).monospace().size(11.0).color(color)),
-                            );
+                            job_cell(ui, egui::text::LayoutJob::simple_singleline(text, font.clone(), color), width);
                         };
 
                         // The address in the row's own colour: the amber
                         // auth/stale cue when that applies. The way is a column
                         // of its own since build 143 - letters, no colour of
-                        // its own (the connection names, owner 2026-10-08).
+                        // its own (the connection names) -
+                        // except a red R while this server's own relay session
+                        // is gone (2.13.1 build 3).
                         cell(ui, c.addr.to_string(), col_widths[0]);
-                        cell(ui, c.path.map_or("-", |k| k.short()).to_string(), col_widths[1]);
+                        // Which letters are red, the kind says itself
+                        // (`PathKind::short_parts`); the phone draws the same.
+                        match c.path.map_or(("-", ""), |k| k.short_parts()) {
+                            (plain, "") => cell(ui, plain.to_string(), col_widths[1]),
+                            (plain, red) => {
+                                let mut job = egui::text::LayoutJob::default();
+                                job.append(plain, 0.0, egui::TextFormat::simple(font.clone(), color));
+                                job.append(red, 0.0, egui::TextFormat::simple(font.clone(), Color32::RED));
+                                job_cell(ui, job, col_widths[1]);
+                            }
+                        }
                         cell(ui, connected_for, col_widths[2]);
                         cell(ui, format!("{} ms", c.rtt_ms), col_widths[3]);
                         cell(ui, format!("{}%", c.loss_percent), col_widths[4]);
@@ -270,7 +285,7 @@ pub fn render_status_panel(
                 });
             // What the letters in the Path column mean.
             ui.label(
-                RichText::new("Path: L local · D direct · R through the relay · +R found through the relay · R (TCP) through the relay over TCP")
+                RichText::new("Path: L local · D direct · R through the relay · +R found through the relay · R (TCP) through the relay over TCP · red R: this server's relay session is gone now")
                     .size(10.0)
                     .weak(),
             );
@@ -287,7 +302,7 @@ pub fn render_status_panel(
                 ui.colored_label(
                     Color32::from_rgb(220, 150, 40),
                     RichText::new(format!(
-                        "{} runs {} and this server is {} - they should be the same build.",
+                        "{} runs {} and this server is {}: they should be the same build.",
                         c.addr,
                         theirs,
                         sdr_remote_core::version_string()
@@ -301,7 +316,7 @@ pub fn render_status_panel(
                 ui.label(RichText::new("Active clients:").strong());
                 ui.colored_label(
                     Color32::from_rgb(160, 160, 160),
-                    "(snapshot busy - updating...)",
+                    "(snapshot busy: updating...)",
                 );
             });
         }
@@ -375,14 +390,14 @@ pub fn render_status_panel(
         None => {
             ui.colored_label(
                 Color32::from_rgb(160, 160, 160),
-                "  (snapshot busy - updating...)",
+                "  (snapshot busy: updating...)",
             );
         }
     }
 
     // ── 6. Configured external devices (compact dot grid) ────────────────
     // Dots reflect Some/None at server-start, NOT live link health - true
-    // online/offline detection per device is out of scope for PATCH-2.
+    // online/offline detection per device is out of scope here.
     // Labelled "Configured devices" so the screenshot reader is not
     // misled into thinking a green dot means the radio replied.
     sdr_remote_theme::rule(ui);
@@ -424,10 +439,10 @@ pub fn render_status_panel(
     }
     if current_expanded {
         ui.indent("mcp2221_section", |ui| {
-            // 7a - per-tuner rows. The number of slots equals the number of
+            // Per-tuner rows. The number of slots equals the number of
             // entries in `config.tuners` (1..=`MAX_TUNERS`). Empty Vec =
-            // no tuner rows; phase 3 adds the "Add tuner" wizard
-            // that creates new entries based on a board scan.
+            // no tuner rows; the "Add tuner" wizard (board scan below)
+            // creates new entries.
             // For a slot that is in config but has no running
             // TunerInstance yet (e.g. disabled or startup failure)
             // we show the lighter "disabled config row" with the same
@@ -443,7 +458,7 @@ pub fn render_status_panel(
                     None => render_tuner_disabled_row(ui, slot),
                 }
             }
-            // 7b - Yaesu rotor (PATCH-yaesu-rotor-mcp2221 phase 3): live
+            // Yaesu rotor: live
             // ADC position + manual CW/CCW/Stop + DAC speed slider for
             // hardware verification. Only visible once a rot_*
             // instance has started.
@@ -465,7 +480,7 @@ pub fn render_status_panel(
                     render_rotor_disabled_row(ui);
                 }
             }
-            // 7c - board scan: list all MCP2221A devices on the USB bus so
+            // Board scan: list all MCP2221A devices on the USB bus so
             // the operator can figure out which USB serial belongs to which
             // physical tuner. Result cached statically until the next Scan
             // click so we don't hammer the HID enumerator on every repaint.
@@ -564,7 +579,7 @@ fn render_tuner_detector_row(
                 });
                 if applied {
                     log::info!(
-                        "Tuner {} MCP serial changed to \"{}\" - auto-restart",
+                        "Tuner {} MCP serial changed to \"{}\", auto-restart",
                         slot + 1,
                         chosen_for_log,
                     );
@@ -621,7 +636,7 @@ fn render_tuner_detector_row(
                 });
                 if applied {
                     log::info!(
-                        "Tuner {} amplitec_pos changed to {:?} - auto-restart",
+                        "Tuner {} amplitec_pos changed to {:?}; auto-restart",
                         slot + 1,
                         chosen,
                     );
@@ -720,7 +735,7 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
             ui.label(RichText::new(format!("Tuner {}", slot + 1)).strong());
             ui.colored_label(
                 Color32::from_rgb(160, 160, 160),
-                "Disabled \u{2014} select an MCP serial to enable",
+                "Disabled: select an MCP serial to enable",
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if super::delete_button(ui)
@@ -763,7 +778,7 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
                     if options.is_empty() {
                         ui.colored_label(
                             Color32::from_rgb(180, 180, 180),
-                            "(no boards detected \u{2014} run Scan below)",
+                            "(no boards detected; run Scan below)",
                         );
                     } else {
                         for opt in &options {
@@ -784,7 +799,7 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
                 });
                 if applied {
                     log::info!(
-                        "Tuner {} MCP serial set to \"{}\" \u{2014} auto-restart",
+                        "Tuner {} MCP serial set to \"{}\", auto-restart",
                         slot + 1,
                         chosen_for_log,
                     );
@@ -840,7 +855,7 @@ fn render_tuner_disabled_row(ui: &mut egui::Ui, slot: usize) {
                 });
                 if applied {
                     log::info!(
-                        "Tuner {} amplitec_pos set to {:?} \u{2014} auto-restart",
+                        "Tuner {} amplitec_pos set to {:?}, auto-restart",
                         slot + 1,
                         chosen,
                     );
@@ -949,7 +964,7 @@ fn remove_tuner_slot(slot: usize) {
         }
     });
     if let Some(label) = removed_label {
-        log::info!("Remove tuner slot: {} - auto-restart", label);
+        log::info!("Remove tuner slot: {}; auto-restart", label);
         restart_server();
     } else {
         log::warn!("Remove tuner slot: index {} out of range (no-op)", slot);
@@ -993,10 +1008,10 @@ fn cached_scan_serials() -> Vec<String> {
     }
 }
 
-/// PATCH-yaesu-rotor-mcp2221 phase 3 - Yaesu G-1000DXC rotor live status.
+/// Yaesu G-1000DXC rotor live status.
 /// Shows ADC position (raw counts + converted Yaesu-pin voltage),
 /// CW/CCW/Stop buttons, DAC speed slider. Intended for hardware
-/// verification and later calibration (phase 4). No local state - all
+/// verification and later calibration. No local state - all
 /// commands go straight to the driver, snapshot reads live state.
 fn render_rotor_row(
     ui: &mut egui::Ui,
@@ -1006,7 +1021,7 @@ fn render_rotor_row(
     let snap = rotor.status();
     sdr_remote_theme::group(ui).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Yaesu rotor - {}", snap.label)).strong());
+            ui.label(RichText::new(format!("Yaesu rotor: {}", snap.label)).strong());
             match &snap.status {
                 RotorStatus::Connected => {
                     ui.colored_label(Color32::from_rgb(50, 200, 50), "Connected");
@@ -1115,7 +1130,7 @@ fn render_rotor_row(
             }
         });
 
-        // Calibration (PATCH-yaesu-rotor-mcp2221 phase 4): the operator turns
+        // Calibration: the operator turns
         // the rotor to the CCW end stop, clicks "Park CCW (0°)" to
         // capture the current median voltage; then to the CW
         // end stop and "Park CW". The max_deg spinner sets the fullscale
@@ -1208,7 +1223,7 @@ fn render_rotor_disabled_row(ui: &mut egui::Ui) {
             ui.label(RichText::new("Yaesu rotor").strong());
             ui.colored_label(
                 Color32::from_rgb(220, 160, 40),
-                "Not linked \u{2014} select a rotor board to enable",
+                "Not linked: select a rotor board to enable",
             );
         });
         ui.horizontal(|ui| {
@@ -1241,7 +1256,7 @@ fn render_rotor_disabled_row(ui: &mut egui::Ui) {
                     if options.is_empty() {
                         ui.colored_label(
                             Color32::from_rgb(180, 180, 180),
-                            "(no rot_ board detected \u{2014} run Scan, or program one via 'Add board' below)",
+                            "(no rot_ board detected; run Scan, or program one via 'Add board' below)",
                         );
                     } else {
                         for opt in &options {
@@ -1269,7 +1284,7 @@ fn render_rotor_disabled_row(ui: &mut egui::Ui) {
                     c.rotor_backend = "mcp2221_yaesu".to_string();
                 });
                 log::info!(
-                    "Rotor MCP serial linked to \"{}\" (backend -> mcp2221_yaesu) \u{2014} auto-restart",
+                    "Rotor MCP serial linked to \"{}\" (backend -> mcp2221_yaesu), auto-restart",
                     chosen_for_log,
                 );
                 restart_server();
@@ -1306,7 +1321,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
         Some(Ok(list)) if list.is_empty() => {
             ui.colored_label(
                 Color32::from_rgb(220, 160, 40),
-                "  (none detected - check USB cable)",
+                "  (none detected: check USB cable)",
             );
         }
         Some(Ok(list)) => {
@@ -1324,7 +1339,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                 ui.colored_label(
                     Color32::from_rgb(220, 160, 40),
                     format!(
-                        "  ! {} onbenoemde boards aangesloten - sluit max 1 ongeprogrammeerd board aan tijdens configuratie",
+                        "  ! {} onbenoemde boards aangesloten: sluit max 1 ongeprogrammeerd board aan tijdens configuratie",
                         unprogrammed_count
                     ),
                 );
@@ -1357,7 +1372,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                         // + Add. Server writes `tun_<name>` or `rot_<name>`
                         // to EEPROM and adds the new entry to
                         // `config.tuners` (only Tuner in v2.0.5; Rotor
-                        // is planned for phase 4).
+                        // came later, in `config.rotors`).
                         ui.horizontal(|ui| {
                             ui.label(rust_i18n::t!("srv_function").to_string());
                             let func = board_function_state(&b.path);
@@ -1423,10 +1438,10 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                                     })
                                     .map_err(|e| format!("{:?}", e))
                                 } else if sel == BoardKind::Rotor {
-                                    // PATCH-yaesu-rotor-mcp2221 phase 1: claim Adafruit
+                                    // Claim the Adafruit
                                     // board as rotor slot. Runtime binding (driver
                                     // module + actual control of GP0/1 + DAC/
-                                    // ADC) comes in phase 3.
+                                    // ADC) is `mcp2221_yaesu_rotor`'s.
                                     crate::mcp2221_scan::program_serial_at_path(
                                         &path,
                                         &new_serial,
@@ -1591,7 +1606,7 @@ fn render_board_scan_section(ui: &mut egui::Ui) {
                             Ok(()) => {
                                 ui.colored_label(
                                     Color32::from_rgb(50, 200, 50),
-                                    "OK - klik Scan om te verversen",
+                                    "OK: klik Scan om te verversen",
                                 );
                             }
                             Err(msg) => {
@@ -1638,7 +1653,7 @@ fn render_port_trouble(ui: &mut egui::Ui, index: usize, radio: Option<&crate::ya
 }
 
 /// "Yaesu N: transmits when Windows raises RTS or DTR ...": the menus that key
-/// the radio on a line of its USB port (build 296; owner, 2026-10-24).
+/// the radio on a line of its USB port.
 fn render_line_keyed(ui: &mut egui::Ui, index: usize, radio: Option<&crate::yaesu::YaesuRadio>) {
     let Some(y) = radio else { return };
     let st = y.status();
@@ -1659,7 +1674,7 @@ const LEAD_CHOICES: [u64; 8] = [0, 20, 40, 60, 80, 100, 120, crate::yaesu::tx_ti
 /// "Yaesu N TX lead": the target in the radio's sound card ring and whether
 /// only every other over gets it (build 278). In the developer mode only, live
 /// (the next over takes it), and not kept: outside the mode, and after a
-/// restart, every over gets `LEAD_MS` (owner, 2026-10-24).
+/// restart, every over gets `LEAD_MS`.
 fn render_lead_row(ui: &mut egui::Ui, index: usize, radio: Option<&crate::yaesu::YaesuRadio>) {
     let Some(y) = radio else { return };
     let timing = y.status_arc().lock().unwrap().tx_timing.clone();
@@ -1683,14 +1698,14 @@ fn render_lead_row(ui: &mut egui::Ui, index: usize, radio: Option<&crate::yaesu:
 }
 
 /// The settings probe's note when it found no radio: why the port did not
-/// open, when it did not (build 271; round 270), else `fallback` - "switch the
+/// open, when it did not, else `fallback` - "switch the
 /// radio on" or "it did not answer". The same keys as the panel's line.
 pub(crate) fn probe_note_key(trouble: u8, fallback: &'static str) -> &'static str {
     port_trouble_key(false, trouble).unwrap_or(fallback)
 }
 
-/// One audio chip on the panel, one per transmitter (build 271, owner's
-/// proposal): its receive audio, and in its place its transmit audio while that
+/// One audio chip on the panel, one per transmitter (build 271): its
+/// receive audio, and in its place its transmit audio while that
 /// comes in. RX2 is a receiver only. Until 271 receive and transmit stood side
 /// by side, both green.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1745,7 +1760,7 @@ impl Chip {
 }
 
 /// How fresh audio has to be to count as flowing: a chip is green, and transmit
-/// audio means sending (one number since build 272; round 271).
+/// audio means sending (one number since build 272).
 const FRESH_SECS: f32 = 1.0;
 
 /// Is transmit audio flowing: under `FRESH_SECS` old.
@@ -1884,7 +1899,7 @@ mod setup_tests {
         assert_eq!(chips(Some(&c(false, false, false))), vec![], "a bare server: nothing to show");
         assert_eq!(chips(None), vec![Chip::Thetis, Chip::Rx2], "before the server said: as it was");
         // One chip per transmitter: its receive label, or its transmit label
-        // while transmit audio comes in (build 271, owner's proposal).
+        // while transmit audio comes in.
         let labels: Vec<(&str, &str)> = [Chip::Thetis, Chip::Rx2, Chip::Radio(0), Chip::Radio(1)]
             .iter()
             .map(|c| (c.label(false), c.label(true)))
@@ -1931,8 +1946,8 @@ mod setup_tests {
     }
 
     /// Red also when the transmitter itself says it transmits - a microphone at
-    /// the radio, Thetis's own MOX or a footswitch, Tune (build 272, owner's
-    /// question) - and the tip says which.
+    /// the radio, Thetis's own MOX or a footswitch, Tune (build 272)
+    /// - and the tip says which.
     #[test]
     fn a_chip_is_red_when_the_transmitter_says_so_too() {
         assert_eq!(tx_shown(false, None), TxShown::Not);
@@ -1942,7 +1957,7 @@ mod setup_tests {
         assert_eq!(tx_shown(true, Some(0.2)), TxShown::Both);
         assert_eq!(FRESH_SECS, 1.0);
         assert!(transmitting(Some(FRESH_SECS - 0.01)) && !transmitting(Some(FRESH_SECS)));
-        // One second for green and for "transmit audio flows" (round 271).
+        // One second for green and for "transmit audio flows".
         let src = include_str!("status_panel.rs");
         let src = &src[..src.find("#[cfg(test)]\nmod setup_tests").unwrap()];
         assert_eq!(src.matches("Some(a) if a < FRESH_SECS =>").count(), 1);
@@ -1954,8 +1969,8 @@ mod setup_tests {
         let net = include_str!("../network.rs");
         assert_eq!(net.matches("probe.set_transmitting(p.tx_now().thetis);").count(), 1);
         // "Thetis transmits" has one definition, `thetis_on_the_air` (builds 273
-        // and 275; rounds 272 and 274), in either spelling.
-        // Every source file of the server (build 274; round 273: a copy in a
+        // and 275), in either spelling.
+        // Every source file of the server (build 274: a copy in a
         // third file stayed green). Whole files: none has it in a test.
         let mut written_out = 0;
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1979,7 +1994,7 @@ mod setup_tests {
         assert_eq!(ptt.matches("thetis: self.tci.thetis_on_the_air(),").count(), 1, "tx_now asks it");
     }
 
-    /// Why a probe found no radio, in the settings (build 271; round 270): a
+    /// Why a probe found no radio, in the settings: a
     /// port another program holds says so, not "switch the radio on".
     #[test]
     fn the_settings_probe_names_a_port_that_does_not_open() {
@@ -1999,7 +2014,7 @@ mod setup_tests {
         assert!(set < body.find("self.probe_silent[s] = true;").unwrap());
     }
 
-    /// The lines no test drives, pinned (round 269: two probes stayed green): which
+    /// The lines no test drives, pinned (two probes stayed green before): which
     /// dot reads which radio, and the grey Thetis line.
     #[test]
     fn the_dots_and_the_grey_line_read_the_right_thing() {
@@ -2030,7 +2045,7 @@ mod setup_tests {
         let main = include_str!("../main.rs");
         assert_eq!(main.matches("status_panel_state.radios.set([yaesu_prebuilt.clone(), yaesu2_prebuilt.clone()]);").count(), 1);
         // The lead's row, in the same loop, in the developer mode only, and
-        // not kept (build 296; owner: "wel in de ontwikkelaars mode").
+        // not kept.
         assert!(src.contains("        render_port_trouble(ui, i, radio.as_deref());\n        render_line_keyed(ui, i, radio.as_deref());\n        if sdr_remote_core::dev_mode::is_on() {\n            render_lead_row(ui, i, radio.as_deref());"));
         assert_eq!(src.matches("set_lead(").count(), 1);
         assert_eq!(src.matches("    if (ms, alternate) != before {\n        timing.set_lead(ms, alternate);\n    }").count(), 1);

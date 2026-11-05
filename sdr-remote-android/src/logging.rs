@@ -15,22 +15,30 @@
 //! logs end up side by side in one problem report, and a client line that
 //! cannot be laid against a server line is half a line.
 
+#[cfg(any(target_os = "android", test))]
 use std::fs::{File, OpenOptions};
+#[cfg(any(target_os = "android", test))]
 use std::io::Write;
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "android", test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Roll at this size and keep one older file. Two megabytes is roughly a long
 /// evening of ordinary running, and a phone has room for it.
+#[cfg(any(target_os = "android", test))]
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 /// The log file, and the one rule about it: it does not grow without bound.
+/// Only the phone writes one; off Android the test still holds the cap.
+#[cfg(any(target_os = "android", test))]
 struct Sink {
     path: PathBuf,
     file: Option<File>,
     written: u64,
 }
 
+#[cfg(any(target_os = "android", test))]
 impl Sink {
     fn open(dir: &Path) -> Option<Self> {
         let path = dir.join(FILE_NAME);
@@ -71,22 +79,20 @@ static DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// One line from the Kotlin side, into the same log the Rust side writes.
 ///
 /// Everything on the Bluetooth button went to the system log alone, so the
-/// owner could never see any of it and a diagnosis needed a cable attached -
+/// user could never see any of it and a diagnosis needed a cable attached -
 /// and a cable suppresses the very power saving the overnight test is meant to
 /// measure. The logger installed at start writes to the file *and* the system
-/// log, so one call across the bridge puts both back in reach (review finding,
-/// a review).
+/// log, so one call across the bridge puts both back in reach.
 pub fn log_line(text: String) {
     log::info!("{}", text);
 }
 
-/// The developer mode on the phone (build 298; owner decision 2026-10-23):
+/// The developer mode on the phone:
 /// the switch the logger reads, and the line that says so - at every start and
 /// at every change. What the mode is (the code, the rule) is
 /// `sdr_remote_core::dev_mode`; the app stores it with its settings.
 pub fn set_developer_mode(on: bool) {
     sdr_remote_core::dev_mode::set(on);
-    // Named in advance (`logregels-build298.md`).
     log::info!("{}", sdr_remote_core::dev_mode::state_line(on));
 }
 
@@ -115,7 +121,7 @@ pub fn log_tail() -> String {
     }
 }
 
-/// Put a copy of the log next to a measurement (owner, 2026-10-03): the log
+/// Put a copy of the log next to a measurement: the log
 /// lives in the app's private folder, which no one can fetch without rooting the
 /// phone - deliberately, it is not debuggable - while the measurement folder can
 /// be fetched over USB. The older generation first, then the current one, so the
@@ -134,7 +140,7 @@ pub fn copy_log_to(dest: &std::path::Path) -> std::io::Result<()> {
 /// by a new one. Following the state rather than the Stop button is what
 /// catches the write error, where there is no Stop to press, and it copies
 /// AFTER the engine has stopped, so the log holds the end of its own
-/// measurement (round 91).
+/// measurement.
 #[derive(Default)]
 pub struct MeasurementLogFollower {
     last: Option<String>,
@@ -157,7 +163,7 @@ fn copy_log_from(dir: &std::path::Path, dest: &std::path::Path) -> std::io::Resu
     // Both opened BEFORE either is copied: a roll in between (`.log` renamed to
     // `.log.1`) would otherwise leave the copy with the older generation twice
     // and the newest lines missing. An open handle keeps the file it opened
-    // across a rename, so this fixes one moment (round 92).
+    // across a rename, so this fixes one moment.
     let sources: Vec<std::fs::File> = [format!("{FILE_NAME}.1"), FILE_NAME.to_string()]
         .iter()
         .filter_map(|name| std::fs::File::open(dir.join(name)).ok())
@@ -240,7 +246,7 @@ mod android {
         if log::set_boxed_logger(Box::new(logger)).is_ok() {
             log::set_max_level(LevelFilter::Info);
             log::info!(
-                "ThetisLink {} - keeping a log at {}/{}",
+                "ThetisLink {}: keeping a log at {}/{}",
                 sdr_remote_core::version_string(),
                 dir,
                 FILE_NAME
@@ -394,9 +400,9 @@ mod tests {
             1
         );
         assert!(src.contains("fn log(&self, record: &Record) {\n            if !self.enabled(record.metadata()) {\n                return;\n            }"));
-        assert!(src.contains("    sdr_remote_core::dev_mode::set(on);\n    // Named in advance (`logregels-build298.md`).\n    log::info!(\"{}\", sdr_remote_core::dev_mode::state_line(on));"));
+        assert!(src.contains("    sdr_remote_core::dev_mode::set(on);\n    log::info!(\"{}\", sdr_remote_core::dev_mode::state_line(on));"));
         // One logger install in the crate's production code: this file's. The
-        // test code goes out with the core's one reader (review of 299).
+        // test code goes out with the core's one reader.
         let mut files = Vec::new();
         sdr_remote_core::source_text::rust_files(std::path::Path::new("src"), &mut files);
         let mut installs = Vec::new();

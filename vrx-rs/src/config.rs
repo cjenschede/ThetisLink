@@ -12,7 +12,7 @@ pub const AUDIO_BIN_HZ: f32 = 62.5;
 ///
 /// SSB modes (Usb/Lsb) extract a single sideband and emit Re(z).
 /// AM-family modes (Am/Sam) extract both sidebands and demodulate
-/// either by envelope (Am) or by a carrier-tracking PLL (Sam —
+/// either by envelope (Am) or by a carrier-tracking PLL (Sam,
 /// synchronous AM, mirroring Thetis/WDSP amd.c: a 2nd-order loop
 /// (ζ=1.0, ωN=250 rad/s, ±3 kHz capture) locks the carrier to the real
 /// axis and the in-phase component is the recovered audio).
@@ -42,7 +42,7 @@ impl VrxMode {
 
 /// VRX audio-rate selection (one setting for all VRX; in `Auto` each VRX
 /// resolves independently from its own filter width). Decoupled from the
-/// global Thetis-wideband toggle (PATCH-vrx-wide-sam-ux).
+/// global Thetis-wideband toggle.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VrxRateMode {
     /// Force narrowband (8 kHz, audio ~4 kHz).
@@ -69,7 +69,7 @@ impl VrxRateMode {
 pub const AUTO_WB_THRESHOLD_HZ: i32 = 4000;
 
 /// Hysteresis band (Hz) below the threshold at which `Auto` drops back to
-/// narrowband — avoids rebuild-thrash while dragging the filter near 4 kHz.
+/// narrowband, avoids rebuild-thrash while dragging the filter near 4 kHz.
 pub const AUTO_WB_HYSTERESIS_HZ: i32 = 250;
 
 /// Single source of truth: does this rate-mode + filter want wideband, given
@@ -124,7 +124,7 @@ impl Default for VrxConfig {
     }
 }
 
-/// Shared VRX control state — what an external UI/network layer
+/// Shared VRX control state: what an external UI/network layer
 /// mutates and the runtime reads each IQ batch. Held by the caller
 /// in an `Arc<std::sync::Mutex<VrxControlState>>`; lock-windows are
 /// short (a handful of field reads/writes) and never include an
@@ -151,12 +151,15 @@ pub struct VrxControlState {
     /// both negative (-3000..=0).
     pub filter_low_hz: i32,
     pub filter_high_hz: i32,
-    /// SAM auto-tune-to-carrier (PATCH-vrx-wide-sam-ux). When true AND the
+    /// SAM auto-tune-to-carrier. When true AND the
     /// mode is SAM AND the PLL is locked, the runtime nudges the listen
     /// frequency onto the detected carrier (continuous follow) and reports
     /// the new frequency so the client VFO tracks it. Default off; ignored
     /// outside SAM.
     pub sam_auto_tune: bool,
+    /// The AGC mode and AGC-T of the receiver this VRX listens on; the
+    /// channel's AGC follows them, at its own level.
+    pub agc: crate::agc::VrxAgcSettings,
 }
 
 impl Default for VrxControlState {
@@ -169,6 +172,7 @@ impl Default for VrxControlState {
             filter_low_hz: 0,
             filter_high_hz: 3000,
             sam_auto_tune: false,
+            agc: crate::agc::VrxAgcSettings::default(),
         }
     }
 }

@@ -104,7 +104,7 @@ impl SdrRemoteApp {
             });
         }
 
-        // TX modulation bandwidth (main-radio TX) - PATCH-tx-modulation-bandwidth.
+        // TX modulation bandwidth (main-radio TX).
         // "Volg RX" mirrors the RX filter 1:1; otherwise set low/high directly.
         super::helpers::rule(ui);
         ui.label(RichText::new(rust_i18n::t!("screen_tx_modulation_bandwidth").to_string()).strong());
@@ -244,12 +244,11 @@ impl SdrRemoteApp {
         // TX Gain slider
         ui.horizontal(|ui| {
             ui.label("TX Gain: ");
-            let slider = egui::Slider::new(&mut self.tx_gain, 0.0..=3.0)
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
-            let resp = ui.add(slider);
-            let scrolled = super::helpers::slider_wheel(ui, &resp, &mut self.tx_gain, 0.0..=3.0, 0.05);
-            if resp.changed() || scrolled {
+            let (changed, done) = super::helpers::tx_gain_slider(ui, &mut self.tx_gain);
+            if changed {
                 let _ = self.cmd_tx.send(Command::SetTxGain(self.tx_gain));
+            }
+            if done {
                 self.save_full_config();
             }
         });
@@ -259,8 +258,8 @@ impl SdrRemoteApp {
         ui.horizontal(|ui| {
             ui.label("S-meter:");
             for (val, label, tooltip) in [
-                (0u8, "Sig", "WDSP RXA_S_PK - peak-hold with 100ms decay (fast bouncing)"),
-                (1u8, "Avg", "WDSP RXA_S_AV - symmetric RMS-avg over linear power (recommended)"),
+                (0u8, "Sig", "WDSP RXA_S_PK: peak-hold with 100ms decay (fast bouncing)"),
+                (1u8, "Avg", "WDSP RXA_S_AV: symmetric RMS-avg over linear power (recommended)"),
                 (2u8, "MaxBin", "Single highest FFT bin in passband"),
             ] {
                 if ui.selectable_label(self.smeter_source == val, label).on_hover_text(tooltip).clicked() {
@@ -289,7 +288,7 @@ impl SdrRemoteApp {
         self.render_websdr_controls(ui, CatSyncTarget::Thetis, self.frequency_hz, self.mode);
 
         // No line here: the RX1 frame below is the boundary, and a line 6 px
-        // above its edge drew two (review of 201).
+        // above its edge drew two.
 
         // --- TCI controls ---
         use sdr_remote_core::protocol::ControlId as CId;

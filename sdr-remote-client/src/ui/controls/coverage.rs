@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Coverage registration for comparing the render path against the CI-gate
-//! expected set.
+//! Coverage registration for comparing the render path against an expected
+//! set.
 //!
 //! On its first call, each render helper registers the combination
 //! `(control, surface, channel, density, guarded)` that it renders. After startup
-//! the app optionally dumps `target/ui-coverage.json` for comparison against
-//! `scripts/ui-coverage-expected.json` via the CI gate (`scripts/check-ui-coverage.sh`).
+//! the app optionally dumps `target/ui-coverage.json` for comparison against a
+//! hand-maintained expected set.
 //!
 //! **Cost per call:** `register()` takes a `Mutex` lock and does a
 //! `BTreeSet::insert` (O(log n) with dedup). At a typical render cadence

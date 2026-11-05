@@ -17,7 +17,7 @@ use super::*;
 ///
 /// This is where a present FT-991A or FTX-1 went missing from the row: it was
 /// gated on the audio subscription alone, so a radio that was there but muted
-/// left no trace at all (owner, 2026-08-20).
+/// left no trace at all.
 fn rec_source(ui: &mut egui::Ui, exists: bool, audio_on: bool, on: &mut bool, label: &str) {
     if !exists {
         *on = false;
@@ -42,7 +42,7 @@ impl SdrRemoteApp {
 
         // Server address + password. The "Wizard" and "Recenter windows"
         // buttons stood on the right of this row until build 197; they are on
-        // the relay group's header row now (owner, 2026-10-14).
+        // the relay group's header row now.
         ui.horizontal(|ui| {
             let enabled = !self.connected;
             if self.relay_external {
@@ -83,7 +83,7 @@ impl SdrRemoteApp {
                 .desired_width(100.0).password(true).hint_text(rust_i18n::t!("screen_required_hint").to_string()));
         });
 
-        // PATCH-3: mDNS-discovered servers shown progressively as they
+        // MDNS-discovered servers shown progressively as they
         // arrive. The browse runs in a background thread; the UI just
         // snapshots the latest list each frame. Empty list (no mDNS yet
         // or no servers on this subnet) is the steady-state - the user
@@ -128,7 +128,7 @@ impl SdrRemoteApp {
 
         // The relay group, a group like the others (build 198; owner: generic
         // where it can be), with "Wizard" and "Recenter windows" on the right
-        // of its header row (owner, 2026-10-14). The header reports the two
+        // of its header row. The header reports the two
         // clicks; they are handled below, after the body has had `self`.
         let relay_title = RichText::new(rust_i18n::t!("screen_relay_connection").to_string()).strong();
         let (folds_open, (wizard_clicked, recenter_clicked)) = super::helpers::settings_group_with(
@@ -150,7 +150,7 @@ impl SdrRemoteApp {
             // All fields save immediately on change (no separate "Apply" button anymore).
             let mut relay_changed = false;
             // What the engine actually runs on: the relay setting applies at the
-            // next start, and the line says so while the two differ (review 110).
+            // next start, and the line says so while the two differ.
             let route = self.state_rx.borrow().route;
             // The route the settings ask for, by the rule main.rs chooses with.
             let expected = sdr_remote_logic::measure::Route::asked_for(sdr_remote_relay::is_configured(
@@ -169,7 +169,7 @@ impl SdrRemoteApp {
             };
             let text = rust_i18n::t!("screen_route_in_use", route = in_use).to_string();
             let text = if differs {
-                format!("{text} - {}", rust_i18n::t!("screen_route_restart"))
+                format!("{text}: {}", rust_i18n::t!("screen_route_restart"))
             } else {
                 text
             };
@@ -300,7 +300,7 @@ impl SdrRemoteApp {
             let ctx = ui.ctx().clone();
             self.recenter_popouts(&ctx);
         }
-        // PATCH-1: read connect_status from logic-state and render via
+        // Read connect_status from logic-state and render via
         // i18n helper. Single source of truth - same NL/EN text as Android
         // bridge. The legacy `auth_rejected` / `totp_required` booleans are
         // still set for back-compat but new UI code uses connect_status.
@@ -308,13 +308,13 @@ impl SdrRemoteApp {
         use sdr_remote_logic::i18n::{connect_status_text, Lang};
         use sdr_remote_logic::state::ConnectStatus;
 
-        // PATCH-1: language from client config (set via `language=nl|en` in
+        // Language from client config (set via `language=nl|en` in
         // thetislink-client.conf). Defaults to English when unset.
         let lang = Lang::from_code(&self.ui_language);
 
         // Whether the match below draws a line of status (build 198).
         let mut status_shown = true;
-        // PATCH-1 smoke-test fix (2026-05-12 #2): show the TOTP input + Verify
+        // Show the TOTP input + Verify
         // button in BOTH AwaitingTotp AND Failed(WrongTotp) states. Without
         // that, a user who types a wrong TOTP code has no way to retry: the
         // TOTP input field disappears, and pressing the regular Connect
@@ -324,8 +324,7 @@ impl SdrRemoteApp {
             &connect_status,
             ConnectStatus::Failed(sdr_remote_logic::state::ConnectError::WrongTotp)
         );
-        // PATCH-1 smoke-test fix (2026-05-13): operator feedback - connect-status text
-        // was smaller than surrounding UI; should *stand out*. Headline now 18pt bold,
+        // The connect-status text stands out from the surrounding UI: headline 18pt bold,
         // action 14pt (body default, not `.small()`).
         match &connect_status {
             ConnectStatus::AwaitingTotp => {
@@ -393,7 +392,7 @@ impl SdrRemoteApp {
             super::helpers::rule(ui);
         }
 
-        // Chat, with the unread count on it (design §1.7): without a number
+        // Chat, with the unread count on it: without a number
         // where people already look, nobody opens the window - and one channel
         // nobody opens is as empty as two were.
         //
@@ -403,8 +402,7 @@ impl SdrRemoteApp {
         // the window now explains what the chat is, that it needs a relay that
         // offers one, and how to reach one. So the button is the way in - the
         // people who would benefit from the relay are exactly the ones who click
-        // out of curiosity, and they are the ones the feedback comes from
-        // (owner, 2026-08-20).
+        // out of curiosity, and they are the ones the feedback comes from.
         ui.horizontal(|ui| {
             let label = if self.chat.unread() > 0 {
                 format!("{} ({})", rust_i18n::t!("chat_window_button"), self.chat.unread())
@@ -421,7 +419,7 @@ impl SdrRemoteApp {
             };
             if ui.add(btn).clicked() {
                 self.chat_open = !self.chat_open;
-                self.save_full_config();
+                self.save_ptt_config();
             }
             if self.chat.unread() > 0 {
                 ui.label(
@@ -434,7 +432,7 @@ impl SdrRemoteApp {
         super::helpers::rule(ui);
 
         // Language, UI scale and theme as one group, behind a chevron like the
-        // others below it (owner, 2026-10-14). The audio group directly after
+        // others below it. The audio group directly after
         // shares this group's line below as its line above.
         self.folds_open = super::helpers::settings_group(
             ui,
@@ -704,73 +702,67 @@ impl SdrRemoteApp {
         // link carrying audio", independent of how loud it is played here.
         ui.label(rust_i18n::t!("screen_audio_levels").to_string())
             .on_hover_text(rust_i18n::t!("screen_audio_levels_hover").to_string());
-        ui.horizontal(|ui| {
+        // One grid, so every bar starts in the same column: the labels differ in
+        // width ("Yaesu 1: 991A" against "RX1:"), and spaces in a proportional
+        // font never lined them up.
+        egui::Grid::new("audio_level_bars").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
             let (mic_label, mic_level) = if self.yaesu_tx_active || self.yaesu2_tx_active {
                 ("Yaesu Mic:", self.yaesu_mic_level)
             } else if self.ptt && self.thetis_configured {
                 ("Thetis Mic:", self.capture_level)
             } else {
-                ("Mic:       ", self.capture_level)
+                ("Mic:", self.capture_level)
             };
             ui.label(mic_label);
             level_bar(ui, mic_level, "mic");
-        });
-        if self.thetis_configured {
-            // Only show when RX1 audio is subscribed (rx1_enabled). NOT on
-            // playback_level: concealed audio keeps it > 0, which left RX1 showing.
-            if self.rx1_enabled {
-                if self.binaural && self.playback_level_bin_r > 0.0 {
-                    ui.horizontal(|ui| {
-                        ui.label("RX1 L:     ");
-                        level_bar(ui, self.playback_level, "rx1");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("RX1 R:     ");
-                        level_bar(ui, self.playback_level_bin_r, "rx1r");
-                    });
-                } else {
-                    ui.horizontal(|ui| {
-                        ui.label("RX1:       ");
-                        level_bar(ui, self.playback_level, "rx1");
-                    });
+            // The bar is the end of the chain; this is its start. A microphone
+            // that clips before ThetisLink reads fine on the bar.
+            if self.mic_input_clip {
+                ui.label(RichText::new("CLIP").color(Color32::RED).strong())
+                    .on_hover_text(rust_i18n::t!("screen_mic_clip_hover").to_string());
+            } else {
+                ui.label("");
+            }
+            ui.end_row();
+            let mut row = |ui: &mut egui::Ui, label: String, level: f32, id: &str| {
+                ui.label(label);
+                level_bar(ui, level, id);
+                ui.label("");
+                ui.end_row();
+            };
+            if self.thetis_configured {
+                // Only show when RX1 audio is subscribed (rx1_enabled). NOT on
+                // playback_level: concealed audio keeps it > 0, which left RX1 showing.
+                if self.rx1_enabled {
+                    if self.binaural && self.playback_level_bin_r > 0.0 {
+                        row(ui, "RX1 L:".into(), self.playback_level, "rx1");
+                        row(ui, "RX1 R:".into(), self.playback_level_bin_r, "rx1r");
+                    } else {
+                        row(ui, "RX1:".into(), self.playback_level, "rx1");
+                    }
+                }
+                if self.rx2_enabled {
+                    row(ui, "RX2:".into(), self.playback_level_rx2, "rx2");
                 }
             }
-            if self.rx2_enabled {
-                ui.horizontal(|ui| {
-                    ui.label("RX2:       ");
-                    level_bar(ui, self.playback_level_rx2, "rx2");
-                });
+            // Only show when the Yaesu audio is subscribed (yaesu_enabled), not when
+            // the radio is merely hardware-connected (yaesu_connected). Consistent
+            // name via yaesu_slot_label (same as the detail tab).
+            if self.yaesu_enabled {
+                row(ui, self.yaesu_slot_label(0), self.playback_level_yaesu, "yaesu1");
             }
-        }
-        // Only show when the Yaesu audio is subscribed (yaesu_enabled), not when
-        // the radio is merely hardware-connected (yaesu_connected). Consistent
-        // name via yaesu_slot_label (same as the detail tab).
-        if self.yaesu_enabled {
-            ui.horizontal(|ui| {
-                ui.label(self.yaesu_slot_label(0));
-                level_bar(ui, self.playback_level_yaesu, "yaesu1");
-            });
-        }
-        if self.yaesu2_enabled {
-            ui.horizontal(|ui| {
-                ui.label(self.yaesu_slot_label(1));
-                level_bar(ui, self.playback_level_yaesu2, "yaesu2");
-            });
-        }
-        if self.thetis_configured {
-            if self.vrx1_enabled {
-                ui.horizontal(|ui| {
-                    ui.label("VRX1:      ");
-                    level_bar(ui, self.playback_level_vrx1, "vrx1");
-                });
+            if self.yaesu2_enabled {
+                row(ui, self.yaesu_slot_label(1), self.playback_level_yaesu2, "yaesu2");
             }
-            if self.vrx2_enabled {
-                ui.horizontal(|ui| {
-                    ui.label("VRX2:      ");
-                    level_bar(ui, self.playback_level_vrx2, "vrx2");
-                });
+            if self.thetis_configured {
+                if self.vrx1_enabled {
+                    row(ui, "VRX1:".into(), self.playback_level_vrx1, "vrx1");
+                }
+                if self.vrx2_enabled {
+                    row(ui, "VRX2:".into(), self.playback_level_vrx2, "vrx2");
+                }
             }
-        }
+        });
 
         // The roger beep. One place for the sound of it, and a tick per
         // channel - an operator wants one beep of their own, not three that
@@ -780,7 +772,7 @@ impl SdrRemoteApp {
         // section goes: a beep is a thing you put ON something. The row used to
         // list Thetis, "Yaesu 1: 991A" and "Yaesu 2: FTX1" on every station,
         // including one with no radio at all - and those two names were startup
-        // guesses, not anything a server had said (owner, 2026-08-20).
+        // guesses, not anything a server had said.
         //
         // The stored choices are deliberately NOT cleared while a channel is
         // away, unlike the recording ticks above: recording is a thing you start
@@ -790,7 +782,7 @@ impl SdrRemoteApp {
         // TRANSMIT path - the tone goes while the transmitter is still keyed -
         // so whether this client happens to be listening to the radio has
         // nothing to do with it. Gating it on the audio toggle hid a connected
-        // FTX-1 from the row entirely (owner, 2026-08-20). Recording is the
+        // FTX-1 from the row entirely. Recording is the
         // opposite case and keeps its own rule: see `rec_source`.
         let roger_thetis = self.thetis_configured;
         let roger_radio1 = self.yaesu_present_last;
@@ -860,7 +852,7 @@ impl SdrRemoteApp {
 
         // The Bluetooth PTT button. On this tab and not with MIDI, because it is
         // a piece of station equipment like the roger beep, not a controller
-        // mapping (owner, 2026-09-17). The line above it is the roger group's
+        // mapping. The line above it is the roger group's
         // line below, when that group is there.
         if !roger_shown {
             super::helpers::rule(ui);
@@ -1010,8 +1002,8 @@ impl SdrRemoteApp {
         // Off: one transmitter at a time, across all three. Whoever is already
         // transmitting keeps it; whoever presses another briefly sees "TX on another
         // radio" and nothing else happens. Without that rule two Yaesus keyed at once
-        // while only one got modulation - two red buttons and a bare carrier (owner,
-        // 2026-09-03).
+        // while only one got modulation - two red buttons and a bare carrier
+        // (2026-09-03).
         //
         // On: the same microphone to every keyed transmitter, so Thetis and both Yaesus
         // together.
@@ -1178,7 +1170,7 @@ impl SdrRemoteApp {
                 .num_columns(2)
                 .spacing([20.0, 2.0])
                 .show(ui, |ui| {
-                    // Only show ACTIVE streams (kbps > 0) — a disabled channel
+                    // Only show ACTIVE streams (kbps > 0); a disabled channel
                     // thus disappears from the data usage.
                     let active: Vec<_> = self.bw_breakdown.iter().filter(|(_, kbps)| *kbps > 0).collect();
                     if self.bw_breakdown.is_empty() {
@@ -1204,7 +1196,7 @@ impl SdrRemoteApp {
             // Only where there is a cluster to switch off. A server with no
             // callsign, or with the cluster off, will never send a spot, and the
             // tick sat there ON regardless - promising a stream that could not
-            // come (owner, 2026-08-20).
+            // come.
             if self.dx_cluster_available {
                 ui.add_space(4.0);
                 let mut dx_spots = self.dx_spots_enabled;
@@ -1243,7 +1235,7 @@ impl SdrRemoteApp {
                 let labels = ["NB (8k)", "WB (16k)", "Auto"];
                 ui.label(rust_i18n::t!("screen_vrx1_rate").to_string());
                 let mut sel1 = (self.vrx_rate_mode as usize).min(2);
-                egui::ComboBox::from_id_source("vrx1_audio_rate")
+                egui::ComboBox::from_id_salt("vrx1_audio_rate")
                     .selected_text(labels[sel1])
                     .show_ui(ui, |ui| {
                         for (i, lbl) in labels.iter().enumerate() {
@@ -1256,7 +1248,7 @@ impl SdrRemoteApp {
                 }
                 ui.label(rust_i18n::t!("screen_vrx2_rate").to_string());
                 let mut sel2 = (self.vrx_rate_mode2 as usize).min(2);
-                egui::ComboBox::from_id_source("vrx2_audio_rate")
+                egui::ComboBox::from_id_salt("vrx2_audio_rate")
                     .selected_text(labels[sel2])
                     .show_ui(ui, |ui| {
                         for (i, lbl) in labels.iter().enumerate() {
@@ -1324,11 +1316,11 @@ impl SdrRemoteApp {
             }
         });
 
-        // The developer mode, together and last, behind its own chevron
-        // (owner, 2026-10-24): the code field or the sign, and the tools that
+        // The developer mode, together and last, behind its own chevron:
+        // the code field or the sign, and the tools that
         // only measure.
         //
-        // Measurement mode (open point 34): every audio arrival and heartbeat
+        // Measurement mode: every audio arrival and heartbeat
         // round trip to a file, for comparing the link before and after a
         // change. Off by default; a new file each time it is switched on, in a
         // folder next to the program.

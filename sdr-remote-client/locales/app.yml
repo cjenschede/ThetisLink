@@ -167,6 +167,21 @@ screen_audio_levels_hover:
   nl: "De ontvangstbalken tonen het niveau zoals ontvangen, vóór de volumeschuiven. De mic-balk toont wat er uitgezonden wordt, ná gain en compressor."
   de: "Die Empfangsbalken zeigen den Pegel wie empfangen, vor den Lautstärkereglern. Der Mic-Balken zeigt, was gesendet wird, nach Gain und Kompressor."
   fr: "Les barres de réception montrent le niveau tel que reçu, avant les curseurs de volume. La barre micro montre ce qui est émis, après gain et compresseur."
+screen_mic_clip_hover:
+  en: "The microphone reaches full scale before ThetisLink, so it clips there. Lower the recording level of the microphone in Windows until even loud speech close to it stays below 100%."
+  nl: "De microfoon haalt de volle schaal al vóór ThetisLink en clipt daar. Zet het opnameniveau van de microfoon in Windows lager, tot ook hard praten vlak bij de microfoon onder de 100% blijft."
+  de: "Das Mikrofon erreicht schon vor ThetisLink den Vollausschlag und übersteuert dort. Senken Sie den Aufnahmepegel des Mikrofons in Windows, bis auch lautes Sprechen nah am Mikrofon unter 100% bleibt."
+  fr: "Le micro atteint la pleine échelle avant ThetisLink et sature déjà là. Baissez le niveau d'enregistrement du micro dans Windows jusqu'à ce que même une voix forte près du micro reste sous 100%."
+dev_gain_off:
+  en: "off"
+  nl: "uit"
+  de: "aus"
+  fr: "coupé"
+dev_gain_hover:
+  en: "Gain at the start of the transmit chain, before EQ, compressor and AGC. Set it with comp and AGC off so the mic bar peaks around -12 dB on normal speech. All the way down is off."
+  nl: "Versterking aan het begin van de zendketen, vóór EQ, compressor en AGC. Stel hem in met comp en AGC uit, zo dat de mic-balk bij gewoon praten pieken rond -12 dB toont. Helemaal omlaag is uit."
+  de: "Verstärkung am Anfang der Sendekette, vor EQ, Kompressor und AGC. Mit Kompressor und AGC aus so einstellen, dass der Mic-Balken bei normaler Sprache Spitzen um -12 dB zeigt. Ganz unten ist aus."
+  fr: "Gain au début de la chaîne d'émission, avant l'EQ, le compresseur et l'AGC. Réglez-le compresseur et AGC coupés pour que la barre micro montre des crêtes vers -12 dB en parole normale. Tout en bas, c'est coupé."
 dev_mem_tone_write_hint:
   en: "Written to the radio with \"Write to radio\": the channel is briefly recalled, because the tone is not part of the memory write itself"
   nl: "Wordt met \"Schrijf naar radio\" opgeslagen: het kanaal wordt daarbij even opgeroepen, want de toon zit niet in het geheugenschrijfcommando zelf"
@@ -238,10 +253,10 @@ screen_high:
   de: "Hoch:"
   fr: "Haut :"
 screen_tx_follows_rx_clamped:
-  en: "TX follows RX: %{lo} .. %{hi} Hz (RX wider - TX max 8 kHz)"
-  nl: "TX volgt RX: %{lo} .. %{hi} Hz (RX breder - TX max 8 kHz)"
-  de: "TX folgt RX: %{lo} .. %{hi} Hz (RX breiter - TX max 8 kHz)"
-  fr: "TX suit RX : %{lo} .. %{hi} Hz (RX plus large - TX max 8 kHz)"
+  en: "TX follows RX: %{lo} .. %{hi} Hz (RX wider, TX max 8 kHz)"
+  nl: "TX volgt RX: %{lo} .. %{hi} Hz (RX breder, TX max 8 kHz)"
+  de: "TX folgt RX: %{lo} .. %{hi} Hz (RX breiter, TX max 8 kHz)"
+  fr: "TX suit RX : %{lo} .. %{hi} Hz (RX plus large, TX max 8 kHz)"
 screen_tx_follows_rx:
   en: "TX follows RX: %{lo} .. %{hi} Hz"
   nl: "TX volgt RX: %{lo} .. %{hi} Hz"
@@ -369,10 +384,10 @@ screen_roger_fm:
   de: "auch in FM"
   fr: "aussi en FM"
 screen_roger_fm_tooltip:
-  en: "SSB and AM always beep. Data and digital modes never do, whatever this says - a tone on top of data is interference."
-  nl: "SSB en AM piepen altijd. Data- en digitale modes nooit, wat hier ook staat - een toon over data heen is storing."
-  de: "SSB und AM piepen immer. Daten- und Digitalmodi nie, egal was hier steht - ein Ton ueber Daten ist Stoerung."
-  fr: "SSB et AM emettent toujours le bip. Les modes data et numeriques jamais, quoi qu'il soit coche - une tonalite sur des donnees est du brouillage."
+  en: "SSB and AM always beep. Data and digital modes never do, whatever this says: a tone on top of data is interference."
+  nl: "SSB en AM piepen altijd. Data- en digitale modes nooit, wat hier ook staat: een toon over data heen is storing."
+  de: "SSB und AM piepen immer. Daten- und Digitalmodi nie, egal was hier steht: Ein Ton ueber Daten ist Stoerung."
+  fr: "SSB et AM emettent toujours le bip. Les modes data et numeriques jamais, quoi qu'il soit coche : une tonalite sur des donnees est du brouillage."
 screen_roger_freq_tooltip:
   en: "Pitch of the tone. Keep it inside your transmit filter, or the far end hears only part of it."
   nl: "Toonhoogte. Houd hem binnen je zendfilter, anders hoort de tegenstation er maar een deel van."
@@ -504,10 +519,10 @@ screen_multi_tx:
   de: "Multi-TX (ein Mikrofon, mehrere Sender)"
   fr: "Multi-TX (un microphone, plusieurs emetteurs)"
 yaesu_loading_notice:
-  en: "Loading the radio's settings (%{what}) - controls respond slowly until done"
-  nl: "Instellingen van de radio worden geladen (%{what}) - bediening reageert traag tot dit klaar is"
-  de: "Einstellungen des Funkgeraets werden geladen (%{what}) - Bedienung reagiert langsam bis dahin"
-  fr: "Chargement des reglages de la radio (%{what}) - les commandes sont lentes jusqu'a la fin"
+  en: "Loading the radio's settings (%{what}): controls respond slowly until done"
+  nl: "Instellingen van de radio worden geladen (%{what}): bediening reageert traag tot dit klaar is"
+  de: "Einstellungen des Funkgeraets werden geladen (%{what}): Bedienung reagiert langsam bis dahin"
+  fr: "Chargement des reglages de la radio (%{what}) : les commandes sont lentes jusqu'a la fin"
 yaesu_loading_background:
   en: "Loading the radio's %{what} in the background"
   nl: "De %{what} van de radio worden op de achtergrond geladen"
@@ -539,14 +554,14 @@ radio_usb_lost:
   de: "USB WEG"
   fr: "USB PERDU"
 screen_multi_tx_tooltip:
-  en: "Off: one transmitter at a time. Whoever is already transmitting keeps it - click another and you briefly see 'TX elsewhere' and nothing happens. Hold a PTT key down and it starts as soon as the first one frees up. On: the same microphone goes to every keyed transmitter, so Thetis and both Yaesus together. Desktop only; the phone always keys one radio."
-  nl: "Uit: een zender tegelijk. Wie al zendt houdt hem - klik je op een andere, dan zie je kort 'TX op andere radio' en gebeurt er verder niets. Houd je een PTT-toets ingedrukt, dan begint die zodra de eerste vrijkomt. Aan: dezelfde microfoon gaat naar elke gekeyde zender, dus Thetis en beide Yaesu's samen. Alleen op de desktop; de telefoon keyt altijd een radio."
-  de: "Aus: ein Sender zur Zeit. Wer schon sendet, behaelt ihn - eine andere Taste zeigt kurz 'TX auf anderem Geraet' und sonst passiert nichts. Ein: dasselbe Mikrofon geht an jeden getasteten Sender, also Thetis und beide Yaesu gleichzeitig. Nur Desktop; das Telefon tastet immer ein Geraet."
-  fr: "Desactive : un emetteur a la fois. Celui qui emet deja le garde - appuyer sur un autre affiche brievement 'TX sur un autre poste' et rien de plus. Active : le meme microphone va vers chaque emetteur en TX, donc Thetis et les deux Yaesu ensemble. Bureau uniquement ; le telephone n'active qu'un poste."
+  en: "Off: one transmitter at a time. Whoever is already transmitting keeps it: click another and you briefly see 'TX elsewhere' and nothing happens. Hold a PTT key down and it starts as soon as the first one frees up. On: the same microphone goes to every keyed transmitter, so Thetis and both Yaesus together. Desktop only; the phone always keys one radio."
+  nl: "Uit: een zender tegelijk. Wie al zendt houdt hem: klik je op een andere, dan zie je kort 'TX op andere radio' en gebeurt er verder niets. Houd je een PTT-toets ingedrukt, dan begint die zodra de eerste vrijkomt. Aan: dezelfde microfoon gaat naar elke gekeyde zender, dus Thetis en beide Yaesu's samen. Alleen op de desktop; de telefoon keyt altijd een radio."
+  de: "Aus: ein Sender zur Zeit. Wer schon sendet, behaelt ihn: Eine andere Taste zeigt kurz 'TX auf anderem Geraet' und sonst passiert nichts. Ein: dasselbe Mikrofon geht an jeden getasteten Sender, also Thetis und beide Yaesu gleichzeitig. Nur Desktop; das Telefon tastet immer ein Geraet."
+  fr: "Desactive : un emetteur a la fois. Celui qui emet deja le garde : appuyer sur un autre affiche brievement 'TX sur un autre poste' et rien de plus. Active : le meme microphone va vers chaque emetteur en TX, donc Thetis et les deux Yaesu ensemble. Bureau uniquement ; le telephone n'active qu'un poste."
 screen_rec_needs_audio:
   en: "Switch this channel's audio on first. Recording writes what this client receives, so a channel it is not listening to would give an empty file."
   nl: "Zet eerst de audio van dit kanaal aan. Opnemen schrijft weg wat deze client ontvangt, dus een kanaal waar hij niet naar luistert levert een leeg bestand op."
-  de: "Schalten Sie zuerst den Ton dieses Kanals ein. Die Aufnahme schreibt mit, was dieser Client empfängt - ein Kanal, den er nicht hört, ergäbe eine leere Datei."
+  de: "Schalten Sie zuerst den Ton dieses Kanals ein. Die Aufnahme schreibt mit, was dieser Client empfängt: Ein Kanal, den er nicht hört, ergäbe eine leere Datei."
   fr: "Activez d'abord l'audio de ce canal. L'enregistrement écrit ce que ce client reçoit ; un canal qu'il n'écoute pas donnerait un fichier vide."
 screen_status:
   en: "Status:"
@@ -554,15 +569,15 @@ screen_status:
   de: "Status:"
   fr: "Statut :"
 screen_relay_saved_stop:
-  en: "Saved - restart the client to stop using the relay"
-  nl: "Opgeslagen - herstart de client om de relay niet meer te gebruiken"
-  de: "Gespeichert - Client neu starten, um das Relay nicht mehr zu verwenden"
-  fr: "Enregistré - redémarrez le client pour cesser d'utiliser le relais"
+  en: "Saved: restart the client to stop using the relay"
+  nl: "Opgeslagen: herstart de client om de relay niet meer te gebruiken"
+  de: "Gespeichert: Client neu starten, um das Relay nicht mehr zu verwenden"
+  fr: "Enregistré : redémarrez le client pour cesser d'utiliser le relais"
 screen_relay_saved_connect:
-  en: "Saved - restart the client to connect via relay"
-  nl: "Opgeslagen - herstart de client om via de relay te verbinden"
-  de: "Gespeichert - Client neu starten, um über das Relay zu verbinden"
-  fr: "Enregistré - redémarrez le client pour vous connecter via le relais"
+  en: "Saved: restart the client to connect via relay"
+  nl: "Opgeslagen: herstart de client om via de relay te verbinden"
+  de: "Gespeichert: Client neu starten, um über das Relay zu verbinden"
+  fr: "Enregistré : redémarrez le client pour vous connecter via le relais"
 screen_relay_off_direct:
   en: "Off (direct connection)"
   nl: "Uit (directe verbinding)"
@@ -754,20 +769,20 @@ screen_relay_only:
   de: "Nur Relay"
   fr: "Relais uniquement"
 screen_relay_only_tooltip:
-  en: "On: no direct path is offered, and a direct one goes back to the relay at once - for comparing the two. Not kept after a restart."
-  nl: "Aan: er wordt geen rechtstreekse weg aangeboden, en een rechtstreekse weg gaat meteen terug naar de relay - om de twee te vergelijken. Wordt niet onthouden na een herstart."
-  de: "Ein: Es wird kein direkter Weg angeboten, und ein direkter Weg wechselt sofort zurück zum Relay - zum Vergleichen der beiden. Wird nach einem Neustart nicht gespeichert."
-  fr: "Activé : aucun chemin direct n'est proposé, et un chemin direct revient aussitôt au relais - pour comparer les deux. Non conservé après un redémarrage."
+  en: "On: no direct path is offered, and a direct one goes back to the relay at once, for comparing the two. Not kept after a restart."
+  nl: "Aan: er wordt geen rechtstreekse weg aangeboden, en een rechtstreekse weg gaat meteen terug naar de relay, om de twee te vergelijken. Wordt niet onthouden na een herstart."
+  de: "Ein: Es wird kein direkter Weg angeboten, und ein direkter Weg wechselt sofort zurück zum Relay, zum Vergleichen der beiden. Wird nach einem Neustart nicht gespeichert."
+  fr: "Activé : aucun chemin direct n'est proposé, et un chemin direct revient aussitôt au relais, pour comparer les deux. Non conservé après un redémarrage."
 screen_force_tcp:
   en: "Force TCP"
   nl: "TCP afdwingen"
   de: "TCP erzwingen"
   fr: "Forcer TCP"
 screen_force_tcp_tooltip:
-  en: "On: everything goes through the relay over TCP, as on a network that lets no UDP through - to measure what that route costs. Not kept after a restart."
-  nl: "Aan: alles gaat via de relay over TCP, zoals op een netwerk dat geen UDP doorlaat - om te meten wat die route kost. Wordt niet onthouden na een herstart."
-  de: "Ein: Alles läuft über das Relay per TCP, wie in einem Netzwerk, das kein UDP durchlässt - um zu messen, was dieser Weg kostet. Wird nach einem Neustart nicht gespeichert."
-  fr: "Activé : tout passe par le relais en TCP, comme sur un réseau qui ne laisse pas passer l'UDP - pour mesurer ce que coûte cette route. Non conservé après un redémarrage."
+  en: "On: everything goes through the relay over TCP, as on a network that lets no UDP through, to measure what that route costs. Not kept after a restart."
+  nl: "Aan: alles gaat via de relay over TCP, zoals op een netwerk dat geen UDP doorlaat, om te meten wat die route kost. Wordt niet onthouden na een herstart."
+  de: "Ein: Alles läuft über das Relay per TCP, wie in einem Netzwerk, das kein UDP durchlässt, um zu messen, was dieser Weg kostet. Wird nach einem Neustart nicht gespeichert."
+  fr: "Activé : tout passe par le relais en TCP, comme sur un réseau qui ne laisse pas passer l'UDP, pour mesurer ce que coûte cette route. Non conservé après un redémarrage."
 screen_relay_only_no_relay_tooltip:
   en: "Only when connected through the relay."
   nl: "Alleen bij een verbinding via de relay."
@@ -798,10 +813,10 @@ screen_play_volume_tooltip:
 # Shown when the server does not run this client's build. It only tells; nothing
 # refuses to work over it.
 screen_build_mismatch:
-  en: "The server runs %{server} and this client is %{client} - they should be the same build."
-  nl: "De server draait %{server} en deze client %{client} - dat hoort dezelfde build te zijn."
-  de: "Der Server läuft mit %{server} und dieser Client mit %{client} - das sollte derselbe Build sein."
-  fr: "Le serveur exécute %{server} et ce client %{client} - ce devrait être la même version."
+  en: "The server runs %{server} and this client is %{client}: they should be the same build."
+  nl: "De server draait %{server} en deze client %{client}: dat hoort dezelfde build te zijn."
+  de: "Der Server läuft mit %{server} und dieser Client mit %{client}: Das sollte derselbe Build sein."
+  fr: "Le serveur exécute %{server} et ce client %{client} : ce devrait être la même version."
 screen_build_too_old:
   en: "a build too old to say which"
   nl: "een build die te oud is om te zeggen welke"
@@ -1047,16 +1062,16 @@ spec_tx_in_use:
   nl: "TX in gebruik: %{w}W"
   de: "TX in Betrieb: %{w}W"
   fr: "TX en cours : %{w}W"
-spec_vrx_hover:
-  en: "Click: tune VRX. Scroll: tune. Drag/scroll filter edge: resize filter."
-  nl: "Klik: VRX afstemmen. Scroll: afstemmen. Sleep/scroll filterrand: filter verschalen."
-  de: "Klick: VRX abstimmen. Scrollen: abstimmen. Filterrand ziehen/scrollen: Filter anpassen."
-  fr: "Clic : accorder le VRX. Molette : accorder. Glisser/molette sur le bord du filtre : redimensionner le filtre."
+spec_hover:
+  en: "Click, drag or scroll: tune. Drag a filter edge: change the filter."
+  nl: "Klik, sleep of scroll: afstemmen. Sleep een filterrand: filter aanpassen."
+  de: "Klicken, ziehen oder scrollen: abstimmen. Filterrand ziehen: Filter anpassen."
+  fr: "Clic, glisser ou molette : accorder. Glisser un bord du filtre : modifier le filtre."
 spec_wf_hover:
-  en: "Click waterfall to tune VRX."
-  nl: "Klik op de waterval om VRX af te stemmen."
-  de: "Auf den Wasserfall klicken, um VRX abzustimmen."
-  fr: "Cliquez sur la cascade pour accorder le VRX."
+  en: "Click, drag or scroll: tune."
+  nl: "Klik, sleep of scroll: afstemmen."
+  de: "Klicken, ziehen oder scrollen: abstimmen."
+  fr: "Clic, glisser ou molette : accorder."
 
 # --- mod.rs ---
 main_meter_click_hover:
@@ -1135,10 +1150,10 @@ main_auto_tune_carrier:
   de: "Auto-Abstimmung auf Träger"
   fr: "Accord auto sur la porteuse"
 main_auto_tune_carrier_hover:
-  en: "SAM: follow the AM carrier - the VFO snaps onto the carrier so the filter stays symmetric around it. Locks within ±3 kHz."
-  nl: "SAM: volg de AM-draaggolf - de VFO klikt op de draaggolf zodat het filter er symmetrisch omheen blijft. Vergrendelt binnen ±3 kHz."
-  de: "SAM: dem AM-Träger folgen - der VFO rastet auf den Träger, sodass der Filter symmetrisch darum bleibt. Rastet innerhalb ±3 kHz ein."
-  fr: "SAM : suivre la porteuse AM - le VFO se cale sur la porteuse afin que le filtre reste symétrique autour d'elle. Verrouille à ±3 kHz près."
+  en: "SAM: follow the AM carrier; the VFO snaps onto the carrier so the filter stays symmetric around it. Locks within ±3 kHz."
+  nl: "SAM: volg de AM-draaggolf; de VFO klikt op de draaggolf zodat het filter er symmetrisch omheen blijft. Vergrendelt binnen ±3 kHz."
+  de: "SAM: dem AM-Träger folgen; der VFO rastet auf den Träger, sodass der Filter symmetrisch darum bleibt. Rastet innerhalb ±3 kHz ein."
+  fr: "SAM : suivre la porteuse AM ; le VFO se cale sur la porteuse afin que le filtre reste symétrique autour d'elle. Verrouille à ±3 kHz près."
 main_ref_label:
   en: "Ref:"
   nl: "Ref:"
@@ -1194,6 +1209,16 @@ main_hover_wf:
   nl: "Watervalcontrast."
   de: "Wasserfall-Kontrast."
   fr: "Contraste de la cascade."
+main_fill_label:
+  en: "Fill:"
+  nl: "Opvullen:"
+  de: "Füllung:"
+  fr: "Remplissage :"
+main_hover_fill:
+  en: "How visible the fill under the spectrum curve is: 0 shows only the curve, 100 a solid fill. Each column takes the colour of its peak. One value for all spectrum panels."
+  nl: "Hoe zichtbaar de opvulling onder de spectrumlijn is: 0 toont alleen de lijn, 100 een vol vlak. Elke kolom krijgt de kleur van zijn top. Eén waarde voor alle spectrumpanelen."
+  de: "Wie sichtbar die Füllung unter der Spektrumkurve ist: 0 zeigt nur die Kurve, 100 eine volle Fläche. Jede Spalte erhält die Farbe ihrer Spitze. Ein Wert für alle Spektrumfelder."
+  fr: "Visibilité du remplissage sous la courbe du spectre : 0 n'affiche que la courbe, 100 une surface pleine. Chaque colonne prend la couleur de son sommet. Une seule valeur pour tous les panneaux de spectre."
 main_auto:
   en: "Auto"
   nl: "Auto"
@@ -1205,10 +1230,10 @@ main_allow_zoom_2x:
   de: "Zoom <2x erlauben"
   fr: "Autoriser le zoom <2x"
 main_hover_server_wide_fft:
-  en: "Server-wide setting - manage via %{rx} spectrum panel."
-  nl: "Server-brede instelling - beheren via het %{rx}-spectrumpaneel."
-  de: "Serverweite Einstellung - über das %{rx}-Spektrumpanel verwalten."
-  fr: "Réglage global du serveur - à gérer via le panneau de spectre %{rx}."
+  en: "Server-wide setting: manage via %{rx} spectrum panel."
+  nl: "Server-brede instelling: beheren via het %{rx}-spectrumpaneel."
+  de: "Serverweite Einstellung: über das %{rx}-Spektrumpanel verwalten."
+  fr: "Réglage global du serveur : à gérer via le panneau de spectre %{rx}."
 main_hover_spectrum_height:
   en: "Total height of the spectrum + waterfall block in pixels. The page becomes scrollable when content overflows."
   nl: "Totale hoogte van het spectrum + waterval-blok in pixels. De pagina wordt scrollbaar als de inhoud overloopt."
@@ -1285,10 +1310,10 @@ main_arrange_windows_title:
   de: "Fenster anordnen"
   fr: "Organiser les fenêtres"
 main_arrange_windows_help:
-  en: "Pick a grid size, select a window and paint it onto the cells (click or drag). A window may cover several adjacent cells - it is stretched over that block. Each screen has its own grid."
-  nl: "Kies een rasterformaat, selecteer een venster en schilder het in de cellen (klik of sleep). Een venster mag meerdere aangrenzende cellen beslaan - het wordt over dat blok uitgerekt. Elk scherm heeft zijn eigen raster."
-  de: "Rastergröße wählen, ein Fenster auswählen und in die Zellen malen (klicken oder ziehen). Ein Fenster darf mehrere benachbarte Zellen belegen - es wird über diesen Block gestreckt. Jeder Bildschirm hat sein eigenes Raster."
-  fr: "Choisissez une taille de grille, sélectionnez une fenêtre et peignez-la sur les cellules (clic ou glisser). Une fenêtre peut couvrir plusieurs cellules adjacentes - elle est étirée sur ce bloc. Chaque écran a sa propre grille."
+  en: "Pick a grid size, select a window and paint it onto the cells (click or drag). A window may cover several adjacent cells: it is stretched over that block. Each screen has its own grid."
+  nl: "Kies een rasterformaat, selecteer een venster en schilder het in de cellen (klik of sleep). Een venster mag meerdere aangrenzende cellen beslaan: het wordt over dat blok uitgerekt. Elk scherm heeft zijn eigen raster."
+  de: "Rastergröße wählen, ein Fenster auswählen und in die Zellen malen (klicken oder ziehen). Ein Fenster darf mehrere benachbarte Zellen belegen: Es wird über diesen Block gestreckt. Jeder Bildschirm hat sein eigenes Raster."
+  fr: "Choisissez une taille de grille, sélectionnez une fenêtre et peignez-la sur les cellules (clic ou glisser). Une fenêtre peut couvrir plusieurs cellules adjacentes : elle est étirée sur ce bloc. Chaque écran a sa propre grille."
 main_screen_n:
   en: "Screen %{n}"
   nl: "Scherm %{n}"
@@ -1335,10 +1360,10 @@ main_layout_memory:
   de: "Anordnungsspeicher"
   fr: "Mémoire d'agencement"
 main_layout_memory_help:
-  en: "Store the current window positions in a slot and put them back later - handy after moving a window by hand."
-  nl: "Bewaar de huidige vensterposities in een geheugen en zet ze later terug - handig nadat je een venster met de hand hebt verschoven."
-  de: "Aktuelle Fensterpositionen in einem Speicher ablegen und später zurückholen - praktisch, nachdem ein Fenster von Hand verschoben wurde."
-  fr: "Enregistrez les positions actuelles des fenêtres dans un emplacement et restaurez-les plus tard - pratique après avoir déplacé une fenêtre à la main."
+  en: "Store the current window positions in a slot and put them back later, handy after moving a window by hand."
+  nl: "Bewaar de huidige vensterposities in een geheugen en zet ze later terug, handig nadat je een venster met de hand hebt verschoven."
+  de: "Aktuelle Fensterpositionen in einem Speicher ablegen und später zurückholen, praktisch, nachdem ein Fenster von Hand verschoben wurde."
+  fr: "Enregistrez les positions actuelles des fenêtres dans un emplacement et restaurez-les plus tard, pratique après avoir déplacé une fenêtre à la main."
 main_layout_memory_name:
   en: "name"
   nl: "naam"
@@ -1400,10 +1425,10 @@ main_tx_in_use:
   de: "TX in Betrieb"
   fr: "TX en cours"
 main_hover_rx_only_antenna:
-  en: "Active Amplitec antenna is RX-only - transmit is blocked"
-  nl: "Actieve Amplitec-antenne is alleen-RX - zenden is geblokkeerd"
-  de: "Aktive Amplitec-Antenne ist nur RX - Senden ist blockiert"
-  fr: "L'antenne Amplitec active est RX seul - l'émission est bloquée"
+  en: "Active Amplitec antenna is RX-only: transmit is blocked"
+  nl: "Actieve Amplitec-antenne is alleen-RX: zenden is geblokkeerd"
+  de: "Aktive Amplitec-Antenne ist nur RX: Senden ist blockiert"
+  fr: "L'antenne Amplitec active est RX seul : l'émission est bloquée"
 main_tune_tuning:
   en: "Tune..."
   nl: "Tune..."
@@ -1475,10 +1500,10 @@ main_audio_error:
   de: "Audiofehler"
   fr: "Erreur audio"
 main_mic_missing:
-  en: "Microphone '%{name}' not found - plug it in. Transmitting is off until it is back."
-  nl: "Microfoon '%{name}' niet gevonden - sluit hem aan. Zenden staat uit tot hij er weer is."
-  de: "Mikrofon '%{name}' nicht gefunden - bitte anschließen. Senden ist aus, bis es wieder da ist."
-  fr: "Microphone '%{name}' introuvable - branchez-le. L'émission est coupée jusqu'à son retour."
+  en: "Microphone '%{name}' not found: plug it in. Transmitting is off until it is back."
+  nl: "Microfoon '%{name}' niet gevonden: sluit hem aan. Zenden staat uit tot hij er weer is."
+  de: "Mikrofon '%{name}' nicht gefunden: bitte anschließen. Senden ist aus, bis es wieder da ist."
+  fr: "Microphone '%{name}' introuvable : branchez-le. L'émission est coupée jusqu'à son retour."
 main_ptt_no_mic:
   en: "No mic"
   nl: "Geen mic"
@@ -1540,10 +1565,10 @@ main_hover_chip_window:
   de: "Das %{name}-Fenster öffnen/schließen (Spektrum + Wasserfall). Geschlossen stoppt auch den Spektrumstrom."
   fr: "Ouvrir/fermer la fenêtre %{name} (spectre + cascade). Fermée, le flux de spectre s'arrête aussi."
 main_hover_yaesu_audio:
-  en: "%{label} - audio on/off. Off saves bandwidth."
-  nl: "%{label} - audio aan/uit. Uit bespaart bandbreedte."
-  de: "%{label} - Audio ein/aus. Aus spart Bandbreite."
-  fr: "%{label} - audio activé/désactivé. Désactivé économise la bande passante."
+  en: "%{label}: audio on/off. Off saves bandwidth."
+  nl: "%{label}: audio aan/uit. Uit bespaart bandbreedte."
+  de: "%{label}: Audio ein/aus. Aus spart Bandbreite."
+  fr: "%{label} : audio activé/désactivé. Désactivé économise la bande passante."
 main_chip_audio:
   en: "audio"
   nl: "audio"
@@ -1632,45 +1657,45 @@ dev_offline:
   de: "Offline"
   fr: "Hors ligne"
 dev_port_busy:
-  en: "The radio's COM port is in use by another program on the server PC - close other CAT/control software there"
-  nl: "De COM-poort van de radio is in gebruik door een ander programma op de server-PC - sluit daar andere CAT/bedieningssoftware af"
-  de: "Der COM-Port des Funkgeraets wird von einem anderen Programm auf dem Server-PC benutzt - dort andere CAT/Steuersoftware schliessen"
-  fr: "Le port COM de la radio est utilise par un autre programme sur le PC serveur - fermez-y l'autre logiciel CAT/de commande"
+  en: "The radio's COM port is in use by another program on the server PC: close other CAT/control software there"
+  nl: "De COM-poort van de radio is in gebruik door een ander programma op de server-PC: sluit daar andere CAT/bedieningssoftware af"
+  de: "Der COM-Port des Funkgeraets wird von einem anderen Programm auf dem Server-PC benutzt: dort andere CAT/Steuersoftware schliessen"
+  fr: "Le port COM de la radio est utilise par un autre programme sur le PC serveur : fermez-y l'autre logiciel CAT/de commande"
 dev_port_missing:
-  en: "The radio's COM port does not exist on the server PC - check the USB cable and the COM number in Device Manager"
-  nl: "De COM-poort van de radio bestaat niet op de server-PC - controleer de USB-kabel en het COM-nummer in Apparaatbeheer"
-  de: "Der COM-Port des Funkgeraets existiert auf dem Server-PC nicht - USB-Kabel und COM-Nummer im Geraete-Manager pruefen"
-  fr: "Le port COM de la radio n'existe pas sur le PC serveur - verifiez le cable USB et le numero COM dans le gestionnaire de peripheriques"
+  en: "The radio's COM port does not exist on the server PC: check the USB cable and the COM number in Device Manager"
+  nl: "De COM-poort van de radio bestaat niet op de server-PC: controleer de USB-kabel en het COM-nummer in Apparaatbeheer"
+  de: "Der COM-Port des Funkgeraets existiert auf dem Server-PC nicht: USB-Kabel und COM-Nummer im Geraete-Manager pruefen"
+  fr: "Le port COM de la radio n'existe pas sur le PC serveur : verifiez le cable USB et le numero COM dans le gestionnaire de peripheriques"
 dev_amplitec_title:
   en: "Amplitec 6/2 Antenna Switch"
   nl: "Amplitec 6/2 antenneschakelaar"
   de: "Amplitec 6/2 Antennenumschalter"
   fr: "Commutateur d'antenne Amplitec 6/2"
 dev_port_a_txrx:
-  en: "Port A — TX+RX"
-  nl: "Poort A — TX+RX"
-  de: "Port A — TX+RX"
-  fr: "Port A — TX+RX"
+  en: "Port A (TX+RX)"
+  nl: "Poort A (TX+RX)"
+  de: "Port A (TX+RX)"
+  fr: "Port A (TX+RX)"
 dev_current_colon_val:
   en: "  Current: %{label}"
   nl: "  Huidig: %{label}"
   de: "  Aktuell: %{label}"
   fr: "  Actuel : %{label}"
 dev_ant_occupied_by_b:
-  en: "Ant%{pos} (%{label}) — occupied by Port B"
-  nl: "Ant%{pos} (%{label}) — bezet door poort B"
-  de: "Ant%{pos} (%{label}) — belegt von Port B"
-  fr: "Ant%{pos} (%{label}) — occupé par le port B"
+  en: "Ant%{pos} (%{label}): occupied by Port B"
+  nl: "Ant%{pos} (%{label}): bezet door poort B"
+  de: "Ant%{pos} (%{label}): belegt von Port B"
+  fr: "Ant%{pos} (%{label}): occupé par le port B"
 dev_port_b_rx:
-  en: "Port B — RX"
-  nl: "Poort B — RX"
-  de: "Port B — RX"
-  fr: "Port B — RX"
+  en: "Port B (RX)"
+  nl: "Poort B (RX)"
+  de: "Port B (RX)"
+  fr: "Port B (RX)"
 dev_ant_occupied_by_a:
-  en: "Ant%{pos} (%{label}) — occupied by Port A"
-  nl: "Ant%{pos} (%{label}) — bezet door poort A"
-  de: "Ant%{pos} (%{label}) — belegt von Port A"
-  fr: "Ant%{pos} (%{label}) — occupé par le port A"
+  en: "Ant%{pos} (%{label}): occupied by Port A"
+  nl: "Ant%{pos} (%{label}): bezet door poort A"
+  de: "Ant%{pos} (%{label}): belegt von Port A"
+  fr: "Ant%{pos} (%{label}): occupé par le port A"
 dev_power_cap_table:
   en: "Power-cap table"
   nl: "Vermogenslimiet-tabel"
@@ -1712,10 +1737,10 @@ dev_no_cap:
   de: "0 W = keine Grenze"
   fr: "0 W = aucune limite"
 dev_edit_on_server:
-  en: "Read-only - edit this table in the server's Amplitec window (0 W = no cap)."
-  nl: "Alleen-lezen - bewerk deze tabel in het Amplitec-venster van de server (0 W = geen limiet)."
-  de: "Nur Lesen - diese Tabelle im Amplitec-Fenster des Servers bearbeiten (0 W = kein Limit)."
-  fr: "Lecture seule - modifiez cette table dans la fenêtre Amplitec du serveur (0 W = pas de limite)."
+  en: "Read-only: edit this table in the server's Amplitec window (0 W = no cap)."
+  nl: "Alleen-lezen: bewerk deze tabel in het Amplitec-venster van de server (0 W = geen limiet)."
+  de: "Nur Lesen: diese Tabelle im Amplitec-Fenster des Servers bearbeiten (0 W = kein Limit)."
+  fr: "Lecture seule : modifiez cette table dans la fenêtre Amplitec du serveur (0 W = pas de limite)."
 dev_log:
   en: "Log"
   nl: "Log"
@@ -2237,10 +2262,10 @@ dev_991a_standby_hover:
   de: "991A ein / Standby (CAT PS). Standby hält die USB/CAT-Verbindung aktiv."
   fr: "991A activé / veille (CAT PS). La veille maintient la liaison USB/CAT active."
 dev_radio_powers_off_hover:
-  en: "This radio powers off completely (USB drops) - no remote power-off."
-  nl: "Deze radio schakelt volledig uit (USB valt weg) - geen extern uitschakelen."
-  de: "Diese Radio schaltet vollständig aus (USB fällt weg) - kein Fern-Ausschalten."
-  fr: "Cette radio s'éteint complètement (l'USB se coupe) - pas d'extinction à distance."
+  en: "This radio powers off completely (USB drops): no remote power-off."
+  nl: "Deze radio schakelt volledig uit (USB valt weg): geen extern uitschakelen."
+  de: "Diese Radio schaltet vollständig aus (USB fällt weg): kein Fern-Ausschalten."
+  fr: "Cette radio s'éteint complètement (l'USB se coupe) : pas d'extinction à distance."
 dev_power_on_upper:
   en: "Power ON"
   nl: "Aan"
@@ -2311,6 +2336,106 @@ dev_new:
   nl: "Nieuw:"
   de: "Neu:"
   fr: "Nouveau :"
+dev_eq_filter:
+  en: "filter"
+  nl: "filter"
+  de: "Filter"
+  fr: "filtre"
+dev_eq_kind_off:
+  en: "off"
+  nl: "uit"
+  de: "aus"
+  fr: "arrêt"
+dev_eq_kind_peak:
+  en: "peak"
+  nl: "piek"
+  de: "Glocke"
+  fr: "cloche"
+dev_eq_kind_low_shelf:
+  en: "low shelf"
+  nl: "laag shelf"
+  de: "Tiefen-Shelf"
+  fr: "plateau grave"
+dev_eq_kind_high_shelf:
+  en: "high shelf"
+  nl: "hoog shelf"
+  de: "Höhen-Shelf"
+  fr: "plateau aigu"
+dev_eq_kind_low_cut:
+  en: "low cut"
+  nl: "low cut"
+  de: "Tiefensperre"
+  fr: "coupe-bas"
+dev_eq_kind_high_cut:
+  en: "high cut"
+  nl: "high cut"
+  de: "Höhensperre"
+  fr: "coupe-haut"
+dev_eq_freq_hover:
+  en: "drag or type; centre or corner frequency"
+  nl: "slepen of typen; midden- of kantelfrequentie"
+  de: "ziehen oder tippen; Mitten- oder Eckfrequenz"
+  fr: "glisser ou saisir ; fréquence centrale ou de coupure"
+dev_eq_q_hover:
+  en: "higher Q = narrower; 0.707 = flat corner for a cut"
+  nl: "hogere Q = smaller; 0,707 = vlakke knik bij een cut"
+  de: "höheres Q = schmaler; 0,707 = flache Ecke bei einer Sperre"
+  fr: "Q plus élevé = plus étroit ; 0,707 = coude plat pour une coupure"
+dev_eq_flat:
+  en: "flat"
+  nl: "vlak"
+  de: "flach"
+  fr: "plat"
+dev_eq_flat_hover:
+  en: "all channels back to the starting point (not saved until you press Save)"
+  nl: "alle kanalen terug naar de beginstand (pas bewaard na Opslaan)"
+  de: "alle Kanäle zurück auf den Ausgangspunkt (erst nach Speichern gesichert)"
+  fr: "tous les canaux au point de départ (enregistré seulement après Enregistrer)"
+dev_eq_advanced:
+  en: "Advanced"
+  nl: "Geavanceerd"
+  de: "Erweitert"
+  fr: "Avancé"
+dev_eq_advanced_hover:
+  en: "twenty channels with filter, frequency and Q, and the compressor timing, in place of the five bands; saved with the profile"
+  nl: "twintig kanalen met filter, frequentie en Q, en de compressortijden, in plaats van de vijf banden; bewaard met het profiel"
+  de: "zwanzig Kanäle mit Filter, Frequenz und Q sowie die Kompressorzeiten, anstelle der fünf Bänder; mit dem Profil gespeichert"
+  fr: "vingt canaux avec filtre, fréquence et Q, et les temps du compresseur, à la place des cinq bandes ; enregistré avec le profil"
+dev_eq_new_profile_hover:
+  en: "a new profile with the EQ, mic gain, compressor and AGC as they are now; a name that exists already is replaced. Not empty, no | in the name"
+  nl: "een nieuw profiel met de EQ, mic-gain, compressor en AGC zoals ze nu staan; een naam die al bestaat wordt vervangen. Niet leeg, geen | in de naam"
+  de: "ein neues Profil mit EQ, Mikrofonpegel, Kompressor und AGC wie sie jetzt stehen; ein vorhandener Name wird ersetzt. Nicht leer, kein | im Namen"
+  fr: "un nouveau profil avec l'EQ, le gain micro, le compresseur et l'AGC tels qu'ils sont ; un nom existant est remplacé. Pas vide, pas de | dans le nom"
+dev_comp_attack:
+  en: "Attack"
+  nl: "Aanval"
+  de: "Attack"
+  fr: "Attaque"
+dev_comp_attack_hover:
+  en: "how fast the compressor pulls a peak down"
+  nl: "hoe snel de compressor een piek indrukt"
+  de: "wie schnell der Kompressor eine Spitze absenkt"
+  fr: "vitesse à laquelle le compresseur abaisse une crête"
+dev_comp_release:
+  en: "Release"
+  nl: "Loslaten"
+  de: "Release"
+  fr: "Relâchement"
+dev_comp_release_hover:
+  en: "how fast the gain comes back after a peak"
+  nl: "hoe snel het volume na een piek terugkomt"
+  de: "wie schnell die Verstärkung nach einer Spitze zurückkehrt"
+  fr: "vitesse à laquelle le gain revient après une crête"
+dev_comp_default:
+  en: "default"
+  nl: "standaard"
+  de: "Standard"
+  fr: "défaut"
+dev_comp_default_hover:
+  en: "back to the former fixed timing"
+  nl: "terug naar de vroegere vaste tijden"
+  de: "zurück zur früheren festen Zeit"
+  fr: "retour aux anciens temps fixes"
 dev_recall:
   en: "Recall"
   nl: "Oproepen"
@@ -2372,10 +2497,10 @@ dev_mem_close_edit_hover:
   de: "Bearbeiten beenden. Die Aenderungen bleiben in der Liste; mit Radio schreiben gelangen sie ins Geraet."
   fr: "Quitter le mode edition. Vos modifications restent dans la liste ; utilisez Ecrire sur la radio pour les y placer."
 dev_mem_offset_readonly:
-  en: "Read-only. The shift size is not stored per memory channel on either radio - the channel holds only the direction, and the size is a per-band menu setting (FT-991A 80-83, FTX-1 EX 010316-010319). The value shown is transmit minus receive frequency."
-  nl: "Alleen-lezen. De grootte van de shift staat bij geen van beide radio's in het geheugenkanaal - daar staat alleen de richting; de grootte is een menu-instelling per band (FT-991A 80-83, FTX-1 EX 010316-010319). De getoonde waarde is zend- min ontvangfrequentie."
-  de: "Nur Anzeige. Die Groesse des Shifts steht bei keinem der beiden Geraete im Speicherkanal - dort steht nur die Richtung; die Groesse ist eine Menueeinstellung pro Band (FT-991A 80-83, FTX-1 EX 010316-010319). Angezeigt wird Sende- minus Empfangsfrequenz."
-  fr: "Lecture seule. La taille du decalage n'est stockee dans la memoire sur aucun des deux postes - la memoire ne retient que le sens ; la taille est un reglage de menu par bande (FT-991A 80-83, FTX-1 EX 010316-010319). La valeur affichee est la frequence d'emission moins celle de reception."
+  en: "Read-only. The shift size is not stored per memory channel on either radio: the channel holds only the direction, and the size is a per-band menu setting (FT-991A 80-83, FTX-1 EX 010316-010319). The value shown is transmit minus receive frequency."
+  nl: "Alleen-lezen. De grootte van de shift staat bij geen van beide radio's in het geheugenkanaal: daar staat alleen de richting; de grootte is een menu-instelling per band (FT-991A 80-83, FTX-1 EX 010316-010319). De getoonde waarde is zend- min ontvangfrequentie."
+  de: "Nur Anzeige. Die Groesse des Shifts steht bei keinem der beiden Geraete im Speicherkanal: Dort steht nur die Richtung; die Groesse ist eine Menueeinstellung pro Band (FT-991A 80-83, FTX-1 EX 010316-010319). Angezeigt wird Sende- minus Empfangsfrequenz."
+  fr: "Lecture seule. La taille du decalage n'est stockee dans la memoire sur aucun des deux postes : la memoire ne retient que le sens ; la taille est un reglage de menu par bande (FT-991A 80-83, FTX-1 EX 010316-010319). La valeur affichee est la frequence d'emission moins celle de reception."
 # The chat_offline_* texts used to live here and never appeared: the label that
 # reads them is compiled in sdr-remote-chat, which resolves against its OWN
 # locales/app.yml, so both GUIs printed the bare key `chat_offline_no_relay`
@@ -2551,10 +2676,10 @@ screen_ble_ptt_connecting:
   de: "Verbinde..."
   fr: "Connexion..."
 screen_ble_ptt_waiting:
-  en: "Out of range - reconnects by itself"
-  nl: "Buiten bereik - verbindt vanzelf opnieuw"
-  de: "Außer Reichweite - verbindet sich selbst wieder"
-  fr: "Hors de portée - se reconnecte tout seul"
+  en: "Out of range, reconnects by itself"
+  nl: "Buiten bereik, verbindt vanzelf opnieuw"
+  de: "Außer Reichweite, verbindet sich selbst wieder"
+  fr: "Hors de portée, se reconnecte tout seul"
 screen_ble_ptt_reconnect:
   en: "Connect again"
   nl: "Opnieuw verbinden"
@@ -2636,10 +2761,10 @@ screen_cw_edges:
   de: "Flanken"
   fr: "fronts"
 screen_cw_paddle_note:
-  en: "The paddle keys the transmitter chosen under Key to - Thetis or a connected Yaesu. Every key edge is written to the log."
-  nl: "De peddel sleutelt de zender die je onder Sleutel naar hebt gekozen - Thetis of een aangesloten Yaesu. Elke sleutelflank komt in het log."
-  de: "Das Paddle tastet den unter Taste an gewaehlten Sender - Thetis oder ein angeschlossenes Yaesu-Geraet. Jede Tastflanke steht im Log."
-  fr: "Le manipulateur pilote l'émetteur choisi sous Manipuler vers - Thetis ou un Yaesu connecté. Chaque front est écrit dans le journal."
+  en: "The paddle keys the transmitter chosen under Key to: Thetis or a connected Yaesu. Every key edge is written to the log."
+  nl: "De peddel sleutelt de zender die je onder Sleutel naar hebt gekozen: Thetis of een aangesloten Yaesu. Elke sleutelflank komt in het log."
+  de: "Das Paddle tastet den unter Taste an gewaehlten Sender: Thetis oder ein angeschlossenes Yaesu-Geraet. Jede Tastflanke steht im Log."
+  fr: "Le manipulateur pilote l'émetteur choisi sous Manipuler vers : Thetis ou un Yaesu connecté. Chaque front est écrit dans le journal."
 screen_cw_sidetone:
   en: "Sidetone"
   nl: "Zijtoon"

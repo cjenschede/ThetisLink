@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Rolling WAV writer — dev tooling that captures channelizer audio
+//! Rolling WAV writer: dev tooling that captures channelizer audio
 //! into fixed-length WAV segments. Activated by the runtime when
 //! `VrxRuntimeOptions::wav_dir` is set.
 

@@ -3,7 +3,7 @@
 //! The CW sidetone: the tone the operator hears the moment the key goes down,
 //! made locally, so it does not wait for anything to come back over the link.
 //!
-//! Step 3 of `docs/internal/DESIGN-remote-cw.md`. The shape follows the
+//! The shape follows the
 //! alarms in `audio.rs`: a small piece of shared state the key side writes
 //! (`Sidetone`, atomics only), and a mixer the playback callback calls on
 //! every buffer, in place and additive, so the receive path gains no buffer
@@ -15,7 +15,7 @@
 //! edges. The ramp runs per sample inside the buffer, so a key that changes
 //! between two callbacks still starts and stops on a slope.
 //!
-//! Measurement 4 of the design lives here too: `set_key(true)` stamps the
+//! The sidetone delay is measured here too: `set_key(true)` stamps the
 //! moment of the edge, the mixer stamps the moment it first renders the tone,
 //! and the difference - plus the buffer it was rendered into - is what the
 //! reader's log reports as the onset latency. It is the software half of the
@@ -82,7 +82,7 @@ pub struct Sidetone {
     last_buffer_frames: AtomicU32,
     /// The same buffer in microseconds, at the rate the mixer was really
     /// called with - a device that does not run at 48 kHz has buffers of
-    /// another length than a frame count suggests (review finding).
+    /// another length than a frame count suggests.
     last_buffer_us: AtomicU32,
     /// What the audio device says lies between a callback and the speaker,
     /// in microseconds; 0 = never told. The part of the latency the callback
@@ -143,7 +143,7 @@ impl Sidetone {
     /// callback (cpal: `timestamp().playback - timestamp().callback`). Called
     /// on every callback, with 0 when the backend has nothing to say: this
     /// state outlives a device switch, and a figure the previous device left
-    /// behind must not speak for the next one (review finding).
+    /// behind must not speak for the next one.
     pub fn note_output_latency(&self, us: u32) {
         self.output_latency_us.store(us, Ordering::Relaxed);
     }

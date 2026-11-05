@@ -35,6 +35,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.sdrremote.R
@@ -47,8 +51,11 @@ import com.sdrremote.nsd.MdnsDiscovery
 fun ConnectionPanel(
     connected: Boolean,
     // The connection name (build 139): the letters, and the long name with what
-    // it means on a tap; amber while coupling. From Rust, drawn here.
-    pathShort: String = "",
+    // it means on a tap; amber while coupling, and the R red while the relay
+    // session is gone (2.13.1 build 3). From Rust, drawn here: which letters are
+    // red comes in its own part, so nothing here cuts the text.
+    pathShortPlain: String = "",
+    pathShortRed: String = "",
     pathName: String = "",
     pathHint: String = "",
     pathCoupling: Boolean = false,
@@ -62,7 +69,7 @@ fun ConnectionPanel(
     paForwardW: Int = 0,
     paMaxW: Int = 0,
     paName: String = "",
-    // PATCH-1: connect-status text rendered in Rust via i18n.rs; Kotlin/Compose
+    // Connect-status text rendered in Rust via i18n.rs; Kotlin/Compose
     // just displays. headline = main user-visible line, action = optional hint
     // ("" when no hint). is_error = render red, otherwise neutral. is_awaiting_totp
     // = show 2FA input row.
@@ -80,14 +87,14 @@ fun ConnectionPanel(
      * "I am done, let go of everything" is a real wish - and until now the only
      * way to grant it was swiping the app out of the recents carousel, which
      * the app never sees. That is why the server log says `timed out` where it
-     * should say `disconnected` (owner, 2026-09-05).
+     * should say `disconnected`.
      */
     onExit: () -> Unit,
     onSendTotp: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE) }
-    var serverInput by rememberSaveable { mutableStateOf(prefs.getString("server_addr", "192.168.1.79:4580") ?: "192.168.1.79:4580") }
+    val prefs = remember { context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE) }
+    var serverInput by rememberSaveable { mutableStateOf(prefs.getString("server_addr", "192.168.1.2:4580") ?: "192.168.1.2:4580") }
 
     // When the relay is the active route the direct server-IP is not relevant
     // (the relay decides the destination via station/token), so we replace the
@@ -103,7 +110,7 @@ fun ConnectionPanel(
         uniffi.sdr_remote.relayIsConfigured(relayEnabled, relayUrl, relayStation, relayToken)
     }
 
-    // PATCH-3: NSD-based mDNS discovery — only runs while ConnectionPanel
+    // NSD-based mDNS discovery: only runs while ConnectionPanel
     // is in the composition AND the user is not yet connected. Multicast
     // lock is acquired in start() and released in stop(); leaving the
     // panel (compose dispose) tears the discovery down so the radio stack
@@ -155,7 +162,7 @@ fun ConnectionPanel(
             }
         } else {
             val pw = prefs.getString("password", "") ?: ""
-            // PATCH-1 smoke-test fix (2026-05-12): disable Connect while mid-auth.
+            // Disable Connect while mid-auth.
             // AwaitingTotp = user must press Verify; pressing Connect again would
             // regress engine to "Connecting" and the server's PendingTotp session
             // would never recover.
@@ -175,10 +182,10 @@ fun ConnectionPanel(
     }
 
     // What blocks the station and what helps (station_notice in Rust): each
-    // its own line, so none hides another - or the audio error (review 59).
+    // its own line, so none hides another - or the audio error.
     StationNoticeLines(stationNotices)
 
-    // PATCH-3: dropdown with mDNS-discovered servers. Empty list = nothing
+    // Dropdown with mDNS-discovered servers. Empty list = nothing
     // to render; user still has the manual IP field above as the always-on
     // fallback. List appears progressively as scans resolve, so we don't
     // gate Connect on it.
@@ -211,7 +218,7 @@ fun ConnectionPanel(
         }
     }
 
-    // PATCH-1: connect-status display.
+    // Connect-status display.
     // - AwaitingTotp: show 2FA input row + the headline ("Enter 2FA code") and action hint
     // - Failed: show headline in red + action hint as small grey text
     // - Other (Disconnected/Connecting/Connected): no extra row here; status row below shows colored badge
@@ -273,11 +280,16 @@ fun ConnectionPanel(
         val statusColor = if (connected) Color(0xFF00C800) else Color(0xFFC80000)
         val statusText = if (connected) stringResource(R.string.common_connected) else stringResource(R.string.common_disconnected)
         Text(text = statusText, color = statusColor, fontSize = 14.sp)
-        if (connected && pathShort.isNotEmpty()) {
+        if (connected && (pathShortPlain.isNotEmpty() || pathShortRed.isNotEmpty())) {
             // The letters by default; a tap shows the long name and what it means.
             var showLong by remember { mutableStateOf(false) }
+            // The red of "disconnected" above, on the R alone.
+            val letters = buildAnnotatedString {
+                append(pathShortPlain)
+                withStyle(SpanStyle(color = Color(0xFFC80000))) { append(pathShortRed) }
+            }
             Text(
-                text = if (showLong) "$pathName - $pathHint" else pathShort,
+                text = if (showLong) AnnotatedString("$pathName: $pathHint") else letters,
                 color = if (pathCoupling) Color(0xFFC8A028) else Color.Unspecified,
                 fontSize = 12.sp,
                 modifier = Modifier.clickable { showLong = !showLong },
@@ -323,7 +335,7 @@ fun ConnectionPanel(
  * The station notices from Rust (`station_notice`), one red line each. One
  * renderer for every screen that shows them - the connection panel, the wizard
  * and, since build 216, the top of the devices screen, where the Amplitec is
- * switched (owner, 2026-10-16).
+ * switched.
  */
 @Composable
 fun StationNoticeLines(stationNotices: List<String>) {

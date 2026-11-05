@@ -7,7 +7,7 @@
 //! token pasted on every visit gets written down somewhere worse. So a browser
 //! trades it once for a session cookie.
 //!
-//! Deliberately the same shape as the relay's own dashboard — HttpOnly, Secure,
+//! Deliberately the same shape as the relay's own dashboard; HttpOnly, Secure,
 //! SameSite=Strict, a sliding idle timeout, a CSRF token required on anything
 //! that changes something, and a limit on failed attempts per address. Not
 //! because this is more precious than the relay, but because it faces the same

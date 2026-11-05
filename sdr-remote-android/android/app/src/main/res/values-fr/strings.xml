@@ -27,7 +27,7 @@
     <string name="conn_choose_server">Choisir un serveur détecté (%1$d)</string>
     <string name="conn_2fa_code">Code 2FA</string>
     <string name="conn_verify">Vérifier</string>
-    <string name="conn_audio_error">Erreur audio — reconnexion…</string>
+    <string name="conn_audio_error">Erreur audio, reconnexion…</string>
 
     <!-- SettingsDialog -->
     <string name="settings_title">Réglages</string>
@@ -36,8 +36,8 @@
     <string name="settings_password_required">Un mot de passe est requis pour se connecter</string>
     <string name="settings_connect_via_relay">Se connecter via relais :</string>
     <string name="settings_relay_hint">Pour les clients qui ne peuvent pas rediriger de port (p. ex. mobile). Redémarrez l\'app pour appliquer.</string>
-    <string name="settings_relay_saved_stop">Enregistré - redémarrez l\'app pour ne plus utiliser le relais</string>
-    <string name="settings_relay_saved_start">Enregistré - redémarrez l\'app pour vous connecter via le relais</string>
+    <string name="settings_relay_saved_stop">Enregistré : redémarrez l\'app pour ne plus utiliser le relais</string>
+    <string name="settings_relay_saved_start">Enregistré : redémarrez l\'app pour vous connecter via le relais</string>
     <string name="settings_relay_url">URL du relais</string>
     <string name="settings_station_name">Nom de la station</string>
     <string name="settings_token">Jeton</string>
@@ -106,6 +106,7 @@
     <!-- StatsPanel -->
     <string name="stats_rx_volume">Volume RX</string>
     <string name="stats_tx_gain">Gain TX</string>
+    <string name="gain_off">coupé</string>
     <string name="stats_audio_levels">Niveaux audio :</string>
     <string name="stats_statistics">Statistiques :</string>
     <string name="stats_measure">Mesure</string>
@@ -114,7 +115,7 @@
     <string name="stats_relay_only">Relais uniquement</string>
     <string name="stats_relay_only_hint">Aucun chemin direct tant que c\'est activé ; un chemin direct revient aussitôt au relais. Non conservé après un redémarrage.</string>
     <string name="stats_force_tcp">Forcer TCP</string>
-    <string name="stats_force_tcp_hint">Tout passe par le relais en TCP tant que c\'est activé, comme sur un réseau sans UDP - pour mesurer ce que cela coûte. Non conservé après un redémarrage.</string>
+    <string name="stats_force_tcp_hint">Tout passe par le relais en TCP tant que c\'est activé, comme sur un réseau sans UDP, pour mesurer ce que cela coûte. Non conservé après un redémarrage.</string>
     <string name="stats_relay_only_no_relay">Uniquement avec une connexion via le relais.</string>
     <string name="stats_link_loss">Perte de liaison</string>
     <string name="stats_down">Desc.</string>
@@ -173,8 +174,8 @@
     <string name="main_devices">Appareils</string>
     <string name="main_native_error">Erreur de bibliothèque native : %1$s</string>
     <string name="main_key">Touche : %1$s</string>
-    <string name="main_yaesu_active_hint">Yaesu actif - aller à Appareils</string>
-    <string name="main_yaesu_hint">Yaesu - aller à Appareils pour les commandes</string>
+    <string name="main_yaesu_active_hint">Yaesu actif : aller à Appareils</string>
+    <string name="main_yaesu_hint">Yaesu : aller à Appareils pour les commandes</string>
     <string name="main_spectrum">Spectre</string>
     <string name="main_about">À propos</string>
     <string name="main_wizard">Assistant</string>
@@ -252,8 +253,8 @@
     <string name="dev_ex_menu">Menu EX (%1$d)</string>
     <string name="dev_menu_num">Menu %1$d</string>
     <string name="dev_dsp_functions">DSP / fonctions</string>
-    <string name="dev_port_a">Port A — ANT1 (TX+RX)</string>
-    <string name="dev_port_b">Port B — RX2 (RX)</string>
+    <string name="dev_port_a">Port A : ANT1 (TX+RX)</string>
+    <string name="dev_port_b">Port B : RX2 (RX)</string>
     <string name="dev_digit_tuner_hint">toucher un chiffre = accorder · appui long = saisir</string>
 
     <!-- Chat sur le relais -->
@@ -265,7 +266,7 @@
     <string name="chat_reply">repondre</string>
     <string name="chat_edit">modifier</string>
     <string name="chat_edited">(modifie)</string>
-    <string name="chat_editing">modification du message - Envoyer enregistre la correction</string>
+    <string name="chat_editing">modification du message : Envoyer enregistre la correction</string>
     <string name="chat_replying_to">reponse a %1$s</string>
     <string name="chat_input_hint">Votre message</string>
     <string name="chat_as_name">Vous etes ici en tant que %1$s</string>
@@ -294,7 +295,7 @@
     <string name="chat_consent_ban">L\'administrateur peut retirer une station de la discussion si la situation devient intenable. Vous en etes informe, ce que vous avez ecrit reste, et cela ferme aussi le signalement de problemes. Quitter la discussion n\'annule pas un retrait.</string>
     <string name="chat_consent_access">Toute personne connectee a ce relais peut lire ce que vous ecrivez ici.</string>
     <string name="chat_consent_age">J\'ai seize ans ou plus, ou un parent est d\'accord.</string>
-    <string name="chat_consent_agree">J\'accepte - rejoindre</string>
+    <string name="chat_consent_agree">J\'accepte, rejoindre</string>
     <string name="chat_report_button">Signaler un probleme</string>
     <string name="chat_report_title">Signaler un probleme</string>
     <string name="chat_report_explain">Que faisiez-vous, qu\'attendiez-vous, et que s\'est-il passe a la place ? Votre description est le signalement.</string>
@@ -318,7 +319,7 @@
     <string name="settings_ble_ptt_no_permission">Autorisation Bluetooth refusée</string>
     <string name="settings_ble_ptt_connected">Connecté : %1$s</string>
     <string name="settings_ble_ptt_connecting">Connexion…</string>
-    <string name="settings_ble_ptt_waiting">Hors portée — se reconnecte tout seul</string>
+    <string name="settings_ble_ptt_waiting">Hors portée, se reconnecte tout seul</string>
     <string name="settings_ble_ptt_reconnect">Reconnecter</string>
     <string name="settings_ble_ptt_forget">Oublier ce bouton</string>
     <string name="settings_ui_scale">Taille d\'affichage :</string>
@@ -326,6 +327,6 @@
     <string name="settings_ui_scale_landscape_off">À cette taille, l\'application reste en portrait. Une taille plus petite permet la rotation.</string>
     <!-- Shown when the server is not running this app's build. It only tells;
          nothing on this screen refuses to work over it. -->
-    <string name="stats_build_mismatch">Le serveur exécute %1$s et cette application %2$s - ce devrait être la même version.</string>
+    <string name="stats_build_mismatch">Le serveur exécute %1$s et cette application %2$s : ce devrait être la même version.</string>
     <string name="stats_build_too_old">une version trop ancienne pour le dire</string>
 </resources>

@@ -1038,6 +1038,22 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1381,8 +1397,24 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_sdr_remote_android_fn_func_set_developer_mode(`on`: Byte,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_sdr_remote_android_fn_func_tx_gain_db(`factor`: Float,uniffi_out_err: UniffiRustCallStatus,
+    ): Float
+    fun uniffi_sdr_remote_android_fn_func_tx_gain_db_max(uniffi_out_err: UniffiRustCallStatus,
+    ): Float
+    fun uniffi_sdr_remote_android_fn_func_tx_gain_db_min(uniffi_out_err: UniffiRustCallStatus,
+    ): Float
+    fun uniffi_sdr_remote_android_fn_func_tx_gain_factor(`db`: Float,uniffi_out_err: UniffiRustCallStatus,
+    ): Float
+    fun uniffi_sdr_remote_android_fn_func_tx_gain_from_fraction(`frac`: Float,uniffi_out_err: UniffiRustCallStatus,
+    ): Float
+    fun uniffi_sdr_remote_android_fn_func_tx_gain_off_db(uniffi_out_err: UniffiRustCallStatus,
+    ): Float
     fun uniffi_sdr_remote_android_fn_func_version(uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_func_yaesu_mic_gain_db(`stored`: Float,uniffi_out_err: UniffiRustCallStatus,
+    ): Float
+    fun uniffi_sdr_remote_android_fn_func_yaesu_mic_gain_from_db(`db`: Float,uniffi_out_err: UniffiRustCallStatus,
+    ): Float
     fun uniffi_sdr_remote_android_fn_func_yaesu_s_meter_dbm(`raw`: Int,uniffi_out_err: UniffiRustCallStatus,
     ): Float
     fun ffi_sdr_remote_android_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
@@ -1523,7 +1555,23 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_sdr_remote_android_checksum_func_set_developer_mode(
     ): Short
+    fun uniffi_sdr_remote_android_checksum_func_tx_gain_db(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_tx_gain_db_max(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_tx_gain_db_min(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_tx_gain_factor(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_tx_gain_from_fraction(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_tx_gain_off_db(
+    ): Short
     fun uniffi_sdr_remote_android_checksum_func_version(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_yaesu_mic_gain_db(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_func_yaesu_mic_gain_from_db(
     ): Short
     fun uniffi_sdr_remote_android_checksum_func_yaesu_s_meter_dbm(
     ): Short
@@ -1869,7 +1917,31 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_sdr_remote_android_checksum_func_set_developer_mode() != 4265.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_sdr_remote_android_checksum_func_tx_gain_db() != 56874.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_tx_gain_db_max() != 48363.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_tx_gain_db_min() != 27214.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_tx_gain_factor() != 36344.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_tx_gain_from_fraction() != 47852.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_tx_gain_off_db() != 59256.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_sdr_remote_android_checksum_func_version() != 61161.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_yaesu_mic_gain_db() != 11092.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_func_yaesu_mic_gain_from_db() != 22391.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_func_yaesu_s_meter_dbm() != 24597.toShort()) {
@@ -5469,6 +5541,7 @@ data class BridgeRadioState (
     var `yaesu2Label`: kotlin.String,
     var `captureLevel`: kotlin.Float,
     var `yaesuMicLevel`: kotlin.Float,
+    var `micInputClip`: kotlin.Boolean,
     var `playbackLevel`: kotlin.Float,
     var `frequencyHz`: kotlin.ULong,
     var `frequencyRx2Hz`: kotlin.ULong,
@@ -5495,7 +5568,8 @@ data class BridgeRadioState (
     var `relayOnly`: kotlin.Boolean,
     var `forceTcp`: kotlin.Boolean,
     var `viaRelay`: kotlin.Boolean,
-    var `pathShort`: kotlin.String,
+    var `pathShortPlain`: kotlin.String,
+    var `pathShortRed`: kotlin.String,
     var `pathName`: kotlin.String,
     var `pathHint`: kotlin.String,
     var `pathCoupling`: kotlin.Boolean,
@@ -5691,6 +5765,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterString.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
@@ -5717,6 +5792,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
@@ -5906,6 +5982,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterString.allocationSize(value.`yaesu2Label`) +
             FfiConverterFloat.allocationSize(value.`captureLevel`) +
             FfiConverterFloat.allocationSize(value.`yaesuMicLevel`) +
+            FfiConverterBoolean.allocationSize(value.`micInputClip`) +
             FfiConverterFloat.allocationSize(value.`playbackLevel`) +
             FfiConverterULong.allocationSize(value.`frequencyHz`) +
             FfiConverterULong.allocationSize(value.`frequencyRx2Hz`) +
@@ -5932,7 +6009,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterBoolean.allocationSize(value.`relayOnly`) +
             FfiConverterBoolean.allocationSize(value.`forceTcp`) +
             FfiConverterBoolean.allocationSize(value.`viaRelay`) +
-            FfiConverterString.allocationSize(value.`pathShort`) +
+            FfiConverterString.allocationSize(value.`pathShortPlain`) +
+            FfiConverterString.allocationSize(value.`pathShortRed`) +
             FfiConverterString.allocationSize(value.`pathName`) +
             FfiConverterString.allocationSize(value.`pathHint`) +
             FfiConverterBoolean.allocationSize(value.`pathCoupling`) +
@@ -6120,6 +6198,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterString.write(value.`yaesu2Label`, buf)
             FfiConverterFloat.write(value.`captureLevel`, buf)
             FfiConverterFloat.write(value.`yaesuMicLevel`, buf)
+            FfiConverterBoolean.write(value.`micInputClip`, buf)
             FfiConverterFloat.write(value.`playbackLevel`, buf)
             FfiConverterULong.write(value.`frequencyHz`, buf)
             FfiConverterULong.write(value.`frequencyRx2Hz`, buf)
@@ -6146,7 +6225,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterBoolean.write(value.`relayOnly`, buf)
             FfiConverterBoolean.write(value.`forceTcp`, buf)
             FfiConverterBoolean.write(value.`viaRelay`, buf)
-            FfiConverterString.write(value.`pathShort`, buf)
+            FfiConverterString.write(value.`pathShortPlain`, buf)
+            FfiConverterString.write(value.`pathShortRed`, buf)
             FfiConverterString.write(value.`pathName`, buf)
             FfiConverterString.write(value.`pathHint`, buf)
             FfiConverterBoolean.write(value.`pathCoupling`, buf)
@@ -6914,11 +6994,83 @@ public object FfiConverterSequenceTypeBridgeDxSpot: FfiConverterRustBuffer<List<
 }
 
 
+ fun `txGainDb`(`factor`: kotlin.Float): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_tx_gain_db(
+        FfiConverterFloat.lower(`factor`),_status)
+}
+    )
+    }
+
+ fun `txGainDbMax`(): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_tx_gain_db_max(
+        _status)
+}
+    )
+    }
+
+ fun `txGainDbMin`(): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_tx_gain_db_min(
+        _status)
+}
+    )
+    }
+
+ fun `txGainFactor`(`db`: kotlin.Float): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_tx_gain_factor(
+        FfiConverterFloat.lower(`db`),_status)
+}
+    )
+    }
+
+ fun `txGainFromFraction`(`frac`: kotlin.Float): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_tx_gain_from_fraction(
+        FfiConverterFloat.lower(`frac`),_status)
+}
+    )
+    }
+
+ fun `txGainOffDb`(): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_tx_gain_off_db(
+        _status)
+}
+    )
+    }
+
  fun `version`(): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_version(
         _status)
+}
+    )
+    }
+
+ fun `yaesuMicGainDb`(`stored`: kotlin.Float): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_yaesu_mic_gain_db(
+        FfiConverterFloat.lower(`stored`),_status)
+}
+    )
+    }
+
+ fun `yaesuMicGainFromDb`(`db`: kotlin.Float): kotlin.Float {
+            return FfiConverterFloat.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_func_yaesu_mic_gain_from_db(
+        FfiConverterFloat.lower(`db`),_status)
 }
     )
     }

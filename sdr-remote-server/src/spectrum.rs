@@ -13,18 +13,25 @@ use sdr_remote_core::{
     ddc_fft_size, SPECTRUM_BINS, SPECTRUM_PACK_FLOOR_DB, SPECTRUM_PACK_MAX, SPECTRUM_PACK_RANGE_DB,
 };
 
-/// Number of 16-bit samples per complete wideband frame (legacy HPSDR constant, still used for wideband FFT)
-const WIDEBAND_SAMPLES: usize = 16_384;
+/// The calibration offset in dB as a shift on the packed bin scale.
+fn cal_shift(cal_offset_db: f32) -> f32 {
+    cal_offset_db * SPECTRUM_PACK_MAX / SPECTRUM_PACK_RANGE_DB
+}
+
+/// A smoothed bin plus the calibration shift, clamped onto the packed scale.
+fn pack_shifted(v: f32, cal_shift: f32) -> u16 {
+    (v + cal_shift).clamp(0.0, SPECTRUM_PACK_MAX) as u16
+}
 
 /// Peak-hold decay coefficient shared by RX1 and RX2 spectrum processing.
 /// New peaks are captured instantly; values below the current peak decay
 /// exponentially toward the incoming bin. At ~11.7 FFT/sec, 0.35 gives a
 /// ~50 ms effective time constant (snappier spectrum). RX1 and RX2 MUST use
-/// the same value — they previously drifted (RX2 was 0.6, sluggish).
+/// the same value, they previously drifted (RX2 was 0.6, sluggish).
 const PEAK_DECAY: f32 = 0.35;
 
 /// A measurement (build 172): the RX1 spectrum in the first moments after the
-/// transmitter goes on or off. The owner sees the spectrum shoot up for a
+/// transmitter goes on or off. The spectrum was seen to shoot up for a
 /// moment when the PTT goes down, on both clients and not in Thetis itself;
 /// the hypothesis is that the smoothing below holds every rise at once
 /// (`update_from_fft`) and so holds the own signal in the receive data of the
@@ -38,8 +45,8 @@ pub struct TxProbe {
 
 /// One frame's levels for `TxProbe`: the highest and the mean bin in dB
 /// (calibrated, as the clients draw it), and how many bins sat on the pack
-/// scale's ceiling - a peak there says "at least", not "this much" (review of
-/// 172: in pack units the line could not tell a clipped frame; build 174).
+/// scale's ceiling - a peak there says "at least", not "this much" (in pack
+/// units the line could not tell a clipped frame; build 174).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpectrumLevels {
     pub peak_db: f32,
@@ -64,15 +71,15 @@ fn levels_of(packed: &[f32], cal_offset_db: f32) -> SpectrumLevels {
 
 impl TxProbe {
     /// Whether the next frame is wanted: a change of the transmitter, or a
-    /// window open - so the levels are only computed then (review of 172:
-    /// they were computed on every frame, under the spectrum's lock).
+    /// window open - so the levels are only computed then
+    /// (they were computed on every frame, under the spectrum's lock).
     pub fn wants(&self, tx: bool) -> bool {
         tx != self.tx || self.since.is_some()
     }
 
     /// One spectrum frame: whether the transmitter is on, and the frame's
     /// levels. The line of a window once it is over - also when a change ends
-    /// it early, and then this frame opens the next window (review of 172: it
+    /// it early, and then this frame opens the next window (it
     /// was lost).
     pub fn frame(&mut self, tx: bool, levels: SpectrumLevels, now: Instant) -> Option<String> {
         let mut line = None;
@@ -97,7 +104,6 @@ impl TxProbe {
             .drain(..)
             .map(|(ms, l)| format!("{ms}:{:.0}/{:.0}/{}", l.peak_db, l.mean_db, l.at_ceiling))
             .collect();
-        // Named in advance (working rule 11, builds 172 and 174).
         Some(format!("Spectrum around TX {}: {}", if self.tx { "on" } else { "off" }, frames.join(" ")))
     }
 }
@@ -154,14 +160,12 @@ pub struct SpectrumProcessor {
     fps: u8,
     sequence: u16,
     last_frame: Instant,
-    /// Smoothed spectrum bins for EMA filtering (262144 bins in DDC mode)
+    /// Smoothed spectrum bins for EMA filtering (one per FFT bin in DDC mode)
     smoothed: Vec<f32>,
     /// Whether we have real HPSDR data (false = use test generator)
     has_real_data: bool,
     /// Whether real data ever came: then a gap sends nothing (build 239).
     had_real_data: bool,
-    /// FFT pipeline for processing real ADC samples (wideband)
-    fft_pipeline: Option<FftPipeline>,
     /// FFT pipeline for DDC I/Q data
     ddc_pipeline: Option<DdcFftPipeline>,
     /// Test signal phase accumulator
@@ -172,7 +176,7 @@ pub struct SpectrumProcessor {
     ddc_center_hz: u64,
     /// DDC sample rate in Hz (determines span)
     sample_rate_hz: u32,
-    /// Whether DDC mode is active (false = wideband)
+    /// Whether DDC mode is active (false = no DDC yet: the test spectrum)
     ddc_mode: bool,
     /// Whether DDC center is being set from HP packets (true = use HP data, false = use CAT/heuristic)
     has_hp_center: bool,
@@ -202,7 +206,6 @@ impl SpectrumProcessor {
             smoothed: vec![0.0; SPECTRUM_BINS],
             has_real_data: false,
             had_real_data: false,
-            fft_pipeline: None,
             ddc_pipeline: None,
             test_phase: 0.0,
             vfo_freq_hz: 14_200_000, // Default 20m band
@@ -237,12 +240,6 @@ impl SpectrumProcessor {
     /// Enable TCI mode: no buffer shifting or frame skipping on freq changes.
     pub fn set_tci_mode(&mut self, enabled: bool) {
         self.tci_mode = enabled;
-    }
-
-    /// Initialize the FFT pipeline for real wideband data processing
-    pub fn init_fft(&mut self) {
-        self.fft_pipeline = Some(FftPipeline::new());
-        log::info!("FFT pipeline initialized ({}pt -> {} bins)", WIDEBAND_SAMPLES, SPECTRUM_BINS);
     }
 
     /// Initialize the DDC FFT pipeline for complex I/Q data
@@ -284,7 +281,7 @@ impl SpectrumProcessor {
                 ddc_fft_size(self.sample_rate_hz)
             }
             _ => {
-                let size = (size_k as usize * 1024).next_power_of_two().clamp(4096, 524288);
+                let size = (size_k as usize * 1024).next_power_of_two().clamp(4096, sdr_remote_core::MAX_FFT_SIZE_K as usize * 1024);
                 self.custom_fft_size = Some(size);
                 size
             }
@@ -307,16 +304,6 @@ impl SpectrumProcessor {
     /// Get current FFT size
     pub fn current_fft_size(&self) -> usize {
         self.ddc_pipeline.as_ref().map(|p| p.window.len()).unwrap_or(0)
-    }
-
-    /// Process raw ADC samples from HPSDR wideband capture
-    pub fn process_adc_samples(&mut self, samples: &[i16]) {
-        if let Some(ref mut pipeline) = self.fft_pipeline {
-            let bins = pipeline.process(samples);
-            self.update_from_fft(&bins);
-            self.has_real_data = true;
-            self.had_real_data = true;
-        }
     }
 
     /// Get current DDC FFT size (for accumulation buffer sizing)
@@ -354,7 +341,6 @@ impl SpectrumProcessor {
             self.has_real_data = true;
             self.had_real_data = true;
             if let Some(ms) = self.band_jump.first_frame() {
-                // Named in advance (`logregels-build236.md`).
                 log::info!("Spectrum RX1: first frame of the new band after {} ms", ms);
             }
         }
@@ -411,8 +397,8 @@ impl SpectrumProcessor {
         // A gap after real data - a band jump, another DDC rate or FFT size -
         // sends nothing until the first real frame (build 239). The frame it
         // sent lay on the floor of the scale: the clients drew an empty
-        // picture and a dark waterfall row, and the auto-ref settled on it
-        // (round 238). The test spectrum stays for a server that never had a
+        // picture and a dark waterfall row, and the auto-ref settled on it.
+        // The test spectrum stays for a server that never had a
         // radio.
         if self.had_real_data && !self.has_real_data {
             return false;
@@ -471,13 +457,12 @@ impl SpectrumProcessor {
         let start = (center - half).max(0).min((total - visible) as isize) as usize;
         let end = (start + visible).min(total);
 
-        // Calibration offset: convert dB to bin-value shift (120 dB = 65535 range)
-        let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
+        let cal_shift = cal_shift(self.cal_offset_db);
 
         let bins: Vec<u16> = if visible <= max_bins {
             // Native resolution: send bins directly
             self.smoothed[start..end].iter()
-                .map(|v| (v + cal_shift).clamp(0.0, 65535.0) as u16)
+                .map(|v| pack_shifted(*v, cal_shift))
                 .collect()
         } else {
             // Decimation: max-per-group to preserve signal peaks.
@@ -493,7 +478,7 @@ impl SpectrumProcessor {
                         max_val = self.smoothed[j];
                     }
                 }
-                (max_val + cal_shift).clamp(0.0, 65535.0) as u16
+                pack_shifted(max_val, cal_shift)
             }).collect()
         };
 
@@ -507,7 +492,7 @@ impl SpectrumProcessor {
             let span_hz = visible as f64 * hz_per_bin;
             (center_hz.round() as u32, span_hz as u32)
         } else {
-            // Wideband: 0-61.44 MHz
+            // No DDC yet: the test spectrum over 0-61.44 MHz
             (30_720_000, 61_440_000)
         };
 
@@ -538,9 +523,9 @@ impl SpectrumProcessor {
             };
         }
 
-        let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
+        let cal_shift = cal_shift(self.cal_offset_db);
         let bins: Vec<u16> = if total <= max_bins {
-            self.smoothed.iter().map(|v| (v + cal_shift).clamp(0.0, 65535.0) as u16).collect()
+            self.smoothed.iter().map(|v| pack_shifted(*v, cal_shift)).collect()
         } else {
             let stride = total as f64 / max_bins as f64;
             (0..max_bins).map(|i| {
@@ -552,7 +537,7 @@ impl SpectrumProcessor {
                         max_val = self.smoothed[j];
                     }
                 }
-                (max_val + cal_shift).clamp(0.0, 65535.0) as u16
+                pack_shifted(max_val, cal_shift)
             }).collect()
         };
 
@@ -614,7 +599,7 @@ impl SpectrumProcessor {
                 bins: Vec::new(),
             };
         }
-        let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
+        let cal_shift = cal_shift(self.cal_offset_db);
         // Render the REQUESTED window, bin for bin. Positions that fall outside
         // the DDC data carry no signal and are emitted as 0 (the packing floor),
         // so the client draws the window at the span it asked for and can show
@@ -642,7 +627,7 @@ impl SpectrumProcessor {
                 if !have {
                     return 0;
                 }
-                (max_val + cal_shift).clamp(0.0, 65535.0) as u16
+                pack_shifted(max_val, cal_shift)
             })
             .collect();
         SpectrumPacket {
@@ -656,7 +641,7 @@ impl SpectrumProcessor {
         }
     }
 
-    /// Process real ADC samples from HPSDR capture into spectrum data.
+    /// Take the bins of a DDC FFT into spectrum data.
     /// Peak-hold display: new peaks are captured instantly; values below the
     /// current peak decay exponentially toward the incoming bin value.
     /// Decay coefficient `PEAK_DECAY` controls the time constant.
@@ -819,12 +804,12 @@ impl SpectrumProcessor {
             }
 
             // EMA smoothing same as real data
-            let val = (noise + signal).clamp(0.0, 65535.0);
+            let val = (noise + signal).clamp(0.0, SPECTRUM_PACK_MAX);
             self.smoothed[i] = self.smoothed[i] * 0.6 + val * 0.4;
         }
     }
 
-    /// Generate simulated wideband spectrum into smoothed buffer.
+    /// Generate the test spectrum (no DDC yet) into smoothed buffer.
     fn generate_test_into_smoothed(&mut self) {
         let total = self.smoothed.len();
         let span_hz = 61_440_000.0f64;
@@ -839,7 +824,7 @@ impl SpectrumProcessor {
             let freq_hz = (i as f64 / total as f64) * span_hz;
             let noise = 25.0 + pseudo_noise(i as u32, self.sequence) * 10.0;
             let signal = ham_signal(freq_hz, variation);
-            let val = (noise + signal).clamp(0.0, 65535.0);
+            let val = (noise + signal).clamp(0.0, SPECTRUM_PACK_MAX);
             self.smoothed[i] = self.smoothed[i] * 0.6 + val * 0.4;
         }
     }
@@ -1011,7 +996,7 @@ impl Rx2SpectrumProcessor {
                 ddc_fft_size(self.sample_rate_hz)
             }
             _ => {
-                let size = (size_k as usize * 1024).next_power_of_two().clamp(4096, 524288);
+                let size = (size_k as usize * 1024).next_power_of_two().clamp(4096, sdr_remote_core::MAX_FFT_SIZE_K as usize * 1024);
                 self.custom_fft_size = Some(size);
                 size
             }
@@ -1063,7 +1048,6 @@ impl Rx2SpectrumProcessor {
             self.has_real_data = true;
             self.had_real_data = true;
             if let Some(ms) = self.band_jump.first_frame() {
-                // Named in advance (`logregels-build236.md`).
                 log::info!("Spectrum RX2: first frame of the new band after {} ms", ms);
             }
         }
@@ -1187,8 +1171,8 @@ impl Rx2SpectrumProcessor {
         // A gap after real data - a band jump, another DDC rate or FFT size -
         // sends nothing until the first real frame (build 239). The frame it
         // sent lay on the floor of the scale: the clients drew an empty
-        // picture and a dark waterfall row, and the auto-ref settled on it
-        // (round 238). The test spectrum stays for a server that never had a
+        // picture and a dark waterfall row, and the auto-ref settled on it.
+        // The test spectrum stays for a server that never had a
         // radio.
         if self.had_real_data && !self.has_real_data {
             return false;
@@ -1233,7 +1217,7 @@ impl Rx2SpectrumProcessor {
                 span_hz: 0, ref_level: 0, db_per_unit: 1, bins: Vec::new(),
             };
         }
-        let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
+        let cal_shift = cal_shift(self.cal_offset_db);
         // Requested window, bin for bin; outside the DDC data -> 0 (floor).
         let requested_bins = (span_hz as f64 / hz_per_bin).ceil().max(1.0);
         let out_n = max_bins.min(requested_bins as usize).max(1);
@@ -1253,7 +1237,7 @@ impl Rx2SpectrumProcessor {
                     if v > max_val { max_val = v; }
                 }
                 if !have { return 0; }
-                (max_val + cal_shift).clamp(0.0, 65535.0) as u16
+                pack_shifted(max_val, cal_shift)
             })
             .collect();
         SpectrumPacket {
@@ -1300,10 +1284,10 @@ impl Rx2SpectrumProcessor {
         let start = (center - half).max(0).min((total - visible) as isize) as usize;
         let end = (start + visible).min(total);
 
-        let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
+        let cal_shift = cal_shift(self.cal_offset_db);
         let bins: Vec<u16> = if visible <= max_bins {
             self.smoothed[start..end].iter()
-                .map(|v| (v + cal_shift).clamp(0.0, 65535.0) as u16)
+                .map(|v| pack_shifted(*v, cal_shift))
                 .collect()
         } else {
             let stride = visible as f64 / max_bins as f64;
@@ -1316,7 +1300,7 @@ impl Rx2SpectrumProcessor {
                         max_val = self.smoothed[j];
                     }
                 }
-                (max_val + cal_shift).clamp(0.0, 65535.0) as u16
+                pack_shifted(max_val, cal_shift)
             }).collect()
         };
 
@@ -1350,9 +1334,9 @@ impl Rx2SpectrumProcessor {
             };
         }
 
-        let cal_shift = self.cal_offset_db * 65535.0 / 120.0;
+        let cal_shift = cal_shift(self.cal_offset_db);
         let bins: Vec<u16> = if total <= max_bins {
-            self.smoothed.iter().map(|v| (v + cal_shift).clamp(0.0, 65535.0) as u16).collect()
+            self.smoothed.iter().map(|v| pack_shifted(*v, cal_shift)).collect()
         } else {
             let stride = total as f64 / max_bins as f64;
             (0..max_bins).map(|i| {
@@ -1364,7 +1348,7 @@ impl Rx2SpectrumProcessor {
                         max_val = self.smoothed[j];
                     }
                 }
-                (max_val + cal_shift).clamp(0.0, 65535.0) as u16
+                pack_shifted(max_val, cal_shift)
             }).collect()
         };
 
@@ -1377,94 +1361,6 @@ impl Rx2SpectrumProcessor {
             db_per_unit: 1,
             bins,
         }
-    }
-}
-
-/// FFT pipeline: windowed FFT -> power spectral density -> decimated bins
-pub struct FftPipeline {
-    fft: Arc<dyn rustfft::Fft<f32>>,
-    window: Vec<f32>,
-    fft_buf: Vec<Complex<f32>>,
-}
-
-impl FftPipeline {
-    pub fn new() -> Self {
-        let mut planner = FftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(WIDEBAND_SAMPLES);
-
-        // Blackman-Harris window for excellent sidelobe suppression
-        let window: Vec<f32> = (0..WIDEBAND_SAMPLES)
-            .map(|i| {
-                let n = i as f32 / (WIDEBAND_SAMPLES - 1) as f32;
-                let w = std::f32::consts::TAU * n;
-                0.35875 - 0.48829 * (w).cos() + 0.14128 * (2.0 * w).cos()
-                    - 0.01168 * (3.0 * w).cos()
-            })
-            .collect();
-
-        let fft_buf = vec![Complex::new(0.0, 0.0); WIDEBAND_SAMPLES];
-
-        Self { fft, window, fft_buf }
-    }
-
-    /// Process 16384 raw ADC samples -> 1024 log-power bins (0-255 range)
-    pub fn process(&mut self, samples: &[i16]) -> Vec<f32> {
-        let n = samples.len().min(WIDEBAND_SAMPLES);
-
-        // Apply window function
-        for i in 0..n {
-            self.fft_buf[i] = Complex::new(
-                samples[i] as f32 / 32768.0 * self.window[i],
-                0.0,
-            );
-        }
-        // Zero-pad if needed
-        for i in n..WIDEBAND_SAMPLES {
-            self.fft_buf[i] = Complex::new(0.0, 0.0);
-        }
-
-        // In-place FFT
-        self.fft.process(&mut self.fft_buf);
-
-        // Only use first half (positive frequencies, 0 to Nyquist)
-        let half = WIDEBAND_SAMPLES / 2; // 8192 bins
-
-        // Compute power spectral density and decimate to SPECTRUM_BINS
-        let bins_per_output = half / SPECTRUM_BINS; // 8192 / 1024 = 8
-        let mut output = vec![0.0f32; SPECTRUM_BINS];
-
-        for i in 0..SPECTRUM_BINS {
-            let start = i * bins_per_output;
-            let end = start + bins_per_output;
-
-            // Max power in this group of 8 bins
-            let mut max_power = 0.0f32;
-            for j in start..end {
-                let c = self.fft_buf[j];
-                let power = c.re * c.re + c.im * c.im;
-                max_power = max_power.max(power);
-            }
-
-            // Convert to dB scale and map to 0-255
-            // noise floor around -120 dB, strong signals around -20 dB
-            let db = if max_power > 1e-20 {
-                10.0 * max_power.log10()
-            } else {
-                -200.0
-            };
-
-            // Wideband FFT path: DELIBERATELY a different pack scale than the
-            // DDC path (floor -120 dB, range 100 dB vs the shared -150/120).
-            // Not unified with SPECTRUM_PACK_* on purpose — wideband has its own
-            // dynamic range. Kept as explicit locals so the divergence is visible.
-            const WB_FLOOR_DB: f32 = -120.0;
-            const WB_RANGE_DB: f32 = 100.0;
-            let normalized = ((db - WB_FLOOR_DB) / WB_RANGE_DB * SPECTRUM_PACK_MAX)
-                .clamp(0.0, SPECTRUM_PACK_MAX);
-            output[i] = normalized;
-        }
-
-        output
     }
 }
 
@@ -1557,7 +1453,7 @@ impl DdcFftPipeline {
 mod centre_measured_tests {
     use super::{Rx2SpectrumProcessor, SpectrumProcessor};
 
-    /// Only a measured centre goes to the clients (build 232, review of 231):
+    /// Only a measured centre goes to the clients:
     /// the starting value of a processor is not one - seen in the field as
     /// `DDC centre from the server: RX2 7050 kHz`.
     #[test]
@@ -1599,7 +1495,7 @@ mod centre_measured_tests {
 mod band_jump_tests {
     use super::{BandJump, Rx2SpectrumProcessor, SpectrumProcessor};
 
-    /// A band jump drops the FFT window's old samples (build 236): the owner
+    /// A band jump drops the FFT window's old samples (build 236): the operator
     /// saw "first empty, then the old spectrum, then the right one" on every
     /// band change, RX and VRX alike, with the full-band row on or off.
     #[test]
@@ -1652,7 +1548,7 @@ mod band_jump_tests {
 
     /// After real data a gap sends nothing until the first real frame (build
     /// 239): no frame on the floor of the scale. A processor that never had
-    /// real data still sends its frames (both ways, working rule 13).
+    /// real data still sends its frames (both ways).
     #[test]
     fn a_gap_after_real_data_sends_nothing() {
         use std::time::{Duration, Instant};
@@ -1667,12 +1563,12 @@ mod band_jump_tests {
                         $q.is_frame_ready()
                     }};
                 }
-                assert!(ready!(p), "{}: no radio yet - frames go out", $rx);
+                assert!(ready!(p), "{}: no radio yet; frames go out", $rx);
                 let frame = vec![(0.1f32, 0.0f32); p.ddc_fft_size()];
                 p.process_ddc_frame(&frame, 0);
                 assert!(ready!(p), "{}: real data", $rx);
                 let mut gen = 0;
-                // Twice (working rule 9): to another band and back.
+                // Twice: to another band and back.
                 for to in [3_600_000u64, 7_100_000] {
                     p.set_ddc_center(to);
                     gen = p.band_jump_since(gen).expect("a jump").generation;
@@ -1687,6 +1583,28 @@ mod band_jump_tests {
         }
         check!(SpectrumProcessor::new(), "RX1");
         check!(Rx2SpectrumProcessor::new(), "RX2");
+    }
+}
+
+#[cfg(test)]
+mod pack_scale_tests {
+    use super::{cal_shift, pack_shifted};
+    use sdr_remote_core::{SPECTRUM_PACK_MAX, SPECTRUM_PACK_RANGE_DB};
+
+    /// The calibration shift and the clamp, by what they give (build 74): a
+    /// whole dB range of offset is the whole packed scale, and the clamp holds
+    /// both ends of a u16.
+    #[test]
+    fn the_calibration_shift_and_the_clamp_by_value() {
+        assert_eq!(cal_shift(0.0), 0.0);
+        assert_eq!(cal_shift(SPECTRUM_PACK_RANGE_DB), SPECTRUM_PACK_MAX);
+        assert_eq!(cal_shift(-SPECTRUM_PACK_RANGE_DB / 2.0), -SPECTRUM_PACK_MAX / 2.0);
+        assert_eq!(pack_shifted(1000.0, 0.0), 1000);
+        assert_eq!(pack_shifted(1000.0, 24.5), 1024);
+        assert_eq!(pack_shifted(SPECTRUM_PACK_MAX, 1.0), u16::MAX);
+        assert_eq!(pack_shifted(SPECTRUM_PACK_MAX - 1.0, 0.0), u16::MAX - 1);
+        assert_eq!(pack_shifted(-5.0, 0.0), 0);
+        assert_eq!(pack_shifted(10.0, -20.0), 0);
     }
 }
 
@@ -1726,7 +1644,7 @@ mod tx_probe_tests {
     }
 
     /// The levels are calibrated dB, and a bin on the ceiling is counted
-    /// (review of 172: the line printed raw pack units).
+    /// (the line printed raw pack units).
     #[test]
     fn the_levels_are_db_and_count_the_ceiling() {
         let full = SPECTRUM_PACK_MAX;
@@ -1735,11 +1653,34 @@ mod tx_probe_tests {
         assert_eq!(l.at_ceiling, 2);
         assert!((l.mean_db - (SPECTRUM_PACK_FLOOR_DB + 0.625 * 120.0)).abs() < 0.01, "{}", l.mean_db);
         assert_eq!(levels_of(&[full / 2.0], 5.0).peak_db, -85.0);
-        // Just under the ceiling is not on it (review of 174, S17/S18).
+        // Just under the ceiling is not on it.
         assert_eq!(levels_of(&[full - 1.0], 0.0).at_ceiling, 0);
-        // The processor hands its calibration on (S8).
+        // The processor hands its calibration on.
         let code = include_str!("spectrum.rs");
         let code = &code[..code.find("mod tx_probe_tests").unwrap()];
         assert_eq!(code.matches("levels_of(&self.smoothed, self.cal_offset_db)").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod fft_size_tests {
+    use super::{Rx2SpectrumProcessor, SpectrumProcessor};
+    use sdr_remote_core::MAX_FFT_SIZE_K;
+
+    /// A size above the shared limit runs at the limit, on both receivers;
+    /// the limit itself and one below it run as asked. Auto stays inside it at
+    /// the highest DDC rate the server takes.
+    #[test]
+    fn the_fft_size_stops_at_the_shared_limit() {
+        let max = MAX_FFT_SIZE_K as usize * 1024;
+        assert!(sdr_remote_core::ddc_fft_size(1_536_000) <= max);
+        let mut rx1 = SpectrumProcessor::new();
+        let mut rx2 = Rx2SpectrumProcessor::new();
+        let rx2_size = |p: &Rx2SpectrumProcessor| p.ddc_pipeline.as_ref().map(|p| p.window.len()).unwrap_or(0);
+        for (asked, runs) in [(MAX_FFT_SIZE_K * 2, max), (MAX_FFT_SIZE_K, max), (MAX_FFT_SIZE_K / 2, max / 2)] {
+            rx1.set_fft_size(asked);
+            rx2.set_fft_size(asked);
+            assert_eq!((rx1.current_fft_size(), rx2_size(&rx2)), (runs, runs), "asked {asked}K");
+        }
     }
 }

@@ -2,13 +2,13 @@
 //
 //! The chat window: the consent screen, or the conversation.
 //!
-//! Which of the two you see is decided by the service, not by this file — no
-//! agreement means no chat (design §6.1), and the rest of ThetisLink carries on
+//! Which of the two you see is decided by the service, not by this file; no
+//! agreement means no chat, and the rest of ThetisLink carries on
 //! untouched either way.
 //!
 //! Nothing here reaches the network. The worker on its own thread does that
 //! (`crate::worker`), and this only drains what it sends back. That is the rule
-//! from §2.4 made structural rather than remembered: a chat service that is
+//! that a closed or absent chat costs nothing, made structural rather than remembered: a chat service that is
 //! down cannot make this window slow, because this window never waits on it.
 
 use eframe::egui;
@@ -168,6 +168,8 @@ fn age_text(d: std::time::Duration) -> String {
 pub struct ChatFiles {
     pub log: String,
     pub conf: String,
+    /// The previous run's log, where the host keeps one (the server, build 27).
+    pub previous_log: Option<String>,
 }
 
 /// The connected server's side of a report, as the host knows it.
@@ -200,9 +202,8 @@ pub struct ChatPanel {
     name_input: String,
     /// The age confirmation on the consent screen.
     ///
-    /// A box and not a sentence in the manual, which is what the design asked
-    /// for and why: under sixteen a parent has to agree, and a line nobody reads
-    /// records nothing. Never remembered between visits - an unticked box that
+    /// A box and not a sentence in the manual, and this is why: under sixteen a
+    /// parent has to agree, and a line nobody reads records nothing. Never remembered between visits - an unticked box that
     /// ticks itself is not a confirmation.
     consent_age_ok: bool,
     input: String,
@@ -227,7 +228,7 @@ pub struct ChatPanel {
     relay_url: String,
 
     // "Report a problem": the description is the report, the log and settings
-    // are an attachment with a tick beside it (design §1.1).
+    // are an attachment with a tick beside it.
     diag_open: bool,
     diag_note: String,
     /// On by default - a description alone rarely settles anything - but nothing
@@ -239,7 +240,7 @@ pub struct ChatPanel {
     /// Shown beside the preview, because the form is not modal: leaving it open
     /// while reproducing the fault and then sending is the ordinary way to
     /// attach a log from before the fault. Re-reading at send time would fix
-    /// that and break something worth more - design 1.1 step 5 promises that
+    /// that and break something worth more - the promise is that
     /// what is on screen is what goes. So it says how old it is and offers to
     /// read it again, and the choice stays with the person who knows.
     diag_built_at: Option<std::time::Instant>,
@@ -313,7 +314,7 @@ impl ChatPanel {
     ///
     /// `open` is the host's own flag for whether its window is showing: polling
     /// only happens while somebody is looking, which is what keeps a closed chat
-    /// free (design §2.4).
+    /// free.
     pub fn tick(&mut self, relay_url: &str, ticket: Option<&str>, open: bool) {
         self.relay_url = relay_url.to_string();
         // The worker, the schedule and what arrives are the model's business;
@@ -401,7 +402,7 @@ impl ChatPanel {
 
     pub fn render_body(&mut self, ctx: &egui::Context, files: &ChatFiles, server: &ServerSide) {
         // The window's ground first: the server opens this window itself, and
-        // without it the seams between the panels are black (review of 208).
+        // without it the seams between the panels are black.
         sdr_remote_theme::paint_window_ground(ctx);
         if let Some(id) = self.render_answers(ctx) {
             self.m.dismiss_answer(id);
@@ -422,10 +423,10 @@ impl ChatPanel {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(why) = self.m.offline {
                 // Not an error, and deliberately not styled like one: a relay
-                // without a chat behind it is a normal state (§2.4). But it does
+                // without a chat behind it is a normal state. But it does
                 // say WHICH of the three, because they need different things
-                // from the reader - and one word covering all three is the fault
-                // this project keeps finding in its own reviews.
+                // from the reader - and one word covering all three tells the
+                // reader nothing.
                 ui.add_space(12.0);
                 // Each arm names its own key inside `t!` rather than handing a
                 // variable to one call. It reads no worse, and it is what lets
@@ -503,9 +504,8 @@ impl ChatPanel {
         }
     }
 
-    /// The consent screen. Its wording lives in the locale file, not here — it
-    /// is the one text every user reads once and carefully, and §6.6 of the
-    /// design is what it has to match.
+    /// The consent screen. Its wording lives in the locale file, not here; it
+    /// is the one text every user reads once and carefully.
     fn render_consent(&mut self, ui: &mut egui::Ui, files: &ChatFiles, server: &ServerSide) {
         ui.add_space(6.0);
         ui.label(RichText::new(rust_i18n::t!("chat_consent_title").to_string()).strong().size(15.0));
@@ -538,10 +538,10 @@ impl ChatPanel {
         ui.add_space(6.0);
         ui.label(rust_i18n::t!("chat_consent_withdraw").to_string());
         ui.add_space(6.0);
-        // The ban, and it is on this screen because of what the owner decided
+        // The ban, and it is on this screen because of what
         // it costs: it closes the postbox too, and leaving the chat does not
         // lift it. Both of those are things somebody has to be told BEFORE
-        // they agree, not discovered afterwards (design 7 + section 6.6).
+        // they agree, not discovered afterwards.
         ui.label(rust_i18n::t!("chat_consent_ban").to_string());
         ui.label(rust_i18n::t!("chat_consent_access").to_string());
         ui.add_space(10.0);
@@ -587,7 +587,7 @@ impl ChatPanel {
 
         // Reporting a problem is not chat: it needs a ticket, not a name, and
         // somebody who has not joined - or does not want to - must still be able
-        // to say what is wrong (design section 4).
+        // to say what is wrong.
         ui.add_space(12.0);
         sdr_remote_theme::rule(ui);
         ui.add_space(6.0);
@@ -767,7 +767,7 @@ impl ChatPanel {
                             match &m.name {
                                 Some(n) => ui.label(RichText::new(format!("{n}:")).strong()),
                                 // Somebody who left the chat. Their words stay so
-                                // the conversation reads; they do not (§6.4).
+                                // the conversation reads; they do not.
                                 None => ui.label(
                                     RichText::new(rust_i18n::t!("chat_left_user").to_string())
                                         .italics()
@@ -852,8 +852,8 @@ impl ChatPanel {
     /// has to be told first.
     ///
     /// The attachment is opt-in but asked for plainly, and when it is on, what it
-    /// contains is on screen. Design §1.1 makes that the actual safeguard: the
-    /// redaction (§1.3) is never complete, so the last thing standing between
+    /// contains is on screen. That is the actual safeguard: the
+    /// redaction is never complete, so the last thing standing between
     /// somebody's log and somebody else's server is a person reading it.
     fn render_diagnosis_form(&mut self, ctx: &egui::Context, files: &ChatFiles, server: &ServerSide) {
         if !self.diag_open {
@@ -945,7 +945,7 @@ impl ChatPanel {
                     // What becomes of a report, said where the decision is made.
                     //
                     // These four facts used to live only in the consent text, and
-                    // reporting does not require consent (design section 4) - so the
+                    // reporting does not require consent - so the
                     // very people that rule was written for, the ones who want no
                     // part of the chat, were the ones who never read them.
                     ui.add_space(4.0);
@@ -1188,7 +1188,7 @@ impl ChatPanel {
     /// reproduce the fault first, close it, do that, and open it again. Keeping
     /// the old attachment would then send the log from BEFORE the reproduction,
     /// silently: the preview shows exactly what will go, but not that it is
-    /// stale. That is design 1.1 step 5 defeated by a detail.
+    /// stale. That is "what is on screen is what goes" defeated by a detail.
     ///
     /// What was typed stays. Somebody's own words are not worth throwing away,
     /// and they cannot go out of date.
@@ -1227,8 +1227,9 @@ impl ChatPanel {
     /// still worth sending, so it is reported beside the tickbox rather than
     /// thrown as an error over the whole form.
     fn build_attachment(&mut self, files: &ChatFiles) {
-        match sdr_remote_core::diagnose::build_attachment(
+        match sdr_remote_core::diagnose::build_attachment_with_previous(
             &files.log,
+            files.previous_log.as_deref(),
             &files.conf,
             &self.relay_url,
         ) {
@@ -1314,7 +1315,7 @@ impl ChatPanel {
 
     /// Whatever the service refused, in its own words.
     ///
-    /// It explains refusals in language meant for a person (design §8), and
+    /// It explains refusals in language meant for a person, and
     /// replacing that with something generic here would throw away the only
     /// thing that tells the user what to do differently.
     fn render_error(&mut self, ui: &mut egui::Ui) {

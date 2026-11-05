@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Mode-selector render-helper (sub-step 2b).
+//! Mode-selector render-helper.
 //!
 //! Replaces three render paths with a single helper:
 //! - `render_rx1_controls_inner` (RX1 popouts, ~mod.rs:2275) - 8 modes, Extended

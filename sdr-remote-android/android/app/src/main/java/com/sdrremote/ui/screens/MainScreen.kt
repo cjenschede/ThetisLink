@@ -50,6 +50,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sdrremote.ui.components.AudioStats
+import com.sdrremote.ui.components.SERVER_FLOOR_DB
+import com.sdrremote.ui.components.SERVER_RANGE_DB
 import com.sdrremote.ui.components.ConnectionPanel
 import com.sdrremote.ui.components.StationNoticeLines
 import com.sdrremote.ui.components.FilterBandwidthControl
@@ -93,8 +95,9 @@ private fun sliderToVol(s: Float): Float {
 fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val yaesuActive by viewModel.yaesuMode.collectAsStateWithLifecycle()
+    val yaesuTxLoad by viewModel.yaesuTxLoad.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("thetislink", Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences(LocalAudioPrefs.STORE, Context.MODE_PRIVATE) }
     // The measurement switch, for both places that show it (build 181): on asks
     // for location first - for the cell and GPS rows - and starts either way.
     val onMeasurement: (Boolean) -> Unit = remember(viewModel, context) {
@@ -115,7 +118,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     val devRelayOnly: ((Boolean) -> Unit)? = if (developerMode) { { on: Boolean -> viewModel.setRelayOnly(on) } } else null
     val devForceTcp: ((Boolean) -> Unit)? = if (developerMode) { { on: Boolean -> viewModel.setForceTcp(on) } } else null
 
-    // PATCH-4: first-run wizard owns the viewport until the user finishes
+    // First-run wizard owns the viewport until the user finishes
     // it OR explicitly skips. `wizardActive` is also flipped on by a small
     // "Re-run setup wizard" entry in the settings dialog so an operator can
     // restart it manually after a fresh app install OR a misconfigure.
@@ -174,13 +177,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
     // The push-to-talk / toggle setting is read once and applied once, in the
     // shared rule. It used to be read here a second time and pushed into the
     // Bluetooth gate, which kept its own idea of being latched on - and that
-    // idea went out of step the moment a transmission was stopped any other way
-    // (owner, build 59).
+    // idea went out of step the moment a transmission was stopped any other way.
 
     LaunchedEffect(Unit) {
         // Connect on start when it was switched on and a button was chosen.
-        // Phase 1 does not reconnect by itself after that; there is a button in
-        // settings for it, and automatic recovery is phase 2.
+        // After that the controller re-arms itself when the link drops, and
+        // settings has a button for a manual reconnect.
         val address = prefs.getString("ble_ptt_address", "") ?: ""
         if (prefs.getBoolean("ble_ptt", false) && address.isNotBlank()) {
             blePtt?.connect(address)
@@ -304,7 +306,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         var count = 0
         for (i in bins.indices) {
             if (i in filterLoBin..filterHiBin) continue
-            val db = -150.0 + (bins[i].toInt().toDouble() / 255.0) * 120.0
+            val db = SERVER_FLOOR_DB.toDouble() + (bins[i].toInt().toDouble() / 255.0) * SERVER_RANGE_DB.toDouble()
             sumDb += db
             count++
         }
@@ -467,8 +469,9 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         viewModel.setRxVolume(frac)
                     }
                     com.sdrremote.service.MidiAction.TxGain -> {
-                        txGainState.floatValue = frac * 3f
-                        viewModel.setTxGain(frac * 3f)
+                        val gain = uniffi.sdr_remote.txGainFromFraction(frac)
+                        txGainState.floatValue = gain
+                        viewModel.setTxGain(gain)
                     }
                     com.sdrremote.service.MidiAction.Drive -> {
                         viewModel.setControl(0x06, (frac * 100).toInt())
@@ -633,18 +636,17 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     HorizontalDivider()
                     Spacer(Modifier.height(6.dp))
                     Text(stringResource(R.string.main_about_author), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("Chiron van der Burgt - PA3GHM", fontSize = 12.sp)
+                    Text("Chiron van der Burgt, PA3GHM", fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
                     Text(stringResource(R.string.main_about_thanks), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("Richie (ramdor) - Thetis SDR, TCI extensions", fontSize = 12.sp)
+                    Text("Richie (ramdor): Thetis SDR, TCI extensions", fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
                     Text(stringResource(R.string.main_about_protocols), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("TCI - Expert Electronics / Thetis", fontSize = 11.sp)
-                    Text("DX Spider - DX cluster", fontSize = 11.sp)
-                    Text("HPSDR / OpenHPSDR Protocol 2", fontSize = 11.sp)
-                    Text("WebSDR (PA3FWM) / KiwiSDR - CatSync", fontSize = 11.sp)
-                    Text("ThetisLink Relay - WS + UDP (internet remote)", fontSize = 11.sp)
-                    Text("ThetisLink Chat - optional service beside a relay", fontSize = 11.sp)
+                    Text("TCI: Expert Electronics / Thetis", fontSize = 11.sp)
+                    Text("DX Spider: DX cluster", fontSize = 11.sp)
+                    Text("WebSDR (PA3FWM) / KiwiSDR: CatSync", fontSize = 11.sp)
+                    Text("ThetisLink Relay: WS + UDP (internet remote)", fontSize = 11.sp)
+                    Text("ThetisLink Chat: optional service beside a relay", fontSize = 11.sp)
                     Spacer(Modifier.height(6.dp))
                     Text(stringResource(R.string.main_about_hardware), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     for ((dev, iface) in listOf(
@@ -677,7 +679,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         "audiopus" to "Opus codec",
                         "rubato" to "Resampling",
                         "rustfft" to "FFT spectrum",
-                        "rustls" to "Relay TLS (wss)",
+                        "quinn" to "QUIC connection",
+                        "rustls" to "TLS 1.3 under QUIC and for wss",
                         "UniFFI" to "Rust-Kotlin bridge",
                         "Jetpack Compose" to "Android UI",
                     )) {
@@ -691,7 +694,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Text("GPL-2.0-or-later (see LICENSE)", fontSize = 11.sp)
                     Text("Copyright (c) 2025-2026 Chiron van der Burgt", fontSize = 11.sp)
                     Text("Source: github.com/cjenschede/ThetisLink", fontSize = 11.sp)
-                    Text("Based on the Thetis SDR lineage - see ATTRIBUTION.md", fontSize = 11.sp)
+                    Text("Based on the Thetis SDR lineage (see ATTRIBUTION.md)", fontSize = 11.sp)
                     Text("Third-party licenses & SBOM: see NOTICE.md, THIRD-PARTY-LICENSES.html", fontSize = 11.sp)
                 }
             },
@@ -756,15 +759,15 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
         viewModel.setYaesuWindowOpen(yaesuWindowOpen)
     }
 
-    // Spectrum 30 s screen grace (PATCH-android-yaesu-presence-datasaver, point 1).
+    // Spectrum 30 s screen grace.
     // Desired state, keyed on showDevices + yaesuActive + connected (the reconnect
     // edge) so that a window change, the Yaesu toggle and a reconnect re-apply the
     // right spectrum state (which prevents a stale spectrum subscription):
     //  - Yaesu active            -> the ENGINE decides, after its grace period.
     //    It used to be "spectrum off, no grace" right here, which is half of
-    //    what open point 13 was about: the audio never stopped and the spectrum
-    //    stopped at once. Removing the send in setYaesuActive was not enough -
-    //    this block sends it too, and a review caught that it still won.
+    //    a reported fault: the audio never stopped and the spectrum stopped at
+    //    once. Removing the send in setYaesuActive was not enough - this block
+    //    sends it too, and it still won.
     //  - on the main screen      -> spectrum on (+ FPS restore).
     //  - main screen left >30 s  -> spectrum off; back within 30 s cancels the effect.
     // The chat screen counts as "left the main screen" here: no spectrum is drawn
@@ -888,7 +891,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                                 ) {
                                     // The number is the point of the tab: without it
                                     // nobody opens a chat to find out whether anything
-                                    // was said (design section 1.7).
+                                    // was said.
                                     Text(
                                         if (chat.unread > 0) {
                                             stringResource(R.string.main_chat) + " (" + chat.unread + ")"
@@ -981,6 +984,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             onYaesuCompressor = { viewModel.yaesuCompressor(it) },
                             onYaesuTxAgc = { viewModel.yaesuTxAgc(it) },
                             onYaesuTxGain = { viewModel.yaesuTxGainSel(it) },
+                            onYaesuChoosePreset = { viewModel.chooseYaesuPreset(it) },
+                            yaesuTxLoad = yaesuTxLoad,
                             onYaesuSelectRadio = { viewModel.selectRadio(it) },
                             onYaesuDspControl = { control, value -> viewModel.yaesuControlSel(control, value) },
                             yaesuActive = yaesuActive,
@@ -1021,7 +1026,8 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
 
                     ConnectionPanel(
                         connected = state.connected,
-                        pathShort = state.pathShort,
+                        pathShortPlain = state.pathShortPlain,
+                        pathShortRed = state.pathShortRed,
                         pathName = state.pathName,
                         pathHint = state.pathHint,
                         pathCoupling = state.pathCoupling,
@@ -1032,7 +1038,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         paForwardW = paForwardW,
                         paMaxW = paMaxW,
                         paName = paName,
-                        // PATCH-1: pre-rendered connect-status text from Rust i18n.rs
+                        // Pre-rendered connect-status text from Rust i18n.rs
                         connectStatusHeadline = state.connectStatusHeadline,
                         connectStatusAction = state.connectStatusAction,
                         connectStatusIsError = state.connectStatusIsError,
@@ -1066,7 +1072,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 }
 
                 // The last key event, for finding out what a Bluetooth remote
-                // sends: developer mode only (owner, 2026-10-24) - `onKeyDown`
+                // sends: developer mode only - `onKeyDown`
                 // fills it on every key, the volume buttons too.
                 if (developerMode && lastKeyEvent.isNotEmpty()) {
                     item {
@@ -1100,6 +1106,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             // level - the playback meter next to it already picks the
                             // Yaesu side, this one did not.
                             captureLevel = state.yaesuMicLevel,
+                            micInputClip = state.micInputClip,
                             playbackLevel = if (state.selectedRadio == 1) state.playbackLevelYaesu2 else state.playbackLevelYaesu,
                             serverBuildDiffers = state.serverBuildDiffers,
                             serverBuild = state.serverBuild,
@@ -1356,6 +1363,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 item {
                     AudioStats(
                         captureLevel = state.captureLevel,
+                        micInputClip = state.micInputClip,
                         playbackLevel = state.playbackLevel,
                         serverBuildDiffers = state.serverBuildDiffers,
                         serverBuild = state.serverBuild,
@@ -1402,7 +1410,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 // About, no Wizard. The settings behind that first button hold
                 // the relay and the server address - exactly what you need when
                 // there is nothing to connect to. The one door that locked
-                // itself from the inside (owner, 2026-08-20).
+                // itself from the inside.
                 item {
                     Spacer(Modifier.height(8.dp))
                     HorizontalDivider()
@@ -1422,7 +1430,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                             Text(stringResource(R.string.main_about))
                         }
                         Spacer(Modifier.width(8.dp))
-                        // PATCH-4 follow-up: parity with the desktop
+                        // Parity with the desktop
                         // "Re-run setup wizard" entry on the Server tab.
                         // Operator-escape-hatch to relaunch the wizard
                         // manually without wiping app data.
@@ -1470,7 +1478,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 ) {
                     // Tune button (visible when tuner available on the active
                     // antenna, hidden in Yaesu mode). Server-side stale-check
-                    // applies \u2014 state == IDLE already covers "out of tune range".
+                    // applies: state == IDLE already covers "out of tune range".
                     if (state.tunerCanTune && state.tunerConnected && !yaesuActive) {
                         val tuneColor = when (state.tunerState) {
                             1 -> Color(0xFF3C78DC) // Tuning = blue
@@ -1529,7 +1537,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     // was already here - yaesuTxActive is what greys the radio
                     // switch with "locked during TX" - and only the PTT button
                     // was not using it. The desktop showed "in use" all along;
-                    // this is the Android catching up (owner, build 23).
+                    // this is the Android catching up.
                     //
                     // "&& !we are transmitting" because the flag is true for our
                     // own transmission too, and telling the operator that his
@@ -1552,7 +1560,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     // The shared rule, not a second copy of it. It was written
                     // out here in Kotlin on the same night it was centralised in
                     // sdr-remote-logic, so the one place with tests was the one
-                    // place this phone did not use (review finding, round 1).
+                    // place this phone did not use.
                     val button = uniffi.sdr_remote.pttButton(heldByOther, weTransmit)
                     PttButton(
                         ptt = button == uniffi.sdr_remote.PttButton.TRANSMITTING,

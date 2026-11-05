@@ -2,7 +2,7 @@
 //! VRX (secondary receiver) UI: the sub-receiver send helpers, the shared
 //! per-channel controls renderer, the audio/spectrum toggles and the shared VRX
 //! spectrum-panel renderer. VRX1 and VRX2 share exactly this code (parity by
-//! construction, per docs/internal/UI-STYLE-GUIDE.md). Extracted verbatim from
+//! construction). Extracted verbatim from
 //! `ui/mod.rs` - pure relocation, no behaviour change. `pub(super)` keeps the
 //! methods callable from the parent module tree (popouts/screens/update).
 
@@ -19,14 +19,14 @@ pub(super) struct DdcMove {
     pub center_hz: u64,
     pub last_center_hz: u64,
     /// Where the server lets this VRX listen around `center_hz`:
-    /// `vrx_tune_limits`, the same guard as the server's (build 227, review of
+    /// `vrx_tune_limits`, the same guard as the server's (build 227, after
     /// 226 - not the half span, which reaches past it).
     pub reach_lo_hz: u64,
     pub reach_hi_hz: u64,
     /// The reach of the previous frame (build 228).
     pub last_reach_lo_hz: u64,
     pub last_reach_hi_hz: u64,
-    /// Centre and span came from a spectrum packet (build 229, review of 228).
+    /// Centre and span came from a spectrum packet.
     /// Without the full-band spectrum - off for a fresh install - the centre
     /// is the VFO, and with CTUN every tuning step looked like a move.
     pub measured: bool,
@@ -48,8 +48,8 @@ pub(super) enum VrxAfterMove {
 }
 
 impl DdcMove {
-    /// Every move of the centre is looked at (build 227, owner after the
-    /// review of 226): a re-centering within one bucket can take a VRX out of
+    /// Every move of the centre is looked at (build 227): a re-centering
+    /// within one bucket can take a VRX out of
     /// reach too. And every change of the reach with the centre standing still
     /// (build 228): another VRX filter, or the first spectrum packet. A VRX still in reach stays where it is (build 226); one out
     /// of reach goes to the frequency saved for the bucket, when that is in
@@ -86,7 +86,7 @@ impl DdcMove {
     }
 }
 
-/// How wide the DDC of a VRX is (build 232, review of 231): the rate the
+/// How wide the DDC of a VRX is: the rate the
 /// server says first - it travels always, and the full-band row's span stays
 /// behind when that row is switched off - then the row's span, then a guess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +116,7 @@ impl DdcWidth {
 /// estimate takes over: it says the centre on every change and every 10 s.
 const FALLBACK_HOLD: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// A measured centre that is no longer there (build 232, review of 231).
+/// A measured centre that is no longer there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FallBackInput {
     /// The previous frame's centre was measured.
@@ -162,8 +162,8 @@ pub(super) struct DdcSources {
     /// The full-band spectrum's centre and span (0 without that row).
     pub full_hz: u64,
     pub full_span_hz: u64,
-    /// The full-band row is of now (`RowLive`; build 233, review of 232, and
-    /// 234, review of 233): switched off or no longer coming, its centre and
+    /// The full-band row is of now (`RowLive`; build 233, and
+    /// 234): switched off or no longer coming, its centre and
     /// span stay behind, and after a lost session that old centre passed for a
     /// measurement.
     pub row_on: bool,
@@ -229,7 +229,7 @@ impl SdrRemoteApp {
             return;
         }
         // A measured centre falling back to the estimate is a lost session,
-        // not a move (build 232, review of 231): nothing happens, and the last
+        // not a move: nothing happens, and the last
         // measured centre and reach stay for when the server speaks again. A
         // connected server that stays silent becomes the estimate's start.
         let connected = self.connected;
@@ -264,7 +264,7 @@ impl SdrRemoteApp {
                 return;
             }
         }
-        // The server's own guard, one place (review of 226).
+        // The server's own guard, one place.
         let (reach_lo_hz, reach_hi_hz) = self.vrx_tune_limits(ch, center_hz);
         let saved = match ch {
             VrxChannel::Vrx1 => &mut self.vrx1_freq_by_bucket,
@@ -282,11 +282,10 @@ impl SdrRemoteApp {
             vfo_hz: vfo,
         }
         .follow(saved);
-        // Named in advance (`logregels-build226.md`, `logregels-build227.md`).
         match after {
             VrxAfterMove::Unchanged => {}
             VrxAfterMove::Stays => log::info!(
-                "{}: DDC centre to {:.3} kHz, still within reach - VRX stays on {:.3} kHz",
+                "{}: DDC centre to {:.3} kHz, still within reach; VRX stays on {:.3} kHz",
                 ch.label(), center_hz as f64 / 1000.0, vrx_hz as f64 / 1000.0
             ),
             VrxAfterMove::To { hz, saved } => {
@@ -299,15 +298,14 @@ impl SdrRemoteApp {
                 }
                 let to = if saved { "saved" } else { "the VFO" };
                 if center_hz == last {
-                    // Named in advance (`logregels-build228.md`).
                     log::info!(
-                        "{}: reach now {:.3}-{:.3} kHz - VRX to {:.3} kHz ({})",
+                        "{}: reach now {:.3}-{:.3} kHz; VRX to {:.3} kHz ({})",
                         ch.label(), reach_lo_hz as f64 / 1000.0, reach_hi_hz as f64 / 1000.0,
                         hz as f64 / 1000.0, to
                     );
                 } else {
                     log::info!(
-                        "{}: DDC centre to {:.3} kHz - VRX to {:.3} kHz ({})",
+                        "{}: DDC centre to {:.3} kHz; VRX to {:.3} kHz ({})",
                         ch.label(), center_hz as f64 / 1000.0, hz as f64 / 1000.0, to
                     );
                 }
@@ -377,10 +375,10 @@ impl SdrRemoteApp {
         }).is_ok()
     }
 
-    /// A shared renderer for VRX1 AND VRX2 controls (parity by construction,
-    /// per docs/internal/UI-STYLE-GUIDE.md). Top row = status (mode amber / BW weak),
+    /// A shared renderer for VRX1 AND VRX2 controls (parity by construction).
+    /// Top row = status (mode amber / BW weak),
     /// operation via shared segmented selectors and theme-toggle/action helpers with
-    /// mandatory hover. Dispatch discipline (Decision 8) same as RX: controls are
+    /// mandatory hover. Dispatch discipline same as RX: controls are
     /// only active when connected, and local state is only mutated after the
     /// command has actually been sent.
     /// Wrapper (like RX): in analog mode the s-meter sits at the top right with the
@@ -579,7 +577,7 @@ impl SdrRemoteApp {
             if let Some(p) = theme::tl_segmented_selector(
                 ui,
                 vrx_filter_presets(mode).iter().map(|&p| (p, format_bandwidth(p, false))),
-                cur_bw, connected, theme::TL_SEGMENT_FONT, &bw_hover,
+                vrx_preset_of_width(mode, cur_bw), connected, theme::TL_SEGMENT_FONT, &bw_hover,
             ) {
                 let (lo, hi) = vrx_filter_from_preset(mode, p);
                 if self.cmd_tx.send(Command::SetVrxFilter(id, lo, hi)).is_ok() {
@@ -593,7 +591,7 @@ impl SdrRemoteApp {
         });
     }
     /// VRX audio checkbox (channel on/off). Sends ONLY the audio subscription; the
-    /// VRX spectrum is separate (own toggle) — audio off must not kill the spectrum
+    /// VRX spectrum is separate (own toggle); audio off must not kill the spectrum
     /// and vice versa (checkbox model, same decouple as RX2).
     pub(super) fn toggle_vrx_audio(&mut self, ch: VrxChannel) {
         let enabled = match ch { VrxChannel::Vrx1 => self.vrx1_enabled, VrxChannel::Vrx2 => self.vrx2_enabled };
@@ -625,7 +623,7 @@ impl SdrRemoteApp {
 
     /// RX1 audio on/off. Shared by the main-screen channel block and the RX1
     /// window, so both routes run the same code instead of each repainting the
-    /// same switch (docs/internal/UI-STYLE-GUIDE.md).
+    /// same switch.
     ///
     /// Optimistic like all six audio toggles: the UI flips at once and the
     /// server may only veto within the grace window. That invariant is what
@@ -685,19 +683,34 @@ impl SdrRemoteApp {
         .clicked()
     }
 
+    /// The width of the VRX window to ask the server for: the DDC span over the
+    /// zoom, in Hz (build 75; it went in whole kHz, at least 1, so the zoom
+    /// stopped at the DDC rate / 1000).
+    pub(super) fn vrx_requested_span_hz(&self, ch: VrxChannel) -> u32 {
+        let zoom = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
+        (self.vrx_ddc_span_hz(ch) as f32 / zoom.max(1.0)) as u32
+    }
+
+    /// Where the VRX window sits relative to the listening frequency, in Hz, as
+    /// the server receives it. The one value both the request and the drawing
+    /// use: the drawing took the pan of the tuning range and the request that of
+    /// the DDC, so at any pan but 0 the two windows lay apart.
+    pub(super) fn vrx_pan_hz(&self, ch: VrxChannel) -> i32 {
+        let pan = match ch { VrxChannel::Vrx1 => self.vrx1_pan, VrxChannel::Vrx2 => self.vrx2_pan };
+        sdr_remote_core::protocol::vrx_pan_on_the_wire((pan as f64 * self.vrx_ddc_span_hz(ch) as f64) as i32)
+    }
+
     /// VRX spectrum toggle (high-res). Shared logic (pop-out + row).
     pub(super) fn toggle_vrx_spectrum(&mut self, ch: VrxChannel) {
         let id: u8 = match ch { VrxChannel::Vrx1 => 0, VrxChannel::Vrx2 => 1 };
         let hr = !match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum };
-        let zoom = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
-        let span_hz = (self.vrx_ddc_span_hz(ch) as f32 / zoom.max(1.0)) as u32;
-        let span_khz = ((span_hz / 1000).max(1)) as u16;
-        // Spectrum subscription is SEPARATE from the VRX audio checkbox (phase 4 / checkbox model):
+        let span_hz = self.vrx_requested_span_hz(ch);
+        // Spectrum subscription is SEPARATE from the VRX audio checkbox:
         // send `hr`, not `enabled && hr`. The server produces VRX spectrum without
         // the audio runtime (subscriber list + manager entry are independent).
-        if self.cmd_tx.send(Command::SetVrxHighResSpectrum(id, hr, span_khz)).is_ok() {
+        if self.cmd_tx.send(Command::SetVrxHighResSpectrum(id, hr, span_hz)).is_ok() {
             match ch { VrxChannel::Vrx1 => self.vrx1_high_res_spectrum = hr, VrxChannel::Vrx2 => self.vrx2_high_res_spectrum = hr };
-            match ch { VrxChannel::Vrx1 => self.vrx1_high_res_last_span_khz = span_khz, VrxChannel::Vrx2 => self.vrx2_high_res_last_span_khz = span_khz };
+            match ch { VrxChannel::Vrx1 => self.vrx1_high_res_last_span_hz = span_hz, VrxChannel::Vrx2 => self.vrx2_high_res_last_span_hz = span_hz };
             if hr {
                 // Spectrum on → open the detached VRX window of THIS channel so the
                 // spectrum actually becomes visible (VRX spectrum only shows there).
@@ -720,10 +733,10 @@ impl SdrRemoteApp {
     }
 
     /// RX-independent DDC bandwidth (Hz) of the channel this VRX
-    /// runs on — the reference width for the high-res span request. Comes from the
+    /// runs on, the reference width for the high-res span request. Comes from the
     /// DDC sample rate (always known once connected), NOT from the
-    /// RX spectrum. This way the VRX zoom also works with the RX spectrum off (§6.2,
-    /// coupling #4/#6). Fallback 384 kHz matches the existing DDC defaults.
+    /// RX spectrum. This way the VRX zoom also works with the RX spectrum off.
+    /// Fallback 384 kHz matches the existing DDC defaults.
     pub(super) fn vrx_ddc_span_hz(&self, ch: VrxChannel) -> u32 {
         let sr_khz = match ch {
             VrxChannel::Vrx1 => self.ddc_sample_rate_rx1,
@@ -774,9 +787,9 @@ impl SdrRemoteApp {
 
     /// Shared renderer for ONE VRX spectrum panel (VRX1 or VRX2): the
     /// Ref/Auto/Range and Zoom/Pan/WF button rows + the spectrum/waterfall strip.
-    /// Parity by construction: VRX1 and VRX2 share exactly this code (per
-    /// docs/internal/UI-STYLE-GUIDE.md). Spectrum display settings are local
-    /// (no server command); click-to-tune follows the dispatch discipline (Decision 8).
+    /// Parity by construction: VRX1 and VRX2 share exactly this code. Spectrum
+    /// display settings are local
+    /// (no server command); click-to-tune follows the dispatch discipline.
     pub(super) fn render_vrx_spectrum_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -787,228 +800,298 @@ impl SdrRemoteApp {
     ) {
         let connected = self.connected;
         let rx_label = match ch { VrxChannel::Vrx1 => "RX1", VrxChannel::Vrx2 => "RX2" };
-        let allow_zoom_below_2x = self.allow_zoom_below_2x;
         // The FFT size of the receiver this channel rides (build 242: VRX2
         // showed RX1's).
         let fft_size_k = match ch { VrxChannel::Vrx1 => self.spectrum_fft_size_k, VrxChannel::Vrx2 => self.rx2_spectrum_fft_size_k };
-        // No ui.group() frame: RX spectrum panels don't have one either (parity).
-        {
-            // Row 1: Ref + Auto + Range
-            ui.horizontal(|ui| {
-                ui.spacing_mut().slider_width = theme::TL_SLIDER_WIDTH;
-                ui.label(rust_i18n::t!("main_ref_label").to_string());
-                let mut changed = false;
-                let auto = match ch { VrxChannel::Vrx1 => self.vrx1_auto_ref, VrxChannel::Vrx2 => self.vrx2_auto_ref };
-                if auto {
-                    let mut disp = match ch { VrxChannel::Vrx1 => self.vrx1_ref_db, VrxChannel::Vrx2 => self.vrx2_ref_db };
-                    ui.add_enabled(false, egui::Slider::new(&mut disp, -90.0..=0.0).suffix(" dB").step_by(5.0))
-                        .on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
-                } else {
-                    let resp = ui.add(egui::Slider::new(
-                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_ref_db, VrxChannel::Vrx2 => &mut self.vrx2_ref_db },
-                        -90.0..=0.0).suffix(" dB").step_by(5.0))
-                        .on_hover_text(rust_i18n::t!("main_hover_ref").to_string());
-                    let scrolled = helpers::slider_wheel(ui, &resp,
-                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_ref_db, VrxChannel::Vrx2 => &mut self.vrx2_ref_db },
-                        -90.0..=0.0, 5.0);
-                    if resp.changed() || scrolled {
-                        changed = true;
-                    }
-                }
-                if ui.checkbox(
-                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_auto_ref, VrxChannel::Vrx2 => &mut self.vrx2_auto_ref },
-                        rust_i18n::t!("main_auto").to_string())
-                    .on_hover_text(rust_i18n::t!("main_hover_auto_ref").to_string())
-                    .changed()
-                {
-                    match ch {
-                        VrxChannel::Vrx1 => if self.vrx1_auto_ref { self.vrx1_spectrum.reset_auto_ref(); },
-                        VrxChannel::Vrx2 => if self.vrx2_auto_ref { self.vrx2_spectrum.reset_auto_ref(); },
-                    }
-                    self.save_full_config();
-                }
-                ui.label(rust_i18n::t!("main_range_label").to_string());
-                let resp = ui.add(egui::Slider::new(
-                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_range_db, VrxChannel::Vrx2 => &mut self.vrx2_range_db },
-                        20.0..=130.0).suffix(" dB").step_by(5.0))
-                    .on_hover_text(rust_i18n::t!("main_hover_range").to_string());
-                let scrolled = helpers::slider_wheel(ui, &resp,
-                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_range_db, VrxChannel::Vrx2 => &mut self.vrx2_range_db },
-                    20.0..=130.0, 5.0);
-                if resp.changed() || scrolled {
-                    match ch {
-                        VrxChannel::Vrx1 => if self.vrx1_auto_ref { self.vrx1_spectrum.reset_auto_ref(); },
-                        VrxChannel::Vrx2 => if self.vrx2_auto_ref { self.vrx2_spectrum.reset_auto_ref(); },
-                    }
-                    changed = true;
-                }
-                if changed { self.save_full_config(); }
-            });
-            // Row 2: Zoom + Allow<2x (disabled stub) + Pan + WF + FFT (disabled stub)
-            ui.horizontal(|ui| {
-                ui.spacing_mut().slider_width = theme::TL_SLIDER_WIDTH;
-                let mut changed = false;
-                ui.label(rust_i18n::t!("main_zoom_label").to_string());
-                let zoom_min: f32 = if allow_zoom_below_2x { 1.0 } else { 2.0 };
-                match ch {
-                    VrxChannel::Vrx1 => if self.vrx1_spectrum_zoom < zoom_min { self.vrx1_spectrum_zoom = zoom_min; },
-                    VrxChannel::Vrx2 => if self.vrx2_spectrum_zoom < zoom_min { self.vrx2_spectrum_zoom = zoom_min; },
-                }
-                let resp = ui.add(egui::Slider::new(
-                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => &mut self.vrx2_spectrum_zoom },
-                        zoom_min..=1024.0).logarithmic(true).custom_formatter(|v, _| format!("{:.0}x", v)))
-                    .on_hover_text(rust_i18n::t!("main_hover_zoom").to_string());
-                let zoom_cur = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
-                let scrolled = helpers::slider_wheel(ui, &resp,
-                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => &mut self.vrx2_spectrum_zoom },
-                    zoom_min..=1024.0, (zoom_cur as f64 * 0.1).max(1.0));
-                if resp.changed() || scrolled {
-                    match ch {
-                        VrxChannel::Vrx1 => { let mp = crate::ui::tuning::max_pan_fraction(self.vrx1_spectrum_zoom); self.vrx1_pan = self.vrx1_pan.clamp(-mp, mp); self.vrx1_zoom_initialized = true; }
-                        VrxChannel::Vrx2 => { let mp = crate::ui::tuning::max_pan_fraction(self.vrx2_spectrum_zoom); self.vrx2_pan = self.vrx2_pan.clamp(-mp, mp); self.vrx2_zoom_initialized = true; }
-                    }
-                    changed = true;
-                }
-                // Same shared client flag as the RX panels, settable here too so
-                // the VRX is usable standalone (§6, each channel independent).
-                self.zoom_below_2x_checkbox(ui);
-                ui.label(rust_i18n::t!("main_pan_label").to_string());
-                let zoom_now = match ch { VrxChannel::Vrx1 => self.vrx1_spectrum_zoom, VrxChannel::Vrx2 => self.vrx2_spectrum_zoom };
-                let max_pan = crate::ui::tuning::max_pan_fraction(zoom_now);
-                let pan_resp = ui.add(egui::Slider::new(
-                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_pan, VrxChannel::Vrx2 => &mut self.vrx2_pan },
-                        -max_pan..=max_pan).custom_formatter(|v, _| format!("{:+.2}", v)))
-                    .on_hover_text(rust_i18n::t!("main_hover_pan").to_string());
-                let pan_scrolled = helpers::slider_wheel(ui, &pan_resp,
-                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_pan, VrxChannel::Vrx2 => &mut self.vrx2_pan },
-                    -max_pan..=max_pan, (max_pan as f64 * 0.1).max(0.0001));
-                changed |= pan_resp.changed() || pan_scrolled;
-                ui.label(rust_i18n::t!("main_wf_label").to_string());
-                let wf_resp = ui.add(egui::Slider::new(
-                        match ch { VrxChannel::Vrx1 => &mut self.vrx1_wf_contrast, VrxChannel::Vrx2 => &mut self.vrx2_wf_contrast },
-                        0.3..=3.0).logarithmic(true).custom_formatter(|v, _| format!("{:.1}", v)))
-                    .on_hover_text(rust_i18n::t!("main_hover_wf").to_string());
-                let wf_scrolled = helpers::slider_wheel(ui, &wf_resp,
-                    match ch { VrxChannel::Vrx1 => &mut self.vrx1_wf_contrast, VrxChannel::Vrx2 => &mut self.vrx2_wf_contrast },
-                    0.3..=3.0, 0.1);
-                changed |= wf_resp.changed() || wf_scrolled;
-                let ddc_sr = match ch { VrxChannel::Vrx1 => self.ddc_sample_rate_rx1, VrxChannel::Vrx2 => self.ddc_sample_rate_rx2 };
-                let ddc_rate = if ddc_sr > 0 { ddc_sr as u32 * 1000 } else { 384_000 };
-                let auto_k = sdr_remote_core::ddc_fft_size(ddc_rate) / 1024;
-                let fft_label = if fft_size_k == 0 { format!("FFT: Auto ({}K)", auto_k) } else { format!("FFT: {}K", fft_size_k) };
-                ui.add_enabled(false, egui::Button::new(&fft_label))
-                    .on_disabled_hover_text(rust_i18n::t!("main_hover_server_wide_fft", rx = rx_label).to_string());
-                if changed { self.save_full_config(); }
-            });
-            super::helpers::rule(ui);
-            let remaining = ui.available_height();
-            // Plot and waterfall equal height (operator wish), the one rule for every
-            // spectrum panel (build 241).
-            let (spec_h, wf_h) = super::spectrum::plot_and_waterfall_heights(remaining, ui.spacing().item_spacing.y);
-            let new_freq = match ch {
-                VrxChannel::Vrx1 => {
-                    // VRX renders EXCLUSIVELY its own extracted spectrum (§6.1
-                    // #1): no more RX fallback. Empty bins → placeholder in the
-                    // renderer. extracted_mode = true: bins map 1:1 onto the view.
-                    let (b, c, s) = (
-                        self.vrx1_spectrum.bins(),
-                        self.vrx1_spectrum.center_hz(),
-                        self.vrx1_spectrum.span_hz(),
-                    );
-                    spectrum::render_vrx_strip(
-                        ui, ctx, "vrx1",
-                        self.vrx1_freq_hz, self.vrx1_spectrum_zoom, self.vrx1_pan,
-                        self.vrx1_ref_db, self.vrx1_range_db, self.vrx1_wf_contrast,
-                        spec_h, wf_h, self.vrx1_mode == 1,
-                        self.vrx1_filter_low_hz, self.vrx1_filter_high_hz,
-                        self.vrx1_spectrum.smeter_dbm(), self.vrx1_enabled,
-                        b, c, s, s, true,
-                        self.vrx1_spectrum.waterfall(),
-                        &mut self.vrx1_waterfall_texture, vrx_min, vrx_max,
-                    )
-                }
-                VrxChannel::Vrx2 => {
-                    let (b, c, s) = (
-                        self.vrx2_spectrum.bins(),
-                        self.vrx2_spectrum.center_hz(),
-                        self.vrx2_spectrum.span_hz(),
-                    );
-                    spectrum::render_vrx_strip(
-                        ui, ctx, "vrx2",
-                        self.vrx2_freq_hz, self.vrx2_spectrum_zoom, self.vrx2_pan,
-                        self.vrx2_ref_db, self.vrx2_range_db, self.vrx2_wf_contrast,
-                        spec_h, wf_h, self.vrx2_mode == 1,
-                        self.vrx2_filter_low_hz, self.vrx2_filter_high_hz,
-                        self.vrx2_spectrum.smeter_dbm(), self.vrx2_enabled,
-                        b, c, s, s, true,
-                        self.vrx2_spectrum.waterfall(),
-                        &mut self.vrx2_waterfall_texture, vrx_min, vrx_max,
-                    )
-                }
+        let ddc_sr = match ch { VrxChannel::Vrx1 => self.ddc_sample_rate_rx1, VrxChannel::Vrx2 => self.ddc_sample_rate_rx2 };
+        let ddc_rate = if ddc_sr > 0 { ddc_sr as u32 * 1000 } else { 384_000 };
+        // The view rows: the one set every spectrum panel has.
+        let changes = {
+            let (ref_db, auto_ref, range_db, zoom, pan, wf_contrast) = match ch {
+                VrxChannel::Vrx1 => (&mut self.vrx1_ref_db, &mut self.vrx1_auto_ref, &mut self.vrx1_range_db,
+                    &mut self.vrx1_spectrum_zoom, &mut self.vrx1_pan, &mut self.vrx1_wf_contrast),
+                VrxChannel::Vrx2 => (&mut self.vrx2_ref_db, &mut self.vrx2_auto_ref, &mut self.vrx2_range_db,
+                    &mut self.vrx2_spectrum_zoom, &mut self.vrx2_pan, &mut self.vrx2_wf_contrast),
             };
-            if let Some(f) = new_freq {
-                if connected && self.vrx_send_freq(ch, f) {
-                    match ch { VrxChannel::Vrx1 => self.vrx1_freq_hz = f, VrxChannel::Vrx2 => self.vrx2_freq_hz = f };
+            super::spectrum::spectrum_view_rows(ui, super::spectrum::ViewControls {
+                ref_db,
+                auto_ref,
+                range_db,
+                fill_percent: &mut self.spectrum_fill_percent,
+                zoom,
+                allow_zoom_below_2x: &mut self.allow_zoom_below_2x,
+                pan,
+                wf_contrast,
+                fft: super::spectrum::FftControl::Shared { size_k: fft_size_k, ddc_rate_hz: ddc_rate, rx_label },
+                height: None,
+            })
+        };
+        let auto_now = match ch { VrxChannel::Vrx1 => self.vrx1_auto_ref, VrxChannel::Vrx2 => self.vrx2_auto_ref };
+        if changes.restart_auto_ref(auto_now) {
+            match ch {
+                VrxChannel::Vrx1 => self.vrx1_spectrum.reset_auto_ref(),
+                VrxChannel::Vrx2 => self.vrx2_spectrum.reset_auto_ref(),
+            }
+        }
+        if changes.allow_zoom_below_2x {
+            self.zoom_below_2x_changed();
+        }
+        if changes.zoom {
+            match ch { VrxChannel::Vrx1 => self.vrx1_zoom_initialized = true, VrxChannel::Vrx2 => self.vrx2_zoom_initialized = true }
+        }
+        if changes.settings() || changes.zoom || changes.pan {
+            self.save_full_config();
+        }
+        let remaining = ui.available_height();
+        // Plot and waterfall equal height (operator wish), the one rule for every
+        // spectrum panel (build 241).
+        let (spec_h, wf_h) = super::spectrum::plot_and_waterfall_heights(remaining, ui.spacing().item_spacing.y);
+        let pan_hz = self.vrx_pan_hz(ch) as f64;
+        let salt = match ch { VrxChannel::Vrx1 => "vrx1", VrxChannel::Vrx2 => "vrx2" };
+        // VRX renders EXCLUSIVELY its own extracted spectrum: no RX fallback;
+        // the bins are the window the server cut at the VRX's width and pan.
+        let action = {
+            let (spectrum, texture, freq, low, high, ref_db, range_db, wf_contrast) = match ch {
+                VrxChannel::Vrx1 => (&self.vrx1_spectrum, &mut self.vrx1_waterfall_texture, self.vrx1_freq_hz,
+                    self.vrx1_filter_low_hz, self.vrx1_filter_high_hz, self.vrx1_ref_db, self.vrx1_range_db, self.vrx1_wf_contrast),
+                VrxChannel::Vrx2 => (&self.vrx2_spectrum, &mut self.vrx2_waterfall_texture, self.vrx2_freq_hz,
+                    self.vrx2_filter_low_hz, self.vrx2_filter_high_hz, self.vrx2_ref_db, self.vrx2_range_db, self.vrx2_wf_contrast),
+            };
+            let span = spectrum.span_hz() as f64;
+            let panel = super::spectrum::SpectrumPanel {
+                id: salt,
+                bins: spectrum.bins(),
+                bins_center_hz: spectrum.center_hz() as f64,
+                bins_span_hz: span,
+                view_center_hz: freq as f64 + pan_hz,
+                marker_hz: freq,
+                filter_low_hz: low,
+                filter_high_hz: high,
+                ref_db,
+                range_db,
+                fill_percent: self.spectrum_fill_percent,
+                wf_contrast,
+                meter: super::spectrum::SpectrumMeter::Signal(spectrum.smeter_dbm()),
+                big_meter: true,
+                rit_hz: None,
+                band_markers: false,
+                dx_spots: &self.dx_spots,
+                tuning: super::spectrum::SpectrumTuning {
+                    tune_hz: freq,
+                    min_hz: vrx_min,
+                    max_hz: vrx_max,
+                    filter: super::spectrum::FilterEdges::VrxRaster,
+                },
+            };
+            let window = super::spectrum::WaterfallWindow { center_hz: panel.view_center_hz, span_hz: span, row_span_hz: span };
+            super::spectrum::spectrum_panel_view(ui, ctx, &panel, spectrum.waterfall(), window, texture, spec_h, wf_h)
+        };
+        match action {
+            Some(super::spectrum::SpectrumAction::Tune { hz, .. }) => {
+                if connected && self.vrx_send_freq(ch, hz) {
+                    match ch { VrxChannel::Vrx1 => self.vrx1_freq_hz = hz, VrxChannel::Vrx2 => self.vrx2_freq_hz = hz };
                     self.save_full_config();
                 }
             }
+            // The window's filter dispatch reads these (`popouts.rs`).
+            Some(super::spectrum::SpectrumAction::FilterEdge { low, hz }) => {
+                let key = format!("{}_filter_{}_hz", salt, if low { "low" } else { "high" });
+                ui.memory_mut(|mem| mem.data.insert_temp(egui::Id::new(key), hz));
+            }
+            None => {}
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    /// One "Zoom <2x" checkbox for every spectrum panel, the VRX2 FFT label
-    /// from RX2, and a rule above the RX2 half of the joined window (build 242).
+    /// Every spectrum panel is the one description (build 81, the operator's
+    /// wish: all spectrum and waterfall windows as equal as they can be): RX1,
+    /// RX2 and the VRX each draw the shared view rows once and the shared plot
+    /// and waterfall once, with nothing of their own around them; what differs
+    /// is a field of the panel, held in this table.
     #[test]
-    fn every_spectrum_panel_has_the_same_zoom_row() {
+    fn every_spectrum_panel_is_the_one_description() {
         let cut = |s: &'static str| &s[..s.find("#[cfg(test)]").unwrap_or(s.len())];
-        let rx1 = cut(include_str!("spectrum_content.rs"));
-        let rx2 = cut(include_str!("rx_controls.rs"));
-        let vrx = cut(include_str!("vrx.rs"));
-        let label = "rust_i18n::t!(\"main_allow_zoom_2x\")";
-        assert_eq!(rx1.matches(label).count() + rx2.matches(label).count() + vrx.matches(label).count(), 1, "one checkbox");
-        let call = "self.zoom_below_2x_checkbox(ui);";
-        let zoom = "ui.label(rust_i18n::t!(\"main_zoom_label\").to_string());";
-        let pan = "ui.label(rust_i18n::t!(\"main_pan_label\").to_string());";
-        for (name, body) in [("RX1", rx1), ("RX2", rx2), ("VRX", vrx)] {
-            assert_eq!(body.matches(call).count(), 1, "{name}");
-            let z = body.find(zoom).expect(name);
-            let p = z + body[z..].find(pan).expect(name);
-            assert!(body[z..p].contains(call), "{name}: in the zoom row, before Pan");
+        let panel = |src: &'static str, from: &str| {
+            let body = cut(src);
+            let body = &body[body.find(from).unwrap()..];
+            &body[..body[3..].find("\n    pub(super) fn ").map_or(body.len(), |i| i + 3)]
+        };
+        let rx1 = panel(include_str!("spectrum_content.rs"), "fn render_spectrum_content");
+        let rx2 = panel(include_str!("rx_controls.rs"), "fn render_rx2_spectrum_only");
+        let vrx = panel(include_str!("vrx.rs"), "fn render_vrx_spectrum_panel");
+        for (name, body, band_markers, rit, filter) in [
+            ("RX1", rx1, "band_markers: true,", "rit_hz: self.rit_enable.then_some(self.rit_offset as i32),", "FilterEdges::Free"),
+            ("RX2", rx2, "band_markers: false,", "rit_hz: None,", "FilterEdges::Free"),
+            ("VRX", vrx, "band_markers: false,", "rit_hz: None,", "FilterEdges::VrxRaster"),
+        ] {
+            assert_eq!(body.matches("super::spectrum::spectrum_view_rows(").count(), 1, "{name}: the view rows");
+            assert_eq!(body.matches("super::spectrum::spectrum_panel_view(").count(), 1, "{name}: the plot and waterfall");
+            let rows = body.find("spectrum_view_rows(").unwrap();
+            assert!(rows < body.find("spectrum_panel_view(").unwrap(), "{name}: rows above the plot");
+            for own in ["ui.horizontal(", "Slider::new(", "egui::ComboBox", "\"main_allow_zoom_2x\""] {
+                assert!(!body.contains(own), "{name}: nothing drawn of its own ({own})");
+            }
+            // The shared values: one Fill and one Zoom <2x flag for every panel.
+            assert!(body.contains("fill_percent: &mut self.spectrum_fill_percent,"), "{name}");
+            assert!(body.contains("fill_percent: self.spectrum_fill_percent,"), "{name}: the plot reads it");
+            assert!(body.contains("allow_zoom_below_2x: &mut self.allow_zoom_below_2x,"), "{name}");
+            // What follows a change: RX hands it to the place MIDI hands its own to.
+            let handled = match name {
+                "RX1" => body.contains("self.rx_view_changed(false, changes);"),
+                "RX2" => body.contains("self.rx_view_changed(true, changes);"),
+                _ => body.contains("if changes.allow_zoom_below_2x {\n")
+                    && body.contains("self.zoom_below_2x_changed();")
+                    && body.contains("changes.settings()")
+                    && body.contains("changes.restart_auto_ref("),
+            };
+            assert!(handled, "{name}: a change is handled and saved");
+            assert!(body.contains(band_markers) && body.contains(rit) && body.contains(filter), "{name}: its row of the table");
+            assert!(body.contains("dx_spots: &self.dx_spots,"), "{name}: DX spots in every panel");
         }
+        // The VRX: the FFT of the receiver it rides (build 242: VRX2 showed
+        // RX1's), shown and not chosen; it tunes inside its DDC window.
         assert!(vrx.contains("VrxChannel::Vrx2 => self.rx2_spectrum_fft_size_k"), "VRX2 shows RX2's FFT size");
+        assert!(vrx.contains("super::spectrum::FftControl::Shared {"));
+        assert!(vrx.contains("min_hz: vrx_min,") && vrx.contains("max_hz: vrx_max,"));
+        assert!(rx1.contains("FftControl::Choose {") && rx2.contains("FftControl::Choose {"));
+        // The rows: one checkbox, one Fill field, a rule under them.
+        let draw = cut(include_str!("spectrum.rs"));
+        let rows = &draw[draw.find("pub(crate) fn spectrum_view_rows(").unwrap()..];
+        let rows = &rows[..rows.find("\n}\n").unwrap()];
+        assert_eq!(rows.matches("rust_i18n::t!(\"main_allow_zoom_2x\")").count(), 1);
+        assert_eq!(rows.matches("helpers::spectrum_fill_field(ui, fill_percent)").count(), 1);
+        assert!(rows.ends_with("    super::helpers::rule(ui);\n    ch"), "a rule under the rows");
+        let label = "rust_i18n::t!(\"main_allow_zoom_2x\")";
+        for f in [include_str!("spectrum_content.rs"), include_str!("rx_controls.rs"), include_str!("vrx.rs")] {
+            assert!(!cut(f).contains(label), "no checkbox of its own");
+        }
+        // One plot and one waterfall, no strip of the VRX's own.
+        assert_eq!(draw.matches("ui.allocate_exact_size(").count(), 2, "the plot and the waterfall");
+        assert!(!draw.contains("fn render_vrx_strip") && !draw.contains("fn render_waterfall"));
         let joined = cut(include_str!("popouts.rs"));
         assert!(joined.contains("super::helpers::rule(ui);\n            self.render_rx2_spectrum_only(ui, ctx);"), "a rule above RX2");
     }
 
-    /// Every spectrum panel - RX1, RX2 and the VRX - has a rule under its
-    /// button rows, between the zoom row and the plot (owner, 2026-10-17,
-    /// build 240: the RX panels had only the one above).
+    /// Clicking, dragging and scrolling do the same in every panel, plot and
+    /// waterfall alike (build 81, the operator's choice: scrolling tunes, also
+    /// over a filter edge; a filter edge is dragged). The VRX's filter edge goes
+    /// on the server's raster, inside ±4 kHz.
     #[test]
-    fn every_spectrum_panel_has_a_rule_under_its_buttons() {
-        let rule = "super::helpers::rule(ui);";
-        let zoom = "ui.label(rust_i18n::t!(\"main_zoom_label\").to_string());";
-        for (name, src, plot) in [
-            ("RX1", include_str!("spectrum_content.rs"), "spectrum_plot("),
-            ("RX2", include_str!("rx_controls.rs"), "spectrum_plot("),
-            ("VRX", include_str!("vrx.rs"), "spectrum::render_vrx_strip("),
-        ] {
-            let body = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
-            let body = match name {
-                "RX2" => &body[body.find("fn render_rx2_spectrum_only").unwrap()..],
-                "VRX" => &body[body.find("fn render_vrx_spectrum_panel").unwrap()..],
-                _ => body,
-            };
-            assert_eq!(body.matches(zoom).count(), 1, "{name}");
-            let z = body.find(zoom).unwrap();
-            let p = z + body[z..].find(plot).expect(name);
-            assert!(body[z..p].contains(rule), "{name}: a rule between the zoom row and the plot");
+    fn every_panel_tunes_the_same_way() {
+        use super::super::spectrum::{FilterEdges, SpectrumTuning, VRX_FILTER_STEP_HZ, snap_vrx_filter_hz};
+        let rx = SpectrumTuning { tune_hz: 7_100_400, min_hz: 1_000, max_hz: u64::MAX, filter: FilterEdges::Free };
+        let vrx = SpectrumTuning { tune_hz: 7_100_400, min_hz: 7_000_000, max_hz: 7_200_000, filter: FilterEdges::VrxRaster };
+        for t in [rx, vrx] {
+            assert_eq!(t.click(7_123_499.0), 7_123_000, "a click: the nearest kHz");
+            assert_eq!(t.click(7_123_500.0), 7_124_000);
+            assert_eq!(t.drag(7_123_456.0), 7_123_400, "a drag: steps of 100 Hz");
+            assert_eq!(t.scroll(true), 7_101_000, "a notch: the next kHz");
+            assert_eq!(t.scroll(false), 7_099_000);
         }
+        assert_eq!(vrx.click(6_000_000.0), 7_000_000, "a VRX stays in its window");
+        assert_eq!(vrx.drag(8_000_000.0), 7_200_000);
+        assert_eq!(rx.filter_edge(true, -2_412.4, -2_400, 0), -2_412, "RX: to the hertz");
+        assert_eq!(vrx.filter_edge(false, 2_412.4, 0, 2_400), 2_437, "VRX: the raster (39 x 62.5)");
+        assert_eq!(vrx.filter_edge(false, 9_000.0, 0, 2_400), 4_000, "inside 4 kHz");
+        assert_eq!(vrx.filter_edge(true, -9_000.0, -2_400, 0), -4_000, "the low edge too");
+        assert_eq!(vrx.filter_edge(false, 50.0, 0, 2_400), 125, "two steps from the other edge");
+        assert_eq!(snap_vrx_filter_hz(2_100.0), 2_125);
+        assert_eq!(VRX_FILTER_STEP_HZ, 62.5);
+        let draw = include_str!("spectrum.rs");
+        let draw = &draw[..draw.find("#[cfg(test)]").unwrap()];
+        assert_eq!(draw.matches("scroll_notch(ui, &response)").count(), 2, "plot and waterfall");
+        assert_eq!(draw.matches("panel.tuning.drag(hz_of(pos.x))").count(), 2, "plot and waterfall");
+        assert_eq!(draw.matches("panel.tuning.click(hz_of(pos.x))").count(), 2, "plot and waterfall");
+        assert!(!draw.contains("outward"), "no filter resize by scrolling");
+        // A drag drags and a click clicks, in the waterfall as on the plot.
+        assert_eq!(draw.matches("hz: panel.tuning.drag(hz_of(pos.x)), how: TuneHow::Drag").count(), 2);
+        // The plot's click goes by way of the DX spots (below), the waterfall's straight.
+        assert_eq!(draw.matches("hz: panel.tuning.click(hz_of(pos.x)), how: TuneHow::Click").count(), 1);
+        assert!(draw.contains("                None => panel.tuning.click(hz_of(pos.x)),\n            };\n            action = Some(SpectrumAction::Tune { hz, how: TuneHow::Click });"));
+        assert!(draw.contains("    if response.dragged() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            return Some(SpectrumAction::Tune { hz: panel.tuning.drag("));
+        // The edge being dragged is forgotten once the drag ends; else every
+        // later drag would move it.
+        assert!(draw.contains("    if !response.dragged() {
+        ui.memory_mut(|mem| mem.data.insert_temp(hover_ready_id, near_lo || near_hi));
+"));
+        assert!(draw.contains("        if dragging_filter.is_some() {
+            ui.memory_mut(|mem| {
+                mem.data.remove::<bool>(drag_id);
+                mem.data.remove::<bool>(is_low_id);
+"));
+        // The nearer edge is the one taken, and an RX edge lands on its own key.
+        assert!(draw.contains("mem.data.insert_temp(is_low_id, dl < dh)"));
+        assert!(draw.contains("let key = if low { \"low\" } else { \"high\" };"));
+        // A spot clicked on a VRX stays in its window.
+        assert!(draw.contains("Some(s) => (s.frequency_hz).clamp(panel.tuning.min_hz, panel.tuning.max_hz),"));
+        // A click on a filter edge is a drag that did not move, not a tune.
+        assert!(draw.contains("} else if response.clicked() && !(near_lo || near_hi) {"));
+        // The RX actions land where the RX handlers read them.
+        assert!(draw.contains("format!(\"{prefix}spectrum_{key}_freq\")") && draw.contains("format!(\"{prefix}spectrum_filter_{key}\")"));
+        let keys = include_str!("rx_controls.rs");
+        assert!(keys.contains("for key in [\"spectrum_scroll_freq\", \"spectrum_click_freq\", \"spectrum_drag_freq\"] {"));
+        assert!(keys.contains("for key in [\"rx2_spectrum_scroll_freq\", \"rx2_spectrum_click_freq\", \"rx2_spectrum_drag_freq\"] {"));
+        assert!(keys.contains("egui::Id::new(\"spectrum_filter_low\")") && keys.contains("egui::Id::new(\"rx2_spectrum_filter_high\")"));
+        assert!(draw.contains("TuneHow::Click => \"click\",") && draw.contains("TuneHow::Drag => \"drag\",") && draw.contains("TuneHow::Scroll => \"scroll\","));
+        let rx1 = include_str!("spectrum_content.rs");
+        let rx2 = include_str!("rx_controls.rs");
+        assert!(rx1.contains("super::spectrum::store_rx_action(ui, \"\", action);"));
+        assert!(rx2.contains("super::spectrum::store_rx_action(ui, \"rx2_\", action);"));
+        assert_eq!(draw.matches("rust_i18n::t!(\"spec_hover\")").count(), 1);
+        assert_eq!(draw.matches("rust_i18n::t!(\"spec_wf_hover\")").count(), 1);
     }
 
-    /// The VRX window has no checkbox of its own for its spectrum (owner,
-    /// 2026-10-16, build 225): unticking it closed the window, which must not
+    /// The pan is sent on every change the server can see, with no threshold,
+    /// and drawn as the server receives it (build 75: a pan below 0.001 was
+    /// drawn and never sent). The VRX takes its pan and width from one helper
+    /// each, for the request and the drawing alike.
+    #[test]
+    fn the_spectrum_is_drawn_where_the_server_cuts_it() {
+        let cut = |s: &'static str| &s[..s.find("#[cfg(test)]").unwrap_or(s.len())];
+        for (name, src, pan, last) in [
+            ("RX1", cut(include_str!("spectrum_content.rs")), "self.spectrum_pan", "self.last_sent_pan"),
+            ("RX2", cut(include_str!("rx_controls.rs")), "self.rx2_spectrum_pan", "self.rx2_last_sent_pan"),
+        ] {
+            assert!(!src.contains("> 0.001"), "{name}: no threshold");
+            // The pan against the one last sent, on the wire value.
+            let moved = format!("let pan_moved = sdr_remote_core::protocol::pack_spectrum_pan_fine({pan})");
+            let at = src.find(&moved).unwrap_or_else(|| panic!("{name}: {moved}"));
+            let rest = src[at + moved.len()..].trim_start();
+            assert!(rest.starts_with(&format!("!= sdr_remote_core::protocol::pack_spectrum_pan_fine({last});")), "{name}: {rest:.80}");
+            assert!(src.contains(&format!("{pan},\n            self.server_fine_spectrum_view,\n")) || src.contains(&format!("{pan},\n                self.server_fine_spectrum_view,\n")), "{name}: drawn for this server");
+        }
+        let tuning = cut(include_str!("tuning.rs"));
+        let centre = &tuning[tuning.find("fn spectrum_target_center_hz").unwrap()..];
+        assert!(centre[..centre.find("\n    }").unwrap()].contains("spectrum_pan_on_the_wire(pan, fine)"), "drawn with the pan as received");
+        let sync = cut(include_str!("sync_state.rs"));
+        assert!(sync.contains("let want1 = self.vrx_pan_hz(VrxChannel::Vrx1);"));
+        assert!(sync.contains("let want2 = self.vrx_pan_hz(VrxChannel::Vrx2);"));
+        assert!(!sync.contains("span_khz"), "the VRX width goes in Hz");
+        assert_eq!(sync.matches("self.vrx_requested_span_hz(").count(), 4, "reconnect and zoom, both VRX");
+        // The width against the one last sent, as this server receives it.
+        assert!(sync.contains("let on_the_wire = move |hz| sdr_remote_core::protocol::vrx_span_on_the_wire(hz, fine_view);"));
+        assert!(sync.contains("if on_the_wire(span_hz) != on_the_wire(self.vrx1_high_res_last_span_hz) {"));
+        assert!(sync.contains("if on_the_wire(span_hz) != on_the_wire(self.vrx2_high_res_last_span_hz) {"));
+        assert!(sync.contains("let fine_view = self.server_fine_spectrum_view;"));
+        // The field the drawing and the width read is the engine's, every frame.
+        assert!(sync.contains("\n        self.server_fine_spectrum_view = state.server_fine_spectrum_view;\n"));
+        assert_eq!(sync.matches("self.server_fine_spectrum_view =").count(), 1);
+        assert_eq!(tuning.matches("self.spectrum_pan, self.server_fine_spectrum_view);").count(), 1, "RX1 pending frequency");
+        assert_eq!(tuning.matches("self.rx2_spectrum_pan, self.server_fine_spectrum_view);").count(), 1, "RX2 pending frequency");
+        let vrx = cut(include_str!("vrx.rs"));
+        assert!(vrx.contains("let pan_hz = self.vrx_pan_hz(ch) as f64;"));
+        let pan_hz = &vrx[vrx.find("fn vrx_pan_hz(").unwrap()..];
+        assert!(pan_hz[..pan_hz.find("\n    }").unwrap()].contains("sdr_remote_core::protocol::vrx_pan_on_the_wire("), "the pan as sent");
+        assert_eq!(vrx.matches("view_center_hz: freq as f64 + pan_hz,").count(), 1, "drawn with it");
+        assert!(!cut(include_str!("spectrum.rs")).contains("pan_reference_hz"), "no pan of its own in the strip");
+    }
+
+    /// The VRX window has no checkbox of its own for its spectrum
+    /// (2026-10-16, build 225): unticking it closed the window, which must not
     /// happen. The window opens with the chip on the main screen and closes
     /// with its X; both still go through `toggle_vrx_spectrum` and
     /// `close_vrx_popout`.
@@ -1026,7 +1109,7 @@ mod tests {
     }
 
     /// A re-centering across a 100 kHz line no longer moves a VRX that is
-    /// still within reach (build 226, owner after the review of 225); out of
+    /// still within reach; out of
     /// reach it goes to the frequency saved for the new bucket, or the VFO.
     /// Reach is the server's guard (build 227): 384 kHz x 0.45 less a 3 kHz
     /// filter edge here. The second pass: back across the line, and a band
@@ -1078,8 +1161,8 @@ mod tests {
             mv(7_250_000, 7_150_000, 0, 7_240_000).follow(&mut saved),
             VrxAfterMove::To { hz: 7_240_000, saved: false }
         );
-        // Between the server's guard and the half span (review of 226, the
-        // probe): 6920 kHz under a centre of 7100.1 is held at 6930.3 by the
+        // Between the server's guard and the half span (a probe on build
+        // 226): 6920 kHz under a centre of 7100.1 is held at 6930.3 by the
         // server, so it does not stay.
         let mut fresh = std::collections::HashMap::new();
         assert_eq!(
@@ -1120,7 +1203,7 @@ mod tests {
         assert_eq!(still(7_100_000, 6_995_000, 6_985_000).follow(&mut fresh), VrxAfterMove::Unchanged, "in reach");
         assert_eq!(still(0, 6_995_000, 6_985_000).follow(&mut fresh), VrxAfterMove::Unchanged, "never set");
         // An estimated centre (no full-band spectrum: the VFO) is looked at
-        // only at a bucket change (build 229, the probe of the review of 228):
+        // only at a bucket change (build 229):
         // DDC really on 7100, VRX on 6935, the VFO from 7100 to 7150.
         let est = |center_hz: u64, last_center_hz: u64, lo_shift: u64, vrx_hz| DdcMove {
             center_hz,
@@ -1162,7 +1245,7 @@ mod tests {
         assert!(!update.contains("_freq_by_bucket"), "no second copy");
     }
 
-    /// A lost session does not move a VRX (build 232, review of 231): the
+    /// A lost session does not move a VRX: the
     /// centre falling back from measured to the estimate is no move, and the
     /// width of the reach comes from the server's DDC rate before the row.
     #[test]
@@ -1212,7 +1295,7 @@ mod tests {
         use super::DdcSources;
         let c = |sent_hz, full_hz, full_span_hz, vfo_hz| DdcSources { sent_hz, full_hz, full_span_hz, row_on: true, vfo_hz }.centre();
         // A row switched off is no source, even with a centre and a span left
-        // behind (build 233, the probe of the review of 232: the row off on 40 m,
+        // behind (build 233, from a probe on build 232: the row off on 40 m,
         // the radio since on 20 m, the session lost).
         assert_eq!(
             DdcSources { sent_hz: 0, full_hz: 7_100_000, full_span_hz: 384_000, row_on: false, vfo_hz: 14_250_000 }.centre(),
@@ -1220,7 +1303,7 @@ mod tests {
             "an old row is no measurement"
         );
         // Switched on, but the RX2 row stopped coming when its windows closed
-        // (build 234, the probe of the review of 233): no measurement either.
+        // (build 234): no measurement either.
         let stopped = super::super::tuning::RowLive {
             switched_on: true,
             age: Some(std::time::Duration::from_secs(30)),
@@ -1261,8 +1344,8 @@ mod tests {
         assert!(!midi.contains("full_spectrum_center_hz"), "MIDI has no second source");
     }
 
-    /// The share of the DDC band a VRX may use is one number on both sides
-    /// (build 228, review of 227): the server clamps with it in `vrx-rs`, and
+    /// The share of the DDC band a VRX may use is one number on both sides:
+    /// the server clamps with it in `vrx-rs`, and
     /// the client's reach - which since 226 also decides whether a VRX stays -
     /// mirrors it. The client does not depend on `vrx-rs`, so this reads both.
     #[test]

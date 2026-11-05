@@ -7,8 +7,7 @@
 //! All render paths (Tab::Radio, RX1/RX2 popout, joined popout) call the same
 //! helpers with different `ControlContext` fields.
 //!
-//! Status: infrastructure (step 1 of PATCH-client-controls-refactor). No
-//! render helpers implemented yet.
+//! Implemented: the band, frequency, frequency-step and mode helpers.
 
 pub(crate) mod band;
 pub(crate) mod context;

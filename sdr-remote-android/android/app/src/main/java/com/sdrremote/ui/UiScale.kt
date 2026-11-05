@@ -13,8 +13,8 @@ import androidx.compose.ui.unit.dp
 /**
  * How large ThetisLink draws itself, and what that earns it.
  *
- * The owner can already make this app smaller today by turning down Android's
- * own screen zoom, and measured that it works: at the smallest system zoom the
+ * This app can already be made smaller today by turning down Android's
+ * own screen zoom, and that was measured to work: at the smallest system zoom the
  * transmit button still keys without trouble, and in landscape there is room for
  * far more at once. The objection was not the result but the reach - a system
  * setting shrinks every app on the phone, and only this one was meant.
@@ -24,14 +24,14 @@ import androidx.compose.ui.unit.dp
  * it changes. It is the same idea as `zoom_factor` in the desktop client.
  *
  * Deliberately NOT excluded from the scaling: the transmit button. It shrinks
- * with the rest, on the owner's decision of 2026-09-08 - someone who chooses
+ * with the rest, by design (2026-09-08) - someone who chooses
  * landscape accepts the layout as it is for now, and a properly reworked
  * landscape layout is a later question. Writing that down because the opposite
- * is the obvious thing to do and a reviewer will ask.
+ * is the obvious thing to do.
  *
  * **Dialogs do not follow this scale, and that is measured rather than assumed.**
  * A dialog in Compose lives in a window of its own with its own composition, and
- * the density we provide does not reach it: the owner compared the MIDI dialog at
+ * the density we provide does not reach it: the MIDI dialog was compared at
  * 100% and at 60% on 2026-09-08 and it was the same size both times.
  *
  * Left that way on purpose for now. A dialog that keeps its own size is the safer
@@ -56,7 +56,6 @@ object UiScale {
     const val LANDSCAPE_MIN_DP = 600
 
     private const val KEY = "ui_scale"
-    private const val PREFS = "thetislink"
 
     private var _scale by mutableFloatStateOf(1.0f)
 
@@ -64,14 +63,14 @@ object UiScale {
     val scale: Float get() = _scale
 
     fun load(context: Context) {
-        val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val p = context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
         _scale = nearestStep(p.getFloat(KEY, 1.0f))
     }
 
     fun set(context: Context, value: Float) {
         val v = nearestStep(value)
         _scale = v
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, Context.MODE_PRIVATE)
             .edit().putFloat(KEY, v).apply()
     }
 
@@ -108,8 +107,7 @@ object UiScale {
  * move when we override the density; a `Modifier.height(...)` inside our
  * composition is in the scaled kind. Write 420.dp for a list and at 60% it is
  * physically 60% of what it was, on a screen that now has room for far more -
- * which is exactly how the chat came to leave over half the screen empty
- * (owner, 2026-09-08).
+ * which is exactly how the chat came to leave over half the screen empty.
  *
  * So: any dimension that is meant as "a share of the screen" has to come from
  * here, and any dimension that is meant as "this many millimetres of glass" -

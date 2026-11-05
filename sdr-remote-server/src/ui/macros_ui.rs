@@ -90,7 +90,7 @@ pub(super) fn render_macro_editor(
                         if def.label.is_empty() {
                             name.clone()
                         } else {
-                            format!("{} - {}", name, def.label)
+                            format!("{}: {}", name, def.label)
                         }
                     } else {
                         format!("{} (empty)", name)

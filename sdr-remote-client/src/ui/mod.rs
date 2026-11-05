@@ -37,7 +37,6 @@ pub(crate) use sdr_remote_core::ftx1_ex_chart;
 
 pub(crate) use helpers::*;
 pub(crate) use meters::*;
-pub(crate) use spectrum::*;
 pub(crate) use arranger::{LayoutGrid, LayoutMemory, SnapWindow, LAYOUT_MEM_SLOTS};
 
 /// Convert RX filter edges (signed Hz) to the TX modulation filter band - a
@@ -53,13 +52,6 @@ pub(crate) fn rx_to_tx_band(low_hz: i32, high_hz: i32) -> (i32, i32) {
     }
 }
 
-pub(super) fn yaesu_mic_gain_to_display(gain: f32) -> f32 {
-    (gain / 0.4).clamp(0.05, 1.0)
-}
-
-pub(super) fn yaesu_mic_gain_from_display(display: f32) -> f32 {
-    (display * 0.4).clamp(0.02, 0.4)
-}
 pub(crate) use config::{load_window_size, load_window_pos, save_config, load_config, NUM_MEMORIES};
 
 /// Startup check for the MAIN window's saved position: true when a usable part would land
@@ -213,26 +205,24 @@ pub struct SdrRemoteApp {
     /// Bluetooth button as one value, the same shape as `yaesu_latches`.
     ///
     /// Four loose booleans until build 77, OR-ed into one want and cleared by
-    /// hand at fourteen places, each of which had to know every boolean (open
-    /// point 37 - and the Bluetooth button was forgotten at two of them within a
-    /// day of being added). The Yaesu slots took this road in step 2c; Thetis
-    /// takes it now, and `$LATCH_SITES` in fitness.ps1 goes to one - the
-    /// last-sent flag inside the one exit function, named there.
+    /// hand at fourteen places, each of which had to know every boolean (and the
+    /// Bluetooth button was forgotten at two of them within a day of being
+    /// added). The Yaesu slots took this road first; Thetis takes it now, and
+    /// the latch is cleared at one place - the last-sent flag inside the one
+    /// exit function, named there.
     thetis_latches: sdr_remote_logic::ptt_intent::Latches,
     ptt_toggle_mode: bool,       // false=push-to-talk (momentary), true=toggle (click on/off)
     yaesu_ptt_toggle_mode: bool, // independent Yaesu PTT mode
     /// The latches of both Yaesu slots, and what last went to the server per slot.
     ///
     /// These were six loose booleans and two loose flags, with an
-    /// `if slot == 0 { ... } else { ... }` around all of it. A reviewer removed one of
-    /// those eight assignments - `yaesu2_midi_ptt` - and the whole workspace stayed
-    /// green: seven hundred tests, not one of which touches this loop, and the fitness
-    /// counter did not notice either. Slot 1 is also the slot that gets the least
-    /// attention in hand testing.
+    /// `if slot == 0 { ... } else { ... }` around all of it. With one of
+    /// those eight assignments removed - `yaesu2_midi_ptt` - the whole workspace stayed
+    /// green: seven hundred tests, not one of which touches this loop. Slot 1 is
+    /// also the slot that gets the least attention in hand testing.
     ///
     /// As an array that is not merely untested but impossible: `latches[slot]` is
-    /// assigned as a whole, and writing half of it back does not exist (Lane 6 step
-    /// 2c).
+    /// assigned as a whole, and writing half of it back does not exist.
     yaesu_latches: [sdr_remote_logic::ptt_intent::Latches; 2],
     yaesu_ptt_last_sent: [bool; 2],
     /// May the same microphone go to more than one transmitter at a time?
@@ -255,7 +245,7 @@ pub struct SdrRemoteApp {
     /// The refusal lasts one frame: it clears the latch, so the frame after it asks for
     /// nothing and there is nothing left to refuse. Without this the button snapped
     /// straight back to grey and the operator only saw that nothing happened - no
-    /// colour, no reason (owner, 2026-09-03).
+    /// colour, no reason.
     ///
     /// A refusal is an event, not a state. It has to stay up long enough to be read.
     /// The raw want of the Thetis PTT, as the top bar reads it this frame.
@@ -263,8 +253,7 @@ pub struct SdrRemoteApp {
     /// The decision does not fall there but at the end of the frame, together with the
     /// Yaesus'. Thetis used to decide immediately, on the Yaesu state of the PREVIOUS
     /// frame - and then a fresh want could be refused on stale data and thrown away
-    /// right afterwards, while the Yaesu blocking it let go later in that same frame
-    /// (review finding).
+    /// right afterwards, while the Yaesu blocking it let go later in that same frame.
     thetis_want: bool,
     /// What the top bar knows and drive_ptt does not: no RX-only antenna
     /// position, and a Thetis to key. Read each frame, never latched.
@@ -313,7 +302,7 @@ pub struct SdrRemoteApp {
     /// TL2-1 ctun-auto-recenter setup checkbox "Allow zoom below 2x (with smear during tune)".
     /// Default false -> zoom-min 2x. True -> zoom-min 1x allowed.
     allow_zoom_below_2x: bool,
-    /// PATCH-1: UI language for connect-status / connect-error display.
+    /// UI language for connect-status / connect-error display.
     /// "en" or "nl" from config; defaults to "en".
     ui_language: String,
     reboot_confirm: bool,
@@ -395,7 +384,10 @@ pub struct SdrRemoteApp {
     /// Which build the server runs, as judged in the engine. Shown on the
     /// Server screen; nothing here refuses to work over it.
     server_build: sdr_remote_core::protocol::PeerBuild,
-    /// The measurement file being written (open point 34), from the engine.
+    /// The server takes the fine pan and VRX width (from the engine): the
+    /// spectrum is drawn with the pan as this server receives it.
+    server_fine_spectrum_view: bool,
+    /// The measurement file being written, from the engine.
     measurement_file: Option<String>,
     /// The developer mode (build 295), as saved; and what is typed in its code
     /// field while it is closed.
@@ -428,6 +420,7 @@ pub struct SdrRemoteApp {
     playback_level_yaesu: f32,
     playback_level_yaesu2: f32,
     yaesu_mic_level: f32,
+    mic_input_clip: bool,
     frequency_hz: u64,
     mode: u8,
     /// RX1 S-meter - dBm in RX mode, watts in TX mode (disambiguated by
@@ -464,7 +457,7 @@ pub struct SdrRemoteApp {
     filter_low_hz: i32,
     filter_high_hz: i32,
     filter_changed_at: Option<Instant>,
-    // TX modulation filter (PATCH-tx-modulation-bandwidth) - main-radio TX,
+    // TX modulation filter - main-radio TX,
     // not VRX. `follow_rx` mirrors the RX filter 1:1; otherwise the low/high
     // fields set it independently. Greyed unless the server reports support.
     tx_filter_follow_rx: bool,
@@ -531,7 +524,7 @@ pub struct SdrRemoteApp {
     band_mem: HashMap<String, BandMemory>,
     current_band: Option<String>,
     spectrum_max_bins: u16,
-    spectrum_fft_size_k: u16,      // FFT size in K (0=auto, 32, 64, 128, 256)
+    spectrum_fft_size_k: u16,      // FFT size in K (0=auto, 32 up to MAX_FFT_SIZE_K)
     rx2_spectrum_fft_size_k: u16,  // RX2 FFT size (independent from RX1)
     /// User-set total height (egui-points) of the spectrum+waterfall block in
     /// the Radio tab. Persisted in config. Range 300..=1200. Popouts ignore.
@@ -585,7 +578,7 @@ pub struct SdrRemoteApp {
     vrx2_freq_hz: u64,
     vrx2_mode: u8,
     vrx2_volume: f32,
-    /// SAM auto-tune-to-carrier per VRX (PATCH-vrx-wide-sam-ux). When on
+    /// SAM auto-tune-to-carrier per VRX. When on
     /// and the mode is SAM, the server follows the carrier and pushes the
     /// new freq; the VRX VFO display tracks it. Persisted.
     vrx1_auto_tune: bool,
@@ -645,7 +638,8 @@ pub struct SdrRemoteApp {
     vrx1_zoom_initialized: bool,
     /// VRX1 SSB filter edges as signed Hz offsets from carrier (UI
     /// convention matching main spectrum). USB: both ≥0, LSB: both ≤0.
-    /// Snapped to 62.5 Hz audio bin grid before sending to server.
+    /// On the server's 62.5 Hz raster (`spectrum::snap_vrx_filter_hz`): a
+    /// dragged edge, a preset and a mode's default alike.
     vrx1_filter_low_hz: i32,
     vrx1_filter_high_hz: i32,
     /// High-res spectrum toggle per VRX. When on, client sends
@@ -654,7 +648,7 @@ pub struct SdrRemoteApp {
     /// VRX freq. Persisted.
     vrx1_high_res_spectrum: bool,
     /// Last span (kHz) sent to server; resend on change to avoid spam.
-    vrx1_high_res_last_span_khz: u16,
+    vrx1_high_res_last_span_hz: u32,
     /// Last VRX pan offset in Hz handed to the server, per channel. The server
     /// cuts its window there; resending an unchanged value every frame would
     /// be a packet per frame for nothing.
@@ -663,9 +657,9 @@ pub struct SdrRemoteApp {
     /// When the VRX pan last moved, so the send can wait for it to settle.
     vrx_pan_changed_at: Option<Instant>,
     /// VRX1's independent channel spectrum: own bins/center/span, waterfall,
-    /// s-meter and auto-ref derivation — all from its own data stream. Replaces
+    /// s-meter and auto-ref derivation; all from its own data stream. Replaces
     /// the separate `vrx1_extracted_*` / `vrx1_hr_waterfall` / `vrx1_smeter_*` /
-    /// `vrx1_auto_ref_*` fields (REFACTOR-audio-spectrum-per-channel §6.1).
+    /// `vrx1_auto_ref_*` fields.
     /// RX1/RX2 spectrum state in the same channel type as VRX. Rendering still
     /// reads the flat fields; what lives here is the derivation (auto-ref) plus
     /// the identity that travels with the bins.
@@ -681,7 +675,7 @@ pub struct SdrRemoteApp {
     vrx2_filter_low_hz: i32,
     vrx2_filter_high_hz: i32,
     vrx2_high_res_spectrum: bool,
-    vrx2_high_res_last_span_khz: u16,
+    vrx2_high_res_last_span_hz: u32,
     /// VRX2's independent channel spectrum (see `vrx1_spectrum`).
     vrx2_spectrum: ChannelSpectrum,
     /// Texture handles for VRX waterfall rendering - one per VRX so
@@ -732,17 +726,17 @@ pub struct SdrRemoteApp {
     view_sent_at: Option<Instant>,
     // Devices screen
     active_tab: Tab,
-    /// PATCH-1 smoke-test fix (2026-05-13): track the previous frame's
+    /// Track the previous frame's
     /// connect_status so we can auto-switch to the Server tab on transitions
     /// that demand user attention (AwaitingTotp, Failed). Without this the
     /// user might be on the Radio tab and never see the 2FA prompt or
     /// error message until they manually switch tabs.
     last_connect_status: sdr_remote_logic::state::ConnectStatus,
-    /// PATCH-3 mDNS discovery: background browse for servers on the LAN.
+    /// mDNS discovery: background browse for servers on the LAN.
     /// `None` if the mDNS daemon failed to start (silent fallback to
     /// manual IP entry).
     mdns_browse: Option<crate::mdns::BrowseHandle>,
-    /// Phase A relay monitor: status-only outbound WebSocket path.
+    /// Relay monitor: status-only outbound WebSocket path.
     relay_enabled: bool,
     relay_url: String,
     relay_station: String,
@@ -751,10 +745,10 @@ pub struct SdrRemoteApp {
     relay_device_name: String,
     relay_monitor: Option<sdr_remote_relay::RelayMonitor>,
     relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
-    /// Phase C: relay runs as transport (monitor in main.rs). In that case don't
+    /// Relay runs as transport (monitor in main.rs). In that case don't
     /// manage our own monitor; config changes require an app restart.
     relay_external: bool,
-    /// PATCH-4 first-run wizard. `Some` while the wizard owns the
+    /// First-run wizard. `Some` while the wizard owns the
     /// viewport; transitions back to `None` on Skip / Finished / when
     /// the operator re-launches the wizard manually.
     wizard_state: Option<wizard::WizardState>,
@@ -830,7 +824,7 @@ pub struct SdrRemoteApp {
     rf2k_active: bool,
     rf2k_peak_power: u16,
     rf2k_peak_time: Instant,
-    // RF2K-S debug (Phase D)
+    // RF2K-S debug
     rf2k_debug_available: bool,
     rf2k_bias_pct_x10: u16,
     rf2k_psu_source: u8,
@@ -915,7 +909,7 @@ pub struct SdrRemoteApp {
     led_sent: [bool; 3],
     yaesu_power_on: bool,
     yaesu_volume: f32,
-    // Dual-radio slot 1 (PATCH-dual-radio-991a-ftx1). yaesu_model/yaesu2_model =
+    // Dual-radio slot 1. yaesu_model/yaesu2_model =
     // wire code from RadioInfo (0=991A,1=FTX1) for the panel naming.
     yaesu_model: u8,
     yaesu2_model: u8,
@@ -942,15 +936,19 @@ pub struct SdrRemoteApp {
     yaesu2_memory_channel: u16,
     yaesu2_tuner_state: u8, // internal ATU state of the radio (0=off,1=on,2=tuning) via AC;-poll
     yaesu2_hi_swr: bool,    // radio reports high SWR during TX (self-clearing)
-    yaesu2_feature_toggles: u32, // DSP/function toggles bitfield (PATCH-yaesu-extra-controls)
-    yaesu2_feature_levels: [u8; 16], // multi-state/level values (Phase B: AGC, IPO)
+    yaesu2_feature_toggles: u32, // DSP/function toggles bitfield
+    yaesu2_feature_levels: [u8; 16], // multi-state/level values (AGC, IPO)
     yaesu2_squelch: u16,
     yaesu2_rf_gain: u16,
     yaesu2_rf_power: u16,
     yaesu2_mic_gain: f32,
     yaesu2_eq_enabled: bool,
-    yaesu2_eq_gains: [f32; 5], // -12..+12 dB per band (own TX-EQ radio 2)
-    yaesu2_eq_profiles: Vec<(String, bool, [f32; 5], f32)>,
+    /// Own TX-EQ radio 2: Advanced ticked, the standard five gains, the
+    /// advanced twenty channels (`config::EqProfile`).
+    yaesu2_eq_advanced: bool,
+    yaesu2_eq_gains: [f32; 5],
+    yaesu2_eq_bands: sdr_remote_logic::eq::EqBands,
+    yaesu2_eq_profiles: Vec<config::EqProfile>,
     yaesu2_eq_active_profile: String,
     yaesu2_eq_new_name: String,
     yaesu2_control_changed_at: Option<std::time::Instant>, // debounce slider-sync
@@ -1008,21 +1006,28 @@ pub struct SdrRemoteApp {
     // Client-side TX-compressor (0-100) + AGC-toggle per radio (like the EQ).
     yaesu_compressor: u8,
     yaesu2_compressor: u8,
+    yaesu_comp_attack_ms: f32,
+    yaesu_comp_release_ms: f32,
+    yaesu2_comp_attack_ms: f32,
+    yaesu2_comp_release_ms: f32,
     yaesu_tx_agc: bool,
     /// The roger beep, as shown in the Server tab. One set of numbers, a tick
     /// per channel.
     roger: sdr_remote_logic::roger::RogerBeep,
     yaesu2_tx_agc: bool,
     yaesu_eq_enabled: bool,
-    yaesu_eq_gains: [f32; 5], // -12..+12 dB per band
-    yaesu_eq_profiles: Vec<(String, bool, [f32; 5], f32)>, // (name, enabled, gains, mic_gain)
+    /// As for radio 2 above.
+    yaesu_eq_advanced: bool,
+    yaesu_eq_gains: [f32; 5],
+    yaesu_eq_bands: sdr_remote_logic::eq::EqBands,
+    yaesu_eq_profiles: Vec<config::EqProfile>,
     yaesu_eq_active_profile: String,
     yaesu_eq_new_name: String,
     yaesu_squelch: u16,       // 0-255
     yaesu_rf_gain: u16,       // 0-255
     yaesu_radio_mic_gain: u16, // 0-100 (radio's own mic gain)
     yaesu_rf_power: u16,      // 0-100 (TX power)
-    // Max TX power (watt) for the current band (PATCH-yaesu-power-scaling). Drives
+    // Max TX power (watt) for the current band. Drives
     // the slider range 5..=max. 0 = old server/unknown -> fall back to 100.
     yaesu_tx_power_max: u16,
     yaesu2_tx_power_max: u16,
@@ -1040,17 +1045,17 @@ pub struct SdrRemoteApp {
     yaesu_hi_swr: bool,    // radio reports high SWR during TX (self-clearing)
     /// The server says the drive went up while a PA is out of reach.
     pa_drive_warning: bool,
-    yaesu_feature_toggles: u32, // DSP/function toggles bitfield (PATCH-yaesu-extra-controls)
-    yaesu_feature_levels: [u8; 16], // multi-state/level values (Phase B: AGC, IPO)
-    // Phase C level-sliders (debounced), [slot][NB,DNR,Processor,AMC]. Synced from
+    yaesu_feature_toggles: u32, // DSP/function toggles bitfield
+    yaesu_feature_levels: [u8; 16], // multi-state/level values (AGC, IPO)
+    // Level sliders (debounced), [slot][NB,DNR,Processor,AMC]. Synced from
     // feature_levels[8..12] once the debounce (yaesu_control_changed_at) has expired.
     yaesu_level_sliders: [[i32; 4]; 2],
-    // Phase D freq-sliders (debounced), [slot][Contour,APF,Notch]. From feature_freqs.
+    // Frequency sliders (debounced), [slot][Contour,APF,Notch]. From feature_freqs.
     yaesu_freq_sliders: [[i32; 3]; 2],
-    // Clarifier-offset (§15) per slot, signed Hz - display from feature_freqs[3].
+    // Clarifier-offset per slot, signed Hz - display from feature_freqs[3].
     yaesu_clar_offset: i16,
     yaesu2_clar_offset: i16,
-    // Chosen step size for the touch-friendly frequency stepper (§16), shared
+    // Chosen step size for the touch-friendly frequency stepper, shared
     // across the main RX and both Yaesu VFOs.
     tune_step_hz: i64,
     yaesu_in_memory_mode: bool,
@@ -1059,7 +1064,7 @@ pub struct SdrRemoteApp {
     /// than a row index - the two lists are different lengths, so an index means a
     /// different channel in each. Sticky: it survives tuning away into VFO, which is
     /// what makes "the one you left" findable.
-    // ---- chat (docs/internal/DESIGN-relay-chat.md) ----
+    // ---- chat ----
     chat_popout_pos: Option<egui::Pos2>,
     chat_popout_size: Option<egui::Vec2>,
     chat_popout_init_applied: bool,
@@ -1099,7 +1104,7 @@ pub struct SdrRemoteApp {
     /// unannounced and repeatedly; parsing only when the content actually differs
     /// keeps a later push working without re-parsing the same list every frame.
     yaesu_mem_blob_hash: Option<u64>,
-    // Slot-1 (FTX-1) memory state (Phase B). render_yaesu_memories is shared
+    // Slot-1 (FTX-1) memory state. render_yaesu_memories is shared
     // via mem::swap of these fields + yaesu_mem_active_slot (for read/write cmds).
     yaesu2_mem_channels: Vec<yaesu_memory::YaesuMemoryChannel>,
     yaesu2_mem_file: String,
@@ -1176,13 +1181,11 @@ pub struct SdrRemoteApp {
     rx1_enabled_pending: Option<(Instant, bool)>,
     rx2_enabled_pending: Option<(Instant, bool)>,
     /// RX2 spectrum subscription, SEPARATE from rx2_enabled (audio). Off = no
-    /// RX2 spectrum stream; on = spectrum even without RX2 audio (phase 3b/4).
+    /// RX2 spectrum stream; on = spectrum even without RX2 audio.
     rx2_spectrum_enabled: bool,
     /// Opt-in: Thetis RX1/RX2/BinR audio in wideband Opus (16 kHz)
     /// instead of narrowband (8 kHz). Default false; sent to the server
-    /// via `ControlId::ThetisWidebandAudio`. See memory
-    /// `reference_thetis_audio_paths` for when which path uses which
-    /// sample rate.
+    /// via `ControlId::ThetisWidebandAudio`.
     thetis_wideband_audio: bool,
     /// Whether the server should keep sending the full-DDC spectrum row.
     full_spectrum_enabled: bool,
@@ -1221,8 +1224,7 @@ pub struct SdrRemoteApp {
     rx2_nr_level: u8,
     rx2_anf_on: bool,
     rx2_freq_step_index: usize,
-    /// Inline freq-edit state for RX2 - symmetric with `freq_editing` on RX1
-    /// (PATCH-rx2-inline-edit).
+    /// Inline freq-edit state for RX2 - symmetric with `freq_editing` on RX1.
     rx2_freq_editing: bool,
     rx2_freq_edit_text: String,
     rx2_spectrum_bins: Vec<u16>,
@@ -1249,6 +1251,8 @@ pub struct SdrRemoteApp {
     rx2_spectrum_range_db: f32,
     rx2_auto_ref_enabled: bool,
     rx2_waterfall_contrast: f32,
+    /// The fill under the spectrum curves, one value for all panels.
+    spectrum_fill_percent: u8,
     vfo_sync: bool,
     mon_on: bool,
     // New TCI controls
@@ -1304,8 +1308,7 @@ pub struct SdrRemoteApp {
     ble_target: u8,
     ble_toggle: bool,
     // The Morse paddle (ui/paddle_screen.rs): the reader thread with the keyer
-    // on it, and what the screen shows of it. Step 2 of the CW design: edges
-    // go to the log only.
+    // on it, and what the screen shows of it.
     paddle: crate::paddle::PaddleManager,
     paddle_enabled: bool,
     /// The CW sidetone (shared with the playback callback), its settings as
@@ -1417,8 +1420,8 @@ impl SdrRemoteApp {
         }
     }
 
-    /// Uniform subscription chips for one RX channel (parity by construction,
-    /// model §1b/§6.4): `[audio-checkbox Name] [spectrum-toggle "spec"]`. All channels
+    /// Uniform subscription chips for one RX channel (parity by construction):
+    /// `[audio-checkbox Name] [spectrum-toggle "spec"]`. All channels
     /// draw their audio checkbox + spectrum toggle via this helper + the shared
     /// `theme::tl_toggle_button`, so they can no longer diverge per channel.
     /// Returns `(audio_clicked, spectrum_clicked)`; the caller dispatches the
@@ -1444,8 +1447,8 @@ impl SdrRemoteApp {
     /// The heading says WHICH channel, the buttons say WHAT they do to it - the
     /// channel name used to be the audio button itself, which read as a label
     /// rather than as a switch. One helper for all six channels (RX1, RX2, VRX1,
-    /// VRX2 and both Yaesu slots): parity by construction, per
-    /// docs/internal/UI-STYLE-GUIDE.md. Only the hover texts differ, because what
+    /// VRX2 and both Yaesu slots): parity by construction. Only the hover texts
+    /// differ, because what
     /// sits behind the window button differs (spectrum + waterfall for RX/VRX,
     /// the control panel for a Yaesu).
     ///
@@ -1581,7 +1584,7 @@ impl SdrRemoteApp {
     }
 
     // ---------------------------------------------------------------------
-    // controls-scaffolding - sub-step 4 writeback extract
+    // controls-scaffolding - snapshot and writeback of the RX channel state
     // ---------------------------------------------------------------------
 
     /// Build an `RxChannelState` snapshot for RX1. Takes `freq_edit_text`
@@ -1598,7 +1601,7 @@ impl SdrRemoteApp {
     }
 
     /// Build an `RxChannelState` snapshot for RX2. Now also carries inline-edit
-    /// state (PATCH-rx2-inline-edit - symmetric with RX1).
+    /// state.
     fn rx2_snap(&mut self) -> controls::RxChannelState {
         controls::RxChannelState {
             frequency_hz: self.rx2_frequency_hz,

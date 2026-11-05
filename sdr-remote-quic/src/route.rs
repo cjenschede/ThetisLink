@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! The route layer under quinn (phase 3b, `OPZET-fase3b-quic-via-relay.md`).
+//! The route layer under quinn.
 //!
 //! quinn runs on a socket of our own ([`quinn::AsyncUdpSocket`]), so one QUIC
 //! connection can travel through the relay without quinn knowing. Each packet
@@ -84,17 +84,29 @@ pub enum ClientPath {
     Local,
     /// Everything through the relay over its TCP line (build 146).
     RelayTcp,
+    /// The direct path carries on while the relay session is gone: an outage,
+    /// or a stopped monitor (2.13.1 build 3, the red R).
+    DirectRelayGone,
+    /// The same on the own network.
+    LocalRelayGone,
 }
 
 impl ClientPath {
+    /// Every way, in the order of the enum: its place here is the number the
+    /// leg stores (`as u8`), so the numbering has this one source. The test
+    /// holds the list to the enum.
+    const ALL: [ClientPath; 7] = [
+        ClientPath::Relay,
+        ClientPath::Coupling,
+        ClientPath::Direct,
+        ClientPath::Local,
+        ClientPath::RelayTcp,
+        ClientPath::DirectRelayGone,
+        ClientPath::LocalRelayGone,
+    ];
+
     fn from_u8(v: u8) -> ClientPath {
-        match v {
-            1 => ClientPath::Coupling,
-            2 => ClientPath::Direct,
-            3 => ClientPath::Local,
-            4 => ClientPath::RelayTcp,
-            _ => ClientPath::Relay,
-        }
+        ClientPath::ALL.get(usize::from(v)).copied().unwrap_or(ClientPath::Relay)
     }
 }
 
@@ -153,9 +165,9 @@ pub fn relay_peer_id(addr: SocketAddr) -> Option<u8> {
 
 /// The live relay session of a side: its socket, the relay address it sends
 /// to, and the token of the moment, under one lock, so a send never takes a
-/// socket of one session with the token of another (review 117).
+/// socket of one session with the token of another.
 ///
-/// The socket is unconnected (phase 3c): the same socket talks to the relay
+/// The socket is unconnected, for punching: the same socket talks to the relay
 /// and, once a punch has worked, directly - so the direct packets leave under
 /// the very address the relay saw. What the operating system filtered for a
 /// connected socket is filtered here: only `relay` and the punched target get
@@ -172,6 +184,19 @@ struct Live {
     public: Option<SocketAddr>,
     /// The client's punching in this session; the server's leg leaves it be.
     punch: ClientPunch,
+    /// The relay session ended while the client's direct path was confirmed
+    /// (field 2026-10-25): the socket stays for that path, and nothing goes to
+    /// the relay any more. A new grant takes a new socket, as after a network
+    /// change. Never set on the server's leg - its direct ways have sockets of
+    /// their own.
+    relay_gone: bool,
+}
+
+impl Live {
+    /// The confirmed direct path of this session, if there is one.
+    fn confirmed(&self) -> Option<&Direct> {
+        self.punch.direct.as_ref().filter(|d| d.confirmed)
+    }
 }
 
 /// Where a client's punching stands in one relay session. A new session (a
@@ -208,6 +233,15 @@ impl Direct {
         }
     }
 
+    /// The same, with the relay session gone.
+    fn way_relay_gone(&self) -> ClientPath {
+        if self.local {
+            ClientPath::LocalRelayGone
+        } else {
+            ClientPath::DirectRelayGone
+        }
+    }
+
     /// The word in the log.
     fn word(&self) -> &'static str {
         if self.local {
@@ -224,7 +258,7 @@ fn same(a: SocketAddr, b: SocketAddr) -> bool {
 }
 
 /// The order in which a leg tries the relay's addresses: the IPv4 one beside
-/// an IPv6 first one goes first (decision 3, phase 3c). Punching was proven over
+/// an IPv6 first one goes first. Punching was proven over
 /// the phone's IPv4 in the third experiment, and on 5G the relay saw the phone
 /// as IPv4 anyway (field test 123). The classic audio path keeps following the
 /// family (`connect_relay_udp`).
@@ -239,8 +273,8 @@ fn relay_order(g: &UdpGrant) -> Vec<SocketAddr> {
 /// loss on the relay path, and whether it is ours).
 /// `no_session` is what had to go while the leg had no relay session at all - a
 /// relay outage takes the grant away, and every datagram to every client then
-/// went without a count (review 122).
-/// The direct path (phase 3c) is counted the same way, beside it, and so is
+/// went without a count.
+/// The punched direct path is counted the same way, beside it, and so is
 /// what the source filter drops: what came from neither the relay nor the
 /// punched peer.
 #[derive(Default)]
@@ -366,7 +400,6 @@ impl RelayLeg {
     /// Something came back over UDP from the relay in `session`.
     fn udp_works(&self, session: u64) {
         if self.udp_works_in.load(Ordering::Relaxed) != session && self.udp_works_in.swap(session, Ordering::Relaxed) != session {
-            // Named in the brief before it was built (working rule 11, build 144).
             info!("QUIC via relay: UDP works in session {session}");
         }
     }
@@ -380,7 +413,9 @@ impl RelayLeg {
     /// the socket is busy, the datagram is dropped: QUIC sends again what it
     /// misses, and a relay leg must never hold up the direct one.
     fn send(&self, client_id: u8, payload: &[u8]) {
-        let Some((sock, relay, token)) = self.live.lock().unwrap().as_ref().map(|l| (l.socket.clone(), l.relay, l.token)) else {
+        let Some((sock, relay, token)) =
+            self.live.lock().unwrap().as_ref().filter(|l| !l.relay_gone).map(|l| (l.socket.clone(), l.relay, l.token))
+        else {
             self.counts.no_session.fetch_add(1, Ordering::Relaxed);
             return;
         };
@@ -399,8 +434,8 @@ impl RelayLeg {
         };
     }
 
-    /// A QUIC packet straight to `target`, without the relay's header (phase
-    /// 3c). Dropped like a relay datagram when it cannot leave.
+    /// A QUIC packet straight to `target`, without the relay's header (the
+    /// punched path). Dropped like a relay datagram when it cannot leave.
     fn send_direct(&self, sock: &UdpSocket, target: SocketAddr, payload: &[u8]) {
         match sock.try_send_to(payload, target) {
             Ok(_) => self.counts.direct_out.fetch_add(1, Ordering::Relaxed),
@@ -420,12 +455,23 @@ impl RelayLeg {
     /// relay's TCP line as well (build 144): on a network that lets no UDP
     /// through, that copy is the connection - without waiting to find out.
     fn send_client(&self, payload: &[u8]) {
-        let Some((sock, relay, token, direct, session)) = self.live.lock().unwrap().as_ref().map(|l| {
-            (l.socket.clone(), l.relay, l.token, l.punch.direct.as_ref().map(|d| (d.target, d.confirmed)), l.session)
+        let Some((sock, relay, token, direct, session, relay_gone)) = self.live.lock().unwrap().as_ref().map(|l| {
+            (l.socket.clone(), l.relay, l.token, l.punch.direct.as_ref().map(|d| (d.target, d.confirmed)), l.session, l.relay_gone)
         }) else {
             self.counts.no_session.fetch_add(1, Ordering::Relaxed);
             return;
         };
+        // The relay is gone and the direct path carries on alone (field
+        // 2026-10-25): before, the whole connection went silent with the relay.
+        if relay_gone {
+            match direct {
+                Some((target, true)) => self.send_direct(&sock, target, payload),
+                _ => {
+                    self.counts.no_session.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            return;
+        }
         // "Force TCP" (build 146): the TCP line only, as on a network that
         // lets no UDP through. The punch is let go at the next offer tick.
         if self.force_tcp.load(Ordering::Relaxed) && self.tcp_out.is_some() {
@@ -465,7 +511,7 @@ impl RelayLeg {
                         }
                         let payload = &data[1..];
                         if payload.len() > out.len() {
-                            debug!("QUIC via relay: a {} B datagram does not fit - dropped", payload.len());
+                            debug!("QUIC via relay: a {} B datagram does not fit; dropped", payload.len());
                             continue;
                         }
                         out[..payload.len()].copy_from_slice(payload);
@@ -476,7 +522,7 @@ impl RelayLeg {
                         continue;
                     }
                     if data.len() > out.len() {
-                        debug!("QUIC direct: a {} B datagram does not fit - dropped", data.len());
+                        debug!("QUIC direct: a {} B datagram does not fit; dropped", data.len());
                         continue;
                     }
                     out[..data.len()].copy_from_slice(data);
@@ -486,8 +532,8 @@ impl RelayLeg {
                 // A UDP socket reports an ICMP "port unreachable" as an error
                 // on the next read; the next datagram is unaffected. This loop
                 // ends: one error per datagram of ours that bounced, then
-                // `Pending` - measured on WinSock for a connected socket (review
-                // 117) and an unconnected one (2026-10-07, before build 125).
+                // `Pending` - measured on WinSock for a connected socket and an
+                // unconnected one (2026-10-07, before build 125).
                 Poll::Ready(Err(e)) => {
                     debug!("QUIC via relay: receive error: {e}");
                     continue;
@@ -508,7 +554,7 @@ impl RelayLeg {
             match rx.poll_recv(cx) {
                 Poll::Ready(Some((cid, data))) => {
                     if data.len() > out.len() {
-                        debug!("QUIC over TCP: a {} B packet does not fit - dropped", data.len());
+                        debug!("QUIC over TCP: a {} B packet does not fit; dropped", data.len());
                         continue;
                     }
                     out[..data.len()].copy_from_slice(&data);
@@ -535,19 +581,19 @@ impl RelayLeg {
             if let Some(d) = direct {
                 if src.ip() == d.target.ip() && src.port() != d.target.port() && !d.port_logged {
                     d.port_logged = true;
-                    info!("QUIC punch: the server's probe came from another port than it said - its router changed the port");
+                    info!("QUIC punch: the server's probe came from another port than it said; its router changed the port");
                 }
             }
             return false;
         }
         match direct {
             Some(d) if same(src, d.target) => {
+                d.last_in = Instant::now();
                 if !d.confirmed {
                     d.confirmed = true;
                     info!("QUIC {} path up after {} ms", d.word(), d.since.elapsed().as_millis());
-                    self.path.store(d.way() as u8, Ordering::Relaxed);
+                    self.publish_path(&live);
                 }
-                d.last_in = Instant::now();
                 true
             }
             _ => {
@@ -558,10 +604,12 @@ impl RelayLeg {
     }
 
     /// Say which way the traffic takes now (`RelayRoute::path`), from the punch
-    /// state as it stands - and through the relay, whether that is its TCP line
+    /// state as it stands, and through the relay, whether that is its TCP line
     /// (build 146): "force TCP" on, or UDP not seen to work for [`RELAY_QUIET`]
     /// after the session began. Not at once: the first answers of every session
-    /// come over TCP before the first over UDP (review 144, measured).
+    /// come over TCP before the first over UDP (measured). The one
+    /// writer of the way: a confirmed answer and a new one call it too (2.13.1
+    /// build 4; three writers before).
     fn publish_path(&self, live: &Option<Live>) {
         let path = match live.as_ref().map(|l| (l, l.punch.direct.as_ref())) {
             None => ClientPath::Relay,
@@ -575,6 +623,7 @@ impl RelayLeg {
                     ClientPath::Relay
                 }
             }
+            Some((l, Some(d))) if d.confirmed && l.relay_gone => d.way_relay_gone(),
             Some((_, Some(d))) if d.confirmed => d.way(),
             Some((_, Some(_))) => ClientPath::Coupling,
         };
@@ -603,18 +652,28 @@ impl RelayLeg {
     fn offer_due_now(&self) -> Option<SocketAddr> {
         let mut live = self.live.lock().unwrap();
         let l = live.as_mut()?;
+        // No relay: no offer goes anywhere. The direct path carries on until it
+        // goes silent, and then there is nothing left - the socket goes, as it
+        // used to at once.
+        if l.relay_gone {
+            if l.confirmed().is_some_and(|d| d.last_in.elapsed() < DIRECT_SILENCE) {
+                return None;
+            }
+            info!("QUIC via relay: the direct path went silent and there is no relay session");
+            *live = None;
+            return None;
+        }
         // "Relay only" (build 137): no offer, and a direct path - confirmed or
         // being tried - is let go at once, so every packet goes through the
         // relay from the next send on. Switched off again, the punch starts
         // over from nothing.
         if self.relay_only.load(Ordering::Relaxed) || self.force_tcp.load(Ordering::Relaxed) {
             if l.punch.direct.is_some() {
-                // Named in the brief before it was built (working rule 11,
-                // builds 137 and 147): the switch that did it, by its name.
+                // The log line names the switch that did it (builds 137 and 147).
                 if self.force_tcp.load(Ordering::Relaxed) {
-                    info!("QUIC punch: force TCP - back to the relay");
+                    info!("QUIC punch: force TCP; back to the relay");
                 } else {
-                    info!("QUIC punch: relay only - back to the relay");
+                    info!("QUIC punch: relay only; back to the relay");
                 }
             }
             l.punch = ClientPunch::default();
@@ -627,7 +686,7 @@ impl RelayLeg {
         }
         if let Some(d) = &p.direct {
             if !d.confirmed && d.since.elapsed() >= GIVE_UP {
-                info!("QUIC punch: the {} path did not answer within {} s - staying on the relay", d.word(), GIVE_UP.as_secs());
+                info!("QUIC punch: the {} path did not answer within {} s; staying on the relay", d.word(), GIVE_UP.as_secs());
                 p.direct = None;
                 p.gave_up = true;
             } else if d.confirmed && d.last_in.elapsed() >= DIRECT_SILENCE {
@@ -645,7 +704,7 @@ impl RelayLeg {
         }
         if p.offers == MAX_OFFERS {
             info!(
-                "QUIC punch: no answer to {MAX_OFFERS} offers - offering every {} s from now on",
+                "QUIC punch: no answer to {MAX_OFFERS} offers; offering every {} s from now on",
                 OFFER_EVERY_SLOW.as_secs()
             );
         }
@@ -672,12 +731,12 @@ impl RelayLeg {
         let Some(l) = live.as_mut() else { return };
         let p = &mut l.punch;
         if p.offers == 0 || p.gave_up {
-            debug!("QUIC punch: an answer to no offer of this session - ignored");
+            debug!("QUIC punch: an answer to no offer of this session; ignored");
             return;
         }
         if addr.is_ipv4() != l.relay.is_ipv4() {
             info!(
-                "QUIC punch: the server is at an {} address and this socket is {} - staying on the relay",
+                "QUIC punch: the server is at an {} address and this socket is {}; staying on the relay",
                 sdr_remote_relay::family(addr),
                 sdr_remote_relay::family(l.relay)
             );
@@ -685,12 +744,12 @@ impl RelayLeg {
             return;
         }
         if !usable_target(addr) {
-            info!("QUIC punch: the server's address is no place to send to - staying on the relay");
+            info!("QUIC punch: the server's address is no place to send to; staying on the relay");
             p.gave_up = true;
             return;
         }
         if local && !sdr_remote_core::path::is_local(addr.ip()) {
-            info!("QUIC local: the server named an address that is not on a local network - staying on the relay");
+            info!("QUIC local: the server named an address that is not on a local network; staying on the relay");
             p.gave_up = true;
             return;
         }
@@ -698,25 +757,28 @@ impl RelayLeg {
             return; // the answer to an offer that crossed it
         }
         if local {
-            // Named in the brief before it was built (working rule 11, build 142).
-            info!("QUIC local: the server is on this network - trying its own port");
+            info!("QUIC local: the server is on this network; trying its own port");
         } else {
-            info!("QUIC punch: the server punched ({}) - trying the direct path", sdr_remote_relay::family(addr));
+            info!("QUIC punch: the server punched ({}); trying the direct path", sdr_remote_relay::family(addr));
         }
         let now = Instant::now();
         p.direct = Some(Direct { target: addr, since: now, confirmed: false, last_in: now, port_logged: false, local });
-        self.path.store(ClientPath::Coupling as u8, Ordering::Relaxed);
+        self.publish_path(&live);
     }
 
     /// Start punching over: a new QUIC connection gets a server socket of its
     /// own; the one of the old connection goes with that connection.
     fn restart_punch(&self) {
         let mut live = self.live.lock().unwrap();
-        if let Some(l) = live.as_mut() {
+        if live.as_ref().is_some_and(|l| l.relay_gone) {
+            // Without a relay a new connection has no way to punch, and the old
+            // connection's direct path is not its own.
+            *live = None;
+        } else if let Some(l) = live.as_mut() {
             l.punch = ClientPunch::default();
         }
         // And say so at once: a new connection must not start with the old
-        // one's way until the next offer tick (review 139, measured).
+        // one's way until the next offer tick (measured).
         self.publish_path(&live);
     }
 
@@ -750,12 +812,31 @@ async fn follow(leg: Weak<RelayLeg>, mut grant: watch::Receiver<Option<UdpGrant>
             tokio::select! {
                 r = grant.changed() => {
                     if r.is_err() {
-                        // The monitor is gone (on the phone it goes with its
-                        // bridge): no session any more, so no socket either,
-                        // rather than sending on into a dead token (review 118).
+                        // The monitor is gone: the app shuts down, a panic in
+                        // the monitor's thread, or on the phone a second bridge
+                        // that stops the first one's monitor. Switching the
+                        // relay off in the settings does not come here: both
+                        // apps apply that at the next start. No session any more. A confirmed
+                        // direct path carries on, as in an outage - `relay_gone` sends nothing into the
+                        // dead token - and goes once it is silent.
+                        // Without one, no socket either.
                         if let Some(leg) = leg.upgrade() {
-                            *leg.live.lock().unwrap() = None;
-                            info!("QUIC via relay: the relay monitor stopped");
+                            let mut live = leg.live.lock().unwrap();
+                            match live.as_mut() {
+                                Some(l) if l.confirmed().is_some() => {
+                                    l.relay_gone = true;
+                                    info!(
+                                        "QUIC via relay: the relay monitor stopped; the {} path carries on",
+                                        l.confirmed().map_or("direct", |d| d.word())
+                                    );
+                                }
+                                _ => {
+                                    *live = None;
+                                    info!("QUIC via relay: the relay monitor stopped");
+                                }
+                            }
+                            // Say the way at once, as every other change does.
+                            leg.publish_path(&live);
                         }
                         return;
                     }
@@ -772,10 +853,20 @@ async fn follow(leg: Weak<RelayLeg>, mut grant: watch::Receiver<Option<UdpGrant>
             let session_now = leg.live.lock().unwrap().as_ref().map(|l| l.session);
             match now {
                 None => {
-                    *leg.live.lock().unwrap() = None;
-                    info!("QUIC via relay: no relay session");
+                    let mut live = leg.live.lock().unwrap();
+                    match live.as_mut() {
+                        Some(l) if !l.relay_gone && l.confirmed().is_some() => {
+                            l.relay_gone = true;
+                            info!("QUIC via relay: no relay session; the {} path carries on", l.confirmed().map_or("direct", |d| d.word()));
+                        }
+                        Some(l) if l.relay_gone => {}
+                        _ => {
+                            *live = None;
+                            info!("QUIC via relay: no relay session");
+                        }
+                    }
                 }
-                Some(g) if session_now == Some(g.session) => {
+                Some(g) if session_now == Some(g.session) && !leg.live.lock().unwrap().as_ref().is_some_and(|l| l.relay_gone) => {
                     // The relay's rotation: the same socket, the new token. Or
                     // the relay's word on our public address: a new one means
                     // the server punched towards an address that is gone.
@@ -783,7 +874,7 @@ async fn follow(leg: Weak<RelayLeg>, mut grant: watch::Receiver<Option<UdpGrant>
                         l.token = g.token;
                         if l.public != g.public {
                             if l.public.is_some() {
-                                info!("QUIC via relay: session {} has a new public address - punching again", g.session);
+                                info!("QUIC via relay: session {} has a new public address; punching again", g.session);
                             }
                             l.public = g.public;
                             l.punch = ClientPunch::default();
@@ -816,6 +907,7 @@ async fn follow(leg: Weak<RelayLeg>, mut grant: watch::Receiver<Option<UdpGrant>
                             relay: used,
                             token: g.token,
                             public: g.public,
+                            relay_gone: false,
                             punch: ClientPunch::default(),
                         });
                         leg.new_session.send_replace(g.session);
@@ -829,7 +921,7 @@ async fn follow(leg: Weak<RelayLeg>, mut grant: watch::Receiver<Option<UdpGrant>
             // Say the way at once: every branch above may have emptied the punch
             // state (no session, a new public address, a new session), and the
             // next offer tick is up to 250 ms away - the old way stood on screen
-            // over a network switch until then (review 140).
+            // over a network switch until then.
             leg.publish_path(&leg.live.lock().unwrap());
             // Whatever waited on the old socket waits on the new one now.
             if let Some(w) = leg.recv_waker.lock().unwrap().take() {
@@ -841,14 +933,14 @@ async fn follow(leg: Weak<RelayLeg>, mut grant: watch::Receiver<Option<UdpGrant>
         leg.send(UDP_MAPPING_KEEPALIVE_ID, &[]);
         // Only the ticks count towards the window: a loop woken by a grant (a
         // rotation, a gap, a new session) is no second, and during a relay outage
-        // those come in bunches - the very window the line is read for (review 122).
+        // those come in bunches - the very window the line is read for.
         if !changed {
             ticks += 1;
         }
         if ticks >= report_every {
             ticks = 0;
             let [to, busy, failed, no_session, from, d_out, d_dropped, d_in, strangers, t_out, t_dropped, t_in] = leg.counts.take();
-            let session = if leg.live.lock().unwrap().is_some() { "" } else { " (no relay session now)" };
+            let session = if leg.live.lock().unwrap().as_ref().is_some_and(|l| !l.relay_gone) { "" } else { " (no relay session now)" };
             dev_info!(
                 "QUIC via relay ({} s){session}: {to} datagrams to the relay, {busy} dropped here (socket busy), {failed} failed, {no_session} dropped with no relay session, {from} from the relay; direct: {d_out} out, {d_dropped} dropped here, {d_in} in; {strangers} from an unknown source dropped; over TCP: {t_out} out, {t_dropped} dropped here, {t_in} in",
                 crate::STATS_EVERY.as_secs()
@@ -860,7 +952,7 @@ async fn follow(leg: Weak<RelayLeg>, mut grant: watch::Receiver<Option<UdpGrant>
 /// One datagram for quinn. `stride` must stay equal to `len`: quinn cuts a
 /// received buffer into pieces of `stride` (quinn endpoint.rs:794-796), and a
 /// `stride` of 0 with a `len` above it is a loop that never ends - the endpoint
-/// would hang without a word (review 117).
+/// would hang without a word.
 fn fill(meta: &mut RecvMeta, addr: SocketAddr, len: usize) {
     *meta = RecvMeta { addr, len, stride: len, ecn: None, dst_ip: None };
 }
@@ -941,7 +1033,7 @@ impl AsyncUdpSocket for ClientRelaySocket {
     fn max_transmit_segments(&self) -> usize {
         // One datagram per send, said here rather than left to quinn's default:
         // a batch would go out as one relay payload, and the other side would
-        // get two QUIC packets in one datagram and drop both (review 117).
+        // get two QUIC packets in one datagram and drop both.
         1
     }
 
@@ -974,19 +1066,18 @@ pub(crate) enum Answer {
 }
 
 /// Whether `ip` may be given out as this side's local address (L+R): IPv4 (the
-/// design is IPv4 only, `OPZET-L-plus-R.md` section 5), on a local network
+/// design is IPv4 only), on a local network
 /// (`is_local` - a server with a public address on its card is not at home), and
 /// not loopback unless a test says so: a relay reached over loopback is a test.
 /// A rule of its own with a table test: inside `home_addr` only the loopback
-/// part could be steered, and the other two stayed green when taken out
-/// (reviews 142).
+/// part could be steered, and the other two stayed green when taken out.
 fn is_home(ip: IpAddr, loopback_ok: bool) -> bool {
     ip.is_ipv4() && sdr_remote_core::path::is_local(ip) && (!ip.is_loopback() || loopback_ok)
 }
 
 /// This side's IP towards `relay`, as the operating system would send from:
 /// read from a UDP socket "connected" there - connecting a UDP socket sends
-/// nothing (`OPZET-L-plus-R.md` section 2).
+/// nothing.
 fn own_ip_towards(relay: SocketAddr) -> Option<IpAddr> {
     let any = if relay.is_ipv4() {
         SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
@@ -998,7 +1089,7 @@ fn own_ip_towards(relay: SocketAddr) -> Option<IpAddr> {
     Some(s.local_addr().ok()?.ip())
 }
 
-/// One client's punch on the server (phase 3c): a fresh socket of its own (the
+/// One client's punch on the server: a fresh socket of its own (the
 /// third experiment: a fresh port per client, against the poisoning), the
 /// client's public address it punches to, and when QUIC last came which way.
 #[derive(Debug)]
@@ -1050,14 +1141,14 @@ pub(crate) struct ServerRouteSocket {
     /// The connections (quinn's `stable_id`) whose client proved the password:
     /// only those may punch (build 126). An offer is taken at the QUIC layer,
     /// before and apart from the session's proof, and an offer makes this side
-    /// send to an address of the client's choosing (review 125).
+    /// send to an address of the client's choosing.
     proven: Mutex<HashSet<usize>>,
     /// The connections already told about in the log: an offer before the proof.
     told_unproven: Mutex<HashSet<usize>>,
     /// The task that waits on quinn's receive, woken for a new punched socket.
     recv_waker: Mutex<Option<Waker>>,
     /// Which source is read first, in turn, so none starves the others - and
-    /// which punched socket, within the punched ones (review 125).
+    /// which punched socket, within the punched ones.
     next_source: AtomicU32,
     next_punched: AtomicU32,
     /// The server takes connections through the relay only (build 135): what
@@ -1076,7 +1167,7 @@ pub(crate) struct ServerRouteSocket {
     /// The same for what came over UDP through the relay (build 145): a client
     /// heard over TCP and not over UDP gets no UDP copy - for a client whose
     /// UDP is closed it never arrives, and it doubled the station's uplink for
-    /// the whole session (review 144).
+    /// the whole session.
     udp_in_at: Vec<AtomicU64>,
     born: Instant,
     /// A test's word that loopback counts as this side's local network.
@@ -1125,7 +1216,6 @@ impl ServerRouteSocket {
         let now = self.born.elapsed().as_millis() as u64 + 1;
         let before = self.tcp_in_at[id as usize].swap(now, Ordering::Relaxed);
         if before == 0 || now.saturating_sub(before) >= RELAY_QUIET.as_millis() as u64 {
-            // Named in the brief before it was built (working rule 11, build 144).
             info!("QUIC via relay: client {id} sends over the relay's TCP line");
         }
     }
@@ -1177,6 +1267,13 @@ impl ServerRouteSocket {
         self.punched.lock().unwrap().get(&id).is_some_and(|p| !p.ended.load(Ordering::Relaxed) && p.direct_only())
     }
 
+    /// Whether the server has a relay set and no session with it now: an
+    /// outage, or a stopped monitor. The server's leg never confirms a direct
+    /// path, so an empty `live` is exactly that.
+    pub(crate) fn relay_session_gone(&self) -> bool {
+        self.relay.as_ref().is_some_and(|l| l.live.lock().unwrap().is_none())
+    }
+
     /// Whether this server takes connections through the relay only.
     pub(crate) fn is_relay_only(&self) -> bool {
         self.relay_only
@@ -1193,10 +1290,10 @@ impl ServerRouteSocket {
         self.proven.lock().unwrap().insert(owner);
     }
 
-    /// Its session ended while the connection lives on (review 126).
+    /// Its session ended while the connection lives on.
     pub(crate) fn revoke(&self, owner: usize) {
         self.proven.lock().unwrap().remove(&owner);
-        // A new "not yet proven" stretch on this connection is said again (review 128).
+        // A new "not yet proven" stretch on this connection is said again.
         self.told_unproven.lock().unwrap().remove(&owner);
     }
 
@@ -1221,7 +1318,7 @@ impl ServerRouteSocket {
             return None;
         };
         // A connection that moved to another client id leaves its old punch -
-        // whichever answer it gets now (review 142: the L+R answer skipped this).
+        // whichever answer it gets now (the L+R answer skipped this).
         self.punched.lock().unwrap().retain(|&k, p| {
             let keep = k == id || p.owner != owner;
             if !keep {
@@ -1230,10 +1327,9 @@ impl ServerRouteSocket {
             keep
         });
         if ours.ip() == public.ip() {
-            // Named in the brief before it was built (working rule 11, build 142).
             match self.home_addr() {
                 Some(home) => {
-                    info!("QUIC punch: client {id} is behind this side's router - answered with the local address (port {})", home.port());
+                    info!("QUIC punch: client {id} is behind this side's router; answered with the local address (port {})", home.port());
                     let mut map = self.punched.lock().unwrap();
                     if map.get(&id).is_some_and(|p| p.owner == owner) {
                         if let Some(old) = map.remove(&id) {
@@ -1243,20 +1339,20 @@ impl ServerRouteSocket {
                     return Some(Answer::Local(home));
                 }
                 None => info!(
-                    "QUIC punch: client {id} is behind this side's router, but this side has no local address towards the relay - punching"
+                    "QUIC punch: client {id} is behind this side's router, but this side has no local address towards the relay; punching"
                 ),
             }
         }
         if ours.is_ipv4() != public.is_ipv4() {
             info!(
-                "QUIC punch: client {id} is at an {} address and this side at an {} one - staying on the relay",
+                "QUIC punch: client {id} is at an {} address and this side at an {} one; staying on the relay",
                 sdr_remote_relay::family(public),
                 sdr_remote_relay::family(ours)
             );
             return None;
         }
         if !usable_target(public) {
-            info!("QUIC punch: client {id} offered an address that is no place to send to - not punched");
+            info!("QUIC punch: client {id} offered an address that is no place to send to; not punched");
             return None;
         }
         {
@@ -1271,7 +1367,7 @@ impl ServerRouteSocket {
                 }
             }
         }
-        // The socket is opened outside the lock that every send takes (review 125).
+        // The socket is opened outside the lock that every send takes.
         let any = if public.is_ipv4() {
             SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
         } else {
@@ -1342,7 +1438,7 @@ impl ServerRouteSocket {
 
     /// Whether this is the first offer on connection `owner` that came before
     /// the password - said once per connection, so a log at the usual level
-    /// tells "offered, not yet answered" from "never offered" (review 127).
+    /// tells "offered, not yet answered" from "never offered".
     pub(crate) fn first_unproven_offer(&self, owner: usize) -> bool {
         self.told_unproven.lock().unwrap().insert(owner)
     }
@@ -1368,7 +1464,7 @@ impl ServerRouteSocket {
     /// One batch per turn: after it, the task is woken again and the turn goes to
     /// the other sources. Reading until the port is empty would let a stream of
     /// datagrams on it keep the relay - the one way in on such a server - from
-    /// its turn (review 135).
+    /// its turn.
     fn poll_direct_refused(&self, cx: &mut Context, bufs: &mut [IoSliceMut<'_>], meta: &mut [RecvMeta]) -> Poll<io::Result<usize>> {
         match self.direct.poll_recv(cx, bufs, meta) {
             Poll::Ready(Ok(n)) => {
@@ -1376,9 +1472,8 @@ impl ServerRouteSocket {
                 let mut log = self.refused.lock().unwrap();
                 log.since_line += n as u64;
                 if log.last_line.map_or(true, |t| t.elapsed() >= REFUSED_LOG_EVERY) {
-                    // Named in the brief before it was built (working rule 11, build 135).
                     info!(
-                        "QUIC: a direct connection from {from} refused - this server takes connections through the relay only ({} datagram(s) dropped)",
+                        "QUIC: a direct connection from {from} refused; this server takes connections through the relay only ({} datagram(s) dropped)",
                         log.since_line
                     );
                     log.last_line = Some(Instant::now());
@@ -1399,7 +1494,7 @@ impl ServerRouteSocket {
             match leg.poll_recv(cx, &mut bufs[0]) {
                 Poll::Ready(Ok(Arrived::Relay(client_id, len))) => {
                     // Only a client that ever came over TCP needs its UDP
-                    // stamped: one atomic load for every other (review 145).
+                    // stamped: one atomic load for every other.
                     if self.tcp_in_at[client_id as usize].load(Ordering::Relaxed) != 0 {
                         self.udp_in_at[client_id as usize].store(self.born.elapsed().as_millis() as u64 + 1, Ordering::Relaxed);
                     }
@@ -1456,7 +1551,7 @@ impl ServerRouteSocket {
                         }
                         if src.ip() == p.target.ip() {
                             if !p.port_logged.swap(true, Ordering::Relaxed) {
-                                info!("QUIC punch: client {id} came from another port than the relay saw - its router changed the port");
+                                info!("QUIC punch: client {id} came from another port than the relay saw; its router changed the port");
                             }
                         } else {
                             self.count(|c| &c.strangers);
@@ -1502,7 +1597,7 @@ async fn keep_punching(route: Weak<ServerRouteSocket>, id: u8, p: Arc<Punched>) 
             Some(_) => None,
         };
         if let Some(why) = why {
-            info!("QUIC punch: client {id} {why} for {} s - back to the relay", GIVE_UP.as_secs());
+            info!("QUIC punch: client {id} {why} for {} s; back to the relay", GIVE_UP.as_secs());
             p.ended.store(true, Ordering::Relaxed);
             if let Some(route) = route.upgrade() {
                 route.punched.lock().unwrap().retain(|_, e| !Arc::ptr_eq(e, &p));
@@ -1571,8 +1666,8 @@ impl AsyncUdpSocket for ServerRouteSocket {
     fn max_transmit_segments(&self) -> usize {
         // One datagram per send: a relay datagram needs its own header, and a
         // batch is sent to one destination - better never to batch at all. This
-        // holds for the direct clients too while the relay is on (review 117:
-        // a price nobody chose, written down in the register).
+        // holds for the direct clients too while the relay is on
+        // (a price nobody chose, written down in the register).
         1
     }
 
@@ -1591,8 +1686,8 @@ impl AsyncUdpSocket for ServerRouteSocket {
 mod tests {
     use super::*;
 
-    /// The punch itself, which no test over localhost can see working (review
-    /// 125: every probe could go and the suite stayed green): a fresh socket,
+    /// The punch itself, which no test over localhost can see working (every
+    /// probe could go and the suite stayed green): a fresh socket,
     /// its first probe out before the answer is back (well within the 200 ms
     /// of the next one), the answer naming that socket's port and this side's
     /// public IP, the probes repeated, the same answer to the same offer - and
@@ -1634,15 +1729,15 @@ mod tests {
         }
         assert_eq!(route.punches(), 1, "nothing opened for those");
         // A proof ends with its connection: quinn reuses a closed connection's
-        // `stable_id`, and a new one must not find the old proof (review 125).
+        // `stable_id`, and a new one must not find the old proof.
         // An offer before the proof is said once per connection, and again on a
-        // connection that comes after (review 127).
+        // connection that comes after.
         assert!(route.first_unproven_offer(5));
         assert!(!route.first_unproven_offer(5), "once");
         route.forget(5);
         assert!(route.first_unproven_offer(5), "a later connection with the same id is told again");
         route.revoke(5);
-        assert!(route.first_unproven_offer(5), "and so is a new stretch after its session ended (review 128)");
+        assert!(route.first_unproven_offer(5), "and so is a new stretch after its session ended");
         route.prove(7);
         route.revoke(7);
         assert!(!route.is_proven(7), "a permit taken back with its session");
@@ -1656,7 +1751,7 @@ mod tests {
     /// L+R (build 142): a client at this side's own public IP is behind the
     /// same router, and gets this side's own port at its local address - no
     /// punch, and a punch it had ends. A client at another IP is punched for,
-    /// on the same server. Twice (rule 9): the same offer, the same answer.
+    /// on the same server. Twice: the same offer, the same answer.
     #[tokio::test]
     async fn behind_the_same_router_the_answer_is_the_own_port() {
         let relay = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -1683,18 +1778,42 @@ mod tests {
         }
         // The same connection under another client id (a network switch where
         // the relay gave it a new one), then home: its old punch ends too
-        // (review 142: the L+R answer skipped this).
+        // (the L+R answer skipped this).
         assert!(matches!(route.punch(3, elsewhere, 1), Some(Answer::Punched(_))));
         assert_eq!(route.punch(4, at_home, 1), Some(Answer::Local(own)), "home under a new id");
         assert_eq!(route.punches(), 0, "the punch under the old id ended");
     }
 
-    /// Which local address may be given out (reviews 142): every condition of
+    /// The number a way is stored as comes back as that way, for every way:
+    /// `ALL` is in the order of the enum and holds all of it. A new way the
+    /// list leaves out read back as `Relay`, without a word.
+    #[test]
+    fn every_way_comes_back_as_itself() {
+        for (i, &way) in ClientPath::ALL.iter().enumerate() {
+            assert_eq!(way as usize, i, "{way:?}: its place in ALL is its number");
+            assert_eq!(ClientPath::from_u8(way as u8), way);
+            // No catch-all: a new way does not compile here until it is named,
+            // and the name above says where it belongs.
+            match way {
+                ClientPath::Relay
+                | ClientPath::Coupling
+                | ClientPath::Direct
+                | ClientPath::Local
+                | ClientPath::RelayTcp
+                | ClientPath::DirectRelayGone
+                | ClientPath::LocalRelayGone => {}
+            }
+        }
+        assert_eq!(ClientPath::ALL.len(), ClientPath::LocalRelayGone as usize + 1, "the last way is the last in ALL");
+        assert_eq!(ClientPath::from_u8(ClientPath::ALL.len() as u8), ClientPath::Relay, "past the list: the relay, as before");
+    }
+
+    /// Which local address may be given out: every condition of
     /// `is_home` decides one row.
     #[test]
     fn only_a_local_ipv4_address_is_home() {
         let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
-        assert!(is_home(ip("192.168.1.97"), false), "the own network");
+        assert!(is_home(ip("192.168.1.50"), false), "the own network");
         assert!(is_home(ip("10.0.0.5"), false));
         assert!(!is_home(ip("203.0.113.97"), false), "a public address on the card");
         assert!(!is_home(ip("fd12::1"), false), "IPv6, even a local one");
@@ -1714,7 +1833,7 @@ mod tests {
     /// The three made-up address ranges never overlap: the QUIC sentinels the
     /// server's sessions see, the old relay's sentinels, and the relay peers
     /// quinn sees here. Checked with the functions themselves, so a range that
-    /// moves cannot slip past (review 117).
+    /// moves cannot slip past.
     #[test]
     fn the_three_made_up_ranges_stay_apart() {
         for id in 0..=255u8 {
@@ -1757,8 +1876,7 @@ mod leg_counts {
     }
 
     /// A leg without a relay session counts what it could not send - a relay
-    /// outage takes the grant away, and those datagrams went uncounted
-    /// (review 122).
+    /// outage takes the grant away, and those datagrams went uncounted.
     #[tokio::test]
     async fn a_leg_without_a_session_counts_what_it_drops() {
         let (_tx, grant) = tokio::sync::watch::channel(None);
@@ -1806,7 +1924,7 @@ mod leg_counts {
         assert_eq!(leg.counts.busy.load(Ordering::Relaxed), 0, "no keepalive dropped as busy");
     }
 
-    /// The offers slow down after ten and never stop (review 126: a 2FA code
+    /// The offers slow down after ten and never stop (a 2FA code
     /// typed for longer than ten seconds left the client without a punch, and
     /// nothing saw it): the interval below and at the limit, and a leg that has
     /// offered fifty times offers again.
@@ -1831,7 +1949,7 @@ mod leg_counts {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         // The leg waits the slow interval, not one second, once it is there:
-        // an offer a second ago is too recent (review 127: the interval itself
+        // an offer a second ago is too recent (the interval itself
         // was pinned, its use was not).
         {
             let mut live = leg.live.lock().unwrap();
@@ -1852,8 +1970,8 @@ mod leg_counts {
         }
     }
 
-    /// An answer the client's socket cannot use - the other family (review
-    /// 125: this check had never run), or no place at all - keeps it on the
+    /// An answer the client's socket cannot use - the other family (this
+    /// check had once never run), or no place at all - keeps it on the
     /// relay: no direct target, and no more offers in this session.
     #[tokio::test]
     async fn an_answer_the_socket_cannot_use_keeps_the_client_on_the_relay() {
@@ -1884,7 +2002,7 @@ mod leg_counts {
 
     /// A new public address in the session empties the punch state, and the
     /// leg says the way at once - not at the next offer tick, which this test
-    /// never runs (review 140: `follow` emptied it and said nothing, so the old
+    /// never runs (`follow` emptied it and said nothing, so the old
     /// way stood over a network switch for up to 250 ms).
     #[tokio::test]
     async fn a_new_public_address_says_relay_at_once() {
@@ -1911,7 +2029,7 @@ mod leg_counts {
         tx.send(Some(UdpGrant { public: Some("127.0.0.1:9".parse().unwrap()), ..grant })).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(leg_says.path(), ClientPath::Relay, "the old way stood after the new address");
-        // The other branches, each from a way being tried (review 141: one
+        // The other branches, each from a way being tried (one
         // branch was driven, and half the repair stayed green): a new session
         // - the branch of a network switch - and then no session at all.
         let couple = |what: &str| {
@@ -2107,7 +2225,7 @@ mod leg_counts {
         assert_eq!(says.path(), ClientPath::Relay, "no line, no R (TCP)");
     }
 
-    /// The leg's socket is unconnected (phase 3c), so the source filter is
+    /// The leg's socket is unconnected (for punching), so the source filter is
     /// ours: the relay gets through, and the punched peer once the server has
     /// answered - its probe dropped, its QUIC packet taken; everything else is
     /// dropped and counted. And the client sends both ways until the direct
@@ -2190,14 +2308,14 @@ mod leg_counts {
         assert_eq!(&buf[..n], b"direct only");
         quiet(&relay, "after the confirmation").await;
 
-        // A new connection starts over, and says so at once (review 139).
+        // A new connection starts over, and says so at once.
         leg.restart_punch();
         assert_eq!(leg_says.path(), super::ClientPath::Relay, "a new connection does not keep the old one's way");
     }
 }
 
-/// A relay-only station's own port gives up its turn after one batch
-/// (review 135). A port that never runs dry stands for a stream of datagrams:
+/// A relay-only station's own port gives up its turn after one batch.
+/// A port that never runs dry stands for a stream of datagrams:
 /// one call into the route socket must come back and leave the relay its turn,
 /// where reading until empty would never return. Run on a thread of its own so
 /// a regression fails on the deadline instead of hanging the suite.
@@ -2351,7 +2469,7 @@ mod through_a_relay {
 
     /// A client reaches the station through the relay and back, and the two
     /// ends derive the same binding - the TLS session is end to end, the relay
-    /// only carries it. Twice on one connection (working rule 9).
+    /// only carries it. Twice on one connection.
     #[tokio::test]
     async fn a_client_reaches_the_station_through_the_relay() {
         let relay = FakeRelay::start().await;
@@ -2406,7 +2524,7 @@ mod through_a_relay {
     /// session (a new token for the same client id), the leg takes a new
     /// socket. The connection goes on; the server sees no new client. Without
     /// the new socket the old dead source would carry the new token, and
-    /// nothing would arrive (review 117: this mutant was green before the
+    /// nothing would arrive (this mutant was green before the
     /// dying source).
     #[tokio::test]
     async fn a_network_change_takes_a_new_socket_and_keeps_the_connection() {
@@ -2488,7 +2606,7 @@ mod through_a_relay {
     /// server's wss link to the VPS drops), then gets a new one: nothing gets
     /// through in between, and afterwards every client is back on its own
     /// connection - quinn does not let them expire in a short gap. Twice,
-    /// without a restart (working rule 9; review 118: only the client's side
+    /// without a restart (before, only the client's side
     /// of a gap had been run).
     #[tokio::test]
     async fn a_station_gap_keeps_the_clients_hanging_on_it() {
@@ -2526,7 +2644,7 @@ mod through_a_relay {
 
     /// The relay monitor stops (on the phone it goes with its bridge): the
     /// grant's sender is gone, and the leg drops its socket rather than keep
-    /// sending on a token nobody holds (review 118).
+    /// sending on a token nobody holds.
     #[tokio::test]
     async fn a_stopped_monitor_takes_the_socket_with_it() {
         let relay = FakeRelay::start().await;
@@ -2551,7 +2669,7 @@ mod through_a_relay {
     }
 
     /// The IPv4 address beside an IPv6 first one carries the connection
-    /// (decision 3, phase 3c: IPv4 first for the leg - before build 125 the
+    /// (IPv4 first for the leg - before build 125 the
     /// first address, with this one as the way back when it took no socket,
     /// field test 119). Both ways, on the first session and the next; the
     /// first address here takes no socket at all, so only the IPv4 one can
@@ -2580,8 +2698,8 @@ mod through_a_relay {
         assert_eq!(tag_of(&mut seen, b"next session").await, tag, "the same connection");
     }
 
-    /// The server answers an offer only once the client proved the password
-    /// (build 126, review 125): before, the path stays on the relay and works
+    /// The server answers an offer only once the client proved the password:
+    /// before, the path stays on the relay and works
     /// there; after the admission, it moves. Both states on one connection.
     #[tokio::test]
     async fn before_the_password_the_path_stays_on_the_relay() {
@@ -2605,8 +2723,8 @@ mod through_a_relay {
         server.allow_punch(tag);
         until_the_path_left_the_relay(&relay, &mut c).await;
         // The session behind the connection ends (a time-out, a goodbye) while
-        // the connection lives on: the permit goes with the session (build 127,
-        // review 126). A new public address makes the client offer again - and
+        // the connection lives on: the permit goes with the session (build 127).
+        // A new public address makes the client offer again - and
         // now nobody answers: the path goes back to the relay and stays there.
         server.punch_gate().revoke(tag);
         let _ = ct.send_modify(|g| {
@@ -2628,7 +2746,7 @@ mod through_a_relay {
     /// A confirmed direct path that goes silent (here: the server's punched
     /// sockets are gone) sends the client back to both ways within
     /// `DIRECT_SILENCE`, and it punches again - instead of sending into
-    /// nothing until QUIC gives up after 30 s (review 125). Twice (rule 9).
+    /// nothing until QUIC gives up after 30 s. Twice.
     #[tokio::test]
     async fn a_silent_direct_path_goes_back_to_the_relay_and_punches_again() {
         let relay = FakeRelay::start().await;
@@ -2646,13 +2764,13 @@ mod through_a_relay {
         }
     }
 
-    /// L+R (build 142, `OPZET-L-plus-R.md` section 3): a client through the
+    /// L+R (build 142): a client through the
     /// relay that sends straight to the station's own port moves its
     /// connection there - quinn on the server follows a known connection to a
     /// new address - and the station answers from that port, so the client
     /// confirms the way and stops sending through the relay. Taken away, the
-    /// client goes through the relay again and quinn follows it back. Twice
-    /// (rule 9). The station here does not know its public address, so it
+    /// client goes through the relay again and quinn follows it back. Twice.
+    /// The station here does not know its public address, so it
     /// never punches: the only direct way is the one this test names.
     #[tokio::test]
     async fn a_client_moves_to_the_station_s_own_port_and_back() {
@@ -2694,7 +2812,7 @@ mod through_a_relay {
     }
 
     /// IPv4 first, then the first address; without an IPv4 one beside it, the
-    /// first alone (decision 3, phase 3c).
+    /// first alone.
     #[test]
     fn the_leg_tries_ipv4_first() {
         let v6: SocketAddr = "[2001:db8::21]:443".parse().unwrap();
@@ -2804,7 +2922,7 @@ mod through_a_relay {
     /// local address; the client moves there and names the way local, the
     /// relay carries nothing more, and no punch was made. A network change (a
     /// new relay session) goes back through the relay and comes home again -
-    /// the same connection throughout. Twice (rule 9).
+    /// the same connection throughout. Twice.
     #[tokio::test]
     async fn behind_the_same_router_the_client_goes_local() {
         let relay = FakeRelay::start().await;
@@ -2833,18 +2951,192 @@ mod through_a_relay {
         }
     }
 
+    /// The relay goes away while the path is direct (field 2026-10-25: an L+R
+    /// client went silent the second its relay session ended, and the server
+    /// let it go 15 s later). Both sides lose their relay session, and the
+    /// connection carries on over the direct path - L+R and D+R alike, with the
+    /// relay forwarding nothing in between. Then the relay comes back: the
+    /// client takes a new socket as after a network change, goes through the
+    /// relay and off it again, the same connection throughout. Twice, without
+    /// a restart.
+    #[tokio::test]
+    async fn a_relay_outage_leaves_the_direct_path_running() {
+        for local in [true, false] {
+            let kind = if local { "L+R" } else { "D+R" };
+            let relay = FakeRelay::start().await;
+            let (server, mut seen, st, mut clients, cts) = reflecting(&relay, &[0]);
+            let route = server.route.clone().expect("a relay");
+            route.loopback_is_home.store(local, Ordering::Relaxed);
+            let c = &mut clients[0];
+            let socket = c.relay_socket.clone().expect("through the relay");
+            let way = || ClientPath::from_u8(socket.leg.path.load(Ordering::Relaxed));
+            ask(c, b"first").await;
+            let tag = tag_of(&mut seen, b"first").await;
+            for round in 0..2 {
+                until_the_path_left_the_relay(&relay, c).await;
+                let off = if local { ClientPath::Local } else { ClientPath::Direct };
+                let gone = if local { ClientPath::LocalRelayGone } else { ClientPath::DirectRelayGone };
+                assert_eq!(way(), off, "{kind} round {round}: off the relay");
+                cts[0].send(None).unwrap();
+                st.send(None).unwrap();
+                let before = relay.forwarded();
+                for n in 0..8 {
+                    if n == 4 {
+                        // The relay library ends every failed attempt with a
+                        // grant of None, about every 5 s in an outage (field
+                        // 2026-10-25: thirteen in one minute). A second None
+                        // must leave the direct path as the first one did.
+                        cts[0].send(None).unwrap();
+                    }
+                    let p = format!("{kind} outage {round}.{n}");
+                    ask(c, p.as_bytes()).await;
+                    assert_eq!(tag_of(&mut seen, p.as_bytes()).await, tag, "{kind} round {round}: the same connection in the outage");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                assert_eq!(relay.forwarded(), before, "{kind} round {round}: nothing went through the relay in the outage");
+                assert_eq!(way(), gone, "{kind} round {round}: the way stays, and says the relay is gone");
+                assert!(route.relay_session_gone(), "{kind} round {round}: the server knows its relay session is gone");
+                // And names the client so: the wire from the route layer to the
+                // server's own table (`Ways::of`) was unpinned.
+                let server_gone = if local { PathKind::LocalRelayGone } else { PathKind::DirectRelayGone };
+                assert_eq!(server.ways().of(tag), Some(server_gone), "{kind} round {round}: the server names it so too");
+                st.send(Some(relay.connect(true, 0))).unwrap();
+                cts[0].send(Some(relay.connect(false, 0))).unwrap();
+                let p = format!("{kind} relay back {round}");
+                ask(c, p.as_bytes()).await;
+                assert_eq!(tag_of(&mut seen, p.as_bytes()).await, tag, "{kind} round {round}: the same connection with the relay back");
+                assert!(!route.relay_session_gone(), "{kind} round {round}: and that it is back");
+                // Not the D+R name: the server calls a punched client D+R only
+                // once nothing came through the relay for `RELAY_QUIET`.
+                assert!(!server.ways().of(tag).is_some_and(|k| k.relay_gone()), "{kind} round {round}: and its name says so");
+            }
+        }
+    }
+
+    /// The other branch of the same outage: the direct path goes silent too
+    /// (here: the server's punched sockets are gone) while there is no relay
+    /// session. The client lets the socket go within `DIRECT_SILENCE` and the
+    /// next tick, instead of sending into nothing - and when the relay comes
+    /// back, the same connection goes on through it. Twice.
+    #[tokio::test]
+    async fn a_direct_path_that_goes_silent_in_a_relay_outage_lets_the_socket_go() {
+        let relay = FakeRelay::start().await;
+        let (server, mut seen, st, mut clients, cts) = reflecting(&relay, &[0]);
+        let c = &mut clients[0];
+        let socket = c.relay_socket.clone().expect("through the relay");
+        let way = || ClientPath::from_u8(socket.leg.path.load(Ordering::Relaxed));
+        ask(c, b"first").await;
+        let tag = tag_of(&mut seen, b"first").await;
+        for round in 0..2 {
+            until_the_path_left_the_relay(&relay, c).await;
+            assert_eq!(way(), ClientPath::Direct, "round {round}: off the relay");
+            cts[0].send(None).unwrap();
+            st.send(None).unwrap();
+            let p = format!("outage {round}");
+            ask(c, p.as_bytes()).await;
+            assert_eq!(tag_of(&mut seen, p.as_bytes()).await, tag, "round {round}: still direct in the outage");
+            assert_eq!(way(), ClientPath::DirectRelayGone, "round {round}: the way says the relay is gone");
+            server.route.as_ref().unwrap().drop_punches();
+            let t0 = Instant::now();
+            while socket.leg.live.lock().unwrap().is_some() {
+                assert!(t0.elapsed() < Duration::from_secs(4), "round {round}: the socket of a silent direct path stayed");
+                c.uplink_tx.send((SERVER.parse().unwrap(), b"into the silence".to_vec())).unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            assert_eq!(way(), ClientPath::Relay, "round {round}: no direct way any more");
+            st.send(Some(relay.connect(true, 0))).unwrap();
+            cts[0].send(Some(relay.connect(false, 0))).unwrap();
+            let p = format!("relay back {round}");
+            ask(c, p.as_bytes()).await;
+            assert_eq!(tag_of(&mut seen, p.as_bytes()).await, tag, "round {round}: the same connection with the relay back");
+        }
+    }
+
+    /// A grant with the same session number after an outage - a rotation that
+    /// comes in after a failed resolve sent None (relay library: `publish_grant`)
+    /// - is a new socket all the same, and the relay is back in use: the same
+    /// connection goes on through it and off it again. Twice.
+    #[tokio::test]
+    async fn a_rotation_after_an_outage_takes_a_new_socket() {
+        let relay = FakeRelay::start().await;
+        let (server, mut seen, _st, mut clients, cts) = reflecting(&relay, &[0]);
+        server.route.clone().expect("a relay").loopback_is_home.store(true, Ordering::Relaxed);
+        let c = &mut clients[0];
+        let socket = c.relay_socket.clone().expect("through the relay");
+        ask(c, b"first").await;
+        let tag = tag_of(&mut seen, b"first").await;
+        for round in 0..2 {
+            until_the_path_left_the_relay(&relay, c).await;
+            let grant = cts[0].borrow().expect("a session");
+            let port = socket.leg.local_addr().unwrap().port();
+            cts[0].send(None).unwrap();
+            let p = format!("outage {round}");
+            ask(c, p.as_bytes()).await;
+            assert_eq!(tag_of(&mut seen, p.as_bytes()).await, tag, "round {round}: direct in the outage");
+            let back = relay.rotate(grant);
+            assert_eq!(back.session, grant.session, "round {round}: a rotation keeps the session number");
+            cts[0].send(Some(back)).unwrap();
+            let p = format!("rotated back {round}");
+            ask(c, p.as_bytes()).await;
+            assert_eq!(tag_of(&mut seen, p.as_bytes()).await, tag, "round {round}: the same connection");
+            assert!(!socket.leg.live.lock().unwrap().as_ref().expect("live").relay_gone, "round {round}: the relay is in use again");
+            assert_ne!(socket.leg.local_addr().unwrap().port(), port, "round {round}: a new socket, not the old one with a new token");
+        }
+    }
+
+    /// The relay monitor stops while the path is direct: the connection carries
+    /// on over the direct path, as in an outage, and nothing goes to the relay.
+    /// Two ways in: the stop alone (a panic in the monitor's thread), and a `None`
+    /// first, then the closed watch - the order in the field, for the relay
+    /// library ends the session before its loop returns.
+    /// Without a direct path the socket still goes
+    /// (`a_stopped_monitor_takes_the_socket_with_it`).
+    #[tokio::test]
+    async fn a_stopped_monitor_leaves_the_direct_path_running() {
+        for none_first in [false, true] {
+            let how = if none_first { "None, then the stop" } else { "the stop alone" };
+            let relay = FakeRelay::start().await;
+            let (_server, mut seen, st, _) = station(&relay);
+            relay.reflect(st.clone());
+            let (mut c, ct, _) = client(&relay, 0);
+            let socket = c.relay_socket.clone().expect("through the relay");
+            let reflection = relay.reflect(ct.clone());
+            ask(&mut c, b"first").await;
+            let tag = tag_of(&mut seen, b"first").await;
+            until_the_path_left_the_relay(&relay, &mut c).await;
+            reflection.abort();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if none_first {
+                ct.send(None).unwrap();
+            }
+            drop(ct);
+            let before = relay.forwarded();
+            for n in 0..8 {
+                let p = format!("after the stop {n}");
+                ask(&mut c, p.as_bytes()).await;
+                assert_eq!(tag_of(&mut seen, p.as_bytes()).await, tag, "{how}: the same connection after the stop");
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            assert_eq!(relay.forwarded(), before, "{how}: nothing through the relay after the stop");
+            // Without a None before it, only the stopped monitor's branch sets
+            // this: the test took that branch, not just a path that ran anyway.
+            assert!(socket.leg.live.lock().unwrap().as_ref().expect("live").relay_gone, "{how}: the leg knows the relay is gone");
+            assert_eq!(ClientPath::from_u8(socket.leg.path.load(Ordering::Relaxed)), ClientPath::DirectRelayGone, "{how}: and says so");
+        }
+    }
+
     /// The TCP fallback route end to end (build 144): a client on a network
     /// that lets no UDP through reaches the station over the relay's TCP line,
     /// and the station answers it there - the relay forwards nothing over UDP.
     /// Then a new relay session with UDP open: the same connection, the copies
     /// over TCP stop, and the station stops answering over TCP once the client
-    /// has been quiet there for `RELAY_QUIET`. Twice (rule 9).
+    /// has been quiet there for `RELAY_QUIET`. Twice.
     ///
     /// Client 1, not 0: the station's own keepalive goes to the keepalive id,
     /// which is 0, and so reaches client 0 as a datagram over UDP every second
     /// (`UDP_MAPPING_KEEPALIVE_ID`, on the real relay too). Client 0 would see
     /// UDP work without the station ever sending it anything, and hide whether
-    /// the station answers over UDP (review 145, U5; build 146, W7/W8).
+    /// the station answers over UDP (build 146, W7/W8).
     #[tokio::test]
     async fn without_udp_the_client_goes_over_tcp() {
         use crate::testing::FakeTcp;
@@ -2898,8 +3190,8 @@ mod through_a_relay {
             // socket stood has no UDP address yet (the relay's `udp_target`
             // too), so it comes over TCP alone. Ask until a round trip makes no
             // copy, within a few seconds.
-            // Measured: two round trips, about 100 ms (review 144) - a second
-            // pins "at most about a second" from the brief, with room to spare.
+            // Measured: two round trips, about 100 ms - a second
+            // pins "at most about a second", with room to spare.
             let t0 = Instant::now();
             for n in 0.. {
                 assert!(t0.elapsed() < Duration::from_secs(1), "round {round}: the client still copies over TCP");
@@ -2911,7 +3203,7 @@ mod through_a_relay {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             // Both TCP and UDP are recent here: the server says R, not R (TCP) -
-            // the `!udp_recent` half of its name (review 146: no test held
+            // the `!udp_recent` half of its name (no test held
             // it).
             assert_eq!(_server.ways().of(t), Some(PathKind::Relay), "round {round}: R while both TCP and UDP are recent");
             tokio::time::sleep(RELAY_QUIET + Duration::from_millis(500)).await;
@@ -2919,7 +3211,7 @@ mod through_a_relay {
             ask(&mut c, format!("udp only {round}").as_bytes()).await;
             assert_eq!(tcp.frames(), quiet.0, "round {round}: no copies either way once UDP works");
             // The station sends over UDP again - the stamp of a UDP arrival
-            // at work, not a timing (review 145: U5 was 4 of 5 red).
+            // at work, not a timing (U5 was 4 of 5 red).
             assert!(relay.received(sg.token) > quiet.1, "round {round}: the station sends over UDP again");
             assert_eq!(way(), ClientPath::Relay, "round {round}: the client says R again");
             assert_eq!(_server.ways().of(t), Some(PathKind::Relay), "round {round}: and so does the server");
@@ -2930,14 +3222,14 @@ mod through_a_relay {
             tokio::time::sleep(RELAY_QUIET + Duration::from_millis(200)).await;
             let before = (relay.forwarded(), tcp.frames());
             ask(&mut c, format!("still forced {round}").as_bytes()).await;
-            assert_eq!(relay.forwarded(), before.0, "round {round}: forced - nothing over UDP");
-            assert!(tcp.frames().0 > before.1 .0 && tcp.frames().1 > before.1 .1, "round {round}: forced - both ways over TCP");
-            assert_eq!(way(), ClientPath::RelayTcp, "round {round}: forced - the client says R (TCP)");
-            assert_eq!(_server.ways().of(t), Some(PathKind::RelayTcp), "round {round}: forced - the server says R (TCP)");
+            assert_eq!(relay.forwarded(), before.0, "round {round}: forced; nothing over UDP");
+            assert!(tcp.frames().0 > before.1 .0 && tcp.frames().1 > before.1 .1, "round {round}: forced; both ways over TCP");
+            assert_eq!(way(), ClientPath::RelayTcp, "round {round}: forced; the client says R (TCP)");
+            assert_eq!(_server.ways().of(t), Some(PathKind::RelayTcp), "round {round}: forced; the server says R (TCP)");
             force.store(false, Ordering::Relaxed);
             let before = relay.forwarded();
             ask(&mut c, format!("unforced {round}").as_bytes()).await;
-            assert!(relay.forwarded() > before, "round {round}: unforced - over UDP again");
+            assert!(relay.forwarded() > before, "round {round}: unforced; over UDP again");
         }
     }
 
@@ -2983,7 +3275,7 @@ mod through_a_relay {
         assert!(relay.forwarded() > before, "through the relay again");
     }
 
-    /// The other state of the punch (working rule 13): the station does not
+    /// The other state of the punch: the station does not
     /// know its public address, so it cannot answer an offer - the path stays
     /// on the relay, and works there.
     #[tokio::test]
@@ -3006,7 +3298,7 @@ mod through_a_relay {
     /// A network change after the path moved: a new relay session, a new
     /// socket, a new public address - the client goes through the relay again,
     /// punches again, and the path moves again. The same connection all along.
-    /// Twice, without a restart (working rule 9).
+    /// Twice, without a restart.
     #[tokio::test]
     async fn a_network_change_punches_again() {
         let relay = FakeRelay::start().await;
@@ -3034,7 +3326,7 @@ mod through_a_relay {
     /// still works once the old connection is gone at the server, every round
     /// trip within 1.3 s: without its own start, the fallback on silence (build
     /// 126) would bring it back too, but only after a gap of 1.5 s. 1.3 s and
-    /// not 1 s: room for a slow build machine (review 126), below the fallback.
+    /// not 1 s: room for a slow build machine, below the fallback.
     #[tokio::test]
     async fn a_new_connection_punches_for_itself() {
         let relay = FakeRelay::start().await;
@@ -3112,7 +3404,7 @@ mod through_a_relay {
     /// "Relay only" on the client (build 137), switched while the connection
     /// runs: from a confirmed direct path back to the relay - every round trip
     /// passes the relay again - and, switched off, off the relay once more. The
-    /// same connection throughout (working rule 9: on, off, and on again).
+    /// same connection throughout (on, off, and on again).
     #[tokio::test]
     async fn relay_only_on_the_client_goes_back_to_the_relay_and_off_again() {
         let relay = FakeRelay::start().await;
@@ -3165,14 +3457,14 @@ mod through_a_relay {
         while t0.elapsed() < Duration::from_secs(4) {
             let before = relay.forwarded();
             ask(&mut c, format!("still relayed {n}").as_bytes()).await;
-            assert!(relay.forwarded() > before, "round trip {n} passed the relay by - a punch was answered");
+            assert!(relay.forwarded() > before, "round trip {n} passed the relay by: a punch was answered");
             n += 1;
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         assert_eq!(_server.bindings.peer(tag), Some(relay_peer_for(0)), "still at its relay address");
         // Not only no direct path: no punch at all. A punch puts the station's
         // own address on the wire before any path stands, and that is what
-        // relay only is for (review 135: a punch that never completed left
+        // relay only is for (a punch that never completed left
         // this test green).
         let route = _server.route.as_ref().expect("a station with a relay has a route layer");
         assert_eq!(route.punches(), 0, "a relay-only station punched: {:?}", route.punch_targets());
@@ -3201,7 +3493,7 @@ mod through_a_relay {
         );
         assert!(direct.binding.borrow().is_none(), "and no connection stood");
         // And said: the refusal line is the field's only sign of a direct try
-        // (review 136: a socket that stopped reading kept every test green).
+        // (a socket that stopped reading kept every test green).
         let route = server.route.as_ref().expect("a station with a relay has a route layer");
         assert!(route.refused.lock().unwrap().last_line.is_some(), "the direct datagrams were dropped without a word");
         ask(&mut via, b"via the relay again").await;

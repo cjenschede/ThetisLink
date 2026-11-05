@@ -8,12 +8,12 @@
 //! needs the same order of the three categories, and until build 204 each
 //! wrote it out by hand: three fields in the server, three in the shared state,
 //! three positions in the status line, a `match category` on the server and two
-//! more in the two "Save to Pi" buttons. Here it is once (owner, 2026-10-15:
-//! "nu meenemen"). On the wire a row travels as its own command code
+//! more in the two "Save to Pi" buttons. Here it is once
+//! (2026-10-15). On the wire a row travels as its own command code
 //! (`COMMANDS`): the client encodes it with `command_for`, the server decodes
-//! it with `category_of` (build 205; review of 204 - until then those were two
+//! it with `category_of` (build 205 - until then those were two
 //! more hand-written lists). The whole command, code and payload, is built by
-//! `encode` and read by `decode` (build 206; review of 205: the order of band
+//! `encode` and read by `decode` (build 206: the order of band
 //! and value in the payload was still a comment at both ends). A change itself
 //! is a `DriveChange` with named fields from the screen to the Pi (build 207).
 
@@ -24,7 +24,7 @@ pub const BANDS: usize = 11;
 
 /// Rows in the table. The table, its names and its command codes all take
 /// their length from here, so a row added to one and not the others does not
-/// compile (review of 205: with three separate `3`s, a fourth row would have
+/// compile (with three separate `3`s, a fourth row would have
 /// had no command and its save would have gone nowhere, silently).
 pub const ROWS: usize = 3;
 
@@ -46,7 +46,7 @@ pub fn category_of(command: u8) -> Option<u8> {
 }
 
 /// One changed cell: its row, its band and the new value in watts. Named, so
-/// that no place unpacks three numbers of one type by position (review of
+/// that no place unpacks three numbers of one type by position (build
 /// 206: the server's `|(category, band, value)|` compiled the other way round,
 /// and so did the two "Save to Pi" loops).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,7 +97,7 @@ pub fn from_wire(fields: [&str; ROWS]) -> DriveTable {
 
 /// The table being edited on a screen, with the server table it was last
 /// filled from. One type, so the two cannot be passed the wrong way round
-/// (review of 204: `changed_cells(server, edit)` compiled, sent the old values
+/// (`changed_cells(server, edit)` compiled, sent the old values
 /// and looked saved).
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct DriveEdit {
@@ -107,7 +107,7 @@ pub struct DriveEdit {
 }
 
 impl DriveEdit {
-    /// Follow the server's table whenever that changes (review of 200).
+    /// Follow the server's table whenever that changes.
     /// Filling it once per run showed zeros when the group was drawn between
     /// the server's two fetches, and the first session's table after a
     /// network change - and "Save to Pi" then wrote those back. An edit of the
@@ -210,7 +210,7 @@ mod tests {
         assert!(!network.contains("CMD_RF2K_SET_DRIVE_"), "the server has its own list again");
         assert!(!network.contains("band: eq_cmd.data["), "the server reads its own payload again");
         // Without this line a save sends the Pi's table back unchanged, and the
-        // screen keeps what was typed: it looks saved (review of 207).
+        // screen keeps what was typed: it looks saved.
         let rf2k = include_str!("../../sdr-remote-server/src/rf2k.rs");
         assert_eq!(rf2k.matches("dc.apply(*change);").count(), 1);
     }
@@ -229,7 +229,7 @@ mod tests {
         edit.follow(&real());
         assert_eq!(edit.cells[0][3], 60);
         // A new session or another client's save: the server's table wins,
-        // whichever single cell differs (review of 201 and 202: a comparison
+        // whichever single cell differs (a comparison
         // of part of the table stayed green when only some rows changed).
         let mut before = real();
         for category in 0..ROWS {
@@ -249,7 +249,7 @@ mod tests {
         let mut edit = DriveEdit::default();
         edit.follow(&server);
         assert!(edit.changed(&server).is_empty(), "an unchanged table sends nothing");
-        // Each cell alone, in every row - CONT and 6 m included (review of
+        // Each cell alone, in every row - CONT and 6 m included (build
         // 202: a loop that skipped CONT sent nothing and looked saved).
         for category in 0..ROWS as u8 {
             for band in 0..BANDS as u8 {

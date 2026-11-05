@@ -23,8 +23,8 @@ pub const CUSHION_MS: u64 = 40;
 /// Where the playout ring is meant to stand at the start of a tick, in ms, on the
 /// desktop and the phone alike: below it the engine pulls two frames a tick, and
 /// a ring that stands clearly above it for a second gives one frame back
-/// (`Settle`). The owner's choice of 2026-10-10, against ~80 ms on the
-/// phone and ~58 on the desktop before (`veldproef-build157.md`): nothing pulled
+/// (`Settle`). Chosen 2026-10-10, against ~80 ms on the
+/// phone and ~58 on the desktop before (field test of build 157): nothing pulled
 /// the ring down between the refill threshold and the bleed-off ceiling, so it
 /// stood wherever its history had left it. Build 158; `laagste_ms` in the
 /// measurement's `ring` line says whether it is too tight for a phone.
@@ -41,7 +41,7 @@ pub const SETTLE_TICKS: u32 = 50;
 
 /// How many of those seconds `Settle` remembers the noise of: a second that
 /// happens to read only at the top of its swing must not make the ring look
-/// calm (build 159; review of 158).
+/// calm.
 pub const SETTLE_MEMORY: usize = 10;
 
 /// After this long without sound, frames are written as before.
@@ -104,7 +104,7 @@ impl AfterTx {
     /// frames per tick. While the window is open the ring is meant to stand at the
     /// cushion, and refilling it to the engine's normal threshold pulled two frames
     /// every tick and emptied the jitter buffer right before the first sound - 7.1
-    /// concealed frames per over against 0.7 (round 106). The decision is taken at
+    /// concealed frames per over against 0.7. The decision is taken at
     /// the start of a tick, one frame's playout after the skip rule left the ring at
     /// the cushion, so the threshold is the cushion less one frame - at the cushion
     /// itself every tick still pulled two (the simulation test below).
@@ -142,7 +142,7 @@ pub fn keep_pulling(frames_this_tick: u32, ring_level: usize, refill_low: usize)
 /// and whether it opened the tick itself. Only `open_tick` makes one and
 /// `close_tick` takes it back, so "did this stream open the tick" is decided in
 /// one place, when the stream starts - it cannot be read too late (build 157;
-/// review of 156: reading it one line further down, after `open_tick` had
+/// reading it one line further down, after `open_tick` had
 /// filled the buffer, stayed green and undid the dry-buffer rule).
 #[must_use]
 #[derive(Debug, PartialEq, Eq)]
@@ -191,8 +191,8 @@ pub fn close_tick(tick: Tick, buf: &mut Vec<f32>, delivered: usize, frame_sample
 /// largest swing of the last `SETTLE_MEMORY` seconds: after it the ring cannot
 /// read below the target, so no refill can undo it. Build 158 let go at a fixed
 /// target plus a frame, and on the phone the next low reading refilled it - a
-/// pendulum costing 20 ms each time (`veldproef-build158.md`). A device that
-/// swings more gets more room by itself (owner's choice B, 2026-10-10). Never
+/// pendulum costing 20 ms each time (field test of build 158). A device that
+/// swings more gets more room by itself. Never
 /// while transmitting; a press starts the second over.
 #[derive(Debug, Default)]
 pub struct Settle {
@@ -247,7 +247,7 @@ mod tests {
     /// One rule per radio, for the measurement only: each radio's copy follows
     /// its own PTT and reports the first sound after its release, but nothing
     /// of a Yaesu is skipped and the ring's cushion stays Thetis's (build 179;
-    /// review of 178: skipping drained the radio's jitter buffer). The engine's
+    /// skipping drained the radio's jitter buffer). The engine's
     /// wiring and the radios' measurement rows, as a text guard.
     #[test]
     fn each_radio_measures_its_own_after_tx() {
@@ -258,17 +258,16 @@ mod tests {
             // One block for both radios (build 180): the measurement and its
             // line inside it, each radio's own name, buffer, decoder, PTT and
             // rule in its own call - a call that mixes two radios' arguments
-            // is what this pins against (review of 154; E10 of 178).
+            // is what this pins against (E10 of 178).
             "let (_, outcome) = $after_tx.frame(crate::after_tx::peak(&resampled), ring_now, frame_ms, Instant::now());",
             "concat!($name, \" RX after TX: first sound {} ms after the release, ring {} ms, jitter depth {}\"),\n                                                                after_ms, ring_ms, $jb.depth()",
             "concat!($name, \" RX after TX: no sound within {} ms, jitter depth {}\"),\n                                                                crate::after_tx::WINDOW.as_millis(), $jb.depth()",
             // The head says what each place means: two places of one type
-            // swapped there compile and swap the roles for both radios
-            // (review of 180).
+            // swapped there compile and swap the roles for both radios.
             "($stream:expr, $name:literal, $logged_first:ident, $jb:ident, $wanted:ident,\n                                 $st:ident, $rec:ident, $accum:ident, $count:ident, $volume:ident,\n                                 $model:ident, $ptt:ident, $after_tx:ident, $level:ident) => {",
             "mix_yaesu_rx!(crate::loss_window::Stream::Radio1, \"Radio 1\", yaesu_logged_first, yaesu_jitter_buf, yaesu_wanted,\n                                st_yaesu, rec_yaesu, yaesu_level_accum, yaesu_level_count, yaesu_volume,\n                                yaesu_model, yaesu_ptt, after_tx_yaesu, playback_level_yaesu);",
             "mix_yaesu_rx!(crate::loss_window::Stream::Radio2, \"Radio 2\", yaesu2_logged_first, yaesu2_jitter_buf, yaesu2_wanted,\n                                st_yaesu2, rec_yaesu2, yaesu2_level_accum, yaesu2_level_count, yaesu2_volume,\n                                yaesu2_model, yaesu2_ptt, after_tx_yaesu2, playback_level_yaesu2);",
-            // Each radio's row on its own clock, with its own buffer (review of 178, E8/E9).
+            // Each radio's row on its own clock, with its own buffer.
             "&mut measure_buffers_at_yaesu,\n                        now_ms < measure_buffers_burst_until,\n                        crate::loss_window::Stream::Radio1,\n                        yaesu_jitter_buf.depth(),\n                        yaesu_jitter_buf.target_depth(),",
             "&mut measure_buffers_at_yaesu2,\n                        now_ms < measure_buffers_burst_until,\n                        crate::loss_window::Stream::Radio2,\n                        yaesu2_jitter_buf.depth(),\n                        yaesu2_jitter_buf.target_depth(),",
         ] {
@@ -281,15 +280,15 @@ mod tests {
         assert_eq!(engine.matches("mix_yaesu_rx!(").count(), 2, "one call per radio");
         // And no radio by name inside the block: a bare name of radio 1 there
         // compiles (it is in scope where the macro is defined), radio 1 hides
-        // it, and radio 2 reads radio 1's state (review of 180).
+        // it, and radio 2 reads radio 1's state.
         let body = &engine[engine.find("macro_rules! mix_yaesu_rx {").unwrap()..];
         let body = &body[..body.find("mix_yaesu_rx!(").unwrap()];
-        let named = body.replace("yaesu_rx_meter_cal", "").replace("mix_yaesu_rx", "");
+        let named = body.replace("yaesu_rx_correction", "").replace("mix_yaesu_rx", "");
         assert!(!named.contains("yaesu"), "a radio named inside the block");
         assert!(!named.contains("Stream::Radio"), "a radio's stream named inside the block");
         // And as the last line of the arm, outside the measurement: a concealed
         // frame that stayed out of the buffer would keep the fill loop going
-        // for ever (review of 179).
+        // for ever.
         let tail = format!(
             "}}\n{0}radio_buf.extend_from_slice(&resampled);\n{1}}}\n{1}None => break,",
             " ".repeat(52),
@@ -303,7 +302,7 @@ mod tests {
 
     /// The release, the silence skipped above the cushion and written below it,
     /// the first sound written and reported once - and twice in a row without a
-    /// restart (working rule 9).
+    /// restart.
     #[test]
     fn silence_after_a_release_is_skipped_above_the_cushion() {
         let t = Instant::now();
@@ -350,7 +349,7 @@ mod tests {
         assert_eq!(count("let target_ring_high = crate::measure::ring_items(crate::after_tx::RING_CEILING_MS, playback_rate, stereo_output);"), 1);
         assert_eq!(count("let drain_this_tick = !skip_this_tick && ring_settle.drain(ring_start_ms, ptt);"), 1);
         // A let-go tick still pulls: the flag is read at the write and the
-        // measurement only, never where the pull is decided (review of 158, M6).
+        // measurement only, never where the pull is decided.
         assert_eq!(src.matches("drain_this_tick").count(), 3, "the definition, the measurement and the write only");
         assert_eq!(count("if !playback_buf.is_empty() && !drain_this_tick {"), 1);
         assert_eq!(src.matches("audio.write_playback_stereo(").count(), 1, "a second way into the ring");
@@ -373,7 +372,7 @@ mod tests {
     /// While the window is open the engine refills only to the cushion, so it
     /// pulls one frame per tick once the cushion stands; outside it, the normal
     /// threshold. Closed by the first sound, by a press and by time - and a second
-    /// release opens it again without a restart (working rule 9).
+    /// release opens it again without a restart.
     #[test]
     fn the_window_refills_only_to_the_cushion() {
         let t = Instant::now();
@@ -411,7 +410,7 @@ mod tests {
     /// within two ticks and the ring stays around the cushion. Build 107's first
     /// attempt held the refill threshold AT the cushion: the skip rule capped the
     /// ring there at the end of a tick, the sound card took 20 ms before the next,
-    /// and every tick started below it and pulled two - the drain of round 106,
+    /// and every tick started below it and pulled two - the drain seen in build 106,
     /// 20 ms lower. Units: rate 1000 mono, so items are ms.
     #[test]
     fn after_a_release_the_engine_pulls_one_frame_per_tick() {
@@ -461,7 +460,7 @@ mod tests {
                     assert!(ring >= 40, "start {start} ms, tick {tick}: ring {ring} ms never came back");
                     // ...and no further than one frame over the threshold: a
                     // rule that refills too far stays at rest above it (build
-                    // 157; review of 156: only the build-107 test caught that).
+                    // 157: only the build-107 test caught that).
                     assert!(ring < low + 20, "start {start} ms, tick {tick}: ring {ring} ms overshoots");
                 }
                 ring = (ring + n).saturating_sub(20); // the sound card, between two ticks
@@ -521,7 +520,7 @@ mod tests {
     /// No let-go that a refill undoes within two seconds, from any start, on a
     /// clean reading, on the phone's 2 ms swing and on the desktop's 20 ms - with
     /// every fourth second reading only at the top of its swing, the case that
-    /// fooled a one-second memory (build 159; review of 158: the build-158 test
+    /// fooled a one-second memory (build 159: the build-158 test
     /// read without any swing and the field pendulummed). And at rest the ring
     /// stands at or above the target and below the line, with at most one
     /// let-go per second.
@@ -557,7 +556,7 @@ mod tests {
     /// The second itself: 50 ticks, the decision at its end only, the line
     /// from the largest swing remembered, a press starting it over, and the
     /// memory holding a noisy second for `SETTLE_MEMORY` seconds (build 159;
-    /// review of 158: a count not started over, two ticks for a second, and a
+    /// a count not started over, two ticks for a second, and a
     /// count surviving a press all stayed green).
     #[test]
     fn a_second_decides_once_from_its_lowest_reading_and_the_remembered_swing() {

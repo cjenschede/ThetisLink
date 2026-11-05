@@ -89,7 +89,6 @@ impl TciConnection {
         // Stock .14/.15 supports vfo_swap_ex without advertising the cap (consistent
         // pattern with other stock-supported _ex commands). Native swap does freq +
         // mode + filter; the earlier fallback ("swap freq only") was incomplete.
-        // On smoke-test FAIL: revert to manual freq-swap fallback.
         self.send("vfo_swap_ex;").await;
     }
 
@@ -231,9 +230,9 @@ impl TciConnection {
 
     pub async fn set_binaural(&mut self, on: bool) {
         // Idempotency-guard: skip if state already matches. Defense in depth
-        // against client-side spam (alpha-5 testlog: 38k+ rx_bin_enable events
-        // from engine.rs SetPtt-side-effect path, root-fixed there in alpha-8
-        // sub-B; this guard makes the server resilient to future variants).
+        // against client-side spam (an early version sent 38k+ rx_bin_enable events
+        // from the engine's SetPtt side-effect path, since fixed there; this
+        // guard makes the server resilient to future variants).
         if on == self.binaural {
             return;
         }
@@ -522,8 +521,7 @@ impl TciConnection {
     // Thetis echoes the change back as a notification (rx_step_att_ex, etc.),
     // which is parsed and dispatched in `handle_notification` - that is the single
     // source of truth. Skipping the optimistic update prevents drift if `send()`
-    // silently dropped the frame (no return value to check). See
-    // `feedback_dispatch_return_checked.md`.
+    // silently dropped the frame (no return value to check).
 
     /// Set step attenuator value via stock v2.10.3.14 rx_step_att_ex.
     /// Wire format requires |attenuation| (positive only, per Math.Abs in Thetis).
@@ -583,7 +581,7 @@ impl TciConnection {
             return;
         }
         let cmd = format!("run_cat_ex:{};", stripped);
-        // ZZFI/ZZFJ are 2-second filter-preset polls (alpha-1 sub-E); demote
+        // ZZFI/ZZFJ are 2-second filter-preset polls; demote
         // their helper-log to debug to keep info-log readable. Response-handler
         // (tci.rs RunCatExResponse arm) still logs on actual state-change.
         let stripped_upper = stripped.to_uppercase();

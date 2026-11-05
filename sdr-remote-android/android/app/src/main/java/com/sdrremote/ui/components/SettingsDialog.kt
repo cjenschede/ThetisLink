@@ -81,8 +81,8 @@ fun SettingsDialog(
     onDxSpotsEnabledChange: (Boolean) -> Unit = {},
     // The Bluetooth PTT button. The dialog shows and chooses; it never owns the
     // connection - that belongs to the ViewModel, so it survives this dialog
-    // closing. The status arrives as itself and not as an ordinal: phase 2
-    // replaced one state with another, and an int would have quietly renamed
+    // closing. The status arrives as itself and not as an ordinal: the
+    // automatic reconnect replaced one state with another, and an int would have quietly renamed
     // "lost" to "waiting" everywhere it was read.
     bleStatus: BlePttController.Status = BlePttController.Status.Off,
     bleDevices: List<Triple<String, String, Int>> = emptyList(),
@@ -112,7 +112,7 @@ fun SettingsDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("thetislink", android.content.Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences(com.sdrremote.prefs.LocalAudioPrefs.STORE, android.content.Context.MODE_PRIVATE) }
     var password by remember { mutableStateOf(prefs.getString("password", "") ?: "") }
     var rebootConfirm by remember { mutableStateOf(false) }
     var rogerFreq by remember { mutableStateOf(prefs.getFloat("roger_freq_hz", 1000f)) }
@@ -162,7 +162,7 @@ fun SettingsDialog(
                     Text(stringResource(R.string.settings_password_required), fontSize = 12.sp, color = Color(0xFFE53935))
                 }
 
-                // Relay connection (Phase C): for clients that cannot port-forward.
+                // Relay connection: for clients that cannot port-forward.
                 // Read once at app start; changing it takes effect after a restart.
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
@@ -177,11 +177,10 @@ fun SettingsDialog(
                 // live toggle differs - symmetric for turning the relay on AND off.
                 val relayActiveSession = remember { prefs.getBoolean("relay_active_session", false) }
                 // No line before the engine's first state: an empty word would
-                // otherwise read as UDP and ask for a restart that is not needed
-                // (review 111).
+                // otherwise read as UDP and ask for a restart that is not needed.
                 if (routeInUse.isNotEmpty()) {
-                    // The route the settings ask for, by the bridge's own rule
-                    // (review 118): asked of it, not worked out here. Remembered
+                    // The route the settings ask for, by the bridge's own rule:
+                    // asked of it, not worked out here. Remembered
                     // per set of values, like relayIsConfigured below.
                     val routeWanted = remember(relayEnabled, relayUrl, relayStation, relayToken) {
                         uniffi.sdr_remote.expectedRouteLabel(relayEnabled, relayUrl, relayStation, relayToken)
@@ -189,7 +188,7 @@ fun SettingsDialog(
                     val routeDiffers = routeWanted != routeInUse
                     Text(
                         stringResource(R.string.settings_route_in_use, if (pathInUse.isNotEmpty()) pathInUse else routeInUse) +
-                            if (routeDiffers) " - " + stringResource(R.string.settings_route_restart) else "",
+                            if (routeDiffers) ": " + stringResource(R.string.settings_route_restart) else "",
                         fontSize = 11.sp,
                         color = if (routeDiffers) Color(0xFFC8A028) else Color.Gray,
                     )
@@ -279,8 +278,8 @@ fun SettingsDialog(
                 // wants. A plain row of six buttons is wide enough to run off the
                 // right-hand side of a narrow dialog once the system font is
                 // turned up - and what falls off the end is 50% and 42%, the two
-                // that matter most to someone who is looking for room (review
-                // finding, unmeasured but arithmetic: six buttons of some 64dp
+                // that matter most to someone who is looking for room (unmeasured
+                // but arithmetic: six buttons of some 64dp
                 // against roughly 328dp of dialog).
                 //
                 // A weight is legal here where it was not in the MIDI dialog: a
@@ -346,7 +345,7 @@ fun SettingsDialog(
                 }
                 Text(stringResource(R.string.settings_bt_remote_hint), fontSize = 11.sp, color = Color.Gray)
 
-                // Phone volume buttons as PTT (never Bluetooth — headset keeps its own volume)
+                // Phone volume buttons as PTT (never Bluetooth; headset keeps its own volume)
                 Spacer(Modifier.height(8.dp))
                 var volumeKeysPtt by remember { mutableStateOf(prefs.getBoolean("volume_keys_ptt", false)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -398,7 +397,7 @@ fun SettingsDialog(
                             }
                             val act = blePttActivity
                             if (act == null) {
-                                Log.w("BlePtt", "no activity behind this dialog - cannot ask")
+                                Log.w("BlePtt", "no activity behind this dialog: cannot ask")
                                 return@Switch
                             }
                             act.requestBluetoothPermission { granted ->
@@ -476,7 +475,7 @@ fun SettingsDialog(
                     // settings dialog takes this subtree out of composition and
                     // neither onDismiss nor onPick ever runs - so the scan kept
                     // going and, since build 10, the button stayed released as
-                    // well, because scanning lets go of it first (review finding).
+                    // well, because scanning lets go of it first.
                     //
                     // Hanging the cleanup on disposal covers every exit,
                     // including the ones nobody thought of.
@@ -490,7 +489,7 @@ fun SettingsDialog(
                 // Only where there is a cluster to switch off: a server with no
                 // callsign, or with the cluster off, can never send a spot, and
                 // the switch sat there ON regardless - promising a stream that
-                // could not come (owner, 2026-08-20).
+                // could not come.
                 if (dxClusterAvailable) {
                     Spacer(Modifier.height(12.dp))
                     HorizontalDivider()
@@ -594,7 +593,7 @@ fun SettingsDialog(
                 }
                 Text(statusText, fontSize = 12.sp, color = if (headsetActive) Color(0xFF00C800) else Color.Gray)
 
-                // S-meter source — mirrors Thetis Multimeter Sig/Avg/MaxBin
+                // S-meter source: mirrors Thetis Multimeter Sig/Avg/MaxBin
                 // selection. Same setting for both RX1 and RX2.
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()

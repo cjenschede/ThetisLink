@@ -7,8 +7,8 @@
 //! and where it used to live - inside an async method that talks to a process
 //! table and a websocket - nothing could reach it.
 //!
-//! The case it exists for is PD0PLK's, reported 2026-09-01: press off, press on
-//! half a second later, and nothing happens for a minute.
+//! The case it exists for, reported from the field on 2026-09-01: press off,
+//! press on half a second later, and nothing happens for a minute.
 
 /// What the caller should do about a power-on request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ pub fn power_on_step(i: PowerOnInputs) -> PowerOnStep {
 /// Right after `shutdown_ex;` Thetis is still talking - the websocket takes a
 /// moment to drop - so a tick in that gap wiped the flag, and a power-on one
 /// second later had no idea a shutdown was under way. The comment described an
-/// intention the condition did not implement, and the owner's own test caught
+/// intention the condition did not implement, and a field test caught
 /// it: `power-on: WaitForConnection` where the whole repair exists to say
 /// `WaitForExitThenLaunch`.
 ///
@@ -104,9 +104,9 @@ mod tests {
         }
     }
 
-    /// PD0PLK, 2026-09-01, and the reason this module exists.
+    /// Seen in the field on 2026-09-01, and the reason this module exists.
     ///
-    /// From his server log:
+    /// From the server log:
     ///
     /// ```text
     /// 21:18:19.147  Client requested Thetis shutdown
@@ -115,7 +115,7 @@ mod tests {
     /// 21:19:20.700  Thetis launch timeout (60s), cancelling
     /// ```
     ///
-    /// Half a second after asking Thetis to close, he pressed on. The process
+    /// Half a second after asking Thetis to close, on was pressed. The process
     /// was still there - a program on its way out is still in the process
     /// table - so the server decided it was already running and waited a
     /// minute for a connection that could never arrive, because that process
@@ -131,11 +131,11 @@ mod tests {
         assert_eq!(
             step,
             PowerOnStep::WaitForExitThenLaunch,
-            "a process we asked to quit will never connect - waiting for that is the bug"
+            "a process we asked to quit will never connect: waiting for that is the bug"
         );
     }
 
-    /// The owner's test of build 15, and what it caught.
+    /// A field test of build 15, and what it caught.
     ///
     /// A second after asking Thetis to close, the process is still there and
     /// TCI may still be up. Neither of those means the shutdown is over.

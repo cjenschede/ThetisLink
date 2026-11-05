@@ -11,7 +11,7 @@ pub struct BufferedFrame {
     pub timestamp: u32,
     pub opus_data: Vec<u8>,
     pub ptt: bool,
-    /// True when the packet header had `Flags::AUDIO_WIDEBAND` — on
+    /// True when the packet header had `Flags::AUDIO_WIDEBAND`; on
     /// pop this selects the correct Opus decoder path
     /// (wideband 16 kHz vs narrowband 8 kHz). Default false so that
     /// existing callers that do not support WB remain unchanged.
@@ -23,7 +23,7 @@ pub struct BufferedFrame {
 pub enum JitterResult {
     /// Normal frame available
     Frame(BufferedFrame),
-    /// Frame missing — caller should use FEC or PLC
+    /// Frame missing: caller should use FEC or PLC
     Missing,
     /// Buffer is empty / not enough data yet (still filling)
     NotReady,
@@ -122,8 +122,8 @@ impl Default for Tuning {
 }
 
 impl Tuning {
-    /// The transmit buffer's numbers: tuning B of the drives of 2026-10-18 (owner
-    /// 2026-10-19: "B mag ook mee in stap 5"; build 258) - a target of `jitter /
+    /// The transmit buffer's numbers: tuning B of the drives of 2026-10-18
+    /// (build 258) - a target of `jitter /
     /// 30 ms + 2`, a stall's peak fading over 115 packets - and no slow trim of
     /// its own: the server's playout tick catches up in the pauses of speech
     /// instead (`pause_trim.rs`). The fast trim and the cap stay.
@@ -237,7 +237,7 @@ impl JitterBuffer {
             if is_seq_before(frame.sequence, next) {
                 if next.wrapping_sub(frame.sequence) > STREAM_RESTART_BACKJUMP {
                     log::info!(
-                        "Jitter buffer stream restart: seq {} << next {} — re-baselining",
+                        "Jitter buffer stream restart: seq {} << next {}, re-baselining",
                         frame.sequence, next
                     );
                     self.stats_cleared += self.buffer.len() as u64;
@@ -260,7 +260,7 @@ impl JitterBuffer {
                 self.stats_capped += 1;
                 // Past it, as the trim does: otherwise the gap it leaves plays
                 // as a lost frame - concealed audio for a frame thrown away on
-                // purpose, and counted twice (review of 183).
+                // purpose, and counted twice.
                 self.step_past(oldest);
             }
         }
@@ -280,7 +280,7 @@ impl JitterBuffer {
             }
         }
 
-        // Nothing buffered — enter refill mode and wait for data
+        // Nothing buffered: enter refill mode and wait for data
         if self.buffer.is_empty() {
             if !self.refilling {
                 log::debug!("Jitter buffer underflow: entering refill mode (target {})", self.target_depth);
@@ -380,9 +380,8 @@ impl JitterBuffer {
             return false;
         }
         if self.ends_with_release && self.buffer.values().any(|f| !f.ptt) {
-            // Named in advance (working rule 11, build 237).
             log::info!(
-                "Jitter buffer: the end of a transmission is in hand - playing {} frame(s) below the target of {}",
+                "Jitter buffer: the end of a transmission is in hand; playing {} frame(s) below the target of {}",
                 self.buffer.len(),
                 self.target_depth
             );
@@ -415,7 +414,7 @@ impl JitterBuffer {
 
     /// Past a frame taken away on purpose (cap or trim): the next frame to play
     /// is the one after it, and the frames still missing in front of it are
-    /// given up - counted as skipped (build 184; review of 183: they vanished
+    /// given up - counted as skipped (build 184: they vanished
     /// uncounted).
     fn step_past(&mut self, taken: u32) {
         if let Some(ref mut next) = self.next_seq {
@@ -509,14 +508,14 @@ pub const TRIM_ABOVE_TARGET: i32 = 2;
 
 /// How many packets a stall's peak takes to fade by a factor e: ~230
 /// packets is ~4.6 s at 50 a second, so a 270 ms stall is down to a few
-/// frames within ten seconds of a steady line (owner, 2026-10-11; build 173).
+/// frames within ten seconds of a steady line.
 /// It was 3000, about a minute.
 pub const SPIKE_DECAY_PACKETS: f32 = 230.0;
 
 /// A buffer above its target drops at most one frame per this many pulls -
 /// ~250 ms at one pull per 20 ms tick (half that while the client's ring is
-/// low and it pulls two a tick), 20 ms gone each time, which the owner
-/// expects not to be heard (2026-10-11; build 173). It was one or two every
+/// low and it pulls two a tick), 20 ms gone each time, which is
+/// expected not to be heard (2026-10-11; build 173). It was one or two every
 /// pull.
 pub const TRIM_EVERY_PULLS: u32 = 12;
 
@@ -524,7 +523,7 @@ pub const TRIM_EVERY_PULLS: u32 = 12;
 /// frame every pull as before build 173: a big lead with a low target - the
 /// sound card took nothing for a moment, or a sender caught up in a burst -
 /// is not a stall the target followed, and would otherwise take ~10 s to
-/// leave (reviews of 173; owner: "ja"; build 174).
+/// leave.
 pub const FAST_TRIM_ABOVE: i32 = 6;
 
 /// Check if sequence `a` comes before `b` with wrapping.
@@ -573,7 +572,7 @@ mod tests {
 
     /// The cap steps past what it takes away, so a burst in the first pulls
     /// after a reset does not play its dropped frames as lost ones - counted
-    /// once, not twice (build 184; review of 183, measured: capped 15 and lost
+    /// once, not twice (build 184: capped 15 and lost
     /// 15).
     #[test]
     fn a_capped_frame_is_counted_once_and_not_played_as_lost() {
@@ -598,7 +597,7 @@ mod tests {
 
     /// A trim in front of a gap: the missing frames before the one it takes
     /// are given up and counted as skipped, not lost without a trace (build
-    /// 184; review of 183: 3..=5 vanished).
+    /// 184: 3..=5 vanished).
     #[test]
     fn a_trim_over_a_gap_counts_the_frames_it_gives_up() {
         // A steady line past the grace period, played until empty.
@@ -631,8 +630,7 @@ mod tests {
         jb.discard();
         assert_eq!((jb.stats_cleared, jb.depth()), (4, 0));
         // The next transmission starts a few numbers on (the release burst
-        // used some): it plays from its first frame, with no gap behind it
-        // (review of 184, U15).
+        // used some): it plays from its first frame, with no gap behind it.
         let lost = jb.stats_lost;
         for seq in 9..12 {
             jb.push(make_frame(seq), seq as u64 * 20);
@@ -669,7 +667,7 @@ mod tests {
             // Wire protocol uses milliseconds for `timestamp`
             // (`start.elapsed().as_millis()` on the server side, see
             // `audio_loops.rs`). Each frame represents 20 ms of audio,
-            // so timestamp delta between consecutive frames is 20 — not
+            // so timestamp delta between consecutive frames is 20; not
             // 160 (the sample count). Using samples here previously
             // injected a 140 ms phantom jitter into RFC-3550 estimator
             // and made every test push min_depth up to max_depth.
@@ -708,7 +706,7 @@ mod tests {
         assert!(matches!(jb.pull(), JitterResult::NotReady));
 
         jb.push(make_frame(1), 20);
-        // Still not ready — target is min_depth=3
+        // Still not ready: target is min_depth=3
         assert!(matches!(jb.pull(), JitterResult::NotReady));
 
         jb.push(make_frame(2), 40);
@@ -720,7 +718,7 @@ mod tests {
     fn out_of_order_reordering() {
         let mut jb = JitterBuffer::new(2, 10);
 
-        // Push out of order — 5 frames to ensure buffer fills past target
+        // Push out of order: 5 frames to ensure buffer fills past target
         jb.push(make_frame(2), 0);
         jb.push(make_frame(0), 10);
         jb.push(make_frame(1), 20);
@@ -807,7 +805,7 @@ mod tests {
     #[test]
     fn small_backward_still_late_dropped() {
         // A packet only slightly behind next_seq is a genuine late/reordered packet
-        // and must still be dropped — NOT treated as a stream restart (build 15).
+        // and must still be dropped; NOT treated as a stream restart (build 15).
         let mut jb = JitterBuffer::new(2, 10);
         jb.push(make_frame(100), 0);
         jb.push(make_frame(101), 20);
@@ -837,7 +835,7 @@ mod tests {
     fn wraparound_late_not_rebaselined() {
         // A u32 sequence wrap (MAX -> 0) is a normal forward step; a packet just
         // before the wrap is late (small backward), not a restart. Build frames
-        // manually — make_frame's `seq * 20` timestamp overflows near u32::MAX.
+        // manually: make_frame's `seq * 20` timestamp overflows near u32::MAX.
         let f = |seq: u32, ts: u32| BufferedFrame {
             sequence: seq,
             timestamp: ts,
@@ -918,8 +916,7 @@ mod tests {
     }
 
     /// One stall raises the target; it is back near the minimum within about
-    /// ten seconds of a steady line, not a minute (owner, 2026-10-11: "na bv
-    /// 10 sec de buffer weer bijna leeg"; build 173).
+    /// ten seconds of a steady line, not a minute (build 173).
     #[test]
     fn a_raised_target_comes_down_within_ten_seconds() {
         let mut jb = JitterBuffer::new(3, 40);
@@ -936,7 +933,7 @@ mod tests {
         assert!(jb.target_depth() >= 15, "the stall raised it: {}", jb.target_depth());
         // Right after the stall, a buffer a few frames above its high target
         // comes down in steps, not one a pull: the fast strip hangs on the
-        // target, not on a fixed depth (review of 174, J12).
+        // target, not on a fixed depth.
         {
             let mut probe = JitterBuffer::new(3, 40);
             let mut q = 0u32;
@@ -969,8 +966,7 @@ mod tests {
         for i in 51..(51 + 250u64) {
             push(&mut jb, i * 20);
         }
-        // Not faster than meant either: after five seconds still well up
-        // (review of 173, J1c).
+        // Not faster than meant either: after five seconds still well up.
         assert!(jb.target_depth() >= 7, "five seconds later: {}", jb.target_depth());
         for i in (51 + 250)..(51 + 500u64) {
             push(&mut jb, i * 20);
@@ -1016,7 +1012,7 @@ mod tests {
 
     /// A big lead with a low target - the sound card took nothing for a
     /// moment - leaves at one frame a pull above `FAST_TRIM_ABOVE`, not in
-    /// steps of 250 ms (reviews of 173, probe A: 46 frames, back in ~2 s;
+    /// steps of 250 ms (46 frames, back in ~2 s;
     /// build 174).
     #[test]
     fn a_big_lead_with_a_low_target_leaves_quickly() {
@@ -1031,7 +1027,7 @@ mod tests {
             assert!(matches!(jb.pull(), JitterResult::Frame(_)), "every pull still plays");
             jb.push(frame(next), next as u64 * 20);
             next += 1;
-            // One frame at a time, never a jump of 40 ms (review of 174, F4).
+            // One frame at a time, never a jump of 40 ms.
             assert!(before - jb.depth() <= 1, "pull {n}: {before} -> {}", jb.depth());
             // After the 25-pull grace of a new buffer, 35 pulls are enough
             // at one a pull; in steps they would take 35 x 12.
@@ -1068,7 +1064,7 @@ mod tests {
         assert_eq!(t, Tuning { ms_per_frame: 30.0, spike_decay_packets: 115.0, trim_every_pulls: u32::MAX, ..Tuning::default() });
         assert_eq!(JitterBuffer::for_transmit(2, 10).tuning, t);
         assert_eq!(JitterBuffer::new(3, 40).tuning, Tuning::default(), "the receive buffers");
-        // the depth by value: the server and the replayer read these names (round 260)
+        // the depth by value: the server and the replayer read these names
         assert_eq!((TX_MIN_DEPTH, TX_MAX_DEPTH), (2, 10));
     }
 
@@ -1133,10 +1129,10 @@ mod tests {
     }
 
     /// Why a silence inside a press empties the transmit buffer (server build
-    /// 249; round 248): frames that waited under the target when the line went
+    /// 249): frames that waited under the target when the line went
     /// play first once a release frame comes after the silence - the oldest
     /// key first, with PTT - and key the transmitter with old speech. Emptied
-    /// before the release goes in, nothing old plays. Both ways (rule 13).
+    /// before the release goes in, nothing old plays. Both ways.
     #[test]
     fn frames_waiting_under_the_target_play_first_unless_the_buffer_is_emptied() {
         let f = |seq: u32, ptt: bool| BufferedFrame { sequence: seq, timestamp: seq * 20, opus_data: vec![0], ptt, wideband: true };
@@ -1182,7 +1178,7 @@ mod tests {
         };
         let all: Vec<Option<u32>> = (12..21).map(Some).chain([None, None, None]).collect();
         assert_eq!(after_a_gap(JitterBuffer::for_transmit(12, 20), 5), all, "the release is played");
-        // Both ways (working rule 13): a receive buffer still refills to its
+        // Both ways: a receive buffer still refills to its
         // target, and a transmit buffer without the release in hand too.
         assert_eq!(after_a_gap(JitterBuffer::new(12, 20), 5), vec![None; 12], "a receive buffer waits");
         assert_eq!(after_a_gap(JitterBuffer::for_transmit(12, 20), 0), vec![None; 12], "no release: it waits");

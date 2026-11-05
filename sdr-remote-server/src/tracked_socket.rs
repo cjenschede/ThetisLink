@@ -111,7 +111,7 @@ pub fn bw_retain(active: &[SocketAddr]) {
 /// TX logic works unchanged.
 pub struct TrackedSocket {
     quic: QuicPath,
-    /// Step 4 (build 256, a development build only): what `trial.rs` plays in,
+    /// The trial (build 256, a development build only): what `trial.rs` plays in,
     /// read by `recv_from` beside the QUIC endpoint.
     #[cfg(any(test, feature = "naspelen"))]
     trial: Option<AsyncMutex<mpsc::UnboundedReceiver<(SocketAddr, Vec<u8>)>>>,
@@ -126,7 +126,7 @@ impl crate::session::WayLookup for WaysOf {
     }
 }
 
-/// The permit to punch a hole (phase 3c) for a client over QUIC: granted when
+/// The permit to punch a hole for a client over QUIC: granted when
 /// the session layer admits it, taken back when its session ends.
 pub struct PunchPermits(pub sdr_remote_quic::PunchGate);
 
@@ -154,14 +154,13 @@ struct QuicPath {
 
 /// Copy a frame into the receive buffer, or say it does not fit: a frame
 /// larger than the buffer is dropped whole, never cut off into a packet that
-/// parses as something else (review 109).
+/// parses as something else.
 use sdr_remote_core::take_frame;
 
 /// What a closed QUIC connection reads as: its client's own goodbye, so the one
 /// Disconnect path ends the session, releases its transmitter and its CW key -
-/// at once, not after the session timeout with a ghost holding the radio
-/// (review 110).
-/// `None` when the buffer cannot hold it - checked like `take_frame` (review 111).
+/// at once, not after the session timeout with a ghost holding the radio.
+/// `None` when the buffer cannot hold it - checked like `take_frame`.
 fn goodbye(buf: &mut [u8]) -> Option<usize> {
     let header = sdr_remote_core::protocol::Header::new(
         sdr_remote_core::protocol::PacketType::Disconnect,
@@ -257,7 +256,7 @@ impl TrackedSocket {
             };
             // Empty: that connection closed, after its last frame.
             if data.is_empty() {
-                log::info!("QUIC: connection {addr} closed - its session ends now");
+                log::info!("QUIC: connection {addr} closed; its session ends now");
                 let Some(n) = goodbye(buf) else { continue };
                 return Ok((n, addr));
             }
@@ -273,7 +272,7 @@ mod tests {
     use super::*;
 
     /// The goodbye a closed QUIC connection reads as: a Disconnect, and only
-    /// when the buffer holds it - never a panic in a receive path (review 111).
+    /// when the buffer holds it - never a panic in a receive path.
     #[test]
     fn a_goodbye_fits_or_is_not_written() {
         let mut small = [0u8; 3];
@@ -311,7 +310,7 @@ mod tests {
     fn relay_audio_types_match_core() {
         // The relay stays dependency-light and mirrors the audio type-byte set
         // as a literal (sdr_remote_relay::AUDIO_TYPE_BYTES) instead of linking
-        // core. This test — in the one crate that links BOTH relay and core —
+        // core. This test, in the one crate that links BOTH relay and core,
         // is the guard: it fails the build if that mirror ever drifts from the
         // authoritative sdr_remote_core::protocol::AUDIO_PACKET_TYPES.
         let mut relay_set = sdr_remote_relay::AUDIO_TYPE_BYTES.to_vec();
@@ -380,7 +379,7 @@ mod tests {
         let peer = channel.peer.expect("the real peer is known");
         assert_eq!(peer.ip(), "127.0.0.1".parse::<std::net::IpAddr>().unwrap(), "the real peer, not the sentinel");
         assert_eq!(sock.throttle_key(from), peer, "the brake counts the real peer");
-        let udp: SocketAddr = "192.168.1.97:4580".parse().unwrap();
+        let udp: SocketAddr = "192.168.1.50:4580".parse().unwrap();
         assert!(sock.auth_channel(udp).is_err(), "no QUIC connection, no channel");
         assert_eq!(sock.throttle_key(udp), udp, "an unknown address counts itself");
         assert!(sock.auth_channel("198.51.100.200:7".parse().unwrap()).is_err(), "a QUIC sentinel with no connection");
@@ -394,7 +393,7 @@ mod tests {
         assert_eq!((tag, back.as_slice()), (quic_addr, &b"reply"[..]));
 
         // The QUIC client leaves: its connection closes, and the socket reads
-        // that as the client's own Disconnect, from its sentinel (review 110).
+        // that as the client's own Disconnect, from its sentinel.
         drop(client);
         let (n, gone) = tokio::time::timeout(std::time::Duration::from_secs(5), sock.recv_from(&mut buf))
             .await
@@ -409,7 +408,7 @@ mod tests {
 
     /// The authentication in the network loop takes its binding from this
     /// socket, for the address the response came from - not a stored one, and
-    /// not skipped (review 108, point 4.2). A text pin: the call sits in the
+    /// not skipped. A text pin: the call sits in the
     /// receive loop, which no test drives.
     #[test]
     fn the_auth_takes_the_binding_of_the_connection_it_came_on() {
@@ -424,7 +423,7 @@ mod tests {
 
     /// What travels on a QUIC stream has room for any packet the protocol
     /// makes; a frame that does not fit the buffer is dropped whole, not cut
-    /// off (review 109; `take_frame`).
+    /// off (`take_frame`).
     #[test]
     fn a_stream_holds_any_packet() {
         assert!(sdr_remote_quic::MAX_STREAM_PACKET >= sdr_remote_core::MAX_PACKET_SIZE);

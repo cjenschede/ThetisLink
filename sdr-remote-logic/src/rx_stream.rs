@@ -303,7 +303,7 @@ mod tests {
             assert!(concealed.concealed, "wide={wide}");
             // The format of a concealed frame picks the resampler: a wideband
             // gap through the narrowband one is an octave down (build 156,
-            // review of 155: no test held it).
+            // no test held it).
             assert_eq!(
                 concealed.rate,
                 if wide { NETWORK_SAMPLE_RATE_WIDEBAND } else { NETWORK_SAMPLE_RATE },
@@ -326,7 +326,7 @@ mod tests {
     /// In a bundle of two channels each channel is rebuilt from its own
     /// redundancy, not from channel 0's (build 155: with a fixed channel 0 the
     /// binaural right would carry the left on every rebuilt frame, and the
-    /// first test, with one channel, stayed green - review of 154).
+    /// first test, with one channel, stayed green).
     #[test]
     fn each_channel_of_a_bundle_is_rebuilt_from_its_own_redundancy() {
         let mut enc0 = OpusEncoderWideband::new_rx_continuous().unwrap();
@@ -355,7 +355,7 @@ mod tests {
 
     /// The common case on a clean link: protection is off, the next packet is
     /// there but carries no redundancy - the frame is concealed (build 155;
-    /// review of 154: no test had this state).
+    /// no test had this state).
     #[test]
     fn a_next_packet_without_redundancy_conceals() {
         let mut enc = OpusEncoder::new_rx_continuous().unwrap();
@@ -384,8 +384,8 @@ mod tests {
         assert_eq!(arms.len(), 4, "five receive streams, four blocks");
         assert!(arms.iter().all(|l| !l.contains(".conceal()")), "a stream conceals a lost frame without asking for a rebuild");
         // Each of the four through the one macro, with its own buffer - the
-        // pair is written once per stream and checked here (build 155; review
-        // of 154: radio 2 looking in radio 1's buffer stayed green).
+        // pair is written once per stream and checked here (build 155;
+        // before it, radio 2 looking in radio 1's buffer stayed green).
         // The radios' block takes its pair from the call, and the calls are
         // pinned whole in `each_radio_measures_its_own_after_tx` (build 180).
         assert_eq!(engine.matches("JitterResult::Missing => rebuild_or_conceal!($st, $jb),").count(), 1);
@@ -395,7 +395,7 @@ mod tests {
         }
         // The packet after the gap, not the lost one, is looked up in one place,
         // and both the macro and the Thetis arm take it from there (build 156;
-        // review of 155: the Thetis arm had its own copy, which no test read).
+        // the Thetis arm had its own copy, which no test read).
         assert_eq!(engine.matches("peek_frame(seq)").count(), 1, "a second way to find the packet after a gap");
         let after = &engine[engine.find("macro_rules! next_after_gap").unwrap()..];
         let after = &after[..after.find("};").unwrap()];
@@ -419,7 +419,7 @@ mod tests {
             assert!(reset.lines().any(|l| l.trim() == format!("{jb}.reset();")), "{jb} missing from the reset list");
         }
         // ...and the four places that empty them all still call it (build 156;
-        // review of 155: removing a call stayed green).
+        // removing a call stayed green).
         assert_eq!(engine.matches("reset_jitter_buffers!();").count(), 4, "a place that empties every buffer no longer does");
     }
 

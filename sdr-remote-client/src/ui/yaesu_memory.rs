@@ -386,9 +386,9 @@ mod mode_string_tests {
     ///
     /// It had the pair reversed like the server's two translations did, and unlike
     /// those it is in the client - so no test in the server crate can ever reach it.
-    /// A review pointed out that reversing it back leaves the whole suite green,
-    /// proved by construction rather than by running: this function appears twice in
-    /// the entire tree, its definition and one caller, and no test named it.
+    /// Reversing it back left the whole suite green, proved by construction rather
+    /// than by running: this function appeared twice in the entire tree, its
+    /// definition and one caller, and no test named it.
     ///
     /// Internal numbering is Thetis's DSPMode: CWL = 3, CWU = 4. The Yaesu names come
     /// from the memory module, which labels code 3 "CW" and code 7 "CW-R".

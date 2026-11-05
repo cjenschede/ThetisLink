@@ -20,7 +20,9 @@ import android.content.SharedPreferences
  * more settings, so it starts in one place.
  */
 object LocalAudioPrefs {
-    /** The store these live in. The Yaesu TX chain uses a different one. */
+    /** The app's main store: these, and the connection, settings, MIDI, scale and
+     *  developer mode. Every reader opens it by this name. The Yaesu TX chain uses
+     *  a different one. */
     const val STORE = "thetislink"
 
     /** Thetis RX level, 0..1. */
@@ -37,7 +39,7 @@ object LocalAudioPrefs {
     /** Listening level for the active Yaesu, 0..1. */
     fun yaesuVolume(prefs: SharedPreferences): Float = prefs.getFloat("yaesu_volume", 1f)
 
-    /** Microphone gain towards the transmitter, 0..3 as the slider scales it. */
+    /** Microphone gain towards the transmitter, as a factor (the slider shows it in dB, 0 is off). */
     fun txGain(prefs: SharedPreferences): Float = prefs.getFloat("tx_gain", 0.5f)
 
     /** The TX AGC - the transmit chain, not a Thetis receive control. */
@@ -45,7 +47,7 @@ object LocalAudioPrefs {
 
     // ---- writers ----
     //
-    // A reviewer's point, and a fair one: a source that only covers the READS is
+    // A source that only covers the READS is
     // not the source. The writers still spelled the keys out, so a writer could
     // use a key the reader does not know - or the other way round - and the two
     // would drift with nothing to say so. Now the key text appears once per

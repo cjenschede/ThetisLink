@@ -2,24 +2,24 @@
 //
 //! Consent and messages, in the chat's own database.
 //!
-//! Its own — never the relay's `stations.db`, not even read-only (design §2.3).
+//! Its own: never the relay's `stations.db`, not even read-only.
 //! Two processes that update separately must not share a file, or a migration
 //! here sits on the relay's data and a hung chat can lock out the thing carrying
 //! audio.
 //!
 //! Everything a user can undo lives here, so the shape of this module is mostly
-//! decided by §6.4: leaving the chat has to be able to unpick a person from the
+//! decided by one rule: leaving the chat has to be able to unpick a person from the
 //! rows without unpicking the conversation other people had around them.
 
 use log::{info, warn};
 use rusqlite::{params, Connection};
 
-/// Kept in step with §2.2 of the design. A message longer than this is not a
-/// question, it is a log fragment - which belongs in a diagnosis report and not
-/// in a channel everyone can read (§1.8).
+/// Announced to clients in the version answer. A message longer than this is
+/// not a question, it is a log fragment - which belongs in a diagnosis report
+/// and not in a channel everyone can read.
 pub const MAX_MESSAGE_CHARS: usize = 2_000;
 
-/// §5: the oldest messages go when the store passes this, and everything goes
+/// The oldest messages go when the store passes this, and everything goes
 /// after 90 days. Two limits because a retention period alone bounds age, not
 /// volume.
 pub const MAX_MESSAGES: i64 = 200_000;
@@ -43,6 +43,13 @@ pub struct Ban {
     pub display_name: Option<String>,
 }
 
+/// What a banned station is told, in English, in the one place the server
+/// writes it. A client that knows the code `banned` shows its own translated
+/// line; this text reaches only what reads the HTTP body without knowing the
+/// code. A refusal nobody can tell from a network fault is the fault the
+/// design warns about: they keep typing, then write to the administrator.
+pub const BANNED: &str = "you have been removed from the chat by the administrator";
+
 impl Ban {
     /// What the station is told. The bare fact always; the reason only when
     /// the administrator chose to send it.
@@ -53,9 +60,9 @@ impl Ban {
     pub fn refusal_text(&self) -> String {
         match (&self.reason, self.shared) {
             (Some(r), true) if !r.trim().is_empty() => {
-                format!("you have been removed from the chat by the administrator: {r}")
+                format!("{BANNED}: {r}")
             }
-            _ => "you have been removed from the chat by the administrator".to_string(),
+            _ => BANNED.to_string(),
         }
     }
 }
@@ -86,7 +93,7 @@ pub struct Message {
     pub id: i64,
     pub at: i64,
     /// What to show. `None` for a message whose author left the chat: the text
-    /// stays so the conversation reads, the person does not (§6.4).
+    /// stays so the conversation reads, the person does not.
     pub display_name: Option<String>,
     pub body: String,
     /// The message this one answers, if any.
@@ -131,7 +138,7 @@ impl Store {
                 -- NULL after the author left: the row keeps the conversation
                 -- readable while no longer pointing at a person. Nulling the
                 -- name but keeping this would leave them traceable through the
-                -- relay's own registry, which is the whole point of §6.4.
+                -- relay's own registry, which is exactly what leaving must prevent.
                 station_id   INTEGER,
                 display_name TEXT,
                 body         TEXT    NOT NULL,
@@ -145,7 +152,7 @@ impl Store {
             CREATE INDEX IF NOT EXISTS messages_station ON messages(station_id);
             -- The ban list, and it lives here rather than on the relay's
             -- `stations.enabled`: chat policy in the part that must keep
-            -- running is the coupling of section 2.3 in another coat, and
+            -- running would tie the chat to the relay again, and
             -- no-more-chat would then hang off the same switch as
             -- no-more-relay. Keyed on the station from the ticket, not on a
             -- device, or reinstalling the client would lift it.
@@ -231,7 +238,7 @@ impl Store {
 
     /// Record consent. The text version is stored with it, because a text that
     /// changes materially needs asking again and nobody can tell later what
-    /// somebody agreed to without it (§6.3).
+    /// somebody agreed to without it.
     pub fn give_consent(
         &self,
         station_id: i64,
@@ -252,7 +259,7 @@ impl Store {
         Ok(())
     }
 
-    /// "Verlaat de chat" — the author is unpicked, the conversation is not.
+    /// "Verlaat de chat": the author is unpicked, the conversation is not.
     ///
     /// Deliberately clears `station_id` as well as the name. Leaving the id
     /// behind would keep every message traceable through the relay's registry,
@@ -268,9 +275,9 @@ impl Store {
         Ok(n)
     }
 
-    /// "Verlaat de chat en verwijder mijn berichten" — for the case anonymising
+    /// "Verlaat de chat en verwijder mijn berichten"; for the case anonymising
     /// cannot reach: a callsign written into the *text* of a message does not
-    /// disappear with the name field (§6.4).
+    /// disappear with the name field.
     pub fn withdraw_and_delete(&self, station_id: i64) -> rusqlite::Result<usize> {
         let n = self
             .conn
@@ -401,7 +408,7 @@ impl Store {
     ///
     /// The logging is not decoration: this deletes messages belonging to people
     /// who did nothing, and an event that happens silently to a third party is
-    /// the kind that comes back as a fault report nobody can place (§8).
+    /// the kind that comes back as a fault report nobody can place.
     pub fn prune(&self, now: i64) -> rusqlite::Result<(usize, usize)> {
         let (by_age, by_size) = Self::expire(&self.conn, now)?;
 
@@ -437,7 +444,7 @@ impl Store {
     /// for the administrator only.
     ///
     /// The station number is not in `Message` and must not be: that type goes
-    /// to every client, and who wrote what is exactly what section 6.4 keeps
+    /// to every client, and who wrote what is exactly what is kept
     /// out of it. Here it is needed for one thing - the button that bans the
     /// author - so it travels beside the message rather than inside it, and
     /// only down a route that has already checked it is the administrator.
@@ -475,6 +482,7 @@ impl Store {
     /// is what makes a ticket issued before the ban stop working - for reading
     /// as much as for writing. A check at issue time would leave whoever was
     /// already holding one inside until it expired.
+    #[cfg(test)]
     pub fn is_banned(&self, station_id: i64) -> rusqlite::Result<bool> {
         Ok(self.ban_of(station_id)?.is_some())
     }
@@ -663,7 +671,7 @@ mod tests {
         assert_eq!(s.since(a, 100).unwrap().len(), 1, "only what came after");
     }
 
-    /// The heart of §6.4: the text survives, the person does not.
+    /// The heart of leaving the chat: the text survives, the person does not.
     #[test]
     fn leaving_the_chat_keeps_the_conversation_and_drops_the_author() {
         let s = store();
@@ -682,8 +690,8 @@ mod tests {
     }
 
     /// Clearing the name while keeping the station id would leave every message
-    /// traceable through the relay's own registry. That is the trap §6.4 warns
-    /// about by name, so it gets its own test.
+    /// traceable through the relay's own registry. That is the trap of leaving
+    /// the chat, so it gets its own test.
     #[test]
     fn leaving_also_drops_the_station_id_not_just_the_name() {
         let s = store();

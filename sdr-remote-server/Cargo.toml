@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [features]
 # The replay of the transmit chain (`--naspelen`, build 246): a tool for the
-# developer, never in a release build (owner, 2026-10-12: measuring is
+# developer, never in a release build (2026-10-12: measuring is
 # development). Its module is also compiled for the tests.
 naspelen = []
 
@@ -42,14 +42,14 @@ url = "2"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# PATCH-3: mDNS service advertise (`_thetislink._udp.local.`) for
+# mDNS service advertise (`_thetislink._udp.local.`) for
 # local-network discovery. Apache-2.0 OR MIT - GPL-2.0-or-later compatible.
 # Pure-Rust, no system deps on Windows.
 mdns-sd = "=0.19.1"
 # Adafruit MCP2221A breakout - used for the StockCorner JC-4s tuner bridge
 # (GP0 -> 2N7000 gate for grey-wire start, GP1 -> ADC for yellow tune-status).
 # Server only exposes a debug panel for now; full tuner integration is a
-# follow-up patch. See docs/internal/referentie/MCP2221A-JC4s-wiring.md.
+# follow-up patch.
 mcp2221-hal = "0.1"
 # UI translations (rust-i18n) - EN as the base (fallback), NL/DE/FR to choose, like the client.
 rust-i18n = "3"
@@ -61,6 +61,10 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
+    # One server per PC (build 14): CreateMutexW and its MessageBox.
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [build-dependencies]

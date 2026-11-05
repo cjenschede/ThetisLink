@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
 
     private val requestMicPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* granted or not — Oboe will fail gracefully if denied */ }
+    ) { /* granted or not; Oboe will fail gracefully if denied */ }
 
     /**
      * Bluetooth, asked for only when someone switches the PTT button on.
@@ -273,7 +273,7 @@ class MainActivity : ComponentActivity() {
         android.util.Log.i("ThetisLink", "KeyDown: $name ($keyCode) device=${event?.device?.name} external=${event?.device?.isExternal}")
         if (pttForKey(keyCode, event)) {
             _volumeUpHeld.value = true
-            return true // consume — don't change system volume / page
+            return true // consume; don't change system volume / page
         }
         return super.onKeyDown(keyCode, event)
     }

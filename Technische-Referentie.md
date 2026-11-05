@@ -1,34 +1,89 @@
-# ThetisLink v2.13.0 — Technische Referentie
+# ThetisLink v2.13.1: Technische Referentie
 
 ## 1. Overzicht
 
-ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger - welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken - en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over één versleutelde QUIC-verbinding met Opus codec.
+ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger (welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken) en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over één versleutelde QUIC-verbinding met Opus codec.
 
-**Versie:** v2.13.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.13.1 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11 en Android 8+ (arm64); macOS (Intel/Apple Silicon) vanaf broncode, experimenteel
 **Ontwerpprioriteit:** latency > bandbreedte > features
 
 ### Thetis compatibiliteit
 
-ThetisLink vereist **Thetis v2.10.3.15** of nieuwer (de laatste officiële release door Richard Samphire, MW0LGE / [ramdor/Thetis](https://github.com/ramdor/Thetis)). Oudere Thetis versies ondersteunen het TCI WebSocket protocol niet volledig — met name IQ streaming en audio routing werken niet correct.
+ThetisLink vereist **Thetis v2.10.3.15** of nieuwer (de laatste officiële release door Richard Samphire, MW0LGE / [ramdor/Thetis](https://github.com/ramdor/Thetis)). Oudere Thetis versies ondersteunen het TCI WebSocket protocol niet volledig: met name IQ streaming en audio routing werken niet correct.
 
 Daarnaast is er een **PA3GHM ThetisLink fork** ([cjenschede/Thetis](https://github.com/cjenschede/Thetis/tree/thetislink-tl2), branch `thetislink-tl2`) met uitbreidingen specifiek voor ThetisLink. Deze fork voegt toe:
 
 - **Extended IQ spectrum**: tot **1536 kHz** IQ bandbreedte via TCI (standaard Thetis beperkt tot 384 kHz)
-- **TCI `_ex` commando's**: CTUN, VFO sync, step attenuator, FM deviation, diversity, DDC sample rate, AGC auto, VFO swap — allemaal via TCI in plaats van CAT
+- **TCI `_ex` commando's**: CTUN, VFO sync, step attenuator, FM deviation, diversity, DDC sample rate, AGC auto, VFO swap, allemaal via TCI in plaats van CAT
 - **Push-notificaties**: real-time state updates naar TCI clients bij wijzigingen in Thetis
 - **Diversity auto-null**: Smart en Ultra algoritmen die server-side in Thetis draaien (DSP-snelheid)
 - **BroadcastDiversityPhase/Gain**: real-time cirkelplot updates tijdens auto-null sweep
 
 Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setup → Network → IQ Stream. Met deze vink uit blijft het stock TCI-extensiegedrag van v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (TL2-4, TL2-6, TL2-7, TL2-17, TL2-18) (de fork bevat wel een eigen build-tag, release-notes en About-metadata). De huidige ThetisLink fork build tag is **TL2-18**.
 
-De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz** — selecteerbaar per receiver via de DDC sample rate dropdown in de client.
+De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz**, selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.13.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.13.1`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.13.1 hoogtepunten
+
+**Een rechtstreekse verbinding overleeft de relay.** Eindigt de relaysessie terwijl
+de client een bevestigde rechtstreekse weg heeft (L+R, D+R), dan houdt de client zijn
+socket en die weg, stuurt alleen nog daarover en doet geen nieuwe aanbiedingen. Hij
+laat de socket los zodra de rechtstreekse weg `DIRECT_SILENCE` stil is geweest, en
+neemt een nieuwe socket als de relay weer een sessie geeft. Twee verbindingssoorten,
+`DirectRelayGone` en `LocalRelayGone`, dragen die toestand naar de drie schermen:
+dezelfde letters, de R in het rood. Niets veranderd op de draad; een programma van
+2.13.1 praat met een van 2.13.0.
+
+**De Windows-programma's dragen hun eigen C-runtime mee** (`+crt-static`); beide
+bouwpaden controleren de afgewerkte exe op een afhankelijkheid van de Visual
+C++-runtime. De Yaesu-voorsprong bij zenden is 120 ms. De server neemt een benoemde
+mutex (één server per pc) voordat hij zijn log opent, en meldt zich pas bij de relay als zijn
+socket gebonden is. Hij zet zijn vorige log opzij als `thetislink-server.previous.log`,
+en een probleemmelding neemt dat bestand ook mee, op dezelfde manier opgeschoond en
+begrensd op de helft van de staart van de huidige.
+
+**De zendketen.** De TX-gain (Thetis en beide Yaesu's) is de eerste stap van de keten,
+in dB van -24 tot +30 met uit onderaan, op één schaal in de kern die desktop en
+telefoon allebei gebruiken; een begrenzer op -1 dB is de laatste stap vóór de
+Opus-encoder. Een opgeslagen gain houdt zijn betekenis, dus een profiel met compressor
+en AGC uit klinkt als voorheen; een opgeslagen Thetis-gain onder 0,063 begint op
+-24 dB. De Yaesu-EQ rekent op de opnamerate van de microfoon. Een Yaesu-EQ-profiel op
+de desktop draagt de vijf banden op de eerste regel (de vorm die eerdere versies
+lezen), de twintig parametrische kanalen en het vinkje Advanced op een tweede, en de
+keten (compressor, attack, release, AGC) op een derde; een telefoonvoorinstelling
+draagt haar vijf banden gevolgd door de keten. Een heropening van de audio tijdens een
+druk opent het opnamehek en zet de afspeeldemping opnieuw.
+
+**Yaesu-ontvangstniveaus.** De ontvangstcorrectie per radiomodel (`yaesu_rx_correction`
+in de motor van de client) heeft twee tabellen: fabriek (FT-991A +10 dB, FTX-1 +24,5 dB)
+en ingesteld (+6,0 dB, +2,0 dB), voor radio's die volgens de installatiegids zo staan
+dat hun USB-CODEC rond -10 dBFS werkt. De serverinstelling `yaesu_rx_levels_tuned`
+kiest, en reist als bit 2 van byte 10 van `YaesuPresence`; een oudere server leest als
+fabriek, een oudere client negeert het bit. Beide gebruiken dan de fabriekstabel, die
+ingestelde radio's veel te hard speelt (een FTX-1 ongeveer 22 dB); de installatiegids
+vraagt daarom eerst de server en elke client op 2.13.1. Tussen 2.13.1-programma's: tot het eerste
+aanwezigheidsbericht van een sessie gebruikt de client de ingestelde (kleine) tabel,
+hooguit even te zacht, nooit te hard. Een Yaesu-opname krijgt nu dezelfde correctie als de luidspreker en de meter.
+
+**Het spectrum.** RX1, RX2, VRX1 en VRX2 tekenen één paneel (`spectrum_view_rows` en
+`spectrum_panel_view`, uit één beschrijving `SpectrumPanel`), met een veld Opvullen (0-100)
+dat voor alle panelen geldt en in de clientinstellingen bewaard wordt. De pan gaat in
+stappen van 1/65534 naar de server (`SpectrumPanFine`, `Rx2SpectrumPanFine`) en de
+VRX-breedte in stappen van 25 Hz (`VrxSpectrumSpanFine`, `VrxSpectrumSpanFine2`), alleen
+naar een server die `Capabilities::FINE_SPECTRUM_VIEW` zet; voor een oudere server houdt de
+motor ze vast en stuurt hij alleen de grove. De VRX heeft een eigen AGC (`vrx-rs`,
+`agc.rs`) die de AGC-stand en AGC-T van zijn ontvanger volgt: vasthouden en herstel per
+stand, en een versterking die bij AGC-T ophoudt. De FFT-grootte is er één per ontvanger
+en gaat alleen van een client met dat spectrum open, of één keer per opening van een VRX
+die eruit gesneden wordt; de rij en de server stoppen bij `MAX_FFT_SIZE_K` (512K).
+VFO-sync wordt na een nieuwe sessie niet meer opnieuw gestuurd.
 
 ### v2.13.0 hoogtepunten
 
@@ -66,7 +121,7 @@ sleutel; geen interne pull-ups, dus de weerstand is verplicht). De keyer draait 
 de leesdraad, de mithoortoon klinkt lokaal en meteen, en de flanken reizen **met
 hun duur** naar de server, die ze op exacte momenten afspeelt in plaats van ze
 door te geven zodra ze aankomen. Doel is per reeks: Thetis via `keyer:` over TCI,
-of een Yaesu via de **RTS-lijn van zijn tweede COM-poort** - dezelfde USB-kabel,
+of een Yaesu via de **RTS-lijn van zijn tweede COM-poort**, dezelfde USB-kabel,
 geen bedrading naar de KEY-ingang. De server zoekt die zusterpoort zelf op
 (VID/PID/serienummer) en zet menu PC KEYING op RTS: `060` op de FT-991A, adres
 `020114` op de FTX-1, per **model** gekozen en niet per sleuf. Wat er stond wordt
@@ -88,7 +143,7 @@ van als verlies geteld, en dubbele pakketten tellen niet als aangekomen.
 ### v2.11.0 hoogtepunten
 
 **Een microfoon kan meerdere zenders bereiken, en een losgeraakte kabel laat geen
-draaggolf meer achter.** Compatibel met v2.10.x - wire `VERSION` blijft ongewijzigd en
+draaggolf meer achter.** Compatibel met v2.10.x: wire `VERSION` blijft ongewijzigd en
 `PttDenied` houdt zijn vier bytes. Twee reservebits in de vlaggenbyte dragen nu **welke**
 zender een weigering betreft (0 = niet gezegd, 1 = Thetis, 2 = radio 1, 3 = radio 2); nul is
 wat elke oudere server stuurt, en de client valt dan terug op zijn oude aanname dat het over
@@ -99,19 +154,19 @@ bediening een eigen idee. Nieuw aan serverkant: verliest een radio zijn seriele 
 ThetisLink hem gekeyed had, dan wordt de zender bij het heropenen alsnog losgelaten, en blijft
 de poort weg tot voorbij de TX-time-out van de radio, dan laat de server hem los zonder dat er
 iets te sturen valt. Beide melden dat aan de client via dezelfde `auto_release`-teller. Staat
-de time-out van de radio op nul, dan bestaat die tweede weg niet - dat is geen aanname maar de
+de time-out van de radio op nul, dan bestaat die tweede weg niet, dat is geen aanname maar de
 afwezigheid van een rem.
 
 ### v2.10.0 hoogtepunten
 
 **Een eerste start op de server claimt niets, en twee radio's van hetzelfde type blijven uit
-elkaar.** Compatibel met v2.9.x - wire `VERSION` blijft ongewijzigd en er zijn geen nieuwe
+elkaar.** Compatibel met v2.9.x: wire `VERSION` blijft ongewijzigd en er zijn geen nieuwe
 control-ids. Zolang er geen `thetislink-server.conf` is start de server kaal: alle apparaten,
 de tweede ontvanger en alle vensters-bij-starten uit; de taal komt dan uit de weergavetaal van
 Windows (NL/DE/FR, anders Engels) en alleen dan. Drie instellingen die tot nu toe **gedeeld**
 waren zijn **per slot** geworden (`yaesu_/yaesu2_ssb_switch_on_ptt`, `_memory_write_ack`,
-`_audio_channel`); de oude gedeelde sleutels - waaronder `ftx1_memory_write_ack` en
-`yaesu2_audio_channel`, die ondanks zijn naam de gedeelde was - zaaien bij het inlezen beide
+`_audio_channel`); de oude gedeelde sleutels (waaronder `ftx1_memory_write_ack` en
+`yaesu2_audio_channel`, die ondanks zijn naam de gedeelde was) zaaien bij het inlezen beide
 slots. Het model van een radio wordt bij het kiezen van de COM-poort **aan de poort gevraagd**
 in plaats van uit het slotnummer afgeleid; dat bepaalt het EX-menu-dialect, het opnamekanaal en
 welke bediening wordt getoond. De ack-vlaggen krijgen `NO_DX_CLUSTER` (geinverteerd, dus een
@@ -122,8 +177,8 @@ opzegt. Terug naar v2.9.1 is **niet** symmetrisch: die kent de per-slot sleutels
 
 **Een gat is de codec weer, en audio uitzetten is stil.** Wire-protocol ongewijzigd t.o.v.
 v2.9.0. De ruisgenerator die in v2.9.0 was meegekomen is verwijderd; wat een gat vult is de
-eigen verhulling van de codec. Een stroom die wordt uitgezet reset zijn decoder - op alle zes
-de kanalen en ook bij een herverbinding - zodat een later gat niet wordt gevuld met audio uit
+eigen verhulling van de codec. Een stroom die wordt uitgezet reset zijn decoder (op alle zes
+de kanalen en ook bij een herverbinding) zodat een later gat niet wordt gevuld met audio uit
 een vorige sessie. Audio uit een radio telt mee als levensteken bij de verbindingsbewaking, wat
 een station zonder Thetis-audio zijn verbinding kost. 60m staat in beide bandtabellen.
 
@@ -135,19 +190,19 @@ serverlog (`0x35`, `0x36`); een oudere kant die ze niet kent vraagt er nooit om 
 er nooit op. Verhulling en foutcorrectie liepen tot dan altijd door de smalbanddecoder, ook
 met breedbandaudio aan, en alleen op het eerste kanaal; sindsdien decodeert elke stroom in zijn
 eigen formaat. Een telefoon die tussen WiFi en mobiel data wisselt haalt zijn audio zelf terug.
-De chat is een aparte container naast de relay, met een meldknop die het log meestuurt -
+De chat is een aparte container naast de relay, met een meldknop die het log meestuurt,
 geschoond, en getoond voordat het weggaat. De Android-APK is niet langer debuggable; de app
 houdt in plaats daarvan zijn eigen logbestand bij.
 
 ### v2.8.0 hoogtepunten
 
 **De gegevens van de radio staan er zodra je verbindt, één schikker voor beide applicaties, en
-drie Android-fouten die in v2.7.0 zijn meegegaan.** Compatibel met v2.7.x — wire `VERSION`
+drie Android-fouten die in v2.7.0 zijn meegegaan.** Compatibel met v2.7.x: wire `VERSION`
 blijft 3 en er zijn **geen nieuwe control-ids**; wat wijzigde is de *waarde* op twee bestaande
 (`0` = lees de radio nu, `1` = de kopie van de server volstaat), zo gekozen dat oude en nieuwe
 kanten in beide richtingen blijven werken. Geheugenkanalen, tonen en EX-instellingen worden
 **eenmalig bij het verbinden van de radio** gelezen en door de server bewaard; een client wordt
-daarna uit die kopie bediend in plaats van de radio opnieuw zijn kanalen te laten langslopen —
+daarna uit die kopie bediend in plaats van de radio opnieuw zijn kanalen te laten langslopen,
 dat kostte ongeveer een seconde op de FT-991A en enkele op de 405 EX-waarden van de FTX-1,
 waarin geen ander CAT-commando erdoor kon. Toestand bereikt clients via **één push-mechaniek**:
 een verse abonnee krijgt de huidige waarde één keer, daarna alleen wijzigingen, met een trage
@@ -163,91 +218,91 @@ FT-991A-geheugenuitlezing komt niet meer één kanaal tekort.
 
 ### v2.7.0 hoogtepunten
 
-**Betrouwbare VRX-audio, CTCSS/DCS vanuit de client, herbouwde audioniveaubalken, en een volbandspectrumrij die gedeeld wordt door een RX en de VRX op dezelfde DDC.** Backwards-compatible met v2.6.x — wire `VERSION` blijft 3; de toevoegingen zijn drie client→server-only `ControlId`-waarden (`YaesuCatMonitor 0x96` gereserveerd/no-op, `YaesuReadMemoryTones 0x97`, `FullSpectrumEnabled 0x98`, zie [Protocol-toevoegingen (v2.7.0)](#control-ids)). **VRX-audio start nu betrouwbaar en blijft schoon na afstemmen**: drie losse oorzaken lagen onder één symptoom — een vastgelopen DDC-midden na een gemiste push, een relay-dedupfilter dat het kanaal-id negeerde waardoor VRX1 en VRX2 elkaars frames opaten, en een herstarte stroom die voor zijn eigen duplicaat werd aangezien (de wachttijd vóór er audio kwam was precies zo lang als de vorige luistersessie). Een VRX **blijft ook binnen de DDC-band** en het spectrum tekent de rand eerlijk in plaats van stilzwijgend te herschalen. **CTCSS en DCS zijn per geheugenkanaal te lezen en te schrijven op de FT-991A** (alle 104 DCS-codes; *Tonen uitlezen* loopt de kanalen met een tone-mode langs, pauzeert en hervat een lopende scan, en keert terug naar het kanaal waar de radio stond) — de FTX-1 kan lezen maar niet schrijven, want daar bestaat geen veilige CAT-route voor. De **audioniveaubalken meten de verbinding in plaats van de volumeschuif** (gemeten vóór het volume), vallen binnen een halve seconde terug naar nul als een stroom stopt, en het **Yaesu-ontvangstpad is per radiomodel geijkt** voor zowel de meter als de weergavegain (de FT-991A stond ~16 dB te hard). De **volledige DDC-spectrumrij wordt gedeeld** door het RX-venster en de VRX op dezelfde DDC — één rij per client per keten, met een vinkje om hem uit te zetten (ruwweg de helft van de spectrumbandbreedte). Fixes: een MIDI-wiel laat een Yaesu niet meer weglopen (frequentiecommando's worden samengevoegd, zoals de Thetis-VFO al deed), VRX-afstemming blijft op het stapraster tot en met de bandgrens, en de relay ziet een dood UDP-pad niet meer als hersteld. Stock Thetis v2.10.3.15 volstaat; geen fork-wijziging nodig. Vanaf deze release wordt `Cargo.lock` meegecommit en bouwen de release-builds met `--locked`, zodat de gepubliceerde binaries, de SBOM en het derde-partij-licentierapport allemaal dezelfde dependency-set beschrijven.
+**Betrouwbare VRX-audio, CTCSS/DCS vanuit de client, herbouwde audioniveaubalken, en een volbandspectrumrij die gedeeld wordt door een RX en de VRX op dezelfde DDC.** Backwards-compatible met v2.6.x: wire `VERSION` blijft 3; de toevoegingen zijn drie client→server-only `ControlId`-waarden (`YaesuCatMonitor 0x96` gereserveerd/no-op, `YaesuReadMemoryTones 0x97`, `FullSpectrumEnabled 0x98`, zie [Protocol-toevoegingen (v2.7.0)](#control-ids)). **VRX-audio start nu betrouwbaar en blijft schoon na afstemmen**: drie losse oorzaken lagen onder één symptoom; een vastgelopen DDC-midden na een gemiste push, een relay-dedupfilter dat het kanaal-id negeerde waardoor VRX1 en VRX2 elkaars frames opaten, en een herstarte stroom die voor zijn eigen duplicaat werd aangezien (de wachttijd vóór er audio kwam was precies zo lang als de vorige luistersessie). Een VRX **blijft ook binnen de DDC-band** en het spectrum tekent de rand eerlijk in plaats van stilzwijgend te herschalen. **CTCSS en DCS zijn per geheugenkanaal te lezen en te schrijven op de FT-991A** (alle 104 DCS-codes; *Tonen uitlezen* loopt de kanalen met een tone-mode langs, pauzeert en hervat een lopende scan, en keert terug naar het kanaal waar de radio stond): de FTX-1 kan lezen maar niet schrijven, want daar bestaat geen veilige CAT-route voor. De **audioniveaubalken meten de verbinding in plaats van de volumeschuif** (gemeten vóór het volume), vallen binnen een halve seconde terug naar nul als een stroom stopt, en het **Yaesu-ontvangstpad is per radiomodel geijkt** voor zowel de meter als de weergavegain (de FT-991A stond ~16 dB te hard). De **volledige DDC-spectrumrij wordt gedeeld** door het RX-venster en de VRX op dezelfde DDC: één rij per client per keten, met een vinkje om hem uit te zetten (ruwweg de helft van de spectrumbandbreedte). Fixes: een MIDI-wiel laat een Yaesu niet meer weglopen (frequentiecommando's worden samengevoegd, zoals de Thetis-VFO al deed), VRX-afstemming blijft op het stapraster tot en met de bandgrens, en de relay ziet een dood UDP-pad niet meer als hersteld. Stock Thetis v2.10.3.15 volstaat; geen fork-wijziging nodig. Vanaf deze release wordt `Cargo.lock` meegecommit en bouwen de release-builds met `--locked`, zodat de gepubliceerde binaries, de SBOM en het derde-partij-licentierapport allemaal dezelfde dependency-set beschrijven.
 
 ### v2.6.0 highlights
 
-**Alleen UI / server-side — geen wire-protocol-wijziging (VERSION blijft 3, backwards-compatible met v2.5.x).** De vensterschikker is omgebouwd tot een **matrix-plaatser** (rasterkiezer tot 12×12, cel-schilderen met spanning, rechthoek-sleepselectie) en zit nu **óók in de server-GUI** om de eigen apparaat-vensters van de server te ordenen (multi-monitor via de geporte `window_placement`). De **server-GUI is nu meertalig** (rust-i18n, EN/NL/DE/FR, taal-picker in Settings; het Settings-scherm en de device-popouts zijn vertaald). De **analoge S-meter** is herzien naar een constante, uniform meeschalende vorm (vaste verhouding, bovenste-60%-boogzone, strak om de schaal, grotere RX/VRX). Fixes: de **991A geheugen-read breekt af bij een niet-reagerende (standby) radio** zodat een power-on-klik niet meer ~30–40 s geblokkeerd wordt, 991A/FTX-1 geheugen betrouwbaar lezen + auto-load, uitklap-secties onthouden hun stand, en RX1 "Auto ref" blijft staan over een TX-spectrum-override. Android: APK-rebuild (peak-hold-streepje op de audioniveau-bars).
+**Alleen UI / server-side: geen wire-protocol-wijziging (VERSION blijft 3, backwards-compatible met v2.5.x).** De vensterschikker is omgebouwd tot een **matrix-plaatser** (rasterkiezer tot 12×12, cel-schilderen met spanning, rechthoek-sleepselectie) en zit nu **óók in de server-GUI** om de eigen apparaat-vensters van de server te ordenen (multi-monitor via de geporte `window_placement`). De **server-GUI is nu meertalig** (rust-i18n, EN/NL/DE/FR, taal-picker in Settings; het Settings-scherm en de device-popouts zijn vertaald). De **analoge S-meter** is herzien naar een constante, uniform meeschalende vorm (vaste verhouding, bovenste-60%-boogzone, strak om de schaal, grotere RX/VRX). Fixes: de **991A geheugen-read breekt af bij een niet-reagerende (standby) radio** zodat een power-on-klik niet meer ~30–40 s geblokkeerd wordt, 991A/FTX-1 geheugen betrouwbaar lezen + auto-load, uitklap-secties onthouden hun stand, en RX1 "Auto ref" blijft staan over een TX-spectrum-override. Android: APK-rebuild (peak-hold-streepje op de audioniveau-bars).
 
 ### v2.5.0 highlights
 
-**Onafhankelijke audio + spectrum per kanaal, aparte VRX-vensters met een per-monitor vensterschikker, S-meter wisselen door klikken, Yaesu op het hoofdscherm met aan/stand-by + TX-vermogen per band, een één-ontvanger-instelling, en een hoog-SWR-alarm.** Backwards-compatible met v2.4.x — wire `VERSION` blijft 3; de toevoegingen zijn twee trailing-`YaesuState`-velden (`hi_swr`, `tx_power_max`, genegeerd door oudere clients), vijf nieuwe per-client-gegate `ControlId`-waarden (`Rx1Enable 0x91`, `YaesuStateEnable`/`Yaesu2StateEnable 0x92/0x93`, `YaesuPowerOnOff`/`Yaesu2PowerOnOff 0x94/0x95`) en een `SINGLE_RECEIVER`-heartbeatvlag (zie [Protocol-toevoegingen (v2.5.0)](#protocol-toevoegingen-v250)). Elk kanaal (RX1/RX2/VRX1/VRX2/Yaesu 1-2) is nu een eigen audio- + spectrum-abonnement — een venster openen zet de data aan, sluiten zet ze uit — zodat een VRX een volledig zelfstandig kanaal is met eigen spectrum en S-meter. **VRX1/VRX2 krijgen elk een eigen venster** (voorheen één gecombineerd pop-out) en een **Vensters-schikken**-sleepraster snapt alle open vensters in een layout, toewijsbaar **per monitor**. Het **S-metertype wissel je door op de meter te klikken** en wordt per kanaal onthouden. Yaesu-radio's verschijnen op het **hoofdscherm** (inschakelen + vensterknop, aanwezigheids-gegate) met consistente **"Yaesu N: type"**-naamgeving vanaf de server; de **audio kan gedempt worden terwijl het bedieningsvenster live blijft** (aparte audio- vs. status-abonnement); de FT-991A krijgt een **aan/stand-by**-knop (CAT `PS`; de FTX-1 is alleen-label omdat zijn USB wegvalt bij uitschakelen); en de **TX-vermogensslider volgt het werkelijke maximum per band** (HF/50/144/430-maxvermogensmenu's gelezen bij verbinden, server-side afgedwongen). Een **hoog-SWR-waarschuwingstoon** klinkt voor de Yaesu-radio's (991A `RI0`, FTX-1 `RI`). Een **één-ontvanger**-serverinstelling verbergt RX2/VRX2 voor radio's met één ontvanger. Android krijgt de 991A-power-knop en een Yaesu-eerst Radio-tabblad als er geen Thetis is geconfigureerd. Geen Thetis-fork-update nodig (stock v2.10.3.15 volstaat).
+**Onafhankelijke audio + spectrum per kanaal, aparte VRX-vensters met een per-monitor vensterschikker, S-meter wisselen door klikken, Yaesu op het hoofdscherm met aan/stand-by + TX-vermogen per band, een één-ontvanger-instelling, en een hoog-SWR-alarm.** Backwards-compatible met v2.4.x: wire `VERSION` blijft 3; de toevoegingen zijn twee trailing-`YaesuState`-velden (`hi_swr`, `tx_power_max`, genegeerd door oudere clients), vijf nieuwe per-client-gegate `ControlId`-waarden (`Rx1Enable 0x91`, `YaesuStateEnable`/`Yaesu2StateEnable 0x92/0x93`, `YaesuPowerOnOff`/`Yaesu2PowerOnOff 0x94/0x95`) en een `SINGLE_RECEIVER`-heartbeatvlag (zie [Protocol-toevoegingen (v2.5.0)](#protocol-toevoegingen-v250)). Elk kanaal (RX1/RX2/VRX1/VRX2/Yaesu 1-2) is nu een eigen audio- + spectrum-abonnement (een venster openen zet de data aan, sluiten zet ze uit) zodat een VRX een volledig zelfstandig kanaal is met eigen spectrum en S-meter. **VRX1/VRX2 krijgen elk een eigen venster** (voorheen één gecombineerd pop-out) en een **Vensters-schikken**-sleepraster snapt alle open vensters in een layout, toewijsbaar **per monitor**. Het **S-metertype wissel je door op de meter te klikken** en wordt per kanaal onthouden. Yaesu-radio's verschijnen op het **hoofdscherm** (inschakelen + vensterknop, aanwezigheids-gegate) met consistente **"Yaesu N: type"**-naamgeving vanaf de server; de **audio kan gedempt worden terwijl het bedieningsvenster live blijft** (aparte audio- vs. status-abonnement); de FT-991A krijgt een **aan/stand-by**-knop (CAT `PS`; de FTX-1 is alleen-label omdat zijn USB wegvalt bij uitschakelen); en de **TX-vermogensslider volgt het werkelijke maximum per band** (HF/50/144/430-maxvermogensmenu's gelezen bij verbinden, server-side afgedwongen). Een **hoog-SWR-waarschuwingstoon** klinkt voor de Yaesu-radio's (991A `RI0`, FTX-1 `RI`). Een **één-ontvanger**-serverinstelling verbergt RX2/VRX2 voor radio's met één ontvanger. Android krijgt de 991A-power-knop en een Yaesu-eerst Radio-tabblad als er geen Thetis is geconfigureerd. Geen Thetis-fork-update nodig (stock v2.10.3.15 volstaat).
 
 ### v2.4.0 highlights
 
-**Relay v2 (lage-latency UDP-audio + automatische TCP-terugval), een beheer-dashboard, uitgebreide verbindingsmonitoring en desktop-thema's — plus een grote Yaesu- en Android-inhaalslag.** Backwards-compatible met v2.3.x — wire `VERSION` blijft 3; alle relay-toevoegingen zitten in de relay-laag en de tunnel, niet in het radio-protocol. Relay-audio + PTT lopen nu over kale UDP (voorheen wss/TCP) met automatische make-before-break UDP↔wss-terugval als een netwerk UDP blokkeert of degradeert, plus een transport-indicator op desktop en Android; UDP-sessietokens roteren over wss vóór ze verlopen. Een web-dashboard beheert stations/apparaten met verbruik/quota per device en een database-backup-knop (`VACUUM INTO`, Argon2id-login, CSRF, per-IP rate-limit, intern achter de TLS-proxy). Het **Statistics-paneel is fors uitgebreid**: per-stream jitter, jitterbuffer-diepte, packet-telling en loss voor Thetis RX / Yaesu 1-2 / VRX1-2, plus RTT, up/down-bandbreedte met een uitsplitsing per packet-type, en de live transport-indicator (desktop + Android); server-side toont het Status-paneel per client de down/up-bandbreedte uitgesplitst naar audio/spectrum/overig. Grote **Yaesu**-uitbreiding: **SSB-zenden via de USB-audio** (991A: per PTT SSB MIC SELECT=REAR + PORT SELECT=USB, hersteld bij loslaten; FTX-1: interne auto-modulatiebron ongemoeid; auto-DATA alleen FM, niet SSB; hybride per-PTT-routing + Exit), client-side **TX-compressor + AGC** per radio en een **clarifier (RIT/XIT)** — plus een grote **Android Yaesu-pariteit** (dual-radio-selector, volledig DSP-paneel, touch freq-tuning, interne ATU). **Databesparing mobiel** stopt de Thetis-RX-stream naar Yaesu-only clients en streamt Yaesu-data alleen als het venster actief is. De desktop-client krijgt kiesbare UI-thema's (Classic/Dark/Slate/Custom) en zelfherstel van off-screen-vensters. Geen Thetis-fork-update nodig (stock v2.10.3.15 volstaat).
+**Relay v2 (lage-latency UDP-audio + automatische TCP-terugval), een beheer-dashboard, uitgebreide verbindingsmonitoring en desktop-thema's, plus een grote Yaesu- en Android-inhaalslag.** Backwards-compatible met v2.3.x: wire `VERSION` blijft 3; alle relay-toevoegingen zitten in de relay-laag en de tunnel, niet in het radio-protocol. Relay-audio + PTT lopen nu over kale UDP (voorheen wss/TCP) met automatische make-before-break UDP↔wss-terugval als een netwerk UDP blokkeert of degradeert, plus een transport-indicator op desktop en Android; UDP-sessietokens roteren over wss vóór ze verlopen. Een web-dashboard beheert stations/apparaten met verbruik/quota per device en een database-backup-knop (`VACUUM INTO`, Argon2id-login, CSRF, per-IP rate-limit, intern achter de TLS-proxy). Het **Statistics-paneel is fors uitgebreid**: per-stream jitter, jitterbuffer-diepte, packet-telling en loss voor Thetis RX / Yaesu 1-2 / VRX1-2, plus RTT, up/down-bandbreedte met een uitsplitsing per packet-type, en de live transport-indicator (desktop + Android); server-side toont het Status-paneel per client de down/up-bandbreedte uitgesplitst naar audio/spectrum/overig. Grote **Yaesu**-uitbreiding: **SSB-zenden via de USB-audio** (991A: per PTT SSB MIC SELECT=REAR + PORT SELECT=USB, hersteld bij loslaten; FTX-1: interne auto-modulatiebron ongemoeid; auto-DATA alleen FM, niet SSB; hybride per-PTT-routing + Exit), client-side **TX-compressor + AGC** per radio en een **clarifier (RIT/XIT)**; plus een grote **Android Yaesu-pariteit** (dual-radio-selector, volledig DSP-paneel, touch freq-tuning, interne ATU). **Databesparing mobiel** stopt de Thetis-RX-stream naar Yaesu-only clients en streamt Yaesu-data alleen als het venster actief is. De desktop-client krijgt kiesbare UI-thema's (Classic/Dark/Slate/Custom) en zelfherstel van off-screen-vensters. Geen Thetis-fork-update nodig (stock v2.10.3.15 volstaat).
 
 ### v2.3.0 highlights
 
-**Synchrone AM (SAM-PLL) + AM auto-tune + TX-modulatiebandbreedte.** Backward-compatible met v2.1.x/v2.2.0 — wire `VERSION` blijft 3; de nieuwe packet-/control-types (`0x2A`/`0x2B`, control `0x75`–`0x79`) zijn puur additief en capability-gated. De VRX SAM-modus is nu een echte synchrone-AM demodulator (kritisch-gedempte draaggolf-volgende PLL, ±3 kHz vangbereik); SAM auto-tune-naar-draaggolf (twee-snelheden ruisrobuuste AFC) volgt de draaggolf met de client-VFO; elke VRX heeft een onafhankelijke NB/WB/Auto audiorate. De TX-modulatiebandbreedte van de hoofdradio is instelbaar vanaf de desktop Thetis-tab (Follow RX, of onafhankelijk laag/hoog, 0–8 kHz). De Android-client is ongewijzigd (geen VRX) en een Thetis-fork-update is niet nodig (stock v2.10.3.14+ volstaat).
+**Synchrone AM (SAM-PLL) + AM auto-tune + TX-modulatiebandbreedte.** Backward-compatible met v2.1.x/v2.2.0: wire `VERSION` blijft 3; de nieuwe packet-/control-types (`0x2A`/`0x2B`, control `0x75`–`0x79`) zijn puur additief en capability-gated. De VRX SAM-modus is nu een echte synchrone-AM demodulator (kritisch-gedempte draaggolf-volgende PLL, ±3 kHz vangbereik); SAM auto-tune-naar-draaggolf (twee-snelheden ruisrobuuste AFC) volgt de draaggolf met de client-VFO; elke VRX heeft een onafhankelijke NB/WB/Auto audiorate. De TX-modulatiebandbreedte van de hoofdradio is instelbaar vanaf de desktop Thetis-tab (Follow RX, of onafhankelijk laag/hoog, 0–8 kHz). De Android-client is ongewijzigd (geen VRX) en een Thetis-fork-update is niet nodig (stock v2.10.3.14+ volstaat).
 
 ### v2.2.0 highlights
 
-**Virtuele ontvangers (VRX) en een tweede Yaesu-radio (FT-991A + FTX-1).** Backward-compatible met v2.1.x — wire `VERSION` blijft 3; de nieuwe packet-types (`0x21`–`0x29`) zijn puur additief en per-client subscription-gated, dus een v2.1.x-peer ontvangt ze nooit. Server, desktop-client en Android-client dragen `VERSION = "2.2.0"`; pair met **Thetis fork PA3GHM TL2-4** voor de volledige feature-set, stock Thetis blijft ondersteund.
+**Virtuele ontvangers (VRX) en een tweede Yaesu-radio (FT-991A + FTX-1).** Backward-compatible met v2.1.x: wire `VERSION` blijft 3; de nieuwe packet-types (`0x21`–`0x29`) zijn puur additief en per-client subscription-gated, dus een v2.1.x-peer ontvangt ze nooit. Server, desktop-client en Android-client dragen `VERSION = "2.2.0"`; pair met **Thetis fork PA3GHM TL2-4** voor de volledige feature-set, stock Thetis blijft ondersteund.
 
-- **Virtuele ontvangers (VRX1/VRX2)** — twee onafhankelijke ontvangers uit de brede DDC-I/Q-stroom via een FFT-channelizer (`vrx-rs`-crate), elk met eigen frequentie, mode (USB/LSB/AM/SAM/FM), filter, high-res spectrum/waterval en S-meter in één gezamenlijk popout-venster; NB (8 kHz) / WB (16 kHz) Opus-audio; per-DDC-bucket frequentiegeheugen en state-persistentie. Zie §28 en het geïllustreerde leerboek op <https://cjenschede.github.io/ThetisLink/VRX-uitleg.html>.
-- **Dual-radio (slot 1)** — een tweede Yaesu draait als onafhankelijk kanaal met autodetect-model (`ID;` → `0670` = FT-991A, `0840` = FTX-1), per-radio audio/CAT/geheugen, een `RadioInfo`-broadcast voor paneel-naamgeving, FTX-1 WIRES-X EX-menu-velden en een server-side software-squelch (alleen FM-familie). Zie §29.
-- **Schakelbare RX-bandbreedte + `#N` device-index** — één schakelaar zet smal/breed RX-audio voor Thetis, de VRX-kanalen en de Yaesu-radio's samen (alleen ontvangst); een `#N`-suffix onderscheidt twee identiek benoemde USB Audio CODEC-apparaten. WAV-opnamerate schaalt automatisch mee.
+- **Virtuele ontvangers (VRX1/VRX2)**: twee onafhankelijke ontvangers uit de brede DDC-I/Q-stroom via een FFT-channelizer (`vrx-rs`-crate), elk met eigen frequentie, mode (USB/LSB/AM/SAM/FM), filter, high-res spectrum/waterval en S-meter in één gezamenlijk popout-venster; NB (8 kHz) / WB (16 kHz) Opus-audio; per-DDC-bucket frequentiegeheugen en state-persistentie. Zie §28 en het geïllustreerde leerboek op <https://cjenschede.github.io/ThetisLink/VRX-uitleg.html>.
+- **Dual-radio (slot 1)**: een tweede Yaesu draait als onafhankelijk kanaal met autodetect-model (`ID;` → `0670` = FT-991A, `0840` = FTX-1), per-radio audio/CAT/geheugen, een `RadioInfo`-broadcast voor paneel-naamgeving, FTX-1 WIRES-X EX-menu-velden en een server-side software-squelch (alleen FM-familie). Zie §29.
+- **Schakelbare RX-bandbreedte + `#N` device-index**: één schakelaar zet smal/breed RX-audio voor Thetis, de VRX-kanalen en de Yaesu-radio's samen (alleen ontvangst); een `#N`-suffix onderscheidt twee identiek benoemde USB Audio CODEC-apparaten. WAV-opnamerate schaalt automatisch mee.
 
 ### v2.1.0 highlights
 
-**Yaesu G-1000DXC rotor via MCP2221A, opt-in wideband Thetis RX, Amplitec reconnect, RX2 filter fixes.** Backwards-compatible met v2.0.4 — wire-protocol ongewijzigd; alle uitbreidingen zijn server-side en zichtbaar via bestaande Rotor/Amplitec/TCI kanalen. Server, desktop client en Android client dragen dezelfde `VERSION = "2.1.0"`; combineer met **Thetis fork PA3GHM TL2-4** voor de volledige feature-set, val terug op stock Thetis zonder veiligheidsgaranties op te geven.
+**Yaesu G-1000DXC rotor via MCP2221A, opt-in wideband Thetis RX, Amplitec reconnect, RX2 filter fixes.** Backwards-compatible met v2.0.4: wire-protocol ongewijzigd; alle uitbreidingen zijn server-side en zichtbaar via bestaande Rotor/Amplitec/TCI kanalen. Server, desktop client en Android client dragen dezelfde `VERSION = "2.1.0"`; combineer met **Thetis fork PA3GHM TL2-4** voor de volledige feature-set, val terug op stock Thetis zonder veiligheidsgaranties op te geven.
 
-- **Yaesu G-1000DXC rotor via Adafruit MCP2221A** — derde rotor-backend naast EA7HG en PstRotator. Directe aansturing van de Yaesu EXT CONTROL DIN-7 connector via een MCP2221A breakout in **5 V mode** (3V solder-jumper doorgesneden, 5V-pad gebrugd op de Adafruit onderkant). GPIO0/1 → BST82 SOT-23 low-side switches op pin 1 (R/CW) en pin 2 (L/CCW) van de Yaesu, met 100 kΩ gate-pulldown om spontane rotatie tijdens USB-reset te voorkomen. GP2 (DAC, 5-bit) → speed-pin 3 met DAC-Vref = Vdd. GP3 (ADC, 10-bit, intern Vrm = 4,096 V) ← position-pin 4 via een **1,8 kΩ + 2,2 kΩ** deler (ratio 1,818, max meting ~7,45 V — sommige G-1000DXC units overschrijden de schema-spec van 4,5 V en gaan tot ~7,3 V op pin 4 bij 450°). Server-side poll-thread combineert adaptive sample-rate (motion 30 Hz / idle 1 Hz, mediaan-filter voor 50/100 Hz ripple-onderdrukking), soft-start / soft-stop ramp (`ramp_pct_per_sec`, 1-200 %/s, default 50), GoTo deadband 1° met decel-distance-gebaseerde landing, kortste-route optie voor `max_deg > 360°` (target ± 360 wordt overwogen tegen de gemechaniseerde afstand), en een manual-mode override die de server-UI test-knoppen + speed-slider laat winnen boven de ramp-loop. Driver-instantie publiceert dezelfde `Rotor`-facade als de andere backends zodat het bestaande Rotor-window in beide clients zonder wijzigingen werkt.
-- **Opt-in wideband Thetis RX audio** — checkbox in het Server-tabblad verhoogt de RX-audio sample rate boven de stock 48 kHz wanneer de Thetis-fork-extensie aanwezig is. Default uit; stock-Thetis pad blijft onveranderd. Vereist Thetis fork **PA3GHM TL2-4** voor het wideband-IQ commando.
-- **Modulaire multi-tuner wizard** — `Vec<TunerConfig>` schema vervangt het oude 2-tuner-hardcoded pad. Per-slot Add via board-scan + classificatie (Tuner / Rotor / Unprogrammed) + EEPROM-write van de gekozen functie. Per-slot Rename, Delete (met server-restart) en threshold/hysterese slider. Het MCP2221A-blok in het Status-paneel is collapsible; open/dicht state persist over restart.
-- **Amplitec 6/2 reconnect + offline-start** — serial-worker thread heeft een retry-loop met 5 s interval. Bij power-cycle van de Amplitec markeert de driver `connected = false` en probeert continu opnieuw te openen tot het bord terug is — zonder server-restart. Bij server-start met de Amplitec offline wordt de instance toch direct aangemaakt zodat het venster verschijnt; verbinding volgt automatisch zodra de poort beschikbaar is.
-- **RX2 mode-switch filter restore** — client `handleModulation`-pad respecteert nu de server filter-band update tijdens een mode-switch (USB → CW etc.) i.p.v. de stale filter-edges van de vorige modus over te nemen.
-- **RX2 spectrum filter-drag isolation** — per-channel filter-edge drag-state keys ontkoppelen RX1 en RX2; een filter-edge drag op RX2 trekt RX1's filter niet meer mee.
-- **Yaesu EQ profile mic-gain persistence** — de mic-gain slider wordt nu mee opgeslagen met band/treble bij EQ-profiel save.
-- **Yaesu TX resampler anti-alias** — scherpere filter-curve op de client TX resampler reduceert aliasing-artefacten in het verzonden audio.
-- **Status-paneel scroll-stabiliteit** — `try_lock`-contentie op de SessionManager toonde voorheen een 1-regel "snapshot busy..." placeholder waardoor de ScrollArea-scroll-positie clampte zodra de bovenliggende sectie kromp. Snapshot-cache vangt nu lock-failures op en houdt de sectie-hoogte constant.
-- **Graceful server auto-restart** — Drop-handlers op alle hardware-Arcs (Yaesu, Amplitec, Tuner, SPE, RF2K, UltraBeam) lopen nu vóór de child-process spawn zodat cpal audio-streams + TCI WebSocket netjes worden vrijgegeven. Audio op de nieuwe instance werkt direct zonder handmatige stop+start cyclus.
-- **UI polish** — alle CollapsingHeader widgets vervangen door `chevron_label` met geometrische driehoek-glyph (ASCII-only, geen egui-default-font tofu). Server Settings-tab in een ScrollArea voor kleinere displays. Amplitec antenne-rename via right-click context-menu + auto-scale knoppen bij lange namen. Client frequency-digit hover blokkeert parent ScrollArea zodat mouse-wheel-edits niet de omliggende panel scrollen. Rotor-poll log-spam (per-tick `set_direction` + 5 s ADC stats) gedegradeerd naar `debug!`.
-- **Hardware-noot Yaesu rotor printje** — bouwers die hetzelfde setup willen reproduceren: gebruik **1,8 kΩ + 2,2 kΩ** voor de position-feedback deler (ratio 1,818). De initiele 1,8 kΩ + 10 kΩ design (ratio 1,18) clipte boven ~365° op sommige G-1000DXC units omdat pin 4 daar boven 4,8 V uitkomt. Een 10 µF condensator parallel aan de 2,2 kΩ onderdrukt de 100 Hz netvoeding-rectifier ripple op het positie-signaal. Na elke deler-wijziging **opnieuw kalibreren** via Park CCW + Park CW — de opgeslagen `v_at_0deg` / `v_at_max_deg` waarden hangen aan de ratio.
+- **Yaesu G-1000DXC rotor via Adafruit MCP2221A**: derde rotor-backend naast EA7HG en PstRotator. Directe aansturing van de Yaesu EXT CONTROL DIN-7 connector via een MCP2221A breakout in **5 V mode** (3V solder-jumper doorgesneden, 5V-pad gebrugd op de Adafruit onderkant). GPIO0/1 → BST82 SOT-23 low-side switches op pin 1 (R/CW) en pin 2 (L/CCW) van de Yaesu, met 100 kΩ gate-pulldown om spontane rotatie tijdens USB-reset te voorkomen. GP2 (DAC, 5-bit) → speed-pin 3 met DAC-Vref = Vdd. GP3 (ADC, 10-bit, intern Vrm = 4,096 V) ← position-pin 4 via een **1,8 kΩ + 2,2 kΩ** deler (ratio 1,818, max meting ~7,45 V: sommige G-1000DXC units overschrijden de schema-spec van 4,5 V en gaan tot ~7,3 V op pin 4 bij 450°). Server-side poll-thread combineert adaptive sample-rate (motion 30 Hz / idle 1 Hz, mediaan-filter voor 50/100 Hz ripple-onderdrukking), soft-start / soft-stop ramp (`ramp_pct_per_sec`, 1-200 %/s, default 50), GoTo deadband 1° met decel-distance-gebaseerde landing, kortste-route optie voor `max_deg > 360°` (target ± 360 wordt overwogen tegen de gemechaniseerde afstand), en een manual-mode override die de server-UI test-knoppen + speed-slider laat winnen boven de ramp-loop. Driver-instantie publiceert dezelfde `Rotor`-facade als de andere backends zodat het bestaande Rotor-window in beide clients zonder wijzigingen werkt.
+- **Opt-in wideband Thetis RX audio**: checkbox in het Server-tabblad verhoogt de RX-audio sample rate boven de stock 48 kHz wanneer de Thetis-fork-extensie aanwezig is. Default uit; stock-Thetis pad blijft onveranderd. Vereist Thetis fork **PA3GHM TL2-4** voor het wideband-IQ commando.
+- **Modulaire multi-tuner wizard**: `Vec<TunerConfig>` schema vervangt het oude 2-tuner-hardcoded pad. Per-slot Add via board-scan + classificatie (Tuner / Rotor / Unprogrammed) + EEPROM-write van de gekozen functie. Per-slot Rename, Delete (met server-restart) en threshold/hysterese slider. Het MCP2221A-blok in het Status-paneel is collapsible; open/dicht state persist over restart.
+- **Amplitec 6/2 reconnect + offline-start**: serial-worker thread heeft een retry-loop met 5 s interval. Bij power-cycle van de Amplitec markeert de driver `connected = false` en probeert continu opnieuw te openen tot het bord terug is: zonder server-restart. Bij server-start met de Amplitec offline wordt de instance toch direct aangemaakt zodat het venster verschijnt; verbinding volgt automatisch zodra de poort beschikbaar is.
+- **RX2 mode-switch filter restore**: client `handleModulation`-pad respecteert nu de server filter-band update tijdens een mode-switch (USB → CW etc.) i.p.v. de stale filter-edges van de vorige modus over te nemen.
+- **RX2 spectrum filter-drag isolation**: per-channel filter-edge drag-state keys ontkoppelen RX1 en RX2; een filter-edge drag op RX2 trekt RX1's filter niet meer mee.
+- **Yaesu EQ profile mic-gain persistence**: de mic-gain slider wordt nu mee opgeslagen met band/treble bij EQ-profiel save.
+- **Yaesu TX resampler anti-alias**: scherpere filter-curve op de client TX resampler reduceert aliasing-artefacten in het verzonden audio.
+- **Status-paneel scroll-stabiliteit**: `try_lock`-contentie op de SessionManager toonde voorheen een 1-regel "snapshot busy..." placeholder waardoor de ScrollArea-scroll-positie clampte zodra de bovenliggende sectie kromp. Snapshot-cache vangt nu lock-failures op en houdt de sectie-hoogte constant.
+- **Graceful server auto-restart**: Drop-handlers op alle hardware-Arcs (Yaesu, Amplitec, Tuner, SPE, RF2K, UltraBeam) lopen nu vóór de child-process spawn zodat cpal audio-streams + TCI WebSocket netjes worden vrijgegeven. Audio op de nieuwe instance werkt direct zonder handmatige stop+start cyclus.
+- **UI polish**: alle CollapsingHeader widgets vervangen door `chevron_label` met geometrische driehoek-glyph (ASCII-only, geen egui-default-font tofu). Server Settings-tab in een ScrollArea voor kleinere displays. Amplitec antenne-rename via right-click context-menu + auto-scale knoppen bij lange namen. Client frequency-digit hover blokkeert parent ScrollArea zodat mouse-wheel-edits niet de omliggende panel scrollen. Rotor-poll log-spam (per-tick `set_direction` + 5 s ADC stats) gedegradeerd naar `debug!`.
+- **Hardware-noot Yaesu rotor printje**: bouwers die hetzelfde setup willen reproduceren: gebruik **1,8 kΩ + 2,2 kΩ** voor de position-feedback deler (ratio 1,818). De initiele 1,8 kΩ + 10 kΩ design (ratio 1,18) clipte boven ~365° op sommige G-1000DXC units omdat pin 4 daar boven 4,8 V uitkomt. Een 10 µF condensator parallel aan de 2,2 kΩ onderdrukt de 100 Hz netvoeding-rectifier ripple op het positie-signaal. Na elke deler-wijziging **opnieuw kalibreren** via Park CCW + Park CW: de opgeslagen `v_at_0deg` / `v_at_max_deg` waarden hangen aan de ratio.
 
 ### v2.0.4 highlights
 
-**Bandbreedte-toolkit, preventieve TX-inhibit, power-cap, PstRotator.** Backwards-compatible met v2.0.3 — wire-protocol uitsluitend additief (één nieuwe `ControlId::DxSpotsEnabled = 0x65`). Server, desktop client en Android client dragen alle dezelfde `VERSION = "2.0.4"`; combineer met **Thetis fork PA3GHM TL2-3** voor de volledige feature-set, val terug op stock Thetis zonder veiligheidsgaranties op te geven.
+**Bandbreedte-toolkit, preventieve TX-inhibit, power-cap, PstRotator.** Backwards-compatible met v2.0.3: wire-protocol uitsluitend additief (één nieuwe `ControlId::DxSpotsEnabled = 0x65`). Server, desktop client en Android client dragen alle dezelfde `VERSION = "2.0.4"`; combineer met **Thetis fork PA3GHM TL2-3** voor de volledige feature-set, val terug op stock Thetis zonder veiligheidsgaranties op te geven.
 
-- **Preventieve RX-only TX-inhibit** — nieuw `rx_only_ex` TCI-commando laat ThetisLink Thetis' "Receive only" flag direct zetten op een RX-only Amplitec-A positie. MOX, spatiebalk, hardware-PTT en VOX worden aan de bron geweigerd, niet reactief teruggeflipt. Server-side state-machine handelt overname, level-maintain (echo-gegate) en teruggave af, inclusief een bootstrap-stale clear binnen ~1 ms na cap-detectie. De Thetis-fork `RXOnly` setter broadcast nu een TCI push-notify zodat externe Setup → "Receive only" toggles real-time zichtbaar zijn voor ThetisLink. De reactieve `ZZTX0` catch-all blijft de veiligheidsvloer voor stock Thetis.
-- **Reactieve RF-power cap per Amplitec-positie** — `amplitec_max_w[]` per positie; de actieve PA's eigen `DriveDown` knop (SPE Expert of RF2K-S) wordt gestuurd totdat de FWD-meter onder de cap zit. Mode-multipliers SSB/CW × 1.0, AM × 0.5, FM/DIG × 0.4. Rate-limited tot één stap per seconde zodat de PA-meter kan settelen — korte CW-bursts onder dat interval kunnen de reactieve cap passeren; preventieve dekking bestaat alleen op RX-only posities. Per-PA `DriveDown` counter wordt hersteld als `DriveUp` bij switch weg van de positie. Nieuwe first-class GUI-editor in het Amplitec-tabblad vervangt file-edit workflows.
-- **PstRotator UDP/XML rotor-backend** — native PstRotator-protocol naast de bestaande rotctl-TCP backend. Per-installation keuze via `rotor_backend = pstrotator`. Integer-graad AZIMUTH-commando's; AZ/EL-replies fallible geparset; offline-timeout markeert status `false`. Host-veld is een **numeriek IP-adres** (geen DNS-resolutie — `SocketAddr::parse` accepteert alleen numerieke literals).
-- **Server-tab bandbreedte-monitor** — live Down (RX) en Up (TX) Kbit/s, geüpdatet elke 500 ms; de Down-regel is klikbaar om een per-`PacketType` breakdown uit te klappen die elke 5 s ververst. De monitor telt UDP application-payload bytes (header + opus/control/spectrum); de besturingssysteem-netwerkmeter leest typisch 1,5-2× hoger omdat die IP/UDP/Ethernet-headers meeneemt. Gebruik de relatieve verschillen tussen instellingen, niet het absolute getal, bij vergelijking met OS-niveau rapportage.
-- **DX-cluster spot broadcast storm fix (~90 Kbit/s → ~6 Kbit/s)** — server stuurde voorheen alle gecachte spots elke equipment-tick (5 Hz); nu dedup op `(callsign, freq, mode)` en een volledige age-refresh elke 10 s. Een nieuwe per-client opt-out (`ControlId::DxSpotsEnabled = 0x65`, default AAN) laat metered-link gebruikers de stream volledig uitschakelen. Desktop-checkbox in het Server-tabblad; Android-switch in Settings. De Android opt-out reset naar AAN bij app-restart (geen preference-persistentie).
-- **WebSDR favorites edit-toggle** — expliciete Edit / Done flow voor hernoemen van favorieten; commit op `lost_focus` en blijft bewaard bij reconnect.
-- **Server-log cleanup** — `PowerCap state` logt nu alleen op `(pos, mode, pa_in_operate, cap)` transities (was: elke 2 s heartbeat). DX-cluster reconnect emitteert één regel per failure plus één regel op herstel (was: drie regels per backoff-cycle). Beide verminderen log-ruis tijdens lange runs zonder transitie-zichtbaarheid op te geven.
+- **Preventieve RX-only TX-inhibit**: nieuw `rx_only_ex` TCI-commando laat ThetisLink Thetis' "Receive only" flag direct zetten op een RX-only Amplitec-A positie. MOX, spatiebalk, hardware-PTT en VOX worden aan de bron geweigerd, niet reactief teruggeflipt. Server-side state-machine handelt overname, level-maintain (echo-gegate) en teruggave af, inclusief een bootstrap-stale clear binnen ~1 ms na cap-detectie. De Thetis-fork `RXOnly` setter broadcast nu een TCI push-notify zodat externe Setup → "Receive only" toggles real-time zichtbaar zijn voor ThetisLink. De reactieve `ZZTX0` catch-all blijft de veiligheidsvloer voor stock Thetis.
+- **Reactieve RF-power cap per Amplitec-positie**: `amplitec_max_w[]` per positie; de actieve PA's eigen `DriveDown` knop (SPE Expert of RF2K-S) wordt gestuurd totdat de FWD-meter onder de cap zit. Mode-multipliers SSB/CW × 1.0, AM × 0.5, FM/DIG × 0.4. Rate-limited tot één stap per seconde zodat de PA-meter kan settelen: korte CW-bursts onder dat interval kunnen de reactieve cap passeren; preventieve dekking bestaat alleen op RX-only posities. Per-PA `DriveDown` counter wordt hersteld als `DriveUp` bij switch weg van de positie. Nieuwe first-class GUI-editor in het Amplitec-tabblad vervangt file-edit workflows.
+- **PstRotator UDP/XML rotor-backend**: native PstRotator-protocol naast de bestaande rotctl-TCP backend. Per-installation keuze via `rotor_backend = pstrotator`. Integer-graad AZIMUTH-commando's; AZ/EL-replies fallible geparset; offline-timeout markeert status `false`. Host-veld is een **numeriek IP-adres** (geen DNS-resolutie: `SocketAddr::parse` accepteert alleen numerieke literals).
+- **Server-tab bandbreedte-monitor**: live Down (RX) en Up (TX) Kbit/s, geüpdatet elke 500 ms; de Down-regel is klikbaar om een per-`PacketType` breakdown uit te klappen die elke 5 s ververst. De monitor telt UDP application-payload bytes (header + opus/control/spectrum); de besturingssysteem-netwerkmeter leest typisch 1,5-2× hoger omdat die IP/UDP/Ethernet-headers meeneemt. Gebruik de relatieve verschillen tussen instellingen, niet het absolute getal, bij vergelijking met OS-niveau rapportage.
+- **DX-cluster spot broadcast storm fix (~90 Kbit/s → ~6 Kbit/s)**: server stuurde voorheen alle gecachte spots elke equipment-tick (5 Hz); nu dedup op `(callsign, freq, mode)` en een volledige age-refresh elke 10 s. Een nieuwe per-client opt-out (`ControlId::DxSpotsEnabled = 0x65`, default AAN) laat metered-link gebruikers de stream volledig uitschakelen. Desktop-checkbox in het Server-tabblad; Android-switch in Settings. De Android opt-out reset naar AAN bij app-restart (geen preference-persistentie).
+- **WebSDR favorites edit-toggle**: expliciete Edit / Done flow voor hernoemen van favorieten; commit op `lost_focus` en blijft bewaard bij reconnect.
+- **Server-log cleanup**: `PowerCap state` logt nu alleen op `(pos, mode, pa_in_operate, cap)` transities (was: elke 2 s heartbeat). DX-cluster reconnect emitteert één regel per failure plus één regel op herstel (was: drie regels per backoff-cycle). Beide verminderen log-ruis tijdens lange runs zonder transitie-zichtbaarheid op te geven.
 
 ### v2.0.3 highlights
 
-**Multi-tuner release + wire-protocol breaking change.** Wire-protocol `VERSION` u8 bumped van 2 → 3 (S-meter payload herschikt). v2.0.2 clients tegen een v2.0.3 server (of omgekeerd) krijgen een gelocaliseerde `ProtocolVersionMismatch` modal ("Server is te oud" / "Client is te oud") in plaats van garbled audio of een stille connect-fail — server stuurt een 4-byte back-channel rejection-packet `[MAGIC, VERSION, 0xFF, 0x00]` zodat de client de mismatch kan detecteren.
+**Multi-tuner release + wire-protocol breaking change.** Wire-protocol `VERSION` u8 bumped van 2 → 3 (S-meter payload herschikt). v2.0.2 clients tegen een v2.0.3 server (of omgekeerd) krijgen een gelocaliseerde `ProtocolVersionMismatch` modal ("Server is te oud" / "Client is te oud") in plaats van garbled audio of een stille connect-fail: server stuurt een 4-byte back-channel rejection-packet `[MAGIC, VERSION, 0xFF, 0x00]` zodat de client de mismatch kan detecteren.
 
-- **Multi-tuner runtime** — tot twee fysieke StockCorner JC-4s / JC-3s tuners parallel via Adafruit MCP2221A USB-HID breakouts (vervangt de v2.0.2 serial-port RTS/CTS aansturing). Per-tuner threshold + hysterese schuiven op de gele tune-status draad (1 MΩ + 1 MΩ deler, default 2.25 V / 0.50 V). Board scan + serial programming UI in het status-paneel. Automatische USB-reconnect met 5 s retry-interval. Inklapbaar MCP2221A-blok waarvan de open/dicht-stand persist over restart.
-- **S-meter overhaul** — multi-source subscription via `rx_channel_sensors_ex` (Sig peak-hold, Avg true-mean, MaxBin), S9-frequency band shift met fork-broadcast `s9_frequency_ex` (fallback 50 MHz tegen stock), TX FWD-power blijft updaten onder Sig/MaxBin selection.
-- **CTUN coupled-recenter + RX1/RX2 spectrum mirror** — beide RX-spectra blijven sync tijdens snel tunen, Auto FFT hertuned naar ~25 FPS, connect-time balancing zodat RX1 en RX2 gelijktijdig opkomen.
-- **MIDI client-side VFO coalesce + auto-recenter handshake** — extreem MIDI-wheel-input vult Thetis' VFO-queue niet meer; auto-recenter ownership handshake met de Thetis-fork werkt nu ook wanneer geen ThetisLink-server actief is.
-- **PA active_pa + drive-snapshot persistence** — overleven proces-kill / power-loss zonder dat de volgende `start_server()`-write nodig is.
-- **Status-panel protocol version-mismatch banner** — voorheen silent, nu zichtbare regel + ringbuffer-entry.
-- **Hardware-doc update** — de impedantie van de yellow-line spanningsdeler is verhoogd van 10 kΩ + 10 kΩ naar **1 MΩ + 1 MΩ** (verhouding 1:1, ×2 in spanning, ongewijzigd; alleen veel minder belasting van de JC-Control LED-keten).
-- **Cleanup** — `assume_tuned` / `TUNER_DONE_ASSUMED` (state 5) / 500 ms assume-deadline pad verwijderd nu feedback-driven detection in productie betrouwbaar werkt. `tuner_port` / `tuner_enabled` legacy COM-port settings UI weg uit de Settings-tab (multi-tuner config loopt nu via het status-paneel). Oude config-keys (`tuner_assume_tuned`, `tuner_port`, `threshold_ratio`, `baseline_override`) worden stilzwijgend genegeerd zodat bestaande config-files niet breken.
-- **Compliance** — vendored Rust crate `mcp2221-hal` v0.1.0 (Copyright © 2025 Rob Wells), dual-licensed `MIT OR Apache-2.0` — ThetisLink gebruikt de **MIT**-tak (Apache-2.0 niet compatible met GPL-2.0-only). Attributie in `NOTICE.md` + volledige MIT-tekst in `compliance/THIRD-PARTY-LICENSES.html` + SPDX SBOM in `compliance/sbom.spdx.json`.
+- **Multi-tuner runtime**: tot twee fysieke StockCorner JC-4s / JC-3s tuners parallel via Adafruit MCP2221A USB-HID breakouts (vervangt de v2.0.2 serial-port RTS/CTS aansturing). Per-tuner threshold + hysterese schuiven op de gele tune-status draad (1 MΩ + 1 MΩ deler, default 2.25 V / 0.50 V). Board scan + serial programming UI in het status-paneel. Automatische USB-reconnect met 5 s retry-interval. Inklapbaar MCP2221A-blok waarvan de open/dicht-stand persist over restart.
+- **S-meter overhaul**: multi-source subscription via `rx_channel_sensors_ex` (Sig peak-hold, Avg true-mean, MaxBin), S9-frequency band shift met fork-broadcast `s9_frequency_ex` (fallback 50 MHz tegen stock), TX FWD-power blijft updaten onder Sig/MaxBin selection.
+- **CTUN coupled-recenter + RX1/RX2 spectrum mirror**: beide RX-spectra blijven sync tijdens snel tunen, Auto FFT hertuned naar ~25 FPS, connect-time balancing zodat RX1 en RX2 gelijktijdig opkomen.
+- **MIDI client-side VFO coalesce + auto-recenter handshake**: extreem MIDI-wheel-input vult Thetis' VFO-queue niet meer; auto-recenter ownership handshake met de Thetis-fork werkt nu ook wanneer geen ThetisLink-server actief is.
+- **PA active_pa + drive-snapshot persistence**: overleven proces-kill / power-loss zonder dat de volgende `start_server()`-write nodig is.
+- **Status-panel protocol version-mismatch banner**: voorheen silent, nu zichtbare regel + ringbuffer-entry.
+- **Hardware-doc update**: de impedantie van de yellow-line spanningsdeler is verhoogd van 10 kΩ + 10 kΩ naar **1 MΩ + 1 MΩ** (verhouding 1:1, ×2 in spanning, ongewijzigd; alleen veel minder belasting van de JC-Control LED-keten).
+- **Cleanup**: `assume_tuned` / `TUNER_DONE_ASSUMED` (state 5) / 500 ms assume-deadline pad verwijderd nu feedback-driven detection in productie betrouwbaar werkt. `tuner_port` / `tuner_enabled` legacy COM-port settings UI weg uit de Settings-tab (multi-tuner config loopt nu via het status-paneel). Oude config-keys (`tuner_assume_tuned`, `tuner_port`, `threshold_ratio`, `baseline_override`) worden stilzwijgend genegeerd zodat bestaande config-files niet breken.
+- **Compliance**: vendored Rust crate `mcp2221-hal` v0.1.0 (Copyright © 2025 Rob Wells), dual-licensed `MIT OR Apache-2.0`; ThetisLink gebruikt de **MIT**-tak (Apache-2.0 niet compatible met GPL-2.0-only). Attributie in `NOTICE.md` + volledige MIT-tekst in `compliance/THIRD-PARTY-LICENSES.html` + SPDX SBOM in `compliance/sbom.spdx.json`.
 
 ### v2.0.2 highlights
 
-Hotfix release. `TciConnection::handle_notification` logde elke `DiversityPhaseEx`, `DiversityGainEx` en `DiversityGainMultiEx` notification op INFO. Thetis pusht deze elke diversity-tick (~10-20 Hz) ongeacht of de waarde verandert, waardoor de server-log honderdduizenden identieke regels per sessie verzamelde (~650k voor een meer-uren run). De drie notification-handlers vergelijken nu de inkomende waarde met de gecachte; alleen bij een echte edge wordt INFO geëmit — onveranderde pushes gaan naar debug (onderdrukt op default log-level). State-propagatie, broadcasts en wire-protocol identiek; pure logging-niveau fix. Volledig interoperabel met v2.0.0 / v2.0.1.
+Hotfix release. `TciConnection::handle_notification` logde elke `DiversityPhaseEx`, `DiversityGainEx` en `DiversityGainMultiEx` notification op INFO. Thetis pusht deze elke diversity-tick (~10-20 Hz) ongeacht of de waarde verandert, waardoor de server-log honderdduizenden identieke regels per sessie verzamelde (~650k voor een meer-uren run). De drie notification-handlers vergelijken nu de inkomende waarde met de gecachte; alleen bij een echte edge wordt INFO geëmit: onveranderde pushes gaan naar debug (onderdrukt op default log-level). State-propagatie, broadcasts en wire-protocol identiek; pure logging-niveau fix. Volledig interoperabel met v2.0.0 / v2.0.1.
 
 ### v2.0.1 highlights
 
 De v2.0.1 release focust op de **connect-ervaring**: een nieuwe gebruiker met minder frictie van "ik heb de app geïnstalleerd" naar "ik zit te zenden" krijgen. Belangrijkste wijzigingen bovenop v2.0.0:
 
-- **First-run connection wizard** — 4 zichtbare stappen (Vind server → Wachtwoord → 2FA → Verbonden). Volgende starts skippen de wizard automatisch.
-- **mDNS local-network discovery** — `_thetislink._udp.local.` gepubliceerd door de server en gebrowst door beide clients. De "Found"-dropdown vult zichzelf op dezelfde WiFi/LAN, geen IP-typewerk meer als eerste hindernis. Falen is stil; manuele invoer blijft beschikbaar.
-- **Gedifferentieerde connect-error feedback** — 9 connect-states (DnsResolutionFailed, NoUdpResponse, WrongPassword, WrongTotp, ProtocolVersionMismatch, TciUnreachable, …) elk via een gedeelde NL/EN i18n-helper. Hints zijn platform-bewust (desktop wijst naar de Thetis-tab; Android wijst naar de Power-knop in het Radio-scherm).
-- **Server Status-paneel** — nieuwe tab in de server-UI met bind-adres, Thetis TCI-link, actieve clients met RTT/loss/jitter en `connected_since`, audio-routing chips per kanaal met frame-tellers, recente connect-pogingen ringbuffer (N=10) en geconfigureerde apparaten.
-- **Slimme TciUnreachable hint** — de server rapporteert `THETIS_RUNNING` en `THETIS_STARTING` bits zodat de client weet of de aanwijzing "druk op Start om Thetis te starten" of "controleer TCI server in Thetis Setup" moet zijn, én de foutmelding tijdens de normale opstartperiode onderdrukken.
-- **Server-side RX2 audio-filter** — multi-channel bundler respecteert nu de per-client `rx2_enabled` vink, zodat een client met RX2 uit niet langer CH2 audio binnenkrijgt (hoorbare RX2 + onnodige bandbreedte, aanwezig in v2.0.0).
-- **Setup-wizard opnieuw starten** — kleine knop op de desktop Server-tab en het Android Radio-scherm om de wizard handmatig opnieuw te starten zonder config te wissen.
-- **Documentatie** — Installation/Installatie secties herschreven rond de wizard, mDNS, language-toggle, `successful_connects` config-gate en de nieuwe Status/Logs split.
+- **First-run connection wizard**: 4 zichtbare stappen (Vind server → Wachtwoord → 2FA → Verbonden). Volgende starts skippen de wizard automatisch.
+- **mDNS local-network discovery**: `_thetislink._udp.local.` gepubliceerd door de server en gebrowst door beide clients. De "Found"-dropdown vult zichzelf op dezelfde WiFi/LAN, geen IP-typewerk meer als eerste hindernis. Falen is stil; manuele invoer blijft beschikbaar.
+- **Gedifferentieerde connect-error feedback**: 9 connect-states (DnsResolutionFailed, NoUdpResponse, WrongPassword, WrongTotp, ProtocolVersionMismatch, TciUnreachable, …) elk via een gedeelde NL/EN i18n-helper. Hints zijn platform-bewust (desktop wijst naar de Thetis-tab; Android wijst naar de Power-knop in het Radio-scherm).
+- **Server Status-paneel**: nieuwe tab in de server-UI met bind-adres, Thetis TCI-link, actieve clients met RTT/loss/jitter en `connected_since`, audio-routing chips per kanaal met frame-tellers, recente connect-pogingen ringbuffer (N=10) en geconfigureerde apparaten.
+- **Slimme TciUnreachable hint**: de server rapporteert `THETIS_RUNNING` en `THETIS_STARTING` bits zodat de client weet of de aanwijzing "druk op Start om Thetis te starten" of "controleer TCI server in Thetis Setup" moet zijn, én de foutmelding tijdens de normale opstartperiode onderdrukken.
+- **Server-side RX2 audio-filter**: multi-channel bundler respecteert nu de per-client `rx2_enabled` vink, zodat een client met RX2 uit niet langer CH2 audio binnenkrijgt (hoorbare RX2 + onnodige bandbreedte, aanwezig in v2.0.0).
+- **Setup-wizard opnieuw starten**: kleine knop op de desktop Server-tab en het Android Radio-scherm om de wizard handmatig opnieuw te starten zonder config te wissen.
+- **Documentatie**: Installation/Installatie secties herschreven rond de wizard, mDNS, language-toggle, `successful_connects` config-gate en de nieuwe Status/Logs split.
 
 Wire-protocol blijft VERSION = 2; v2.0.0 clients en servers blijven volledig interoperabel met v2.0.1 (geen breaking change).
 
@@ -255,19 +310,19 @@ Wire-protocol blijft VERSION = 2; v2.0.0 clients en servers blijven volledig int
 
 De v2.0.0 release is een grote stap ten opzichte van de v0.x-lijn. Belangrijkste wijzigingen:
 
-- **Wire-protocol VERSION = 2** — breaking change. v0.x clients/servers werken niet met v2.0.0. Zie §5.
-- **TCI als enig transport** — het CAT (TCP) pad is volledig verwijderd. Alle radio-commando's en audio gaan via TCI WebSocket :40001. Zie §9.
-- **Server-side CTUN auto-recenter** (fork) — wanneer CTUN aan staat en de VFO naar de rand van het zichtbare spectrum drift, toggelt de TL-server CTUN (`ZZCN`/`ZZCO` via de TCI `run_cat_ex` relay) om een recenter af te dwingen. De `auto_recenter_ex` capability is alleen advertentie. Zie §13.
-- **Yaesu FT-991A auto-DFM met memory-restore** — bij PTT switcht de server tijdelijk FM → DATA-FM en bij PTT-off wordt via `MC<nnn>;` hersteld zodat memory-mode en het actieve kanaal behouden blijven. Zie §26.
-- **DDC sample rate dropdown per RX** — 48/96/192/384/768/1536 kHz, selecteerbaar per ontvanger (RX1/RX2). 768 en 1536 kHz alleen met de fork. Zie §16.
-- **Filter-preset push** (fork) — de fork stuurt F1..VAR2/NONE over TCI; ThetisLink gebruikt dat nog niet (de clients tonen de breedte, niet de presetnaam).
-- **Diversity live circle broadcast** (fork) — real-time fase/gain updates tijdens Smart/Ultra auto-null sweep. Zie §22.
-- **Android EQ auto-switch** — mic-profiel en BT-headset-profiel wisselen automatisch op basis van het geselecteerde output device.
-- **BLE-zendknop (YPC21 / PTT-Z01-klasse)** — GATT-verbinding die de app zelf vasthoudt: scannen, verbinden, service discovery en opnieuw verbinden, zonder koppelen in Android. Verwerkt knoppen die een druk op twee kenmerken tegelijk melden. Overleeft een vergrendeld scherm; buiten bereik wordt de zender losgelaten. Android 12+.
-- **ZL-01 BT remote PTT** — ondersteund als PTT-input op Android; meldt zich als externe touch-device en heeft dus een wakker scherm nodig.
-- **TX meter SWR kleur-coded** — groen &lt;1:2, oranje 1:2..1:3, rood &gt;1:3.
-- **DX cluster click-to-tune** — 15 px snap op het spectrum.
-- **CW keyer + macros + stop** — keyer met macro-knoppen en een directe stop-knop.
+- **Wire-protocol VERSION = 2**: breaking change. v0.x clients/servers werken niet met v2.0.0. Zie §5.
+- **TCI als enig transport**: het CAT (TCP) pad is volledig verwijderd. Alle radio-commando's en audio gaan via TCI WebSocket :40001. Zie §9.
+- **Server-side CTUN auto-recenter** (fork): wanneer CTUN aan staat en de VFO naar de rand van het zichtbare spectrum drift, toggelt de TL-server CTUN (`ZZCN`/`ZZCO` via de TCI `run_cat_ex` relay) om een recenter af te dwingen. De `auto_recenter_ex` capability is alleen advertentie. Zie §13.
+- **Yaesu FT-991A auto-DFM met memory-restore**: bij PTT switcht de server tijdelijk FM → DATA-FM en bij PTT-off wordt via `MC<nnn>;` hersteld zodat memory-mode en het actieve kanaal behouden blijven. Zie §26.
+- **DDC sample rate dropdown per RX**: 48/96/192/384/768/1536 kHz, selecteerbaar per ontvanger (RX1/RX2). 768 en 1536 kHz alleen met de fork. Zie §16.
+- **Filter-preset push** (fork): de fork stuurt F1..VAR2/NONE over TCI; ThetisLink gebruikt dat nog niet (de clients tonen de breedte, niet de presetnaam).
+- **Diversity live circle broadcast** (fork): real-time fase/gain updates tijdens Smart/Ultra auto-null sweep. Zie §22.
+- **Android EQ auto-switch**: mic-profiel en BT-headset-profiel wisselen automatisch op basis van het geselecteerde output device.
+- **BLE-zendknop (YPC21 / PTT-Z01-klasse)**: GATT-verbinding die de app zelf vasthoudt: scannen, verbinden, service discovery en opnieuw verbinden, zonder koppelen in Android. Verwerkt knoppen die een druk op twee kenmerken tegelijk melden. Overleeft een vergrendeld scherm; buiten bereik wordt de zender losgelaten. Android 12+.
+- **ZL-01 BT remote PTT**: ondersteund als PTT-input op Android; meldt zich als externe touch-device en heeft dus een wakker scherm nodig.
+- **TX meter SWR kleur-coded**: groen &lt;1:2, oranje 1:2..1:3, rood &gt;1:3.
+- **DX cluster click-to-tune**: 15 px snap op het spectrum.
+- **CW keyer + macros + stop**: keyer met macro-knoppen en een directe stop-knop.
 
 ---
 
@@ -299,8 +354,8 @@ Het schema hierboven is het **rechtstreekse** pad: de client opent een QUIC-verb
 naar de server op UDP 4580. Dat werkt op een LAN, of van buitenaf met een
 port-forward.
 
-Kan geen van beide kanten een inkomende verbinding aannemen - een client op mobiele
-data, een station achter CGNAT - dan melden beide kanten zich **uitgaand** aan bij een
+Kan geen van beide kanten een inkomende verbinding aannemen (een client op mobiele
+data, een station achter CGNAT) dan melden beide kanten zich **uitgaand** aan bij een
 relay (wss, TCP 443), en loopt dezelfde QUIC-verbinding door de relay (UDP 443):
 
 ```mermaid
@@ -445,7 +500,7 @@ sdr-remote/
 ├── sdr-remote-chat/            # Gedeeld chatmodel + meldformulier (desktop egui + Android)
 │   └── src/                    # model.rs (geen UI), worker.rs (HTTP), panel.rs (egui, feature)
 ├── vrx-rs/                     # VRX-engine: FFT-channelizer + per-VRX Opus/runtime
-│   └── src/                    # channelizer.rs, opus.rs, runtime.rs, config.rs, wav.rs
+│   └── src/                    # channelizer.rs, agc.rs, opus.rs, runtime.rs, config.rs, wav.rs
 ├── sdr-remote-relay/           # Relay-client-library: aanmelden over wss, sessie, herhaalladder (in server + client)
 ├── sdr-remote-quic/            # De versleutelde verbinding: QUIC (quinn, TLS 1.3), rechtstreeks of via de relay
 │   └── src/
@@ -462,6 +517,7 @@ sdr-remote/
 │       ├── main.rs             # Opstarten, argumenten, afsluiten
 │       ├── network.rs          # QUIC-server, ontvangen/zenden per client, resampling, playout-timer, routering
 │       ├── session.rs          # Clientsessies (multi-client, abonnementsverzamelingen)
+│       ├── single_instance.rs  # Eén server per pc: een benoemde mutex, genomen voordat er een poort opengaat
 │       ├── tracked_socket.rs   # UDP-socket met tellers per stroom + pariteitstests met de relay
 │       ├── mdns.rs             # mDNS-dienstaankondiging (lokale ontdekking)
 │       ├── tci.rs              # TciConnection: TCI-WebSocketclient + status + stromen
@@ -505,7 +561,7 @@ sdr-remote/
 │       ├── ultrabeam.rs        # UltraBeam RCU-06 seriële controller
 │       ├── rotor.rs            # Rotorbesturing (EA7HG UDP-backend + dispatch)
 │       ├── pstrotator.rs       # PstRotator UDP/XML rotorbackend (zenden)
-│       ├── pstrotator_listen.rs# PstRotator/Log4OM inkomende luisteraar
+│       ├── pstrotator_listen.rs # PstRotator/Log4OM inkomende luisteraar
 │       ├── mcp2221_yaesu_rotor.rs # G-1000DXC-rotor via MCP2221A (ADC + zachte start)
 │       ├── tuner.rs            # JC-4s/JC-3s tunercontrollers (MCP2221A USB-HID)
 │       ├── mcp2221_debug.rs    # MCP2221A USB-HID-brug (GP2 + GP1 ADC)
@@ -663,13 +719,13 @@ Elk packet begint met dezelfde header:
 | Offset | Grootte | Veld | Waarde |
 |--------|---------|------|--------|
 | 0 | 1 | Magic | `0xAA` |
-| 1 | 1 | Version | `3` (opgehoogd 1→2 in v2.0.0, 2→3 in v2.0.3; client en server moeten dezelfde wire-VERSION delen - nodig maar sinds v2.13 niet voldoende: een client weigert ook een server die bij de handdruk geen bewijs geeft, zie sectie 27) |
+| 1 | 1 | Version | `3` (opgehoogd 1→2 in v2.0.0, 2→3 in v2.0.3; client en server moeten dezelfde wire-VERSION delen; nodig maar sinds v2.13 niet voldoende: een client weigert ook een server die bij de handdruk geen bewijs geeft, zie sectie 27) |
 | 2 | 1 | PacketType | Zie onder |
 | 3 | 1 | Flags | Bit 0 = PTT actief; bit 1 = `AUDIO_WIDEBAND` (16 kHz Opus-payload); bit 2 = `HELD_BY_OTHER`; bit 3 = `SERVER_RELEASED`; bits 4-5 = over welke zender een `PttDenied` gaat; bits 6-7 vrij |
 
 ### Packet Types
 
-#### Audio Packet (0x01) — variabele lengte
+#### Audio Packet (0x01): variabele lengte
 
 Draagt gecodeerde Opus audio + PTT status. Wordt 50x per seconde verzonden (elke 20ms).
 
@@ -693,7 +749,7 @@ RX2 audio van de tweede ontvanger. Zelfde binair formaat als Audio.
 
 Yaesu FT-991A audio stream. Zelfde binair formaat als Audio.
 
-#### Heartbeat (0x02) — 16-52 bytes
+#### Heartbeat (0x02): 16-52 bytes
 
 Periodiek (elke 500ms) door client verzonden voor verbindingsbewaking en RTT-meting.
 
@@ -710,7 +766,7 @@ Periodiek (elke 500ms) door client verzonden voor verbindingsbewaking en RTT-met
 
 Backward compatible: oude clients zonder capabilities (16 bytes) worden geaccepteerd.
 
-#### HeartbeatAck (0x03) — 12-54 bytes
+#### HeartbeatAck (0x03): 12-54 bytes
 
 Server antwoord op Heartbeat. Echoot de client's timestamp terug voor RTT-berekening.
 
@@ -719,7 +775,7 @@ Server antwoord op Heartbeat. Echoot de client's timestamp terug voor RTT-bereke
 | 0-3 | 4 | Header | Magic, version, type=0x03, flags |
 | 4-7 | 4 | EchoSequence | Geechode heartbeat sequence |
 | 8-11 | 4 | EchoTime | Geechode client timestamp |
-| 12-15 | 4 | Capabilities | Negotiated capabilities (u32, optioneel) |
+| 12-15 | 4 | Capabilities | De capabilities van de server (u32, optioneel) |
 | 16-19 | 4 | StateFlags | `ServerStateFlags`-bitveld (u32, optioneel; geadverteerd via capability-bit 3) |
 | 20-21 | 2 | SubscriptionMask | De abonnementen die de server voor deze client houdt (optioneel; sinds v2.13) |
 | 22-53 | 32 | VersionTag | Versie en build van de server (optioneel; sinds v2.13) |
@@ -730,14 +786,15 @@ Backward-compatible: een oudere server stuurt alleen 12-16 bytes (geen StateFlag
 
 | Bit | Naam | Beschrijving |
 |-----|------|--------------|
-| 0 | WIDEBAND_AUDIO | 16kHz wideband Opus |
-| 1 | SPECTRUM | Spectrum/waterfall data |
-| 2 | RX2 | RX2/VFO-B dual receiver |
+| 0 | WIDEBAND_AUDIO | 16kHz wideband Opus (door geen huidige build gezet of gelezen) |
+| 1 | SPECTRUM | Spectrum/waterfall data (door geen huidige build gezet of gelezen) |
+| 2 | RX2 | RX2/VFO-B dual receiver (door geen huidige build gezet of gelezen) |
 | 3 | REPORTS_STATE_FLAGS | Server vult het HeartbeatAck StateFlags-veld (bv. `SINGLE_RECEIVER`) |
+| 4 | FINE_SPECTRUM_VIEW | Server kent `SpectrumPanFine`, `Rx2SpectrumPanFine`, `VrxSpectrumSpanFine` en `VrxSpectrumSpanFine2`; de client stuurt ze alleen dan (2.13.1) |
 
-Negotiation via intersectie: server stuurt alleen flags die beide kanten ondersteunen.
+De server zet bit 3 en 4, wat de client ook stuurt; bit 0-2 worden door geen huidige build gezet of gelezen. De client leest elk bit los, en een bit dat hij niet kent negeert hij.
 
-#### Control Packet (0x04) — 7 bytes
+#### Control Packet (0x04): 7 bytes
 
 Stuurt bedieningscommando's (bidirectioneel).
 
@@ -751,16 +808,16 @@ Stuurt bedieningscommando's (bidirectioneel).
 **Bevestigde bediening (sinds v2.13).** Een client van v2.13 zet er een volgnummer achter; het
 pakket is dan 11 bytes (`YaesuControl` 0x2C: 12). Een server van v2.13 beantwoordt elke
 genummerde bediening met `ControlAck` (0x37, header + het volgnummer, u32) en past hem alleen toe
-als het nummer nieuwer is dan het laatst toegepaste voor dezelfde bediening - een late kopie van
-"PTT aan" die na "uit" binnenkomt, wordt niet toegepast. Een handeling - een VFO-wissel, de
+als het nummer nieuwer is dan het laatst toegepaste voor dezelfde bediening: een late kopie van
+"PTT aan" die na "uit" binnenkomt, wordt niet toegepast. Een handeling (een VFO-wissel, de
 V/M-knop, een rauwe Yaesu-knop, een clarifier-stap, het lezen of schrijven van geheugens of menu's,
-een diversity-auto-null - kent geen volgorde: elk nummer wordt één keer uitgevoerd, in welke volgorde het ook aankomt. De client
+een diversity-auto-null) kent geen volgorde: elk nummer wordt één keer uitgevoerd, in welke volgorde het ook aankomt. De client
 herhaalt een bediening die de server niet bevestigt (eerst na 1,5 rondreis, tussen 100 en 500 ms,
 daarna telkens het dubbele; hooguit vier herhalingen, dus opgeven na 1,5 tot 7,5 s), en alleen zodra de server van deze sessie minstens één bediening heeft
 bevestigd. Een oudere server leest de eerste 7 (8) bytes en bevestigt nooit, dus naar hem gaat
 niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorheen.
 
-**ControlId waarden — Thetis RX1:**
+**ControlId waarden (Thetis RX1):**
 
 | ID | Naam | Waarden | TCI commando |
 |----|------|---------|--------------|
@@ -774,7 +831,7 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 | 0x1E | MonitorOn | 0/1 | `mon_enable:bool` |
 | 0x1F | ThetisTune | 0/1 | `tune:0,bool` |
 
-**ControlId waarden — Spectrum:**
+**ControlId waarden (Spectrum):**
 
 | ID | Naam | Waarden | Beschrijving |
 |----|------|---------|-------------|
@@ -785,15 +842,15 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 | 0x0B | FilterLow | signed Hz | Filter low cut (i16 als u16) |
 | 0x0C | FilterHigh | signed Hz | Filter high cut (i16 als u16) |
 | 0x1A | SpectrumMaxBins | 64-32768 | Max bins per packet (0=default 8192) |
-| 0x1C | SpectrumFftSize | 32/65/131/262 | FFT-grootte in K = 32768/65536/131072/262144 (0=auto) |
+| 0x1C | SpectrumFftSize | 0, 32-512 | FFT-grootte in K (0 = auto); de server draait de eerstvolgende macht van twee, hooguit `MAX_FFT_SIZE_K` (512K). Per ontvanger, voor elke client |
 | 0x1D | SpectrumBinDepth | 8/16 | Bin depth: 8=u8 (1 byte/bin), 16=u16 (2 bytes/bin) |
 
-**ControlId waarden — RX2/VFO-B:**
+**ControlId waarden (RX2/VFO-B):**
 
 | ID | Naam | Waarden | Beschrijving |
 |----|------|---------|-------------|
 | 0x0E | Rx2Enable | 0/1 | RX2 aan/uit |
-| 0x0F | Rx2AfGain | 0-100 | RX2 AF volume — TCI `rx_volume:1,0,dB` |
+| 0x0F | Rx2AfGain | 0-100 | RX2 AF volume: TCI `rx_volume:1,0,dB` |
 | 0x10 | Rx2SpectrumZoom | 10-10240 | Zoom |
 | 0x11 | Rx2SpectrumPan | 0-10000 | Pan |
 | 0x12 | Rx2FilterLow | signed Hz | RX2 filter low |
@@ -803,15 +860,17 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 | 0x16 | Rx2SpectrumFps | 5-30 | RX2 spectrum FPS |
 | 0x17 | Rx2NoiseReduction | 0-4 | RX2 NR level |
 | 0x18 | Rx2AutoNotchFilter | 0/1 | RX2 ANF |
-| 0x19 | VfoSwap | trigger | VFO A<->B swap — TCI `vfo_swap_ex` |
+| 0x19 | VfoSwap | trigger | VFO A<->B swap: TCI `vfo_swap_ex` |
 | 0x1B | Rx2SpectrumMaxBins | 64-32768 | RX2 max bins |
 | 0x3D | DdcSampleRateRx1 | kHz (bijv. 384) | Per-RX DDC rate (stock `iq_samplerate`, fork `ddc_sample_rate_ex`) |
 | 0x3E | DdcSampleRateRx2 | kHz | Per-RX DDC rate RX2 |
 | 0x9C | DdcCentreRx1 | kHz, afgerond (0 = onbekend) | Server → client: het DDC-midden van RX1 dat de VRX op de server gebruikt; ook zonder volle-bandspectrum (build 231) |
 | 0x9D | DdcCentreRx2 | kHz | Idem voor RX2 |
-| 0x3F | Rx2SpectrumFftSize | 32/65/131/262 | FFT-grootte in K = 32768/65536/131072/262144 (RX2) |
+| 0x9E | SpectrumPanFine | 0-65534 (32767 = midden) | RX1-pan in stappen van 1/65534 van de ontvanger (6 Hz bij 384 kHz). Gaat naast `SpectrumPan`; zodra hij binnenkomt negeert de server de grove van die sessie (2.13.1) |
+| 0x9F | Rx2SpectrumPanFine | 0-65534 | Idem voor RX2; de vlag die de grove pan negeert is er één voor beide ontvangers |
+| 0x3F | Rx2SpectrumFftSize | 0, 32-512 | Idem voor RX2 |
 
-**ControlId waarden — TCI Controls (v0.5.3):**
+**ControlId waarden, TCI Controls (v0.5.3):**
 
 | ID | Naam | Waarden | TCI commando |
 |----|------|---------|-------------|
@@ -829,7 +888,7 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 | 0x3B | Binaural | 0/1 | `rx_bin_enable` |
 | 0x3C | ApfEnable | 0/1 | `rx_apf_enable` |
 
-**ControlId waarden — Diversity:**
+**ControlId waarden (Diversity):**
 
 | ID | Naam | Waarden | Beschrijving |
 |----|------|---------|-------------|
@@ -845,7 +904,7 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 | 0x49 | AgcAutoRx2 | 0/1 | AGC auto mode RX2 |
 | 0x4A | DiversityAutoNull | 1=start | Start Smart auto-null (Thetis-side) |
 
-**ControlId waarden — RX2 TCI Controls:**
+**ControlId waarden (RX2 TCI Controls):**
 
 | ID | Naam | Waarden | TCI commando |
 |----|------|---------|-------------|
@@ -858,7 +917,7 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 | 0x56 | Rx2ApfEnable | 0/1 | `rx_apf_enable` rx=1 |
 | 0x57 | Rx2VfoLock | 0/1 | `vfo_lock` rx=1 |
 
-**ControlId waarden — Extra Controls (v0.6.x):**
+**ControlId waarden, Extra Controls (v0.6.x):**
 
 | ID | Naam | Waarden | Beschrijving |
 |----|------|---------|-------------|
@@ -875,14 +934,14 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 | 0x62 | AudioMode | 0-2 | Audio routing (0=Mono, 1=Binaural, 2=Split) |
 | 0x63 | AllowZoomBelow2x | 0/1 | Per-client setup-vink voor sub-2× zoom (smear trade-off; gebruikt door `auto_recenter_ex`) |
 
-**ControlId waarden — Yaesu:**
+**ControlId waarden (Yaesu):**
 
 | ID | Naam | Waarden | Beschrijving |
 |----|------|---------|-------------|
 | 0x20 | YaesuEnable | 0/1 | Yaesu audio+state stream |
-| 0x21 | YaesuPtt | 0/1 | Yaesu TX |
-| 0x22 | YaesuFreq | — | Gebruikt FrequencyPacket formaat |
-| 0x23 | YaesuMicGain | gain x10 | ThetisLink TX gain (200 = 20.0x) |
+| 0x21 | YaesuPtt | 0/1 | Gereserveerd: een server negeert hem; de PTT van een Yaesu is de vlag op zijn `AudioYaesu`-pakketten |
+| 0x22 | YaesuFreq | - | Gebruikt FrequencyPacket formaat |
+| 0x23 | YaesuMicGain | gain x100 | Verouderd: een Yaesu-micgain op de server (200 = 2,0x); een huidige client stuurt hem niet |
 | 0x24 | YaesuMode | mode nr | Operating mode |
 | 0x25 | YaesuReadMemories | 0 = lees de radio nu, 1 = de serverkopie volstaat | Lees alle geheugens |
 | 0x26 | YaesuRecallMemory | 1-117 | Memory channel recall (991A 1-117 incl. PMS; FTX-1 5-cijferig) |
@@ -898,25 +957,25 @@ niets herhaald; een oudere client stuurt geen nummer en wordt bediend als voorhe
 
 Control packets zijn **bidirectioneel**: client->server stuurt wijzigingen, server->client broadcast de huidige staat.
 
-#### Disconnect Packet (0x05) — 4 bytes
+#### Disconnect Packet (0x05): 4 bytes
 
 Nette afmelding. Alleen de header, geen payload.
 
-#### PttDenied Packet (0x06) — 4 bytes
+#### PttDenied Packet (0x06): 4 bytes
 
 Server -> client, alleen een header: één weigering, over één zender. Zowel de
 reden als de zender zitten in de vlaggenbyte.
 
-- **Bit 3, `SERVER_RELEASED` — waarom.** Uit: een andere client bezit deze
+- **Bit 3, `SERVER_RELEASED`: waarom.** Uit: een andere client bezit deze
   zender. Aan: de server heeft hem zelf losgelaten, omdat de radio stopte of
   omdat zijn TX-time-out bijna afliep. De client moet die twee uit elkaar
   houden. In het eerste geval mag een vastgehouden knop blijven vragen, want
   hij komt aan de beurt; in het tweede moet hij eerst worden losgelaten, anders
   loopt hij regelrecht dezelfde time-out weer in.
-- **Bits 4-5 — welke zender.** 0 = niet gezegd, 1 = Thetis, 2 = radio 1,
+- **Bits 4-5: welke zender.** 0 = niet gezegd, 1 = Thetis, 2 = radio 1,
   3 = radio 2. Een server van voor deze uitbreiding stuurt nullen; de client
   valt dan terug op de aanname dat de weigering gaat over alles waar hij op dat
-  moment om vraagt - wat hij daarvoor ook deed. Die terugval klopt precies met
+  moment om vraagt, zoals hij ook vóór deze uitbreiding deed. Die terugval klopt precies met
   één zender in de lucht en is te breed met meer, en dat is waar deze bits voor
   zijn.
 
@@ -928,7 +987,7 @@ Thetis-weigeringen worden afgeknepen tot één per seconde per client zolang het
 verzoek blijft binnenkomen. Thetis-PTT rijdt mee op de audiopakketten, dus elke
 geweigerde beantwoorden is er vijftig per seconde.
 
-#### Frequency Packet (0x07) — 12 bytes
+#### Frequency Packet (0x07): 12 bytes
 
 Bidirectioneel: server->client (readback) en client->server (set).
 
@@ -937,15 +996,15 @@ Bidirectioneel: server->client (readback) en client->server (set).
 | 0-3 | 4 | Header | Magic, version, type=0x07, flags |
 | 4-11 | 8 | FrequencyHz | VFO-A frequentie in Hz (u64) |
 
-#### FrequencyRx2 (0x0F) — 12 bytes
+#### FrequencyRx2 (0x0F): 12 bytes
 
 Zelfde formaat als Frequency, voor VFO-B.
 
-#### FrequencyYaesu (0x18) — 12 bytes
+#### FrequencyYaesu (0x18): 12 bytes
 
 Zelfde formaat, voor Yaesu frequentie instelling.
 
-#### Mode Packet (0x08) — 5 bytes
+#### Mode Packet (0x08): 5 bytes
 
 Bidirectioneel. Mode waarden: 00=LSB, 01=USB, 05=FM, 06=AM (Thetis ZZMD waarden).
 
@@ -954,24 +1013,24 @@ Bidirectioneel. Mode waarden: 00=LSB, 01=USB, 05=FM, 06=AM (Thetis ZZMD waarden)
 | 0-3 | 4 | Header | Magic, version, type=0x08, flags |
 | 4 | 1 | Mode | Operating mode (u8) |
 
-#### ModeRx2 (0x10) — 5 bytes
+#### ModeRx2 (0x10): 5 bytes
 
 Zelfde formaat, voor RX2 mode.
 
-#### S-meter Packet (0x09) — 6 bytes
+#### S-meter Packet (0x09): 6 bytes
 
 Server->client. Sinds wire-VERSION 3 is het `Level`-veld een **signed i16 in deci-eenheden**: op RX is het dBm×10 (bv. -73 dBm → S9 → waarde -730); tijdens TX is het forward power in watts×10. De client mapt dBm naar de 0-228 S-meter-displayschaal (S0=0, S9=108, S9+60=228). (Vóór VERSION 3 was dit een unsigned 0-260 displaywaarde.)
 
 | Offset | Grootte | Veld | Beschrijving |
 |--------|---------|------|--------------|
 | 0-3 | 4 | Header | Magic, version, type=0x09, flags |
-| 4-5 | 2 | Level | S-meter niveau (dBm×10) of TX power (W×10) — **signed i16** |
+| 4-5 | 2 | Level | S-meter niveau (dBm×10) of TX power (W×10): **signed i16** |
 
-#### SmeterRx2 (0x11) — 6 bytes
+#### SmeterRx2 (0x11): 6 bytes
 
 Zelfde formaat, RX2 S-meter.
 
-#### Spectrum Packet (0x0A) — 18 + N bytes
+#### Spectrum Packet (0x0A): 18 + N bytes
 
 Server->client. Spectrum data gecentreerd op VFO frequentie (DDC I/Q modus). Aantal bins is dynamisch per client (afhankelijk van schermresolutie x zoom).
 
@@ -996,7 +1055,7 @@ Volledige DDC spectrum row voor waterfall history. Zelfde formaat als Spectrum.
 
 RX2 spectrum data. Zelfde formaat als Spectrum.
 
-#### EquipmentStatus (0x0C) — variabele lengte
+#### EquipmentStatus (0x0C): variabele lengte
 
 Server -> client, elke 200ms. Status van extern apparaat.
 
@@ -1008,7 +1067,7 @@ Server -> client, elke 200ms. Status van extern apparaat.
 | connected | bool | Hardware online |
 | labels | Option\<String\> | Komma-gescheiden extra data |
 
-#### EquipmentCommand (0x0D) — variabele lengte
+#### EquipmentCommand (0x0D): variabele lengte
 
 Client -> server. Commando naar extern apparaat.
 
@@ -1018,27 +1077,27 @@ Client -> server. Commando naar extern apparaat.
 | command_id | u8 | Commando (apparaat-specifiek) |
 | data | Vec\<u8\> | Parameters (variabele lengte) |
 
-#### Spot (0x14) — variabele lengte
+#### Spot (0x14): variabele lengte
 
 DX cluster spot (server -> client).
 
-#### TxProfiles (0x15) — variabele lengte
+#### TxProfiles (0x15): variabele lengte
 
 TX profiel lijst met namen (server -> client).
 
-#### YaesuState (0x17) — variabele lengte
+#### YaesuState (0x17): variabele lengte
 
 Yaesu radio state (server -> client).
 
-#### YaesuMemoryData (0x19) — variabele lengte
+#### YaesuMemoryData (0x19): variabele lengte
 
 Yaesu memory data (server -> client, tab-separated text).
 
-#### AudioBinR (0x1A) — [deprecated]
+#### AudioBinR (0x1A): [deprecated]
 
 Binaural right channel audio. Vervangen door AudioMultiCh (0x1B).
 
-#### AudioMultiCh (0x1B) — variabele lengte
+#### AudioMultiCh (0x1B): variabele lengte
 
 Multi-channel audio: bundelt 1-4 mono Opus frames in een enkel UDP packet. Perfecte sync: alle kanalen delen een sequence number en timestamp.
 
@@ -1073,10 +1132,11 @@ Multi-channel audio: bundelt 1-4 mono Opus frames in een enkel UDP packet. Perfe
 | 0x37 | ControlAck | Server -> Client | 4-byte volgnummer van een genummerde bediening (sinds v2.13; zie Control Packet) |
 | 0x38 | PunchOffer | Client -> Server | het openbare adres van de client: familie (4 of 6), adres, poort u16 (sinds v2.13; alleen binnen QUIC, voor een directe verbinding door gaten prikken) |
 | 0x39 | PunchReady | Server -> Client | het adres waarvandaan de server prikte, zelfde opbouw (sinds v2.13; alleen binnen QUIC) |
+| 0x3A | PunchLocal | Server -> Client | de eigen poort van de server op zijn lokale adres, achter dezelfde router, zelfde opbouw; het antwoord op een aanbod in plaats van een prik (sinds v2.13; alleen binnen QUIC) |
 
 ### Protocol-uitbreidingen (v2.2.0)
 
-Wire-protocol `VERSION` blijft **3** in v2.2.0 — de VRX- en tweede-radio-features zijn **puur additief**. De nieuwe packet-types gebruiken het tot dusver vrije gat `0x21`–`0x29` en worden — de echte back-compat-garantie — alleen verstuurd naar clients die expliciet abonneren (per-client gating, zie hieronder), dus een v2.1.x-peer ontvangt ze überhaupt niet. Geen enkele bestaande packet-layout is gewijzigd, dus een v2.1.x-client en een v2.2.0-server werken volledig samen.
+Wire-protocol `VERSION` blijft **3** in v2.2.0: de VRX- en tweede-radio-features zijn **puur additief**. De nieuwe packet-types gebruiken het tot dusver vrije gat `0x21`–`0x29` en worden (de echte back-compat-garantie) alleen verstuurd naar clients die expliciet abonneren (per-client gating, zie hieronder), dus een v2.1.x-peer ontvangt ze überhaupt niet. Geen enkele bestaande packet-layout is gewijzigd, dus een v2.1.x-client en een v2.2.0-server werken volledig samen.
 
 #### Nieuwe packet-types
 
@@ -1098,7 +1158,7 @@ De tweede-radio-controls zijn een 1:1 spiegel van de slot-0 Yaesu-controls (`0x2
 
 | ID | Naam | Waarden | Beschrijving |
 |----|------|---------|--------------|
-| 0x66 | ThetisWidebandAudio | 0/1 | RX-audio-bandbreedte: 0 = narrowband 8 kHz (default), 1 = wideband 16 kHz. Vereist `WIDEBAND_AUDIO`-capability aan beide kanten. |
+| 0x66 | ThetisWidebandAudio | 0/1 | RX-audio-bandbreedte: 0 = narrowband 8 kHz (default), 1 = wideband 16 kHz. Geen capability-bit bepaalt het: een server die hem niet kent blijft narrowband. |
 | 0x67 | VrxEnable | 0/1 | VRX1 enable + **audio-subscription-gate**. Bij 1 draait de server de channelizer op RX1-IQ en streamt VRX-audio. |
 | 0x68 | VrxMode | 0=USB, 1=LSB, 2=AM, 3=SAM, 4=FM | VRX1 demod-mode |
 | 0x69 | VrxVolume | volume x100 (0..200) | VRX1 mix-volume (client-side toegepast) |
@@ -1113,18 +1173,20 @@ De tweede-radio-controls zijn een 1:1 spiegel van de slot-0 Yaesu-controls (`0x2
 | 0x72 | VrxSpectrumEnable2 | 0/1 | VRX2 high-res spectrum-extractie-gate |
 | 0x73 | VrxSpectrumSpanKhz | kHz (u16) | VRX1 high-res spectrum-vensterbreedte |
 | 0x74 | VrxSpectrumSpanKhz2 | kHz (u16) | VRX2 high-res spectrum-vensterbreedte |
+| 0xA0 | VrxSpectrumSpanFine | stappen van 25 Hz (u16) | VRX1-vensterbreedte, naast `VrxSpectrumSpanKhz`: in hele kHz stopte de VRX met inzoomen bij de DDC-rate / 1000 (2.13.1) |
+| 0xA1 | VrxSpectrumSpanFine2 | stappen van 25 Hz (u16) | Idem voor VRX2 |
 | 0x80 | Yaesu2Enable | 0/1 | Slot-1 stream-enable + **slot-1 subscription-gate**. Spiegel van `YaesuEnable` (0x20). |
 | 0x81..0x8F | Yaesu2Ptt … Yaesu2SetMenu | (per slot-0 spiegel) | 1:1 spiegel van de slot-0 Yaesu-controls `0x21`–`0x2F` (PTT, freq, mic-gain, mode, memory read/recall/write, VFO-select, squelch, RF-gain, radio-mic-gain, RF-power, raw button, read/set EX-menu). |
 
 #### Per-client subscription-gating
 
-De nieuwe packet-types worden **nooit naar elke client gebroadcast** — elk gaat alleen naar clients die expliciet hebben opt-in gegeven, via hetzelfde mechanisme dat de tweede radio gate't:
+De nieuwe packet-types worden **nooit naar elke client gebroadcast**: elk gaat alleen naar clients die expliciet hebben opt-in gegeven, via hetzelfde mechanisme dat de tweede radio gate't:
 
 - **VRX-audio** (`AudioVrx`): een client ontvangt het pas nadat ze `VrxEnable` (VRX1) of `VrxEnable2` (VRX2) met waarde 1 heeft gestuurd. Server-side filtert `SessionManager::vrx_audio_addrs(ch)` de broadcast-lijst tot alleen geabonneerde, geauthenticeerde clients.
 - **VRX high-res spectrum** (`SpectrumVrx1/2`): gegate door `VrxSpectrumEnable` / `VrxSpectrumEnable2` via `vrx_spectrum_addrs(ch)`.
 - **Tweede radio** (`AudioYaesu2` / `YaesuState2` / `YaesuMemoryData2`): gegate door `Yaesu2Enable` (default uit) via `yaesu2_addrs()`, exact zoals slot-0 Yaesu `YaesuEnable` + `yaesu_addrs()` gebruikt.
 
-Omdat de default van elke gate **uit** is, ontvangt een v2.1.x-client (die nooit `VrxEnable*` / `Yaesu2Enable` stuurt) geen van de `0x21`–`0x29` packet-types — geen parse-fouten, geen log-spam, geen verspilde bandbreedte.
+Omdat de default van elke gate **uit** is, ontvangt een v2.1.x-client (die nooit `VrxEnable*` / `Yaesu2Enable` stuurt) geen van de `0x21`–`0x29` packet-types: geen parse-fouten, geen log-spam, geen verspilde bandbreedte.
 
 ### Aanvullende message- en control-types (referentie)
 
@@ -1143,7 +1205,7 @@ De onderstaande additieve types zijn geïntroduceerd in v2.0.3–v2.4.2 en worde
 | 0x2B | TxFilterBand | TX-modulatiefilter-band (low/high-randen) push (`TxFilterBandPacket`, SIZE 12). |
 | 0x2C | YaesuControl | Getypt Yaesu-control-kanaal (SIZE 8; 12 met een volgnummer van een client van v2.13, zie Control Packet). |
 | 0x2D | YaesuFeature | Yaesu DSP-feature-state-snapshot (toggles/levels/freqs; SIZE 33). |
-| 0x2E | YaesuPresence | Yaesu radio-aanwezigheid (geconfigureerd + actief) per slot, plus een poort-probleemcode per slot: 0 = niets te melden, 1 = de COM-poort wordt vastgehouden door een ander programma, 2 = de COM-poort bestaat niet (SIZE 10; de twee probleem-bytes zijn additief - de 8-byte-vorm van een oudere peer leest als probleem 0). |
+| 0x2E | YaesuPresence | Yaesu radio-aanwezigheid (geconfigureerd + actief) per slot, plus een poort-probleemcode per slot: 0 = niets te melden, 1 = de COM-poort wordt vastgehouden door een ander programma, 2 = de COM-poort bestaat niet (SIZE 11; de twee probleem-bytes zijn additief; de 8-byte-vorm van een oudere peer leest als probleem 0, de 10-byte-vorm als geconfigureerd = aanwezig en niet ingesteld). Byte 10: bit 0/1 = slot geconfigureerd, bit 2 = de ontvangstniveaus van de radio's zijn ingesteld volgens de installatiegids, dus gebruiken clients de kleine ontvangstcorrectie (2.13.1; een oudere server leest als niet ingesteld). |
 
 **Control-waarden (client ↔ server):**
 
@@ -1179,22 +1241,25 @@ Wire-protocol `VERSION` blijft **3** in v2.5.0. De toevoegingen zijn (a) twee tr
 | ID | Naam | Waarden | Beschrijving |
 |----|------|--------|-------------|
 | 0x91 | Rx1Enable | 0/1 | RX1-audio-abonnement aan/uit. **Default aan** op de server, zodat een oudere client die dit nooit stuurt RX1-audio blijft krijgen. Een client die alleen VRX gebruikt zet dit op 0 om de RX1-audiostroom te stoppen (bandbreedte sparen). Dit is het mechanisme achter het onafhankelijke-audio-per-kanaal-feature. |
-| 0x92 | YaesuStateEnable | 0/1 | Slot-0 **status/bediening**-abonnement, los van audio. Bij 1 ontvangt de client `YaesuState` + geheugen + feature-pushes **zonder** de audiostroom — de "audio dempen, bedieningsvenster live houden"-splitsing. |
+| 0x92 | YaesuStateEnable | 0/1 | Slot-0 **status/bediening**-abonnement, los van audio. Bij 1 ontvangt de client `YaesuState` + geheugen + feature-pushes **zonder** de audiostroom: de "audio dempen, bedieningsvenster live houden"-splitsing. |
 | 0x93 | Yaesu2StateEnable | 0/1 | Slot-1 spiegel van `YaesuStateEnable`. |
 | 0x94 | YaesuPowerOnOff | 0/1 | Slot-0 aan/stand-by. 1 → CAT `PS1;` (aan), 0 → `PS0;` (stand-by). Alleen FT-991A; de FTX-1 verliest zijn USB-verbinding bij power-off, dus de client toont dit alleen voor de 991A. |
 | 0x95 | Yaesu2PowerOnOff | 0/1 | Slot-1 spiegel van `YaesuPowerOnOff`. |
-| 0x96 | YaesuCatMonitor | — | **Gereserveerd, no-op.** Binnen de v2.7.0-cyclus toegevoegd en weer teruggetrokken: de CAT-monitor is een diagnose-hulpmiddel (hij zet Auto Information aan en vermenigvuldigt de serverlog) en is bereikbaar met `THETISLINK_CAT_MONITOR=1` op de server. De server accepteert het id en negeert het. **Hergebruik deze byte niet** — een client uit de v2.7.0-periode kan hem nog sturen. |
+| 0x96 | YaesuCatMonitor | - | **Gereserveerd, no-op.** Binnen de v2.7.0-cyclus toegevoegd en weer teruggetrokken: de CAT-monitor is een diagnose-hulpmiddel (hij zet Auto Information aan en vermenigvuldigt de serverlog) en is bereikbaar met `THETISLINK_CAT_MONITOR=1` op de server. De server accepteert het id en negeert het. **Hergebruik deze byte niet**: een client uit de v2.7.0-periode kan hem nog sturen. |
 | 0x97 | YaesuReadMemoryTones | slot | Lees de CTCSS/DCS-toon van elk geheugenkanaal dat een tone-mode heeft. Een toon is een instelling van het *actieve* kanaal, dus de radio loopt die kanalen langs en keert terug; een expliciete actie, nooit onderdeel van de gewone geheugenuitlezing. Waarde = slot (0 = radio 1, 1 = radio 2). |
 | 0x98 | FullSpectrumEnabled | 0/1 | Stuur de volledige DDC-spectrumrij naast de uitgesneden weergave. **Standaard aan** op de server, zodat een v2.6.x-server die het id niet kent zijn oude gedrag houdt en een oudere client de rij blijft ontvangen. Uit halveert de spectrumbandbreedte per ontvangerketen ruwweg. Zie [Gedeelde volbandrij](#gedeelde-volbandrij-v270). |
+| 0x99 | VrxSpectrumPan | met teken, stappen van 10 Hz (i16 als u16) | Verschuiving van het VRX1-spectrumvenster ten opzichte van de luisterfrequentie; een server die hem niet kent blijft op de luisterfrequentie centreren |
+| 0x9A | VrxSpectrumPan2 | idem | Idem voor VRX2 |
+| 0x9B | PaDriveWarning | bit 0: melding, bit 1: piep | Server -> client: de drive ging omhoog terwijl een PA buiten bereik kan versterken (RF2K-S zonder netwerk); de melding blijft tot de PA weer bereikbaar is |
 
 #### Gedeelde volbandrij (v2.7.0)
 
-Elke ontvangerketen produceert één volledige DDC-spectrumrij naast de uitgesneden weergave. Tot v2.7.0 ging die rij **alleen naar de RX-spectrumabonnees**, terwijl VRX1 op de RX1-DDC meelift en VRX2 op die van RX2 — de rij die een VRX-venster nodig heeft is precies de rij die het RX-venster al ontvangt, geproduceerd door dezelfde processor in dezelfde frame-tick.
+Elke ontvangerketen produceert één volledige DDC-spectrumrij naast de uitgesneden weergave. Tot v2.7.0 ging die rij **alleen naar de RX-spectrumabonnees**, terwijl VRX1 op de RX1-DDC meelift en VRX2 op die van RX2: de rij die een VRX-venster nodig heeft is precies de rij die het RX-venster al ontvangt, geproduceerd door dezelfde processor in dezelfde frame-tick.
 
 `SessionManager::full_row_clients(keten)` geeft nu de **vereniging** van de RX- en VRX-abonnees op die keten, gefilterd op `full_spectrum_enabled`. Gevolgen:
 
 - **Eén rij per client per keten**, nooit één per venster. Een client met zowel het RX- als het VRX-venster open ontvangt dezelfde bytes één keer en routeert ze naar beide.
-- Het geval waarin de rij **helemaal ontbrak** — VRX aan, RX-spectrum uit — is gedekt.
+- Het geval waarin de rij **helemaal ontbrak** (VRX aan, RX-spectrum uit) is gedekt.
 - De bestaande loss-gates gelden nog voor de gedeelde rij: overslaan boven 15 % verlies, elk tweede frame boven 5 %.
 - Met `FullSpectrumEnabled = 0` wordt er op die keten geen rij gestuurd en bouwt elke waterval zich op uit zijn eigen uitsnede.
 
@@ -1252,7 +1317,7 @@ De server houdt nu per slot een aparte **status**-adresset bij naast de audioset
 | `MAX_PACKET_SIZE` | 33000 | Max UDP packet grootte |
 | `DEFAULT_SPECTRUM_BINS` | 8192 | Default spectrum bins |
 | `MAX_SPECTRUM_SEND_BINS` | 32768 | Max spectrum bins per packet |
-| `DDC_FFT_SIZE` | 262144 | FFT size voor DDC I/Q |
+| `MAX_FFT_SIZE_K` | 512 | Grootste FFT size voor DDC I/Q, in K |
 | `FULL_SPECTRUM_BINS` | 8192 | Full waterfall row bins |
 | `DEFAULT_SPECTRUM_FPS` | 15 | Default spectrum FPS |
 
@@ -1306,21 +1371,21 @@ Bij PTT aan/uit stuurt de client **5 kopieen** van het audio packet. Dit garande
 
 Als de server **2 seconden lang geen packets** ontvangt terwijl PTT actief is, wordt PTT automatisch uitgeschakeld. Log level: WARN.
 
-Dit was 500ms tot v2.11.1. Een netwerkwissel op een mobiel - van wifi naar 5G bijvoorbeeld - laat de pakketstroom langer haperen dan dat, ook als de verbinding zelf gewoon blijft bestaan, waardoor zenden tijdens zo'n wissel de zender elke keer losliet. Het venster is nu gelijk aan dat van laag 4, en dat is het moment waarop de client als weg geldt. Het loslaten gebeurt bij de eerstvolgende veiligheidscontrole nadat het venster voorbij is, en die lopen elke 100ms - in het slechtste geval staat de zender dus ongeveer 2,1 seconde aan na het wegvallen van het contact, niet precies 2. Welke van de twee regels in het log verschijnt zegt ook iets: die over de packets betekent dat de verbinding zelf nog leefde en alleen de audiostroom haperde.
+Dit was 500ms tot v2.11.1. Een netwerkwissel op een mobiel (van wifi naar 5G bijvoorbeeld) laat de pakketstroom langer haperen dan dat, ook als de verbinding zelf gewoon blijft bestaan, waardoor zenden tijdens zo'n wissel de zender elke keer losliet. Het venster is nu gelijk aan dat van laag 4, en dat is het moment waarop de client als weg geldt. Het loslaten gebeurt bij de eerstvolgende veiligheidscontrole nadat het venster voorbij is, en die lopen elke 100ms: in het slechtste geval staat de zender dus ongeveer 2,1 seconde aan na het wegvallen van het contact, niet precies 2. Welke van de twee regels in het log verschijnt zegt ook iets: die over de packets betekent dat de verbinding zelf nog leefde en alleen de audiostroom haperde.
 
 ### Laag 4: Heartbeat timeout (2s)
 
 Als de server **2 seconden lang geen heartbeat** ontvangt, wordt de verbinding als verloren beschouwd en PTT wordt uitgeschakeld. Log level: ERROR (noodsituatie).
 
-### Laag 5: PTT tail delay (150ms)
+### Laag 5: PTT tail delay
 
-Bij PTT loslaten wacht de server **150ms** voordat PTT uitgeschakeld wordt via TCI (`TRX:0,false;`). Dit geeft de audio pipeline (jitter buffer + resampling) tijd om te draineren, zodat de laatste audio niet afgeknipt wordt.
+Bij PTT loslaten wacht de server voordat PTT uitgeschakeld wordt via TCI (`TRX:0,false;`): de diepte van de jitter buffer (20 ms per frame) plus 10 ms, minstens 25 ms. Dit geeft de audio pipeline (jitter buffer + resampling) tijd om te draineren, zodat de laatste audio niet afgeknipt wordt.
 
 ### Laag 6: de sleutellijn van een Yaesu (v2.12.0)
 
 De lagen 1 t/m 5 gaan over **MOX bij Thetis**. Een Yaesu die via CW gesleuteld
 wordt, loopt daar niet langs: daar **is** de RTS-lijn de zender, en de radio heeft
-geen eigen waakhond op die lijn - een RTS die hoog blijft, zendt. De netten zijn
+geen eigen waakhond op die lijn; een RTS die hoog blijft, zendt. De netten zijn
 daarom andere:
 
 - de afspeelbuffer heeft een waakhond van 3 s op een sleutel die neer blijft, en
@@ -1329,7 +1394,7 @@ daarom andere:
 - een afscheid of een sessie-time-out laat de sleutel op, langs dezelfde weg als
   de PTT;
 - mislukt een schrijfactie naar de lijn, dan wordt hij eerst expliciet laag gezet
-  en dan pas losgelaten - een mislukte sleutel-**op** zou anders een zendende
+  en dan pas losgelaten: een mislukte sleutel-**op** zou anders een zendende
   radio achterlaten waar niets meer naar kijkt;
 - bij het afsluiten van de server gaan alle sleutellijnen laag **voordat** de
   menu's worden teruggezet, en het log zegt of dat de poort ook werkelijk bereikt
@@ -1350,7 +1415,7 @@ TCI (Transceiver Control Interface) is een WebSocket-gebaseerd protocol ingebouw
 
 ### Stock vs fork TCI sub-protocol
 
-ThetisLink praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork**. Het basisprotocol is identiek — maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-1).
+ThetisLink praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork**. Het basisprotocol is identiek, maar de fork voegt een `_ex` extensielaag toe die ThetisLink gebruikt wanneer beschikbaar, inclusief de `rx_only_ex` preventieve TX-inhibit (TL2-3+) en de wideband-IQ extensie (TL2-1).
 
 **Capability-negotiation:** bij verbinden vraagt de client `tci_caps_ex;` op. Met de fork (en de "ThetisLink extensions" Setup-checkbox aan) antwoordt Thetis met een lijst van ondersteunde `_ex` capabilities (`auto_recenter_ex`, `rx_filter_preset_ex`, `ddc_sample_rate_ex`, `diversity_ex`, ...). Stock Thetis implementeert `tci_caps_ex` niet en het verzoek timet uit → ThetisLink valt terug op stock-mode gedrag.
 
@@ -1370,7 +1435,7 @@ ThetisLink praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork*
 **Gedrag voor de gebruiker:**
 - Met de fork → geen apart CAT-proces nodig voor ThetisLink-interne besturing; alles loopt over de enige TCI WebSocket.
 - Zonder de fork → ThetisLink werkt nog steeds maar verliest de fork-only features hierboven (DDC > 384 kHz, server-side recenter, filter preset readback, live diversity circle).
-- **Externe CAT clients** (logging software, N1MM, etc.) verbinden rechtstreeks met de Thetis CAT TCP server — onafhankelijk van welke TCI-mode ThetisLink gebruikt. Zie §10.
+- **Externe CAT clients** (logging software, N1MM, etc.) verbinden rechtstreeks met de Thetis CAT TCP server: onafhankelijk van welke TCI-mode ThetisLink gebruikt. Zie §10.
 
 ### Verbinding
 
@@ -1413,8 +1478,8 @@ ThetisLink praat TCI met zowel **stock Thetis v2.10.3.15** als de **PA3GHM fork*
 | `rx_apf_enable:R,bool;` | Audio Peak Filter | apf_enable |
 | `tx_profiles_ex:names;` | TX profiel namen (lijst) | tx_profile_names |
 | `tx_profile_ex:name;` | Actief TX profiel naam | tx_profile_name |
-| `rx_channel_enable:R,C,bool;` | RX channel enable | — |
-| `volume:db;` | Master volume | — |
+| `rx_channel_enable:R,C,bool;` | RX channel enable | - |
+| `volume:db;` | Master volume | - |
 
 ### Binary Streams
 
@@ -1456,7 +1521,7 @@ TCI binary header: 16 x u32 = 64 bytes. Stream type op offset 24, sample format 
 
 ## 10. Legacy CAT Referentie (historisch)
 
-Eerdere ThetisLink versies (≤ v1.x) gebruikten een parallelle TCP CAT-verbinding naast TCI voor commando's die TCI niet ondersteunde. **ThetisLink v2.0.0 heeft het CAT-pad volledig verwijderd** — alle radio-besturing loopt via de enkele TCI WebSocket uit §9. De ZZ-commando lijst hieronder blijft staan als Thetis-CAT-referentie voor gebruikers die externe CAT-clients (logging-software, N1MM, etc.) direct aan de Thetis CAT-server koppelen (Thetis Setup → Serial/Network/Midi CAT → Network → TCP/IP CAT Server).
+Eerdere ThetisLink versies (≤ v1.x) gebruikten een parallelle TCP CAT-verbinding naast TCI voor commando's die TCI niet ondersteunde. **ThetisLink v2.0.0 heeft het CAT-pad volledig verwijderd**: alle radio-besturing loopt via de enkele TCI WebSocket uit §9. De ZZ-commando lijst hieronder blijft staan als Thetis-CAT-referentie voor gebruikers die externe CAT-clients (logging-software, N1MM, etc.) direct aan de Thetis CAT-server koppelen (Thetis Setup → Serial/Network/Midi CAT → Network → TCP/IP CAT Server).
 
 | ZZ commando | TCI-tegenhanger gebruikt door ThetisLink v2.0.3 |
 |-------------|-------------------------------------------------|
@@ -1534,8 +1599,8 @@ target_depth = clamp(desired, min_depth, max_depth)
 Bij variabele netwerken (WiFi, 4G/5G) kunnen packets in bursts aankomen waardoor de buffer volloopt. Omdat playout rate == arrival rate (beide 50 frames/sec) draineert de buffer niet vanzelf terug naar target depth.
 
 **3-delige oplossing:**
-1. **`pull()` geleidelijke recovery:** Als `depth > target_depth + 4`, drop 1 frame per pull(). Spreidt recovery over meerdere ticks — geen hoorbare klik/stutter.
-2. **`push()` harde limiet:** `max_depth + 10` — voorkomt extreme opbouw.
+1. **`pull()` geleidelijke recovery:** Als `depth > target_depth + 4`, drop 1 frame per pull(). Spreidt recovery over meerdere ticks: geen hoorbare klik/stutter.
+2. **`push()` harde limiet:** `max_depth + 10`: voorkomt extreme opbouw.
 3. **Underflow recovery:** Bij lege buffer pauzeert playout (`refilling = true`) tot buffer weer op target depth zit.
 
 ### Sequence wrapping
@@ -1559,7 +1624,7 @@ De desktop client gebruikt **egui** (via eframe) voor een cross-platform GUI.
 ┌─────────────────────────────────┐
 │  ThetisLink                     │
 ├─────────────────────────────────┤
-│  Server: [192.168.1.79:4580]    │
+│  Server: [192.168.1.2:4580]     │
 │  Status: Connected              │
 ├─────────────────────────────────┤
 │         ┌─────────┐             │
@@ -1633,10 +1698,10 @@ De meter bar is context-afhankelijk op basis van PTT status:
 
 ### Configuratie bestand
 
-`thetislink-client.conf` (of `sdr-remote-client.conf`) naast het executable, key=value formaat:
+`thetislink-client.conf` naast het executable, key=value formaat:
 
 ```
-server=192.168.1.79:4580
+server=192.168.1.2:4580
 password=MijnGeheim
 volume=0.20
 tx_gain=0.50
@@ -1647,7 +1712,8 @@ mem1=3630000,0
 mem2=7073000,0
 mem3=14345000,1
 spectrum_enabled=false
-websdr_favorites=https://websdr.ewi.utwente.nl:8901/,https://kiwisdr.example.com:8073/
+catsync_fav=UTwente|https://websdr.ewi.utwente.nl:8901/
+catsync_fav=KiwiSDR|https://kiwisdr.example.com:8073/
 ```
 
 | Sleutel | Beschrijving | Default |
@@ -1655,13 +1721,13 @@ websdr_favorites=https://websdr.ewi.utwente.nl:8901/,https://kiwisdr.example.com
 | `server` | Server adres:poort | `127.0.0.1:4580` |
 | `password` | Server wachtwoord (verplicht, obfuscated na opslaan) | leeg |
 | `volume` | RX volume 0.0-1.0 | `0.2` |
-| `tx_gain` | TX gain 0.0-3.0 (0-300%) | `0.5` |
+| `tx_gain` | TX gain als factor: 0 (uit), of 0,063-31,6 (-24 tot +30 dB) | `0.5` |
 | `input_device` | Microfoon device naam (exact match) | (systeem default) |
 | `output_device` | Speaker device naam (exact match) | (systeem default) |
 | `tx_profiles` | TX profiel index:naam paren (komma-gescheiden) | `00:Default` |
 | `memN` | Geheugen N: frequentie_hz,mode (N=1-5) | leeg |
 | `spectrum_enabled` | Spectrum display aan/uit | `false` |
-| `websdr_favorites` | Favoriete WebSDR/KiwiSDR URL's (komma-gescheiden) | leeg |
+| `catsync_fav` | Een favoriete WebSDR/KiwiSDR als `label\|url`, één regel per favoriet | geen |
 
 **TX Profiles:** De index correspondeert met de positie in Thetis' TX profiel dropdown (0-based). In TCI modus worden profielnamen automatisch via `tx_profiles_ex` ontvangen.
 
@@ -1705,7 +1771,7 @@ De server ondersteunt **meerdere gelijktijdige clients** met single-TX arbitrati
 3. Als TOTP ingeschakeld: Server stuurt AuthResult(2) + TotpChallenge -> client toont invoerveld -> client stuurt TotpResponse
 4. Server registreert client sessie (`TouchResult::NewClient`)
 5. Server reset jitter buffer + decoder
-6. Server antwoordt met HeartbeatAck (+ negotiated capabilities)
+6. Server antwoordt met HeartbeatAck (+ de capabilities van de server)
 7. Client markeert verbinding als "Connected" bij ontvangst HeartbeatAck
 
 ### Disconnect flow (timeout)
@@ -1727,11 +1793,11 @@ smoothed_loss = smoothed_loss x 0.7 + raw_loss x 0.3
 Server past spectrum FPS per client aan op basis van gerapporteerde loss:
 - **0-5% loss:** Normale FPS
 - **5-15% loss:** Halve FPS (skip every other frame)
-- **>15% loss:** Spectrum gepauzeerd — audio heeft prioriteit
+- **>15% loss:** Spectrum gepauzeerd: audio heeft prioriteit
 
 ### Server-side CTUN auto-recenter (fork)
 
-Met de PA3GHM fork ingeschakeld en `auto_recenter_ex` aangekondigd in `tci_caps_ex` neemt de **TL-server CTUN-recentering over**. De capability-vlag is uitsluitend een advertentie — er is geen `auto_recenter_ex:` command handler in Thetis en geen `pan_ex` push-contract. De server polt VFO/DDC-state en toggelt CTUN om Thetis te dwingen de bandscope op de huidige VFO te hercentreren.
+Met de PA3GHM fork ingeschakeld en `auto_recenter_ex` aangekondigd in `tci_caps_ex` neemt de **TL-server CTUN-recentering over**. De capability-vlag is uitsluitend een advertentie: er is geen `auto_recenter_ex:` command handler in Thetis en geen `pan_ex` push-contract. De server polt VFO/DDC-state en toggelt CTUN om Thetis te dwingen de bandscope op de huidige VFO te hercentreren.
 
 - **Trigger-evaluatie** (`ctun_recenter::evaluate_trigger`): de server controleert per-RX of de VFO de safety-band van het zichtbare spectrum verlaat, gegate op `effective_zoom`, `vfo_freq`, `dds_freq`, `ddc_sample_rate` en `tx_active`. PTT (lokaal of extern `thetis_tx_active`) blokkeert recenter.
 - **Recenter-actie**: een korte CTUN UIT/AAN burst getoggeld via de TCI `run_cat_ex` relay:
@@ -1761,7 +1827,7 @@ Lock-free SPSC (Single Producer Single Consumer) ring buffers scheiden de audio 
 2. Multi-kanaal -> mono (eerste kanaal)
 3. Push naar capture ring buffer
 4. Netwerk loop (20ms tick): pop naar accumulatiebuffer
-5. Verwerk complete frames: resample -> AGC (optioneel) -> TX gain -> Opus wideband 16kHz encode -> UDP send
+5. Verwerk complete frames: TX gain -> (Yaesu: EQ) -> resample -> (Yaesu: compressor) -> AGC (optioneel) -> begrenzer op -1 dB -> Opus wideband 16kHz encode -> verzenden
 6. Onvolledige frames blijven in accumulatiebuffer voor volgende tick
 
 **Belangrijk:** De accumulatiebuffer voorkomt sample verlies. Eerdere implementatie met `pop_slice` op een grote buffer verloor het restant na elke frame, wat brokkelige audio veroorzaakte.
@@ -1805,10 +1871,10 @@ Yaesu RX audio wordt als apart packet type (`AudioYaesu` 0x16) verstuurd. De ser
 Schakelbare client-side AGC in het TX audiopad. Signaalpad:
 
 ```
-Mic capture -> resample 16kHz -> [AGC] -> TX gain -> Opus wideband encode -> UDP
+Mic capture -> TX gain -> (Yaesu: EQ) -> resample 16kHz -> (Yaesu: compressor) -> [AGC] -> begrenzer -1 dB -> Opus wideband encode
 ```
 
-AGC zit voor TX gain zodat de gain slider als extra boost/demping werkt bovenop het genormaliseerde signaal.
+Sinds 2.13.1 is de TX gain de eerste stap en komt de AGC erna; met de AGC aan zet de schuif het niveau dus niet meer, want de AGC trekt het gelijk. Stel de gain in met de AGC (en bij een Yaesu de compressor) uit. De begrenzer is de laatste stap vóór de encoder.
 
 Peak-based envelope follower met noise gate:
 
@@ -1845,12 +1911,12 @@ ThetisLink heeft 7 wire-protocol `DeviceType`-waarden (0x01..0x07). Status wordt
 | Waarde | Apparaat | Verbinding |
 |--------|----------|-----------|
 | 0x01 | Amplitec 6/2 Antenneschakelaar | Serieel USB-TTL, 19200 baud |
-| 0x02 | JC-4s / JC-3s Antenna Tuner (tot 2 parallel) | Adafruit MCP2221A USB-HID |
+| 0x02 | JC-4s / JC-3s Antenna Tuner (tot 6 parallel) | Adafruit MCP2221A USB-HID |
 | 0x03 | SPE Expert 1.3K-FA Eindversterker | Serieel USB, 115200 baud |
 | 0x04 | RF2K-S Eindversterker | TCP/IP |
 | 0x05 | UltraBeam RCU-06 Antennecontroller | Serieel USB, 19200 baud |
 | 0x06 | Rotor (3 backends, één tegelijk actief): EA7HG Visual Rotor / PstRotator (XML/UDP) / Yaesu G-1000DXC (MCP2221A, v2.1.0+) | UDP / UDP-XML / USB-HID afhankelijk van backend |
-| 0x07 | RemoteServer | Intern (geen externe hardware — server-side reboot/shutdown control) |
+| 0x07 | RemoteServer | Intern (geen externe hardware: server-side reboot/shutdown control) |
 
 > **Niet in deze tabel: de morsepeddel.** Die hangt aan de desktopclient en niet
 > aan de server, en heeft daarom geen apparaat-ID in dit protocol. De client leest
@@ -1867,14 +1933,14 @@ ThetisLink heeft 7 wire-protocol `DeviceType`-waarden (0x01..0x07). Status wordt
 
 ### JC-4s / JC-3s Antenna Tuners (MCP2221A USB-HID bridge)
 
-Vanaf v2.0.3 worden tot twee StockCorner JC-4s / JC-3s tuners parallel aangestuurd via een **Adafruit MCP2221A USB-naar-HID breakout** per tuner (vervangt het serial-RTS/CTS-flow uit v2.0.2). Het protocol is identiek voor JC-4s en JC-3s; het model-label is cosmetisch.
+Vanaf v2.0.3 worden StockCorner JC-4s / JC-3s tuners (inmiddels tot zes) parallel aangestuurd via een **Adafruit MCP2221A USB-naar-HID breakout** per tuner (vervangt het serial-RTS/CTS-flow uit v2.0.2). Het protocol is identiek voor JC-4s en JC-3s; het model-label is cosmetisch.
 
 **Hardware (per tuner):**
 - GP2 (digital out) → serie-gate-weerstand → transistor (2N7000 / MMBT3904) → grey "start"-draad naar GND.
 - GP1 (ADC) → midpunt 1 MΩ + 1 MΩ 1:1 spanningsdeler op de yellow "tune-status"-draad (idle ≈ 4.5 V, tune-actief ≈ 0 V).
 - Volledige wiring-schema's met componentwaardes en BJT/MOSFET-varianten: zie de interne MCP2221A-JC4s wiring reference (beschikbaar op aanvraag bij PA3GHM).
 
-**Native library:** `mcp2221-hal` v0.1.0 — vendored als `vendor/mcp2221-hal/`, dual-licensed `MIT OR Apache-2.0`; ThetisLink kiest de MIT-tak (Apache-2.0 ↔ GPL-2.0-only incompatible). Zie `NOTICE.md` en `compliance/THIRD-PARTY-LICENSES.html` voor attributie.
+**Native library:** `mcp2221-hal` v0.1.0: vendored als `vendor/mcp2221-hal/`, dual-licensed `MIT OR Apache-2.0`; ThetisLink kiest de MIT-tak (Apache-2.0 ↔ GPL-2.0-only incompatible). Zie `NOTICE.md` en `compliance/THIRD-PARTY-LICENSES.html` voor attributie.
 
 **Tune aan/uit** gaat naar Thetis via TCI `tune:0,true;` / `tune:0,false;` (doorgestuurd via een tokio channel).
 
@@ -1891,15 +1957,15 @@ Vanaf v2.0.3 worden tot twee StockCorner JC-4s / JC-3s tuners parallel aangestuu
 State `5` (DoneAssumed) bestond in v2.0.2 voor de assume-tuned compensatie en is in v2.0.3 verwijderd; oude clients die nog state 5 verwachten zien dit nooit meer van een v2.0.3 server.
 
 **Per-tuner config keys** (in `thetislink-server.conf`):
-- `tuner{1,2}_enabled` — slot aan/uit
-- `tuner{1,2}_model` — `jc-4s` / `jc-3s` (cosmetisch label)
-- `tuner{1,2}_mcp_serial` — USB-serienummer van het toegewezen MCP2221A bord
-- `tuner{1,2}_amplitec_pos` — Amplitec-A positie (1..6) waarachter de tuner fysiek hangt
-- `tuner{1,2}_threshold_v` — switch-niveau op de gele draad (default 2.25 V)
-- `tuner{1,2}_hysteresis_v` — dood-band rond de threshold (default 0.50 V)
-- `mcp2221_section_expanded` — open/dicht-stand van het status-paneel MCP-blok
+- `tuner<N>_enabled`: slot aan/uit (N = 1 tot en met 6)
+- `tuner<N>_model`: `jc-4s` / `jc-3s` (cosmetisch label)
+- `tuner<N>_mcp_serial`: USB-serienummer van het toegewezen MCP2221A bord
+- `tuner<N>_amplitec_pos`: Amplitec-A positie (1..6) waarachter de tuner fysiek hangt
+- `tuner<N>_threshold_v`: switch-niveau op de gele draad (default 2.25 V)
+- `tuner<N>_hysteresis_v`: dood-band rond de threshold (default 0.50 V)
+- `mcp2221_section_expanded`: open/dicht-stand van het status-paneel MCP-blok
 
-Legacy v2.0.2 keys (`tuner_assume_tuned`, `tuner{1,2}_assume_tuned`, `threshold_ratio`, `baseline_override`) worden stilzwijgend genegeerd bij inlezen — bestaande config-files breken niet.
+Legacy v2.0.2 keys (`tuner_assume_tuned`, `tuner{1,2}_assume_tuned`, `threshold_ratio`, `baseline_override`) worden stilzwijgend genegeerd bij inlezen: bestaande config-files breken niet.
 
 **PA bescherming:** tijdens tuning wordt SPE Expert of RF2K-S automatisch in Standby gezet en na tune hersteld naar Operate.
 
@@ -1933,7 +1999,7 @@ Lineaire eindversterker, 1300W.
 
 RF2K-S (RFKIT) solid-state eindversterker.
 
-**Verbinding:** TCP/IP (bijv. `192.168.1.50:8080`).
+**Verbinding:** TCP/IP (bijv. `192.168.1.3:8080`).
 
 **Status:** band, frequentie, temperatuur, spanning, stroom, forward/reflected power, SWR, error state, antenne type/nummer, tuner mode/setup, max power, device name.
 
@@ -1956,7 +2022,7 @@ Controller voor UltraBeam stuurbare Yagi-antenne. Bestuurt elementlengtes via st
 | Motor progress | 10 | Afgelegde afstand (mm) + completion (0..60), één gedeelde waarde voor beide motoren |
 | Modify element | 12 | Handmatig één element-lengte instellen |
 
-**Status-respons (14 bytes DAT) — per-motor bitfield (v2.0.0):**
+**Status-respons (14 bytes DAT), per-motor bitfield (v2.0.0):**
 
 | Byte | Veld | Opmerkingen |
 |------|------|-------------|
@@ -1972,11 +2038,11 @@ Controller voor UltraBeam stuurbare Yagi-antenne. Bestuurt elementlengtes via st
 | 10 | freq_max_mhz | Maximum frequentie (MHz) |
 | 11-13 | trailing / reserved | Genegeerd door ThetisLink |
 
-Pre-v2.0.0 las de parser byte 8 als `motors_moving` — die byte is in werkelijkheid een controller-state-waarde die zelfs in idle non-zero is, waardoor de motor-progress-poll continu vuurde en de per-motor weergave betekenisloos was. Vanaf v2.0.0 leest de parser byte 9 (gevalideerd door byte-transities te volgen tijdens een 40m → 20m band-switch en een retract-operatie: de bit die langer aan blijft staan correspondeert met de motor met de grootste element-positie-delta).
+Pre-v2.0.0 las de parser byte 8 als `motors_moving`, die byte is in werkelijkheid een controller-state-waarde die zelfs in idle non-zero is, waardoor de motor-progress-poll continu vuurde en de per-motor weergave betekenisloos was. Vanaf v2.0.0 leest de parser byte 9 (gevalideerd door byte-transities te volgen tijdens een 40m → 20m band-switch en een retract-operatie: de bit die langer aan blijft staan correspondeert met de motor met de grootste element-positie-delta).
 
 **Motor-progress (CMD 10) is één gecombineerde waarde** voor beide motoren. De RCU-06-firmware deelt geen voortgang per motor. ThetisLink toont twee M1 / M2 status-indicatoren (gestuurd door de byte-9 bitfield) plus één gedeelde voortgangsbalk.
 
-**Unsolicited broadcasts:** Ongeveer elke 84-148 seconden stuurt de RCU-06 een 3-burst sequence van ongevraagde frames met dezelfde DAT als een CMD_STATUS-respons maar met `COM = 0x00` en een checksum die een andere init/algoritme gebruikt — `read_packet` rapporteert die als "Checksum mismatch (got 129)". De poll-loop herstelt zich automatisch binnen ~30 seconden. Gelogd op debug-niveau. Geen functionele impact (motorposities worden door de RCU-06 zelf bijgehouden, onafhankelijk van onze PC-verbinding).
+**Unsolicited broadcasts:** Ongeveer elke 84-148 seconden stuurt de RCU-06 een 3-burst sequence van ongevraagde frames met dezelfde DAT als een CMD_STATUS-respons maar met `COM = 0x00` en een checksum die een andere init/algoritme gebruikt: `read_packet` rapporteert die als "Checksum mismatch (got 129)". De poll-loop herstelt zich automatisch binnen ~30 seconden. Gelogd op debug-niveau. Geen functionele impact (motorposities worden door de RCU-06 zelf bijgehouden, onafhankelijk van onze PC-verbinding).
 
 **UI:** Frequentie/band display, richtingsindicator (forward/reverse), per-motor M1 + M2 indicatoren, gedeelde motor-progress-balk, elementlengtes per element, retract-knop.
 
@@ -1984,7 +2050,7 @@ Pre-v2.0.0 las de parser byte 8 als `motors_moving` — die byte is in werkelijk
 
 Rotor controller voor draaibare antennes. Arduino Mega 2560 met W5100 LAN module.
 
-**Verbinding:** UDP naar een door de gebruiker ingesteld `host:poort` (geen vaste default; bv. `192.168.1.60:3010`). Gebaseerd op het Prosistel-protocol.
+**Verbinding:** UDP naar een door de gebruiker ingesteld `host:poort` (geen vaste default; bv. `192.168.1.4:3010`). Gebaseerd op het Prosistel-protocol.
 
 **Commando's:**
 
@@ -2050,7 +2116,7 @@ De IQ sample rate is per ontvanger configureerbaar via de **DDC sample rate drop
 
 - **Stock TCI** (`IQ_SAMPLERATE`): de rate is globaal per Thetis-instance. Instellen voor RX1 beïnvloedt ook RX2; de client-dropdown clipt naar de globale waarde.
 - **Fork TCI `_ex`** (`ddc_sample_rate_ex:<rx>,<rate>;`): rate is onafhankelijk selecteerbaar per RX0 en RX1. De server stuurt een push-update (`ddc_sample_rate_ex:<rx>,<rate>;`) zodat andere clients de wijziging live zien.
-- **Netwerk-impact**: Float32 I/Q op 1536 kHz is ~12 MB/s raw. Opus op het audio-pad wordt niet beïnvloed; alleen de IQ-stream schaalt met de rate. ThetisLink streamt IQ van het server-procesgeheugen naar de spectrum processor van de client — er gaat geen IQ over UDP naar de client; alleen `SpectrumPacket` (binned + smoothed) gaat over de lijn.
+- **Netwerk-impact**: Float32 I/Q op 1536 kHz is ~12 MB/s raw. Opus op het audio-pad wordt niet beïnvloed; alleen de IQ-stream schaalt met de rate. ThetisLink streamt IQ van het server-procesgeheugen naar de spectrum processor van de client: er gaat geen IQ over UDP naar de client; alleen `SpectrumPacket` (binned + smoothed) gaat over de lijn.
 - **FFT-grootte**: `ddc_fft_size()` schaalt mee met de sample rate; de bins/pixel-ratio blijft constant over alle rates.
 
 ### FFT Configuratie
@@ -2059,7 +2125,7 @@ Dynamische FFT grootte op basis van sample rate (`ddc_fft_size()` in `lib.rs`):
 
 ```rust
 pub fn ddc_fft_size(sample_rate_hz: u32) -> usize {
-    let target = (sample_rate_hz as usize) * 2 / 3;
+    let target = (sample_rate_hz as usize) * 8 / 25;
     target.next_power_of_two().max(4096)
 }
 ```
@@ -2070,17 +2136,24 @@ pub fn ddc_fft_size(sample_rate_hz: u32) -> usize {
 
 | FFT size | Hz/bin @384kHz | FFT/sec | Data window |
 |----------|---------------|---------|-------------|
-| 32768 | 11.7 | ~47 | 85ms |
-| 65536 | 5.9 | ~23 | 171ms |
-| 131072 | 2.9 | ~12 | 341ms |
-| 262144 (auto) | 1.5 | ~6 | 683ms |
+| 32768 | 11.7 | ~94 | 85ms |
+| 65536 | 5.9 | ~47 | 171ms |
+| 131072 (auto) | 2.9 | ~23 | 341ms |
+| 262144 | 1.5 | ~12 | 683ms |
+| 524288 | 0.7 | ~6 | 1365ms |
+
+De desktoprij biedt de groottes van 32K tot en met `MAX_FFT_SIZE_K` aan die hooguit vier keer de sample rate zijn, en
+de server klemt elke vraag op die grens; Auto (0) volgt `ddc_fft_size()`. De grootte is er één per ontvanger, gedeeld
+door elke client: een client stuurt hem alleen met dat spectrum open (bij het openen, als de grootte gekozen wordt,
+bij een nieuwe sessie en bij terugkomen van een Yaesu naar Thetis), en een VRX-spectrum, dat uit de FFT van zijn ontvanger gesneden wordt, stuurt de grootte van zijn ontvanger één keer
+per opening. Op Auto (0) stuurt een client niets bij een opening of een nieuwe sessie; Auto kiezen met het spectrum open stuurt 0. Een zoomstap stuurt er geen.
 
 ### Server-Side Zoom/Pan
 
 Elke client heeft eigen zoom/pan state op de server. De smoothed buffer wordt eenmalig per FFT frame berekend; per client wordt een view geextraheerd:
 
 - **extract_view(zoom, pan, max_bins)**: selecteert visible bins, decimeert naar max 32768
-- **Float stride**: `stride = visible as f64 / max_bins as f64` — dekt volledige zichtbare range af
+- **Float stride**: `stride = visible as f64 / max_bins as f64`, dekt volledige zichtbare range af
 - **Max-per-group**: behoud signaalpieken bij decimatie
 - **center_freq_hz + span_hz**: per-view frequentie metadata in Hz-precisie
 
@@ -2088,15 +2161,14 @@ Elke client heeft eigen zoom/pan state op de server. De smoothed buffer wordt ee
 
 - Server ontvangt VFO frequentie via TCI push (`vfo:0,0,freq;`)
 - `center_freq_hz` in SpectrumPacket = Hz-precisie
-- DDS center freq uit TCI `dds:0,freq;` of HPSDR HP packet NCO phaseword
+- DDS center freq uit TCI `dds:0,freq;`
 - Band change detectie: buffer reset bij sprong > sample_rate/4
 
 ### VFO Marker Stabiliteit
 
 - Client `pending_freq` tracking voorkomt VFO marker bounce bij tuning
-- `pending_freq` wordt pas gecleard als spectrum center binnen 500 Hz van pending waarde
-- Tijdens pending: VFO marker vastgepind op display center
-- `tune_base_hz`: scroll-tuning accumuleert op werkelijke VFO (niet display-VFO)
+- `pending_freq` wordt gewist zodra de server precies die frequentie meldt (na minstens 200 ms), of na 1 s
+- Tijdens pending: de VFO-marker volgt de gevraagde frequentie zonder afvlakking
 
 ### Desktop Client Rendering
 
@@ -2111,7 +2183,7 @@ Elke client heeft eigen zoom/pan state op de server. De smoothed buffer wordt ee
 - **Drag-to-tune**: klik en sleep in spectrum = VFO volgt muis (100 Hz snap)
 - **Click-to-tune**: enkele klik op spectrum -> VFO verplaatst (1 kHz snap)
 - **Zoom/Pan sliders**: server-side zoom (1x-1024x), pan met 100ms debounce
-- **Ref level (-80..0 dB) / range (20..130 dB) sliders**: instelbaar display bereik
+- **Ref level (-90..0 dB) / range (20..130 dB) sliders**: instelbaar display bereik
 - **Waterfall contrast slider**: power curve aanpassing
 - **Colormap**: zwart -> blauw -> cyan -> geel -> rood -> wit (5-punt lineair)
 
@@ -2204,11 +2276,11 @@ Twee weergavemodi:
 Volledige diversity ondersteuning met controls voor enable, referentiebron (RX1/RX2), source (RX1+RX2/RX1/RX2), gain per receiver (3 decimalen), en fase-aanpassing. Interactieve cirkelplot (desktop + Android) toont real-time phase/gain vector.
 
 **Smart Auto-Null** (Thetis-side, ~9 seconden):
-1. Equalize — diversity uit, RX1/RX2 meters apart, gain automatisch instellen
-2. Coarse sweep — 450° (360°+90° overlap) AVG sweep in configureerbare stappen
-3. Fine phase — ±15° rond coarse null in 1° stappen
-4. Gain optimalisatie — ±6dB rond equalized gain in 0.5dB stappen
-5. Vergelijking — diversity off/on met resultaat in dB
+1. Equalize: diversity uit, RX1/RX2 meters apart, gain automatisch instellen
+2. Coarse sweep: 450° (360°+90° overlap) AVG sweep in configureerbare stappen
+3. Fine phase: ±15° rond coarse null in 1° stappen
+4. Gain optimalisatie: ±6dB rond equalized gain in 0.5dB stappen
+5. Vergelijking: diversity off/on met resultaat in dB
 
 Parameters configureerbaar via `diversity-smart.txt` (A-lijn):
 `A coarseStep coarseSettle fineRange fineStep fineSettle gainRange gainStep gainSettle`
@@ -2290,7 +2362,7 @@ Deze paragraaf beschreef het model van v0.6.5 en dat is op drie punten
 achterhaald:
 
 - **Foutcorrectie staat niet vast op 10%.** De server meet het verlies en zet de
-  correctie aan en uit: "error correction on at N%" en "link clean again -
+  correctie aan en uit: "error correction on at N%" en "link clean again;
   error correction off". Dat verklaart ook waarom een fout in dit pad kan komen
   en gaan met de kwaliteit van de verbinding.
 - **Elke stroom kiest zijn eigen formaat, en dat is niet meer weglaatbaar.**
@@ -2299,17 +2371,17 @@ achterhaald:
   smalbandige decoder, ongeacht wat er binnenkwam.
 - **Een gat is de codec, en niets dat erbij gemaakt wordt.** Opus extrapoleert
   uit het signaal van de stroom zelf, en daarom klinkt een wegval als je eigen
-  ontvanger. Op bandruis dooft hij niet uit - over vier seconden gemeten houdt hij
-  het niveau - dus er hoeft niets bovenop. (2.9.0 maakte er kort wel ruis bij;
+  ontvanger. Op bandruis dooft hij niet uit (over vier seconden gemeten houdt hij
+  het niveau) dus er hoeft niets bovenop. (2.9.0 maakte er kort wel ruis bij;
   2.9.1 heeft dat weggehaald. De 260 ms fade die daarvoor werd aangehaald geldt
   voor spraak.)
 - **Verhulling volgt het abonnement.** Een kanaal dat de operator heeft uitgezet
-  wordt niet verhuld, en bij uitzetten vergeet die decoder zijn geschiedenis - op
+  wordt niet verhuld, en bij uitzetten vergeet die decoder zijn geschiedenis: op
   alle zes de stromen, de twee radioplekken erbij. Bij een herverbinding worden
   ook alle zes gewist; tot 2.9.1 gebeurde dat alleen bij de drie Thetis-stromen.
 - **Een gat vroeg in een luistersessie is stil.** De codec moet eerst een tijd
   gedecodeerd hebben voordat er iets is om uit te extrapoleren, en de twee
-  formaten zijn aparte decoders - omschakelen begint de andere vanaf niets.
+  formaten zijn aparte decoders: omschakelen begint de andere vanaf niets.
   **De twee doen er niet even lang over.** Smalband draagt de band binnen enkele
   seconden alweer; breedband heeft veel langer nodig. Daardoor geeft dezelfde
   proef op hetzelfde kanaal een ander antwoord, afhankelijk van welk formaat er
@@ -2320,7 +2392,7 @@ achterhaald:
   voorkeuren per band; ze bepalen niets dat de lucht in gaat, dus een
   gekanaliseerde band als 60m is in zijn geheel gedekt (5.250-5.450 MHz) in
   plaats van per regio. `dxcluster::freq_to_band` op de server is een aparte
-  functie met dezelfde naam die DX-spots filtert - houd die twee gelijk.
+  functie met dezelfde naam die DX-spots filtert: houd die twee gelijk.
 - **Na acht seconden stopt de verhulling.** Ze is er om een hapering te
   overbruggen, niet om een verbinding te vervangen die weg is.
 
@@ -2329,15 +2401,15 @@ achterhaald:
 
 ## 21. Audio Recording en Playback (v0.6.6)
 
-WAV recorder voor RX audio op de server, met playback naar speaker of TX.
+WAV recorder voor RX audio in de client, met playback naar speaker of TX.
 
 ### Recording
 
-- Per audiobron: **RX1**, **RX2**, **Yaesu 1**, **Yaesu 2**, **VRX1**, **VRX2** (v2.4.0) — elk een eigen checkbox in de Server tab, alleen zichtbaar als die bron beschikbaar/ingeschakeld is
-- Formaat: WAV, 16-bit mono (PCM). De sample-rate volgt de gedecodeerde stream-rate — meestal **8 kHz** (smalband) of **16 kHz** (breedband), dus meelopend met de RX-bandbreedte-instelling; hij wordt vastgelegd bij de eerste write van elk bestand
+- Per audiobron: **RX1**, **RX2**, **Yaesu 1**, **Yaesu 2**, **VRX1**, **VRX2** (v2.4.0), elk een eigen checkbox in de Server tab, alleen zichtbaar als die bron beschikbaar/ingeschakeld is
+- Formaat: WAV, 16-bit mono (PCM). De sample-rate volgt de gedecodeerde stream-rate: meestal **8 kHz** (smalband) of **16 kHz** (breedband), dus meelopend met de RX-bandbreedte-instelling; hij wordt vastgelegd bij de eerste write van elk bestand
 - Bestandsnaam: automatisch met timestamp, bijv. `rx1_2026-04-05_14-30-00.wav`
 - Opname start/stop via checkboxes in de client GUI
-- Ruwe PCM na Opus decode, voor resampling naar device rate
+- PCM na Opus decode, voor resampling naar device rate. Thetis en VRX zoals gedecodeerd; een Yaesu met de ontvangstcorrectie die de luidspreker en de meter ook krijgen (`yaesu_rx_correction`, niet het volume), sinds 2.13.1
 
 ### Playback
 
@@ -2358,11 +2430,11 @@ Alternatief voor Smart Auto-Null: een continu sweep-algoritme dat nauwkeuriger i
 
 ### Algoritme
 
-1. **Forward sweep** — 0° tot 450° in 1° stappen, continu (geen per-step settle), leest AVG S-meter bij elke stap
-2. **Backward sweep** — 450° terug naar 0° in 1° stappen, zelfde aanpak
-3. **True null** — gemiddelde van forward en backward minimum-fase. Dit compenseert de AVG meter lag: forward meet "te laat" (na het echte minimum), backward meet "te vroeg", het gemiddelde is het werkelijke minimum.
-4. **Gain optimalisatie** — sweep gain rond de equalized waarde bij de gevonden null-fase
-5. **Vergelijking** — diversity off vs. on, resultaat in dB verschil
+1. **Forward sweep**: 0° tot 450° in 1° stappen, continu (geen per-step settle), leest AVG S-meter bij elke stap
+2. **Backward sweep**: 450° terug naar 0° in 1° stappen, zelfde aanpak
+3. **True null**: gemiddelde van forward en backward minimum-fase. Dit compenseert de AVG meter lag: forward meet "te laat" (na het echte minimum), backward meet "te vroeg", het gemiddelde is het werkelijke minimum.
+4. **Gain optimalisatie**: sweep gain rond de equalized waarde bij de gevonden null-fase
+5. **Vergelijking**: diversity off vs. on, resultaat in dB verschil
 
 ### Verschil met Smart Auto-Null
 
@@ -2410,7 +2482,7 @@ Desktop (egui) en Android (Compose Canvas) gebruiken identieke kleurberekening. 
 
 ## 24. CAT-naar-TCI Vertaling (historisch, v0.6.7)
 
-In v0.6.7 leerde de server intern ZZ-stijl CAT-commando's vertalen naar hun TCI-equivalent wanneer de auxiliaire CAT-verbinding niet beschikbaar was. **In v2.0.0 is het auxiliaire CAT-pad volledig verwijderd**, waardoor deze vertaal-laag runtime niet meer nodig is — elke interne aanroep is al een TCI-commando. De legacy mapping hieronder blijft nuttig voor gebruikers die externe CAT-clients aan de Thetis CAT-server (Thetis-zijde, niet ThetisLink-zijde) koppelen.
+In v0.6.7 leerde de server intern ZZ-stijl CAT-commando's vertalen naar hun TCI-equivalent wanneer de auxiliaire CAT-verbinding niet beschikbaar was. **In v2.0.0 is het auxiliaire CAT-pad volledig verwijderd**, waardoor deze vertaal-laag runtime niet meer nodig is: elke interne aanroep is al een TCI-commando. De legacy mapping hieronder blijft nuttig voor gebruikers die externe CAT-clients aan de Thetis CAT-server (Thetis-zijde, niet ThetisLink-zijde) koppelen.
 
 | Legacy CAT | TCI equivalent |
 |------------|----------------|
@@ -2464,7 +2536,7 @@ Gedetailleerde flow (PTT-toggle, server-gedreven). De server gebruikt **gecachte
 
 1. **PTT-on** (gecachte velden gelezen: `mode_char`, `auto_dfm_active`, `vfo_select` voor memory-mode-vlag, `memory_channel`):
    - Als `mode_char == '4'` (FM) **en** `auto_dfm_active == false`:
-     - Stuur `MD0A;` (DATA-FM op de FT-991A — mode-digit `A`, **niet** `MD08;`).
+     - Stuur `MD0A;` (DATA-FM op de FT-991A: mode-digit `A`, **niet** `MD08;`).
      - Slaap 50 ms zodat de mode-change-transient van de radio settle't voordat TX aan gaat.
      - Zet gecached `auto_dfm_active = true` en `auto_dfm_saved_memory_channel` = `memory_channel` als momenteel in memory-mode (`vfo_select == 1`) en `memory_channel > 0`, anders 0.
      - Stuur `TX1;`.
@@ -2480,7 +2552,7 @@ Gedetailleerde flow (PTT-toggle, server-gedreven). De server gebruikt **gecachte
      - Wis gecached `auto_dfm_active = false` en `auto_dfm_saved_memory_channel = 0`.
    - Anders (radio was niet door ons auto-DFM'd): stuur `TX0;` en stop.
 4. **Edge cases**:
-   - Mode-change in memory-mode forceert de FT-991A uit memory-mode naar de VFO van dat kanaal — dit is onvermijdelijk om USB mic audio gerouteerd te krijgen. De MC-restore bij PTT-off herstelt memory-mode.
+   - Mode-change in memory-mode forceert de FT-991A uit memory-mode naar de VFO van dat kanaal: dit is onvermijdelijk om USB mic audio gerouteerd te krijgen. De MC-restore bij PTT-off herstelt memory-mode.
    - Als serial-reconnect plaatsvindt tijdens TX, wordt het gecachte memory-kanaal weggegooid. De gebruiker landt in DATA-FM/VFO en moet het memory-kanaal handmatig terugroepen.
 
 De velden `auto_dfm_active: bool` en `auto_dfm_saved_memory_channel: u16` leven op de gecachte Yaesu-status struct (0 = geen opgeslagen kanaal).
@@ -2526,9 +2598,9 @@ Alle 153 setup menu-items zijn uitleesbaar en instelbaar via het **EX commando**
 ### VFO/Memory Status
 
 Server pollt `IF;` elke 500ms. P7 veld geeft de modus:
-- **VFO** (groen) — normaal
-- **VFO Split** (oranje) — split mode actief
-- **MEM nn naam freq** (blauw) — memory mode met kanaalnaam
+- **VFO** (groen): normaal
+- **VFO Split** (oranje): split mode actief
+- **MEM nn naam freq** (blauw): memory mode met kanaalnaam
 
 ### Auto-reconnect
 
@@ -2557,7 +2629,7 @@ hij de toon leest. Die wandeling
 
 - **pauzeert een lopende scan** (`SC;` -> `SC0;`) en hervat hem in de stand waarin
   hij stond;
-- **bevestigt elk kanaal** met de leesvorm van het model - `MC;` op de FT-991A,
+- **bevestigt elk kanaal** met de leesvorm van het model: `MC;` op de FT-991A,
   `MC0;` op de FTX-1, die het side-cijfer draagt (FTX-1 CAT OM 2508-C p.19). De
   verkeerde vorm sturen is een ongeldige vraag die de radio niet beantwoordt, en
   dan wordt elk kanaal overgeslagen;
@@ -2566,12 +2638,12 @@ hij de toon leest. Die wandeling
 - **breekt af bij TX** en keert terug naar het kanaal waar de radio stond.
 
 **Beperking FTX-1 (v2.8.0):** lezen werkt; een toon *opslaan* in een geheugenkanaal
-niet, en de reden staat zwart op wit in plaats van dat hij is afgeleid - `MW` heeft
+niet, en de reden staat zwart op wit in plaats van dat hij is afgeleid: `MW` heeft
 wel een veld voor de toon-**modus** (P8) maar geen voor het toon-**nummer** (P9 is
 `00: (Fixed)`), en `MW` is set-only. Een geheugen schrijven zet de toon van dat kanaal
 in de radio dus terug op 100,0 Hz. ThetisLink bewaart de tonen in zijn eigen lijst en
 zet telkens de juiste terug zodra de radio op een kanaal landt, dus zenden via
-ThetisLink werkt gewoon - maar de radio op zichzelf zendt op geschreven kanalen
+ThetisLink werkt gewoon, maar de radio op zichzelf zendt op geschreven kanalen
 100,0 Hz uit. Vanwege die prijs staat schrijven naar de FTX-1 uit tot het in de
 serverinstellingen is geaccepteerd. Zie [Bekende Beperkingen](#32-bekende-beperkingen) voor het
 volledige verhaal.
@@ -2580,7 +2652,7 @@ volledige verhaal.
 
 ### Challenge-Response
 
-ThetisLink gebruikt wachtwoord-authenticatie via een pre-shared key (PSK) - verplicht: de server start niet zonder geldig wachtwoord, ook niet vanaf de opdrachtregel - met optionele TOTP twee-factor authenticatie:
+ThetisLink gebruikt wachtwoord-authenticatie via een pre-shared key (PSK) (verplicht: de server start niet zonder geldig wachtwoord, ook niet vanaf de opdrachtregel) met optionele TOTP twee-factor authenticatie:
 
 ```mermaid
 sequenceDiagram
@@ -2611,14 +2683,14 @@ sequenceDiagram
     C->>S: Heartbeat (normaal verder)
 ```
 
-De client stopt heartbeats tijdens het wachten op TOTP input. Dat houdt de sessie op de server niet in leven: een client bij de codestap is nog niet aangemeld. De server geeft hem twee minuten om te typen (sinds v2.13; daarvoor vijftien seconden). Een code die daarna komt krijgt geen antwoord; na vijf seconden laat de client die poging los, zijn heartbeats lopen weer, de server daagt hem opnieuw uit en hij vraagt een nieuwe code (een server van v2.13 of later; een oudere houdt de oude poging vast tot zijn termijn, en de client meldt dan na nog vijf seconden "geen antwoord"). Komt het antwoord laat in plaats van nooit, dan geldt het alsnog: de client bewaart de nonces van de poging tot een nieuwe uitdaging ze vervangt, en verbindt. Een client waarvan een heartbeat binnenkomt terwijl de server zijn codestap nog vasthoudt (een herstart, of hetzelfde adres via de relay) krijgt een nieuwe uitdaging zodra die codestap twee seconden oud is - daarvoor kan de heartbeat zijn eigen zijn, nog onderweg; wat de operator ondertussen aanraakt is geen klop.
+De client stopt heartbeats tijdens het wachten op TOTP input. Dat houdt de sessie op de server niet in leven: een client bij de codestap is nog niet aangemeld. De server geeft hem twee minuten om te typen (sinds v2.13; daarvoor vijftien seconden). Een code die daarna komt krijgt geen antwoord; na vijf seconden laat de client die poging los, zijn heartbeats lopen weer, de server daagt hem opnieuw uit en hij vraagt een nieuwe code (een server van v2.13 of later; een oudere houdt de oude poging vast tot zijn termijn, en de client meldt dan na nog vijf seconden "geen antwoord"). Komt het antwoord laat in plaats van nooit, dan geldt het alsnog: de client bewaart de nonces van de poging tot een nieuwe uitdaging ze vervangt, en verbindt. Een client waarvan een heartbeat binnenkomt terwijl de server zijn codestap nog vasthoudt (een herstart, of hetzelfde adres via de relay) krijgt een nieuwe uitdaging zodra die codestap twee seconden oud is: daarvoor kan de heartbeat zijn eigen zijn, nog onderweg; wat de operator ondertussen aanraakt is geen klop.
 
 ### Eigenschappen
 
-- **Wachtwoord verplicht** - de server start niet zonder geldig wachtwoord (min. 8 tekens, letters + cijfers), via de GUI, de autostart en de opdrachtregel; met 2FA aan ook niet zonder volledige sleutel
-- **TOTP 2FA optioneel** - TOTP-SHA1, 6 cijfers, 30 seconden periode, +/-1 periode clock skew tolerantie
-- **Geen overhead** op data packets (audio/spectrum) - alleen IP:port check na auth
-- **Brute-force bescherming** - 5 pogingen per client (IP:port), daarna 60s blokkade
+- **Wachtwoord verplicht**: de server start niet zonder geldig wachtwoord (min. 8 tekens, letters + cijfers), via de GUI, de autostart en de opdrachtregel; met 2FA aan ook niet zonder volledige sleutel
+- **TOTP 2FA optioneel**: TOTP-SHA1, 6 cijfers, 30 seconden periode, +/-1 periode clock skew tolerantie
+- **Geen overhead** op data packets (audio/spectrum): alleen IP:port check na auth
+- **Brute-force bescherming**: 5 pogingen per client (IP:port), daarna 60s blokkade
 - **Wachtwoord** gaat nooit over het netwerk (alleen HMAC van random nonce)
 - **Obfuscated opslag** in config bestanden (XOR met vaste sleutel + hex encoding)
 - **Constant-time vergelijking** ter voorkoming van timing side-channel attacks
@@ -2656,9 +2728,9 @@ Wachtwoorden en TOTP secrets worden automatisch obfuscated bij opslaan.
 
 ## 28. Virtuele Ontvangers (VRX) (v2.2.0)
 
-Twee onafhankelijke **virtuele ontvangers** — VRX1 op RX1/VFO-A en VRX2 op RX2/VFO-B — worden uit de wideband DDC-I/Q-stream gesneden door een FFT-channelizer (de nieuwe `vrx-rs`-crate). Elke VRX heeft zijn eigen luisterfrequentie, demod-mode, filter, high-resolution spectrum/waterfall, S-meter en audio, en wordt in de hoofd-RX-audio gemengd naast RX1/RX2 en de aangesloten Yaesu-radio's. State (enable/frequentie/mode/filter) blijft behouden over reconnects.
+Twee onafhankelijke **virtuele ontvangers** (VRX1 op RX1/VFO-A en VRX2 op RX2/VFO-B) worden uit de wideband DDC-I/Q-stream gesneden door een FFT-channelizer (de nieuwe `vrx-rs`-crate). Elke VRX heeft zijn eigen luisterfrequentie, demod-mode, filter, high-resolution spectrum/waterfall, S-meter en audio, en wordt in de hoofd-RX-audio gemengd naast RX1/RX2 en de aangesloten Yaesu-radio's. State (enable/frequentie/mode/filter) blijft behouden over reconnects.
 
-Voor de volledige geïllustreerde uitleg van de signaalketen — van radiogolf tot geluid — en van het server -> client netwerkpad, zie de publieke uitleg-pagina's:
+Voor de volledige geïllustreerde uitleg van de signaalketen (van radiogolf tot geluid) en van het server -> client netwerkpad, zie de publieke uitleg-pagina's:
 - [Hoe een VRX werkt](https://cjenschede.github.io/ThetisLink/VRX-uitleg.html)
 - [Het netwerkpad](https://cjenschede.github.io/ThetisLink/Netwerk-uitleg.html)
 
@@ -2679,12 +2751,12 @@ De voorwaartse-FFT-kosten worden over de input-batch geamortiseerd; een VRX-kana
 ### Bin-breedte en output-rates
 
 - **62,5 Hz audio-bins.** De iFFT-grootte is zo gekozen dat de bin-breedte exact 62,5 Hz is bij beide output-rates: 128-punts iFFT bij 8 kHz (NB) en 256-punts iFFT bij 16 kHz (WB). De voorwaartse-FFT-grootte schaalt mee met de input-DDC-rate zodat FFT- en iFFT-bin-breedte gelijk zijn (`fft_n = ifft_n x input_rate / output_rate`). Filterranden worden gekwantiseerd naar veelvouden van 62,5 Hz zodat ze direct op bin-indices afbeelden.
-- **NB-output (8 kHz, Opus narrowband)** is de default — SSB/CW, ~4 kHz audio-bandbreedte.
+- **NB-output (8 kHz, Opus narrowband)** is de default: SSB/CW, ~4 kHz audio-bandbreedte.
 - **WB-output (16 kHz, Opus wideband)** wordt gekozen voor AM/FM-kwaliteit. WB wordt ook aangestuurd door de globale RX-bandbreedte-schakelaar (ControlId `ThetisWidebandAudio` 0x66, §5).
 
 ### Demodulatie-modes
 
-`VrxMode` ondersteunt USB, LSB, AM, SAM en FM. SSB extraheert één zijband en geeft het reële deel; AM demoduleert via envelope; SAM coherent in-fase (gaat ervan uit dat de gebruiker op de draaggolf is afgestemd — nog geen PLL-tracking); FM geeft de fase-afgeleide tussen opeenvolgende complexe basisband-samples (`atan2` kwadrant-correct sinds de v2.2.0-fix).
+`VrxMode` ondersteunt USB, LSB, AM, SAM en FM. SSB extraheert één zijband en geeft het reële deel; AM demoduleert via envelope; SAM coherent tegen de draaggolf, die een PLL volgt (sinds v2.3.0); FM geeft de fase-afgeleide tussen opeenvolgende complexe basisband-samples (`atan2` kwadrant-correct sinds de v2.2.0-fix).
 
 ### Protocol-oppervlak
 
@@ -2710,20 +2782,20 @@ Het radiomodel wordt bij bring-up gedetecteerd uit de CAT `ID;`-respons (`RadioM
 | `0670` | FT-991A |
 | `0840` | FTX-1 |
 
-De Yaesu-CAT-dialect is grotendeels gedeeld, dus `RadioModel` draagt alleen de paar per-model-verschillen (autodetect-code, audio-device-naam, mode-code-extra's en enkele commando-formaat-quirks — bv. de FTX-1 gebruikt 5-cijferige memory-kanalen `MC0{ch:05};` en een power-head-prefix `PC{head}{nnn};`, waar de 991A 3-cijferig `MC{ch:03};` en `PC{nnn};` gebruikt). Detectie probeert de seriële poort met een baud-fallback. Een bring-up-probe logt een waarschuwing als het gedetecteerde model niet matcht met de geconfigureerde slot (waarschijnlijk een USB-enumeration-swap). Een onbekende maar reagerende Yaesu-`ID` zet het slot-model standaard op **FTX-1** (`detect_model` → `unwrap_or(Ftx1)`), geparseerd met het gedeelde, 991A-compatibele CAT-dialect.
+De Yaesu-CAT-dialect is grotendeels gedeeld, dus `RadioModel` draagt alleen de paar per-model-verschillen (autodetect-code, audio-device-naam, mode-code-extra's en enkele commando-formaat-quirks: bv. de FTX-1 gebruikt 5-cijferige memory-kanalen `MC0{ch:05};` en een power-head-prefix `PC{head}{nnn};`, waar de 991A 3-cijferig `MC{ch:03};` en `PC{nnn};` gebruikt). Detectie probeert de seriële poort met een baud-fallback. Een bring-up-probe logt een waarschuwing als het gedetecteerde model niet matcht met de geconfigureerde slot (waarschijnlijk een USB-enumeration-swap). Een onbekende maar reagerende Yaesu-`ID` zet het slot-model standaard op **FTX-1** (`detect_model` → `unwrap_or(Ftx1)`), geparseerd met het gedeelde, 991A-compatibele CAT-dialect.
 
 Twee identiek genoemde `USB Audio CODEC`-devices (één per radio) kunnen onderscheiden worden met een `#N`-index-suffix in de audio-device-selector.
 
 ### Per-radio packet-varianten en RadioInfo
 
-Slot 1 heeft eigen audio (`AudioYaesu2` 0x25), state (`YaesuState2` 0x26), frequentie-set (`FrequencyYaesu2` 0x27) en memory-data (`YaesuMemoryData2` 0x28) — elk byte-identiek in layout aan de slot-0-tegenhanger. De server broadcast ook `RadioInfo` (0x29) — `slot + model` — zodat een dual-radio-bewuste client elk paneel correct labelt ("991A 1" / "FTX1" enz.). Al het slot-1-verkeer is gegate achter `Yaesu2Enable` (default uit), zodat een onbewuste of oudere client het nooit ontvangt.
+Slot 1 heeft eigen audio (`AudioYaesu2` 0x25), state (`YaesuState2` 0x26), frequentie-set (`FrequencyYaesu2` 0x27) en memory-data (`YaesuMemoryData2` 0x28): elk byte-identiek in layout aan de slot-0-tegenhanger. De server broadcast ook `RadioInfo` (0x29) (`slot + model`) zodat een dual-radio-bewuste client elk paneel correct labelt ("991A 1" / "FTX1" enz.). Al het slot-1-verkeer is gegate achter `Yaesu2Enable` (default uit), zodat een onbewuste of oudere client het nooit ontvangt.
 
 ### FTX-1 software-squelch
 
 De hardware-squelch van de FTX-1 gate't zijn USB-audio niet, dus een FM-kanaal zou continu ruis streamen. Een **server-side software-squelch** lost dit op:
 
-- De fast-poll-loop voegt `RI0;` toe naast `SM0;` voor beide modellen - op de FTX-1 voor de `RI` P8-busy-vlag (hieronder) plus de P2 Hi-SWR-vlag, op de 991A alleen voor zijn `RI0` P2 Hi-SWR-vlag. Het `RI` P8-veld (FTX-1) rapporteert de busy-status van de radio -> `squelch_open`.
-- Bij gesloten squelch faded de audio-loop de FTX-1 (Yaesu) USB-audio naar stilte (een korte gate-envelope, ~200 ms volledige fade) in plaats van abrupt af te kappen; alleen de fade-randen worden gelogd. Dit gate't alleen het USB-audiopad van de radio zelf — niet de VRX- of Thetis-audio.
+- De fast-poll-loop voegt `RI0;` toe naast `SM0;` voor beide modellen: op de FTX-1 voor de `RI` P8-busy-vlag (hieronder) plus de P2 Hi-SWR-vlag, op de 991A alleen voor zijn `RI0` P2 Hi-SWR-vlag. Het `RI` P8-veld (FTX-1) rapporteert de busy-status van de radio -> `squelch_open`.
+- Bij gesloten squelch faded de audio-loop de FTX-1 (Yaesu) USB-audio naar stilte (een korte gate-envelope, ~200 ms volledige fade) in plaats van abrupt af te kappen; alleen de fade-randen worden gelogd. Dit gate't alleen het USB-audiopad van de radio zelf: niet de VRX- of Thetis-audio.
 - **Alleen FM-familie-modes.** Gating geldt voor internal mode 5 (FM / FM-N / DATA-FM). Op SSB/CW/AM/data is de busy-flag betekenisloos, dus audio gaat altijd door. `squelch_open` is default **true** (open), zodat een radio die niet software-squelch-gated is (de 991A) of elk kanaal vóór de eerste poll nooit gegate wordt.
 
 De FTX-1 **WIRES-X** EX-menu-velden zijn toegevoegd aan de EX-editor (§26).
@@ -2792,8 +2864,8 @@ het adres waarmee hij verbond. Geen van deze bereiken is routeerbaar.
 
 Na het aanmelden (wss) krijgt een kant een **grant**: het UDP-token en het UDP-adres
 van de relay. De relay bindt het token aan de eerste bron die hij ziet, dus alle
-datagrammen van één kant gaan uit één socket. Een nieuwe relaysessie - na een
-netwerkwissel, met een nieuw token - krijgt een nieuwe socket en meteen een
+datagrammen van één kant gaan uit één socket. Een nieuwe relaysessie (na een
+netwerkwissel, met een nieuw token) krijgt een nieuwe socket en meteen een
 keepalive.
 
 Zodra de relay UDP van een kant ziet, meldt hij het openbare adres dat hij ziet
@@ -2801,8 +2873,8 @@ Zodra de relay UDP van een kant ziet, meldt hij het openbare adres dat hij ziet
 0x38) en antwoordt de server met het adres waarvandaan hij prikte (`PunchReady`,
 0x39); beide sturen pakketten naar elkaar tot de rechtstreekse weg werkt. Daarna
 loopt dezelfde QUIC-verbinding rechtstreeks (**D+R**); valt die weg stil, dan gaat ze
-terug door de relay (**R**). Zijn beide openbare adressen gelijk - app en server achter
-dezelfde router - dan geeft de server binnen de verbinding ook zijn thuisadres door, en
+terug door de relay (**R**). Zijn beide openbare adressen gelijk (app en server achter
+dezelfde router) dan geeft de server binnen de verbinding ook zijn thuisadres door, en
 probeert de client dat op poort 4580 (**L+R**).
 
 Met **Rechtstreeks verbinden toestaan** uit (`allow_direct=false`, alleen met een
@@ -2827,9 +2899,9 @@ nieuwe netwerk er is (`networkAvailable`), en dan breekt de bibliotheek de lopen
 daarvan geen melding; het staat in het log.
 
 **Een andere versie aan de andere kant.** De peerberichten over wss (TLR2) dragen
-`proto=quic`. Ontbreekt dat - een programma van vóór 2.13 - dan zet de bibliotheek de
+`proto=quic`. Ontbreekt dat (een programma van vóór 2.13) dan zet de bibliotheek de
 relaystatus op `Error` met "The other side runs an older version of ThetisLink (before
-2.13) - update it to this version". Een peerbericht draagt geen clientnummer: met
+2.13): update it to this version". Een peerbericht draagt geen clientnummer: met
 clients van beide versies in één kamer volgt de melding van het station wie het laatst
 sprak.
 
@@ -2838,7 +2910,7 @@ sprak.
 `thetislink-relay` draait achter een TLS-proxy en levert:
 
 - de **forwarder** (`main.rs`): kamers, plekken, keepalive, byte-totalen per peer
-  die lock-vrij worden opgeteld en één keer bij verbreken worden weggeschreven —
+  die lock-vrij worden opgeteld en één keer bij verbreken worden weggeschreven,
   nooit een schrijfactie per frame;
 - een **stationsregister** in SQLite (`store.rs`): `stations`, `devices`, `admin`,
   `station_usage`. Stationssleutels worden gehasht; beheerderswachtwoorden met
@@ -2853,13 +2925,13 @@ peerberichten (TLR2) over wss.
 
 ---
 
-## 31. Chat and diagnosis postbox (v2.9.0)
+## 31. Chat en diagnosepostbus (v2.9.0)
 
-A second service beside the relay, in its own container, with its own database
-and its own route. The separation is a requirement and not a preference: a chat
-update must never stop the relay, which is carrying audio and PTT.
+Een tweede dienst naast de relay, in een eigen container, met een eigen database
+en een eigen route. De scheiding is een eis en geen voorkeur: een update van de chat
+mag de relay nooit stilleggen, want die draagt audio en PTT.
 
-### 31.1 Shape
+### 31.1 Opzet
 
 ```
 browser ─┐
@@ -2868,124 +2940,131 @@ client  ─┤               ├─ /admin* → thetislink-relay :18081 ─ stat
 server  ─┘               └─ /       → thetislink-relay :18080  (wss tunnel)
 ```
 
-The dependency points **chat → relay** and never the other way. The chat asks
-the relay to validate an administrator password or session; the relay knows
-nothing about the chat and needs no change to support it.
+De afhankelijkheid wijst **chat → relay** en nooit andersom. De chat vraagt de
+relay om een beheerderswachtwoord of sessie te valideren; de relay weet niets van
+de chat en hoeft er niets voor te veranderen.
 
-### 31.2 The ticket
+### 31.2 Het ticket
 
-The relay signs a short-lived ticket (HMAC-SHA256, 15 minutes, rotated at half
-life) and hands it to every registered peer on the `relay-ready` reply, next to
-the UDP token. The chat verifies the signature before anything in the payload
-steers a decision. No ticket means no chat — which is simply a relay with no
-chat behind it, and a normal state.
+De relay ondertekent een kortlevend ticket (HMAC-SHA256, 15 minuten, vernieuwd na
+de halve looptijd) en geeft het aan elke geregistreerde peer mee in het antwoord
+`relay-ready`, naast het UDP-token. De chat controleert de handtekening voordat iets
+in de payload een beslissing stuurt. Geen ticket betekent geen chat: dat is gewoon
+een relay zonder chat erachter, en een normale toestand.
 
-`THETISLINK_CHAT_KEYS` holds the signing keys, comma-separated; the first signs
-and all of them verify, so a key can be rotated without a flag day.
+`THETISLINK_CHAT_KEYS` bevat de ondertekensleutels, gescheiden door komma's; de eerste
+ondertekent en ze controleren allemaal, zodat een sleutel kan worden gewisseld zonder
+een vaste omschakeldag.
 
 ### 31.3 Endpoints
 
-| Method | Path | Who |
+| Methode | Pad | Wie |
 |---|---|---|
-| GET | `/chat/version` | anyone — the only endpoint without a ticket |
+| GET | `/chat/version` | iedereen: het enige endpoint zonder ticket |
 | GET | `/chat/state` | ticket |
 | POST | `/chat/consent`, `/chat/leave` | ticket |
 | GET | `/chat/messages?since=` | ticket |
 | POST | `/chat/message` | ticket + `chat:write` |
-| POST | `/chat/diagnosis` | ticket + `chat:write` + daily counter |
+| POST | `/chat/message/edit` | ticket + `chat:write`: een eigen bericht, binnen 15 minuten |
+| POST | `/chat/diagnosis` | ticket + `chat:write` + dagteller |
 | GET | `/chat/replies` | ticket |
-| GET | `/chat/admin`, `/chat/admin/api/*` | administrator |
-| GET/POST | `/chat/admin/diagnoses`, `/diagnosis`, `/release`, `/reply` | administrator |
+| POST | `/chat/reply/dismiss` | ticket, ook met een ban |
+| GET/POST | `/chat/admin`, `/chat/admin/api/*` | beheerder |
+| GET/POST | `/chat/admin/diagnoses`, `/diagnosis`, `/release`, `/reply` | beheerder |
+| GET/POST | `/chat/admin/bans`, `/ban`, `/unban`, `/recent`, `/housekeeping`, `/prune-preview` | beheerder |
 
-A report requires **no consent**: joining the chat means agreeing to a name
-others see, while a report is a private line to the administrator. Demanding the
-first for the second would force a public identity for a private message.
+Een melding vraagt **geen toestemming**: meedoen aan de chat betekent instemmen met
+een naam die anderen zien, terwijl een melding een privélijn naar de beheerder is.
+Het eerste eisen voor het tweede zou een publieke identiteit afdwingen voor een
+privébericht.
 
-### 31.4 The administrator side
+### 31.4 De beheerderskant
 
-Two ways in, and they are for different callers. A **bearer token**
-(`THETISLINK_CHAT_ADMIN_TOKEN`) for `scripts/postbox.sh`, and a **session
-cookie** for the page at `/chat/admin`. The page trades a password once for a
-cookie (HttpOnly, Secure, SameSite=Strict, `Path=/chat/admin`, 30-minute sliding
-idle) plus a CSRF token required on anything that changes something. A bearer
-token needs no CSRF: a browser never attaches one by itself.
+Twee ingangen, en die zijn voor verschillende aanroepers. Een **bearer token**
+(`THETISLINK_CHAT_ADMIN_TOKEN`) voor een commandoregelclient, en een **sessiecookie**
+voor de pagina op `/chat/admin`. De pagina ruilt eenmaal een wachtwoord in voor een
+cookie (HttpOnly, Secure, SameSite=Strict, `Path=/chat/admin`, 30 minuten glijdende
+inactiviteit) plus een CSRF-token dat nodig is bij alles wat iets verandert. Een bearer
+token heeft geen CSRF nodig: een browser voegt er nooit uit zichzelf een toe.
 
-The password it accepts is the **relay's** administrator password — one person
-runs both services, so there is one thing to remember. The chat forwards what
-was typed to the relay's own login and believes the answer; it stores neither
-the password nor the hash. A relay that cannot be reached answers 503 and does
-**not** count as a failed attempt — it says nothing about the password — while
-unverifiable attempts have a counter of their own so the token cannot be guessed
-freely during an outage.
+Het wachtwoord dat de pagina accepteert is het beheerderswachtwoord van de **relay**:
+één persoon beheert beide diensten, dus er is één ding om te onthouden. De chat stuurt
+wat er getypt is door naar de eigen login van de relay en gelooft het antwoord; hij
+bewaart het wachtwoord niet en de hash ook niet. Een relay die niet bereikbaar is geeft
+503 en telt **niet** als mislukte poging (het zegt niets over het wachtwoord), terwijl
+niet te controleren pogingen een eigen teller hebben, zodat het token tijdens een
+storing niet vrij te raden is.
 
-The page carries a `Content-Security-Policy` with a per-response nonce on its two
-inline blocks, plus `nosniff` and `no-referrer`. It displays somebody else's log,
-which is the one thing on it that comes from outside.
+De pagina draagt een `Content-Security-Policy` met een nonce per antwoord op zijn twee
+inline blokken, plus `nosniff` en `no-referrer`. Hij toont de log van iemand anders, en
+dat is het enige op de pagina dat van buiten komt.
 
-### 31.5 Limits
+### 31.5 Grenzen
 
 | | |
 |---|---|
-| message | 2000 characters — keeps log fragments out of a shared room |
-| retention | 90 days, or sooner at 200 000 messages |
-| report | 512 kB, 15 per station per day |
-| postbox | 20 MB total, uncollected reports expire after 30 days |
-| request | 1 MB at Caddy, 1 MB in the reader |
+| bericht | 2000 tekens: houdt logfragmenten buiten een gedeelde ruimte |
+| bewaartermijn | 90 dagen, of eerder bij 200 000 berichten |
+| melding | 4 MB, 100 per station per dag |
+| postbus | 200 MB totaal, niet opgehaalde meldingen vervallen na 30 dagen |
+| verzoek | 8 MB bij Caddy, 8 MB in de lezer |
 
-The reader's limit must stay above the report limit, and a test says so: at
-64 kB it did not, and a report longer than that was silently trimmed and then
-refused as malformed JSON.
+De grens van de lezer moet boven de meldingsgrens blijven, en een toets zegt dat: bij
+64 kB was dat niet zo, en een melding die langer was werd stil ingekort en daarna
+geweigerd als ongeldige JSON.
 
-### 31.6 Redaction
+### 31.6 Redactie
 
-Two mechanisms, and the difference is the design:
+Twee mechanismen, en het verschil is het ontwerp:
 
-- **the log gets a denylist** — relay host, IP addresses, e-mail addresses, user
-  names in paths, anything key-shaped. Nobody can enumerate what a log line
-  contains, so patterns are all there is. Loopback is deliberately kept:
-  `127.0.0.1` is not a person and says something useful.
-- **the settings get an allowlist**, by family, with an absolute veto on any name
-  containing `password`, `secret`, `token`, `key`, `url`, `instance`,
-  `credential` or `auth`. The veto is checked first and wins: every sensitive key
-  in both config files matches a safe family on its prefix, so without it the
-  families would have shipped the lot.
+- **de log krijgt een denylist**: relayhost, IP-adressen, e-mailadressen, gebruikersnamen
+  in paden, alles wat op een sleutel lijkt. Niemand kan opsommen wat een logregel bevat,
+  dus patronen zijn het enige wat er is. Loopback blijft bewust staan: `127.0.0.1` is
+  geen persoon en zegt iets nuttigs.
+- **de instellingen krijgen een allowlist**, per familie, met een absoluut veto op elke
+  naam die `password`, `secret`, `token`, `key`, `url`, `instance`, `credential` of
+  `auth` bevat. Het veto wordt eerst gecontroleerd en wint: elke gevoelige sleutel in
+  beide configuratiebestanden past met zijn voorvoegsel op een veilige familie, dus
+  zonder veto hadden de families alles meegestuurd.
 
-Everything fails closed. If the relay host cannot be worked out, nothing is
-built. Callsigns are deliberately **not** stripped: they may be somebody's chosen
-name and they are often what makes a report readable.
+Alles faalt dicht. Als de relayhost niet te bepalen is, wordt er niets gebouwd.
+Roepnamen worden bewust **niet** verwijderd: ze kunnen iemands zelfgekozen naam zijn,
+en ze maken een melding vaak pas leesbaar.
 
-### 31.7 Fetching the server's log from a client (packet 0x35/0x36)
+### 31.7 De log van de server ophalen vanaf een client (pakket 0x35/0x36)
 
-`ServerReportRequest` (0x35, client → server, header only) asks the connected
-server for its own attachment. The server builds and cleans it with the same
-code the client uses on its own files, then answers with `ServerReportPart`
-(0x36):
+`ServerReportRequest` (0x35, client → server, alleen header) vraagt de verbonden server
+om zijn eigen bijlage. De server bouwt en schoont die op met dezelfde code die de client
+voor zijn eigen bestanden gebruikt, en antwoordt dan met `ServerReportPart` (0x36):
 
 ```
 header(4) | part u16 | parts u16 | len u16 | bytes
 ```
 
-1100 bytes per part, with a short pause every sixteen. Nothing is acknowledged
-and nothing is retransmitted; the numbering is what lets a client tell a
-complete transfer from a lossy one and say "163 of 171 parts" instead of
-attaching a shorter log that looks whole. A transfer that stalls times out after
-20 seconds.
+1100 bytes per deel, met een korte pauze na elke zestien. Er wordt niets bevestigd en
+niets opnieuw verzonden; dankzij de nummering kan een client een volledige overdracht
+onderscheiden van een met verlies, en "163 van 171 delen" zeggen in plaats van een
+kortere log bij te voegen die er compleet uitziet. Een overdracht die stokt, verloopt
+na 20 seconden.
 
-Only an authenticated client can ask — everything else is dropped at the auth
-gate well before this — and that is the intended bar: somebody who can key the
-transmitter can read the log about it.
+Alleen een geauthenticeerde client kan het vragen (al het andere wordt ruim daarvoor
+bij de auth-poort weggegooid), en dat is de bedoelde drempel: wie de zender kan
+laten zenden, mag de log erover lezen.
 
-### 31.8 Deployment
+### 31.8 Uitrol
 
 ```
 docker compose up -d --build thetislink-chat
 docker builder prune -f
 ```
 
-Only that container is touched. The second line is not tidiness: seven days of
-relay builds once left 2.84 GB of build cache, and a full disk means Caddy
-cannot renew a certificate — a relay taken down by a chat update, which is the
-one thing the separation exists to prevent.
+Alleen die container wordt aangeraakt. De tweede regel is geen netheid: zeven dagen
+relaybuilds lieten ooit 2,84 GB buildcache achter, en een volle schijf betekent dat
+Caddy geen certificaat kan vernieuwen: een relay die door een chatupdate plat gaat,
+en dat is precies wat de scheiding moet voorkomen.
+
+De chat staat achter het compose-profiel `chat`: de dienst bij naam noemen, zoals hier, start hem; een kale
+`docker compose up` start hem alleen met `COMPOSE_PROFILES=chat` in `.env`.
 
 ---
 
@@ -3002,7 +3081,7 @@ one thing the separation exists to prevent.
 5. **FTX-1 CTCSS/DCS schrijven:** de toon van een geheugenkanaal kan bij een FTX-1
    **niet over CAT worden opgeslagen**, en dat staat zwart op wit: het `MW`-commando
    heeft wel een veld voor de toon-**modus** (P8) maar geen veld voor het
-   toon-**nummer** — P9 is `00: (Fixed)` in de FTX-1 CAT-handleiding — en `MW` is
+   toon-**nummer** (P9 is `00: (Fixed)` in de FTX-1 CAT-handleiding) en `MW` is
    set-only, dus teruglezen kan ook niet. Een geheugen schrijven zet daarmee de
    **toon van dat kanaal in de radio terug op 100,0 Hz**, zonder CAT-commando om die
    te herstellen. Alle andere routes zijn gemeten en dicht: een toon die je vóór het
@@ -3017,14 +3096,14 @@ one thing the separation exists to prevent.
    verbonden is**. De radio zelf zendt uit wat er is opgeslagen, en dat is na een
    schrijfactie 100,0 Hz. Omdat een schrijfactie die tonen kost, staat het schrijven
    naar de FTX-1 **standaard uit**. *Write radio* geeft de lijst dan nog steeds aan de
-   server - de tonen erin worden per kanaal gezet en werken dus - maar er gaat niets de
+   server (de tonen erin worden per kanaal gezet en werken dus) maar er gaat niets de
    radio in; wat je daarmee opgeeft is dat een gewijzigde frequentie of naam in de lijst
    van de server staat en niet in de set. Pas als de voorwaarde in de serverinstellingen
    is geaccepteerd (Yaesu → *Schrijven van FTX-1-geheugenkanalen toestaan*) wordt de
    radio zelf geschreven. Lezen is nooit gepoort. De FT-991A slaat tonen
    wel gewoon op en heeft hier geen last van.
 
-6. **Een geheugenkanaal wissen:** kan bij geen van beide radio's over CAT - er bestaat
+6. **Een geheugenkanaal wissen:** kan bij geen van beide radio's over CAT: er bestaat
    geen commando voor. Schrijven kan wel, leegmaken niet, dus een ongewenst kanaal
    wis je op de set zelf. Een rij verwijderen in de clienttabel haalt hem alleen uit
    de lijst; in de radio blijft het kanaal staan.

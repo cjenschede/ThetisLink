@@ -3,7 +3,7 @@
 # is being built). Platform-specific crates that don't apply on the host
 # target are omitted (e.g., Linux-only `alsa-sys`, Android-only
 # `android-*`). The full cross-platform inventory is captured in
-# `compliance/sbom.spdx.json` instead — THIRD-PARTY-LICENSES.html is the
+# `compliance/sbom.spdx.json` instead; THIRD-PARTY-LICENSES.html is the
 # per-host license-text bundle, the SBOM is the full crate inventory.
 #
 # cargo-about v0.8.4 caveat: the default `--threshold 0.8` lets the
@@ -18,7 +18,7 @@
 #
 # Mitigation: regenerate with `--threshold 1.0` so cargo-about only
 # trusts exact license-text matches and drops the noisy file scans.
-# This is what RELEASE.md should reference for compliance regen:
+# The compliance regeneration:
 #   cargo about generate about.hbs -o compliance/THIRD-PARTY-LICENSES.html --threshold 1.0
 # Output is the per-host license-text bundle; the SBOM (regen via
 # `cargo sbom > compliance/sbom.spdx.json`) is the full crate inventory.
@@ -53,12 +53,11 @@ accepted = [
 # "(MIT OR Apache-2.0) AND OFL-1.1 AND LicenseRef-UFL-1.0".
 # UFL-1.0 (Ubuntu Font License) has no standard SPDX identifier and
 # cargo-about cannot resolve it. We clarify the license expression here
-# down to its SPDX-standard components. The UFL.txt file that ships
-# inside the crate's `fonts/` directory remains physically present in
-# the dependency's distribution (it is bundled with the font binary
-# asset), so the UFL license text reaches end-users through the normal
-# crate packaging channel even though it does not appear in our
-# generated THIRD-PARTY-LICENSES.html.
+# down to its SPDX-standard components. The UFL-1.0 text, and those of the
+# two other fonts in this crate that the generated THIRD-PARTY-LICENSES.html
+# does not carry (Hack, emoji-icon-font), travel in the release package from
+# compliance/licenses/ (NOTICE.md). They do not reach a user through the
+# crate: a program carries the font, not the crate's files.
 [epaint_default_fonts.clarify]
 license = "(MIT OR Apache-2.0) AND OFL-1.1"
 override-git-commit = "0.29.1"
@@ -72,7 +71,7 @@ checksum = "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
 # with the bare `GPL-3.0` identifier that SPDX has deprecated in favour of
 # `GPL-3.0-only` or `GPL-3.0-or-later`). cargo-about can't parse this in
 # 0.8.4+. We're pulling unescaper transitively via `serialport`; we choose
-# the MIT branch of the dual-licence — MIT is compatible with our
+# the MIT branch of the dual-licence; MIT is compatible with our
 # `GPL-2.0-or-later` distribution and avoids the GPL-3 propagation
 # question entirely.
 [unescaper.clarify]

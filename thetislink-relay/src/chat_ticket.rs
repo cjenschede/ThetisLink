@@ -3,17 +3,16 @@
 //! Signing the ticket the chat service verifies.
 //!
 //! This is the relay's entire involvement with the chat, and it is deliberately
-//! the only one. The relay already knows who is connecting — it authenticated
-//! them against the station registry — so it says so in a signed line and hands
+//! the only one. The relay already knows who is connecting; it authenticated
+//! them against the station registry; so it says so in a signed line and hands
 //! it over. The chat checks the signature and believes it.
 //!
 //! What that buys is the thing the whole design turns on: the two processes
 //! never call each other. The relay never waits on the chat, and the chat can
-//! admit somebody while the relay is unreachable. See
-//! `docs/internal/DESIGN-relay-chat.md` §2.3 and §3.
+//! admit somebody while the relay is unreachable.
 //!
 //! Note what this does NOT decide: the name a user appears under in the chat.
-//! That is the user's own choice at the consent screen (§6.1), stored on the
+//! That is the user's own choice at the consent screen, stored on the
 //! chat side. The label here is what the relay happens to know, no more.
 
 use hmac::{Hmac, Mac};
@@ -23,7 +22,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// How long a ticket is good for.
 ///
-/// Short on purpose (design §3.2): a stolen one is then worth minutes, and the
+/// Short on purpose: a stolen one is then worth minutes, and the
 /// chat can refuse it without asking the relay anything. Refreshed over the
 /// connection that is already authenticated, so nothing extra has to be secured.
 pub const TICKET_TTL_SECS: u64 = 900;
@@ -53,7 +52,7 @@ pub fn issue(key: &[u8], station_id: i64, label: &str, jti: &str, now: u64) -> S
 ///
 /// Only the first of a comma-separated list is used for signing: during a
 /// rotation the chat accepts both, so the relay can move to the new one on its
-/// own schedule without a restart anywhere (§3.3).
+/// own schedule without a restart anywhere.
 pub fn signing_key_from_env() -> Option<Vec<u8>> {
     std::env::var("THETISLINK_CHAT_KEYS")
         .ok()

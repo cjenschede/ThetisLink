@@ -32,9 +32,9 @@ impl BoardInfo {
     /// Falls back to "(no serial)" when the board has no serial set yet.
     pub fn label(&self) -> String {
         if self.serial_number.is_empty() {
-            format!("(no serial) - {}", self.product_string)
+            format!("(no serial): {}", self.product_string)
         } else {
-            format!("{}  -  {}", self.serial_number, self.product_string)
+            format!("{} ({})", self.serial_number, self.product_string)
         }
     }
 
@@ -52,8 +52,7 @@ pub enum BoardKind {
     /// Board programmed for tuner control (`tun_*` prefix).
     Tuner,
     /// Board programmed for rotor control (`rot_*` prefix).
-    /// Runtime support arrives in phase 4 - the wizard already accepts
-    /// the choice but Add is blocked in v2.0.5.
+    /// Driven at runtime by `mcp2221_yaesu_rotor`.
     Rotor,
     /// No `tun_`/`rot_` prefix found. A fresh-from-factory
     /// Adafruit board or a board whose serial was set manually

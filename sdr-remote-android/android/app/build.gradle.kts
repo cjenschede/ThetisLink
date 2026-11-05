@@ -14,8 +14,8 @@ android {
         applicationId = "com.sdrremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 87
-        versionName = "2.13.0"
+        versionCode = 88
+        versionName = "2.13.1"
 
         // ThetisLink is a 64-bit ARM app, and this line is what makes Android
         // say so at install time instead of at the first tap.
@@ -92,7 +92,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.compose.ui:ui-tooling-preview")
 
     // AndroidX
     implementation("androidx.activity:activity-compose:1.8.2")
@@ -103,5 +102,8 @@ dependencies {
     // uniffi JNA runtime
     implementation("net.java.dev.jna:jna:5.13.0@aar")
 
-    debugImplementation("androidx.compose.ui:ui-tooling")
+    // No ui-tooling, nor its preview annotations: they are for the IDE's
+    // previews, which the app has none of, and the tooling's manifest put an
+    // exported PreviewActivity in the APK that is shipped (the release is the
+    // debug build).
 }

@@ -44,7 +44,7 @@ impl ServerApp {
         ) {
             Ok(credentials) => credentials,
             Err(why) => {
-                log::error!("Not started: {why} - set it in the settings screen");
+                log::error!("Not started: {why}; set it in the settings screen");
                 return;
             }
         };
@@ -75,6 +75,7 @@ impl ServerApp {
             yaesu2_model_last: self.probe_model[1],
             yaesu_audio_channel: self.audio_channel[0],
             yaesu2_audio_channel: self.audio_channel[1],
+            yaesu_rx_levels_tuned: self.yaesu_rx_levels_tuned,
             // From disk, like yaesu2_baud seven lines below - NOT a literal.
             // Save & Start rebuilds this whole config from the screen and then
             // writes it (config::save below), and the baud of slot 0 is not on
@@ -175,8 +176,8 @@ impl ServerApp {
             password: Some(password),
             // The key is kept whether 2FA is on or not: one generated and
             // scanned before the box was ticked was otherwise gone after a
-            // save, and the screen made a new one at the next start (review
-            // 129). The server only uses it with 2FA on (`start_credentials`).
+            // save, and the screen made a new one at the next start.
+            // The server only uses it with 2FA on (`start_credentials`).
             totp_secret: totp_secret.or_else(|| Some(self.totp_secret.clone()).filter(|k| !k.is_empty())),
             totp_enabled: self.totp_enabled,
             friendly_name: if self.friendly_name.trim().is_empty() {
@@ -232,7 +233,7 @@ impl ServerApp {
                     }
                     None => {
                         log::warn!(
-                            "[radio0] slot 0: nothing answered on {} - ASSUMING an FT-991A dialect",
+                            "[radio0] slot 0: nothing answered on {}; ASSUMING an FT-991A dialect",
                             port
                         );
                         (crate::yaesu::RadioModel::Ft991a, baud)
@@ -262,7 +263,7 @@ impl ServerApp {
                     // for the session, and a client will show no radio there
                     // however well the port behaves afterwards.
                     log::warn!(
-                        "Yaesu slot 0 on {} was not created: {} - this radio will not appear until the server is restarted",
+                        "Yaesu slot 0 on {} was not created: {}; this radio will not appear until the server is restarted",
                         port_log, e
                     );
                 }
@@ -352,7 +353,7 @@ impl ServerApp {
         }
 
         // Create Rotor if configured - backend choice: EA7HG, PstRotator
-        // or Adafruit MCP2221A (PATCH-yaesu-rotor-mcp2221).
+        // or Adafruit MCP2221A.
         // The RotorInstance for mcp2221_yaesu is temporarily held in
         // `pending_yaesu_rotor` so that we can publish it in rotor_slot
         // after creating status_panel_state (further down in this fn).
@@ -423,7 +424,7 @@ impl ServerApp {
                             );
                         } else {
                             log::warn!(
-                                "mcp2221_yaesu backend selected but config.rotors[0] is empty or disabled - use the wizard to claim a rot_<name> board"
+                                "mcp2221_yaesu backend selected but config.rotors[0] is empty or disabled: use the wizard to claim a rot_<name> board"
                             );
                         }
                     } else {
@@ -461,7 +462,7 @@ impl ServerApp {
         let ultrabeam_for_net = self.ultrabeam.clone();
         let rotor_for_net = self.rotor.clone();
         let yaesu_for_net = self.yaesu.clone();
-        // PATCH-2: build the Status-panel state bundle and keep a clone for the UI.
+        // Build the Status-panel state bundle and keep a clone for the UI.
         let status_panel_state = crate::audio_stats::StatusPanelShared::new();
         self.status_panel_state = Some(status_panel_state.clone());
         // Publish any Adafruit-rotor instance in the status-panel

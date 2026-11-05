@@ -4,8 +4,8 @@
 //
 // Thetis's chain logs prefill->TRX, the tail and "RX audio back N ms after TRX
 // off" per transmission; a Yaesu logged only "Yaesu PTT: TX/RX", so the two
-// could not be compared (owner, 2026-10-10: "yaesu 1 991a, yaesu 2 ftx1 en
-// thetis naast elkaar"). One of these per radio, kept in its `YaesuState`; the
+// could not be compared (2026-10-10: Yaesu 1 a 991A, Yaesu 2 an FTX-1 and
+// Thetis, side by side). One of these per radio, kept in its `YaesuState`; the
 // PTT request, the CAT write, the transmit audio and the receive audio each
 // report to it. Measuring only: nothing here changes what the chain does.
 
@@ -92,11 +92,14 @@ impl OutputGaps {
 /// (`HOLD_MAX_MS`), about Thetis's own queue.
 pub const LEAD_MAX_MS: u64 = HOLD_MAX_MS;
 
-/// The lead every over gets (build 294; owner, 2026-10-23): 80 ms, no longer a
-/// setting. Measured with the alternating lead of 278: on the evening of
-/// 2026-10-23 the overs at 80 ms played without silence, those at 0 ms had
-/// 10-30 ms each, with no gap on the network.
-pub const LEAD_MS: u64 = 80;
+/// The lead every over gets, no longer a setting. 80 ms from build 294
+/// (2026-10-23): measured with the alternating lead of 278, the overs at 80 ms
+/// played without silence, those at 0 ms had 10-30 ms each. 120 ms from 2.13.1
+/// build 15, after the drives of 21-27 October: at 80 ms a
+/// network gap of 123 ms still left 20 ms of silence and gaps of 147-151 ms left
+/// 30-60 ms, and in the replay a fixed 100-120 ms did about what every adaptive
+/// rule did. The cost is 40 ms more transmit delay on every Yaesu over.
+pub const LEAD_MS: u64 = 120;
 
 /// The lead target of over `over` (build 278): the setting, or 0 for every
 /// even over when it alternates - both settings over the same road.
@@ -152,7 +155,7 @@ impl GapWatch {
         }
         if !keyed {
             // A keying that ends ends what waited, and the next keying starts
-            // like an over: its silence before audio is a start (round 263).
+            // like an over: its silence before audio is a start.
             self.pending = 0;
             self.heard = false;
             return None;
@@ -231,8 +234,8 @@ pub fn output_line(label: &str, padded_ms: u64, gaps: u64, s: &OverSummary) -> S
 
 /// The longest transmit audio held back waiting for `TX1;`: about what
 /// Thetis has ready when it starts (40-100 ms), so a slow radio does not carry
-/// a long delay through the whole transmission (build 165, owner's choice A;
-/// review of 164: at 500 ms a DATA-FM start could carry half a second).
+/// a long delay through the whole transmission (build 165;
+/// at 500 ms a DATA-FM start could carry half a second).
 pub const HOLD_MAX_MS: u64 = 150;
 /// What an operator's release waits at least for the transmit audio to play
 /// out before `TX0;` (build 164); the floor of `tail_limit` since build 168,
@@ -241,8 +244,8 @@ pub const TAIL_MAX_MS: u64 = 250;
 /// After the ring is empty: the sound card's own buffer still holds some.
 pub const TAIL_MARGIN_MS: u64 = 30;
 /// Beyond what was ready at the release, the room the wait gives itself
-/// (build 168, owner's choice A: what the buffer held is played out, as
-/// Thetis does, instead of cut at 250 ms - `veldproef-build167.md`).
+/// (build 168: what the buffer held is played out, as
+/// Thetis does, instead of cut at 250 ms - field test of build 167).
 pub const TAIL_EXTRA_MS: u64 = 100;
 /// The release never waits longer than this, whatever was ready: the
 /// transmitter goes off within a second of the operator letting go.
@@ -273,15 +276,15 @@ pub struct Tail {
 }
 
 /// What the line after the margin says, if anything: whether the release
-/// waited for what it found, or was past its bound (build 169; review of 168:
+/// waited for what it found, or was past its bound (build 169:
 /// the two could be swapped unseen).
 pub fn after_margin(tail: &Tail) -> Option<&'static str> {
     (tail.late > 0).then_some(if tail.again { "waited again" } else { "past the bound, TX0 anyway" })
 }
 
 /// `wait_for_tail` on the real clock and the real sleep - the one place the
-/// poll thread's wait gets them, so it cannot pass another (build 166; review
-/// of 165: the clock `poll.rs` passed was untested).
+/// poll thread's wait gets them, so it cannot pass another (build 166; before
+/// that, the clock `poll.rs` passed was untested).
 pub fn wait_for_tail_now(queued_ms: impl FnMut() -> u64) -> Tail {
     let started = std::time::Instant::now();
     wait_for_tail(
@@ -295,7 +298,7 @@ pub fn wait_for_tail_now(queued_ms: impl FnMut() -> u64) -> Tail {
 /// `tail_limit` has passed, then `TAIL_MARGIN_MS` for the sound card's own
 /// buffer if there was anything to play. `now_ms` and `pause` are the clock
 /// and the sleep, so a test can run it on a ring that never empties (build
-/// 165; review of 164: the whole bound of the tail hung on code no test ran).
+/// 165: the whole bound of the tail hung on code no test ran).
 /// Returns how long it waited and what was queued at the start.
 pub fn wait_for_tail(
     mut queued_ms: impl FnMut() -> u64,
@@ -306,7 +309,7 @@ pub fn wait_for_tail(
     let first = queued_ms();
     // The bound follows the most that was ever ready, not only the first
     // reading: frames handed between threads can arrive after a first
-    // reading of 0 (build 169; review of 168, a reviewer's probe).
+    // reading of 0 (found with a probe on build 168).
     let mut limit = tail_limit(first);
     let mut most = first;
     fn until_empty(started: u64, limit: &mut u64, most: &mut u64, queued_ms: &mut impl FnMut() -> u64, now_ms: &mut impl FnMut() -> u64, pause: &mut impl FnMut(u64)) {
@@ -328,7 +331,7 @@ pub fn wait_for_tail(
         pause(TAIL_MARGIN_MS);
     }
     // One more look: the last frames can be on their way between the decode
-    // task and the bridge's ring when the counts read empty (review of 166).
+    // task and the bridge's ring when the counts read empty.
     // Past the bound it goes anyway, as for a ring that never empties.
     let late = queued_ms();
     let again = late > 0 && now_ms().saturating_sub(started) < limit;
@@ -341,7 +344,7 @@ pub fn wait_for_tail(
 
 /// Transmit audio that came before the radio transmits, held back until it
 /// does - as Thetis's transmit ring holds it until Thetis asks (build 164;
-/// `veldproef-build163.md`: on the 991A ~50 ms of the start went into a radio
+/// field test of build 163: on the 991A ~50 ms of the start went into a radio
 /// still receiving). One per radio, in the bridge to the sound card.
 #[derive(Debug, Default)]
 pub struct Hold {
@@ -394,7 +397,7 @@ impl Hold {
 
 /// Samples of one transmission that did not reach the sound card, reported
 /// once when the next transmission begins - the same rhythm as `Hold`'s
-/// report (build 185; review of 184).
+/// report.
 #[derive(Debug, Default)]
 pub struct OverTally {
     over: u64,
@@ -420,7 +423,7 @@ impl OverTally {
 
 impl TxTiming {
     /// A radio's timing, with the lead every over gets (`LEAD_MS`) from the
-    /// start: the one place the number is set (review of 294).
+    /// start: the one place the number is set.
     pub fn new(slot: u8) -> Self {
         let (label, prefix) = if slot == 0 { ("Radio 1", "Radio 1 ") } else { ("Radio 2", "Radio 2 ") };
         let timing = Self { label, rx_back: RxBackWatch::for_radio(prefix), ..Default::default() };
@@ -473,7 +476,6 @@ impl TxTiming {
         let ms = ms.min(LEAD_MAX_MS);
         self.lead_setting_ms.store(ms, Ordering::Relaxed);
         self.lead_alternate.store(alternate, Ordering::Relaxed);
-        // Named in advance (working rule 11, build 278).
         dev_info!(
             "{} TX lead target: {} ms (every other over: {})",
             self.label,
@@ -498,7 +500,7 @@ impl TxTiming {
 
     /// A new session of the poll loop: a release that was asked for but never
     /// written (the port went away) is forgotten, so the safety release that
-    /// follows goes at once (build 165; review of 164).
+    /// follows goes at once.
     pub fn forget_release(&self) {
         self.released_at.store(0, Ordering::Relaxed);
         // Nothing transmits after a new session either: the next "on" is a new over.
@@ -513,8 +515,7 @@ impl TxTiming {
     /// The release waited for the transmit audio to play out.
     pub fn tail_waited(&self, tail: Tail) {
         if let Some(what) = after_margin(&tail) {
-            // Named in advance (working rule 11, builds 167 and 168).
-            dev_info!("{} PTT metrics: TX0 found {} ms more TX audio after the margin - {}", self.label, tail.late, what);
+            dev_info!("{} PTT metrics: TX0 found {} ms more TX audio after the margin; {}", self.label, tail.late, what);
         }
         dev_info!("{} PTT metrics: TX0 waited {} ms for {} ms of TX audio to play out", self.label, tail.waited, tail.first);
     }
@@ -529,11 +530,10 @@ impl TxTiming {
             // A second "on" with no "off" and no TX0 since the first - a resend,
             // or a press again during the roger beep - is the same transmission:
             // a new over would empty the buffer, put the lead's zeros in the
-            // middle of the speech and flip "every other over" (review of 278).
+            // middle of the speech and flip "every other over".
             // The radio is keyed as before; only the count stays.
             if self.pressed.swap(true, Ordering::Relaxed) {
-                // Named in advance (working rule 11, build 279).
-                info!("{} PTT: on again while still pressed - the same transmission, no new over", self.label);
+                info!("{} PTT: on again while still pressed; the same transmission, no new over", self.label);
                 return;
             }
             self.requested_at.store(now, Ordering::Relaxed);
@@ -561,7 +561,6 @@ impl TxTiming {
             return None;
         }
         let ms = now.saturating_sub(from);
-        // Named in advance (working rule 11, build 163).
         dev_info!("{} PTT metrics: first TX audio {} ms after the request", self.label, ms);
         Some(ms)
     }
@@ -611,7 +610,7 @@ impl TxTiming {
 /// The ms of transmit audio standing in a radio's output ring: two items per
 /// frame (the bridge writes mono to both channels), at the rate the output
 /// stream runs - which is the ring's capacity over two, since the ring is made
-/// as `sample_rate * 2` (build 164; review of 163: 48 kHz was assumed).
+/// as `sample_rate * 2` (48 kHz was assumed).
 pub fn queued_ms(items: usize, capacity: usize) -> u64 {
     let rate = (capacity / 2).max(1) as u64;
     (items / 2) as u64 * 1000 / rate
@@ -645,7 +644,7 @@ mod tests {
     }
 
     /// The labels, and the RX-back watch the writes drive: TX0 starts it, TX1
-    /// stops it (build 164; review of 163: neither was tested).
+    /// stops it (neither was tested).
     #[test]
     fn each_radio_has_its_name_and_its_rx_back_follows_the_writes() {
         assert_eq!(TxTiming::new(0).label(), "Radio 1");
@@ -668,7 +667,7 @@ mod tests {
     #[test]
     fn the_sound_card_counts_silence_between_audio_only() {
         let mut w = GapWatch::default();
-        let mut feed = |w: &mut GapWatch, audio: bool, keyed: bool, over: u64, n: usize| {
+        let feed = |w: &mut GapWatch, audio: bool, keyed: bool, over: u64, n: usize| {
             (0..n).filter_map(|_| w.sample(audio, keyed, over)).collect::<Vec<_>>()
         };
         assert!(feed(&mut w, false, true, 1, 50).is_empty(), "the start of an over is not a gap");
@@ -687,7 +686,7 @@ mod tests {
         assert!(feed(&mut w, false, false, 2, 5).is_empty());
         assert!(feed(&mut w, true, true, 2, 1).is_empty(), "the tail before the unkeying is forgotten");
         // Keyed again within the over: the silence before its first audio is a
-        // start, not a gap (round 263: a probe gave 30).
+        // start, not a gap (a probe gave 30).
         assert!(feed(&mut w, false, false, 2, 20).is_empty());
         assert!(feed(&mut w, false, true, 2, 30).is_empty());
         assert!(feed(&mut w, true, true, 2, 1).is_empty(), "a new keying starts like an over");
@@ -700,7 +699,7 @@ mod tests {
     }
 
     /// A second "on" before any "off" or TX0 is the same transmission (build
-    /// 279; review of 278): no new over, no new lead, no new timing. An "off",
+    /// 279): no new over, no new lead, no new timing. An "off",
     /// a TX0 written by anyone (the 2 s clock of build 265, a watchdog), or a
     /// new session of the poll loop ends it, and the next "on" is a new over.
     #[test]
@@ -762,7 +761,7 @@ mod tests {
     /// The lead (build 278): every over takes the setting at its request,
     /// every even over 0 when it alternates; the bridge pads the first block
     /// of an over only, and only to the target; the task sees no ring before
-    /// TX1. At target 0 nothing is padded (both settings, working rule 13).
+    /// TX1. At target 0 nothing is padded (both settings).
     #[test]
     fn the_lead_is_fixed_per_over_and_padded_once() {
         assert_eq!((lead_for_over(80, false, 1), lead_for_over(80, false, 2)), (80, 80));
@@ -820,7 +819,7 @@ mod tests {
         assert_eq!(audio.matches("gaps.set_ring_ms(super::tx_timing::queued_ms(consumer.occupied_len(), consumer.capacity().get()));").count(), 1);
         assert_eq!(bridge.matches("let pad = lead_start.pad(timing.over(), (timing.lead_ms() * tx_rate as u64 / 1000) as usize, samples.len());").count(), 1);
         // And the zeros are pushed, under the same lock, before the block
-        // (review of 278: without it the pad could be computed and dropped).
+        // (without it the pad could be computed and dropped).
         assert_eq!(bridge.matches("for _ in 0..pad {\n                                    let _ = prod.try_push(0.0);\n                                    let _ = prod.try_push(0.0);\n                                }\n                                for &s in &samples {").count(), 1);
         let task = include_str!("../tx_recover.rs");
         let task = &task[..task.find("#[cfg(test)]").unwrap()];
@@ -835,17 +834,18 @@ mod tests {
         assert_eq!(own.matches(".set_lead(").count(), 1);
     }
 
-    /// Every radio's timing starts with 80 ms and gives it to every over, not
-    /// every other one (build 294, owner, 2026-10-23; the value is pinned here
-    /// since the review of 294 found `LEAD_MS = 0` stayed green).
+    /// Every radio's timing starts with 120 ms and gives it to every over, not
+    /// every other one (80 ms from build 294, 2026-10-23; 120 ms from 2.13.1
+    /// build 15, 2026-10-29). The value is pinned here since a probe on build
+    /// 294 showed `LEAD_MS = 0` stayed green.
     #[test]
-    fn every_radio_starts_with_the_80_ms_lead() {
+    fn every_radio_starts_with_the_120_ms_lead() {
         for slot in [0, 1] {
             let t = TxTiming::new(slot);
-            assert_eq!(t.lead_setting(), (80, false));
+            assert_eq!(t.lead_setting(), (120, false));
             for _ in 0..2 {
                 t.request(true);
-                assert_eq!(t.lead_ms(), 80, "every over");
+                assert_eq!(t.lead_ms(), 120, "every over");
                 t.request(false);
                 t.forget_release();
             }
@@ -867,7 +867,7 @@ mod tests {
 
     /// What the hold throws away - beyond its limit while not keyed, and what
     /// still waited when the next over began - is reported once, for the
-    /// over it belonged to (build 184; review of 183).
+    /// over it belonged to.
     #[test]
     fn the_hold_reports_what_it_threw_away_once() {
         let mut h = Hold::default();
@@ -955,7 +955,7 @@ mod tests {
 
     /// Frames that land in the ring during the margin - handed over between
     /// two threads after the counts read empty - are waited for too, within
-    /// the bound (build 167; review of 166).
+    /// the bound.
     #[test]
     fn the_tail_looks_again_after_the_margin() {
         use std::cell::Cell;
@@ -978,7 +978,7 @@ mod tests {
         );
         assert_eq!(tail, Tail { waited: 40 + TAIL_MARGIN_MS + 20 + TAIL_MARGIN_MS, first: 40, late: 20, again: true });
         // Full again after the margin and staying full: the second wait ends
-        // at the same bound, counted from the same start (review of 167, K12).
+        // at the same bound, counted from the same start.
         clock.set(0);
         left.set(40);
         margins.set(0);
@@ -999,14 +999,14 @@ mod tests {
         assert_eq!(after_margin(&tail), Some("waited again"));
         assert_eq!(after_margin(&Tail { waited: 285, first: 40, late: 40, again: false }), Some("past the bound, TX0 anyway"));
         assert_eq!(after_margin(&Tail { waited: 70, first: 40, late: 0, again: false }), None);
-        // The line uses it, and has no words of its own (review of 169, T7).
+        // The line uses it, and has no words of its own.
         let code = include_str!("tx_timing.rs");
         let code = &code[..code.find("#[cfg(test)]").unwrap()];
         assert_eq!(code.matches("if let Some(what) = after_margin(&tail) {").count(), 1);
         assert_eq!(code.matches("\"past the bound, TX0 anyway\"").count(), 1);
         assert_eq!(code.matches("\"waited again\"").count(), 1);
         // A grown buffer: the second look works against the grown bound,
-        // not 250 (review of 168, L1/L2).
+        // not 250.
         clock.set(0);
         left.set(440);
         margins.set(0);
@@ -1026,7 +1026,7 @@ mod tests {
         );
         assert_eq!(tail, Tail { waited: 440 + TAIL_MARGIN_MS + 20 + TAIL_MARGIN_MS, first: 440, late: 20, again: true });
         // Nothing at the first reading, then 440 ms reaching the ring: the
-        // bound grows with it and nothing is cut (review of 168, a reviewer's probe).
+        // bound grows with it and nothing is cut (found with a probe on build 168).
         clock.set(0);
         left.set(0);
         let reads = Cell::new(0);
@@ -1049,7 +1049,7 @@ mod tests {
     }
 
     /// A grown jitter buffer is played out at the release, not cut at 250 ms
-    /// (build 168, owner's choice A; `veldproef-build167.md`: 440 ms ready,
+    /// (build 168; field test of build 167: 440 ms ready,
     /// 160 ms cut).
     #[test]
     fn a_grown_buffer_is_played_out_at_the_release() {
@@ -1070,7 +1070,7 @@ mod tests {
 
     /// The one production clock: a ring that never empties lets the real
     /// wait go at the bound plus the margin, on the real sleep (build 167;
-    /// review of 166 - a frozen clock here would hang the release).
+    /// a frozen clock here would hang the release).
     #[test]
     fn the_real_tail_wait_ends_at_its_bound() {
         let started = std::time::Instant::now();
@@ -1127,7 +1127,7 @@ mod tests {
         // And what the bridge could not write, every block (build 185).
         assert_eq!(module.matches("if let Some(n) = unwritten.add(timing.over(), samples.len() - written) {").count(), 1);
         // And a push that worked counts as written: without it every
-        // transmission would report its whole length (review of 185, V3).
+        // transmission would report its whole length.
         assert_eq!(module.matches("if prod.try_push(s).is_ok() {
                                         written += 1;
                                     }").count(), 1);

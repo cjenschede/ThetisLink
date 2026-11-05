@@ -3,8 +3,7 @@
 // The transmit audio as the server receives it, for Thetis and the Yaesu
 // radios alike (build 166). The operator's microphone reaches the server over
 // the same path whichever radio it keys, with the same jitter and the same
-// losses, so it is buffered and repaired the same way (owner, 2026-10-10: "ik
-// zie geen aanleiding de pakketten anders te behandelen"). Until build 166
+// losses, so it is buffered and repaired the same way. Until build 166
 // Thetis concealed every lost frame although the client always sends in-band
 // redundancy, and a Yaesu had no jitter buffer at all: a late or lost packet
 // was a gap on the air.
@@ -111,7 +110,7 @@ impl TxLoss {
     }
 
     /// What the buffer line would say: the highest target and depth, when the
-    /// target rose above the minimum (build 168; review of 167: the line the
+    /// target rose above the minimum (build 168: the line the
     /// field test leans on was seen by no test).
     fn buffer_grew(&self) -> Option<(u32, usize)> {
         (self.target_max > TX_MIN_DEPTH).then_some((self.target_max, self.depth_max))
@@ -141,9 +140,8 @@ impl TxLoss {
             return;
         }
         if self.rebuilt + self.concealed > 0 {
-            // Named in advance (working rule 11, build 166). An ordinary line,
-            // not a developer's: it appears only when a frame was lost, and it is
-            // the server's only trace of loss on the way to it (owner, 2026-10-24).
+            // An ordinary line, not a developer's: it appears only when a frame was lost, and it is
+            // the server's only trace of loss on the way to it.
             info!(
                 "{} TX audio (10 s): {} lost frame(s): {} rebuilt from redundancy, {} concealed",
                 self.label,
@@ -153,16 +151,16 @@ impl TxLoss {
             );
         }
         if let Some((target, depth)) = self.buffer_grew() {
-            // Named in advance (working rule 11, builds 167 and 168): the
+            // The
             // buffer grew on a jittery line.
             dev_info!("{} TX buffer (10 s): target up to {} frames, depth up to {}", self.label, target, depth);
         }
         if let Some([arrival, trimmed, late, cleared, skipped]) = self.thrown_away() {
-            // Named in advance (working rule 11, builds 183 and 184): speech
+            // Speech
             // the buffer received and did not send, every way it can, and
             // the frames it stopped waiting for.
             dev_info!(
-                "{} TX audio (10 s): {} frame(s) thrown away - {} on arrival above the cap, {} trimmed to catch up, {} arrived too late, {} cleared at a new over or sender; {} not there in time (skipped over)",
+                "{} TX audio (10 s): {} frame(s) thrown away; {} on arrival above the cap, {} trimmed to catch up, {} arrived too late, {} cleared at a new over or sender; {} not there in time (skipped over)",
                 self.label,
                 arrival + trimmed + late + cleared,
                 arrival,
@@ -173,7 +171,6 @@ impl TxLoss {
             );
         }
         if self.extra > 0 {
-            // Named in advance (working rule 11, build 193).
             dev_info!("{} TX ring (10 s): {} extra frame(s) pulled to rebuild the lead", self.label, self.extra);
         }
         self.extra = 0;
@@ -189,7 +186,7 @@ impl TxLoss {
 /// When the last packet of a radio's transmit audio came (build 264): a radio
 /// has no packet clock of its own - its PTT is a control, and it is let go by
 /// the session's time-out, the watchdog on a radio nobody holds, its own
-/// time-out timer or a goodbye (`PTT-NOOIT-HANGEN.md` 4.3). Inside one press,
+/// time-out timer or a goodbye. Inside one press,
 /// a silence past the safety's packet window ends what the buffer holds, as it
 /// does for Thetis (build 249).
 #[derive(Debug, Default)]
@@ -294,7 +291,7 @@ pub fn fill_gap(dec: &mut StreamDecoder, jb: &JitterBuffer, loss: &mut TxLoss) -
 /// within the buffer, and the release is no release - its burst is passed over
 /// in the same tick and the new press plays on, as Thetis keeps the
 /// transmitter through a press in its tail (build 283; in 282 the new press's
-/// first words went with the burst, round 282).
+/// first words went with the burst).
 /// Until build 282 the release was a control that arrived on its own, and the
 /// whole buffer was played out at once when it came (build 166). A frame with
 /// only the flag has no audio and gives none, as in Thetis's tick.
@@ -383,7 +380,7 @@ pub fn play_tick(
 
 /// A radio's transmit audio: packets in (sequence, timestamp, Opus) - the
 /// timestamp lets the buffer grow on a jittery line as Thetis's does (build
-/// 167; review of 166: without it the target stayed at 3) -, a jitter buffer
+/// 167: without it the target stayed at 3) -, a jitter buffer
 /// played every 20 ms like Thetis's, gaps filled by `fill_gap`, and the result
 /// resampled to the sound card's rate and handed to the bridge. The release
 /// frame plays in its place in the stream, after the last word, and is told
@@ -421,7 +418,6 @@ pub async fn radio_tx_task(
     // the old numbers, 3-20, and a trim wherever it fell).
     let mut jitter = JitterBuffer::for_transmit(TX_MIN_DEPTH, TX_MAX_DEPTH);
     let mut trim = PauseTrim::new(Instant::now());
-    // Named in advance (working rule 11, build 263).
     dev_info!("{}", buffer_line(label, None));
     let mut loss = TxLoss::new(label);
     let mut tick = tokio::time::interval(Duration::from_millis(20));
@@ -448,8 +444,7 @@ pub async fn radio_tx_task(
                 let silence = clock.packet(Instant::now());
                 // Another sender - another operator, or the same one on a new
                 // address after a network switch: what was learned about the
-                // old line goes, as Thetis resets on a new holder (build 169;
-                // review of 168).
+                // old line goes, as Thetis resets on a new holder (build 169).
                 if sender != Some(from) {
                     sender = Some(from);
                     jitter.reset();
@@ -461,17 +456,16 @@ pub async fn radio_tx_task(
                     }
                     // A new transmission starts with an empty buffer, but keeps
                     // what the buffer learned about the line, as Thetis's does
-                    // across one operator's transmissions (build 168; review
-                    // of 167: a reset forgot it at every press).
+                    // across one operator's transmissions (build 168; before
+                    // that, a reset forgot it at every press).
                     match before_push(over, t.over(), silence) {
                         BeforePush::NewOver => {
                             over = t.over();
                             jitter.discard();
                         }
                         BeforePush::Silence(silence) => {
-                            // Named in advance (working rule 11, build 264).
                             info!(
-                                "{} TX: silent for {} ms inside a press, past the packet window - its buffered audio goes",
+                                "{} TX: silent for {} ms inside a press, past the packet window; its buffered audio goes",
                                 label,
                                 silence.as_millis()
                             );
@@ -492,15 +486,13 @@ pub async fn radio_tx_task(
                     send(pcm, &mut to_radio);
                 }
                 if played.pressed_again {
-                    // Named in advance (working rule 11, build 283).
-                    info!("{} TX: pressed again behind the release frame - it plays on, the radio stays keyed", label);
+                    info!("{} TX: pressed again behind the release frame; it plays on, the radio stays keyed", label);
                 }
                 // After the frames before it are with the bridge.
                 if let (Some(sequence), Some(from)) = (played.release, sender) {
                     let _ = released.send(ReleasePlayed { target, from, sequence, over });
                 }
                 if let Some((in_pause, fallback)) = trim.counts_to_say(Instant::now()) {
-                    // Named in advance (working rule 11, build 263).
                     dev_info!("{}", pause_line(label, in_pause, fallback));
                 }
                 loss.maybe_log();
@@ -572,8 +564,8 @@ mod tests {
     /// the flag gives nothing; the release frame - the first without the flag -
     /// plays in its place behind the last word, is said once, and the rest of
     /// its burst goes (build 282; until then the release came as a control and
-    /// played the buffer out at once, build 166). Twice without a new buffer
-    /// (working rule 9), the second over on the same sequence run.
+    /// played the buffer out at once, build 166). Twice without a new buffer,
+    /// the second over on the same sequence run.
     #[test]
     fn the_release_frame_plays_behind_the_last_word() {
         let mut enc = OpusEncoderWideband::new().unwrap();
@@ -634,7 +626,7 @@ mod tests {
         let p = play_tick(&mut jb, &mut dec, &mut loss, &mut trim, now, Some((0, 80)));
         assert_eq!((p.pcm.len(), p.release, p.pressed_again, jb.depth()), (0, Some(seq), false, 0), "the release stops the tick, the burst goes");
         seq += 5;
-        // Pressed again within the buffer (build 283; round 282): the release
+        // Pressed again within the buffer: the release
         // and its burst are passed over in the same tick, the new press plays
         // on, nothing is said - twice.
         for pass in 0..2 {
@@ -658,7 +650,7 @@ mod tests {
     /// The lead's rebuild (build 278): a ring below the over's target, with
     /// more in the buffer than its target, gives a second frame and counts it;
     /// a ring at the target, a target of 0, or no ring (not keyed) gives one -
-    /// both settings (working rule 13). Never more than the buffer's excess.
+    /// both settings. Never more than the buffer's excess.
     #[test]
     fn a_ring_below_its_lead_takes_a_second_frame() {
         let run_with = |frames: u32, ring: Option<(u64, u64)>| {
@@ -682,7 +674,7 @@ mod tests {
         let (ticks, extra, target) = run(Some((0, 80)));
         assert_eq!(target, TX_MIN_DEPTH, "the buffer's target these counts are made for");
         // Eight frames, target two: after each first pull 7, 5, 3 stand - more
-        // than the target, a second - then 1, which is not (review of 278: a
+        // than the target, a second - then 1, which is not (a
         // bound of `twos <= 8 - target` could not fail).
         assert_eq!(ticks, vec![2, 2, 2, 1, 1], "only the excess over the buffer's target");
         assert_eq!(extra, 3, "each counted for the 10 s line");
@@ -747,8 +739,8 @@ mod tests {
     }
 
     /// Thetis's loop and the radios' task have the same buffer and catch up the
-    /// same way: the two places that must agree, pinned (working rule 15,
-    /// build 263). A shared playout step would be one source; Thetis's loop has
+    /// same way: the two places that must agree, pinned (build 263). A
+    /// shared playout step would be one source; Thetis's loop has
     /// its PTT machine between the pull and the decode.
     #[test]
     fn thetis_and_the_radios_share_the_buffer_and_its_catching_up() {
@@ -822,7 +814,7 @@ mod tests {
 
     /// With the packets' timestamps the radio's buffer grows on a line that
     /// stalls and then delivers in a burst, as Thetis's does; without them it
-    /// stayed at 3 and dropped the burst (build 167; review of 166).
+    /// stayed at 3 and dropped the burst.
     #[test]
     fn a_radio_buffer_grows_on_a_stalling_line() {
         let mut jb = JitterBuffer::for_transmit(TX_MIN_DEPTH, TX_MAX_DEPTH);
@@ -840,7 +832,7 @@ mod tests {
     }
 
     /// The buffer line says the target, only when it rose above the minimum,
-    /// and starts again after each line (build 168; review of 167).
+    /// and starts again after each line.
     #[test]
     fn the_buffer_line_says_how_far_the_target_rose() {
         let mut loss = TxLoss::new("test");
@@ -859,7 +851,7 @@ mod tests {
         loss.since = Instant::now() - LOSS_EVERY;
         loss.maybe_log();
         assert_eq!(loss.buffer_grew(), None, "a new window starts from nothing");
-        assert_eq!(loss.depth_max, 0, "the depth too (review of 168, N4)");
+        assert_eq!(loss.depth_max, 0, "the depth too");
         // Between transmissions: the learned target stays, nothing is buffered.
         jb.drain_all();
         assert!(jb.target_depth() > TX_MIN_DEPTH);
@@ -889,7 +881,7 @@ mod tests {
         // Counted once: a second look at the same totals adds nothing.
         loss.note_buffer(&jb);
         assert_eq!(loss.thrown_away(), Some([20, 0, 0, 0, 0]));
-        // Every column to its own place (review of 183, T3).
+        // Every column to its own place.
         jb.stats_trimmed += 2;
         jb.stats_late += 3;
         jb.stats_cleared += 4;
@@ -905,14 +897,14 @@ mod tests {
         assert_eq!(loss.extra, 0, "and so do the extra frames (build 193)");
     }
 
-    /// The thrown-away line as named in `logregels-build184.md` (review of 183,
-    /// T5: the field log leans on it).
+    /// The thrown-away line as it stands since build 184: the field log leans
+    /// on it.
     #[test]
     fn the_thrown_away_line_says_what_was_named() {
         let src = include_str!("tx_recover.rs");
         let src = &src[..src.find("#[cfg(test)]").unwrap()];
         assert!(src.contains("info!(\"{} TX ring (10 s): {} extra frame(s) pulled to rebuild the lead\", self.label, self.extra);"));
-        assert!(src.contains("\"{} TX audio (10 s): {} frame(s) thrown away - {} on arrival above the cap, {} trimmed to catch up, {} arrived too late, {} cleared at a new over or sender; {} not there in time (skipped over)\","));
+        assert!(src.contains("\"{} TX audio (10 s): {} frame(s) thrown away; {} on arrival above the cap, {} trimmed to catch up, {} arrived too late, {} cleared at a new over or sender; {} not there in time (skipped over)\","));
         assert!(src.contains("arrival + trimmed + late + cleared,"));
     }
 
@@ -929,7 +921,7 @@ mod tests {
         assert_eq!(network.matches("opus_decoder.decode_plc()").count(), 0, "no second way to fill a gap");
         assert_eq!(network.matches("tx.try_send(crate::tx_recover::TxPacket { from: addr, sequence: pkt.sequence, timestamp: pkt.timestamp, opus: pkt.opus_data, ptt })").count(), 1, "sender, sequence, timestamp and flag go along, for both radios in one block");
         assert_eq!(network.matches("radio_audio!(pkt, addr, ").count(), 2, "both radios through it");
-        // The task's wiring, which no test drives (review of 166).
+        // The task's wiring, which no test drives.
         let task = include_str!("tx_recover.rs");
         let task = &task[..task.find("#[cfg(test)]").unwrap()];
         for wired in [
@@ -950,7 +942,7 @@ mod tests {
                     sender = Some(from);
                     jitter.reset();"), "another sender forgets the line");
         // Nothing else writes the sender, and the reset comes before the
-        // packet goes in (review of 169: S1, S2, X7).
+        // packet goes in (S1, S2, X7).
         assert_eq!(task.matches("sender = ").count(), 1);
         assert_eq!(task.matches("sender.").count(), 0);
         assert!(task.find("if sender != Some(from) {").unwrap() < task.find("jitter.push(").unwrap());

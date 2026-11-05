@@ -97,8 +97,7 @@ pub enum TciNotification {
     TxQueueReportEx(TxQueueReport),
     /// A `tx_queue_report_ex` in a format version this server does not read.
     TxQueueReportUnknownVersion { version: String },
-    /// A version-1 or version-2 `tx_queue_report_ex` that does not read
-    /// (review of 212).
+    /// A version-1 or version-2 `tx_queue_report_ex` that does not read.
     TxQueueReportUnreadable { line: String },
     /// run_cat_ex response (stock v2.10.3.14 native CAT-relay over TCI):
     /// outgoing  `run_cat_ex:ZZxxx;` / incoming `run_cat_ex:ZZxxx;,response;`
@@ -231,8 +230,7 @@ impl TxQueueReport {
         })
     }
 
-    /// The server log line, named in advance (`logregels-build212.md`; the
-    /// shape of version 2 in `logregels-build230.md`).
+    /// The server log line (build 212; the shape of version 2 since build 230).
     pub fn line(&self) -> String {
         let shape = self.shape.map_or_else(String::new, |s| {
             format!(
@@ -807,7 +805,7 @@ pub fn parse_tci_text(cmd: &str) -> Option<TciNotification> {
             } else { None }
         }
         // Stock v2.10.3.14+: iq_samplerate is the global IQ stream / DDC sample rate (Hz).
-        // Primary source for tci.ddc_sample_rate_rx1/rx2 in TL2 v2.0.0-alpha-3+.
+        // Primary source for tci.ddc_sample_rate_rx1/rx2 in the fork.
         "iq_samplerate" => {
             if !args.is_empty() {
                 let rate: u32 = args[0].trim().parse().ok()?;
@@ -1286,7 +1284,7 @@ mod tests {
             parse_tci_text("tx_queue_report_ex:3,48000,720,3460,180,45,30,2,60,0,trx,more"),
             Some(TciNotification::TxQueueReportUnknownVersion { version }) if version == "3"
         ));
-        // A version 1 that does not read is said, not dropped (review of 212).
+        // A version 1 that does not read is said, not dropped.
         for (line, why) in [
             ("tx_queue_report_ex:1,48000,720,3460", "too short"),
             ("tx_queue_report_ex:1,48000,720,3460,180,45,30,2,60,0,trx,more", "a field too many"),

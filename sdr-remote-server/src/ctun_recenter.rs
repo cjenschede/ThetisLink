@@ -2,7 +2,7 @@
 //
 // TL2-1 ctun-auto-recenter feature: server-side trigger evaluation + recenter action.
 //
-// Per PATCH-tl2-server-ctun-auto-recenter (A'-revised, operator: PA3GHM, 2026-05-07):
+// Design (2026-05-07):
 // - Operator-specific formula: threshold = 0.6 × visible_span; trigger when VFO comes within
 //   threshold of DDC-edge. Guarantees the visible-window is always full (no black edges).
 // - Per-RX independent state-machines (RX1, RX2)
@@ -128,7 +128,7 @@ pub enum TriggerDecision {
     Trigger,
     SkipNoCap,         // fork-extensions cap not advertised -> feature off
     SkipZoomLow,       // effective_zoom <= 1.2 (formula unusable at low-zoom)
-    SkipPtt,           // state.ptt = true -> defer (per operator-choice 2026-05-07 = B)
+    SkipPtt,           // state.ptt = true -> defer
     SkipFlagged,       // recentering-burst still active
     SkipWithinZone,    // VFO safely within 60% headroom
     SkipHwInit,        // ddc_bandwidth == 0 (band-switch transient)
@@ -136,7 +136,7 @@ pub enum TriggerDecision {
     SkipThetisLocal,   // last VFO change was in Thetis: Thetis scrolls itself (TL2-8, build 218)
 }
 
-/// Trigger-formula (operator-specific, per PATCH-tl2-server-ctun-auto-recenter §1.3):
+/// Trigger-formula (operator-specific):
 ///
 /// ```text
 /// effective_zoom = min(zoom_rx) over all connected clients        // multi-client aggregation
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn trigger_during_ptt_skips() {
         let s = make_state();
-        // VFO far outside zone, but PTT active -> SkipPtt (defer; per operator-choice B)
+        // VFO far outside zone, but PTT active -> SkipPtt (defer)
         let d = eval(true, Some(8.0), 14_165_000, 14_000_000, 384_000, true, &s);
         assert_eq!(d, TriggerDecision::SkipPtt);
     }
